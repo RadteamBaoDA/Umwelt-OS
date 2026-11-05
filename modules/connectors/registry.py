@@ -218,7 +218,7 @@ def normalize(record: dict[str, Any]) -> dict[str, Any]:
     from datetime import UTC, datetime
 
     raw_timestamp = str(record.get("observed_at") or "")
-    timestamp = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00")) if raw_timestamp else datetime.now(UTC)  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+    timestamp = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00")) if raw_timestamp else datetime.now(UTC)
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=UTC)
     return {

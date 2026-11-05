@@ -499,7 +499,8 @@ async def list_goals(session: AsyncSession, filter: GoalFilter, *, scope: Scope,
     """Return a bounded cursor page of owner goals, with linked progress refreshed."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     statement = select(Goal).where(Goal.workspace_id == scope.workspace_id)
-    if filter.status is not None: statement = statement.where(Goal.status == filter.status)
+    if filter.status is not None:
+        statement = statement.where(Goal.status == filter.status)
     if filter.q and filter.q.strip():
         term = f"%{filter.q.strip()}%"
         statement = statement.where(Goal.title.ilike(term) | Goal.description.ilike(term) | Goal.desired_outcome.ilike(term))

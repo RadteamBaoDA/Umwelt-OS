@@ -540,7 +540,7 @@ async def _read_service_envelope(response: Any) -> dict[str, object]:
         )
     value = json.loads(body)
     if not isinstance(value, dict):
-        raise ValueError("Browser service response is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("Browser service response is invalid")
     return value
 
 
@@ -645,7 +645,7 @@ def _validate_service_pages(
     persisted_rows: list[BrowserPageEvidence] = []
     for index, item in enumerate(pages_wire, start=1):
         if not isinstance(item, dict):
-            raise ValueError("Browser page evidence is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("Browser page evidence is invalid")
         raw_value, text_value = item.get("raw_content"), item.get("extracted_text")
         if (
             not agent_browser_target_in_scope(plan.grant, str(item.get("requested_url", "")))

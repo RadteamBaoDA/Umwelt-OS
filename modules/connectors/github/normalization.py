@@ -39,8 +39,8 @@ def normalize_github_record(
         commit_value = commit if isinstance(commit, dict) else {}
         author = commit_value.get("author") if isinstance(commit_value.get("author"), dict) else {}
         committer = commit_value.get("committer") if isinstance(commit_value.get("committer"), dict) else {}
-        assert author is not None
-        assert committer is not None
+        assert author is not None  # noqa: S101  # mypy narrowing invariant
+        assert committer is not None  # noqa: S101  # mypy narrowing invariant
         fields = {
             key: value for key, value in {
                 "sha": raw.get("sha"), "html_url": raw.get("html_url"),
@@ -56,8 +56,8 @@ def normalize_github_record(
     commit_value = commit if isinstance(commit, dict) else {}
     author = commit_value.get("author") if isinstance(commit_value.get("author"), dict) else {}
     committer = commit_value.get("committer") if isinstance(commit_value.get("committer"), dict) else {}
-    assert committer is not None
-    assert author is not None
+    assert committer is not None  # noqa: S101  # mypy narrowing invariant
+    assert author is not None  # noqa: S101  # mypy narrowing invariant
     published_value = (
         committer.get("date") or author.get("date") if kind == "commit"
         else raw.get("published_at") or raw.get("created_at")
@@ -70,7 +70,7 @@ def normalize_github_record(
     parsed_timestamp = None
     if isinstance(timestamp_value, str):
         try:
-            parsed = datetime.fromisoformat(timestamp_value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+            parsed = datetime.fromisoformat(timestamp_value.replace("Z", "+00:00"))
             if parsed.tzinfo is not None and parsed.utcoffset() is not None:
                 parsed_timestamp = parsed.astimezone(UTC)
                 observed = parsed_timestamp

@@ -300,7 +300,7 @@ async def test_to_thread_joined_waits_for_thread_on_cancel() -> None:
         return 1
 
     task = asyncio.create_task(to_thread_joined(work))
-    while not started.is_set():
+    while not started.is_set():  # noqa: ASYNC110  # test polls a fake until it settles
         await asyncio.sleep(0.005)
     task.cancel()
     await asyncio.sleep(0.05)

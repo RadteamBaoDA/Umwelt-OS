@@ -470,7 +470,7 @@ class GitHubVerifier(BaseNativeVerifier):
     async def verify_grant(self, ctx: NativeAcceptance) -> None:
         """Lock the GitHub binding fence and require it to equal the proof's fence, then the base checks."""
         payload, source = ctx.payload, ctx.source
-        assert ctx.github_proof is not None
+        assert ctx.github_proof is not None  # noqa: S101  # mypy narrowing invariant
         ctx.github_fence = await _connectors().lock_github_binding_fence_in_uow(
             ctx.session, source.id, source_generation=payload.source_generation,
             connector_revision=payload.connector_revision, scope=ctx.scope,
@@ -483,7 +483,7 @@ class GitHubVerifier(BaseNativeVerifier):
     async def verify_transition(self, ctx: NativeAcceptance, state: SourceIngestionState) -> None:
         """Revalidate the raw segment against the reserved cursor; supplied records/cursor/coverage must match."""
         payload, source = ctx.payload, ctx.source
-        assert ctx.github_proof is not None
+        assert ctx.github_proof is not None  # noqa: S101  # mypy narrowing invariant
         segment = await _connectors().validate_github_collection_segment_in_uow(
             ctx.session, source=source, reserved_cursor_before=state.cursor,
             proof=ctx.github_proof, binding_fence=typing_cast("GitHubBindingFence", ctx.github_fence),

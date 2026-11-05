@@ -32,7 +32,7 @@ def _response(status: int = 200, body: Any = None, headers: dict[str, str] | Non
 
 async def _wake(*, response: Any = None, post_error: Exception | None = None, source_ok: bool = True,
                 provisioned: Any = "ok", enabled: Any = True, fence_ok: Any = True,
-                token: str | None = "tok", n8n_enabled: bool = True, timeout: int = 15,
+                token: str | None = "tok", n8n_enabled: bool = True, timeout: int = 15,  # noqa: ASYNC109  # test double mirrors the production signature
                 current_same: bool = True, module_after: bool = True) -> tuple[Any, SimpleNamespace]:
     source = SimpleNamespace(status="active", generation=2, type="rss") if source_ok else None
     locked = SimpleNamespace(local_only=False)

@@ -1890,7 +1890,7 @@ def _transitioned_source_scope(scope: Scope, source: Source) -> Scope:
     if scope.workspace_id != source.workspace_id:
         raise ValueError("Source workspace changed")
     if isinstance(scope, InternalJobScope) and scope.source_id is not None:
-        assert scope.source_generation is not None
+        assert scope.source_generation is not None  # noqa: S101  # mypy narrowing invariant
         if scope.source_id != source.id or source.generation not in (
             scope.source_generation, scope.source_generation + 1,
         ):

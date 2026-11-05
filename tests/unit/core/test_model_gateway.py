@@ -278,7 +278,7 @@ class TestModelGatewayRequestExecution:
             yield mock_client
 
         with patch("core.model_gateway.client.AsyncOpenAI", side_effect=mock_async_openai), \
-             patch.object(ModelGateway, "_http_client", return_value=MagicMock()):  # noqa: SIM117  # style-only; nested with kept
+             patch.object(ModelGateway, "_http_client", return_value=MagicMock()):
             with pytest.raises(CapabilityUnsupported):
                 await mock_gateway.chat("chat", mapping, policy, [{"role": "user", "content": "hi"}], before_send=AsyncMock())
 
@@ -730,7 +730,7 @@ def written(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     total = [0]
     original = AnyIOStream.write
 
-    async def write(self: AnyIOStream, buffer: bytes, timeout: float | None = None) -> None:
+    async def write(self: AnyIOStream, buffer: bytes, timeout: float | None = None) -> None:  # noqa: ASYNC109  # test double mirrors the production signature
         await original(self, buffer, timeout)
         total[0] += len(buffer)
 

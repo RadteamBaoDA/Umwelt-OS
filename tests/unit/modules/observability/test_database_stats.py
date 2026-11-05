@@ -118,7 +118,7 @@ async def test_sampler_survives_db_stats_failure(monkeypatch: pytest.MonkeyPatch
 
 
 def _bucket(**over: Any) -> SimpleNamespace:
-    base: dict[str, Any] = dict(start=NOW, samples=2, overall_healthy=2, queue_backlog_max=0, pg_size_max=7, pg_conn_avg=3.0,  # noqa: C408
+    base: dict[str, Any] = dict(start=NOW, samples=2, overall_healthy=2, queue_backlog_max=0, pg_size_max=7, pg_conn_avg=3.0,
                 pg_conn_max=5, pg_hit_avg=0.99, xact_first=100, xact_last=220, xact_t_first=0, xact_t_last=60,
                 redis_mem_max=9, redis_ops_avg=2.0, redis_hit_avg=0.5)
     return SimpleNamespace(**{**base, **over})

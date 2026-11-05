@@ -22,11 +22,11 @@ async def finalize_account_erasure(session: AsyncSession, operation: AccountDele
     """
     from core.workspaces.erasure import finalize_account_workspace_erasure
 
-    assert operation.account_id is not None and operation.workspace_id is not None
+    assert operation.account_id is not None and operation.workspace_id is not None  # noqa: S101  # mypy narrowing invariant
     scope = AccountErasureScope(operation.id, operation.account_id, operation.workspace_id)
     await authorize_account_erasure(session, scope)
     owner = await session.get(Owner, scope.account_id)
-    assert owner is not None
+    assert owner is not None  # noqa: S101  # mypy narrowing invariant
     owner.default_workspace_id = None
     await session.flush()
     await finalize_account_workspace_erasure(session, scope)
@@ -77,7 +77,7 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
                 operation = await session.get(AccountDeletionOperation, operation_id)
                 if operation is None or operation.status == "succeeded":
                     return False
-                assert operation.account_id is not None and operation.workspace_id is not None
+                assert operation.account_id is not None and operation.workspace_id is not None  # noqa: S101  # mypy narrowing invariant
                 scope = AccountErasureScope(operation.id, operation.account_id, operation.workspace_id)
                 phase, cursor = operation.phase, dict(operation.cursor)
                 await authorize_account_erasure(session, scope)

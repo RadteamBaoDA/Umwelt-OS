@@ -23,7 +23,7 @@ HEAD = ScriptDirectory.from_config(Config(str(REPOSITORY_ROOT / "alembic.ini")))
 
 
 def _alembic(database_url: str, *arguments: str, extra_env: dict[str, str] | None = None) -> str:
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603  # test-only subprocess with fixed arguments
         [sys.executable, "-m", "alembic", *arguments],
         cwd=REPOSITORY_ROOT,
         env={**os.environ, "DATABASE_URL": database_url, **(extra_env or {})},

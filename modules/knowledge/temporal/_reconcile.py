@@ -208,7 +208,7 @@ def _build_replacement_node(
     if binding is not None:
         node_name, node_summary = binding.node_name, binding.node_summary or ""
     else:
-        assert candidate is not None  # guarded by the caller: binding and candidate not both None
+        assert candidate is not None  # guarded by the caller: binding and candidate not both None  # noqa: S101  # mypy narrowing invariant
         node_name, node_summary = candidate.node_name, candidate.node_summary
     return EntityNode(
         uuid=action.graph_entity_uuid, group_id=context.group_id,
@@ -332,7 +332,7 @@ async def _replace_node_and_confirm(
     from graphiti_core.nodes import EntityNode
 
     node_id = action.graph_entity_uuid
-    assert plan.replacement is not None
+    assert plan.replacement is not None  # noqa: S101  # mypy narrowing invariant
     await plan.replacement.save(driver)
     # Seed replacement deliberately drops old vectors derived from deleted support.
     records, _, _ = await driver.execute_query(
@@ -369,7 +369,7 @@ async def _write_node_action(
     """
     await context.record_write_intent(receipt)
     state.retained_receipts.append(receipt)
-    assert context.authorize_node_recovery is not None
+    assert context.authorize_node_recovery is not None  # noqa: S101  # mypy narrowing invariant
     await context.authorize_node_recovery(tuple(state.retained_receipts), actions)
     if not await _recheck_node_before_write(driver, context, action, current_fingerprint):
         state.unresolved.append(action.graph_entity_uuid)
@@ -633,7 +633,7 @@ async def _write_fact_action(
 
     await context.record_write_intent(receipt)
     state.retained_receipts.append(receipt)
-    assert context.authorize_fact_recovery is not None
+    assert context.authorize_fact_recovery is not None  # noqa: S101  # mypy narrowing invariant
     await context.authorize_fact_recovery(tuple(state.retained_receipts), actions)
     fresh = await _fetch_fact(driver, context, action.fact_id)
     if fresh is None:
@@ -722,7 +722,7 @@ async def _reconcile_fact_action(
     if current_fingerprint != action.expected_current_state_fingerprint:
         state.unresolved.append(action.fact_id)
         return
-    assert current_fingerprint is not None
+    assert current_fingerprint is not None  # noqa: S101  # mypy narrowing invariant
     receipt = _fact_cleanup_receipt(
         context, receipts, episode_id, action, current, current_fingerprint, intended_fingerprint,
     )

@@ -68,7 +68,7 @@ class PublicationGateMiddleware:
                     started = True
                 await send(message)
                 return
-            assert fence is not None
+            assert fence is not None  # noqa: S101  # mypy narrowing invariant
             if kind == "http.response.body":
                 # Drain-before-lock: uvicorn drains its write buffer at the start of send(), so an
                 # empty more_body chunk forces any backpressure wait to happen here, before the

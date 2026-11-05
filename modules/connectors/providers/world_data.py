@@ -156,7 +156,7 @@ async def _json_get(
     except (httpx.HTTPError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError("world_data_provider_unavailable") from exc
     if not isinstance(decoded, dict):
-        raise ValueError("world_data_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("world_data_response_invalid")
     return decoded
 
 
@@ -205,7 +205,7 @@ def _market_records(source: ConnectorSource, config: ConnectorConfig, payload: d
             if "premium" in normalized or "entitlement" in normalized:
                 raise ValueError("alpha_vantage_entitlement_unavailable")
             raise ValueError("alpha_vantage_access_unavailable")
-        raise ValueError("alpha_vantage_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("alpha_vantage_response_invalid")
     provider_symbol = metadata.get("2. Symbol")
     if not isinstance(provider_symbol, str) or provider_symbol.upper() not in set(config.market_symbols or ()):
         raise ValueError("alpha_vantage_scope_mismatch")
@@ -217,7 +217,7 @@ def _market_records(source: ConnectorSource, config: ConnectorConfig, payload: d
     # existing 500-record ingress limit; historical points accumulate across schedules.
     for day, row in sorted(series.items(), reverse=True)[:1]:
         if not isinstance(day, str) or not isinstance(row, dict):
-            raise ValueError("alpha_vantage_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("alpha_vantage_response_invalid")
         try:
             observed_at = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=zone).astimezone(UTC)
         except ValueError as exc:
@@ -288,7 +288,7 @@ def _weather_records(
             raise ValueError("open_meteo_measurement_scope_invalid")
         for stamp, raw in zip(times, values, strict=True):
             if not isinstance(stamp, str):
-                raise ValueError("open_meteo_timestamp_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+                raise ValueError("open_meteo_timestamp_invalid")
             try:
                 observed_at = datetime.fromisoformat(stamp).replace(tzinfo=zone).astimezone(UTC)
             except ValueError as exc:

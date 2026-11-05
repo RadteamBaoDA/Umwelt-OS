@@ -414,7 +414,7 @@ async def _prepare_upload_document(
     raw_uri, mime_type = delivery.payload.get("raw_uri"), delivery.payload.get("mime_type")
     if not isinstance(raw_uri, str) or not isinstance(mime_type, str):
         # ValueError (not TypeError) is part of the established contract for a malformed envelope.
-        raise ValueError("Upload envelope lacks stored extraction identity")  # noqa: TRY004
+        raise ValueError("Upload envelope lacks stored extraction identity")
     expected_prefix = f"workspaces/{scope.workspace_id}/documents/{document_id}/"
     legacy_prefix = f"documents/{document_id}/"
     if not raw_uri.startswith((expected_prefix, legacy_prefix)):
@@ -1037,7 +1037,7 @@ async def _schedule_transient_retry(
                                        claim=claim, multi_workspace_enabled=enabled)
             return None
         delay = (max(0.5, exc.retry_after) if isinstance(exc, ConnectorRetryError) and exc.retry_after is not None
-                 else random.uniform(0.5, min(60.0, 2.0 ** work.stage.attempts)))
+                 else random.uniform(0.5, min(60.0, 2.0 ** work.stage.attempts)))  # noqa: S311  # retry backoff jitter, not a security value
         work.stage.status = "retrying"
         work.stage.error_code = "transient_failure"
         work.stage.next_attempt_at = datetime.now(UTC) + timedelta(seconds=delay)
@@ -1579,7 +1579,7 @@ async def _settle_failure(
                 run.error_code = "retry_exhausted"
                 event.status = "failed"
             else:
-                delay = random.uniform(0.5, min(60.0, 2.0 ** stage.attempts))
+                delay = random.uniform(0.5, min(60.0, 2.0 ** stage.attempts))  # noqa: S311  # retry backoff jitter, not a security value
                 next_attempt_at = datetime.now(UTC) + timedelta(seconds=delay)
                 stage.status = "retrying"
                 stage.error_code = "transient_failure"

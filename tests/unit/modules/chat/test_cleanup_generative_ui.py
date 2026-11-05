@@ -153,7 +153,7 @@ async def test_completed_run_matching_scope_loses_input_request_todos_and_templa
         progress = await chat.purge_document_copied_evidence_page(session, scope, **CTX)  # type: ignore[arg-type]
     assert progress.rows_changed >= 1 and session.run.status == "completed"
     for table in ("chat_todos", "chat_templates"):
-        (idx,) = [i for i, q in enumerate(session.sql) if q.startswith(f"DELETE FROM {table}")]
+        (idx,) = [i for i, q in enumerate(session.sql) if q.startswith(f"DELETE FROM {table}")]  # noqa: S608  # test-only SQL built from constants
         assert RUN_ID in session.params[idx].values()  # keyed by the matched run's source_response_id
     assert any(q.startswith("UPDATE chat_response_runs SET input_request") for q in session.sql)
 

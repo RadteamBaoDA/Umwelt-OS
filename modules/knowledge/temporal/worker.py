@@ -253,8 +253,8 @@ async def _mark_dependents_for_rebuild(factory: async_sessionmaker[AsyncSession]
         await _admit(journal, adm)
         partition = await _get(journal, GraphPartition, mapping.partition_id, adm, lock=True)
         current_operation = await _get(journal, GraphOperation, operation.id, adm, lock=True)
-        assert current_operation is not None
-        assert partition is not None
+        assert current_operation is not None  # noqa: S101  # mypy narrowing invariant
+        assert partition is not None  # noqa: S101  # mypy narrowing invariant
         if partition.lease_token != token or current_operation.lease_owner != token:
             raise GraphOperationError("graph_rebuild_dependency_lease_lost")
         drafts = []
@@ -315,35 +315,35 @@ async def _claim(factory: async_sessionmaker[AsyncSession], adm: _Admission, ope
         partition = await _get(session, GraphPartition, locator.partition_id, adm, lock=True)
         operation = await _get(session, GraphOperation, operation_id, adm, lock=True)
         now = datetime.now(UTC)
-        assert operation is not None
+        assert operation is not None  # noqa: S101  # mypy narrowing invariant
         if operation.status in {"succeeded", "failed"} or operation.next_attempt_at > now:
             return None
-        assert partition is not None
+        assert partition is not None  # noqa: S101  # mypy narrowing invariant
         if partition.lease_expires_at and partition.lease_expires_at > now:
             return None
         if partition.uncertain_operation_id and partition.uncertain_operation_id != operation.id:
             return None
         desired = await _get(session, GraphMapping, operation.mapping_id, adm, lock=True)
-        assert desired is not None
+        assert desired is not None  # noqa: S101  # mypy narrowing invariant
         if (desired.desired_revision != operation.desired_revision or desired.desired_digest != operation.desired_digest) and operation.dispatched_at is None:
-            assert operation is not None
+            assert operation is not None  # noqa: S101  # mypy narrowing invariant
             operation.status, operation.error_code = "succeeded", "superseded_before_dispatch"
             await _commit(session, adm)
             return None
         if operation.attempts >= 5 and not partition.uncertain_operation_id:
-            assert operation is not None
+            assert operation is not None  # noqa: S101  # mypy narrowing invariant
             operation.status, operation.error_code = "failed", "attempts_exhausted"
             mapping = await _get(session, GraphMapping, operation.mapping_id, adm, lock=True)
-            assert mapping is not None
+            assert mapping is not None  # noqa: S101  # mypy narrowing invariant
             if mapping.desired_revision == operation.desired_revision and mapping.desired_digest == operation.desired_digest:
-                assert mapping is not None
+                assert mapping is not None  # noqa: S101  # mypy narrowing invariant
                 mapping.status, mapping.error_code = "failed", "attempts_exhausted"
             await _commit(session, adm, [await public.graph_status_change(session, mapping.id, scope=adm.scope)])
             return None
         token = uuid7()
         partition.lease_token, partition.lease_expires_at = token, now + timedelta(seconds=LEASE_SECONDS)
         operation.lease_owner, operation.lease_expires_at = token, partition.lease_expires_at
-        assert operation is not None
+        assert operation is not None  # noqa: S101  # mypy narrowing invariant
         operation.status = "running"
         operation.attempts += 1
         await _commit(session, adm)
@@ -520,9 +520,9 @@ async def _record(factory: async_sessionmaker[AsyncSession], adm: _Admission, op
     async with factory() as session:
         await _admit(session, adm)
         operation = await _get(session, GraphOperation, operation_id, adm, lock=True)
-        assert operation is not None
+        assert operation is not None  # noqa: S101  # mypy narrowing invariant
         mapping = await _get(session, GraphMapping, operation.mapping_id, adm)
-        assert mapping is not None
+        assert mapping is not None  # noqa: S101  # mypy narrowing invariant
         if (receipt.operation_id != operation.id or receipt.lease_token != operation.receipt_token
                 or receipt.mapping_revision != operation.desired_revision
                 or receipt.episode_id != mapping.episode_id or receipt.group_id != str(mapping.partition_id)):
@@ -717,7 +717,7 @@ class _OwnerCallbacks:
         async with self.factory() as journal:
             await _admit(journal, adm)
             current = await _get(journal, GraphOperation, self.operation.id, adm, lock=True)
-            assert current is not None
+            assert current is not None  # noqa: S101  # mypy narrowing invariant
             if ownership.operation_id != current.id or ownership.group_id != str(mapping.partition_id):
                 raise GraphOperationError("graph_dispatch_not_owned")
             uncertain = await journal.scalar(select(GraphDispatch.id).where(
@@ -1023,7 +1023,7 @@ async def _record_embedding_identity(
     async with factory() as identity_session:
         await _admit(identity_session, adm)
         current = await _get(identity_session, GraphMapping, mapping.id, adm, lock=True)
-        assert current is not None
+        assert current is not None  # noqa: S101  # mypy narrowing invariant
         current.embedding_identity = identity
         await _commit(identity_session, adm)
     mapping.embedding_identity = identity
@@ -1138,7 +1138,7 @@ async def _validate_fact_replacement(session: AsyncSession, adm: _Admission, map
     if left is None or right is None:
         raise GraphOperationError("graph_candidate_fact_requires_current_owner_proof")
     snapshot = action.replacement
-    assert snapshot is not None
+    assert snapshot is not None  # noqa: S101  # mypy narrowing invariant
     relation = await _current_relationship_snapshot(session, adm, left, right, snapshot.name)
     version_ids = {row.document_version_id for row in rows if str(row.episode_id) in snapshot.episode_ids and not row.tombstoned}
     if not relation or not relation.relationship.evidence or any(
@@ -1272,53 +1272,53 @@ async def _finish(factory: async_sessionmaker[AsyncSession], adm: _Admission, op
         # these rows would deadlock recovery against a concurrent claimant.
         partition = await _get(session, GraphPartition, locator.partition_id, adm, lock=True)
         operation = await _get(session, GraphOperation, operation_id, adm, lock=True)
-        assert operation is not None
+        assert operation is not None  # noqa: S101  # mypy narrowing invariant
         if operation.lease_owner != token:
             return
         mapping = await _get(session, GraphMapping, operation.mapping_id, adm, lock=True)
-        assert mapping is not None
+        assert mapping is not None  # noqa: S101  # mypy narrowing invariant
         current_revision = mapping.desired_revision == operation.desired_revision and mapping.desired_digest == operation.desired_digest
         operation.status, operation.error_code = status, error_code
         operation.lease_owner, operation.lease_expires_at = None, None
         operation.next_attempt_at = datetime.now(UTC) + timedelta(seconds=min(300, 5 * 2 ** min(operation.attempts, 5)))
-        assert partition is not None
+        assert partition is not None  # noqa: S101  # mypy narrowing invariant
         if partition.lease_token == token:
-            assert partition is not None
+            assert partition is not None  # noqa: S101  # mypy narrowing invariant
             partition.lease_token, partition.lease_expires_at = None, None
         if status == "reconcile_needed":
-            assert operation is not None
-            assert partition is not None
+            assert operation is not None  # noqa: S101  # mypy narrowing invariant
+            assert partition is not None  # noqa: S101  # mypy narrowing invariant
             partition.uncertain_operation_id = operation.id
             if current_revision:
-                assert mapping is not None
+                assert mapping is not None  # noqa: S101  # mypy narrowing invariant
                 mapping.status = "tombstoned" if mapping.tombstoned else "reconcile_needed"
         elif partition.uncertain_operation_id == operation.id:
-            assert partition is not None
+            assert partition is not None  # noqa: S101  # mypy narrowing invariant
             partition.uncertain_operation_id = None
         if external_state and current_revision:
-            assert mapping is not None
+            assert mapping is not None  # noqa: S101  # mypy narrowing invariant
             mapping.external_state = external_state
         if status == "succeeded" and current_revision:
-            assert mapping is not None
-            assert operation is not None
+            assert mapping is not None  # noqa: S101  # mypy narrowing invariant
+            assert operation is not None  # noqa: S101  # mypy narrowing invariant
             mapping.applied_revision, mapping.applied_digest = operation.desired_revision, operation.desired_digest
             mapping.status = "tombstoned" if mapping.tombstoned else "synchronized"
             mapping.applied_at = datetime.now(UTC)
         elif current_revision and status != "reconcile_needed" and not mapping.tombstoned:
             # An older intent may converge after a correction queued a newer
             # desired revision. Its success cannot certify that new revision.
-            assert mapping is not None
+            assert mapping is not None  # noqa: S101  # mypy narrowing invariant
             mapping.status = "pending" if status == "succeeded" else status
         if current_revision:
-            assert mapping is not None
+            assert mapping is not None  # noqa: S101  # mypy narrowing invariant
             mapping.error_code = error_code
-        assert mapping is not None
-        assert operation is not None
+        assert mapping is not None  # noqa: S101  # mypy narrowing invariant
+        assert operation is not None  # noqa: S101  # mypy narrowing invariant
         if (retry_upsert and not mapping.tombstoned and mapping.desired_revision == operation.desired_revision
                 and mapping.desired_digest == operation.desired_digest):
             # Cleanup completion and the replacement attempt publish together;
             # an absent projection is never briefly advertised synchronized.
-            assert mapping is not None
+            assert mapping is not None  # noqa: S101  # mypy narrowing invariant
             mapping.status, mapping.applied_revision, mapping.applied_digest = "pending", 0, None
             await public._queue(session, mapping, "upsert")
         await _commit(session, adm, [await public.graph_status_change(session, mapping.id, scope=adm.scope)])
@@ -1337,11 +1337,11 @@ async def _publish_clean_projection(factory: async_sessionmaker[AsyncSession], a
         partition = await _get(session, GraphPartition, operation.partition_id, adm, lock=True)
         current = await _get(session, GraphOperation, operation.id, adm, lock=True)
         mapping = await _get(session, GraphMapping, operation.mapping_id, adm, lock=True)
-        assert current is not None
-        assert partition is not None
+        assert current is not None  # noqa: S101  # mypy narrowing invariant
+        assert partition is not None  # noqa: S101  # mypy narrowing invariant
         if partition.lease_token != token or current.lease_owner != token:
             raise GraphOperationError("graph_clean_publication_lease_lost")
-        assert mapping is not None
+        assert mapping is not None  # noqa: S101  # mypy narrowing invariant
         if mapping.desired_revision != operation.desired_revision or mapping.desired_digest != operation.desired_digest:
             return False
         mapping.external_state = "absent"
@@ -1400,21 +1400,21 @@ async def _verify_prior_dispatches(
         GraphDispatch.operation_id == operation.id, GraphDispatch.completed_at.is_(None),
         GraphDispatch.cessation_verified_at.is_(None)).order_by(GraphDispatch.id))).all()
     for prior_dispatch in prior_dispatches:
-        assert mapping is not None
-        assert operation is not None
+        assert mapping is not None  # noqa: S101  # mypy narrowing invariant
+        assert operation is not None  # noqa: S101  # mypy narrowing invariant
         previous = DispatchOwnership(operation.id, str(mapping.partition_id),
                                      prior_dispatch.server_run_id, prior_dispatch.client_id)
         if not await graph.verify_dispatch_cessation(previous, context):
             raise GraphOperationUnknown("graph_prior_dispatch_still_unknown")
         async with factory() as stopped:
             await _admit(stopped, adm)
-            assert operation is not None
+            assert operation is not None  # noqa: S101  # mypy narrowing invariant
             current = await _get(stopped, GraphOperation, operation.id, adm, lock=True)
-            assert current is not None
+            assert current is not None  # noqa: S101  # mypy narrowing invariant
             current.cessation_verified_at = datetime.now(UTC)
             current.cessation_reason = "owned_sync_client_killed"
             journal = await _get(stopped, GraphDispatch, prior_dispatch.id, adm, lock=True)
-            assert journal is not None
+            assert journal is not None  # noqa: S101  # mypy narrowing invariant
             journal.cessation_verified_at = datetime.now(UTC)
             journal.cessation_reason = "owned_sync_client_killed"
             await _commit(stopped, adm)
@@ -1431,24 +1431,24 @@ async def _project_current_episode(
     a canonical-binding recheck, with every fence still held while ``_finish`` commits.
     """
     if not await _publish_clean_projection(factory, adm, operation, token):
-        assert operation is not None
+        assert operation is not None  # noqa: S101  # mypy narrowing invariant
         await _finish(factory, adm, operation.id, token, "succeeded", None)
         return
     await session.refresh(mapping)
-    assert mapping is not None
+    assert mapping is not None  # noqa: S101  # mypy narrowing invariant
     if mapping.tombstoned:
-        assert operation is not None
+        assert operation is not None  # noqa: S101  # mypy narrowing invariant
         await _finish(factory, adm, operation.id, token, "succeeded", None, external_state="absent")
         return
     context, gateway, _rows = await _context(factory, adm, session, ctx, operation, mapping, token, cleanup=False)
-    assert mapping is not None
+    assert mapping is not None  # noqa: S101  # mypy narrowing invariant
     data = await documents.read_extraction_input(
         session, mapping.document_version_id, scope=adm.scope, multi_workspace_enabled=adm.multi,
     )
     if data is None:
         raise GraphOperationError("graph_document_no_longer_ready")
     content = "\n\n".join(chunk.content for chunk in data.chunks)
-    assert operation is not None
+    assert operation is not None  # noqa: S101  # mypy narrowing invariant
     request = EpisodeRequest(mapping.episode_id, str(mapping.partition_id), "Evidence-backed document",
                              content, data.observed_at, context.evidence,
                              tuple(binding.canonical_entity_id for binding in context.canonical_bindings),
@@ -1491,9 +1491,9 @@ async def _run_operation(
     async with factory() as session:
         await _admit(session, adm)
         operation = await _get(session, GraphOperation, operation_id, adm)
-        assert operation is not None
+        assert operation is not None  # noqa: S101  # mypy narrowing invariant
         mapping = await _get(session, GraphMapping, operation.mapping_id, adm)
-        assert mapping is not None
+        assert mapping is not None  # noqa: S101  # mypy narrowing invariant
         ancestor = await _find_ancestor_operation(session, adm, operation, mapping)
         # Establish cessation/absence before model identity checks. A
         # cleaned old identity must not prevent a new model rebuild;
@@ -1542,7 +1542,7 @@ async def process_graph_operation(ctx: dict[str, object], operation_id_value: st
                 async with factory() as dependency:
                     await _admit(dependency, adm)
                     current = await _get(dependency, GraphOperation, operation_id, adm, lock=True)
-                    assert current is not None
+                    assert current is not None  # noqa: S101  # mypy narrowing invariant
                     fingerprint = await _dependency_fingerprint(dependency, ctx, state, adm, current.partition_id)
                     current.dependency_fingerprint = fingerprint
                     await _commit(dependency, adm)
@@ -1678,7 +1678,7 @@ async def _build_fact_actions(
             # A different owned rebuild may already have physically removed
             # this fact. Consume that exact deletion proof before discarding
             # terminal owners from the historical support claim.
-            assert context.authorize_rebuild_absence is not None
+            assert context.authorize_rebuild_absence is not None  # noqa: S101  # mypy narrowing invariant
             await context.authorize_rebuild_absence("fact", fact_id)
             terminal = {str(row.episode_id) for row in rows if row.tombstoned and row.external_state == "absent"
                 and row.applied_revision == row.desired_revision and row.applied_digest == row.desired_digest
@@ -1733,7 +1733,7 @@ async def _complete_recovery(
     async with factory() as journal:
         await _admit(journal, adm)
         op_row = await _get(journal, GraphOperation, operation.id, adm, lock=True)
-        assert op_row is not None
+        assert op_row is not None  # noqa: S101  # mypy narrowing invariant
         op_row.cleanup_completed_at = datetime.now(UTC)
         await _commit(journal, adm)
     if cleanup_only:
@@ -1836,8 +1836,8 @@ async def _recover_ancestor(graph: TemporalGraph, factory: async_sessionmaker[As
         await _admit(claim, adm)
         partition = await _get(claim, GraphPartition, mapping.partition_id, adm, lock=True)
         ancestor = await _get(claim, GraphOperation, ancestor_id, adm, lock=True)
-        assert ancestor is not None
-        assert partition is not None
+        assert ancestor is not None  # noqa: S101  # mypy narrowing invariant
+        assert partition is not None  # noqa: S101  # mypy narrowing invariant
         if partition.lease_token != token or ancestor.cleanup_completed_at is not None:
             return
         ancestor.lease_owner, ancestor.lease_expires_at = token, partition.lease_expires_at
@@ -1847,21 +1847,21 @@ async def _recover_ancestor(graph: TemporalGraph, factory: async_sessionmaker[As
     await _admit(session, adm)
     fresh_ancestor = await _get(session, GraphOperation, ancestor_id, adm)
     fresh_mapping = await _get(session, GraphMapping, mapping_id, adm)
-    assert fresh_ancestor is not None and fresh_mapping is not None
+    assert fresh_ancestor is not None and fresh_mapping is not None  # noqa: S101  # mypy narrowing invariant
     ancestor, mapping = fresh_ancestor, fresh_mapping
     context, _gateway, rows = await _context(factory, adm, session, ctx, ancestor, mapping, token, cleanup=True)
     prior = (await session.scalars(select(GraphDispatch).where(
         GraphDispatch.workspace_id == adm.scope.workspace_id, GraphDispatch.operation_id == ancestor_id,
         GraphDispatch.completed_at.is_(None), GraphDispatch.cessation_verified_at.is_(None)))).all()
     for dispatch in prior:
-        assert ancestor is not None
+        assert ancestor is not None  # noqa: S101  # mypy narrowing invariant
         ownership = DispatchOwnership(ancestor.id, str(mapping.partition_id), dispatch.server_run_id, dispatch.client_id)
         if not await graph.verify_dispatch_cessation(ownership, context):
             raise GraphOperationUnknown("graph_ancestor_dispatch_unknown")
         async with factory() as journal:
             await _admit(journal, adm)
             stopped = await _get(journal, GraphDispatch, dispatch.id, adm, lock=True)
-            assert stopped is not None
+            assert stopped is not None  # noqa: S101  # mypy narrowing invariant
             stopped.cessation_verified_at, stopped.cessation_reason = datetime.now(UTC), "owned_sync_client_killed"
             await _commit(journal, adm)
     if context.receipt_history:
@@ -1872,15 +1872,15 @@ async def _recover_ancestor(graph: TemporalGraph, factory: async_sessionmaker[As
         # cessation proves this original actor owns no logical cleanup effects.
         async with factory() as journal:
             await _admit(journal, adm)
-            assert ancestor is not None
+            assert ancestor is not None  # noqa: S101  # mypy narrowing invariant
             cleaned = await _get(journal, GraphOperation, ancestor.id, adm, lock=True)
-            assert cleaned is not None
+            assert cleaned is not None  # noqa: S101  # mypy narrowing invariant
             cleaned.cleanup_completed_at = datetime.now(UTC)
             await _commit(journal, adm)
     async with factory() as progress:
         await _admit(progress, adm)
         completed = await _get(progress, GraphOperation, ancestor_id, adm)
-        assert completed is not None
+        assert completed is not None  # noqa: S101  # mypy narrowing invariant
         succeeded = completed.cleanup_completed_at is not None
     if not succeeded:
         raise GraphOperationUnknown("graph_ancestor_cleanup_pending")
@@ -1968,19 +1968,19 @@ async def recover_graph_work(ctx: dict[str, object]) -> int:
                     # Retry admission uses the same row order as execution. Mapping is
                     # deliberately untouched; any uncertainty retains its exact ledger.
                     locator = await _get(session, GraphOperation, blocked_id, adm)
-                    assert locator is not None and dependency_state is not None
+                    assert locator is not None and dependency_state is not None  # noqa: S101  # mypy narrowing invariant
                     fingerprint = await _dependency_fingerprint(session, ctx, dependency_state, adm, locator.partition_id)
                     if locator.dependency_fingerprint == fingerprint:
                         continue
                     partition = await _get(session, GraphPartition, locator.partition_id, adm, lock=True)
                     operation = await _get(session, GraphOperation, blocked_id, adm, lock=True)
-                    assert operation is not None
-                    assert partition is not None
+                    assert operation is not None  # noqa: S101  # mypy narrowing invariant
+                    assert partition is not None  # noqa: S101  # mypy narrowing invariant
                     if operation.status == "blocked" and (partition.lease_expires_at is None or partition.lease_expires_at <= now):
                         operation.status, operation.attempts = "pending", 0
                         operation.dependency_fingerprint = fingerprint
                         mapping = await _get(session, GraphMapping, operation.mapping_id, adm, lock=True)
-                        assert mapping is not None
+                        assert mapping is not None  # noqa: S101  # mypy narrowing invariant
                         if mapping.desired_revision == operation.desired_revision and mapping.desired_digest == operation.desired_digest:
                             mapping.status, mapping.error_code = "pending", None
                             await _commit(session, adm, [await public.graph_status_change(session, mapping.id, scope=adm.scope)])

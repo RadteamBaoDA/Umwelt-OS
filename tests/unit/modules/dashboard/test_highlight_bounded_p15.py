@@ -30,7 +30,7 @@ def test_matching_cost_is_bounded_and_caps_apply() -> None:
     assert all(len(c.terms) <= MAX_TERMS_PER_RULE for c in compiled)
     assert sum(len(c.terms) for c in compiled) <= MAX_TERMS_PER_DEFINITION
     assert all(c.terms and c.truncated > 0 for c in compiled)
-    rng = random.Random(1)
+    rng = random.Random(1)  # noqa: S311  # deterministic test data, not a security value
     # Every excerpt passes the substring filter but fails the word-boundary regex (term1xy contains term1x).
     words = [f"term{rng.randrange(16)}xy" for _ in range(300)]
     texts = [(" ".join(words[i : i + 300]) + " w" * 1000)[:2000] for i in range(200)]

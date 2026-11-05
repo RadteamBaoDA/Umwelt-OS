@@ -44,8 +44,8 @@ def test_load_test_runner_is_disposable_and_pinned() -> None:
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is required to stub-load the k6 scripts")
 def test_k6_scripts_load_with_stubbed_runtime() -> None:
     """scripts/check-k6-scripts.mjs imports every k6 script against stubs and validates scenarios/thresholds."""
-    result = subprocess.run(
-        ["node", str(ROOT / "scripts/check-k6-scripts.mjs")], capture_output=True, text=True, timeout=60, check=False
+    result = subprocess.run(  # noqa: S603  # test-only subprocess with fixed arguments
+        ["node", str(ROOT / "scripts/check-k6-scripts.mjs")], capture_output=True, text=True, timeout=60, check=False,  # noqa: S607  # node from PATH is the test toolchain
     )
     assert result.returncode == 0, result.stderr
     assert "k6 scripts OK" in result.stdout

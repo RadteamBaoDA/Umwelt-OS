@@ -75,7 +75,7 @@ def test_sample_data_defaults_source_unless_model_sets_one(name: str) -> None:
         {"title": "t", "columns": [{"key": "a", "label": "A"}]} if name == "render_table"
         else {"title": "t", "series": [{"key": "a", "label": "A"}]}
     )
-    parse = lambda **extra: parse_ui_tool_args(name, json.dumps({**base, **extra}))
+    parse = lambda **extra: parse_ui_tool_args(name, json.dumps({**base, **extra}))  # noqa: E731  # terse test stub
     assert parse(is_sample=True).source == "Illustrative sample dataset"
     assert parse(is_sample=True, source="Grounded evidence").source == "Grounded evidence"
     assert parse(is_sample=True, source="Acme").source == "Acme"

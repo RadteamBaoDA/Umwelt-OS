@@ -266,13 +266,13 @@ class Settings(BaseSettings):
     def normalize_mcp_endpoint_origins(cls, values: object) -> object:
         """Convert deployment origin keys to the exact normalized tuple consumed by MCP transport."""
         if not isinstance(values, dict):
-            raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS must be a JSON object")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS must be a JSON object")
         if len(values) > 64:
             raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS supports at most 64 exact origins")
         normalized: dict[tuple[str, str, int], object] = {}
         for raw_origin, cidrs in values.items():
             if not isinstance(raw_origin, str):
-                raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS keys must be origin strings")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+                raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS keys must be origin strings")
             scheme, host, port, _path = normalize_mcp_url(raw_origin, origin_only=True)
             origin = (scheme, host, port)
             if origin in normalized:

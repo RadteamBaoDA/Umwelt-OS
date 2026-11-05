@@ -210,7 +210,7 @@ class LocalFilesystemBackend:
                 os.replace(temporary_name, destination)
                 return StoredObject(relative.as_posix(), size, digest.hexdigest())
             except BaseException:
-                Path(temporary_name).unlink(missing_ok=True)
+                Path(temporary_name).unlink(missing_ok=True)  # noqa: ASYNC240  # best-effort tmp cleanup on the failure path; must run even under cancellation
                 raise
 
     async def open_stream(self, key: str) -> AsyncIterator[bytes]:

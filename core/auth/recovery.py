@@ -24,6 +24,7 @@ async def recover_bootstrap_account_in_uow(session: AsyncSession, password: str)
     ValueError rejects invalid passwords, incomplete cleanup and any non-tombstone identity.
     """
     # Import the owner registry to register the complete schema before the read projection.
+    # Import registers the deletion-cleanup hook as a side effect.
     from core.auth import deletion_cleanup as _deletion_cleanup  # noqa: F401
 
     if not 12 <= len(password) <= 128:

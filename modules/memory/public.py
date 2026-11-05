@@ -319,7 +319,7 @@ def _parse_export_provenance(row: Memory | MemoryCandidate) -> _ExportProvenance
     )
     parsed.raw_doc_fields = any(raw.get(key) is not None for key in ("document_id", "document_version_id", "chunk_id"))
     parsed.complete_doc = all(value is not None for value in (parsed.document_id, parsed.version_id, parsed.chunk_id))
-    if not manual_memory:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
+    if not manual_memory:
         if ((raw.get("conversation_id") is not None and parsed.conversation_id is None)
                 or (raw.get("message_id") is not None and parsed.message_id is None)
                 or (raw.get("source_id") is not None and parsed.explicit_source_id is None)
@@ -380,7 +380,7 @@ async def _verify_export_document_evidence(
             raise ConflictError("Memory export cannot verify incomplete document provenance")
         return
     try:
-        assert prov.version_id is not None and prov.chunk_id is not None  # complete_doc
+        assert prov.version_id is not None and prov.chunk_id is not None  # complete_doc  # noqa: S101  # mypy narrowing invariant
         refs = await documents_public.read_evidence_refs(
             session, [(prov.version_id, prov.chunk_id)], scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
@@ -435,7 +435,7 @@ async def _fence_export_source(
             prov.doc_evidence = None
     else:
         prov.safe["source_id"] = source_id
-        assert source is not None
+        assert source is not None  # noqa: S101  # mypy narrowing invariant
         prov.source_fence_data = {"source_id": source.id, "source_generation": source.generation}
 
 
@@ -1504,7 +1504,7 @@ class MemoryService:
         if self.redis is not None:
             try:
                 await self.redis.delete(_cache_key(scope))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001  # cache eviction failure must not fail the memory write; logged
                 logger.warning("Failed to evict memory cache: %s", exc)
 
     async def get_memories(
@@ -1948,7 +1948,7 @@ class MemoryService:
                 _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
             )
         if rec is None:
-            assert fence is not None  # only the locked branch reaches an insert
+            assert fence is not None  # only the locked branch reaches an insert  # noqa: S101  # mypy narrowing invariant
             rec = MemoryPrivacyRecord(
                 workspace_id=scope.workspace_id,
                 owner_id=_actor(scope),

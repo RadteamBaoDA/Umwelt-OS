@@ -62,7 +62,7 @@ async def _member_fence(
     """Admission fence for member reads (None for owners, who need no publication gate)."""
     if not public.is_member_scope(workspace):
         return None
-    assert isinstance(workspace, WorkspaceContext)
+    assert isinstance(workspace, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
     return await workspaces.read_access_fence(
         session, scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
@@ -108,7 +108,7 @@ async def global_search(
     )
     if member_fence is not None:
         # Members get documents only: no task/goal rows and no cross-type counts.
-        assert isinstance(workspace, WorkspaceContext)
+        assert isinstance(workspace, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
         await _gate_member_hits(request, session, workspace, member_fence, doc_response.items)
         return GlobalSearchResponse(
             documents=doc_response.items, document_next_cursor=doc_response.next_cursor,
@@ -148,7 +148,7 @@ async def search(
         release_during_embed=member_fence is None,
     )
     if member_fence is not None:
-        assert isinstance(workspace, WorkspaceContext)
+        assert isinstance(workspace, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
         await _gate_member_hits(request, session, workspace, member_fence, response.items)
     return response
 

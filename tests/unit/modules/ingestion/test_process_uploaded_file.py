@@ -80,7 +80,7 @@ class Env:
             @asynccontextmanager
             async def download_to_temp(self, uri):
                 env.log.append(("download", uri))
-                yield "/tmp/x"
+                yield "/tmp/x"  # noqa: S108  # fake path string used as fixture data; nothing is written
 
         monkeypatch.setattr(worker, "_lock_worker_event", lock)
         monkeypatch.setattr(worker, "_ingestion_enabled", enabled)

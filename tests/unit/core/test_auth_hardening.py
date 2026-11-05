@@ -55,7 +55,8 @@ class FakeRedis:
     async def set(self, key, _v, ex=None): self.locks[key] = ex
     async def delete(self, *keys):
         for k in keys:
-            self.kv.pop(k, None); self.locks.pop(k, None)
+            self.kv.pop(k, None)
+            self.locks.pop(k, None)
 
 
 @pytest.mark.asyncio

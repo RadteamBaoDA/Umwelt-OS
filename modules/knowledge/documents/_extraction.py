@@ -86,7 +86,7 @@ async def _extraction_document(
     missing/moved/deleted/raw-input mismatch returns None before mutation.
     """
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("extraction_original_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
+        raise RuntimeError("extraction_original_fence_required")
     await _normalized_source_proof(
         session, source_id, source_fence.generation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence, source_fence=source_fence,

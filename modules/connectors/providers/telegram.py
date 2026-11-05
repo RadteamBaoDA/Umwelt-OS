@@ -54,7 +54,7 @@ def _rate_limit_deadline(body: bytes | bytearray) -> datetime:
         payload_json = json.loads(body)
         retry_after = payload_json["parameters"]["retry_after"]
         if isinstance(retry_after, bool) or not isinstance(retry_after, int):
-            raise ValueError  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError
         if retry_after <= 0:
             raise ValueError
     except KeyError:

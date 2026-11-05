@@ -257,7 +257,7 @@ async def revalidate_native_output_fences_many(
     async def per_row(index: int) -> bool:
         """Exact per-row verdict used whenever a combined check cannot attribute a failure."""
         sink, principal = items[index]
-        assert principal is not None
+        assert principal is not None  # noqa: S101  # mypy narrowing invariant
         return await revalidate_native_output_fences(
             session_factory, sink, principal, destination_kind=destination_kind,
             multi_workspace_enabled=multi_workspace_enabled,

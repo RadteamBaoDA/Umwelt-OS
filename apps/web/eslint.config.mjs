@@ -5,19 +5,16 @@ import nextTypescript from 'eslint-config-next/typescript';
 const HEX_COLOR = '#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\\b';
 const HEX_MESSAGE = 'Use a semantic design token (bg, surface, text, muted, line, accent, danger) instead of a literal hex color.';
 
-/**
- * Quality rules introduced by the web-platform package. They are warnings for now: feature packages fix the
- * existing findings and the severity is raised to error afterwards.
- */
+/** Quality gate rules (plan 3.3 R0): function size, complexity, module boundaries and no literal hex colours. */
 const qualityRules = {
   files: ['src/**/*.{ts,tsx}'],
   ignores: ['src/**/*.test.{ts,tsx}', 'src/test/**', 'src/core/api-types.gen.ts'],
   rules: {
-    'max-lines-per-function': ['warn', { max: 100, skipBlankLines: true, skipComments: true }],
-    complexity: ['warn', 15],
+    'max-lines-per-function': ['error', { max: 100, skipBlankLines: true, skipComments: true }],
+    complexity: ['error', 15],
     // Modules integrate through their index entry point only: `@/modules/<name>` or relative imports inside the module.
     'no-restricted-imports': [
-      'warn',
+      'error',
       {
         patterns: [
           {
@@ -28,7 +25,7 @@ const qualityRules = {
       },
     ],
     'no-restricted-syntax': [
-      'warn',
+      'error',
       { selector: `JSXAttribute[name.name='className'] Literal[value=/${HEX_COLOR}/]`, message: HEX_MESSAGE },
       { selector: `JSXAttribute[name.name='className'] TemplateElement[value.raw=/${HEX_COLOR}/]`, message: HEX_MESSAGE },
       { selector: `JSXAttribute[name.name='style'] Literal[value=/${HEX_COLOR}/]`, message: HEX_MESSAGE },

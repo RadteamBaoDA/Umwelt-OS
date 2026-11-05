@@ -44,7 +44,7 @@ def downgrade() -> None:
     """
     legacy = _in_list(_LEGACY_PROVIDER_IDS)
     op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM observations "
+        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM observations "  # noqa: S608  # identifiers come from the frozen legacy provider constant
         f"WHERE provider NOT IN ({legacy})) THEN "
         "RAISE EXCEPTION 'Cannot downgrade: observations rows exist for providers outside the legacy set'; "
         "END IF; END $$"

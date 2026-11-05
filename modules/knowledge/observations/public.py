@@ -423,7 +423,7 @@ async def _observation_source_proof(
     mutation; callers cannot substitute a newer generation or membership.
     """
     if not isinstance(access_fence, AccessFence) or not isinstance(source_fence, SourceFence):
-        raise RuntimeError("observation_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
+        raise RuntimeError("observation_preparation_fence_required")
     if (source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id
             or access_fence.workspace_id != scope.workspace_id or source_fence.generation != source_generation
             or source_fence.status != "active"):
@@ -515,7 +515,7 @@ async def prepare_ingestion_observation_keys(
         _validate_observation_key(key[0])
     keys = tuple(dict.fromkeys(keys))
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("observation_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
+        raise RuntimeError("observation_preparation_fence_required")
     if not await _observation_source_proof(
         session, source_id, source_fence.generation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence, source_fence=source_fence,

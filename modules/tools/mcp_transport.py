@@ -364,7 +364,7 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
         """Close the owned direct HTTP transport and its bounded connection pool."""
         await self._delegate.aclose()
 
-    async def __aenter__(self) -> "McpPinnedHttpTransport":  # noqa: PYI034  # async context-manager signature kept; typing-only
+    async def __aenter__(self) -> "McpPinnedHttpTransport":
         """Enter the delegated HTTP transport so httpx2 clients can manage it as a context."""
         await self._delegate.__aenter__()
         return self

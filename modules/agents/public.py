@@ -214,8 +214,8 @@ async def reserve_browser_run_budget_in_uow(
     raw_sources = (run.profile_snapshot or {}).get("source_ids")
     try:
         source_ids = frozenset(UUID(item) for item in raw_sources) if isinstance(raw_sources, list) else frozenset()
-    except (TypeError, ValueError):
-        raise PermissionError("Browser profile source scope is invalid")
+    except (TypeError, ValueError) as exc:
+        raise PermissionError("Browser profile source scope is invalid") from exc
     profile = await session.scalar(select(AgentProfile).where(
         AgentProfile.workspace_id == scope.workspace_id, AgentProfile.profile_id == profile_id,
     ))
@@ -1073,7 +1073,7 @@ def _scrub_agent_scope_payloads(
             approval_fences = _strict_agent_fences(approval.source_fences) if approval is not None else None
             if approval_fences is not None:
                 classified = True
-                assert approval is not None
+                assert approval is not None  # noqa: S101  # mypy narrowing invariant
                 matched = _fences_match_agent_scope(approval.source_fences, records)
         if matched:
             # Input provenance justifies clearing derived arguments. Output references may identify
@@ -1253,7 +1253,7 @@ async def _cleanup_finalized_marker(
             work.session, run_id, workspace_id=work.workspace_id,
         )
         unresolved = work.scrub(approvals, effects, calls)
-        assert marker is not None
+        assert marker is not None  # noqa: S101  # mypy narrowing invariant
         marker.state = "unavailable" if unresolved else "finalized"
         work.unavailable = work.unavailable or unresolved or marker.state == "unavailable"
     work.advance(run_id)
@@ -1286,7 +1286,7 @@ async def _cleanup_unavailable_marker(
         work.advance(run_id)
         work.unavailable = True
         return None
-    assert marker is not None
+    assert marker is not None  # noqa: S101  # mypy narrowing invariant
     marker.matched_identity = matching
     marker.state = "pending"
     _revoke_run_for_cleanup(run)
@@ -1399,7 +1399,7 @@ async def _cleanup_phase_b(work: _CleanupPass, run_id: UUID) -> AgentCopiedEvide
     run.updated_at = now
     for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
         await work.session.execute(
-            text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),
+            text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
             {"thread_id": run.checkpoint_thread_id},
         )
     marker.state = "unavailable" if unresolved else "finalized"
@@ -1770,7 +1770,7 @@ async def purge_agent_runs(
             run.completed_at = datetime.now(UTC)
         for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
             await session.execute(
-                text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),
+                text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
                 {"thread_id": run.checkpoint_thread_id},
             )
     await purge_browser_results_in_uow(
@@ -1835,7 +1835,7 @@ async def request_cancel(
             row.error_code = None
             for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
                 await session.execute(
-                    text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),
+                    text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
                     {"thread_id": row.checkpoint_thread_id},
                 )
         await commit_with_replay(
@@ -2070,7 +2070,7 @@ async def redact_expired_agent_traces(
         row.trace_redacted_at = now
         eligible_ids.append(row.id)
         for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
-            await session.execute(text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),
+            await session.execute(text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
                                   {"thread_id": row.checkpoint_thread_id})
         redacted += 1
     if eligible_ids:

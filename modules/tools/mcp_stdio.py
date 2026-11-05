@@ -114,7 +114,7 @@ class _StdioReadPipe(ByteReceiveStream):
                 await anyio.wait_readable(self._fd)
                 await anyio.lowlevel.checkpoint()
                 if self._closed:
-                    raise anyio.ClosedResourceError
+                    raise anyio.ClosedResourceError from None
                 continue
             except InterruptedError:
                 await anyio.lowlevel.checkpoint()
@@ -170,7 +170,7 @@ class _StdioWritePipe(ByteSendStream):
                 await anyio.wait_writable(self._fd)
                 await anyio.lowlevel.checkpoint()
                 if self._closed:
-                    raise anyio.ClosedResourceError
+                    raise anyio.ClosedResourceError from None
                 continue
             except InterruptedError:
                 await anyio.lowlevel.checkpoint()
@@ -515,7 +515,7 @@ async def _verify_one_artifact(
     if not isinstance(raw_path, str) or not Path(raw_path).is_absolute() or not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
         raise McpTransportError("MCP stdio artifact manifest is invalid")
     try:
-        path = Path(raw_path).resolve(strict=True)
+        path = Path(raw_path).resolve(strict=True)  # noqa: ASYNC240  # one resolve() of a reviewed manifest path during startup validation
         path.relative_to(root)
         if str(path) != raw_path:
             raise ValueError("non-canonical")
@@ -565,7 +565,7 @@ async def _verify_artifacts(
             raise McpTransportError("MCP stdio absolute argument is outside the reviewed manifest")
     if profile.runtime_kind != "native":
         try:
-            entry = Path(cast("str", profile.entry_script)).resolve(strict=True)  # non-native profiles always carry a script
+            entry = Path(cast("str", profile.entry_script)).resolve(strict=True)  # non-native profiles always carry a script  # noqa: ASYNC240  # one resolve() of a reviewed manifest path during startup validation
             entry.relative_to(plan.root)
         except (OSError, RuntimeError, ValueError) as exc:
             raise McpTransportError("MCP stdio entry script is unavailable") from exc
@@ -983,8 +983,8 @@ async def _read_stdio_stdout(
         if shutdown.is_set():
             return
         if pending:
-            raise McpTransportError("MCP stdio server ended with a truncated frame")
-        raise McpTransportError("MCP stdio server closed stdout unexpectedly")
+            raise McpTransportError("MCP stdio server ended with a truncated frame") from None
+        raise McpTransportError("MCP stdio server closed stdout unexpectedly") from None
     except (anyio.ClosedResourceError, anyio.BrokenResourceError):
         # SDK shutdown closes the receive end; keep consuming without retaining
         # child output so a cooperative process can still finish its shutdown.

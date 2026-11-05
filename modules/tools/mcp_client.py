@@ -112,7 +112,7 @@ class McpSdkClient:
             terminate_on_close=True,
             max_sse_event_size=min(budget.max_response_bytes, 1_000_000),
         )
-        async with http_client:  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        async with http_client:
             async with Client(
                 transport_context,
                 mode="auto",

@@ -111,7 +111,7 @@ class TestDigestAndCredentials:
     async def test_create_collector_credential_source_not_found(self) -> None:
         """Create collector credential raises LookupError if source is absent."""
         session = AsyncMock()
-        with patch("modules.sources.public.lock_source", return_value=None):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        with patch("modules.sources.public.lock_source", return_value=None):
             with pytest.raises(LookupError, match="Source not found"):
                 await create_collector_credential(session, uuid4(), scope=SCOPE, multi_workspace_enabled=False)
 

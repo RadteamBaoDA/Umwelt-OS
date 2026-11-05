@@ -369,7 +369,7 @@ async def _finish_run(
 async def _delete_checkpoints(session: AsyncSession, thread_id: str) -> None:
     """Delete every pinned saver row for a terminal run before its private evidence can linger."""
     for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
-        await session.execute(text(f"DELETE FROM {table} WHERE thread_id = :thread_id"), {"thread_id": thread_id})
+        await session.execute(text(f"DELETE FROM {table} WHERE thread_id = :thread_id"), {"thread_id": thread_id})  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
 
 
 async def _enqueue_generation(redis: ArqRedis, run_id: UUID, generation: int) -> bool:
@@ -640,7 +640,7 @@ async def _finish_segment_state(
     continuation. Re-checks the profile checkpoint and the durable run before publishing.
     """
     if not isinstance(state, dict):
-        raise RuntimeError("Workflow state is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise RuntimeError("Workflow state is invalid")
     context.assert_profile_checkpoint(cast(HarnessState, state))
     await context._run_snapshot()
     if state.get("answer") is not None and not state.get("segment_done"):
@@ -821,7 +821,7 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
             rows = list((await session.execute(
                 status_query.order_by(AgentRun.id).limit(MAX_RECONCILE_ROWS)
             )).all())
-    for run_id, generation, owner_id, auth_session_hash, status in rows:
+    for run_id, _generation, owner_id, auth_session_hash, status in rows:
         await publish_agent_activity_safely(
             session_factory, run_id=run_id, owner_id=owner_id,
             auth_session_hash=auth_session_hash, status=status,
@@ -830,7 +830,7 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
         _activity_reconcile_cursor = rows[-1][0]
     queued = await _load_dispatchable_runs(session_factory, flag)
     enqueued = 0
-    for run_id, generation, workspace_id, owner_id in queued:
+    for run_id, generation, _workspace_id, _owner_id in queued:
         try:
             enqueued += int(await _enqueue_generation(redis, run_id, generation))
         except Exception:  # best-effort enqueue: PostgreSQL retains the queued work

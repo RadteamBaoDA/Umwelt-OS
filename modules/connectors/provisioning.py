@@ -1355,7 +1355,7 @@ def _retire_activation_for_saved_configuration(
                     and envelope.get("activation_id") == activation.get("id")
                 ):
                     if envelope.get("state") == "prepared":
-                        assert credential is not None
+                        assert credential is not None  # noqa: S101  # mypy narrowing invariant
                         credential.operation_id = None
                         credential.operation_envelope = None
                         credential.state = "ready" if credential.credential_id else "queued"
@@ -1943,7 +1943,7 @@ async def _apply_collection_fence(
                     and envelope.get("activation_id") == activation.get("id")
                 ):
                     if envelope.get("state") == "prepared":
-                        assert credential is not None
+                        assert credential is not None  # noqa: S101  # mypy narrowing invariant
                         credential.operation_id = None
                         credential.operation_envelope = None
                         credential.state = "ready" if credential.credential_id else "queued"
@@ -2149,7 +2149,7 @@ async def claim_credential_operation(
         row.operation_id = None
         row.state = "ready" if row.credential_id else "queued"
         row.error_code = "prepared_credential_intent_stale"
-        if isinstance(activation_id, str) and desired is not None and isinstance(desired.activation_intent, dict):  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
+        if isinstance(activation_id, str) and desired is not None and isinstance(desired.activation_intent, dict):
             if desired.activation_intent.get("id") == activation_id:
                 for sibling in slots.values():
                     sibling_envelope = sibling.operation_envelope
@@ -2887,7 +2887,7 @@ async def defer_unknown_workflow_create(
     now = datetime.now(UTC)
     if latest is not None and now <= latest:
         now = latest + timedelta(microseconds=1)
-    assert row is not None
+    assert row is not None  # noqa: S101  # mypy narrowing invariant
     row.updated_at = now
     await session.flush()
     return True
@@ -3002,7 +3002,7 @@ async def _lookup_workflow_step(
     if not isinstance(workflow_id, str) or not workflow_id:
         raise ValueError("n8n workflow lookup response omitted its ID")
     if not isinstance(body, dict):
-        raise ValueError("Prepared workflow request body is invalid")  # noqa: TRY004  # ValueError is the caller-classified contract
+        raise ValueError("Prepared workflow request body is invalid")
     if not await _workflow_send_allowed(
         session, source_id, operation, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,

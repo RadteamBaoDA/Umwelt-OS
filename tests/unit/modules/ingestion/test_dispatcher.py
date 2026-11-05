@@ -325,7 +325,7 @@ class TestCursorCasLogic:
 
         cursor_after = older_item_time.isoformat()
         # Verify cursor monotonic guard
-        latest = datetime.fromisoformat(cursor_after.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+        latest = datetime.fromisoformat(cursor_after.replace("Z", "+00:00"))
         if prior_cursor > latest:
             cursor_after = prior_cursor.isoformat()
 

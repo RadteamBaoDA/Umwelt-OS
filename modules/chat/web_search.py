@@ -285,7 +285,7 @@ async def search_with_fallback(
             except EndpointNetworkPolicyError:
                 logger.info("web_search provider=%s outcome=network_denied", target.provider)
                 raise WebSearchError("network_denied") from None
-            assert target.endpoint is not None  # targets must be filtered by target_permitted
+            assert target.endpoint is not None  # targets must be filtered by target_permitted  # noqa: S101  # mypy narrowing invariant
             return await search(target.provider, target.endpoint, target.api_key, message, transport=transport), target.provider
         except WebSearchError as exc:
             if exc.code not in ("timeout", "provider_error", "network_denied"):

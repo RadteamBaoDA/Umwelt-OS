@@ -111,7 +111,7 @@ def _admit():
 
 # ---------- owner closures built from discovery results ----------
 
-ENT_RESULTS = lambda: (
+ENT_RESULTS = lambda: (  # noqa: E731  # terse test stub
     [(M1, M2)], [(M1, M1)], [M2], [(M1, M2)],
 )
 
@@ -127,7 +127,7 @@ async def _relationship_closure(results=None, refs=(), document_id=None):
         document_id=document_id, membership_ids=[M1], **KW)
 
 
-TL_RESULTS = lambda: ([(M1, M2)], [M1], [M2])
+TL_RESULTS = lambda: ([(M1, M2)], [M1], [M2])  # noqa: E731  # terse test stub
 
 
 async def _timeline_closure(results=None, document_id=None):
@@ -176,7 +176,7 @@ async def test_member_denied_before_any_query(module) -> None:
 
 @pytest.mark.asyncio
 async def test_overflow_flag_without_raising() -> None:
-    big = lambda n: [(uuid4(), uuid4()) for _ in range(n)]
+    big = lambda n: [(uuid4(), uuid4()) for _ in range(n)]  # noqa: E731  # terse test stub
     assert (await entities.support_cleanup_ids(Rec(big(10_001)), source_id=SRC, **KW)).overflow
     assert (await relationships.support_cleanup_ids(
         Rec(big(10_001)), refs=[], source_id=SRC, membership_ids=[], **KW)).overflow

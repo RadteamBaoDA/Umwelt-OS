@@ -133,7 +133,7 @@ def _raise_if_policy_denied(exc: BaseException) -> None:
 
 def _retry_delay() -> float:
     """Jittered pause before the single retry so concurrent workers do not retry in lockstep."""
-    return random.uniform(0.25, 1.0)
+    return random.uniform(0.25, 1.0)  # noqa: S311  # retry jitter, not a security value
 
 
 def _retry_after_seconds(exc: APIStatusError) -> float | None:
@@ -462,7 +462,7 @@ class ModelGateway:
         # and indexed source text out of logs even when OPENAI_LOG=debug is set.
         logging.getLogger("openai").setLevel(logging.WARNING)
         if not isinstance(self.scope, (WorkspaceContext, InternalJobScope)) or not callable(self.before_send):
-            raise ValueError("Explicit scope and fresh before_send callback are required")  # noqa: TRY004  # constructor contract raises ValueError for bad wiring
+            raise ValueError("Explicit scope and fresh before_send callback are required")
         if isinstance(self.scope, WorkspaceContext) and self.scope.role != "owner":
             raise PrivacyPolicyDenied("Workspace owner required for model execution")
         if len(self.gateway_identity) != 64 or any(char not in "0123456789abcdef" for char in self.gateway_identity):
@@ -661,7 +661,7 @@ class ModelGateway:
                         if slot >= 0:
                             key = keys[slot]
                         else:
-                            await asyncio.sleep(0.1 + random.uniform(0, 0.05))
+                            await asyncio.sleep(0.1 + random.uniform(0, 0.05))  # noqa: S311  # retry jitter, not a security value
             except TimeoutError as exc:
                 raise ModelGatewayError("Model capacity is unavailable") from exc
             if degraded:

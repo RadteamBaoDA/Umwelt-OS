@@ -302,7 +302,7 @@ class TestDepthBoundsAndTraversalLimits:
         mock_redirect.aclose = AsyncMock()
 
         with patch("modules.connectors.crawl._dns_safe", new_callable=AsyncMock), \
-             patch("httpx.AsyncClient.send", return_value=mock_redirect):  # noqa: SIM117  # style-only; nested with kept
+             patch("httpx.AsyncClient.send", return_value=mock_redirect):
             with pytest.raises(ValueError, match="Web redirect limit exceeded"):
                 await crawl(req)
 

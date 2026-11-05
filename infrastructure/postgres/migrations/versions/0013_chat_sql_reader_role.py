@@ -24,7 +24,7 @@ _ROLE = "umwelt_chat_sql_reader"
 def upgrade() -> None:
     """Create the NOLOGIN reader role if missing and allow the current user to assume it."""
     op.execute(
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + _ROLE + "') THEN "
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + _ROLE + "') THEN "  # noqa: S608  # _ROLE is a module constant, not input
         "CREATE ROLE " + _ROLE + " NOLOGIN NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE "
         "NOREPLICATION NOBYPASSRLS; END IF; END $$"
     )

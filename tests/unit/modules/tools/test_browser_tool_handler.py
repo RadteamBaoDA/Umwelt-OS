@@ -44,7 +44,7 @@ def _context(**over: Any) -> dict[str, Any]:
 class _Session:
     """Async session double."""
 
-    async def __aenter__(self) -> _Session:  # noqa: PYI034
+    async def __aenter__(self) -> _Session:
         """Enter."""
         return self
 

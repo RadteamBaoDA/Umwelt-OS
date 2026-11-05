@@ -544,7 +544,7 @@ class McpRuntime:
                 return False
             if not self._profile_identity_current(connection, fence):
                 return False
-            assert grant is not None and capability is not None
+            assert grant is not None and capability is not None  # noqa: S101  # mypy narrowing invariant
             expected_definition = build_mcp_tool_definition(
                 connection, discovery.id, capability, grant,
             )

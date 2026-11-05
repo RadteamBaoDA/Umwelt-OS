@@ -217,8 +217,8 @@ async def save_connection(
         raise ValueError("stdio connections cannot retain an existing bearer credential")
     if op.action == "replace":
         row.credential_revision += 1
-        assert op is not None
-        assert op.value is not None
+        assert op is not None  # noqa: S101  # mypy narrowing invariant
+        assert op.value is not None  # noqa: S101  # mypy narrowing invariant
         row.encrypted_credential = encrypt_connection_credential(
             op.value.get_secret_value(), key=encryption_key, owner_id=owner_id,
             connection_id=row.id, credential_revision=row.credential_revision)

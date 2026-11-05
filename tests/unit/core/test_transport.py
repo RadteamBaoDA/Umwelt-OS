@@ -38,7 +38,7 @@ from modules.chat.web_search import search
         "169.254.169.254",
         "127.0.0.1",
         "::1",
-        "0.0.0.0",
+        "0.0.0.0",  # noqa: S104  # test-only literal, no socket is bound
         "::",
         "10.0.0.1",
         "172.16.0.1",

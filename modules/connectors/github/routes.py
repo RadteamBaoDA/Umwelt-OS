@@ -722,7 +722,7 @@ async def _consume_callback_attempt(
         binding = oauth._open_token_cipher(key, attempt.encrypted_verifier, attempt.source_id, attempt.id, attempt.source_generation, attempt.configuration_revision)
         verifier = binding.get("verifier")
         if not isinstance(verifier, str):
-            raise ValueError  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=503, detail="GitHub authorization attempt is unavailable") from exc
     attempt.consumed_at = now

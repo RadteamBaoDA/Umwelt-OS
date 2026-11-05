@@ -639,7 +639,7 @@ async def _run_collection(ctx: FetchContext, collector: ProviderCollector) -> Pr
                 retryable=True, provider_deadline=outcome.rate_limited.next_eligible_at)
             return outcome.rate_limited
     receipt = outcome.receipt
-    assert receipt is not None
+    assert receipt is not None  # noqa: S101  # mypy narrowing invariant
     if receipt.batch_id is None:  # replay-only Telegram page: nothing accepted, so nothing settled it
         await settle_request_exit(ctx.session, ctx.request_ref, outcome="no_changes")
     return provider_fetch_read(receipt, outcome.eligible)

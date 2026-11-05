@@ -19,7 +19,7 @@ from core.heavy_work import to_thread_joined
 from modules.connectors import quota
 from modules.connectors.live_map_catalog import CATALOG_IDS
 from modules.connectors.live_map_catalog import (
-    live_cache_seconds as live_cache_seconds,  # noqa: PLC0414 - public re-export
+    live_cache_seconds as live_cache_seconds,
 )
 from modules.connectors.providers import news, rest, security
 from modules.connectors.providers.feed_catalog import _retry_deadline

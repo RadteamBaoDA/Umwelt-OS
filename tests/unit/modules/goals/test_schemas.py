@@ -131,7 +131,7 @@ class TestPlanProposalSchemas:
 
     def test_plan_proposal_task_naive_due_at_rejected(self) -> None:
         """Naive datetime in proposal tasks must be rejected."""
-        naive = datetime(2026, 11, 1, 10, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
+        naive = datetime(2026, 11, 1, 10, 0)
         task = TaskProposal(title="Implement feature", due_at=naive)
 
         with pytest.raises(ValidationError, match="proposal due_at must include a timezone offset"):

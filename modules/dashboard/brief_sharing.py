@@ -196,7 +196,7 @@ async def read_shared_brief(
             session, [row], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         return SharedBrief(item, ())
-    assert isinstance(scope, WorkspaceContext)
+    assert isinstance(scope, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
     grants = await _member_grants(
         session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )

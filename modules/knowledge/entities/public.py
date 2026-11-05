@@ -1521,7 +1521,7 @@ async def _attach_review_evidence(
             multi_workspace_enabled=multi_workspace_enabled,
         ))
     entity_refs_by_id = {ref.requested_id: ref for ref in entity_refs}
-    for item, keys, endpoints in zip(items, evidence_keys, endpoint_keys):
+    for item, keys, endpoints in zip(items, evidence_keys, endpoint_keys, strict=False):
         fence = fences.get(item.document_version_id)
         item.evidence = [EntityReviewEvidence(
             document_id=ref.document_id, document_version_id=ref.document_version_id,

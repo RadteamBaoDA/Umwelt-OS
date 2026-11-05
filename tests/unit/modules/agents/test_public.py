@@ -403,7 +403,7 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
+             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
                     session, run_id=run_id, claim_generation=1,
@@ -443,7 +443,7 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
+             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
                     session, run_id=run_id, claim_generation=1,
@@ -484,7 +484,7 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
+             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
             with pytest.raises(PermissionError, match="Browser run active-time budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
                     session, run_id=run_id, claim_generation=1,

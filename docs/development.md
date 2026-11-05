@@ -49,3 +49,23 @@ Module persistence models stay private. The following SQL projections are approv
 | Host-only bootstrap recovery (`core/auth/recovery.py`) | Registered table metadata: integer identity columns (`owner_id`, `account_id`, `user_id`, `*_user_id`) and direct foreign keys to `owner.id`; existence only, no payloads | Auth locks account 1, requires the exact sanitized disabled tombstone, loads the complete erasure owner registry, and refuses any remaining reference. This projection only checks absence; it never writes another module's tables. Workspace creation uses the public provisioning contract within the same transaction. |
 
 Cross-module mutations use owner commands on the caller's `AsyncSession`; commands preserve source generation fences, row-lock ordering, and transaction boundaries without committing early.
+
+## Quality gates
+
+`make lint` and `./scripts/dev.ps1 lint` run the lint gates; `make typecheck` the type gates; CI (`.github/workflows/ci.yml`) runs all of them on every push and pull request. A change is not done until each gate is green.
+
+| Gate | Command | Notes |
+| --- | --- | --- |
+| Ruff | `uv run ruff check core apps modules tests infrastructure/postgres/migrations scripts/check_function_length.py` | Rules `E F W I B UP C90 PLR0912 PLR0915 BLE S ASYNC RUF100` (`pyproject.toml`); mccabe 15, 15 branches, 60 statements. `E501` is off (no formatter owns wrapping). Every `# noqa` names the rule and carries a reason (`# noqa: S608  # ...`, or the ` - reason` style already used for `F401` re-exports); `RUF100` fails stale ones. Tests only get scoped `S101/S105/S106/S107` ignores. |
+| Function length | `uv run python scripts/check_function_length.py` | No production Python function over 100 lines; must report 0. |
+| mypy | `uv run mypy core apps modules` | Strict; must report 0 errors. |
+| GenUI parity | `uv run python scripts/check_genui_parity.py` | |
+| Import contracts | `uv run lint-imports` | Runs only when `.importlinter` exists. |
+| Python tests | `uv run pytest -q` (unit: `tests/unit tests/test_*.py`) | Docker integration/e2e only through `make test`. |
+| ESLint | `npm run lint` | `max-lines-per-function` (100), `complexity` (15), module-boundary `no-restricted-imports` and the literal hex-colour guard are errors. |
+| TypeScript | `npm run typecheck` | |
+| Vitest | `npm test --workspace apps/web` | |
+| Build | `npm run build` | |
+| OpenAPI types | `npm run check:api-types` | Fails when `apps/web/src/core/api-types.gen.ts` is stale; regenerate with `npm run gen:api --workspace apps/web`. |
+| Dependency audit | `make audit` | `npm audit --audit-level=high` plus `pip-audit` over the locked production set. |
+| Prettier | `npm run format:check --workspace apps/web` (also part of `npm run lint`) | Enforced for files changed since `FORMAT_BASE` (default `HEAD`; CI passes the PR base). A repo-wide `--write` was measured: it leaves 53-68 ESLint `max-lines-per-function` errors (printWidth 140/160/200 all tried), so the tree is formatted incrementally. Format touched files with `npx prettier --write <file>`; once those components are split, switch to `format:check:all`. |

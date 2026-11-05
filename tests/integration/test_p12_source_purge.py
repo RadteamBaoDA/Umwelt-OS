@@ -75,7 +75,7 @@ async def _occurrences(engine: AsyncEngine, needle: str) -> dict[str, int]:
         if table in SKIPPED_SCAN_TABLES:
             continue
         count = await _scalar(
-            engine, f'SELECT count(*) FROM "{table}" t WHERE t::text LIKE :needle',
+            engine, f'SELECT count(*) FROM "{table}" t WHERE t::text LIKE :needle',  # noqa: S608  # test-only SQL built from constants
             needle=f"%{needle}%",
         )
         if count:
@@ -88,7 +88,7 @@ async def _occurrences(engine: AsyncEngine, needle: str) -> dict[str, int]:
     ):
         table, name = column["table_name"], column["column_name"]
         count = await _scalar(
-            engine, f"SELECT count(*) FROM \"{table}\" "
+            engine, f"SELECT count(*) FROM \"{table}\" "  # noqa: S608  # test-only SQL built from constants
             f"WHERE position(convert_to(:needle, 'UTF8') in \"{name}\") > 0",
             needle=needle,
         )
@@ -207,7 +207,7 @@ async def _wait_for_operation(
     pytest.fail(f"purge did not reach {until} in time: {row}")
 
 
-async def test_source_purge_erases_derived_data_and_replays_never_resurrect_it(
+async def test_source_purge_erases_derived_data_and_replays_never_resurrect_it(  # noqa: PLR0915  # linear test scenario
     ready_owner_client: AsyncClient, committed_engine: AsyncEngine,
 ) -> None:
     client, engine = ready_owner_client, committed_engine
@@ -260,7 +260,7 @@ async def test_source_purge_erases_derived_data_and_replays_never_resurrect_it(
             "candidates": await _rows(
                 engine, "SELECT id, content, status, updated_at FROM memory_candidates ORDER BY id"),
             "counts": {
-                table: await _scalar(engine, f'SELECT count(*) FROM "{table}"')
+                table: await _scalar(engine, f'SELECT count(*) FROM "{table}"')  # noqa: S608  # test-only SQL built from constants
                 for table in ("documents", "document_versions", "document_chunks",
                               "entity_extraction_work", "news_observations", "search_index_items")
             },

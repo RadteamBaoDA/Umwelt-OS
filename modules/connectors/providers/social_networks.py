@@ -6,7 +6,6 @@ send-fence; returned cursors must be committed with the same durable ingestion r
 """
 
 # ValueError is the executor's stable classification for invalid provider payloads and scopes.
-# ruff: noqa: TRY004
 
 import json
 import re

@@ -1030,7 +1030,7 @@ async def get_story(
             incomplete_reasons=sorted(page_live.incomplete_reasons | {"support_scan_limit", "stale_support_omitted"}),
         )
     story_row = match or page_match
-    assert story_row is not None
+    assert story_row is not None  # noqa: S101  # mypy narrowing invariant
     story, observations, base_evidence = story_row
     title_evidence = base_evidence or (page_match[2] if page_match else [])
     representative = max(title_evidence, key=lambda item: (item.published_at or item.observed_at, str(item.document_id)))

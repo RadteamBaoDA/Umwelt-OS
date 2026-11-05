@@ -759,7 +759,7 @@ async def _reserve_step(
             and row.tool_calls >= tool_ordinal
         )
         if tool_name is not None and tool_ordinal is not None:
-            if existing is not None and existing.input_provenance_version == 1:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
+            if existing is not None and existing.input_provenance_version == 1:
                 if input_source_fences is None or existing.input_source_fences != input_source_fences:
                     raise RunIncompatible("Tool slot model-input evidence changed")
             if (existing_call is None and not recover_legacy_reservation
@@ -1071,10 +1071,10 @@ def _parse_tool_calls(requested: Any, allowed_names: set[str]) -> list[dict[str,
     used_ids: set[str] = set()
     for item in requested:
         if not isinstance(item, dict):
-            raise ValueError("Invalid tool-call item")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("Invalid tool-call item")
         function = item.get("function", {})
         if not isinstance(function, dict):
-            raise ValueError("Invalid tool-call function")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("Invalid tool-call function")
         name, arguments, call_id = function.get("name"), function.get("arguments"), item.get("id")
         if (not isinstance(name, str) or not 1 <= len(name) <= 160 or name not in allowed_names
                 or not isinstance(arguments, str) or len(arguments.encode("utf-8")) > MAX_TOOL_ARGUMENT_BYTES):
@@ -1300,7 +1300,7 @@ def _resolve_tool_slots(
         return _legacy_tool_ordinal(context, state, request, index, definition), True
     if (len(slots) != len(state["pending_tool_calls"])
             or any(type(slot) is not int or not 1 <= slot <= MAX_TOOL_CALLS for slot in slots)
-            or any(left >= right for left, right in zip(slots, slots[1:]))):  # noqa: RUF007  # style-only rewrite skipped to avoid touching control flow
+            or any(left >= right for left, right in zip(slots, slots[1:], strict=False))):
         raise RunIncompatible("Checkpoint tool-slot identities are incompatible")
     return slots[index], False
 

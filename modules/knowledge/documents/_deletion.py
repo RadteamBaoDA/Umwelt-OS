@@ -222,7 +222,7 @@ async def _lock_cleanup_closure(
     if closure.document_id is not None:
         parameters["document_id"] = closure.document_id
     await session.execute(text(
-        "WITH identities AS MATERIALIZED ("
+        "WITH identities AS MATERIALIZED ("  # noqa: S608  # interpolates only a fixed predicate fragment; values are bound
         " SELECT DISTINCT raw_uri FROM documents"
         " WHERE workspace_id = :workspace_id AND source_id = :source_id"
         f"{scoped_document} AND raw_uri IS NOT NULL AND raw_uri <> ''"

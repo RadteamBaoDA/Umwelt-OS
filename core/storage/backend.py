@@ -78,7 +78,7 @@ def build_document_key(workspace_id: UUID, document_id: UUID, suffix: str) -> st
     (no separators, colon or NUL). Pure: touches no storage.
     """
     if not isinstance(workspace_id, UUID) or not isinstance(document_id, UUID):
-        raise ValueError("Valid workspace and document UUIDs are required")  # noqa: TRY004  # ValueError is the documented contract for invalid upload identity
+        raise ValueError("Valid workspace and document UUIDs are required")
     if not suffix.startswith(".") or any(char in suffix for char in ("/", "\\", ":", "\x00")):
         raise ValueError("Invalid upload suffix or byte limit")
     return (Path("workspaces") / str(workspace_id) / "documents" / str(document_id) / f"{document_id}{suffix}").as_posix()

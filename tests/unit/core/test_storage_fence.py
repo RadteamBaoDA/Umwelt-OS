@@ -39,7 +39,7 @@ except WorkspaceStorageBusy:
     raise SystemExit(0)
 """
     with workspace_filesystem_lease(tmp_path, WORKSPACE):
-        result = subprocess.run([sys.executable, "-c", child, str(tmp_path), str(WORKSPACE)],
+        result = subprocess.run([sys.executable, "-c", child, str(tmp_path), str(WORKSPACE)],  # noqa: S603  # test-only subprocess with fixed arguments
                                 cwd=Path(__file__).resolve().parents[3], capture_output=True, timeout=15, check=False)
     assert result.returncode == 0
 

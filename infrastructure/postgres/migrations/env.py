@@ -10,8 +10,8 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import modules  # Domain model packages are imported here as they are added.
-import modules.dashboard.live_credentials  # noqa: F401 - register transient-map settings metadata
-import modules.translations.models  # noqa: F401
+import modules.dashboard.live_credentials  # import registers transient-map settings metadata
+import modules.translations.models  # noqa: F401  # import registers the translations tables on Base.metadata
 from core.auth.deletion_models import AccountDeletionOperation
 from core.auth.models import AuthSession, GoogleIdentity, Owner
 from core.database import Base

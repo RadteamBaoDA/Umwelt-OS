@@ -324,7 +324,7 @@ async def _gmail_initial_state(
             profile = await _json_async(await run.budget.get(f"{GMAIL_ORIGIN}/profile"))
         except _ReceiptPause as pause:
             if pause.deferred is not None:
-                raise pause.deferred
+                raise pause.deferred from pause
             raise GoogleProviderError("gmail_cursor_no_progress") from pause
         history_id = profile.get("historyId") if isinstance(profile, dict) else None
         if not isinstance(history_id, str) or not history_id.isdigit():
@@ -737,7 +737,7 @@ async def collect_calendar(
         result_cursor = _cursor_json(state)
         if result_cursor == original_cursor and not records:
             if pause.deferred is not None:
-                raise pause.deferred
+                raise pause.deferred from pause
             raise GoogleProviderError("calendar_cursor_no_progress") from pause
         return GoogleCollectionResult(tuple(records), result_cursor, "truncated")
     complete = calendar_index == 0 and page_token is None and all(isinstance(token, str) for token in tokens)
@@ -1187,7 +1187,7 @@ async def collect_drive(
         encoded = _cursor_json(run.state)
         if encoded == original_cursor and not run.records:
             if pause.deferred is not None:
-                raise pause.deferred
+                raise pause.deferred from pause
             raise GoogleProviderError("drive_cursor_no_progress") from pause
         return GoogleCollectionResult(tuple(run.records), encoded, "truncated")
     return GoogleCollectionResult(tuple(run.records), _cursor_json(run.state), "returned_snapshot")

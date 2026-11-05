@@ -99,7 +99,7 @@ def _parse_published_at(raw_metadata: dict[str, Any]) -> datetime | None:
         return None
     try:
         # ``Z`` is rewritten explicitly so the parse is identical on every supported interpreter.
-        published_at = datetime.fromisoformat(published_value.replace("Z", "+00:00"))  # noqa: FURB162
+        published_at = datetime.fromisoformat(published_value.replace("Z", "+00:00"))
     except ValueError:
         return None
     if published_at.tzinfo is None:

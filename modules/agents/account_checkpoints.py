@@ -30,7 +30,7 @@ async def erase_account_checkpoints_page(
     )]
     # Only the pinned internal table names enter SQL; all thread IDs remain bound values.
     checkpoint_rows = [text(
-        f'EXISTS (SELECT 1 FROM {name} WHERE {name}.thread_id = agent_runs.checkpoint_thread_id)'
+        f'EXISTS (SELECT 1 FROM {name} WHERE {name}.thread_id = agent_runs.checkpoint_thread_id)'  # noqa: S608  # table names come from the pinned internal checkpoint table set; ids are bound
     ) for name in present]
     rows = list((await session.scalars(select(AgentRun).where(
         AgentRun.workspace_id == scope.workspace_id,
@@ -46,7 +46,7 @@ async def erase_account_checkpoints_page(
             run.status = 'cancelled'
             run.claim_generation += 1
         for name in present:
-            await session.execute(text(f'DELETE FROM {name} WHERE thread_id = :thread_id'), {
+            await session.execute(text(f'DELETE FROM {name} WHERE thread_id = :thread_id'), {  # noqa: S608  # table names come from the pinned internal checkpoint table set; ids are bound
                 'thread_id': run.checkpoint_thread_id,
             })
     await session.flush()

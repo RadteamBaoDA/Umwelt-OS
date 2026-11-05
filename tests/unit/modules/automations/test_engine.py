@@ -75,7 +75,7 @@ class TestDeduplicationAndTriggerInbox:
     async def test_enqueue_trigger_webhook_requires_hook_name(self) -> None:
         """enqueue_trigger raises ValueError if webhook trigger lacks a hook identifier."""
         session = AsyncMock()
-        with patch("modules.automations.execution.validate_sample", return_value=None):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        with patch("modules.automations.execution.validate_sample", return_value=None):
             with pytest.raises(ValueError, match="webhook triggers need a hook name"):
                 await enqueue_trigger(
                     session, trigger_type="webhook", event_key="hook-1",

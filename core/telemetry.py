@@ -445,7 +445,7 @@ async def flush_metrics(redis: Any, *, force: bool = False) -> None:
                       ex=SNAPSHOT_TTL_SECONDS),
             timeout=_REDIS_TIMEOUT_SECONDS,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # best-effort telemetry; any Redis failure is logged at debug and dropped
         logger.debug("telemetry snapshot publish failed (%s)", type(exc).__name__)
 
 
@@ -466,7 +466,7 @@ async def read_snapshots(redis: Any) -> list[dict[str, Any]]:
                     data = json.loads(raw)
                     data["process"] = (key.decode() if isinstance(key, bytes) else key)[len(SNAPSHOT_KEY_PREFIX):]
                     out.append(data)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # best-effort telemetry read; failure yields an empty snapshot list
         logger.debug("telemetry snapshot read failed (%s)", type(exc).__name__)
     return out
 

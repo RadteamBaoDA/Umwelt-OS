@@ -430,7 +430,7 @@ async def _evict_memory_cache_after_commit(
         await session.rollback()
     try:
         await memory.invalidate_memory_cache(redis, scope=scope)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # cache eviction is best-effort; the event is retried later
         logger.warning("Source Memory cache eviction deferred (%s)", type(exc).__name__)
         return
     async with factory() as session:
@@ -588,7 +588,7 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
     except (HTTPException, DomainError):
         # Permission loss is never rewritten as cursor failure or an upgraded job epoch.
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # coverage failure is recorded and recovered below; the worker must not crash
         logger.warning("Source Memory coverage deferred (%s)", type(exc).__name__)
         reset_cursor = reset_cursor or isinstance(exc, _MalformedMemoryCursorError) or (
             isinstance(exc, ValueError) and str(exc) == "Source Memory cleanup cursor is invalid")

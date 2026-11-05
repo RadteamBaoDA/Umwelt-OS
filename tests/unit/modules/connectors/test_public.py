@@ -609,11 +609,11 @@ class TestStatusChecksAndGuards:
             await validate_public_url("https://user:pass@example.com/feed")
 
         # Resolves to private IP
-        with patch("modules.connectors.service.collection_requests.getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 443))]):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        with patch("modules.connectors.service.collection_requests.getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 443))]):
             with pytest.raises(ValueError, match="URL resolves to a non-public address"):
                 await validate_public_url("https://localhost/feed")
 
-        with patch("modules.connectors.service.collection_requests.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.1", 443))]):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        with patch("modules.connectors.service.collection_requests.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.1", 443))]):
             with pytest.raises(ValueError, match="URL resolves to a non-public address"):
                 await validate_public_url("https://router.local/feed")
 

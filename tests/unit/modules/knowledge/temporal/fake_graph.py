@@ -112,7 +112,7 @@ def make_entity(entity_id: str, **extra: Any) -> Any:
     )
 
 
-def _build_modules(graph: FakeGraph) -> dict[str, Any]:
+def _build_modules(graph: FakeGraph) -> dict[str, Any]:  # noqa: C901  # test harness
     """Build fake graphiti_core.edges/nodes modules backed by ``graph``."""
 
     class EntityEdge(SimpleNamespace):

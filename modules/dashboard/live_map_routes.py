@@ -43,7 +43,7 @@ async def _while_connected[T](request: Request, operation: Coroutine[Any, Any, T
     """Cancel and drain final revalidation if this client's request disconnects."""
     async def watch() -> None:
         """Watch only this request while its final database work is pending."""
-        while not await request.is_disconnected():
+        while not await request.is_disconnected():  # noqa: ASYNC110  # polls the ASGI disconnect state; there is no event to await
             await asyncio.sleep(0.2)
 
     work, watcher = asyncio.create_task(operation), asyncio.create_task(watch())
@@ -126,7 +126,7 @@ async def _join_shared[T](key: tuple[Any, ...], observer: _Observer,
 
     async def watch() -> None:
         """Wait for this particular client to disconnect without consuming another client's receive channel."""
-        while not await observer.request.is_disconnected():
+        while not await observer.request.is_disconnected():  # noqa: ASYNC110  # polls the ASGI disconnect state; there is no event to await
             await asyncio.sleep(0.2)
 
     watcher = asyncio.create_task(watch())

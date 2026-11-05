@@ -368,7 +368,7 @@ async def execute_db_query_tool(
 
     try:
         args = QueryCollectedDataArgs.model_validate(raw_arguments or {})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # tool argument validation failure is reported to the model as invalid_arguments
         return json.dumps({"error": f"invalid_arguments: {type(exc).__name__}", "rows": []})
 
     ctx = retrieval_context or {}
@@ -410,7 +410,7 @@ async def execute_db_query_tool(
             )
     except ValueError as exc:
         return json.dumps({"error": str(exc), "rows": []})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # any query failure is returned as a sanitized tool error (exception type only)
         return json.dumps({"error": f"query_execution_failed: {type(exc).__name__}", "rows": []})
 
 
@@ -496,7 +496,7 @@ async def _run_sql_as_reader(
         await session.execute(text("SET LOCAL transaction_read_only = on"))
         await session.execute(text(f"SET LOCAL ROLE {CHAT_SQL_READER_ROLE}"))
         res = await session.execute(
-            text("SELECT * FROM (" + clean_sql + ") AS _bounded_query LIMIT :max_rows"),
+            text("SELECT * FROM (" + clean_sql + ") AS _bounded_query LIMIT :max_rows"),  # noqa: S608  # clean_sql passed the read-only single-statement guard and runs under SET LOCAL ROLE
             {"max_rows": max_rows},
         )
         mappings = list(res.mappings().all())

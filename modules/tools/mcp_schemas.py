@@ -10,13 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 from core.mcp_endpoint import normalize_mcp_url
 
 
-class McpTransport(str, Enum):  # str+Enum kept: StrEnum changes str()/format() behavior
+class McpTransport(str, Enum):  # noqa: UP042  # str+Enum kept: StrEnum changes str()/format() behavior
     """Supported server transport names; stdio authority is an admin deployment profile only."""
     STREAMABLE_HTTP = "streamable_http"
     STDIO = "stdio"
 
 
-class McpRisk(str, Enum):  # str+Enum kept: StrEnum changes str()/format() behavior
+class McpRisk(str, Enum):  # noqa: UP042  # str+Enum kept: StrEnum changes str()/format() behavior
     """Explicit owner review classification for a selected immutable capability."""
     READ_ONLY = "READ_ONLY"
     INTERNAL_WRITE = "INTERNAL_WRITE"

@@ -357,7 +357,7 @@ async def _classify_highlight_row(
         if version_id is not None and version_id != parsed_version:
             return "undecidable", None
         version_id = version_id or parsed_version
-    assert version_id is not None  # every surviving branch above resolved a version
+    assert version_id is not None  # every surviving branch above resolved a version  # noqa: S101  # mypy narrowing invariant
     if not exact_match and version_id not in known_versions:
         from modules.knowledge.documents import public as documents
 
@@ -424,7 +424,7 @@ async def scrub_document_evidence(
         if verdict == "undecidable":
             (unavailable if final_reference_page else provisional).append(row.id)
             continue
-        assert version_id is not None  # every scrub verdict carries a resolved version
+        assert version_id is not None  # every scrub verdict carries a resolved version  # noqa: S101  # mypy narrowing invariant
         row.document_id = document_id
         row.document_version_id = version_id
         row.title = None

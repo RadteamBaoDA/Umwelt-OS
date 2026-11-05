@@ -275,7 +275,7 @@ def _targeted_records(
         ValueError: identity mismatch, result-count violation or missing/unknown outcome.
     """
     records: tuple[IngestionRecord, ...] = ()
-    if proof.target_outcome == "found" and claim.locator_kind == "repository" and claim.intent == "visibility_check":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
+    if proof.target_outcome == "found" and claim.locator_kind == "repository" and claim.intent == "visibility_check":
         if len(proof.raw_items) != 1 or str(proof.raw_items[0].get("id")) != claim.locator:
             raise ValueError("github_targeted_identity_mismatch")
     if proof.target_outcome == "found" and proof.raw_items and claim.intent not in {"visibility_check", "visibility_lost"}:
@@ -336,7 +336,7 @@ def _in_scope_items(
                 in_scope.append(item)
         elif state.resource == "release":
             in_scope.append(item)
-    if state.resource == "pull" and any(left < right for left, right in zip(pull_order, pull_order[1:])):  # noqa: RUF007  # style-only rewrite skipped to avoid touching control flow
+    if state.resource == "pull" and any(left < right for left, right in zip(pull_order, pull_order[1:], strict=False)):
         raise ValueError("github_pull_page_order_invalid")
     return in_scope, pull_order
 
@@ -439,7 +439,7 @@ def _validate_returned_repository_identity(item: dict[str, object], expected_id:
     if not isinstance(repository, dict):
         base = item.get("base")
         repository = base.get("repo") if isinstance(base, dict) else None
-    if isinstance(repository, dict) and repository.get("id") is not None:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
+    if isinstance(repository, dict) and repository.get("id") is not None:
         if str(repository["id"]) != expected_id:
             raise ValueError("github_targeted_repository_mismatch")
 
@@ -461,9 +461,9 @@ def _resource_timestamp(resource: GitHubResource, item: dict[str, object]) -> da
     if value is None:
         raise ValueError("GitHub provider timestamp is missing")
     if not isinstance(value, str):
-        raise ValueError("GitHub provider timestamp is invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("GitHub provider timestamp is invalid")
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError("GitHub provider timestamp is invalid") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:

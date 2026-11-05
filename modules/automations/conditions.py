@@ -73,13 +73,20 @@ def evaluate(conditions: list[dict[str, Any]], sample: dict[str, Any]) -> tuple[
         else:
             actual = sample[field]
             try:
-                if op == "eq": ok = actual == expected
-                elif op == "ne": ok = actual != expected
-                elif op == "in": ok = actual in expected
-                elif op == "gt": ok = actual > expected
-                elif op == "gte": ok = actual >= expected
-                elif op == "lt": ok = actual < expected
-                else: ok = actual <= expected
+                if op == "eq":
+                    ok = actual == expected
+                elif op == "ne":
+                    ok = actual != expected
+                elif op == "in":
+                    ok = actual in expected
+                elif op == "gt":
+                    ok = actual > expected
+                elif op == "gte":
+                    ok = actual >= expected
+                elif op == "lt":
+                    ok = actual < expected
+                else:
+                    ok = actual <= expected
             except TypeError:
                 ok = False  # mistyped runtime payload never matches an ordered comparison
             outcome = "matched" if ok else "not_matched"

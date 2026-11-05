@@ -180,7 +180,7 @@ def _read_registration(project: str) -> dict[str, object]:
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError("workspace is not registered by this checkout; refusing operation") from exc
     if not isinstance(value, dict):
-        raise RuntimeError("workspace registration is invalid; refusing operation")  # noqa: TRY004
+        raise RuntimeError("workspace registration is invalid; refusing operation")
     if value.get("project") != project or value.get("repository") != str(REPOSITORY):
         raise RuntimeError("workspace registration does not belong to this checkout; refusing operation")
     if value.get("daemon_id") != _daemon_identity():
@@ -259,7 +259,7 @@ def _verify_target(project: str, web_port: int) -> None:
             labels = json.loads(inspected.stdout)
             config_label = labels.get("com.docker.compose.project.config_files") if isinstance(labels, dict) else None
             if not isinstance(config_label, str):
-                raise ValueError("Compose config label is unavailable")  # noqa: TRY004
+                raise ValueError("Compose config label is unavailable")
             config_files = {
                 str(Path(value).resolve()).casefold()
                 for value in config_label.split(",")

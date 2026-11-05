@@ -201,7 +201,7 @@ def _agent_browser_scope_url(value: object) -> tuple[str, str]:
     from urllib.parse import unquote, urlsplit
 
     if not isinstance(value, str):
-        raise ValueError("Web source URL is unavailable")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("Web source URL is unavailable")
     parsed = urlsplit(value)
     path = parsed.path or "/"
     decoded_path = unquote(path)

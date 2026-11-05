@@ -898,7 +898,7 @@ def _validate_extraction_response(
     discard the valid entities extracted alongside them.
     """
     if not isinstance(response, dict):
-        raise ValueError("invalid_model_response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("invalid_model_response")
     extracted, actual_model, usage = response_content(response)
     allowed_chunks = {chunk.id for chunk in data.chunks}
     if any(not set(item.chunk_ids) <= allowed_chunks for item in extracted.entities):
@@ -1084,7 +1084,7 @@ async def _lock_matched_entities(session: AsyncSession, claim: _Claim, plan: dic
             )
             locked_refs = {ref.requested_id: ref for ref in refs}
         except (LookupError, ValueError):
-            for key, (resolution, match_id, possible, reason) in list(plan.items()):
+            for key, (resolution, match_id, possible, _reason) in list(plan.items()):
                 if resolution == "matched":
                     plan[key] = ("review", None, possible + ([match_id] if match_id else []), "identity_changed_during_resolution")
     return locked_refs
@@ -1360,7 +1360,7 @@ async def _publish_extraction(session: AsyncSession, snap: _Snapshot, response: 
     published = await _publish_entities(session, snap, extracted, plan, match_fingerprints, evidence_by_chunk)
     await _publish_relationships(session, snap, extracted, published)
     mapping = snap.mapping
-    assert mapping is not None
+    assert mapping is not None  # noqa: S101  # mypy narrowing invariant
     if await entities.finish_extraction_work(
         session, claim.work_id, claim.lease_owner, facts=published.facts, review=published.review,
         model=actual_model or mapping.model, usage=usage, scope=claim.scope,

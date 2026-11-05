@@ -55,7 +55,7 @@ def label(value: Any) -> Any:
 def _digest(statement: Any) -> str:
     """Stable digest of the compiled PostgreSQL text of one statement."""
     text = str(statement.compile(dialect=postgresql.dialect()))
-    return hashlib.sha1(text.encode()).hexdigest()[:10]
+    return hashlib.sha1(text.encode()).hexdigest()[:10]  # noqa: S324  # fixture digest, not a security use
 
 
 class Session:

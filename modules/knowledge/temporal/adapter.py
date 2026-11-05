@@ -263,7 +263,7 @@ class TemporalGraph:
                 deadline = await self._construct_driver(config)
                 self._graphiti_type = importlib.import_module("graphiti_core.graphiti").Graphiti
                 async with asyncio.timeout_at(deadline):
-                    assert self._driver is not None
+                    assert self._driver is not None  # noqa: S101  # mypy narrowing invariant
                     await self._driver.build_indices_and_constraints(delete_existing=False)
                     await self._driver.control_query(PARTITION_FENCE_CONSTRAINT, {}, read=False)
                     require_partition_fence_schema(
@@ -509,7 +509,7 @@ class TemporalGraph:
                 # Re-authorize right before the destructive command: the lease may have changed.
                 await context.authorize_dispatch_cessation(ownership)
                 await driver.control_query("TERMINATE TRANSACTIONS $ids", {"ids": ids}, read=False)
-                while await driver.control_query(show, {"token": token}, read=True):
+                while await driver.control_query(show, {"token": token}, read=True):  # noqa: ASYNC110  # polls the graph driver state; there is no event to await
                     await asyncio.sleep(0.1)
                 return True
         except GraphOperationError:
@@ -860,7 +860,7 @@ class TemporalGraph:
                 async with asyncio.timeout(OPERATION_SECONDS):
                     await _authorize_receipt_witnesses(context, scope.receipts, "node")
                     if scope.node_recovery:
-                        assert context.authorize_node_recovery is not None
+                        assert context.authorize_node_recovery is not None  # noqa: S101  # mypy narrowing invariant
                         await context.authorize_node_recovery(scope.receipts, actions)
                     await self._validate_partition(context, "reconcile", scope.episode_id)
                     driver = await self._partition_driver(context.group_id)
@@ -913,7 +913,7 @@ class TemporalGraph:
     ) -> CanonicalNodeRecoveryOutcome:
         """Authorize, validate the partition and reconcile each node action inside the fence and timeout."""
         await _authorize_receipt_witnesses(context, receipts, "node")
-        assert context.authorize_node_recovery is not None
+        assert context.authorize_node_recovery is not None  # noqa: S101  # mypy narrowing invariant
         await context.authorize_node_recovery(receipts, actions)
         await self._validate_partition(context, "reconcile", episode_id)
         driver = await self._partition_driver(context.group_id)
@@ -962,7 +962,7 @@ class TemporalGraph:
     ) -> ExactFactRecoveryOutcome:
         """Authorize, validate the partition and reconcile each fact action inside the fence and timeout."""
         await _authorize_receipt_witnesses(context, receipts, "fact")
-        assert context.authorize_fact_recovery is not None
+        assert context.authorize_fact_recovery is not None  # noqa: S101  # mypy narrowing invariant
         await context.authorize_fact_recovery(receipts, actions)
         await self._validate_partition(context, "reconcile", episode_id)
         driver = await self._partition_driver(context.group_id)

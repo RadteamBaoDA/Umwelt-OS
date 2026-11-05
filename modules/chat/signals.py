@@ -130,7 +130,7 @@ class ResponseSignalSubscription:
         self._pubsub = pubsub
         return True
 
-    async def wait(self, timeout: float) -> bool:
+    async def wait(self, timeout: float) -> bool:  # noqa: ASYNC109  # bounded wait primitive; callers pass the poll fallback interval
         """Wait up to ``timeout`` seconds for a wake-up; True when one arrived, False on timeout/failure.
 
         Drains every message already buffered so one poll covers a burst of flushes.

@@ -209,7 +209,7 @@ def check_select_policy(sql: str) -> None:
         raise ValueError("SQL query must be a single statement without comments or semicolons")
     stmt = statements[0].stmt
     if not isinstance(stmt, ast.SelectStmt):
-        raise ValueError("SQL query must begin with SELECT or WITH ... SELECT")  # noqa: TRY004
+        raise ValueError("SQL query must begin with SELECT or WITH ... SELECT")
     with_clause = stmt.withClause
     visible = set(ALLOWED_RELATIONS)
     scoped_refs = 0
@@ -217,7 +217,7 @@ def check_select_policy(sql: str) -> None:
         raise ValueError("WITH RECURSIVE is not allowed")
     for cte in (with_clause.ctes or ()) if with_clause is not None else ():
         if not isinstance(cte.ctequery, ast.SelectStmt):
-            raise ValueError("data-modifying WITH queries are not allowed")  # noqa: TRY004
+            raise ValueError("data-modifying WITH queries are not allowed")
         name = str(cte.ctename).lower()
         result = _check_subtree(cte.ctequery, frozenset(visible), with_clause)
         if result.error:

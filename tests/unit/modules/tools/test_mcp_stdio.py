@@ -43,9 +43,9 @@ class TestStdioDeploymentProfile:
             platform="posix",
             executable="/bin/echo",
             argv=("/bin/echo", "hello"),
-            cwd="/tmp",
+            cwd="/tmp",  # noqa: S108  # fake path string used as fixture data; nothing is written
             environment={"LANG": "en_US.UTF-8"},
-            immutable_root="/tmp",
+            immutable_root="/tmp",  # noqa: S108  # fake path string used as fixture data; nothing is written
             artifact_sha256={"/bin/echo": "b" * 64},
             operation_kind="ordinary",
             runtime_kind="native",
@@ -57,7 +57,7 @@ class TestStdioDeploymentProfile:
             profile.enabled = False  # type: ignore
 
 
-import time
+import time  # noqa: E402  # import order matters for this test module
 
 
 class TestStdioProcess:
@@ -361,15 +361,15 @@ class TestStdioClientTransportPlatform:
             platform="posix",
             executable="/bin/echo",
             argv=("/bin/echo",),
-            cwd="/tmp",
+            cwd="/tmp",  # noqa: S108  # fake path string used as fixture data; nothing is written
             environment={},
-            immutable_root="/tmp",
+            immutable_root="/tmp",  # noqa: S108  # fake path string used as fixture data; nothing is written
             artifact_sha256={},
             operation_kind="ordinary",
             runtime_kind="native",
             entry_script=None,
         )
-        with patch("os.name", "nt"):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        with patch("os.name", "nt"):
             with pytest.raises(McpTransportError, match="MCP stdio requires POSIX"):
                 async with stdio_client_transport(profile, AsyncMock(return_value=True)):
                     pass  # pragma: no cover

@@ -8,7 +8,7 @@ the same name on this facade only affects callers that resolve it through the fa
 and silently does nothing for helpers used inside ``service.*``.
 """
 
-# ruff: noqa: F401, PLC0414
+# ruff: noqa: F401
 import asyncio
 import base64
 import hashlib

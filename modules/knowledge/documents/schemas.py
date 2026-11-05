@@ -251,7 +251,7 @@ def _validate_string_list(key: str, value: Any) -> None:
 def _validate_bool_field(key: str, value: Any) -> None:
     """Require a real boolean (ints do not qualify)."""
     if not isinstance(value, bool):
-        raise ValueError(f"Provider {key} must be boolean")  # noqa: TRY004 - pydantic validators must raise ValueError
+        raise ValueError(f"Provider {key} must be boolean")
 
 
 def _validate_nonnegative_int(key: str, value: Any) -> None:
@@ -283,7 +283,7 @@ def _validate_release_url(key: str, value: Any) -> None:
 def _validate_iso_timestamp(key: str, value: str) -> None:
     """Require an ISO-8601 timestamp that carries a timezone (``Z`` is accepted)."""
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError(f"Provider {key} must be an ISO timestamp") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
@@ -296,7 +296,7 @@ def _validate_calendar_boundary(key: str, value: str) -> None:
         # Calendar all-day events use YYYY-MM-DD; timed events must carry an offset.
         parsed_date = date.fromisoformat(value) if "T" not in value else None
         parsed_time = (
-            datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
             if parsed_date is None else None
         )
     except ValueError as exc:

@@ -1267,7 +1267,7 @@ def _coverage(records: Sequence[IngestionRecord]) -> Literal["returned_snapshot"
     return "truncated" if any(r.metadata["provider_record"]["coverage"] == "truncated" for r in records) else "returned_snapshot"
 
 
-async def _get_body(run: Run, request: Any, *, max_bytes: int, timeout: float | None = None) -> rest.Fetched:
+async def _get_body(run: Run, request: Any, *, max_bytes: int, timeout: float | None = None) -> rest.Fetched:  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
     """One gated send (terms + quota + fences before the wire); no redirects, bounded bytes."""
     extra: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
     if getattr(request, "body", None) is not None:  # read-only POST search (VietnamWorks)
@@ -1832,7 +1832,7 @@ async def _google_access_token(run: Run) -> tuple[str, tuple[UUID, int]]:
             access = tokens.get("access_token")
             refresh = tokens.get("refresh_token")
             if not isinstance(access, str) or not isinstance(refresh, str):
-                raise ValueError("google_token_missing")  # noqa: TRY004
+                raise ValueError("google_token_missing")
             expiry = grant.token_expires_at
             if expiry is not None and expiry > datetime.now(UTC) + timedelta(seconds=60):
                 binding = (grant.operation_id, grant.token_revision)
@@ -2188,7 +2188,7 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
     run = Run(ctx=ctx, factory=factory, settings=settings, attempt=attempt, gate=gate)
     lost = asyncio.Event()
     main = asyncio.current_task()
-    assert main is not None
+    assert main is not None  # noqa: S101  # mypy narrowing invariant
     beat = asyncio.create_task(_heartbeat(factory, attempt, main, lost))
     settle: dict[str, Any] | None = None
     try:

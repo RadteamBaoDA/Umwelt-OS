@@ -112,7 +112,7 @@ def _pinned_request(url: str, address: str, headers: dict[str, str]) -> tuple[st
 async def fetch_bounded(
     url: str, *, headers: dict[str, str] | None = None, before_send: BeforeSend,
     resolve: Resolver = resolve_public, transport: httpx.AsyncBaseTransport | None = None,
-    max_bytes: int = MAX_PAGE_BYTES, timeout: float = REQUEST_TIMEOUT_SECONDS, json_body: bytes | None = None,
+    max_bytes: int = MAX_PAGE_BYTES, timeout: float = REQUEST_TIMEOUT_SECONDS, json_body: bytes | None = None,  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
 ) -> Fetched:
     """GET (or, with ``json_body``, POST that JSON to) one URL through the pinned public destination with byte, status and time bounds.
 
@@ -217,7 +217,7 @@ def _parse_time(raw: Any) -> datetime | None:
     if raw is None or raw == "":
         return None
     try:
-        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))  # noqa: FURB162  # exact 'Z' handling
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except ValueError:
         return None
     return (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)).astimezone(UTC)

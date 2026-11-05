@@ -86,7 +86,7 @@ def _call(client: TestClient, method: str, path: str) -> int:
     return client.request(method, path, headers={"X-Workspace-ID": str(WS)}, **kwargs).status_code  # type: ignore[arg-type]
 
 
-_ADMITTED = lambda code: code not in {401, 403, 404}
+_ADMITTED = lambda code: code not in {401, 403, 404}  # noqa: E731  # terse test stub
 
 
 @pytest.mark.parametrize("name", [n for n, g in GROUPS.items() if g[1] is not None])

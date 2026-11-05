@@ -150,7 +150,7 @@ class TestGitHubWebhookDeliverySchemas:
 
     def test_verified_github_delivery_naive_time_rejected(self) -> None:
         """Naive receipt timestamps without timezone must be rejected."""
-        naive = datetime(2026, 10, 5, 12, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
+        naive = datetime(2026, 10, 5, 12, 0)
         with pytest.raises(ValidationError, match="GitHub receipt timestamp must be timezone-aware"):
             VerifiedGitHubDelivery(
                 receiver_revision="rev-1",

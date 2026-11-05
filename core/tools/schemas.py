@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, computed_field, fi
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 
 
-class ToolRisk(str, Enum):  # str+Enum kept: StrEnum changes str()/format() behavior
+class ToolRisk(str, Enum):  # noqa: UP042  # str+Enum kept: StrEnum changes str()/format() behavior
     """Classification of tool execution risk controlling automatic execution and approval requirements."""
 
     READ_ONLY = "READ_ONLY"
@@ -42,10 +42,10 @@ class ToolRisk(str, Enum):  # str+Enum kept: StrEnum changes str()/format() beha
             for member in cls:
                 if member.value == normalized:
                     return member
-            raise ValueError(f"Unknown tool risk level: {value}")
+            raise ValueError(f"Unknown tool risk level: {value}") from None
 
 
-class ToolDestination(str, Enum):  # str+Enum kept: StrEnum changes str()/format() behavior
+class ToolDestination(str, Enum):  # noqa: UP042  # str+Enum kept: StrEnum changes str()/format() behavior
     """Trusted privacy class for an output destination; only LOCAL permits local-only data."""
 
     LOCAL = "local"
@@ -247,5 +247,5 @@ class ToolExecutionPrincipal(BaseModel):
     def _typed_scope(cls, value: object) -> object:
         """Reject dict/str input: pydantic would otherwise build a dataclass from a mapping."""
         if not isinstance(value, (WorkspaceContext, InternalJobScope)):
-            raise ValueError("Typed workspace scope required")  # noqa: TRY004  # pydantic only wraps ValueError
+            raise ValueError("Typed workspace scope required")
         return value

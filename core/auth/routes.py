@@ -1023,7 +1023,7 @@ async def auth_session(
     if csrf_is_current:
         # Read-only: _current_session already validated existence and expiry, and nothing is written,
         # so no NOWAIT owner/session lock is needed (concurrent tabs must not 409 on a plain read).
-        assert existing_token is not None
+        assert existing_token is not None  # noqa: S101  # mypy narrowing invariant
         csrf_token = existing_token
     else:
         _owner, row = await _lock_owner_session_retrying(request, session, row)

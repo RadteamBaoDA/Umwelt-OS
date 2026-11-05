@@ -70,7 +70,7 @@ async def erase_account_storage_page(
                 if probe.state == "pruned_subdir":
                     return False, {"kind": "orphans"}
                 uri = probe.key
-                assert uri is not None  # "file" probes always carry a key
+                assert uri is not None  # "file" probes always carry a key  # noqa: S101  # mypy narrowing invariant
                 async with factory() as session:
                     await authorize_account_erasure(session, scope)
                     await lock_raw_uri_identity(session, uri)

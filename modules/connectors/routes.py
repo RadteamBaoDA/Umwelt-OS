@@ -948,7 +948,7 @@ async def admit_collection(
         # The mcp:collect bearer is valid only for an MCP source; every other type needs the collector bearer.
         source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
         if source.type != mcp_collection.PROVIDER_ID:
-            raise HTTPException(status_code=403, detail="MCP collector bearer is valid only for MCP sources")
+            raise HTTPException(status_code=403, detail="MCP collector bearer is valid only for MCP sources") from exc
     await session.rollback()  # admission takes its own fence -> Source -> request locks
     return await connectors_public.admit_managed_collection(
         session, scope, source_id, payload, trigger=payload.trigger, multi_workspace_enabled=multi_workspace_enabled)

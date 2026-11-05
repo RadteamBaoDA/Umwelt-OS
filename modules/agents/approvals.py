@@ -140,7 +140,7 @@ async def verify_approved_action(
         effect = await session.scalar(select(AgentEffect).where(
             AgentEffect.action_id == action_id, AgentEffect.workspace_id == scope.workspace_id,
         ))
-        if (row is None or run is None or effect is None or row.run_id != run_id  # noqa: SIM103  # style-only rewrite skipped to avoid touching control flow
+        if (row is None or run is None or effect is None or row.run_id != run_id
                 or row.owner_id != owner_id or row.auth_session_hash != auth_session_hash
                 or run.owner_id != owner_id or run.auth_session_hash != auth_session_hash
                 or run.claim_generation != claim_generation or run.status != "running" or run.cancel_requested

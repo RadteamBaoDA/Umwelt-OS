@@ -45,7 +45,7 @@ from modules.translations.schemas import (
     TranslationPayload,
 )
 from modules.translations.schemas import (
-    TranslationInput as TranslationInput,  # noqa: PLC0414  # explicit re-export (strict mypy)
+    TranslationInput as TranslationInput,
 )
 
 PROMPT_VERSION = "v2"  # T2 owns prompt text; bumping it invalidates every cache fingerprint.
@@ -260,7 +260,7 @@ async def request_translations(
         if verdict is None:
             raise NotFoundError(detail="Resource not found")
         verdicts.append(verdict)
-    if any(v.resource_revision != i.resource_revision for v, i in zip(verdicts, request.items)):
+    if any(v.resource_revision != i.resource_revision for v, i in zip(verdicts, request.items, strict=False)):
         raise ConflictError(detail="Resource revision changed")
     now = datetime.now(UTC)
     policy_fp = await _policy_fingerprint(session, app_settings, redis, actor.workspace_id)
@@ -283,7 +283,7 @@ async def request_translations(
     rows: list[ContentTranslation] = []
     fresh: list[ContentTranslation] = []
     retry: list[ContentTranslation] = []
-    for item, verdict, config in zip(request.items, verdicts, configs):
+    for item, verdict, config in zip(request.items, verdicts, configs, strict=False):
         found = existing.get((item.resource_type, item.resource_id, verdict.resource_revision,
                               verdict.content_hash, verdict.visibility_hash, config))
         if found is None:
@@ -318,12 +318,12 @@ async def request_translations(
     session.add_all(TranslationBatchItem(
         batch_id=batch.id, position=n, workspace_id=actor.workspace_id, resource_type=i.resource_type,
         resource_id=i.resource_id, resource_revision=i.resource_revision, translation_id=t.id)
-        for n, (i, t) in enumerate(zip(request.items, rows)))
+        for n, (i, t) in enumerate(zip(request.items, rows, strict=False)))
     await session.flush()
     return TranslationBatchEnqueue(batch_id=batch.id, settings=settings, items=[
         TranslationItemStatusRead(
             resource_type=i.resource_type, resource_id=i.resource_id, status=t.status)
-        for i, t in zip(request.items, rows)], enqueue_ids=[t.id for t in (*fresh, *retry)])
+        for i, t in zip(request.items, rows, strict=False)], enqueue_ids=[t.id for t in (*fresh, *retry)])
 
 
 async def read_batch(

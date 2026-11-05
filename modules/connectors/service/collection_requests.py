@@ -55,7 +55,7 @@ def overlap_floor(cursor: str | None, overlap: timedelta = DEFAULT_OVERLAP) -> d
     if not cursor:
         return None
     try:
-        value = datetime.fromisoformat(cursor.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+        value = datetime.fromisoformat(cursor.replace("Z", "+00:00"))
     except ValueError:
         return None
     if value.tzinfo is None:

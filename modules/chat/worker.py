@@ -533,7 +533,7 @@ async def _send_search(
 
     def make_transport(candidate: WebSearchTarget) -> httpx.AsyncBaseTransport:
         """Pin this endpoint to the approved network policy before the attempt."""
-        assert candidate.endpoint is not None
+        assert candidate.endpoint is not None  # noqa: S101  # mypy narrowing invariant
         return approved_web_search_transport(
             candidate.endpoint, args.settings.ai_allowed_endpoint_hosts, args.settings.web_search_allowed_cidrs,
             allow_http=candidate.provider == "searxng",

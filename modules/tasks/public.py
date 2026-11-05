@@ -417,7 +417,8 @@ async def get_task(session: AsyncSession, task_id: UUID, *, scope: Scope, multi_
     task = await session.scalar(select(Task).where(
         Task.id == task_id, Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
     ))
-    if task is None: raise TaskMissing
+    if task is None:
+        raise TaskMissing
     return await _current_entity_projection(session, _to_task_read(task), scope=scope,
                                             multi_workspace_enabled=multi_workspace_enabled)
 
@@ -508,7 +509,8 @@ async def delete_task(
     task = await session.scalar(select(Task).where(
         Task.id == task_id, Task.workspace_id == scope.workspace_id, Task.deleted_at.is_(None),
     ).with_for_update())
-    if task is None: raise TaskMissing
+    if task is None:
+        raise TaskMissing
     if task.revision != expected_revision:
         raise TaskConflict("stale_revision", f"Expected revision {expected_revision} but task is at {task.revision}", task.revision)
     if task.revision >= MAX_REVISION:
@@ -541,7 +543,8 @@ async def accepted_task_results(
     remain in the replay result's deleted-ID list and are never recreated.
     """
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if len(task_ids) > 100: raise ValueError("Accepted task manifest exceeds 100 entries")
+    if len(task_ids) > 100:
+        raise ValueError("Accepted task manifest exceeds 100 entries")
     rows = list((await session.scalars(select(Task).where(
         Task.workspace_id == scope.workspace_id, Task.id.in_(task_ids), Task.deleted_at.is_(None),
     ).order_by(Task.id))).all()) if task_ids else []

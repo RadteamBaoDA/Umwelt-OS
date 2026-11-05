@@ -395,7 +395,7 @@ async def _validate_replay_fence(
     by the caller. Current visible stale revisions are409, invisible admission stays401/404.
     """
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
-        raise ValueError("A typed replay scope is required")  # noqa: TRY004  # ValueError is the documented contract for a missing typed scope
+        raise ValueError("A typed replay scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner" and not allow_member:
         raise HTTPException(status_code=403, detail="Workspace owner required")
     if type(multi_workspace_enabled) is not bool or not isinstance(access_fence, AccessFence):
@@ -691,7 +691,7 @@ async def commit_with_replay(
         principal = _scope_principal(scope)
         for draft in drafts:
             if not isinstance(draft, (SourceChanged, IngestionChanged, KnowledgeChanged, DashboardChanged)):
-                raise ValueError("A typed replay draft is required")  # noqa: TRY004  # ValueError is the documented contract for an untyped replay draft
+                raise ValueError("A typed replay draft is required")
             if any(getattr(draft, key) != value for key, value in principal.items()):
                 raise ValueError("Replay draft principal does not match admission")
             # Round trip the exact Unicode serialization checked here. SSE uses these

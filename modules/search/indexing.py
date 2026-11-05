@@ -154,7 +154,7 @@ def embedding_values(response: object, expected_dimensions: int | None = None) -
         raise ValueError("Embedding response model identity is invalid")
     row = response["data"][0]
     if not isinstance(row, dict) or not isinstance(row.get("embedding"), list):
-        raise ValueError("Invalid embedding response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("Invalid embedding response")
     values = row["embedding"]
     if not 1 <= len(values) <= MAX_VECTOR_DIMENSIONS or expected_dimensions not in (None, len(values)):
         raise ValueError("Embedding dimensions do not match the index generation")
@@ -163,7 +163,7 @@ def embedding_values(response: object, expected_dimensions: int | None = None) -
     nonzero = False
     for value in values:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError("Embedding contains invalid values")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("Embedding contains invalid values")
         fval = float(value)
         if not math.isfinite(fval):
             raise ValueError("Embedding contains invalid values")

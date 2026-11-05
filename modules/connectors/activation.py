@@ -240,10 +240,10 @@ async def _scan_required_credentials(
             scan.stop = True
             return scan
         if kind == "pending":
-            assert operation_id is not None
+            assert operation_id is not None  # noqa: S101  # mypy narrowing invariant
             scan.pending = (slot, operation_id)
             return scan
-        assert credential is not None  # kind == "ready" implies a resolved credential row
+        assert credential is not None  # kind == "ready" implies a resolved credential row  # noqa: S101  # mypy narrowing invariant
         scan.ready_ids[slot] = credential.credential_id
     return scan
 

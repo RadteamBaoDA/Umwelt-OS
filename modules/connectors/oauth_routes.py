@@ -1,7 +1,6 @@
 """Source-bound Google OAuth routes for read-only Gmail, Calendar and Drive connectors."""
 
 # Boundary validation uses ValueError for malformed provider/cipher data to preserve stable API errors.
-# ruff: noqa: TRY004
 
 import hashlib
 import hmac
@@ -50,7 +49,7 @@ OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 _AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105  # label/URL/enum value, not a credential
 _REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 _PROVIDER_SCOPES = {
     "google_mail": "https://www.googleapis.com/auth/gmail.readonly",

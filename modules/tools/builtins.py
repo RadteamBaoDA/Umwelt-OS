@@ -226,7 +226,7 @@ async def _handle_search_query(args: dict[str, Any], context: dict[str, Any]) ->
         if not allowed:
             _record_output_fences(context, [], source_generations)
             return {"items": [], "next_cursor": None, "effective_mode": "lexical", "warnings": []}
-    if destination != ToolDestination.LOCAL:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
+    if destination != ToolDestination.LOCAL:
         # Remote search is fail-closed unless every queried source has a pre-await generation.
         if set(source_generations) != set(allowed):
             _record_output_fences(context, [], source_generations)

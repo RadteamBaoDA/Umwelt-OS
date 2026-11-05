@@ -2155,7 +2155,7 @@ async def _prepare_apply_target(
         dashboard_revision = dashboard.revision
         session.add_all([DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20) for bp in ("desktop", "mobile")])
     elif payload.mode == "append":
-        assert dashboard is not None
+        assert dashboard is not None  # noqa: S101  # mypy narrowing invariant
         instance_count = await session.scalar(select(func.count()).select_from(GadgetInstance).where(
             GadgetInstance.dashboard_id == dashboard.id)) or 0
         if instance_count + len(current["slots"]) > MAX_INSTANCES_PER_DASHBOARD:
@@ -2166,14 +2166,14 @@ async def _prepare_apply_target(
             raise DashboardConflict("group_limit", "Group limit reached", dashboard.revision)
         dashboard_revision = _bump(dashboard)
     else:
-        assert dashboard is not None
+        assert dashboard is not None  # noqa: S101  # mypy narrowing invariant
         dashboard_revision = _bump(dashboard)
         if payload.name is not None:
             dashboard.name = payload.name
         await session.execute(delete(DashboardGroup).where(DashboardGroup.dashboard_id == dashboard.id))
         await session.execute(delete(DashboardLayout).where(DashboardLayout.dashboard_id == dashboard.id))
         session.add_all([DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20) for bp in ("desktop", "mobile")])
-    assert dashboard is not None
+    assert dashboard is not None  # noqa: S101  # mypy narrowing invariant
     return dashboard, dashboard_revision, group_positions
 
 
@@ -2231,7 +2231,7 @@ async def apply_preset(
             multi_workspace_enabled=multi_workspace_enabled)
     target_dashboard_id = payload.target_dashboard_id
     if payload.mode in ("replace", "append"):
-        assert target_dashboard_id is not None and payload.expected_revision is not None  # both modes require them
+        assert target_dashboard_id is not None and payload.expected_revision is not None  # both modes require them  # noqa: S101  # mypy narrowing invariant
         dashboard = await _lock_dashboard(session, target_dashboard_id, scope=scope)
         _check_revision(dashboard, payload.expected_revision)
     else:
@@ -2264,7 +2264,7 @@ async def apply_preset(
     )) or 0
     if definition_count + len(current["slots"]) > MAX_DEFINITIONS_PER_OWNER:
         raise DashboardConflict("definition_limit", "Definition limit reached", dashboard_revision)
-    assert dashboard is not None
+    assert dashboard is not None  # noqa: S101  # mypy narrowing invariant
     # Append puts the preset in its own group after the existing ones; create/replace start from an empty dashboard.
     group_position = max(group_positions, default=-1) + 1 if payload.mode == "append" else 0
     group = DashboardGroup(dashboard_id=dashboard.id, name=current["name"], position=group_position)
@@ -2279,7 +2279,7 @@ async def apply_preset(
             source_ids=[str(item) for item in slot["source_ids"]], scope=slot["scope"], filters=slot["filters"], highlight_rules=[])
         session.add(definition)
         await session.flush()
-        assert dashboard is not None
+        assert dashboard is not None  # noqa: S101  # mypy narrowing invariant
         instance = GadgetInstance(dashboard_id=dashboard.id, group_id=group.id, definition_id=definition.id, title=None, position=index)
         session.add(instance)
         await session.flush()
@@ -2296,7 +2296,7 @@ async def apply_preset(
 
 
 # Stable seams for P10 automation: daily context and briefs are consumed through this module only.
-from modules.dashboard.brief_sharing import (
+from modules.dashboard.brief_sharing import (  # noqa: E402  # deliberate late import
     SharedBrief,
     check_brief_shareable,
     list_shared_briefs,
@@ -2304,7 +2304,7 @@ from modules.dashboard.brief_sharing import (
     read_brief_translation_input,
     read_shared_brief,
 )
-from modules.dashboard.briefs import (
+from modules.dashboard.briefs import (  # noqa: E402  # deliberate late import
     BriefEmpty,
     BriefEvidenceRevoked,
     BriefSlotOwned,
@@ -2319,8 +2319,11 @@ from modules.dashboard.briefs import (
     read_slot_owner,
     release_brief_slot,
 )
-from modules.dashboard.context import build_daily_context
-from modules.dashboard.daily_schemas import BriefRead, DailyContext
+from modules.dashboard.context import build_daily_context  # noqa: E402  # deliberate late import
+from modules.dashboard.daily_schemas import (  # noqa: E402  # deliberate late import
+    BriefRead,
+    DailyContext,
+)
 
 
 async def count_source_gadgets(

@@ -141,7 +141,7 @@ async def parse_file_bounded(
     not bounded by ``timeout_seconds`` itself, but the heavy slot is never released under a live thread.
     """
     try:
-        is_small_text = mime in _IN_PROCESS_TEXT_MIMES and path.stat().st_size <= _IN_PROCESS_MAX_BYTES
+        is_small_text = mime in _IN_PROCESS_TEXT_MIMES and path.stat().st_size <= _IN_PROCESS_MAX_BYTES  # noqa: ASYNC240  # single stat() of a local temp file; negligible blocking
     except OSError:
         is_small_text = False
     if is_small_text:
@@ -171,7 +171,7 @@ async def parse_file_bounded(
         if status != "ok":
             raise ValueError(str(result))
         if not isinstance(result, ParsedDocument):
-            raise RuntimeError("File parser returned an invalid result")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise RuntimeError("File parser returned an invalid result")
         return result
     finally:
         if process.is_alive():

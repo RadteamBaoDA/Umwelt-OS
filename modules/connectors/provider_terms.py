@@ -144,7 +144,7 @@ async def require_terms_eligible(session: AsyncSession, source: ConnectorSource)
     row = await _terms_row(session, source)
     if not decide(spec, row).allowed:
         raise ConflictError(TERMS_INELIGIBLE)
-    assert row is not None  # allowed implies an acknowledged row
+    assert row is not None  # allowed implies an acknowledged row  # noqa: S101  # mypy narrowing invariant
     return row.terms_revision
 
 

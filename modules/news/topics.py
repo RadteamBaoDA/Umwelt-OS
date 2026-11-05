@@ -717,7 +717,7 @@ class TopicService:
         await delete_topic(self.session, topic_id, expected_revision, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
-from modules.settings.public import module_dependency
+from modules.settings.public import module_dependency  # noqa: E402  # deliberate late import
 
 router = APIRouter(prefix="/api/v1/topics", tags=["news"], dependencies=[Depends(module_dependency("news"))])
 Session = Annotated[AsyncSession, Depends(get_session)]

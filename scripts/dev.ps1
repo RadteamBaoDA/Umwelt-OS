@@ -121,8 +121,10 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
       Invoke-Checked 'python' @('scripts/dev_workspace.py', 'reset', '--name', $Workspace, '--confirm', $ConfirmFingerprint)
     }
     'lint' {
-      Invoke-Checked 'uv' @('run', 'ruff', 'check', 'core', 'apps', 'modules', 'tests', 'infrastructure/postgres/migrations')
+      Invoke-Checked 'uv' @('run', 'ruff', 'check', 'core', 'apps', 'modules', 'tests', 'infrastructure/postgres/migrations', 'scripts/check_function_length.py')
       Invoke-Checked 'uv' @('run', 'python', 'scripts/check_genui_parity.py')
+      Invoke-Checked 'uv' @('run', 'python', 'scripts/check_function_length.py')
+      if (Test-Path '.importlinter') { Invoke-Checked 'uv' @('run', 'lint-imports') }
       Invoke-Checked 'npm' @('run', 'lint')
     }
     'typecheck' {

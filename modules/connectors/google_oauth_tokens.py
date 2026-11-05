@@ -1,7 +1,6 @@
 """Server-side token refresh for read-only Google connector grants."""
 
 # Boundary validation uses ValueError for malformed provider/token data and stable failure mapping.
-# ruff: noqa: TRY004
 
 from datetime import UTC, datetime, timedelta
 from typing import Any

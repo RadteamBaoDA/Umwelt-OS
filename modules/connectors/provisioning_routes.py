@@ -161,7 +161,7 @@ class ConnectorSettingsRequest(BaseModel):
 class DraftValidationRequest(ConnectorSettingsRequest):
     """Add the source generation required to validate a connector draft."""
     expected_source_generation: int = Field(ge=1)
-    secret_action: Literal["keep", "replace"] = "keep"
+    secret_action: Literal["keep", "replace"] = "keep"  # noqa: S105  # label/URL/enum value, not a credential
     secret: SecretStr | None = None
 
     @model_validator(mode="after")
@@ -176,7 +176,7 @@ class ActivationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
-    secret_action: Literal["keep", "replace"] = "keep"
+    secret_action: Literal["keep", "replace"] = "keep"  # noqa: S105  # label/URL/enum value, not a credential
     secret: SecretStr | None = None
     # Omitted: preserve an existing source's backend; a never-activated supported source defaults to native.
     execution_backend: Literal["native", "n8n"] | None = None
@@ -437,7 +437,7 @@ async def _telegram_validation_token(
     Raises 409 when a retained token is required but not ready and 503 when it cannot be
     decrypted. Does not commit; the caller rolls back before provider I/O.
     """
-    if payload.secret_action == "replace":
+    if payload.secret_action == "replace":  # noqa: S105  # label/URL/enum value, not a credential
         return payload.secret.get_secret_value() if payload.secret is not None else ""
     if previous is None or previous.state != "ready":
         raise HTTPException(status_code=409, detail="A validated Telegram token is required")
@@ -848,7 +848,7 @@ async def activate_source(
             session, request, source_id, source, payload, activation_id=activation_id, encryption_key=encryption_key,
             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
         )
-    elif payload.secret_action == "replace" and row.desired_configuration.get("auth_method") != "http_header":
+    elif payload.secret_action == "replace" and row.desired_configuration.get("auth_method") != "http_header":  # noqa: S105  # label/URL/enum value, not a credential
         raise HTTPException(status_code=422, detail="This provider does not accept a replacement token")
 
     # Save/validation may have held native rows; restart from original admission
@@ -1006,7 +1006,7 @@ async def _stage_telegram_activation(
     validation_access_fence = previous.access_fence if previous is not None else access_fence
     if validation_access_fence != access_fence:
         raise HTTPException(status_code=409, detail="Original Telegram access changed")
-    if payload.secret_action == "keep":
+    if payload.secret_action == "keep":  # noqa: S105  # label/URL/enum value, not a credential
         if previous is None or previous.state != "ready":
             raise HTTPException(status_code=409, detail="A validated Telegram token is required")
         try:
@@ -1132,7 +1132,7 @@ async def _stage_bundle_credentials(
     if row.desired_configuration.get("auth_method") == "http_header":
         provider = await provisioning.get_managed_credential(session, source_id, "provider", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
         provider_header = str(row.desired_configuration.get("auth_header_name", ""))
-        if payload.secret_action == "keep":
+        if payload.secret_action == "keep":  # noqa: S105  # label/URL/enum value, not a credential
             provider_binding = provider.resolved_binding if provider is not None else None
             if (
                 provider is None or provider.state != "ready" or not provider.credential_id
@@ -1388,7 +1388,7 @@ async def activate_native(
     otherwise 409 "Original activation configuration changed".
     """
     gate = request.app.state.settings.multi_workspace_enabled
-    if payload.secret_action == "replace":
+    if payload.secret_action == "replace":  # noqa: S105  # label/URL/enum value, not a credential
         raise HTTPException(status_code=422, detail="Native credentials are entered with the credential endpoint")
     await session.rollback()
     access_fence = await _owner_access(session, request, scope, expected=access_fence)

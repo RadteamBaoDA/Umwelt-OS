@@ -428,7 +428,7 @@ def test_every_model_gateway_construction_passes_kind():
         for match in re.finditer(r"(?<![A-Za-z_])ModelGateway\(", text):
             call = text[match.end(): match.end() + 1200]
             depth, end = 1, 0
-            for end, ch in enumerate(call):
+            for end, ch in enumerate(call):  # noqa: B007  # `end` is read after the loop
                 depth += {"(": 1, ")": -1}.get(ch, 0)
                 if depth == 0:
                     break

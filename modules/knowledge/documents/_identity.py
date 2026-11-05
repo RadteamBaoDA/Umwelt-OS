@@ -43,7 +43,7 @@ async def _normalized_source_proof(
     membership/epoch rebasing, mutation, commit or remote I/O.
     """
     if not isinstance(access_fence, AccessFence) or not isinstance(source_fence, SourceFence):
-        raise RuntimeError("normalized_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
+        raise RuntimeError("normalized_preparation_fence_required")
     current_access = await workspaces.read_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
@@ -123,7 +123,7 @@ async def prepare_normalized_document_keys(
         raise ValueError("Normalized preparation requires at most32 exact external keys")
     external_ids = tuple(dict.fromkeys(external_ids))
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("normalized_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
+        raise RuntimeError("normalized_preparation_fence_required")
     await _normalized_source_proof(
         session, source_id, source_fence.generation, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence,

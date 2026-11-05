@@ -218,7 +218,7 @@ class InboundMcpGuard:
         content_lengths = [value for name, value in headers if name.lower() == b"content-length"]
         if content_encodings and content_encodings != [b"identity"]:
             return _Reject(415, "unsupported_encoding")
-        if len(content_types) != 1 or not content_types[0].split(b";", 1)[0].strip().lower() == b"application/json":  # noqa: SIM201  # style-only rewrite skipped to avoid touching control flow
+        if len(content_types) != 1 or not content_types[0].split(b";", 1)[0].strip().lower() == b"application/json":
             return _Reject(415, "unsupported_media_type")
         if len(content_lengths) > 1:
             return _Reject(400, "invalid_request")
@@ -379,7 +379,7 @@ class InboundMcpGuard:
                     raise ValueError("Invalid request stream")
                 chunk = message.get("body", b"")
                 if not isinstance(chunk, bytes):
-                    raise ValueError("Invalid request body")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+                    raise ValueError("Invalid request body")
                 if len(chunks) + len(chunk) > 128_000:
                     raise OverflowError("Request exceeds its byte limit")
                 chunks.extend(chunk)

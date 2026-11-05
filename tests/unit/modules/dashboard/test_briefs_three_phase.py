@@ -97,7 +97,7 @@ class _Env:
 
 
 @pytest.fixture
-def env(monkeypatch: pytest.MonkeyPatch) -> _Env:
+def env(monkeypatch: pytest.MonkeyPatch) -> _Env:  # noqa: C901  # test harness
     world = _Env()
 
     async def widgets(session: _Session, *_args: object, **_kwargs: object) -> list[object]:

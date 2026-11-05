@@ -347,7 +347,7 @@ class S3StorageBackend:
                         await to_thread_joined(handle.write, block)
             yield path
         finally:
-            path.unlink(missing_ok=True)
+            await to_thread_joined(path.unlink, True)  # temp-file cleanup off the loop (missing_ok=True)
 
     @staticmethod
     def _headers(filename: str) -> dict[str, str]:

@@ -176,7 +176,7 @@ async def lock_review_version_evidence(
     generation, source_name = source_row if source_row else (None, None)
     if version is None or generation != source_generation:
         return None
-    assert source_name is not None  # generation matched, so the source row exists
+    assert source_name is not None  # generation matched, so the source row exists  # noqa: S101  # mypy narrowing invariant
     refs = await read_evidence_refs(
         session, [(version_id, chunk_id) for chunk_id in chunk_ids],
         scope=scope, multi_workspace_enabled=multi_workspace_enabled,

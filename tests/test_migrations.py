@@ -15,7 +15,7 @@ CHAT_SQL_READER = "0013_chat_sql_reader_role"
 
 def _alembic(*args: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "DATABASE_URL": "postgresql+asyncpg://u:build-placeholder@postgres:5432/db", **(extra_env or {})}
-    return subprocess.run(
+    return subprocess.run(  # noqa: S603  # test-only subprocess with fixed arguments
         [sys.executable, "-m", "alembic", *args], check=False, capture_output=True, text=True, env=env
     )
 

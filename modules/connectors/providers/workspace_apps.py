@@ -5,7 +5,6 @@ responsible for rechecking the collection send fence immediately before every re
 """
 
 # ValueError is the executor's stable classification for invalid provider payloads and scopes.
-# ruff: noqa: TRY004
 
 from __future__ import annotations
 

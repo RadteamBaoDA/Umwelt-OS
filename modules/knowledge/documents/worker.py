@@ -201,7 +201,7 @@ def _optional_uuid(value: object, label: str) -> UUID | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(f"Stored {label} cursor is malformed")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError(f"Stored {label} cursor is malformed")
     parsed = UUID(value)
     if str(parsed) != value:
         raise ValueError(f"Stored {label} cursor is malformed")
@@ -579,7 +579,7 @@ async def _evict_memory_cache_after_commit(
         return
     try:
         await invalidate_memory_cache(redis, scope=admitted.scope)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # cache eviction is best-effort; cleanup is retried later
         logger.warning("Memory cleanup cache eviction deferred (%s)", type(exc).__name__)
         return
     hints: list[documents.SourceCleanupWakeup] = []
@@ -913,7 +913,7 @@ async def _advance_agent_stage(
     reference_value = cursor_state.get("reference_after")
     candidate_cursor = cursor_state.get("candidate_after")
     if not isinstance(reference_value, (str, type(None))) or not isinstance(candidate_cursor, (str, type(None))):
-        raise ValueError("Stored Agent cleanup cursor is malformed")  # noqa: TRY004 - ValueError is the cursor-corruption contract
+        raise ValueError("Stored Agent cleanup cursor is malformed")
     reference_after = UUID(reference_value) if reference_value else None
     from modules.agents import public as agents
 

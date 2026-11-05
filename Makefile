@@ -34,8 +34,10 @@ reset:
 	python scripts/dev_workspace.py reset --name "$$WORKSPACE" --confirm "$$CONFIRM_FINGERPRINT"
 
 lint:
-	uv run ruff check core apps modules tests infrastructure/postgres/migrations
+	uv run ruff check core apps modules tests infrastructure/postgres/migrations scripts/check_function_length.py
 	uv run python scripts/check_genui_parity.py
+	uv run python scripts/check_function_length.py
+	@if [ -f .importlinter ]; then uv run lint-imports; fi
 	npm run lint
 
 typecheck:

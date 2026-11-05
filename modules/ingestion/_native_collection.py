@@ -365,7 +365,7 @@ async def _accept_new_work(
     """
     source, payload, scope = ctx.source, ctx.payload, ctx.scope
     now = _check_reservation(ctx, state)
-    assert state is not None  # _check_reservation rejects a missing row
+    assert state is not None  # _check_reservation rejects a missing row  # noqa: S101  # mypy narrowing invariant
     await verifier.verify_transition(ctx, state)
     provider_records = await _drop_seen(ctx, verifier.verify_records(ctx))
     batch, run, receive_stage = await _insert_run(

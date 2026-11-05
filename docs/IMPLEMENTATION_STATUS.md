@@ -1231,3 +1231,7 @@ cross-cutting wave after the parallel work packages merge (about 129 `except HTT
 315 `pytest.raises(HTTPException)` assertions live in modules owned by other packages): `core/workspaces/{access,admission,public,dependencies}.py`,
 `core/auth/public.py`, `core/rate_limit.py`, `core/realtime/service.py`. Plan: first move callers to
 `core.errors.is_http_error`, then convert the raisers.
+
+## Deferred: repo-wide Prettier enforcement (guardrails package)
+
+`npm run lint` and CI enforce Prettier only for files changed since `FORMAT_BASE` (`apps/web/scripts/format-check.mjs`). A repo-wide `prettier --write apps/web/src` was measured and reverted: 555 files differ, and the formatted tree fails the enforced ESLint `max-lines-per-function` (100) rule in 53 to 68 components regardless of printWidth (140, 160, 200, with `bracketSameLine`). Resolution path: split those components (owned by the UI packages), then run `prettier --write` in one formatting-only commit and switch lint/CI to `format:check:all`. Owner decision needed if the 100-line budget should instead be relaxed for JSX-heavy components.

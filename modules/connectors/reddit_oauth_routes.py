@@ -1,7 +1,6 @@
 """Source-bound OAuth lifecycle for read-only Reddit subreddit connectors."""
 
 # Boundary validation uses ValueError for malformed provider/cipher data to preserve stable API errors.
-# ruff: noqa: TRY004
 
 import base64
 import hashlib
@@ -49,7 +48,7 @@ OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 _AUTHORIZE_URL = "https://www.reddit.com/api/v1/authorize"
-_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
+_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"  # noqa: S105  # label/URL/enum value, not a credential
 _REVOKE_URL = "https://www.reddit.com/api/v1/revoke_token"
 _CALLBACK_PATH = "/api/v1/connectors/oauth/reddit/callback"
 _READ_SCOPE = "read"

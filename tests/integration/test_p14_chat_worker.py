@@ -31,7 +31,7 @@ TOKENS = 300
 
 
 def _docker(*args: str, timeout: float = 120) -> str:
-    result = subprocess.run(["docker", *args], capture_output=True, text=True, check=True, timeout=timeout)
+    result = subprocess.run(["docker", *args], capture_output=True, text=True, check=True, timeout=timeout)  # noqa: S603, S607  # test-only
     return result.stdout.strip()
 
 
@@ -60,7 +60,7 @@ def _service_container(service: str) -> str:
     return found[0]
 
 
-async def _wait_api_ready(client: AsyncClient, timeout: float = 90) -> None:
+async def _wait_api_ready(client: AsyncClient, timeout: float = 90) -> None:  # noqa: ASYNC109  # test double mirrors the production signature
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:

@@ -91,7 +91,7 @@ async def _get_page(
     """
     try:
         async with asyncio.timeout(timeout_seconds):
-            async with httpx.AsyncClient(  # style-only rewrite skipped to avoid touching control flow
+            async with httpx.AsyncClient(
                 timeout=httpx.Timeout(timeout_seconds), trust_env=False, follow_redirects=False, verify=True
             ) as client:
                 await before_request()
@@ -170,7 +170,7 @@ def _release_record(
         ValueError: ``github_response_invalid`` for a malformed release, ID, timestamp or URL.
     """
     if not isinstance(release, dict):
-        raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("github_response_invalid")
     release_id = release.get("id")
     if isinstance(release_id, bool) or not isinstance(release_id, int) or release_id <= 0:
         raise ValueError("github_response_invalid")
@@ -216,7 +216,7 @@ def _release_record(
     draft = release.get("draft", False)
     prerelease = release.get("prerelease", False)
     if not isinstance(draft, bool) or not isinstance(prerelease, bool):
-        raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("github_response_invalid")
     title = name or tag or f"Release {release_id}"
     source_fields, source_fields_truncated = _release_source_fields(
         draft=draft, prerelease=prerelease, node_id=node_id, name_value=name_value, name=name,

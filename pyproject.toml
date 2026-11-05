@@ -82,6 +82,35 @@ markers = [
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+# Quality gate (plan 3.3 R0). Rule families and why they are on:
+#   E/F/W  pycodestyle + pyflakes basics        I     import ordering (deterministic diffs)
+#   B      bugbear (real bug patterns)          UP    modern syntax for the py312 target
+#   C90    mccabe complexity (<= 15)            PLR0912/PLR0915  branch and statement budgets
+#   BLE    no blind `except Exception` swallowing without a justification
+#   S      bandit security checks               ASYNC blocking calls inside coroutines
+#   RUF100 every `# noqa` must still suppress something
+select = ["E", "F", "W", "I", "B", "UP", "C90", "PLR0912", "PLR0915", "BLE", "S", "ASYNC", "RUF100"]
+# E501: the code base is not formatted by `ruff format`, so line wrapping is not enforced by a
+# tool; function length (scripts/check_function_length.py) and complexity gate maintainability
+# instead. Enabling it would flag ~12k pre-existing lines of docstring/prose with no quality gain.
+ignore = ["E501"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.pylint]
+max-branches = 15
+max-statements = 60
+
+[tool.ruff.lint.per-file-ignores]
+# Asserts are the pytest idiom; S101 is only meaningful in production code.
+# S105/S106/S107: test fixtures use fictional literal credentials ("secret", "token") by design.
+"tests/**" = ["S101", "S105", "S106", "S107"]
+# Frozen initial migration: W291 hits trailing spaces inside multi-line SQL string literals,
+# which must not be edited (historical revision text, ancestry and behaviour stay unchanged).
+"infrastructure/postgres/migrations/versions/0001_init.py" = ["W291"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

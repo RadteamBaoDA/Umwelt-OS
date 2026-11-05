@@ -41,10 +41,10 @@ from modules.search.schemas import (
     SearchSource,
 )
 from modules.search.schemas import (
-    SearchFilters as SearchFilters,  # noqa: PLC0414  # explicit re-export (strict mypy)
+    SearchFilters as SearchFilters,
 )
 from modules.search.schemas import (
-    SearchRequest as SearchRequest,  # noqa: PLC0414  # explicit re-export (strict mypy)
+    SearchRequest as SearchRequest,
 )
 from modules.sources.models import Source
 from modules.tasks.schemas import TaskFilter, TaskPage
@@ -121,7 +121,7 @@ def is_member_scope(scope: Scope) -> bool:
 
 def _member_grants(scope: Scope) -> Select[Any]:
     """Document-id projection of this member's active grants (members are always WorkspaceContext)."""
-    assert isinstance(scope, WorkspaceContext)
+    assert isinstance(scope, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
     return workspaces.granted_resource_ids(scope=scope, kind="document")
 
 
@@ -414,7 +414,7 @@ async def _vector_ids(
     # chunk_id sort key disables index ordering); all filters stay before the LIMIT. The outer sort
     # restores deterministic tie-breaking and order under relaxed iterative scans.
     statement = text(
-        "SELECT t.chunk_id FROM ("
+        "SELECT t.chunk_id FROM ("  # noqa: S608  # interpolates only an int dimension and fixed clause fragments; values are bound
         f"SELECT i.chunk_id AS chunk_id, {distance} AS dist FROM search_index_items i "
         "JOIN search_index_generations g ON g.id = i.generation_id "
         "JOIN document_chunks c ON c.id = i.chunk_id "

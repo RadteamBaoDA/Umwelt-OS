@@ -767,7 +767,7 @@ async def authorize_agent_run_access(
     if ((link.expires_at is not None and link.expires_at <= now)
             or (conversation.expires_at is not None and conversation.expires_at <= now)):
         return False
-    if (require_original_session or link.ephemeral) and link.auth_session_hash != auth_session_hash:  # noqa: SIM103  # style-only rewrite skipped to avoid touching control flow
+    if (require_original_session or link.ephemeral) and link.auth_session_hash != auth_session_hash:
         return False
     return True
 

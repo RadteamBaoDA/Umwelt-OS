@@ -143,7 +143,7 @@ class TestPdfParser:
 
         mock_reader = MagicMock()
         mock_reader.is_encrypted = True
-        with patch("modules.ingestion.parsers.PdfReader", return_value=mock_reader):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        with patch("modules.ingestion.parsers.PdfReader", return_value=mock_reader):
             with pytest.raises(ValueError, match="Encrypted PDFs are not supported"):
                 _parse_pdf(pdf_path, page_limit=PDF_PAGE_LIMIT)
 
@@ -155,7 +155,7 @@ class TestPdfParser:
         mock_reader.is_encrypted = False
         mock_reader.pages = [MagicMock() for _ in range(10)]
 
-        with patch("modules.ingestion.parsers.PdfReader", return_value=mock_reader):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        with patch("modules.ingestion.parsers.PdfReader", return_value=mock_reader):
             with pytest.raises(ValueError, match="PDF exceeds the configured page limit"):
                 _parse_pdf(pdf_path, page_limit=5)
 

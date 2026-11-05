@@ -927,7 +927,7 @@ async def start_manual(
     rev = await session.scalar(select(AutomationRevision).where(
         AutomationRevision.automation_id == head.id, AutomationRevision.revision == head.revision))
     key = f"manual:{client_request_id}"
-    assert rev is not None  # the head's current revision snapshot always exists
+    assert rev is not None  # the head's current revision snapshot always exists  # noqa: S101  # mypy narrowing invariant
     await plan_run(
         session, rev=rev, trigger_type="manual", trigger_key=key, trigger_event_id=None,
         slot=None, payload={}, depth=1, origin_automation_id=None, origin_run_id=None, apply_conditions=False,
@@ -938,7 +938,7 @@ async def start_manual(
         AutomationRun.workspace_id == scope.workspace_id, AutomationRun.owner_id == _actor(scope),
         AutomationRun.automation_id == head.id, AutomationRun.revision == head.revision,
         AutomationRun.trigger_key == key))
-    assert run is not None  # plan_run committed the manual run above
+    assert run is not None  # plan_run committed the manual run above  # noqa: S101  # mypy narrowing invariant
     return (await _reads(session, [run]))[0]
 
 
@@ -1240,12 +1240,12 @@ async def _prepare_action(
     run = await _locked_run(session, run_id, scope)
     row = await session.scalar(select(AutomationRunAction).where(
         AutomationRunAction.run_id == run_id, AutomationRunAction.ordinal == ordinal).with_for_update())
-    assert run is not None
+    assert run is not None  # noqa: S101  # mypy narrowing invariant
     rev = await session.scalar(select(AutomationRevision).where(
         AutomationRevision.automation_id == run.automation_id, AutomationRevision.revision == run.revision))
-    assert rev is not None
+    assert rev is not None  # noqa: S101  # mypy narrowing invariant
     spec = rev.actions[ordinal - 1]
-    assert row is not None
+    assert row is not None  # noqa: S101  # mypy narrowing invariant
     state = row.status
     if state == "succeeded":
         return "succeeded"
@@ -1397,9 +1397,9 @@ async def _transient(
             return "failed"
         row = await session.scalar(select(AutomationRunAction).where(
             AutomationRunAction.run_id == run_id, AutomationRunAction.ordinal == ordinal).with_for_update())
-        assert row is not None
+        assert row is not None  # noqa: S101  # mypy narrowing invariant
         if row.attempts >= MAX_ACTION_ATTEMPTS:
-            assert row is not None
+            assert row is not None  # noqa: S101  # mypy narrowing invariant
             row.status, row.error_code = "failed", "retries_exhausted"
             await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
             return "failed"
@@ -1698,7 +1698,7 @@ async def _heartbeat(
     async with factory() as session:
         fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
         run = await _locked_run(session, run_id, scope)
-        assert run is not None
+        assert run is not None  # noqa: S101  # mypy narrowing invariant
         run.updated_at = datetime.now(UTC)
         await _commit(session, fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
@@ -1788,7 +1788,7 @@ async def dispatch_runs(
         for row in expired:
             row.status, row.error_code = "failed", "approval_expired"
             run = await _locked_run(session, row.run_id, scope)
-            assert run is not None
+            assert run is not None  # noqa: S101  # mypy narrowing invariant
             _finish(run, "failed", "approval_expired")
             await _skip_pending(session, run.id, "approval_expired")
         runs = (await session.scalars(select(AutomationRun).where(

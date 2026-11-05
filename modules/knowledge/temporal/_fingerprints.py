@@ -131,7 +131,7 @@ def _entity_created_at(created_at: Any) -> str | None:
         return created_at.astimezone(UTC).isoformat()
     if isinstance(created_at, str):
         try:
-            parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+            parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
         except ValueError:
             raise GraphOperationError("graph_entity_state_unsupported") from None
         if parsed.tzinfo is None:
@@ -262,7 +262,7 @@ def _normalized_graph_timestamp(value: datetime | str | None) -> str | None:
         return None
     if isinstance(value, str):
         try:
-            value = datetime.fromisoformat(value.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             raise GraphOperationError("graph_state_datetime_unsupported") from None
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:

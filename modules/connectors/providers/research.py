@@ -34,7 +34,7 @@ async def _fetch_models(author: str, before_request: Callable[[], Awaitable[None
     )
     try:
         async with asyncio.timeout(30):
-            async with httpx.AsyncClient(  # style-only rewrite skipped to avoid touching control flow
+            async with httpx.AsyncClient(
                 timeout=httpx.Timeout(30), trust_env=False, follow_redirects=False, verify=True
             ) as client:
                 await before_request()
@@ -64,7 +64,7 @@ async def _fetch_models(author: str, before_request: Callable[[], Awaitable[None
     except (httpx.HTTPError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError):
         raise ValueError("huggingface_provider_unavailable") from None
     if not isinstance(result, list):
-        raise ValueError("huggingface_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("huggingface_response_invalid")
     models = [item for item in result if isinstance(item, dict)]
     if len(models) != len(result):
         raise ValueError("huggingface_response_invalid")

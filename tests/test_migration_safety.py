@@ -35,7 +35,7 @@ def _alembic(*args: str, extra_env: dict[str, str] | None = None) -> subprocess.
     env = {**os.environ, "DATABASE_URL": "postgresql+asyncpg://u:build-placeholder@postgres:5432/db", **(extra_env or {})}
     if extra_env is None:
         env.pop(migration_support.DESTRUCTIVE_DOWNGRADE_ENV, None)
-    return subprocess.run(
+    return subprocess.run(  # noqa: S603  # test-only subprocess with fixed arguments
         [sys.executable, "-m", "alembic", *args], check=False, capture_output=True, text=True, env=env, cwd=ROOT,
     )
 

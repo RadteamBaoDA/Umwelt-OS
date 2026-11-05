@@ -139,7 +139,7 @@ async def schedule_version(
     if partition is None or partition.reservations >= 100 or partition.evidence_reservations + chunk_count > 100:
         if partition is not None:
             partition.sealed = True
-        assert allocation is not None
+        assert allocation is not None  # noqa: S101  # mypy narrowing invariant
         partition = GraphPartition(workspace_id=scope.workspace_id, source_id=ready.source_id,
                                    generation=ready.source_generation,
                                    ordinal=allocation.next_bucket, reservations=0)
@@ -164,7 +164,7 @@ async def schedule_version(
     if input_error is not None:
         mapping.status, mapping.error_code = "blocked", input_error
         operation = await session.get(GraphOperation, operation_id)
-        assert operation is not None
+        assert operation is not None  # noqa: S101  # mypy narrowing invariant
         operation.status, operation.error_code = "blocked", input_error
         # Version chunks are immutable; model/dependency retries cannot make
         # over-limit input valid. A new ready version gets its own mapping.

@@ -132,7 +132,7 @@ async def received(request: Request) -> Response:
     return JSONResponse({"count": sum(1 for text in RECEIVED if needle in text)})
 
 
-async def chat_completions(request: Request) -> Response:
+async def chat_completions(request: Request) -> Response:  # noqa: C901  # test harness
     body = await request.json()
     RECEIVED.append(_last_user(body))
     tokens, delay, first_delay = _options(request, body)

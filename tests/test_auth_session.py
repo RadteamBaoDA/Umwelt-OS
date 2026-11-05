@@ -55,7 +55,7 @@ class MemorySession:
     def add(self, value) -> None:
         self.pending = value
 
-    async def __aenter__(self) -> "MemorySession":  # noqa: PYI034  # async context-manager signature kept; typing-only
+    async def __aenter__(self) -> "MemorySession":
         return self
 
     async def __aexit__(self, *_exc) -> None:
@@ -376,7 +376,7 @@ async def test_owner_lock_share_flag_compiles_for_share_vs_for_update() -> None:
     class FakeSession:
         async def scalar(self, stmt):
             compiled.append(str(stmt.compile(dialect=postgresql.dialect())))
-            return  # noqa: PLR1711
+            return
 
     await auth_routes._lock_owner(FakeSession(), 1)  # type: ignore[arg-type]
     await auth_routes._lock_owner(FakeSession(), 1, share=True)  # type: ignore[arg-type]

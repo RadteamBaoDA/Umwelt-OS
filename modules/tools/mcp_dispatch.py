@@ -229,7 +229,7 @@ class McpDispatchAdapter:
                 or (principal.owner_all_sources and not principal.is_owner)):
             return False
         grant_sources = frozenset(str(source_id) for source_id in fence.source_ids)
-        if not principal.owner_all_sources:  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
+        if not principal.owner_all_sources:
             if not grant_sources or not grant_sources.issubset(principal.source_ids):
                 return False
         try:

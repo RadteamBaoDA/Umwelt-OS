@@ -89,7 +89,7 @@ async def _counts(engine: AsyncEngine) -> dict[str, int]:
         for table in tables:
             if table in WORKER_OWNED or table == "alembic_version":
                 continue
-            counts[table] = await connection.scalar(text(f'SELECT count(*) FROM "{table}"')) or 0
+            counts[table] = await connection.scalar(text(f'SELECT count(*) FROM "{table}"')) or 0  # noqa: S608  # test-only SQL built from constants
         return counts
 
 

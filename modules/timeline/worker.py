@@ -382,7 +382,7 @@ async def _infer(
         response_schema(), probe=False, before_send=before_send,
     )
     if not isinstance(response, dict):
-        raise ValueError("invalid_model_response")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("invalid_model_response")
     return response_content(response)
 
 

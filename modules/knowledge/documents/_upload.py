@@ -91,7 +91,7 @@ async def prepare_uploaded_document_in_uow(
     the later initializer; no token, registry, placeholder, mutation, event or commit exists.
     """
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("upload_original_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
+        raise RuntimeError("upload_original_fence_required")
     await _normalized_source_proof(session, source_id, source_fence.generation, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
     documents, identities = await _upload_document_state(session, source_id=source_id,
@@ -130,7 +130,7 @@ async def add_uploaded_document(
     return UUID without commit/event/I/O. Caller owns atomic publication and raw rollback.
     """
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("upload_original_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
+        raise RuntimeError("upload_original_fence_required")
     await _normalized_source_proof(session, source_id, source_fence.generation, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
     documents, identities = await _upload_document_state(session, source_id=source_id,

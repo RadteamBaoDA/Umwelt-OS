@@ -406,7 +406,7 @@ async def test_wakeups_publish_per_observer_in_separate_sessions_after_commit() 
 
 async def test_cleanup_is_not_module_gated() -> None:
     # Cleanup must finish even for a disabled module: the worker never consults the module gate.
-    source = Path(worker.__file__).read_text(encoding="utf-8")
+    source = Path(worker.__file__).read_text(encoding="utf-8")  # noqa: ASYNC240  # test fixture file access
     assert "module_is_enabled" not in source.replace("``module_is_enabled``", "")
     with patch("modules.settings.public.module_is_enabled", AsyncMock()) as gate, \
             patch.object(worker, "_admit_cleanup", AsyncMock(return_value=None)):

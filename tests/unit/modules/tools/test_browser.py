@@ -281,7 +281,7 @@ class TestBrowserJobSubmissionAndCancellation:
             max_bytes=100_000,
             max_active_seconds=30,
             service_token_hash="a" * 64,
-            expires_at=datetime.now(),  # naive!  # noqa: DTZ005  # intentionally naive: wall-clock/DST math or naive-rejection test
+            expires_at=datetime.now(),  # naive!  # intentionally naive: wall-clock/DST math or naive-rejection test
         )
         args = BrowserReadArgs(source_id=mock_browser_scope.source_id, max_pages=1)
 

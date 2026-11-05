@@ -534,7 +534,7 @@ def map_ecb(xml: bytes, collected_at: datetime) -> list[IngestionRecord]:
     if "<!doctype" in lowered or "<!entity" in lowered:
         raise ProviderPayloadError("ecb_forbidden_xml_construct")
     try:
-        root = ET.fromstring(bytes(xml))  # hostile constructs rejected above
+        root = ET.fromstring(bytes(xml))  # hostile constructs rejected above  # noqa: S314  # DOCTYPE/ENTITY rejected before parsing; defusedxml not installed
     except ET.ParseError as exc:
         raise ProviderPayloadError("ecb_xml_malformed") from exc
     days = [el for el in root.iter() if _local(el.tag) == "Cube" and "time" in el.attrib]

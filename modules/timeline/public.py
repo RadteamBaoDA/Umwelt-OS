@@ -73,7 +73,7 @@ async def _admit(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
         allowed_scopes=ALL_SCOPE_TYPES, scope_label="timeline workspace", admin_read_only_on_lock=True,
     )
-from modules.timeline.seed import (
+from modules.timeline.seed import (  # noqa: E402  # deliberate late import
     ensure_demo_events,  # re-export: used by documents seed
 )
 
@@ -398,7 +398,7 @@ def _cursor_decode(value: str | None, fingerprint: str) -> dict[str, Any]:
                 parsed_instant = datetime.fromisoformat(key[0])
                 if parsed_instant.tzinfo is None or parsed_instant.utcoffset() is None:
                     raise ValueError("cursor timestamp must be aware")
-                assert parsed_instant is not None
+                assert parsed_instant is not None  # noqa: S101  # mypy narrowing invariant
                 if parsed_instant.utcoffset() != timedelta(0) or parsed_instant.astimezone(UTC).isoformat() != key[0]:
                     raise ValueError("cursor timestamp is not canonical UTC")
         except (ValueError, TypeError) as exc:
@@ -486,7 +486,7 @@ async def list_event_evidence(
     event_row = await session.scalar(select(Event).where(
         Event.id == event_id, Event.workspace_id == scope.workspace_id,
     ))
-    assert event_row is not None  # id was just selected above
+    assert event_row is not None  # id was just selected above  # noqa: S101  # mypy narrowing invariant
     result = await _event_read(session, event_row, scope=scope,
                                multi_workspace_enabled=multi_workspace_enabled)
     return result.evidence if result else None
@@ -695,7 +695,7 @@ async def _list_partition(
         statement = statement.where(Event.date_precision == "timed")
         if query.date_from is not None:
             start, _ = day_window(query.date_from, query.timezone)
-            assert query.date_to is not None  # validated together with date_from
+            assert query.date_to is not None  # validated together with date_from  # noqa: S101  # mypy narrowing invariant
             _, end = day_window(query.date_to - timedelta(days=1), query.timezone)
             statement = statement.where(Event.started_at >= start, Event.started_at < end)
         if query.entity_id is not None:
@@ -774,7 +774,7 @@ async def _list_page(
         if len(rows) > room:
             last = rows[room - 1]
             value = last.started_at if partition == 0 else last.occurred_date if partition == 1 else last.created_at
-            assert value is not None
+            assert value is not None  # noqa: S101  # mypy narrowing invariant
             next_position = {"v": 1, "f": fingerprint, "p": partition, "k": [value.isoformat(), str(last.id)]}
             break
         partition += 1
@@ -1174,7 +1174,7 @@ async def schedule_extraction_work(
             TimelineExtractionWork.extractor_version == extractor_version,
             TimelineExtractionWork.prompt_version == prompt_version,
         ))
-    assert work_id is not None  # the conflicting identity row exists
+    assert work_id is not None  # the conflicting identity row exists  # noqa: S101  # mypy narrowing invariant
     await session.flush()
     # GitHub events are produced deterministically by the connector mapper and are canonical;
     # model extraction would only add duplicates. Terminal-block the work (an error code the
@@ -1816,7 +1816,7 @@ async def publish_provider_event(
         EventEvidence.chunk_id.in_(chunk_ids),
         EventEvidence.document_version_id == document_version_id,
     ))).all())
-    for ref, (_, role) in zip(canonical, participants):
+    for ref, (_, role) in zip(canonical, participants, strict=False):
         row = await session.scalar(select(EventParticipant).where(
             EventParticipant.event_id == event.id, EventParticipant.entity_id == ref.canonical_id,
             EventParticipant.role == role,

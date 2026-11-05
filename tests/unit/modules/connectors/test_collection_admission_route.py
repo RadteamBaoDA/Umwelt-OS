@@ -136,7 +136,7 @@ def test_templates_admit_before_provider_io_and_carry_token(name: str, source_ty
 
 # --- remaining n8n collection paths: /rss, /crawl, /provider-fetch, /mcp-collect --------------------------------
 
-from modules.connectors.collection_schemas import ManagedCrawlRequest
+from modules.connectors.collection_schemas import ManagedCrawlRequest  # noqa: E402
 
 
 def test_remaining_requests_refuse_a_missing_admission() -> None:

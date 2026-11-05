@@ -262,7 +262,7 @@ def safe_xml_root(body: object, max_bytes: int = MAX_FEED_BYTES) -> ET.Element:
     if "<!doctype" in lowered or "<!entity" in lowered:
         raise ProviderPayloadError("news_feed_forbidden_xml_construct")
     try:
-        return ET.fromstring(text.encode("utf-8"))  # hostile constructs rejected above
+        return ET.fromstring(text.encode("utf-8"))  # hostile constructs rejected above  # noqa: S314  # DOCTYPE/ENTITY rejected before parsing; defusedxml not installed
     except ET.ParseError as exc:
         raise ProviderPayloadError("news_feed_xml_malformed") from exc
 

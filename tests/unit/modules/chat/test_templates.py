@@ -236,7 +236,7 @@ def test_tool_clear(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_specs_and_prompt_are_opt_in() -> None:
-    names = lambda **kw: {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, **kw)}
+    names = lambda **kw: {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, **kw)}  # noqa: E731  # terse test stub
     assert not (TEMPLATE_TOOLS | {TOOL_SET_THEME}) & names()
     assert TEMPLATE_TOOLS <= names(include_templates=True) and TOOL_SET_THEME not in names(include_templates=True)
     assert TOOL_SET_THEME in names(include_theme=True)

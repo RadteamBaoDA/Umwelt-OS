@@ -63,19 +63,19 @@ from modules.settings.display_name import derive_display_name, normalize_display
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
 
 # Re-exported for the model_gateway routes (strict mypy forbids implicit re-export, hence the aliases).
-from modules.settings.models import capability_evidence as capability_evidence  # noqa: PLC0414
-from modules.settings.models import list_capabilities as list_capabilities  # noqa: PLC0414
+from modules.settings.models import capability_evidence as capability_evidence
+from modules.settings.models import list_capabilities as list_capabilities
 from modules.settings.models import (
-    list_model_test_results as list_model_test_results,  # noqa: PLC0414
+    list_model_test_results as list_model_test_results,
 )
-from modules.settings.models import new_capability_result as new_capability_result  # noqa: PLC0414
-from modules.settings.models import save_capability as save_capability  # noqa: PLC0414
+from modules.settings.models import new_capability_result as new_capability_result
+from modules.settings.models import save_capability as save_capability
 from modules.settings.models import (
-    save_model_test_result as save_model_test_result,  # noqa: PLC0414
+    save_model_test_result as save_model_test_result,
 )
 from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS, MAX_PROMPT_CHARS
 from modules.settings.schemas import (
-    MaintenanceSummaryRead as MaintenanceSummaryRead,  # noqa: PLC0414  # explicit re-export (strict mypy)
+    MaintenanceSummaryRead as MaintenanceSummaryRead,
 )
 from modules.settings.schemas import (
     ModuleLifecycleRead,
@@ -94,10 +94,10 @@ from modules.settings.schemas import (
     WebSearchUpdate,
 )
 from modules.settings.schemas import (
-    TranslationSettingsRead as TranslationSettingsRead,  # noqa: PLC0414  # explicit re-export (strict mypy)
+    TranslationSettingsRead as TranslationSettingsRead,
 )
 from modules.settings.schemas import (
-    TranslationSettingsUpdate as TranslationSettingsUpdate,  # noqa: PLC0414  # explicit re-export (strict mypy)
+    TranslationSettingsUpdate as TranslationSettingsUpdate,
 )
 
 VIZ_TYPESAFE_DESTINATION = "typesafe:api.typesafe.ai"
@@ -903,7 +903,7 @@ class N8nResolved(BaseModel):
     webhook_token: str = Field(default="", repr=False)
     service_url_source: str = "environment"
     api_key_source: str = "none"
-    webhook_token_source: str = "none"
+    webhook_token_source: str = "none"  # noqa: S105  # label/URL/enum value, not a credential
     enabled: bool = True
 
 

@@ -99,13 +99,13 @@ async def test_denial_never_raises_and_is_terminal(
         monkeypatch.setattr(documents_worker.ingestion, "read_document_cleanup_event_operation_id",
                             AsyncMock(return_value=uuid4()))
         monkeypatch.setattr(documents_worker.ingestion, "resolve_ingestion_event_scope", deny)
-        run = lambda: documents_worker.process_document_cleanup(ctx, event)
+        run = lambda: documents_worker.process_document_cleanup(ctx, event)  # noqa: E731  # terse test stub
     elif name == "entities_ready":
         monkeypatch.setattr(entities_worker.ingestion, "resolve_ingestion_event_scope", deny)
-        run = lambda: entities_worker.process_document_ready(ctx, event)
+        run = lambda: entities_worker.process_document_ready(ctx, event)  # noqa: E731  # terse test stub
     elif name == "news":
         monkeypatch.setattr(news_worker.ingestion, "resolve_ingestion_event_scope", deny)
-        run = lambda: news_worker.process_news_document_ready(ctx, event)
+        run = lambda: news_worker.process_news_document_ready(ctx, event)  # noqa: E731  # terse test stub
     elif name == "dashboard":
         monkeypatch.setattr(dashboard_worker.workspaces, "list_workspace_job_candidate_ids",
                             AsyncMock(return_value=[WS]))
@@ -113,7 +113,7 @@ async def test_denial_never_raises_and_is_terminal(
         monkeypatch.setattr(dashboard_worker.briefs, "_admit", deny)
         monkeypatch.setattr(dashboard_worker, "_read_workspace_cursor", AsyncMock(return_value=None))
         monkeypatch.setattr(dashboard_worker, "_write_workspace_cursor", AsyncMock())
-        run = lambda: dashboard_worker.run_scheduled_brief(ctx)
+        run = lambda: dashboard_worker.run_scheduled_brief(ctx)  # noqa: E731  # terse test stub
     elif name == "graph":
         row = SimpleNamespace(workspace_id=WS, mapping_id=uuid4(), partition_id=uuid4())
         session.execute = AsyncMock(return_value=SimpleNamespace(one_or_none=lambda: row))
@@ -121,7 +121,7 @@ async def test_denial_never_raises_and_is_terminal(
         monkeypatch.setattr(temporal_worker.workspaces, "resolve_workspace_owner_context", owner)
         monkeypatch.setattr(temporal_worker.workspaces, "authorize_internal_job", deny)
         monkeypatch.setattr(temporal_worker, "terminalize", recorded)
-        run = lambda: temporal_worker.process_graph_operation(ctx, str(uuid4()))
+        run = lambda: temporal_worker.process_graph_operation(ctx, str(uuid4()))  # noqa: E731  # terse test stub
     elif name in {"timeline", "entities_work"}:
         mod = timeline_worker if name == "timeline" else entities_worker
         monkeypatch.setattr(mod, "_workspace_job_scope", scope)
@@ -132,12 +132,12 @@ async def test_denial_never_raises_and_is_terminal(
         entry = (timeline_worker.process_timeline_extraction_work if name == "timeline"
                  else entities_worker.process_entity_extraction_work)
         entry = getattr(entry, "__wrapped__", entry)  # skip the heavy-slot decorator
-        run = lambda: entry(ctx, str(uuid4()))
+        run = lambda: entry(ctx, str(uuid4()))  # noqa: E731  # terse test stub
     else:
         monkeypatch.setattr(search_indexing.workspaces, "resolve_workspace_owner_context", owner)
         monkeypatch.setattr(search_indexing, "capture_authority", deny)
         monkeypatch.setattr(search_indexing, "terminalize", recorded)
-        run = lambda: search_indexing._index_generation(
+        run = lambda: search_indexing._index_generation(  # noqa: E731  # terse test stub
             _Factory(session), MagicMock(), ctx["settings"], uuid4(), WS)
 
     await run()  # never raises

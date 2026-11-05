@@ -160,17 +160,15 @@ def _assistant_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
     return blocks
 
 
-def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]:
-    """Translate an OpenAI-shaped chat request into an Anthropic Messages request. Pure; never mutates ``body``.
+def _split_messages(raw_messages: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Split OpenAI chat messages into Anthropic ``system`` strings and ``messages`` turns. Pure.
 
-    System messages become the top-level ``system``; tool results become ``tool_result`` user blocks; sampling
-    parameters, ``extra_body`` and ``stream_options`` are dropped (400 on the current API version). ``tool_choice``
-    ``required`` maps to ``any`` and a named function to ``tool``; a forced choice that cannot be honoured
-    (no tools, or extended thinking is on) raises CapabilityUnsupported.
+    System text is collected separately; tool results become ``tool_result`` user blocks. User and assistant turns
+    with no usable content are dropped because Anthropic rejects empty content with a 400. Order is preserved.
     """
     system: list[str] = []
     messages: list[dict[str, Any]] = []
-    for message in body.get("messages") or []:
+    for message in raw_messages:
         role = message.get("role")
         if role == "system":
             if text := _text_of(message.get("content")):
@@ -187,6 +185,36 @@ def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]
             messages.append({"role": "user", "content": [{
                 "type": "tool_result", "tool_use_id": _tool_id(message.get("tool_call_id")),
                 "content": _tool_result_content(content)}]})
+    return system, messages
+
+
+def _translate_tools(tools: list[Any]) -> list[dict[str, Any]]:
+    """Translate OpenAI function tool definitions into Anthropic tool definitions. Pure; skips malformed entries."""
+    return [
+        {"name": t["function"]["name"], **({"description": t["function"]["description"]} if t["function"].get("description") else {}),
+         "input_schema": t["function"].get("parameters") or {"type": "object", "properties": {}}}
+        for t in tools if isinstance(t, dict) and isinstance(t.get("function"), dict)]
+
+
+def _json_schema_output_config(response_format: Any) -> dict[str, Any]:
+    """Return the ``output_config`` fragment for an OpenAI ``json_schema`` response format, else an empty dict. Pure."""
+    output_config: dict[str, Any] = {}
+    if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
+        schema = (response_format.get("json_schema") or {}).get("schema")
+        if isinstance(schema, dict):
+            output_config["format"] = {"type": "json_schema", "schema": schema}
+    return output_config
+
+
+def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]:
+    """Translate an OpenAI-shaped chat request into an Anthropic Messages request. Pure; never mutates ``body``.
+
+    System messages become the top-level ``system``; tool results become ``tool_result`` user blocks; sampling
+    parameters, ``extra_body`` and ``stream_options`` are dropped (400 on the current API version). ``tool_choice``
+    ``required`` maps to ``any`` and a named function to ``tool``; a forced choice that cannot be honoured
+    (no tools, or extended thinking is on) raises CapabilityUnsupported.
+    """
+    system, messages = _split_messages(body.get("messages") or [])
     out: dict[str, Any] = {
         "model": body.get("model"), "messages": messages,
         "max_tokens": body.get("max_tokens") or body.get("max_completion_tokens")
@@ -196,16 +224,8 @@ def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]
         out["system"] = "\n\n".join(system)
     tools = body.get("tools")
     if tools:
-        out["tools"] = [
-            {"name": t["function"]["name"], **({"description": t["function"]["description"]} if t["function"].get("description") else {}),
-             "input_schema": t["function"].get("parameters") or {"type": "object", "properties": {}}}
-            for t in tools if isinstance(t, dict) and isinstance(t.get("function"), dict)]
-    output_config: dict[str, Any] = {}
-    response_format = body.get("response_format")
-    if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
-        schema = (response_format.get("json_schema") or {}).get("schema")
-        if isinstance(schema, dict):
-            output_config["format"] = {"type": "json_schema", "schema": schema}
+        out["tools"] = _translate_tools(tools)
+    output_config = _json_schema_output_config(body.get("response_format"))
     effort = body.get("reasoning_effort")
     if (tool_choice := _tool_choice(body, thinking=effort in {"low", "medium", "high"})) is not None:
         out["tool_choice"] = tool_choice
@@ -275,6 +295,46 @@ class StreamTranslator:
             choice["finish_reason"] = finish_reason
         return {"id": self._id, "object": "chat.completion.chunk", "model": self._model, "choices": [choice]}
 
+    def _on_block_start(self, block: dict[str, Any], index: int) -> list[dict[str, Any]]:
+        """Handle ``content_block_start``: open a tool call (emits a chunk) or start tracking a thinking block."""
+        if block.get("type") == "tool_use":
+            ordinal = len(self._tool_ordinals)
+            self._tool_ordinals[index] = ordinal
+            return [self._chunk({"tool_calls": [{"index": ordinal, "id": block.get("id"), "type": "function",
+                                                 "function": {"name": block.get("name"), "arguments": ""}}]})]
+        if block.get("type") == "thinking":
+            self._thinking[index] = {"type": "thinking", "thinking": "", "signature": ""}
+        elif block.get("type") == "redacted_thinking":
+            self._details.append(block)
+        return []
+
+    def _on_block_delta(self, delta: dict[str, Any], index: int) -> list[dict[str, Any]]:
+        """Handle ``content_block_delta``: text, tool-argument and thinking deltas; signature deltas emit nothing."""
+        dtype = delta.get("type")
+        if dtype == "text_delta":
+            return [self._chunk({"content": delta.get("text") or ""})]
+        if dtype == "input_json_delta" and index in self._tool_ordinals:
+            return [self._chunk({"tool_calls": [{"index": self._tool_ordinals[index],
+                                                 "function": {"arguments": delta.get("partial_json") or ""}}]})]
+        if dtype == "thinking_delta":
+            text = delta.get("thinking") or ""
+            if index in self._thinking:
+                self._thinking[index]["thinking"] += text
+            return [self._chunk({"reasoning_content": text})]
+        if dtype == "signature_delta" and index in self._thinking:
+            self._thinking[index]["signature"] += delta.get("signature") or ""
+        return []
+
+    def _on_message_delta(self, event: dict[str, Any]) -> list[dict[str, Any]]:
+        """Handle ``message_delta``: record output usage and emit the finish chunk carrying reasoning details."""
+        usage = event.get("usage") or {}
+        self._output = usage.get("output_tokens", self._output) or 0
+        if isinstance(usage.get("input_tokens"), int):
+            self._input = {**self._input, **usage}
+        delta = event.get("delta") or {}
+        payload: dict[str, Any] = {"reasoning_details": self._details[:_MAX_REASONING_DETAILS]} if self._details else {}
+        return [self._chunk(payload, _finish_reason(delta.get("stop_reason")))]
+
     def feed(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         """Consume one decoded SSE event and return the chunks it produces (possibly none).
 
@@ -290,45 +350,15 @@ class StreamTranslator:
             self._input = dict(message.get("usage") or {})
             return [self._chunk({"role": "assistant"})]
         if kind == "content_block_start":
-            block = event.get("content_block") or {}
-            if block.get("type") == "tool_use":
-                ordinal = len(self._tool_ordinals)
-                self._tool_ordinals[index] = ordinal
-                return [self._chunk({"tool_calls": [{"index": ordinal, "id": block.get("id"), "type": "function",
-                                                     "function": {"name": block.get("name"), "arguments": ""}}]})]
-            if block.get("type") == "thinking":
-                self._thinking[index] = {"type": "thinking", "thinking": "", "signature": ""}
-            elif block.get("type") == "redacted_thinking":
-                self._details.append(block)
-            return []
+            return self._on_block_start(event.get("content_block") or {}, index)
         if kind == "content_block_delta":
-            delta = event.get("delta") or {}
-            dtype = delta.get("type")
-            if dtype == "text_delta":
-                return [self._chunk({"content": delta.get("text") or ""})]
-            if dtype == "input_json_delta" and index in self._tool_ordinals:
-                return [self._chunk({"tool_calls": [{"index": self._tool_ordinals[index],
-                                                     "function": {"arguments": delta.get("partial_json") or ""}}]})]
-            if dtype == "thinking_delta":
-                text = delta.get("thinking") or ""
-                if index in self._thinking:
-                    self._thinking[index]["thinking"] += text
-                return [self._chunk({"reasoning_content": text})]
-            if dtype == "signature_delta" and index in self._thinking:
-                self._thinking[index]["signature"] += delta.get("signature") or ""
-            return []
+            return self._on_block_delta(event.get("delta") or {}, index)
         if kind == "content_block_stop":
             if index in self._thinking:
                 self._details.append(self._thinking.pop(index))
             return []
         if kind == "message_delta":
-            usage = event.get("usage") or {}
-            self._output = usage.get("output_tokens", self._output) or 0
-            if isinstance(usage.get("input_tokens"), int):
-                self._input = {**self._input, **usage}
-            delta = event.get("delta") or {}
-            payload: dict[str, Any] = {"reasoning_details": self._details[:_MAX_REASONING_DETAILS]} if self._details else {}
-            return [self._chunk(payload, _finish_reason(delta.get("stop_reason")))]
+            return self._on_message_delta(event)
         if kind == "message_stop":
             usage = _usage({**self._input, "output_tokens": self._output})
             return [{"id": self._id, "object": "chat.completion.chunk", "model": self._model, "choices": [], "usage": usage}]
@@ -393,7 +423,7 @@ async def _send(http: httpx.AsyncClient, request: httpx.Request, *, stream: bool
 
 
 async def create_message(
-    http: httpx.AsyncClient, base_url: str, api_key: str, body: dict[str, Any], *, timeout: httpx.Timeout | None = None,
+    http: httpx.AsyncClient, base_url: str, api_key: str, body: dict[str, Any], *, timeout: httpx.Timeout | None = None,  # noqa: ASYNC109  # httpx.Timeout is forwarded to the client; not an asyncio timeout
 ) -> dict[str, Any]:
     """POST ``{base_url}/messages`` for an OpenAI-shaped ``body`` and return an OpenAI ``chat.completion`` dict.
 
@@ -407,7 +437,7 @@ async def create_message(
 
 
 async def open_message_stream(
-    http: httpx.AsyncClient, base_url: str, api_key: str, body: dict[str, Any], *, timeout: httpx.Timeout | None = None,
+    http: httpx.AsyncClient, base_url: str, api_key: str, body: dict[str, Any], *, timeout: httpx.Timeout | None = None,  # noqa: ASYNC109  # httpx.Timeout is forwarded to the client; not an asyncio timeout
 ) -> AsyncIterator[dict[str, Any]]:
     """Open a streaming Messages call; a non-2xx status raises before this returns (body already read).
 
@@ -442,7 +472,7 @@ async def open_message_stream(
 
 
 async def list_models(
-    http: httpx.AsyncClient, base_url: str, api_key: str, *, timeout: httpx.Timeout | None = None,
+    http: httpx.AsyncClient, base_url: str, api_key: str, *, timeout: httpx.Timeout | None = None,  # noqa: ASYNC109  # httpx.Timeout is forwarded to the client; not an asyncio timeout
 ) -> list[str]:
     """GET ``{base_url}/models?limit=1000`` and return the non-empty string model ids."""
     request = http.build_request("GET", f"{base_url}/models", params={"limit": 1000}, headers=headers(api_key),
