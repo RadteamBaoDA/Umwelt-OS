@@ -12,12 +12,12 @@ import pytest
 from fastapi import HTTPException
 
 from apps.worker import main as worker_main
-from core.system import routes as system_routes
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.export import routes as export_routes
 from modules.observability import maintenance, operations, operations_routes
 from modules.observability import public as observability
 from modules.observability import routes as observability_routes
+from modules.sources import system_routes
 
 WS = uuid4()
 OWNER = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=3)

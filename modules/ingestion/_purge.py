@@ -25,7 +25,6 @@ from modules.ingestion.models import (
     SourceObservation,
 )
 from modules.knowledge.documents import public as documents
-from modules.knowledge.observations import public as observations_public
 from modules.sources import public as sources
 from modules.sources.public import SourceFence
 
@@ -321,6 +320,10 @@ async def purge_expired_datasource_data(
     Returns:
         Total number of expired observation, source_observation, and document version rows deleted.
     """
+    # Deferred: observations.public -> connectors.public -> ingestion.public -> this module
+    # would otherwise form an import cycle when this module is imported first.
+    from modules.knowledge.observations import public as observations_public
+
     now = now or datetime.now(UTC)
     cutoffs = await sources.list_retention_cutoffs(session, now=now)
     if not cutoffs:
