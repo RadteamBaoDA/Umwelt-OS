@@ -42,7 +42,10 @@ jobs:
       - name: Import contracts (when configured)
         run: if [ -f .importlinter ]; then uv run lint-imports; else echo "no .importlinter; skipped"; fi
       # Non-docker unit tests: integration tests are gated by INTEGRATION (unset here).
-      - run: uv run pytest -q
+      # Coverage floor (ratchet, see docs/development.md). Tracing slows the timing-sensitive event-loop offload
+      # tests past their budgets, so that file runs separately without coverage.
+      - run: uv run pytest -q --ignore=tests/unit/test_event_loop_offload.py --cov=core --cov=modules --cov=apps --cov-report=term:skip-covered --cov-fail-under=68
+      - run: uv run pytest -q tests/unit/test_event_loop_offload.py
 
   monitoring-rules:
     runs-on: ubuntu-latest
@@ -77,7 +80,8 @@ jobs:
         run: npm run format:check --workspace apps/web
         env:
           FORMAT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
-      - run: npm test --workspace apps/web
+      # Coverage floors are in apps/web/vitest.config.ts (ratchet, see docs/development.md).
+      - run: npm run test:coverage --workspace apps/web
       - run: npm run build
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
