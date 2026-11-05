@@ -16,6 +16,7 @@ import pytest
 
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.connectors import provisioning
+from modules.connectors.provisioning import _workflow_drive
 
 SOURCE_ID = uuid4()
 WORKSPACE_ID = uuid4()
@@ -51,9 +52,9 @@ async def _drive(claims: list[Any], *, api: Any = None, allowed: list[bool] | No
     }
     session = SimpleNamespace(rollback=AsyncMock())
     spies["session"] = session
-    with patch.object(provisioning, "claim_workflow_step", spies["claim"]), \
-            patch.object(provisioning, "_workflow_send_allowed", spies["allowed"]), \
-            patch.object(provisioning, "_settle_retained_workflow_after_io", spies["settle"]), \
+    with patch.object(_workflow_drive, "claim_workflow_step", spies["claim"]), \
+            patch.object(_workflow_drive, "_workflow_send_allowed", spies["allowed"]), \
+            patch.object(_workflow_drive, "_settle_retained_workflow_after_io", spies["settle"]), \
             patch("modules.connectors.n8n.find_workflows_by_name", spies["find"]), \
             patch("modules.connectors.n8n.workflow_matches", return_value=workflow_matches):
         result = await provisioning.drive_workflow_operation(

@@ -364,15 +364,16 @@ async def test_list_is_batched_and_matches_per_provider_state() -> None:
 async def test_activation_statuses_maps_rows_and_404s_on_invisible_source() -> None:
     """Batch mirrors activation_status: None for no row, 404 when any id is not visible in scope."""
     from modules.connectors import provisioning
+    from modules.connectors.provisioning import _status
     a, b = uuid4(), uuid4()
     row = SimpleNamespace(source_id=a)
     session = SimpleNamespace(scalars=AsyncMock(return_value=[row]))
-    with patch.object(provisioning, "_connector_access", AsyncMock()), \
-            patch.object(provisioning.sources, "get_connector_sources", AsyncMock(return_value={a: 1, b: 2})):
+    with patch.object(_status, "_connector_access", AsyncMock()), \
+            patch.object(_status.sources, "get_connector_sources", AsyncMock(return_value={a: 1, b: 2})):
         got = await provisioning.activation_statuses(session, frozenset({a, b}), scope=SCOPE, multi_workspace_enabled=False)  # type: ignore[arg-type]
     assert got == {a: row, b: None} and session.scalars.await_count == 1
-    with patch.object(provisioning, "_connector_access", AsyncMock()), \
-            patch.object(provisioning.sources, "get_connector_sources", AsyncMock(return_value={a: 1})), \
+    with patch.object(_status, "_connector_access", AsyncMock()), \
+            patch.object(_status.sources, "get_connector_sources", AsyncMock(return_value={a: 1})), \
             pytest.raises(DomainError) as exc:
         await provisioning.activation_statuses(session, frozenset({a, b}), scope=SCOPE, multi_workspace_enabled=False)  # type: ignore[arg-type]
     assert exc.value.status_code == 404
