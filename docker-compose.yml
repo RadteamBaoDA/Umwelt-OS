@@ -12,7 +12,8 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
-    command: ["alembic", "upgrade", "head"]
+    # Then apply the chat SQL reader password (no-op when CHAT_SQL_READER_DATABASE_URL is unset).
+    command: ["sh", "-c", "alembic upgrade head && python -m core.chat_sql_provision"]
     env_file: .env
     depends_on:
       postgres:

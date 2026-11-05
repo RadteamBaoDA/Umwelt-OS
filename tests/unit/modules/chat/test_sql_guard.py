@@ -1,4 +1,4 @@
-"""Security tests for the chat SQL tool: parser allowlist and least-privilege execution order."""
+"""Security tests for the chat SQL tool: parser allowlist and dedicated read-only connection execution."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from modules.chat import db_query
-from modules.chat.db_query import CHAT_SQL_READER_ROLE, validate_readonly_sql
+from modules.chat.db_query import ChatSqlReaderUnavailableError, validate_readonly_sql
 
 BYPASSES = [
     "SELECT * FROM chat_messages",
@@ -119,107 +119,124 @@ class _FakeResult:
         return [{"symbol": "BTC", "avg_val": 1}]
 
 
-class _RecordingSession:
-    """Async session double that records every executed SQL string in order."""
+class _RecordingConn:
+    """Async connection double recording executed SQL, bind params and rollbacks; optionally failing the model query."""
 
-    def __init__(self) -> None:
-        """Start with an empty statement log."""
+    def __init__(self, *, fail: bool = False) -> None:
+        """Start with empty logs."""
         self.statements: list[str] = []
+        self.params: list[Any] = []
+        self.rollbacks = 0
+        self.fail = fail
+
+    async def __aenter__(self) -> _RecordingConn:
+        """Enter the ``engine.connect()`` context."""
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        """Leave the context without suppressing errors."""
 
     async def execute(self, statement: Any, params: Any = None) -> _FakeResult:
-        """Record the rendered statement text and return a canned result."""
+        """Record the statement; raise on the bounded model query when ``fail`` is set."""
         self.statements.append(str(statement))
+        self.params.append(params)
+        if self.fail and "_bounded_query" in str(statement):
+            raise RuntimeError("division by zero")
         return _FakeResult()
 
+    async def rollback(self) -> None:
+        """Count rollbacks."""
+        self.rollbacks += 1
 
-async def test_user_sql_runs_after_read_only_and_role_switch_and_state_is_rolled_back() -> None:
-    """SET LOCAL transaction_read_only and SET LOCAL ROLE precede the model SQL; savepoint rolls both back."""
-    session = _RecordingSession()
+
+class _FakeEngine:
+    """Engine double whose ``connect()`` yields the shared recording connection."""
+
+    def __init__(self, conn: _RecordingConn) -> None:
+        """Remember the connection."""
+        self.conn = conn
+
+    def connect(self) -> _RecordingConn:
+        """Return the recording connection."""
+        return self.conn
+
+
+class _NoQuerySession:
+    """Session double: the SQL path must not touch the app session for the model query."""
+
+    async def execute(self, *_: Any, **__: Any) -> Any:
+        """Fail loudly if the app connection is used."""
+        raise AssertionError("model SQL must not run on the application session")
+
+
+def _patch_engine(monkeypatch: pytest.MonkeyPatch, conn: _RecordingConn) -> None:
+    """Route ``_reader_engine`` to the recording double."""
+    monkeypatch.setattr(db_query, "_reader_engine", lambda: _FakeEngine(conn))
+
+
+async def test_user_sql_runs_on_reader_connection_after_scope_and_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scope settings and READ ONLY precede the model SQL; the transaction is rolled back; app session is untouched."""
+    conn = _RecordingConn()
+    _patch_engine(monkeypatch, conn)
     user_sql = "SELECT symbol, AVG(value) AS avg_val FROM scoped_observations GROUP BY symbol"
+    workspace_id, source_id = uuid4(), uuid4()
     out = await db_query._execute_sql_mode(
-        session,  # type: ignore[arg-type]
+        _NoQuerySession(),  # type: ignore[arg-type]
         user_sql,
-        workspace_id=uuid4(),
-        allowed_source_ids=[uuid4()],
+        workspace_id=workspace_id,
+        allowed_source_ids=[source_id],
         limit=10,
         evidence_list=[],
     )
-    stmts = session.statements
+    stmts = conn.statements
     user_idx = next(i for i, s in enumerate(stmts) if user_sql in s)
-    ro_idx = next(i for i, s in enumerate(stmts) if "transaction_read_only = on" in s)
-    role_idx = next(i for i, s in enumerate(stmts) if f"SET LOCAL ROLE {CHAT_SQL_READER_ROLE}" in s)
-    grant_idx = next(i for i, s in enumerate(stmts) if s.startswith("GRANT SELECT"))
-    assert grant_idx < ro_idx < role_idx < user_idx
-    assert any(s.startswith("ROLLBACK TO SAVEPOINT") for s in stmts[user_idx + 1 :])
+    ro_idx = next(i for i, s in enumerate(stmts) if s == "SET TRANSACTION READ ONLY")
+    cfg_idx = [i for i, s in enumerate(stmts) if "set_config" in s]
+    assert len(cfg_idx) == 2 and max(cfg_idx) < ro_idx < user_idx
+    assert {p["value"] for p in conn.params if p and "value" in p} == {str(workspace_id), str(source_id)}
+    assert not any("ROLE" in s for s in stmts)
+    assert conn.rollbacks == 1
     assert '"avg_val": 1' in out and '"mode": "sql"' in out
 
 
-async def test_invalid_sql_is_rejected_before_any_statement_executes() -> None:
-    """A rejected query never reaches the database (no role switch, no temp views)."""
-    session = _RecordingSession()
+async def test_invalid_sql_is_rejected_before_any_statement_executes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rejected query never reaches the database."""
+    conn = _RecordingConn()
+    _patch_engine(monkeypatch, conn)
     with pytest.raises(ValueError):
         await db_query._execute_sql_mode(
-            session,  # type: ignore[arg-type]
+            _NoQuerySession(),  # type: ignore[arg-type]
             "SELECT * FROM chat_messages",
             workspace_id=uuid4(),
             allowed_source_ids=[uuid4()],
             limit=10,
             evidence_list=[],
         )
-    assert session.statements == []
+    assert conn.statements == []
 
 
-class _FailingSession(_RecordingSession):
-    """Session double whose model query raises after the reader role was set, like a Postgres runtime error."""
-
-    async def execute(self, statement: Any, params: Any = None) -> _FakeResult:
-        """Record the statement; fail on the bounded model query only."""
-        result = await super().execute(statement, params)
-        if "_bounded_query" in str(statement):
-            raise RuntimeError("division by zero")
-        return result
-
-
-async def test_model_query_error_after_role_switch_rolls_back_savepoint_and_session_stays_usable() -> None:
-    """A query that raises after SET LOCAL ROLE still issues ROLLBACK TO + RELEASE, then re-raises the original error."""
-    session = _FailingSession()
+async def test_model_query_error_still_rolls_back_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A query that raises still rolls the reader transaction back and surfaces the original error."""
+    conn = _RecordingConn(fail=True)
+    _patch_engine(monkeypatch, conn)
     with pytest.raises(RuntimeError, match="division by zero"):
         await db_query._run_sql_as_reader(
-            session,  # type: ignore[arg-type]
-            "SELECT 1 / 0 FROM scoped_observations",
-            workspace_id=uuid4(),
-            allowed_source_ids=[uuid4()],
-            max_rows=5,
+            "SELECT 1 / 0 FROM scoped_observations", workspace_id=uuid4(), allowed_source_ids=[uuid4()], max_rows=5,
         )
-    stmts = session.statements
-    role_idx = next(i for i, s in enumerate(stmts) if f"SET LOCAL ROLE {CHAT_SQL_READER_ROLE}" in s)
-    tail = stmts[role_idx + 1 :]
-    rollback_idx = next(i for i, s in enumerate(tail) if s.startswith("ROLLBACK TO SAVEPOINT"))
-    assert any(s.startswith("RELEASE SAVEPOINT") for s in tail[rollback_idx + 1 :])
-    # The session accepts further statements afterwards (nothing left poisoned in the double).
-    await session.execute("SELECT 1")
-    assert stmts[-1] == "SELECT 1"
+    assert conn.rollbacks == 1
 
 
-async def test_cleanup_failure_does_not_mask_the_original_query_error() -> None:
-    """If the savepoint rollback itself fails (lost connection), the model-query error is still what surfaces."""
-
-    class _Dead(_FailingSession):
-        """Fails the cleanup statements too."""
-
-        async def execute(self, statement: Any, params: Any = None) -> _FakeResult:
-            """Raise a different error for the rollback so masking would be visible."""
-            if str(statement).startswith("ROLLBACK TO SAVEPOINT"):
-                raise ConnectionError("gone")
-            return await super().execute(statement, params)
-
-    with pytest.raises(RuntimeError, match="division by zero"):
-        await db_query._run_sql_as_reader(
-            _Dead(),  # type: ignore[arg-type]
+async def test_sql_mode_fails_closed_without_reader_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With CHAT_SQL_READER_DATABASE_URL unset the tool is disabled; it never falls back to the app connection."""
+    monkeypatch.setattr(db_query, "Settings", lambda: type("S", (), {"chat_sql_reader_database_url": None})())
+    with pytest.raises(ChatSqlReaderUnavailableError, match="CHAT_SQL_READER_DATABASE_URL"):
+        await db_query._execute_sql_mode(
+            _NoQuerySession(),  # type: ignore[arg-type]
             "SELECT 1 FROM scoped_observations",
             workspace_id=uuid4(),
             allowed_source_ids=[uuid4()],
-            max_rows=5,
+            limit=10,
+            evidence_list=[],
         )
 
 
@@ -231,29 +248,14 @@ async def test_cleanup_failure_does_not_mask_the_original_query_error() -> None:
         (uuid4(), [uuid4(), "x'); DROP TABLE users; --"]),
     ],
 )
-def test_scoped_view_statements_reject_non_uuid_ids(workspace_id: Any, source_ids: list[Any]) -> None:
-    """Ids are formatted into DDL, so anything that is not a uuid.UUID instance (even a valid-looking str) is refused."""
-    with pytest.raises(TypeError):
-        db_query.build_scoped_view_statements(workspace_id, source_ids)
-
-
-def test_scoped_view_statements_accept_uuid_instances() -> None:
-    """UUID instances render as quoted hex ids in both views and the GRANT is emitted last."""
-    workspace_id, source_id = uuid4(), uuid4()
-    statements = db_query.build_scoped_view_statements(workspace_id, [source_id])
-    assert len(statements) == 3 and str(workspace_id) in statements[0] and str(source_id) in statements[1]
-    assert statements[2].startswith("GRANT SELECT")
-
-
-async def test_non_uuid_ids_fail_before_any_statement_executes() -> None:
-    """The runtime type check runs before the SAVEPOINT, so nothing reaches the database."""
-    session = _RecordingSession()
+async def test_non_uuid_ids_fail_before_any_statement_executes(
+    monkeypatch: pytest.MonkeyPatch, workspace_id: Any, source_ids: list[Any],
+) -> None:
+    """Anything that is not a uuid.UUID instance (even a valid-looking str) is refused before any I/O."""
+    conn = _RecordingConn()
+    _patch_engine(monkeypatch, conn)
     with pytest.raises(TypeError):
         await db_query._run_sql_as_reader(
-            session,  # type: ignore[arg-type]
-            "SELECT 1 FROM scoped_observations",
-            workspace_id=uuid4(),
-            allowed_source_ids=["not-a-uuid"],  # type: ignore[list-item]
-            max_rows=5,
+            "SELECT 1 FROM scoped_observations", workspace_id=workspace_id, allowed_source_ids=source_ids, max_rows=5,
         )
-    assert session.statements == []
+    assert conn.statements == []

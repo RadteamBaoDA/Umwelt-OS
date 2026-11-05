@@ -1,61 +1,94 @@
-"""Integration proof for the chat SQL tool's least-privilege execution on a real PostgreSQL server.
+"""Integration proof that the chat SQL tool's dedicated login role is read-only and isolated from the app role.
 
-Unit tests only record statement order with a mock; these tests run the actual TEMP-view, GRANT,
-``SET LOCAL transaction_read_only``, ``SET LOCAL ROLE`` and ``ROLLBACK TO SAVEPOINT`` sequence
-against the migrated disposable ``bbd_test`` database. The validator is deliberately bypassed
-(``_run_sql_as_reader`` is called directly) to prove the database layer holds on its own.
+Runs against the migrated disposable ``bbd_test`` database (migration 0017 plus
+``python -m core.chat_sql_provision`` applying the password). The parser allowlist is bypassed on purpose
+(``_run_sql_as_reader`` / raw reader connections) to prove the database layer holds on its own.
 """
 
 from __future__ import annotations
 
+import os
+from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from modules.chat.db_query import _run_sql_as_reader
+from modules.chat import db_query
+from modules.chat.db_query import CHAT_SQL_LOGIN_ROLE, _run_sql_as_reader
 
 pytestmark = pytest.mark.integration
 
-
-async def _identity(session: AsyncSession) -> tuple[str, str]:
-    """Return ``(current_user, transaction_read_only)`` for the session's current transaction."""
-    row = (await session.execute(text("SELECT current_user, current_setting('transaction_read_only')"))).one()
-    return str(row[0]), str(row[1])
+_APP_ROLE = "bbd_test"
 
 
-async def test_scoped_query_runs_as_reader_and_restores_session(db_session: AsyncSession) -> None:
-    """A legitimate scoped query returns rows twice (plan cache) and leaves role/read-only untouched."""
-    before = await _identity(db_session)
+@pytest.fixture
+async def reader_engine(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncEngine]:
+    """Engine logging in as the reader; also exported as ``CHAT_SQL_READER_DATABASE_URL`` for the tool."""
+    url = os.getenv("CHAT_SQL_READER_DATABASE_URL")
+    if not url:
+        pytest.skip("CHAT_SQL_READER_DATABASE_URL is available only in the disposable test runner")
+    monkeypatch.setenv("CHAT_SQL_READER_DATABASE_URL", url)
+    db_query._reader_engines.clear()
+    engine = create_async_engine(url, pool_size=1, max_overflow=0)
+    yield engine
+    await engine.dispose()
+    for cached in db_query._reader_engines.values():
+        await cached.dispose()
+    db_query._reader_engines.clear()
+
+
+async def test_scoped_query_runs_as_reader_and_returns_rows(reader_engine: AsyncEngine) -> None:
+    """A scoped query works repeatedly and an unknown workspace yields zero rows."""
     for _ in range(2):
         rows = await _run_sql_as_reader(
-            db_session,
             "SELECT count(*) AS n FROM scoped_observations",
-            workspace_id=uuid4(),
-            allowed_source_ids=[uuid4()],
-            max_rows=5,
+            workspace_id=uuid4(), allowed_source_ids=[uuid4()], max_rows=5,
         )
         assert [dict(row) for row in rows] == [{"n": 0}]
-    assert await _identity(db_session) == before
-    assert before[1] == "off"
+
+
+async def test_session_user_is_the_login_role_and_cannot_switch_to_app_role(reader_engine: AsyncEngine) -> None:
+    """``session_user`` is the dedicated login and ``SET ROLE``/``RESET ROLE`` cannot reach the app role."""
+    async with reader_engine.connect() as conn:
+        assert (await conn.execute(text("SELECT session_user"))).scalar_one() == CHAT_SQL_LOGIN_ROLE
+        for stmt in (f"SET ROLE {_APP_ROLE}", "SET ROLE umwelt_chat_sql_reader"):
+            with pytest.raises(DBAPIError):
+                await conn.execute(text(stmt))
+            await conn.rollback()
+        await conn.execute(text("RESET ROLE"))
+        assert (await conn.execute(text("SELECT current_user"))).scalar_one() == CHAT_SQL_LOGIN_ROLE
 
 
 @pytest.mark.parametrize(
     "sql",
     [
-        "SELECT count(*) AS n FROM chat_messages",
-        "SELECT count(*) AS n FROM observations",
-        "SELECT lo_from_bytea(0, 'x'::bytea) AS oid",
+        "CREATE TABLE chat_sql_probe (x int)",
+        "INSERT INTO chat_sql.scoped_observations (id) VALUES (gen_random_uuid())",
+        "DELETE FROM public.observations",
+        "SELECT count(*) FROM public.chat_messages",
+        "SELECT count(*) FROM public.observations",
+        "SELECT lo_from_bytea(0, 'x'::bytea)",
     ],
 )
-async def test_validator_bypass_is_denied_by_the_database(db_session: AsyncSession, sql: str) -> None:
-    """Reads of base tables and large-object writes fail under the reader role even without layer 1."""
-    before = await _identity(db_session)
+async def test_writes_and_base_table_reads_fail_even_after_leaving_read_only(
+    reader_engine: AsyncEngine, sql: str,
+) -> None:
+    """Default read-only plus missing privileges deny writes and base-table reads, even with READ WRITE requested."""
+    async with reader_engine.connect() as conn:
+        with pytest.raises(DBAPIError):
+            await conn.execute(text("SET TRANSACTION READ WRITE"))
+            await conn.execute(text(sql))
+        await conn.rollback()
+        assert (await conn.execute(text("SHOW default_transaction_read_only"))).scalar_one() == "on"
+
+
+async def test_validator_bypass_is_denied_by_the_database(reader_engine: AsyncEngine) -> None:
+    """Base tables are unreadable through the tool's own execution path."""
     with pytest.raises(DBAPIError):
-        async with db_session.begin_nested():
-            await _run_sql_as_reader(
-                db_session, sql, workspace_id=uuid4(), allowed_source_ids=[uuid4()], max_rows=5
-            )
-    assert await _identity(db_session) == before
+        await _run_sql_as_reader(
+            "SELECT count(*) AS n FROM public.chat_messages",
+            workspace_id=uuid4(), allowed_source_ids=[uuid4()], max_rows=5,
+        )
