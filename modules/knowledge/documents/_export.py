@@ -47,8 +47,8 @@ from modules.knowledge.documents.schemas import (
     TimelineExportEvidenceRead,
 )
 from modules.sources import public as sources
-from modules.sources.models import Source
 from modules.sources.public import SourceExportFence
+from modules.sources.public import SourceReadProjection as Source
 
 if TYPE_CHECKING:
     from modules.connectors.public import ProviderScopeSnapshot

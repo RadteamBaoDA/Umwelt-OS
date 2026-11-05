@@ -54,7 +54,7 @@ from modules.knowledge.documents.schemas import (
     DocumentPatch,
 )
 from modules.sources import public as sources
-from modules.sources.models import Source
+from modules.sources.public import SourceReadProjection as Source
 
 
 async def observability_quality_summary(

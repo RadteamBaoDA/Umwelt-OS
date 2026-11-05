@@ -1,3 +1,11 @@
+# Approved read projection (AGENTS.md "Testing Guidelines" / docs/architecture/module-boundaries.md): sources owns
+# Source; other modules may build SELECT/JOIN statements on these columns and must never INSERT, UPDATE, DELETE,
+# instantiate or add them (guarded by tests/unit/architecture/test_module_boundaries.py). Permission and deletion
+# checks stay with the caller's own admission fence plus the owner's workspace/source predicates; the projection adds
+# no access of its own.
+from modules.sources.models import Source as SourceReadProjection
+
+# isort: split
 import base64
 import binascii
 import hashlib
@@ -86,6 +94,7 @@ __all__ = [
     "SourcePatch",
     "SourcePurgeJobIdentity",
     "SourceRead",
+    "SourceReadProjection",
 ]
 
 

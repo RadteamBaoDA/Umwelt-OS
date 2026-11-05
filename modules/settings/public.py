@@ -1527,5 +1527,7 @@ async def read_ai_policy_fingerprint(
 
 # Names re-exported from the owner's private submodules for other modules (see top of file).
 __all__ = [
+    "DEFAULT_SYSTEM_PROMPTS",
+    "normalize_display_name",
     "resolve_prompt",
 ]

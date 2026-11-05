@@ -23,7 +23,7 @@ from modules.knowledge.documents.models import (
 from modules.knowledge.documents.schemas import (
     EvidenceReferenceRead,
 )
-from modules.sources.models import Source
+from modules.sources.public import SourceReadProjection as Source
 
 
 async def _list_evidence_ref_keys(

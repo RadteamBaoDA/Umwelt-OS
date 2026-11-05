@@ -9,6 +9,15 @@ and silently does nothing for helpers used inside ``service.*``.
 """
 
 # ruff: noqa: F401, PLC0414
+# Approved read projection (AGENTS.md "Testing Guidelines" / docs/architecture/module-boundaries.md): connectors owns
+# ConnectorOAuthGrant, ConnectorProvisioning; other modules may build SELECT/JOIN statements on these columns and must never INSERT, UPDATE, DELETE,
+# instantiate or add them (guarded by tests/unit/architecture/test_module_boundaries.py). Permission and deletion
+# checks stay with the caller's own admission fence plus the owner's workspace/source predicates; the projection adds
+# no access of its own.
+from modules.connectors.models import ConnectorOAuthGrant as ConnectorOAuthGrantReadProjection
+from modules.connectors.models import ConnectorProvisioning as ConnectorProvisioningReadProjection
+
+# isort: split
 from importlib import import_module as _import_module
 from typing import Any as _Any
 
@@ -16,6 +25,7 @@ from typing import Any as _Any
 # facade's own implementation imports their contracts, so eager re-exports would close import cycles. The mapping and
 # ``__getattr__`` sit first so a partially initialised facade can still resolve them; type checkers see the names
 # through the ``TYPE_CHECKING`` blocks below.
+_LAZY_SUBMODULES = {"live_map": "modules.connectors.live_map"}
 _LAZY_DTO_MODULES = {
     "PROVIDER_SOURCE_TYPES": "modules.connectors.backends",
     "FREE_PROVIDER_SPECS": "modules.connectors.provider_specs",
@@ -41,6 +51,11 @@ def __getattr__(name: str) -> _Any:
 
     Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
     """
+    if name in _LAZY_SUBMODULES:
+        # Whole-module handle (Live Map query surface); callers keep attribute access on the module object.
+        value = _import_module(_LAZY_SUBMODULES[name])
+        globals()[name] = value
+        return value
     module_name = _LAZY_DTO_MODULES.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -558,3 +573,11 @@ if TYPE_CHECKING:
 
 if TYPE_CHECKING:
     from modules.connectors.backends import PROVIDER_SOURCE_TYPES as PROVIDER_SOURCE_TYPES
+
+__all__ = [
+    "ConnectorOAuthGrantReadProjection",
+    "ConnectorProvisioningReadProjection",
+]
+
+if TYPE_CHECKING:
+    from modules.connectors import live_map as live_map

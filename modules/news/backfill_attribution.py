@@ -23,7 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.database import make_session_factory
-from modules.knowledge.documents.models import NormalizedVersionProvenance as Provenance
+from modules.knowledge.documents.public import (
+    NormalizedVersionProvenanceReadProjection as Provenance,
+)
 from modules.knowledge.documents.public import ProviderRecordMetadata
 from modules.news.models import NewsObservation
 from modules.news.stories import _attribution

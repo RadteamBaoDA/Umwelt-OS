@@ -22,7 +22,7 @@ from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.connectors.public import get_provider_spec
 from modules.knowledge.documents import public as documents
-from modules.knowledge.documents.models import Document
+from modules.knowledge.documents.public import DocumentReadProjection as Document
 from modules.knowledge.entities import public as entities
 from modules.news import topics
 from modules.news.models import NewsObservation, NewsStory, NewsStoryIdentity
@@ -36,7 +36,7 @@ from modules.news.schemas import (
 )
 from modules.search import public as search
 from modules.sources import public as sources
-from modules.sources.models import Source
+from modules.sources.public import SourceReadProjection as Source
 from modules.translations.public import TranslationInput
 
 ALGORITHM_VERSION = 1

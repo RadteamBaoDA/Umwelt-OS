@@ -92,6 +92,7 @@ async def _admit(
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
+    "CorrectionRelationshipRef",
     "NeighborPage",
     "RelationshipSnapshot",
     "ensure_demo_relationships",

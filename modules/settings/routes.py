@@ -24,7 +24,7 @@ from core.model_gateway.transport import EndpointNetworkPolicyError, approved_we
 from core.rate_limit import require_budget
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
-from modules.chat import web_search as web
+from modules.chat.public import WebSearchError, run_web_search
 from modules.chat.public import external_router as viz
 from modules.settings import lifecycle, models, public
 from modules.settings.openrouter_models import parse_openrouter_page, to_query_params
@@ -285,8 +285,8 @@ async def test_web_search(body: WebSearchTest, session: Session, request: Reques
     try:
         transport = approved_web_search_transport(endpoint, settings.ai_allowed_endpoint_hosts,
                                                   settings.web_search_allowed_cidrs, allow_http=body.provider == "searxng")
-        results = await web.search(body.provider, endpoint, key, "test", transport=transport)
-    except web.WebSearchError as exc:
+        results = await run_web_search(body.provider, endpoint, key, "test", transport=transport)
+    except WebSearchError as exc:
         return ConnectionTestResult(ok=False, error=exc.code, reason=exc.reason)
     except EndpointNetworkPolicyError:
         return ConnectionTestResult(ok=False, error="network_denied")

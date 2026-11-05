@@ -196,9 +196,9 @@ class KnowledgeService:
         Returns:
             AnswerContext DTO containing deduplicated evidence, summaries, and privacy snapshots.
         """
-        from modules.chat import retrieval
+        from modules.chat.public import build_answer_context
 
-        return await retrieval.build_context(
+        return await build_answer_context(
             self.session, session_factory, redis, settings, request, scope=self.scope,
         )
 

@@ -29,7 +29,7 @@ from modules.knowledge.documents.schemas import (
     ProviderDocumentSnapshotRead,
     ProviderRecordMetadata,
 )
-from modules.sources.models import Source
+from modules.sources.public import SourceReadProjection as Source
 
 
 def _provider_snapshot(

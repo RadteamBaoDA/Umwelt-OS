@@ -26,11 +26,19 @@ from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
-from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
+from modules.knowledge.documents.public import (
+    DocumentChunkReadProjection as DocumentChunk,
+)
+from modules.knowledge.documents.public import (
+    DocumentReadProjection as Document,
+)
+from modules.knowledge.documents.public import (
+    DocumentVersionReadProjection as DocumentVersion,
+)
 from modules.search.models import IndexGeneration, SearchIndexItem
 from modules.settings import public as ai_settings
 from modules.sources import public as sources
-from modules.sources.models import Source
+from modules.sources.public import SourceReadProjection as Source
 
 MAX_VECTOR_DIMENSIONS = 2000  # pgvector HNSW vector index limit.
 AUTO_INDEX_CURSOR_KEY = "search:auto:generation-cursor"

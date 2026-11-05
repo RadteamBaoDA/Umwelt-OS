@@ -1994,6 +1994,7 @@ __all__ = [
     "purge_agent_runs",
     "purge_conversation_actions",
     "purge_document_copied_evidence_page",
+    "read_workspace_modules",
     "redact_expired_agent_traces",
     "request_cancel",
     "request_cancel_for_owner",

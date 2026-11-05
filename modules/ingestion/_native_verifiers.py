@@ -240,7 +240,12 @@ class BaseNativeVerifier:
             raise _fail(422, f"{label} credential proof does not match the provider")
         if not owned:
             return
-        from modules.connectors.models import ConnectorOAuthGrant, ConnectorProvisioning
+        from modules.connectors.public import (
+            ConnectorOAuthGrantReadProjection as ConnectorOAuthGrant,
+        )
+        from modules.connectors.public import (
+            ConnectorProvisioningReadProjection as ConnectorProvisioning,
+        )
 
         session = ctx.session
         grant = await session.scalar(select(ConnectorOAuthGrant).where(

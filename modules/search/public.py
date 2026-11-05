@@ -25,7 +25,15 @@ from core.workspaces import public as workspaces
 from core.workspaces.admission import admit_scope
 from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.goals.public import GoalFilter, GoalPage
-from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
+from modules.knowledge.documents.public import (
+    DocumentChunkReadProjection as DocumentChunk,
+)
+from modules.knowledge.documents.public import (
+    DocumentReadProjection as Document,
+)
+from modules.knowledge.documents.public import (
+    DocumentVersionReadProjection as DocumentVersion,
+)
 from modules.search.indexing import (
     configured_embedding,
     embedding_values,
@@ -46,7 +54,7 @@ from modules.search.schemas import (
 from modules.search.schemas import (
     SearchRequest as SearchRequest,  # noqa: PLC0414  # explicit re-export (strict mypy)
 )
-from modules.sources.models import Source
+from modules.sources.public import SourceReadProjection as Source
 from modules.tasks.public import TaskFilter, TaskPage
 
 MAX_CANDIDATES = 500

@@ -8,6 +8,14 @@ package and are re-exported here under their original names.
 """
 
 # Hoisted first: DTO contracts must be bound before heavy imports so cyclic importers see them.
+# Approved read projection (AGENTS.md "Testing Guidelines" / docs/architecture/module-boundaries.md): ingestion owns
+# SourceIngestionState; other modules may build SELECT/JOIN statements on these columns and must never INSERT, UPDATE, DELETE,
+# instantiate or add them (guarded by tests/unit/architecture/test_module_boundaries.py). Permission and deletion
+# checks stay with the caller's own admission fence plus the owner's workspace/source predicates; the projection adds
+# no access of its own.
+from modules.ingestion.models import SourceIngestionState as SourceIngestionStateReadProjection
+
+# isort: split
 from modules.ingestion.schemas import (
     ChatAttachmentRead,
     CollectionState,
@@ -188,6 +196,7 @@ __all__ = [
     "RetryRunRequest",
     "RunRead",
     "SourceIngestionRead",
+    "SourceIngestionStateReadProjection",
     "StageRead",
     "TelegramCursor",
     "TelegramDeliveryProof",
