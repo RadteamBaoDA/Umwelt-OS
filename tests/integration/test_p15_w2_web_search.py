@@ -39,6 +39,8 @@ from modules.settings import public as settings_public
 sys.path.insert(0, str(Path(__file__).parent))
 import fake_model
 
+from tests.unit.modules.chat._worker_patch import patch_worker
+
 pytestmark = pytest.mark.skipif(
     os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
@@ -172,9 +174,9 @@ async def test_end_to_end_search_sends_only_literal_query_and_persists_cited_res
         assert "Fake result one" in kwargs["messages"][0]["content"]
         yield 'data: {"choices": [{"delta": {"content": "News [1]"}}]}'
 
-    monkeypatch.setattr(worker, "approved_web_search_transport", _fake_provider)
-    monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=AnswerContext(query=message, evidence=[])))
-    monkeypatch.setattr(worker, "ModelGateway", lambda **_k: SimpleNamespace(stream=stream))
+    patch_worker(monkeypatch, "approved_web_search_transport", _fake_provider)
+    patch_worker(monkeypatch, "build_context", AsyncMock(return_value=AnswerContext(query=message, evidence=[])))
+    patch_worker(monkeypatch, "ModelGateway", lambda **_k: SimpleNamespace(stream=stream))
     try:
         with patch.object(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(return_value=[_answer("93.184.216.34")])):
             await worker.run_response_generation(run_id, factory, _settings(), _Redis())  # type: ignore[arg-type]
@@ -206,9 +208,9 @@ async def test_same_url_results_persist_one_citation(
     async def stream(**kwargs: Any) -> AsyncIterator[str]:
         yield 'data: {"choices": [{"delta": {"content": "A [1] B [2]"}}]}'
 
-    monkeypatch.setattr(worker, "approved_web_search_transport", _fake_provider)
-    monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=AnswerContext(query=message, evidence=[])))
-    monkeypatch.setattr(worker, "ModelGateway", lambda **_k: SimpleNamespace(stream=stream))
+    patch_worker(monkeypatch, "approved_web_search_transport", _fake_provider)
+    patch_worker(monkeypatch, "build_context", AsyncMock(return_value=AnswerContext(query=message, evidence=[])))
+    patch_worker(monkeypatch, "ModelGateway", lambda **_k: SimpleNamespace(stream=stream))
     try:
         with patch.object(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(return_value=[_answer("93.184.216.34")])):
             await worker.run_response_generation(run_id, factory, _settings(), _Redis())  # type: ignore[arg-type]
@@ -229,7 +231,7 @@ async def test_consent_revoked_while_fence_waits_sends_nothing(
 ) -> None:
     """Review P1-1: hold the privacy key, commit a revocation while the search fence waits, then release."""
     conversation_id, run_id, fence = await _run(factory, "revocation race")
-    monkeypatch.setattr(worker, "approved_web_search_transport", _fake_provider)
+    patch_worker(monkeypatch, "approved_web_search_transport", _fake_provider)
     async with factory() as holder:
         ws_id = (await holder.execute(text("SELECT workspace_id FROM chat_response_runs WHERE id = :i"), {"i": run_id})).scalar_one()
         await lock_export_privacy(holder, ws_id)
@@ -287,7 +289,7 @@ async def test_save_after_fence_read_blocks_until_body_is_sent(
             ), _settings(), scope=scope)
             await session.commit()
 
-    monkeypatch.setattr(worker, "approved_web_search_transport", parked_provider)
+    patch_worker(monkeypatch, "approved_web_search_transport", parked_provider)
     search = save = None
     try:
         with patch.object(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(return_value=[_answer("93.184.216.34")])):
@@ -321,7 +323,7 @@ async def test_nat64_and_private_answers_are_denied(
     async with factory() as claim:
         await claim.execute(text("UPDATE chat_response_runs SET status = 'streaming' WHERE id = :i"), {"i": run_id})
         await claim.commit()
-    monkeypatch.setattr(worker, "approved_web_search_transport", _fake_provider)
+    patch_worker(monkeypatch, "approved_web_search_transport", _fake_provider)
     try:
         with patch.object(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(return_value=[_answer(ip)])):
             run = await worker._search_for_run(

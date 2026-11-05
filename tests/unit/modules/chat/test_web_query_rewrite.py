@@ -11,6 +11,7 @@ import pytest
 
 from modules.chat import worker
 from modules.chat.schemas import WebSearchOutcomeRead
+from tests.unit.modules.chat._worker_patch import patch_worker
 
 
 def _config(*, reasoning: bool = True) -> Any:
@@ -47,7 +48,7 @@ class _Rig:
                     raise reply
                 return {"choices": [{"message": {"content": reply}}]}
 
-        monkeypatch.setattr(worker, "ModelGateway", Gateway)
+        patch_worker(monkeypatch, "ModelGateway", Gateway)
 
         @asynccontextmanager
         async def factory() -> Any:
@@ -107,7 +108,7 @@ async def test_publish_tool_status_event(monkeypatch: pytest.MonkeyPatch) -> Non
         """Session double."""
         yield session
 
-    monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, SimpleNamespace())))
+    patch_worker(monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, SimpleNamespace())))
     seq = await worker._publish_tool_status(
         factory, uuid4(), uuid4(), object(), 2, "query_collected_data", "running",  # type: ignore[arg-type]
         scope=MagicMock(), access_fence=MagicMock(),
