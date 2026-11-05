@@ -9,7 +9,7 @@
  */
 
 import { buildSandboxStylesheet, type SandboxTheme } from '../design-system';
-import { buildFrameDocument, createFrameNonce, type FrameDocumentOptions } from './frame-content';
+import { buildFrameDocument, createFrameNonce, frameDocumentProps, type FrameDocumentOptions } from './frame-content';
 import { processPartialHtml } from './process-partial-html';
 
 export interface SandboxController {
@@ -54,11 +54,7 @@ function frameNonce(iframe: HTMLIFrameElement): string | undefined {
  * @param html - Raw or partial HTML markup to sanitize and morph.
  * @param css - Optional widget-specific CSS stylesheet.
  */
-export function updateSandboxContent(
-  iframe: HTMLIFrameElement | null,
-  html: string,
-  css?: string,
-): void {
+export function updateSandboxContent(iframe: HTMLIFrameElement | null, html: string, css?: string): void {
   if (!iframe) return;
   enforceStrictSandboxAttribute(iframe);
 
@@ -91,11 +87,7 @@ export function updateSandboxContent(
  * @param jsFunctions - Optional top-level function declarations.
  * @param jsExpressions - Optional statement/expression code to run in an async IIFE.
  */
-export function executeSandboxScripts(
-  iframe: HTMLIFrameElement | null,
-  jsFunctions?: string,
-  jsExpressions?: string,
-): void {
+export function executeSandboxScripts(iframe: HTMLIFrameElement | null, jsFunctions?: string, jsExpressions?: string): void {
   if (!iframe) return;
   const hasFunctions = typeof jsFunctions === 'string' && jsFunctions.trim().length > 0;
   const hasExpressions = typeof jsExpressions === 'string' && jsExpressions.trim().length > 0;
@@ -125,10 +117,7 @@ export function executeSandboxScripts(
  * @param iframe - Target `HTMLIFrameElement` (no-op if null).
  * @param theme - Active theme (`'light'` or `'dark'`).
  */
-export function syncSandboxTheme(
-  iframe: HTMLIFrameElement | null,
-  theme: SandboxTheme,
-): void {
+export function syncSandboxTheme(iframe: HTMLIFrameElement | null, theme: SandboxTheme): void {
   if (!iframe) return;
   enforceStrictSandboxAttribute(iframe);
   iframe.dataset.theme = theme;
@@ -150,22 +139,21 @@ export function syncSandboxTheme(
 
 /**
  * Creates a `SandboxController` bound to an `HTMLIFrameElement`, enforcing `sandbox="allow-scripts"`
- * and optionally writing the initial `srcdoc` frame document.
+ * and optionally loading the initial frame document through the frame shell route (`src` + `name`, never `srcdoc`).
  *
  * @param iframe - Target `HTMLIFrameElement`.
- * @param initialOptions - Optional `FrameDocumentOptions` to populate `iframe.srcdoc` immediately.
+ * @param initialOptions - Optional `FrameDocumentOptions` to load the document immediately.
  * @returns `SandboxController` with `updateContent`, `executeScripts`, `syncTheme`, and `destroy`.
  */
-export function createSandboxController(
-  iframe: HTMLIFrameElement,
-  initialOptions?: FrameDocumentOptions,
-): SandboxController {
+export function createSandboxController(iframe: HTMLIFrameElement, initialOptions?: FrameDocumentOptions): SandboxController {
   enforceStrictSandboxAttribute(iframe);
 
   if (initialOptions) {
     const nonce = initialOptions.nonce ?? createFrameNonce();
     iframe.dataset.umweltNonce = nonce;
-    iframe.srcdoc = buildFrameDocument({ ...initialOptions, nonce });
+    const { src, name } = frameDocumentProps(buildFrameDocument({ ...initialOptions, nonce }));
+    iframe.name = name;
+    iframe.src = src;
     iframe.dataset.theme = initialOptions.theme ?? 'light';
     if (initialOptions.html) {
       iframe.dataset.latestHtml = processPartialHtml(initialOptions.html);
@@ -178,11 +166,11 @@ export function createSandboxController(
   return {
     iframe,
     updateContent: (html: string, css?: string) => updateSandboxContent(iframe, html, css),
-    executeScripts: (jsFunctions?: string, jsExpressions?: string) =>
-      executeSandboxScripts(iframe, jsFunctions, jsExpressions),
+    executeScripts: (jsFunctions?: string, jsExpressions?: string) => executeSandboxScripts(iframe, jsFunctions, jsExpressions),
     syncTheme: (theme: SandboxTheme) => syncSandboxTheme(iframe, theme),
     destroy: () => {
-      iframe.srcdoc = '';
+      iframe.name = '';
+      iframe.removeAttribute('src');
       delete iframe.dataset.latestHtml;
       delete iframe.dataset.latestCss;
       delete iframe.dataset.scriptsExecuted;

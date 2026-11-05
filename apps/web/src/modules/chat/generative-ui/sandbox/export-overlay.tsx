@@ -8,23 +8,18 @@
 import * as React from 'react';
 import { CheckIcon, CopyIcon, DownloadIcon, Maximize2Icon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { usePromptBridge } from '../bridge';
 import { genUiCopy } from '../copy';
 import { downloadHtmlDocument, slugify } from './export-utils';
+import { frameDocumentProps } from './frame-content';
 
 export interface ExportOverlayProps {
   /** Human-readable title used for the dialog heading and `.html` download filename. */
   title?: string;
   /** Standalone HTML document string for export and fullscreen preview. */
   html?: string;
-  /** Frame HTML (`srcdoc`) used for fullscreen preview if different from `html`. */
+  /** Frame document HTML (loaded via the frame shell) used for fullscreen preview if different from `html`. */
   previewHtml?: string;
   /** Nonce embedded in `previewHtml`; the fullscreen frame is registered with the bridge under it. */
   frameNonce?: string;
@@ -71,7 +66,10 @@ function resolveOverlayLabels(labels: ExportOverlayProps['labels']): OverlayLabe
  *
  * @returns `[isOpen, setOpen]`.
  */
-function useDialogOpen(controlledOpen: boolean | undefined, onOpenChange: ((open: boolean) => void) | undefined): [boolean, (open: boolean) => void] {
+function useDialogOpen(
+  controlledOpen: boolean | undefined,
+  onOpenChange: ((open: boolean) => void) | undefined,
+): [boolean, (open: boolean) => void] {
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
   const setDialogOpen = React.useCallback(
     (nextOpen: boolean) => {
@@ -129,9 +127,7 @@ function usePreviewFrameRegistration(frameNonce: string | undefined, isDialogOpe
   const handlePreviewLoad = React.useCallback(
     (event: React.SyntheticEvent<HTMLIFrameElement>) => {
       unregisterPreviewRef.current?.();
-      unregisterPreviewRef.current = frameNonce
-        ? bridge.registerFrame(event.currentTarget.contentWindow, frameNonce)
-        : null;
+      unregisterPreviewRef.current = frameNonce ? bridge.registerFrame(event.currentTarget.contentWindow, frameNonce) : null;
     },
     [bridge, frameNonce],
   );
@@ -150,7 +146,13 @@ function CopyStateIcon({ copied }: { copied: boolean }) {
 }
 
 /** Hover/focus toolbar over the widget: fullscreen, copy HTML and download. */
-function ExportToolbar({ labels, copied, onExpand, onCopy, onDownload }: {
+function ExportToolbar({
+  labels,
+  copied,
+  onExpand,
+  onCopy,
+  onDownload,
+}: {
   labels: OverlayLabels;
   copied: boolean;
   onExpand: () => void;
@@ -221,6 +223,18 @@ interface FullscreenDialogProps {
   onPreviewLoad: (event: React.SyntheticEvent<HTMLIFrameElement>) => void;
 }
 
+/**
+ * Cheap non-cryptographic string hash (djb2) used only as a React `key` so the preview iframe remounts when its HTML changes.
+ *
+ * @param value - String to hash.
+ * @returns Base-36 hash combined with the length (collisions only skip a remount of identical-length documents).
+ */
+function hashString(value: string): string {
+  let h = 5381;
+  for (let i = 0; i < value.length; i += 1) h = ((h << 5) + h + value.charCodeAt(i)) | 0;
+  return `${value.length}-${(h >>> 0).toString(36)}`;
+}
+
 /** Fullscreen preview dialog hosting a strictly sandboxed `<iframe sandbox="allow-scripts">`. */
 function FullscreenDialog(props: FullscreenDialogProps) {
   const { title, labels, open, onOpenChange, exportable, copied, onCopy, onDownload, previewHtml, frameNonce, onPreviewLoad } = props;
@@ -233,12 +247,8 @@ function FullscreenDialog(props: FullscreenDialogProps) {
       >
         <DialogHeader className="flex flex-row items-center justify-between gap-3 border-b border-border pr-8 pb-3">
           <div className="min-w-0 flex-1 text-left">
-            <DialogTitle className="truncate text-base font-semibold text-foreground">
-              {title}
-            </DialogTitle>
-            <DialogDescription className="sr-only">
-              {labels.previewDescription}
-            </DialogDescription>
+            <DialogTitle className="truncate text-base font-semibold text-foreground">{title}</DialogTitle>
+            <DialogDescription className="sr-only">{labels.previewDescription}</DialogDescription>
           </div>
           {exportable && (
             <div className="flex items-center gap-2">
@@ -256,9 +266,11 @@ function FullscreenDialog(props: FullscreenDialogProps) {
         <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-background">
           {open && previewHtml && (
             <iframe
+              // The document travels in `name`, which does not navigate on change: remount when the HTML changes.
+              key={hashString(previewHtml)}
               title={`${title} fullscreen preview`}
               sandbox="allow-scripts"
-              srcDoc={previewHtml}
+              {...frameDocumentProps(previewHtml)}
               onLoad={onPreviewLoad}
               data-umwelt-nonce={frameNonce}
               className="h-full w-full border-0 bg-transparent"
@@ -300,7 +312,13 @@ export function ExportOverlay({
   return (
     <div className="group relative w-full" data-testid="generative-ui-export-overlay">
       {exportable && (
-        <ExportToolbar labels={resolvedLabels} copied={copied} onExpand={() => setDialogOpen(true)} onCopy={handleCopy} onDownload={handleDownload} />
+        <ExportToolbar
+          labels={resolvedLabels}
+          copied={copied}
+          onExpand={() => setDialogOpen(true)}
+          onCopy={handleCopy}
+          onDownload={handleDownload}
+        />
       )}
 
       {children}

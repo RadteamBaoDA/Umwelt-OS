@@ -1,34 +1,12 @@
 import type { NextConfig } from 'next';
 import createNextIntlPlugin from 'next-intl/plugin';
-
-const isDev = process.env.NODE_ENV !== 'production';
+import { API_FALLBACK_CSP } from './src/core/csp';
 
 /**
- * Content-Security-Policy. Audit of map/globe/video gadgets found no external origins: the globe uses bundled
- * geometry, video items are outbound links only, and realtime uses same-origin EventSource, so everything is 'self'.
- * Relaxations: 'unsafe-inline' for scripts, deliberately kept after review (F2.7). A nonce CSP (proxy.ts nonce + layout
- * reading it) would force every page dynamic AND break generative-UI widgets: their srcdoc iframes inherit this policy
- * (frame-content.ts) and run inline scripts/importmaps that cannot carry the host's per-request nonce. A hash is not an
- * option either, because Next's inline hydration payloads differ per page. Revisit by serving widget frames from a
- * separate route with its own CSP first (tracked in docs/security.md); 'unsafe-inline' for styles (React style props, Recharts, Radix); 'unsafe-eval'
- * only in dev (React refresh); data:/blob: images (globe canvas, inline icons); blob: workers (three.js/globe.gl).
+ * The Content-Security-Policy is deliberately NOT set here: src/proxy.ts emits it per request with a nonce
+ * (src/core/csp.ts), and the Caddyfile must not add one (two CSP headers intersect). Docs: docs/security.md.
  */
-const csp = [
-  "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''}`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  `connect-src 'self'${isDev ? ' ws: wss:' : ''}`,
-  "worker-src 'self' blob:",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-].join('; ');
-
 const securityHeaders = [
-  { key: 'Content-Security-Policy', value: csp },
   // HSTS is deliberately not set here: the TLS terminator (infrastructure/proxy/Caddyfile, or the tunnel) owns it so there is one value.
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'X-Frame-Options', value: 'DENY' },
@@ -46,7 +24,9 @@ const nextConfig: NextConfig = {
   /** Applies the security headers to every route, including API rewrites' HTML error pages. */
   async headers() {
     return [
-      { source: '/:path*', headers: securityHeaders },
+      // Not the widget frame shell (/genui-frame): it must be framable (X-Frame-Options DENY) and sets its own headers.
+      { source: '/((?!genui-frame$).*)', headers: securityHeaders },
+      { source: '/api/:path*', headers: [{ key: 'Content-Security-Policy', value: API_FALLBACK_CSP }] },
       // Sandboxed (opaque-origin) generative-UI iframes load these modules cross-origin, so they need CORS + CORP.
       {
         source: '/vendor/genui/:path*',

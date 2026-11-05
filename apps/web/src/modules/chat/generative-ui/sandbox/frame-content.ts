@@ -6,15 +6,11 @@
  * `window.sendPrompt` postMessage bridge.
  */
 
-import {
-  buildSandboxStylesheet,
-  DESIGN_SYSTEM_CSS,
-  buildImportMapScriptTag,
-  type SandboxTheme,
-} from '../design-system';
+import { buildSandboxStylesheet, DESIGN_SYSTEM_CSS, buildImportMapScriptTag, type SandboxTheme } from '../design-system';
 import { IDIOMORPH_INLINE_SCRIPT } from './idiomorph-inline';
 import { processPartialHtml } from './process-partial-html';
 import { TRIP_ANIMATOR_SCRIPT } from './trip-animator';
+import { FRAME_SHELL_PATH } from '@/core/genui-frame';
 import { uuid7 } from '@/core/uuid7';
 
 /** Message type emitted by the sandboxed iframe when its content height changes. */
@@ -22,6 +18,8 @@ export const RESIZE_MESSAGE_TYPE = 'umwelt:resize';
 
 /** Legacy resize message type alias for OpenIntelligentUI compatibility. */
 export const LEGACY_RESIZE_MESSAGE_TYPE = '__ogui_resize';
+
+export { FRAME_SHELL_PATH, FRAME_SHELL_SCRIPT, buildFrameShellCsp } from '@/core/genui-frame';
 
 /** Minimal preview shell used when initializing an empty sandboxed frame. */
 export const PREVIEW_FRAME_CONTENT = '<head></head><body><div id="umwelt-sandbox-root"></div></body>';
@@ -35,15 +33,24 @@ export const PREVIEW_FRAME_CONTENT = '<head></head><body><div id="umwelt-sandbox
  *   Defaults to `window.location.origin`; empty omits the vendored-library source.
  * @returns The `<meta http-equiv="Content-Security-Policy">` tag string.
  */
-export function buildCspMetaTag(
-  origin = typeof window !== 'undefined' ? window.location.origin : '',
-): string {
+export function buildCspMetaTag(origin = typeof window !== 'undefined' ? window.location.origin : ''): string {
   const vendor = origin ? ` ${origin}/vendor/genui/` : '';
-  return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'${vendor}; style-src 'unsafe-inline'${vendor}; img-src data: blob:; font-src data:; connect-src 'none'">`;
+  return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'${vendor}; style-src 'unsafe-inline'${vendor}; img-src data: blob:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">`;
 }
 
 /** Default CSP tag for the current origin (evaluated at import time; prefer `buildCspMetaTag` at render time). */
 export const CSP_META_TAG = buildCspMetaTag('');
+
+/**
+ * Props that make an `<iframe>` render `doc` through the shell route instead of `srcdoc` (which would inherit the host CSP).
+ * The iframe must also carry `sandbox="allow-scripts"` (never `allow-same-origin`).
+ *
+ * @param doc - Complete frame document from `buildFrameDocument`.
+ * @returns `src` and `name` iframe attributes.
+ */
+export function frameDocumentProps(doc: string): { src: string; name: string } {
+  return { src: FRAME_SHELL_PATH, name: doc };
+}
 
 /**
  * Escapes closing `</style` sequences inside CSS strings to prevent tag breakout.
@@ -131,9 +138,8 @@ export const SANDBOX_BRIDGE_JS = `
     return '';
   }
 
-  // Runs model-authored code as an inline <script>, not eval(): the frame inherits the host page's CSP
-  // (script-src 'self' 'unsafe-inline', no 'unsafe-eval' in production), which blocks eval/new Function.
-  // Inline scripts stay allowed by 'unsafe-inline'; function declarations still become globals.
+  // Runs model-authored code as an inline <script>, not eval(): the frame CSP has no 'unsafe-eval', which blocks
+  // eval/new Function. Function declarations in an inline script still become globals (inline onclick handlers use them).
   function runScript(code) {
     var el = document.createElement('script');
     el.textContent = code;
@@ -360,11 +366,7 @@ export function buildPreviewBodyMorph(body: string): string {
  * @param theme - Active Umwelt-OS theme (`'light'` or `'dark'`).
  * @returns HTML string containing `<style>` blocks for the preview `<head>`.
  */
-export function buildPreviewHeadContent(
-  css?: string,
-  previewStyles?: string,
-  theme: SandboxTheme = 'light',
-): string {
+export function buildPreviewHeadContent(css?: string, previewStyles?: string, theme: SandboxTheme = 'light'): string {
   const parts = [
     '<style>html, body { overflow: hidden !important; }</style>',
     `<style id="umwelt-design-system">${escapeStyleTagContent(buildSandboxStylesheet(theme))}</style>`,
@@ -411,7 +413,7 @@ export function createFrameNonce(): string {
 }
 
 /**
- * Assembles the complete sandboxed iframe HTML document (`srcdoc`), combining:
+ * Assembles the complete sandboxed iframe HTML document (delivered via `frameDocumentProps`, not `srcdoc`), combining:
  * 1. Strict `CSP_META_TAG` (`default-src 'none'; script-src/style-src 'unsafe-inline' + <origin>/vendor/genui/; connect-src 'none'`)
  * 2. Vendored-library import map (must precede any module import; backs `import('d3')` etc.)
  * 2b. Umwelt-OS + OpenIntelligentUI Design System CSS (`buildSandboxStylesheet(theme)`)
@@ -423,7 +425,7 @@ export function createFrameNonce(): string {
  * 8. Optional deferred JS execution (`jsFunctions` and `jsExpressions`) once streaming completes.
  *
  * @param options - `FrameDocumentOptions` configuring HTML, CSS, scripts, and theme.
- * @returns Complete HTML document string for `<iframe srcdoc={...} sandbox="allow-scripts">`.
+ * @returns Complete HTML document string for `<iframe {...frameDocumentProps(doc)} sandbox="allow-scripts">`.
  */
 export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
   const {
@@ -447,16 +449,11 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
       scriptParts.push(escapeScriptTagContent(jsFunctions));
     }
     if (jsExpressions.trim().length > 0) {
-      scriptParts.push(
-        `(async () => {\n${escapeScriptTagContent(jsExpressions)}\n})();`,
-      );
+      scriptParts.push(`(async () => {\n${escapeScriptTagContent(jsExpressions)}\n})();`);
     }
   }
 
-  const userScriptTag =
-    scriptParts.length > 0
-      ? `\n  <script id="umwelt-widget-js">\n${scriptParts.join('\n')}\n  </script>`
-      : '';
+  const userScriptTag = scriptParts.length > 0 ? `\n  <script id="umwelt-widget-js">\n${scriptParts.join('\n')}\n  </script>` : '';
 
   return `<!DOCTYPE html>
 <html lang="en" data-theme="${theme}"${themeClass}>
@@ -484,7 +481,7 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
  * Alias for `buildFrameDocument` matching upstream/contract naming.
  *
  * @param options - `FrameDocumentOptions` configuring HTML, CSS, scripts, and theme.
- * @returns Complete HTML document string for `<iframe srcdoc={...} sandbox="allow-scripts">`.
+ * @returns Complete HTML document string for `<iframe {...frameDocumentProps(doc)} sandbox="allow-scripts">`.
  */
 export const assembleFrameHtml = buildFrameDocument;
 

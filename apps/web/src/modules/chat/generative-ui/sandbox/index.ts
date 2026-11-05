@@ -15,17 +15,9 @@ export {
   type StreamingStage,
 } from './schema';
 
-export {
-  extractCompleteStyles,
-  balanceUnclosedTags,
-  processPartialHtml,
-  type ProcessPartialHtmlOptions,
-} from './process-partial-html';
+export { extractCompleteStyles, balanceUnclosedTags, processPartialHtml, type ProcessPartialHtmlOptions } from './process-partial-html';
 
-export {
-  IDIOMORPH_INLINE_SCRIPT,
-  IDIOMORPH_JS,
-} from './idiomorph-inline';
+export { IDIOMORPH_INLINE_SCRIPT, IDIOMORPH_JS } from './idiomorph-inline';
 
 export {
   CSP_META_TAG,
@@ -42,6 +34,10 @@ export {
   buildPreviewHeadContent,
   buildFinalFrameContent,
   buildFrameDocument,
+  buildFrameShellCsp,
+  frameDocumentProps,
+  FRAME_SHELL_PATH,
+  FRAME_SHELL_SCRIPT,
   assembleFrameHtml,
   type FrameDocumentOptions,
 } from './frame-content';
@@ -77,10 +73,7 @@ export {
   type StandaloneActivityContent,
 } from './export-utils';
 
-export {
-  ExportOverlay,
-  type ExportOverlayProps,
-} from './export-overlay';
+export { ExportOverlay, type ExportOverlayProps } from './export-overlay';
 
 export {
   OpenGenerativeUIRenderer,

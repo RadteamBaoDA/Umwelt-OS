@@ -10,9 +10,13 @@
 		X-Frame-Options "DENY"
 		Referrer-Policy "same-origin"
 		Permissions-Policy "camera=(), microphone=(), geolocation=(self)"
-		Content-Security-Policy "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'"
+		# No Content-Security-Policy here: the web app sets a per-request nonce CSP (apps/web/src/proxy.ts); a second header would intersect it.
 		-Server
 	}
+
+	# The widget frame shell is framed by the app itself (its CSP sets frame-ancestors 'self'), so drop the blanket DENY here.
+	@genuiframe path /genui-frame
+	header @genuiframe -X-Frame-Options
 
 	# Vendored generative-UI libraries are fetched cross-origin by opaque-origin sandbox iframes (CORS + CORP required).
 	@genui path /vendor/genui/*
