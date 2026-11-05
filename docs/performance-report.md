@@ -186,3 +186,29 @@ Baseline from the implementation container (4 vCPU Intel Xeon @ 2.10 GHz, Python
 | `stream.format_sse_event` | `message.delta` frame | 1.8 | 1.9 | 2.1 |
 
 Reading: chunking dominates (about 9 ms per 60 KB document, run in a worker, so it adds to ingest lag but not request latency); the SQL guard costs well under a millisecond even for a join, and per-chunk SSE parsing and formatting are a few microseconds, far below the 0.4 s stream flush interval, so they do not threaten the TTFT SLO.
+
+## k6 load profile baseline (2026-11-05, development host, indicative only)
+
+Not target-host evidence: the record above stays `target_host_verified: false`. This is the first recorded `tests/load/all.js` run (unmodified durations, `LOAD_DURATION_SCALE=1`, 3.5 min, 21 VUs max) at source revision `6fc29ba4` plus the k6 cookie fix in `17c5b1e8`.
+
+- Host: Windows 11, Docker Desktop, 14 CPUs / 31 GiB visible to Docker (SLOs are defined for 2 vCPU / 8 GiB; containers carry the compose memory limits only, no CPU cap). Fake model, `grafana/k6:0.57.0` on the stack network, 8 seed documents, project `bbd-os-test-k6` (MinIO not started). `scripts/load-test.sh` was not used verbatim (no `python3`/`nproc` on the host); its `docker run` was replicated by hand with the same environment.
+- A first attempt failed 98 % of requests with 401: `tests/load/lib/auth.js` read `.value` of k6 cookie-jar entries, which are plain strings, so VUs sent empty cookies. Fixed in `17c5b1e8`; the table is from the second run.
+
+| SLO | Metric | Measured | Threshold | Result |
+|---|---|---|---|---|
+| SLO-1 | `http_req_failed` | 0.00 % (0 of 1118) | < 0.5 % | pass |
+| SLO-2a | dashboards p95 / p99 | 21.7 / 28.0 ms | 400 / 800 ms | pass |
+| SLO-2b | search p95 / p99 | 36.1 / 52.3 ms | 800 / 1500 ms | pass |
+| SLO-2c | documents p95 / p99 | 20.8 / 26.1 ms | 300 / 600 ms | pass |
+| SLO-3 | chat TTFT p50 / p95 / p99 | 2422 / 2594 / 2915 ms | p95 < 2000, p99 < 4000 ms | **p95 FAIL**, p99 pass |
+| SLO-3b | chat send p95 | 44 ms | 500 ms | pass |
+| SLO-4 | ingest lag p95 / p99 | 2252 / 2307 ms | 30 / 60 s | pass |
+| SLO-5 | SSE open p95 | 35 ms | 500 ms | pass |
+| SLO-6 | ingest queue age p95 | 2225 ms | 5 s | pass |
+| SLO-7 | checks | 100 % (1234 of 1234) | > 99 % | pass |
+
+Throughput: 1118 HTTP requests, 5.26 req/s, 539 iterations; `chat_completion_ms` (20 tokens) avg 2.5 s. k6 exit 99 solely because of the TTFT p95 threshold.
+
+Resources at about 100 s into the run (`docker stats --no-stream`): api 17.9 % CPU / 554 MiB of 1 GiB; chat-worker 9.1 % / 269 MiB of 768 MiB; worker 8.3 % / 262 MiB of 1 GiB; postgres 5.1 % / 232 MiB of 2.5 GiB; cron-worker 0.4 % / 264 MiB of 512 MiB; model-worker 0.1 % / 252 MiB of 768 MiB; web 46 MiB; redis 4 MiB. `pg_stat_activity` (one sample): 20 connections, 1 active, 19 idle on `ClientRead`, 0 idle in transaction, no lock or IO waits.
+
+Observation: the only SLO miss is TTFT p95 (2.59 s vs 2 s) with a 2.2 s floor (min 2230 ms) for a one-token fake reply while API reads are about 15 ms. Ingest queue age shows the same 2.2 s floor, so a fixed dispatch delay (about 2 s) shared by the chat and ingestion job paths is the likely cause (hypothesis, not yet traced: check the outbox/arq poll interval and the 0.4 s stream flush). The machine is far from saturated, so this is latency from a tick, not load. Not tuned and no threshold changed; per the SLO policy a threshold is not relaxed to make a run pass.
