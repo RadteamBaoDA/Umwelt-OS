@@ -116,7 +116,7 @@ async def backfill_news_attribution(ctx: dict[str, object]) -> int:
 
 async def _main(args: argparse.Namespace) -> int:
     """CLI entry: run one backfill (dry-run unless ``--apply``), print its JSON summary, always dispose the engine."""
-    engine, factory = make_session_factory(Settings().database_url, pool_size=2, max_overflow=0)
+    engine, factory = make_session_factory(Settings().admin_database_url, pool_size=2, max_overflow=0)
     try:
         print(json.dumps(await backfill_attribution(factory, apply=args.apply, limit=args.limit), indent=2))
     finally:

@@ -35,7 +35,18 @@ class Settings(BaseSettings):
     # development when PUBLIC_ORIGIN is a local/LAN host and production otherwise. Unknown values fail closed to production.
     environment: str = Field(default="auto", validation_alias="ENVIRONMENT")
     database_url: str = Field(default="postgresql+asyncpg://bbd:bbd@postgres:5432/bbd", repr=False)
+    # Direct (non-pooled) PostgreSQL URL for migrations and session-level features (session advisory locks).
+    # Required when PGBOUNCER_ENABLED=true, where DATABASE_URL points at PgBouncer in transaction-pooling mode.
+    database_direct_url: str | None = Field(default=None, validation_alias="DATABASE_DIRECT_URL", repr=False)
+    pgbouncer_enabled: bool = Field(default=False, validation_alias="PGBOUNCER_ENABLED")
+    # Pool bound of the small direct engine that owns session advisory leases (only used in PgBouncer mode).
+    db_direct_pool_size: int = Field(default=4, ge=1, le=100, validation_alias="DB_DIRECT_POOL_SIZE")
     redis_url: str = Field(default="redis://redis:6379/0", repr=False)
+    # Redis Sentinel HA: "host1:26379,host2:26379". Unset keeps the single-instance redis_url. The password,
+    # username and database of redis_url still authenticate against the elected master.
+    redis_sentinels: str | None = Field(default=None, validation_alias="REDIS_SENTINELS")
+    redis_master_name: str = Field(default="mymaster", min_length=1, validation_alias="REDIS_MASTER_NAME")
+    redis_sentinel_password: SecretStr = Field(default=SecretStr(""), validation_alias="REDIS_SENTINEL_PASSWORD", repr=False)
     graph_enabled: bool = Field(default=False, validation_alias="GRAPH_ENABLED")
     graph_host: str = Field(default="graph", validation_alias="GRAPH_HOST", repr=False)
     graph_port: int = Field(default=7687, ge=1, le=65535, validation_alias="GRAPH_PORT")
@@ -47,6 +58,12 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=10, ge=0, le=100, validation_alias="DB_MAX_OVERFLOW")
     db_statement_timeout_ms: int = Field(default=60_000, ge=0, validation_alias="DB_STATEMENT_TIMEOUT_MS")
     db_idle_tx_timeout_ms: int = Field(default=240_000, ge=0, validation_alias="DB_IDLE_TX_TIMEOUT_MS")
+    # Worker roles run longer set-based maintenance statements than request handlers, but model/provider I/O never
+    # happens inside a DB statement, so a bounded timeout is safe and stops a runaway statement holding a slot.
+    db_worker_statement_timeout_ms: int = Field(default=120_000, ge=0, validation_alias="DB_WORKER_STATEMENT_TIMEOUT_MS")
+    db_model_worker_statement_timeout_ms: int = Field(
+        default=120_000, ge=0, validation_alias="DB_MODEL_WORKER_STATEMENT_TIMEOUT_MS",
+    )
     max_request_body_bytes: int = Field(default=5 * 1024 * 1024, gt=0, validation_alias="MAX_REQUEST_BODY_BYTES")
     # Most presentation widgets (parts) one assistant turn may carry; extra tool calls are ignored.
     generative_ui_max_parts: int = Field(default=4, ge=1, le=8, validation_alias="GENERATIVE_UI_MAX_PARTS")
@@ -378,6 +395,25 @@ class Settings(BaseSettings):
         on a real server must not silently accept template credentials. "auto" relaxes transport rules only.
         """
         return self.environment.strip().lower() in {"dev", "development", "test"}
+
+    @property
+    def admin_database_url(self) -> str:
+        """Return the URL for one-shot admin tools and migrations: the direct URL when set, else ``database_url``.
+
+        Admin processes are short-lived and may use session features, so they never go through a transaction pooler.
+        """
+        return self.database_direct_url or self.database_url
+
+    @model_validator(mode="after")
+    def require_direct_url_with_pgbouncer(self) -> "Settings":
+        """Require ``DATABASE_DIRECT_URL`` whenever PgBouncer mode is on.
+
+        Session advisory leases and migrations cannot run through a transaction pooler; falling back to the
+        pooled URL would silently break their mutual exclusion, so startup fails instead.
+        """
+        if self.pgbouncer_enabled and not self.database_direct_url:
+            raise ValueError("DATABASE_DIRECT_URL is required when PGBOUNCER_ENABLED is true")
+        return self
 
     @model_validator(mode="after")
     def reject_insecure_production_config(self) -> "Settings":

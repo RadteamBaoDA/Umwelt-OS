@@ -5,12 +5,15 @@ import hashlib
 import os
 import sys
 from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
+
+from core.database import direct_engine
 
 
 class WorkspaceStorageBusy(RuntimeError):
@@ -91,8 +94,14 @@ async def workspace_storage_lease(
     key = int.from_bytes(hashlib.blake2b(workspace_id.bytes, digest_size=8, person=b'bbd-storage').digest(), 'big', signed=True)
     acquire = 'pg_try_advisory_lock' if exclusive else 'pg_try_advisory_lock_shared'
     release = 'pg_advisory_unlock' if exclusive else 'pg_advisory_unlock_shared'
-    engine = factory.kw['bind']
-    async with engine.connect() as connection:
+    # Session lease: never a transaction-pooled connection.
+    async with AsyncExitStack() as stack:
+        try:
+            connection = await stack.enter_async_context(direct_engine(factory.kw['bind']).connect())
+        except PoolTimeoutError as exc:
+            # The bounded direct pool (DB_DIRECT_POOL_SIZE) is exhausted by concurrent leases: report busy
+            # (retryable) rather than a 500.
+            raise WorkspaceStorageBusy('Workspace storage lease capacity is exhausted') from exc
         acquired = await connection.scalar(text(f'SELECT {acquire}(:key)'), {'key': key})
         await connection.commit()
         if not acquired:

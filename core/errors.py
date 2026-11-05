@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from redis.exceptions import RedisError
 from sqlalchemy.exc import DBAPIError
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -308,6 +309,28 @@ def install_error_handling(app: FastAPI) -> None:
                 "error": {
                     "code": "TEMPORARILY_UNAVAILABLE",
                     "message": "The service is busy; retry shortly",
+                    "details": {},
+                    "requestId": getattr(request.state, "request_id", ""),
+                }
+            },
+        )
+
+    @app.exception_handler(RedisError)
+    async def queue_unavailable(request: Request, exc: RedisError) -> JSONResponse:
+        """Map an unhandled Redis failure (down, failing over, or ``OOM`` under ``noeviction``) to a retryable 503.
+
+        Enqueues and rate-limit/session writes fail loudly rather than being dropped; the client is told to retry.
+        Only the exception class is logged: Redis messages can carry key names or URLs.
+        """
+        logger.warning("Redis unavailable; request_id=%s error=%s", getattr(request.state, "request_id", ""),
+                       type(exc).__name__)
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            content={
+                "error": {
+                    "code": "QUEUE_UNAVAILABLE",
+                    "message": "The job queue is temporarily unavailable; retry shortly",
                     "details": {},
                     "requestId": getattr(request.state, "request_id", ""),
                 }

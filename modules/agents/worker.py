@@ -19,6 +19,7 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.database import direct_engine
 from core.errors import DomainError
 from core.modules import register_modules
 from core.realtime import commit_with_replay
@@ -81,7 +82,8 @@ async def _run_lease(engine: AsyncEngine, run_id: UUID) -> AsyncIterator[tuple[A
     requests. Connection loss releases the database lock; every call boundary then fails closed.
     """
     key = _advisory_key(run_id)
-    connection = await engine.connect()
+    # Session advisory lock: needs one stable backend, so it uses the direct engine in PgBouncer mode.
+    connection = await direct_engine(engine).connect()
     acquired = False
     try:
         acquired = bool(await connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key}))
@@ -611,7 +613,9 @@ async def _run_graph_segment(
         raise RunLimitReached("Active execution budget exhausted")
     segment_timeout = min(SEGMENT_TIMEOUT_SECONDS, remaining)
     async with asyncio.timeout(segment_timeout):
-        database_url: URL = make_url(settings.database_url)
+        # The saver prepares every statement by name (psycopg prepare_threshold=0) and holds the connection for
+        # the whole segment, so it always uses the direct URL, never a transaction-pooled alias.
+        database_url: URL = make_url(settings.admin_database_url)
         checkpoint_url = database_url.set(drivername="postgresql").render_as_string(hide_password=False)
         async with AsyncPostgresSaver.from_conn_string(
             checkpoint_url, serde=StrictJsonSerializer(),

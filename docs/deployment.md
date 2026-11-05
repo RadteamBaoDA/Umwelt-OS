@@ -11,10 +11,13 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 | Variable | Default | Effect |
 |---|---|---|
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `10` / `10` | API SQLAlchemy pool per process (pool timeout 5 s, recycle 1800 s). Size total connections across API processes, workers and admin below PostgreSQL `max_connections`. |
-| `DB_STATEMENT_TIMEOUT_MS` | `60000` | API and chat-worker `statement_timeout` (also bounds lock waits). `0` disables. The main worker never sets a statement timeout. The chat-worker pool is fixed at 10 + 10 (not affected by `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`). |
+| `DB_STATEMENT_TIMEOUT_MS` | `60000` | API and chat-worker `statement_timeout` (also bounds lock waits). `0` disables. The chat-worker pool is fixed at 10 + 10 (not affected by `DB_POOL_SIZE` / `DB_MAX_OVERFLOW`). |
+| `DB_WORKER_STATEMENT_TIMEOUT_MS` / `DB_MODEL_WORKER_STATEMENT_TIMEOUT_MS` | `120000` / `120000` | `statement_timeout` of the main worker and the model worker. Both used to run unbounded. Parsing, embedding and provider/model calls happen outside DB statements (jobs hold a session, never a long statement), so 120 s only stops a runaway query from pinning a slot. The timeout also bounds blocking lock waits (`pg_advisory_xact_lock`, row locks) in worker paths such as news catch-up, search generation, document identity and sources; a wait longer than 120 s fails the job, which is retried. `0` disables. |
+| `PGBOUNCER_ENABLED` / `DATABASE_DIRECT_URL` / `DB_DIRECT_POOL_SIZE` | `false` / unset / `4` | PgBouncer mode: `DATABASE_URL` points at the pooler, `DATABASE_DIRECT_URL` at PostgreSQL (required when enabled; used by migrations and session advisory leases). `DB_DIRECT_POOL_SIZE` bounds the API's direct lease pool (the worker and cron-worker use their `max_jobs`). See "PgBouncer and horizontal scaling". |
+| `REDIS_SENTINELS` / `REDIS_MASTER_NAME` / `REDIS_SENTINEL_PASSWORD` | unset / `mymaster` / unset | Redis Sentinel HA: `REDIS_SENTINELS=s1:26379,s2:26379,s3:26379` makes the API and every ARQ worker resolve the master through Sentinel. `REDIS_URL` still supplies the password and database (its host is ignored). |
 | `BACKGROUND_LLM_TIMEOUT_SECONDS` / `MODEL_WORKER_JOB_TIMEOUT_SECONDS` | `60` / `900` | Per-call model timeout for background entity/timeline extraction (work leases are this plus 75 s, at least 110 s), and the model-worker arq job timeout. |
 | `SEARCH_EMBED_BATCH_SIZE` | `64` | Chunks per embedding request in search indexing (1-128). `1` restores one request per chunk. Each batch is claimed in one keyset query, revalidated and published in one transaction. |
-| `DB_IDLE_TX_TIMEOUT_MS` | `240000` | `idle_in_transaction_session_timeout` for API and worker connections; a backstop above the longest legitimate send-fence hold. `0` disables. |
+| `DB_IDLE_TX_TIMEOUT_MS` | `240000` | `idle_in_transaction_session_timeout` for every role (API, worker, cron-worker, chat-worker, model-worker); a backstop above the longest legitimate send-fence hold. `0` disables. |
 | `MAX_REQUEST_BODY_BYTES` | `5242880` | Request body cap returning 413; `POST /api/v1/documents/upload` allows `UPLOAD_MAX_BYTES` plus 1 MiB. |
 | `WEB_CONCURRENCY` | `2` (image `ENV`) | API process count. Above 1 (also `UVICORN_WORKERS` > 1) the API refuses to start unless `CSRF_SIGNING_SECRET` is set, so every process signs sessions with the same secret. |
 | `PARSED_TEXT_MAX_CHARS` | `10485760` | Cap on parsed document text. Text past it is truncated, a `parsed_text_truncated` warning is recorded, and the document is shown with a notice (only the first part is searchable). |
@@ -39,9 +42,61 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 
 Memory limits sum to 7.66 GiB (2.5 + 0.375 + 1 + 1 + 0.5 + 0.75 + 0.75 + 0.75), leaving about 0.34 GiB for the OS and page cache. The optional connectors overlay adds limits of 768 MiB + 1.5 GiB (2.25 GiB), so with it the limits total about 9.4 GiB, above 8 GiB: they are caps, not reservations, and the stack relies on actual RSS (about 4.2 GiB steady, plus connectors) staying below RAM. CPU shares apply only under contention (no hard CPU caps).
 
-Connection budget (`max_connections=120`, raised from 100 when the cron worker was split out): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, cron-worker 9 + 5 = 14, chat-worker 10 + 10 = 20, model-worker 5 + 5 = 10, total 101. The main worker also opens one non-pooled agent checkpoint connection per running agent run (at most 6, so worker worst case 23); plus migrate, backup and admin about 5 gives a worst case of about 112, leaving about 8 spare. A second cron-worker replica adds 14 more; recompute before scaling. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
+Connection budget without PgBouncer (`max_connections=120`, raised from 100 when the cron worker was split out; see "PgBouncer and horizontal scaling" for N replicas): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, cron-worker 9 + 5 = 14, chat-worker 10 + 10 = 20, model-worker 5 + 5 = 10, total 101. The main worker also opens one non-pooled agent checkpoint connection per running agent run (at most 6, so worker worst case 23); plus migrate, backup and admin about 5 gives a worst case of about 112, leaving about 8 spare. A second cron-worker replica adds 14 more; recompute before scaling. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
 
 Redis clients use `socket_timeout=5`, `socket_connect_timeout=2`, `health_check_interval=30` and at most 100 connections. Each API process allows 32 concurrent Realtime SSE streams and 64 concurrent chat response streams (503 beyond). No global `lock_timeout` is set because it would turn waits on the Memory privacy lock into errors.
+
+## PgBouncer and horizontal scaling
+
+### Connection budget
+
+PostgreSQL has `max_connections=120`. Without a pooler every process owns its SQLAlchemy pool, so the budget grows with the replica count:
+
+| Role | Per replica (pool + overflow) |
+|---|---|
+| API | `WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW)` = 2 x 20 = 40 |
+| worker | 7 + 10 = 17, plus up to 6 direct connections (agent checkpoints and leases) = 23 |
+| cron-worker | 9 + 5 = 14 |
+| chat-worker | 10 + 10 = 20 |
+| model-worker | 5 + 5 = 10 |
+
+Direct, with N API replicas, W worker replicas and C cron-worker replicas (one chat-worker and one model-worker): `40N + 23W + 14C + 20 + 10 + 5` (admin/migrate). One of each is 112 and fits; **a second API replica (152), a second worker replica (135) or a second cron-worker replica (126) exceeds `max_connections`**. This is why the stack ships as a single replica of each service.
+
+With the PgBouncer overlay (`docker compose -f docker-compose.yml -f docker-compose.pgbouncer.yml up -d`) the application pools become *client* pools. PostgreSQL only sees the pooler's server connections, which are fixed per database alias and do not grow with replicas:
+
+| Consumer | Server connections |
+|---|---|
+| PgBouncer aliases `bbd_api` / `bbd_worker` / `bbd_cron` / `bbd_chat` / `bbd_model` | 20 / 12 / 10 / 12 / 6 = 60 (`PGBOUNCER_POOL_*`, per PgBouncer instance; `bbd_cron` uses the worker statement timeout) |
+| Direct connections | worker: up to `max_jobs` (6) per worker replica for session leases and agent checkpoint connections (the LangGraph saver uses `DATABASE_DIRECT_URL`); cron-worker: up to `max_jobs` (8) per replica (account-erasure leases, HNSW index builds); API: up to `DB_DIRECT_POOL_SIZE` (4) per API process |
+| Migrations, admin scripts, backup, `psql` | about 5 |
+
+Pooled total (direct engines open connections only when used, so these are worst cases): `60 + 6W + 8C + 4 x WEB_CONCURRENCY x N + 5`. Two API replicas, two workers and one cron-worker: 60 + 12 + 8 + 16 + 5 = 101. A second PgBouncer instance is for availability only; its pools add to the 60.
+
+### How the application stays transaction-pool safe
+
+- `PGBOUNCER_ENABLED=true` disables asyncpg's and SQLAlchemy's prepared-statement caches (`statement_cache_size=0`, `prepared_statement_cache_size=0`, unique prepared-statement names) and sends no startup GUCs, which a transaction pooler rejects. The overlay therefore applies each role's `statement_timeout` and `idle_in_transaction_session_timeout` with a per-alias `connect_query` in `pgbouncer.ini`.
+- **Direct connection required** (`core.database.direct_engine`): session advisory leases for agent runs (`modules/agents/worker.py`), account erasure (`core/auth/deletion_worker.py`) and workspace storage leases (`core/storage/admission.py`), the search HNSW `CREATE INDEX CONCURRENTLY` build (`modules/search/indexing.py`: per-index session advisory lock plus session `SET statement_timeout/lock_timeout = 0` on one autocommit connection), the agent LangGraph checkpointer (`AsyncPostgresSaver`, named prepared statements held for a whole segment), plus Alembic migrations and one-shot admin scripts (`DATABASE_DIRECT_URL`). `tests/unit/test_pgbouncer_session_state_guard.py` fails if any other module uses a session advisory lock, a non-`LOCAL` `SET`, `LISTEN`, `WITH HOLD` or a temp object; the only session-`SET` exemptions are the HNSW build (on `direct_engine`) and `core/migration_support.py` (Alembic, which always connects with `DATABASE_DIRECT_URL`).
+- Safe through the pooler: `pg_advisory_xact_lock` / `pg_try_advisory_xact_lock` (including the heavy-work slot), `SET LOCAL` and `set_config(..., true)` (chat SQL tool, HNSW search settings, Realtime fences), and the chat SQL tool's `TEMP VIEW`s, which live inside one transaction's raw savepoint and are rolled back before it ends.
+- The **heavy-work slot** (`core.heavy_work.heavy_job_slot`) deliberately keeps one transaction open for up to 150 s: the transaction-scoped advisory lock *is* the cluster-wide capacity, released by any rollback, crash or connection loss without a TTL takeover. A `SELECT 1` heartbeat every 10 s keeps the connection from idling in the transaction longer than 10 s (limit 240 s), and domain work uses separate sessions. Under PgBouncer the transaction pins one server connection for its length, which is what the lock needs.
+
+**Upload concurrency cap:** in PgBouncer mode workspace storage leases (uploads, cleanup) use the per-process direct pool, so at most `DB_DIRECT_POOL_SIZE` (default 4) run concurrently per API process. A further lease waits 5 s for a connection and then fails as `WorkspaceStorageBusy` (retryable); raise `DB_DIRECT_POOL_SIZE` (and the budget above) if you expect more concurrent uploads. In direct mode these leases share the main pool instead.
+
+### Making PgBouncer the default for production
+
+Recommended for any deployment that runs more than one API or worker replica. Put the overlay in your launch command (`COMPOSE_FILE=docker-compose.yml:docker-compose.pgbouncer.yml` in `.env` makes plain `docker compose up` use it) and keep `DATABASE_URL` pointing at `postgres` in `.env`; the overlay rewrites it per service. Run migrations with the same command (`migrate` receives `DATABASE_DIRECT_URL`). Verify with `SHOW POOLS;` on the PgBouncer admin console and `components.postgres` in `/api/v1/system/health`. The pinned image tag in the overlay must be checked against your registry before first use.
+
+### Scaling guide
+
+1. **Stateless services:** API, worker, cron-worker, chat-worker and model-worker hold no cross-request correctness state. The audited per-process state (`tests/unit/test_scale_readiness.py`, `PER_PROCESS_STATE_ALLOWLIST`) is: SSE wakeup hints (a missed hint on another replica costs at most the 2 s poll), live-map and weather TTL caches and burst pacing (the durable provider budget stays in PostgreSQL), the CoinGecko catalog, the query-vector cache (60 s, workspace/generation scoped), the ingestion scan cursor and its in-process lock (claims are row-fenced with `FOR UPDATE SKIP LOCKED`, so replicas never double-claim), the agent activity reconcile cursor, and the browser sidecar (a deliberate singleton fenced by `service_instance_id`). A new module-level lock or cache must be added to that list with a justification.
+2. **Shared files:** `app-data` (`/data`) must be a volume shared by api and worker replicas until a non-local storage backend ships; this remains the blocker for multi-host deployments (single-host replicas on one volume work).
+3. **Concurrency that does not scale with replicas:** the heavy slot serialises parsing/embedding cluster-wide, the global privacy lock serialises chat flushes, and the translation slot is global. Add replicas for API, chat-worker and model-worker throughput, not for those.
+4. **Order of scaling:** enable PgBouncer, then raise API replicas, then chat-worker replicas (each adds 15 jobs), then workers (each adds 6 jobs but contends for the one heavy slot).
+
+### Redis HA and queue-full behaviour
+
+Redis stays `noeviction`: queued ARQ jobs, sessions and rate-limit counters are never evicted. When memory reaches `maxmemory`, writes fail with `OOM`. The API maps any unhandled Redis failure (down, failing over or `OOM`) to a retryable `503` with `Retry-After: 5` and error code `QUEUE_UNAVAILABLE` instead of a generic 500; durable outbox rows are re-enqueued by their recovery scans once Redis accepts writes again. `/api/v1/system/health` reports `components.redis.queue_writable` (false above 95% of `maxmemory`, which also sets `overall` to `degraded`); alert on that flag rather than on a failed enqueue.
+
+Recommended `maxmemory`: at least 256 MB (the shipped value) and about 25% of the Redis host's RAM; queue payloads are identity-only, so growth means a stalled consumer, not data volume. For HA run Redis with one replica and three Sentinels (quorum 2, `down-after-milliseconds 5000`, `failover-timeout 30000`), the same `requirepass`/`masterauth` on both nodes and `min-replicas-to-write 1`, then set `REDIS_SENTINELS`, `REDIS_MASTER_NAME` (and `REDIS_SENTINEL_PASSWORD` if the Sentinels are password-protected). The compose stack ships a single Redis; the Sentinel topology is operator-provided. Clients use `retry_on_timeout`, a 5 s socket timeout and a 30 s health check, so a failover shows up as a few `QUEUE_UNAVAILABLE` responses, not a restart.
 
 ## Client IP and `X-Forwarded-For`
 

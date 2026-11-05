@@ -126,7 +126,7 @@ async def run(
 async def _main(args: argparse.Namespace) -> int:
     """Open a short-lived pool, run one upgrade pass, print its JSON summary and dispose the engine."""
     settings = Settings()
-    engine, factory = make_session_factory(settings.database_url, pool_size=2, max_overflow=0)
+    engine, factory = make_session_factory(settings.admin_database_url, pool_size=2, max_overflow=0)
     try:
         print(json.dumps(await run(factory, settings, apply=args.apply, limit=args.limit, after=args.after), indent=2))
     finally:

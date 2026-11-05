@@ -281,14 +281,19 @@ def _format(row: WorkerDeadLetter) -> str:
 
 
 async def _run(arguments: argparse.Namespace) -> int:
-    """Open the engine (and Redis for replay), run the chosen subcommand, always dispose connections."""
-    from arq.connections import RedisSettings, create_pool
+    """Open the engine (and Redis for replay), run the chosen subcommand, always dispose connections.
+
+    A one-shot admin tool: it connects with ``admin_database_url`` (the direct URL in PgBouncer mode) and to
+    Redis through the shared factories, so a Sentinel deployment replays to the current master.
+    """
+    from arq.connections import create_pool
 
     from core.config import Settings
     from core.database import make_session_factory
+    from core.redis_client import build_redis_settings, build_worker_redis_pool
 
     settings = Settings()
-    engine, factory = make_session_factory(settings.database_url, pool_size=1, max_overflow=0)
+    engine, factory = make_session_factory(settings.admin_database_url, pool_size=1, max_overflow=0)
     pool = None
     try:
         if arguments.command == "list":
@@ -296,7 +301,8 @@ async def _run(arguments: argparse.Namespace) -> int:
                 print(_format(row))
         elif arguments.command == "replay":
             if arguments.execute:
-                pool = await create_pool(RedisSettings.from_dsn(settings.redis_url))
+                # Sentinel mode: our pool carries the sentinel password; direct mode: arq's own pool.
+                pool = build_worker_redis_pool(settings) or await create_pool(build_redis_settings(settings))
             plan = await replay_dead_letters(factory, pool, ids=arguments.ids, execute=arguments.execute)
             verb = "replayed" if plan.executed else "would replay"
             for row in plan.replayable:

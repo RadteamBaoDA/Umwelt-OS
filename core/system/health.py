@@ -16,6 +16,17 @@ ARQ_MODEL_WORKER_HEALTH_KEY = "arq:model:health-check"
 ARQ_CRON_WORKER_HEALTH_KEY = "arq:cron:health-check"
 ARQ_WORKER_GENERATION_KEY = "bbd:worker:generation"
 PROBE_TIMEOUT_SECONDS = 1.0
+# Redis runs with ``noeviction``: at maxmemory every write (enqueue, session, rate-limit) fails with OOM instead of
+# silently dropping queued jobs. Report the queue as not writable before the cap is hit so operators can act.
+QUEUE_FULL_RATIO = 0.95
+
+
+def queue_writable(redis_memory: dict[str, int]) -> bool | None:
+    """Return whether Redis can still accept writes: ``None`` when memory is unknown or uncapped, else used < 95% of max."""
+    max_bytes = redis_memory.get("max_bytes", 0)
+    if max_bytes <= 0:
+        return None
+    return redis_memory.get("used_bytes", 0) < max_bytes * QUEUE_FULL_RATIO
 
 
 async def system_health(
@@ -75,7 +86,11 @@ async def system_health(
     gateway_status = "configured" if gateway_configured else "unconfigured"
     components = {
         "postgres": {"status": postgres, "latency_ms": postgres_ms},
-        "redis": {"status": redis_status, "latency_ms": redis_ms, **({"memory": redis_memory} if redis_memory else {})},
+        "redis": {
+            "status": redis_status, "latency_ms": redis_ms,
+            **({"memory": redis_memory} if redis_memory else {}),
+            **({"queue_writable": writable} if (writable := queue_writable(redis_memory)) is not None else {}),
+        },
         "worker": {"status": worker_status},
         "chat_worker": {"status": chat_worker_status},
         "model_worker": {"status": model_worker_status},
@@ -88,5 +103,6 @@ async def system_health(
     }
     core_statuses = (postgres, redis_status, worker_status, chat_worker_status, model_worker_status,
                      cron_worker_status)
-    return {"overall": "healthy" if all(s == "healthy" for s in core_statuses) else "degraded",
+    healthy = all(s == "healthy" for s in core_statuses) and queue_writable(redis_memory) is not False
+    return {"overall": "healthy" if healthy else "degraded",
             "components": components}

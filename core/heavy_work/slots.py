@@ -78,6 +78,14 @@ async def heavy_job_slot(
     Connection death releases the server lock without a TTL takeover; it does
     not prove remote cancellation. Model slots/graph partition uncertainty stay
     under their respective owners. This helper never commits domain state.
+
+    Why a transaction stays open across I/O (deliberate): the slot IS the transaction-scoped advisory lock,
+    so the cluster-wide capacity is released by any rollback/crash/connection loss with no TTL takeover. It
+    pins one server connection for at most MAX_OPERATION_SECONDS (150 s), which is correct under PgBouncer
+    transaction pooling too (the pooler keeps the backend for the whole transaction). The 10 s ``SELECT 1``
+    heartbeat keeps the connection from ever idling longer than 10 s, far below
+    ``idle_in_transaction_session_timeout`` (240 s default), and holds no row locks; domain work runs on its
+    own sessions. The session is not a session-level lock, so it needs no direct connection.
     """
     if not 0 < timeout_seconds <= MAX_OPERATION_SECONDS:
         raise ValueError("Heavy operation timeout must be within 150 seconds")

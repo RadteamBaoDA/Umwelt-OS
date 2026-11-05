@@ -11,6 +11,7 @@ from core.auth.deletion_models import AccountDeletionOperation
 from core.auth.deletion_service import authorize_account_erasure
 from core.auth.erasure_contracts import AccountErasureScope
 from core.auth.models import AuthSession, GoogleIdentity, Owner
+from core.database import direct_engine
 
 
 async def finalize_account_erasure(session: AsyncSession, operation: AccountDeletionOperation) -> None:
@@ -62,7 +63,8 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
     engine = cast(AsyncEngine, ctx["db_engine"])
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     key = int.from_bytes(operation_id.bytes[:8], "big", signed=True)
-    async with engine.connect() as connection:
+    # Session advisory lease: must be a dedicated backend, never a transaction-pooled connection.
+    async with direct_engine(engine).connect() as connection:
         backend_pid = await connection.scalar(text("SELECT pg_backend_pid()"))
         acquired = await connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key})
         await connection.commit()

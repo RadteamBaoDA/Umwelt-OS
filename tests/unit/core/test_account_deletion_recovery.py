@@ -110,7 +110,7 @@ async def test_cli_recovery_failure_exits_session_without_commit(monkeypatch, ca
     context.__aexit__ = AsyncMock(return_value=False)
     factory = MagicMock(return_value=context)
     engine = MagicMock(dispose=AsyncMock())
-    monkeypatch.setattr(account_deletion, "Settings", lambda: SimpleNamespace(database_url="unused"))
+    monkeypatch.setattr(account_deletion, "Settings", lambda: SimpleNamespace(database_url="unused", admin_database_url="unused"))
     monkeypatch.setattr(account_deletion, "make_session_factory", lambda _url: (engine, factory))
     monkeypatch.setattr(account_deletion, "recover_bootstrap_account_in_uow",
                         AsyncMock(side_effect=RuntimeError("provision failed")))
@@ -129,7 +129,7 @@ async def test_cli_commits_recovery_once_without_printing_password(monkeypatch, 
     context.__aenter__ = AsyncMock(return_value=session)
     factory = MagicMock(return_value=context)
     engine = MagicMock(dispose=AsyncMock())
-    monkeypatch.setattr(account_deletion, "Settings", lambda: SimpleNamespace(database_url="unused"))
+    monkeypatch.setattr(account_deletion, "Settings", lambda: SimpleNamespace(database_url="unused", admin_database_url="unused"))
     monkeypatch.setattr(account_deletion, "make_session_factory", lambda _url: (engine, factory))
     recover = AsyncMock()
     monkeypatch.setattr(account_deletion, "recover_bootstrap_account_in_uow", recover)

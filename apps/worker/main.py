@@ -6,7 +6,6 @@ from datetime import timedelta
 from functools import wraps
 from typing import Any, ClassVar, cast
 
-from arq.connections import RedisSettings
 from arq.constants import default_queue_name
 from arq.worker import func as _arq_func
 from redis.asyncio import Redis
@@ -40,7 +39,7 @@ from core.cron import (
     stable_offset,
     wake,
 )
-from core.database import make_session_factory
+from core.database import dispose_engine, make_session_factory_for_role
 from core.heavy_work import HEAVY_JOB_MAX_TRIES
 from core.ids import uuid7
 from core.metrics import (
@@ -51,6 +50,7 @@ from core.metrics import (
 )
 from core.model_gateway.pool import close_pinned_clients
 from core.modules import effective_modules, register_modules, scheduled_job_owners
+from core.redis_client import build_redis_settings, build_worker_redis_pool
 from core.system.health import (
     ARQ_CRON_WORKER_HEALTH_KEY,
     ARQ_WORKER_GENERATION_KEY,
@@ -188,28 +188,35 @@ def _install_observability(ctx: dict[str, object], settings: Settings, engine: A
         instrument_engine(engine)
 
 
-async def _boot_runtime(ctx: dict[str, object], *, role: str, pool_size: int, max_overflow: int) -> None:
+async def _boot_runtime(
+    ctx: dict[str, object], *, role: str, pool_size: int, max_overflow: int, direct_pool_size: int,
+) -> None:
     """Shared startup for the processes that run the full job ctx (main worker and cron worker).
 
     Installs settings, the shared dispatch/cursor state, log redaction, the bounded database pool,
     optional metrics/tracing for ``role``, the worker-owned agent registry and the event-driven wake
-    hook. When registry composition fails the metrics tasks are stopped and the engine is disposed
+    hook. The engine comes from ``make_session_factory_for_role`` (direct or PgBouncer mode) with the bounded
+    worker statement timeout and ``direct_pool_size`` session-lease connections. When registry composition fails the metrics tasks are stopped and the engine is disposed
     before the error propagates. Nested state is neither authority nor durable and resets on restart.
     """
     _silence_cron_logs()
     configure_default_executor()  # explicit default thread-pool size; see core.async_runtime
     settings = Settings()
     ctx["settings"] = settings
+    # SAFE PER PROCESS: this lock only serialises overlapping cron calls of one process so they cannot regress the
+    # scan cursor. It is not a cross-replica mutex: every claim is fenced in SQL (FOR UPDATE SKIP LOCKED, leases,
+    # dispatched_at), so replicas scanning from their own cursors never double-claim an outbox event.
     ctx["ingestion_dispatch_scan_state"] = {"cursor": None, "lock": asyncio.Lock()}
     ctx["w2_cursor_state"] = {}  # dict[str,str] shared across ARQ ctx copies; see core/worker_cursors.py for key namespaces (_gen:/_unsynced:)
     install_log_redaction()
     set_process_role(role)
-    engine, factory = make_session_factory(
-        settings.database_url,
+    engine, factory = make_session_factory_for_role(
+        settings,
         pool_size=pool_size,
         max_overflow=max_overflow,
-        statement_timeout_ms=0,
-        idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
+        # Bounded (default 120 s): jobs spend long periods in provider/parse I/O, never inside a DB statement.
+        statement_timeout_ms=settings.db_worker_statement_timeout_ms,
+        direct_pool_size=direct_pool_size,  # at most one session run/erasure lease per concurrent job
     )
     ctx["session_factory"] = factory
     ctx["db_engine"] = engine
@@ -224,7 +231,7 @@ async def _boot_runtime(ctx: dict[str, object], *, role: str, pool_size: int, ma
         ctx["agent_mcp_runtime"] = runtime
     except Exception:
         await stop_background(cast("list[asyncio.Task[None]]", ctx.pop("metrics_tasks", [])))
-        await engine.dispose()
+        await dispose_engine(engine)
         raise
     redis = cast(Redis, ctx["redis"])
 
@@ -242,7 +249,10 @@ async def startup(ctx: dict[str, object]) -> None:
     invocation contexts; neither is authority or durable, and both reset on restart. Publishes a new
     worker generation for health once composition succeeded.
     """
-    await _boot_runtime(ctx, role="worker", pool_size=WorkerSettings.max_jobs + 1, max_overflow=10)
+    await _boot_runtime(
+        ctx, role="worker", pool_size=WorkerSettings.max_jobs + 1, max_overflow=10,
+        direct_pool_size=WorkerSettings.max_jobs,
+    )
     await cast(Redis, ctx["redis"]).set(ARQ_WORKER_GENERATION_KEY, uuid7().hex)
 
 
@@ -277,7 +287,10 @@ async def catch_up_missed_runs(ctx: dict[str, object]) -> list[str]:
 
 async def cron_startup(ctx: dict[str, object]) -> None:
     """Cron-worker startup: full job ctx on its own bounded pool, then missed-run catch-up."""
-    await _boot_runtime(ctx, role="cron-worker", pool_size=CRON_DB_POOL[0], max_overflow=CRON_DB_POOL[1])
+    await _boot_runtime(
+        ctx, role="cron-worker", pool_size=CRON_DB_POOL[0], max_overflow=CRON_DB_POOL[1],
+        direct_pool_size=CronWorkerSettings.max_jobs,
+    )
     await catch_up_missed_runs(ctx)
 
 
@@ -292,12 +305,11 @@ async def chat_startup(ctx: dict[str, object]) -> None:
     ctx["settings"] = settings
     install_log_redaction()
     set_process_role("chat-worker")
-    engine, factory = make_session_factory(
-        settings.database_url,
+    engine, factory = make_session_factory_for_role(
+        settings,
         pool_size=CHAT_DB_POOL[0],
         max_overflow=CHAT_DB_POOL[1],
         statement_timeout_ms=settings.db_statement_timeout_ms,
-        idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
     )
     ctx["session_factory"] = factory
     ctx["db_engine"] = engine
@@ -315,12 +327,13 @@ async def model_startup(ctx: dict[str, object]) -> None:
     ctx["settings"] = settings
     install_log_redaction()
     set_process_role("model-worker")
-    engine, factory = make_session_factory(
-        settings.database_url,
+    engine, factory = make_session_factory_for_role(
+        settings,
         pool_size=MODEL_DB_POOL[0],
         max_overflow=MODEL_DB_POOL[1],
-        statement_timeout_ms=0,  # long model calls hold no DB statement; mirrors the main worker
-        idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
+        # Remote model calls run outside DB statements, so a bounded timeout never interrupts them.
+        statement_timeout_ms=settings.db_model_worker_statement_timeout_ms,
+        direct_pool_size=1,  # no session leases on this role
     )
     ctx["session_factory"] = factory
     ctx["db_engine"] = engine
@@ -331,8 +344,8 @@ async def shutdown(ctx: dict[str, object]) -> None:
     """Release every worker process's runtime in dependency order (all four worker settings share this hook).
 
     Clears the wake hook, cancels the metrics tasks, stops new worker MCP admissions, closes the pooled
-    model-gateway HTTP clients and finally disposes the database engine when present; the engine is
-    disposed even when closing the HTTP clients fails.
+    model-gateway HTTP clients and finally disposes the database engine (and its PgBouncer-mode direct sibling)
+    when present; the engines are disposed even when closing the HTTP clients fails.
     """
     set_wake_hook(None)
     await stop_background(cast("list[asyncio.Task[None]]", ctx.get("metrics_tasks", [])))
@@ -344,7 +357,7 @@ async def shutdown(ctx: dict[str, object]) -> None:
     finally:
         engine = ctx.get("db_engine")
         if engine is not None:
-            await cast(AsyncEngine, engine).dispose()
+            await dispose_engine(cast(AsyncEngine, engine))
 
 
 async def purge_expired_sessions(ctx: dict[str, object]) -> int:
@@ -455,7 +468,9 @@ class WorkerSettings:
     # Heavy-slot jobs retry on contention; with several job slots the default max_tries would be
     # exhausted (and the job id blocked for keep_result_s) before the slot holder finishes.
     # Cron jobs run on CronWorkerSettings (queue arq:cron); only event-driven functions stay here.
-    redis_settings = RedisSettings.from_dsn(Settings().redis_url)
+    redis_settings = build_redis_settings(Settings())
+    # Sentinel mode supplies a pool so the sentinel password/timeouts match the API; None keeps arq's direct path.
+    redis_pool = build_worker_redis_pool(Settings())
 
     # Heavy local work (parsing, embedding, graph, browser reads) is serialized across
     # processes by `core.heavy_work.heavy_job_slot` and retries on contention, so extra slots only
@@ -512,7 +527,9 @@ class CronWorkerSettings:
     # traced_job strips the ``_trace_carrier`` that a tracing API adds to wake-up enqueues.
     functions: ClassVar[list[Any]] = [_arq_func(traced_job(run_cron_job), max_tries=CRON_MAX_TRIES)]
     cron_jobs: ClassVar[list[object]] = [build_cron(spec, _gate_module_job) for spec in CRON_SPECS]
-    redis_settings = RedisSettings.from_dsn(Settings().redis_url)
+    redis_settings = build_redis_settings(Settings())
+    # Sentinel mode supplies a pool so the sentinel password/timeouts match the API; None keeps arq's direct path.
+    redis_pool = build_worker_redis_pool(Settings())
     queue_name = CRON_QUEUE
     max_jobs = 8
     max_tries = CRON_MAX_TRIES  # only ``Retry`` (heavy-slot contention) consumes tries; other errors never rerun
@@ -539,7 +556,9 @@ class ModelWorkerSettings:
     ]
     functions = [_register(_gate_module_job(instrument_job(function)), max_tries=5, timeout=MODEL_JOB_TIMEOUT, queue=MODEL_QUEUE)
                  for function in functions]
-    redis_settings = RedisSettings.from_dsn(Settings().redis_url)
+    redis_settings = build_redis_settings(Settings())
+    # Sentinel mode supplies a pool so the sentinel password/timeouts match the API; None keeps arq's direct path.
+    redis_pool = build_worker_redis_pool(Settings())
     queue_name = MODEL_QUEUE
     max_jobs = 4
     job_timeout = MODEL_JOB_TIMEOUT
@@ -560,7 +579,9 @@ class ChatWorkerSettings:
         _arq_func(traced_job(_gate_module_job(instrument_job(process_chat_response))), keep_result=0),
     ]
     cron_jobs: ClassVar[list[object]] = [build_cron(spec, _gate_module_job) for spec in CHAT_CRON_SPECS]
-    redis_settings = RedisSettings.from_dsn(Settings().redis_url)
+    redis_settings = build_redis_settings(Settings())
+    # Sentinel mode supplies a pool so the sentinel password/timeouts match the API; None keeps arq's direct path.
+    redis_pool = build_worker_redis_pool(Settings())
     queue_name = CHAT_QUEUE
     max_jobs = 15  # keeps 5 of the shared 10+10 DB pool free for cron/rerank sessions (pool_timeout 5 s)
     job_timeout = CHAT_JOB_TIMEOUT

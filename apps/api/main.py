@@ -16,7 +16,7 @@ from core.auth.dependencies import session_middleware_secret
 from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
 from core.cron import CRON_QUEUE, set_wake_hook, wake
-from core.database import make_session_factory
+from core.database import dispose_engine, make_session_factory_for_role
 from core.errors import install_error_handling
 from core.metrics import monitor_event_loop_lag, run_sampler_loop, spawn_background, stop_background
 from core.metrics_http import MetricsMiddleware, metrics_enabled
@@ -24,6 +24,7 @@ from core.model_gateway.pool import close_pinned_clients
 from core.modules import ModuleRegistry, ordered_router_specs, register_modules
 from core.publication import PublicationGateMiddleware
 from core.realtime.routes import MAX_STREAMS_PER_API_PROCESS
+from core.redis_client import create_api_redis
 from core.telemetry import install_log_redaction
 from core.tools import ToolRegistry
 from core.tracing import TracingArqRedis, configure_tracing, instrument_engine, instrument_fastapi
@@ -109,7 +110,7 @@ def _make_lifespan(redis: ArqRedis, engine: AsyncEngine) -> Callable[[FastAPI], 
                 await close_pinned_clients()  # pooled model-gateway HTTP clients
                 await redis.aclose()
             finally:
-                await engine.dispose()
+                await dispose_engine(engine)
 
     return lifespan
 
@@ -265,12 +266,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """
     app_settings = settings or Settings()
     csrf_secret = _validated_csrf_secret(app_settings)
-    engine, session_factory = make_session_factory(
-        app_settings.database_url,
+    engine, session_factory = make_session_factory_for_role(
+        app_settings,
         pool_size=app_settings.db_pool_size,
         max_overflow=app_settings.db_max_overflow,
         statement_timeout_ms=app_settings.db_statement_timeout_ms,
-        idle_tx_timeout_ms=app_settings.db_idle_tx_timeout_ms,
     )
     tracing_on = configure_tracing(
         app_settings.otel_exporter_otlp_endpoint, service_name="umwelt-api",
@@ -279,15 +279,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if tracing_on:
         instrument_engine(engine)
     # ArqRedis subclasses Redis, so existing callers work and enqueue_job exists for chat/agent dispatch.
-    # TracingArqRedis adds the caller's trace context to job kwargs only while tracing is on.
-    redis = TracingArqRedis.from_url(
-        app_settings.redis_url,
-        decode_responses=True,
-        socket_timeout=5,
-        socket_connect_timeout=2,
-        health_check_interval=30,
-        max_connections=100,
-    )
+    # TracingArqRedis adds the caller's trace context to job kwargs only while tracing is on; the factory keeps
+    # the Sentinel-aware connection setup (direct or Sentinel-resolved master).
+    redis = create_api_redis(app_settings, redis_class=TracingArqRedis)
     app = _new_app(app_settings, csrf_secret, session_factory, redis, _make_lifespan(redis, engine))
     instrument_fastapi(app)  # no-op unless tracing is on
     app.state.modules = register_modules()

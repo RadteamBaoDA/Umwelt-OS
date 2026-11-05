@@ -15,6 +15,7 @@ from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.database import direct_engine
 from core.errors import ConflictError, DomainError, ForbiddenError
 from core.heavy_work import bounded_heavy_work
 from core.job_denial import admit_retry_stale, denial_code, terminalize
@@ -1460,10 +1461,15 @@ async def build_vector_index_concurrently(engine: AsyncEngine, generation_id: UU
     waits for them. Statement/lock timeouts are lifted for the build and reset afterwards. An *invalid*
     index left by an earlier interrupted build is dropped first (``IF NOT EXISTS`` would silently keep it),
     and a build that fails here drops its own invalid leftover before re-raising so a retry starts clean.
+
+    The connection comes from ``core.database.direct_engine(engine)``: the build holds a session-level advisory
+    lock and session ``SET``/``RESET`` across several autocommit statements, which a transaction pooler would
+    hand to other clients between statements. In PgBouncer mode that is the attached direct (unpooled) engine;
+    in direct mode it is ``engine`` itself.
     """
     drop, create = vector_index_statements(generation_id, dimensions)
     name = vector_index_name(generation_id)
-    async with engine.connect() as raw:
+    async with direct_engine(engine).connect() as raw:
         connection = await raw.execution_options(isolation_level="AUTOCOMMIT")
         locked = False
         try:
