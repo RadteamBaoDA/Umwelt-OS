@@ -12,7 +12,7 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' };
 /**
  * Reads a cookie from the current cookie jar for the API origin.
  * @param {string} name Cookie name.
- * @returns {{value: string} | undefined}
+ * @returns {string | undefined} Cookie value (k6's cookiesForURL maps name to an array of value strings).
  */
 function jarCookie(name) {
   const cookies = http.cookieJar().cookiesForURL(`${API_URL}/`);
@@ -60,8 +60,8 @@ export function login() {
   const state = http.get(`${API_URL}/api/v1/auth/session`, { tags: { endpoint: 'auth_session' } });
   check(state, { 'session 200': (r) => r.status === 200 }) || fail(`session failed: ${state.status} ${state.body}`);
   return {
-    session: jarCookie(SESSION_COOKIE).value,
-    csrfCookie: jarCookie(CSRF_COOKIE).value,
+    session: jarCookie(SESSION_COOKIE),
+    csrfCookie: jarCookie(CSRF_COOKIE),
     csrfToken: state.json('csrfToken'),
   };
 }
