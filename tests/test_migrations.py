@@ -163,3 +163,15 @@ def test_chat_sql_login_role_migration_is_isolated_and_passwordless() -> None:
     down = _alembic("downgrade", "0017_chat_sql_login_role:0016_workspace_storage_state", "--sql")
     assert down.returncode == 0, down.stderr
     assert "DROP ROLE IF EXISTS umwelt_chat_sql_login" in down.stdout
+
+
+def test_chat_sql_query_fence_migration_has_no_reader_grants_and_restores_views() -> None:
+    """0018 creates the fence table without reader privileges, joins it by pid, and downgrade restores the GUC views."""
+    up = _alembic("upgrade", "0017_chat_sql_login_role:0018_chat_sql_query_fence", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "CREATE TABLE chat_sql.query_fence" in up.stdout
+    assert "REVOKE ALL ON chat_sql.query_fence FROM umwelt_chat_sql_login" in up.stdout
+    assert "f.backend_pid = pg_backend_pid()" in up.stdout and "current_setting" not in up.stdout
+    down = _alembic("downgrade", "0018_chat_sql_query_fence:0017_chat_sql_login_role", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "current_setting('umwelt.chat_sql_workspace'" in down.stdout and "DROP TABLE IF EXISTS chat_sql.query_fence" in down.stdout
