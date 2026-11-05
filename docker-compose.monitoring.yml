@@ -6,6 +6,8 @@
 #   * METRICS_TOKEN=<random secret> in .env (the API refuses /metrics scrapes in production without it).
 #   * The same value in infrastructure/monitoring/metrics_token.local (git-ignored, no trailing newline),
 #     or point METRICS_TOKEN_FILE at another file.
+#   * infrastructure/monitoring/alert_webhook_url.local (git-ignored) holding the Alertmanager webhook URL, or point
+#     ALERT_WEBHOOK_URL_FILE at another file.
 #   * GRAFANA_ADMIN_PASSWORD in .env (no default; Grafana will not start without one).
 # Prometheus and Grafana publish only on 127.0.0.1; reach them remotely through an SSH tunnel or the reverse proxy
 # with its own authentication. Worker metrics ports are internal to the compose network and never published.
@@ -57,6 +59,27 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
 
+  alertmanager:
+    profiles: ["monitoring"]
+    image: prom/alertmanager:v0.28.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.listen-address=:9093
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./infrastructure/monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    secrets: [alert_webhook_url]
+    deploy:
+      resources:
+        limits: {memory: 128M}
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
   grafana:
     profiles: ["monitoring"]
     image: grafana/grafana:12.1.0
@@ -84,7 +107,11 @@ services:
 secrets:
   metrics_token:
     file: ${METRICS_TOKEN_FILE:-./infrastructure/monitoring/metrics_token.local}
+  # Single-line webhook URL receiving alerts (git-ignored; no trailing newline). Override with ALERT_WEBHOOK_URL_FILE.
+  alert_webhook_url:
+    file: ${ALERT_WEBHOOK_URL_FILE:-./infrastructure/monitoring/alert_webhook_url.local}
 
 volumes:
   prometheus-data:
   grafana-data:
+  alertmanager-data:

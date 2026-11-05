@@ -1,0 +1,24 @@
+# Alertmanager routing for the optional `monitoring` compose profile.
+# Delivery target is a generic webhook. The URL is a secret-bearing value: it is read from the file mounted at
+# /run/secrets/alert_webhook_url (see docker-compose.monitoring.yml, ALERT_WEBHOOK_URL_FILE) and never committed.
+# Point it at Slack/Discord/ntfy/PagerDuty-compatible bridge of your choice. Documented in docs/observability.md.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: owner-webhook
+  group_by: [alertname, process]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # severity=page alerts re-notify faster than ticket-level ones.
+    - matchers: ['severity="page"']
+      receiver: owner-webhook
+      repeat_interval: 1h
+
+receivers:
+  - name: owner-webhook
+    webhook_configs:
+      - url_file: /run/secrets/alert_webhook_url
+        send_resolved: true

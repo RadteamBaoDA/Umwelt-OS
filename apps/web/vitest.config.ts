@@ -17,5 +17,14 @@ export default defineConfig({
     setupFiles: ['./vitest.setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
     exclude: ['node_modules', '.next', '../../tests/**', '**/*.spec.{ts,tsx}'],
+    // Coverage runs only via `npm run test:coverage` (CI). Floors in docs/development.md "Coverage floors".
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.test.{ts,tsx}', 'src/test/**', 'src/**/*.d.ts'],
+      reporter: ['text-summary', 'json-summary'],
+      // Ratchet floors, set ~1.5 points under the measured 61.7/58.1/51.0/48.5 (lines/statements/functions/branches).
+      thresholds: { lines: 60, statements: 57, functions: 50, branches: 47 },
+    },
   },
 });

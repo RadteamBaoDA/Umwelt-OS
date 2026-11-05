@@ -61,11 +61,24 @@ Cross-module mutations use owner commands on the caller's `AsyncSession`; comman
 | mypy | `uv run mypy core apps modules` | Strict; must report 0 errors. |
 | GenUI parity | `uv run python scripts/check_genui_parity.py` | |
 | Import contracts | `uv run lint-imports` | Runs only when `.importlinter` exists. |
-| Python tests | `uv run pytest -q` (unit: `tests/unit tests/test_*.py`) | Docker integration/e2e only through `make test`. |
+| Python tests | `uv run pytest -q` (unit: `tests/unit tests/test_*.py`) | Docker integration/e2e only through `make test`. CI adds `--cov=core --cov=modules --cov=apps --cov-fail-under=68` (see Coverage floors). |
 | ESLint | `npm run lint` | `max-lines-per-function` (100), `complexity` (15), module-boundary `no-restricted-imports` and the literal hex-colour guard are errors. |
 | TypeScript | `npm run typecheck` | |
-| Vitest | `npm test --workspace apps/web` | |
+| Vitest | `npm test --workspace apps/web` | CI runs `npm run test:coverage --workspace apps/web` with the floors in `apps/web/vitest.config.ts`. |
 | Build | `npm run build` | |
 | OpenAPI types | `npm run check:api-types` | Fails when `apps/web/src/core/api-types.gen.ts` is stale; regenerate with `npm run gen:api --workspace apps/web`. |
 | Dependency audit | `make audit` | `npm audit --audit-level=high` plus `pip-audit` over the locked production set. |
 | Prettier | `npm run format:check --workspace apps/web` (also part of `npm run lint`) | Enforced for files changed since `FORMAT_BASE` (default `HEAD`; CI passes the PR base). A repo-wide `--write` was measured: it leaves 53-68 ESLint `max-lines-per-function` errors (printWidth 140/160/200 all tried), so the tree is formatted incrementally. Format touched files with `npx prettier --write <file>`; once those components are split, switch to `format:check:all`. |
+
+## Coverage floors
+
+Coverage is reported and enforced in CI as a ratchet: the floor sits just under the last measured value, so coverage can rise but not silently fall.
+
+| Suite | Measured (2026-11-05) | Floor | Where |
+| --- | --- | --- | --- |
+| Python `tests/unit` (`core`, `modules`, `apps`, line coverage) | 70% | 68% | `--cov-fail-under` in `.github/workflows/ci.yml` |
+| Vitest `apps/web` (lines / statements / functions / branches) | 61.7 / 58.1 / 51.0 / 48.5 | 60 / 57 / 50 / 47 | `coverage.thresholds` in `apps/web/vitest.config.ts` |
+
+Run locally: `uv run pytest tests/unit --ignore=tests/unit/test_event_loop_offload.py --cov=core --cov=modules --cov=apps --cov-report=term` and `npm run test:coverage --workspace apps/web`. CI excludes the timing-sensitive `tests/unit/test_event_loop_offload.py` from the coverage run (tracing pushes it over its budgets) and runs it in a separate step.
+
+Ratchet procedure: when a change raises a measured value by 2 or more points, raise the floor to about 1.5 points under the new measurement in the same change and update the table above. Never lower a floor to land a change; add the missing tests or, for genuinely untestable code, document why in the PR.

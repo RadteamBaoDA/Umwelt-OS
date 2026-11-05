@@ -36,3 +36,5 @@ apps/web/public/vendor/genui/
 /node_modules
 # Local scrape token for the monitoring profile (docs/observability.md)
 infrastructure/monitoring/metrics_token.local
+infrastructure/monitoring/alert_webhook_url.local
+apps/web/coverage/

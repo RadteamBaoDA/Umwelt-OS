@@ -6,6 +6,9 @@ name: CI
 on:
   push:
   pull_request:
+  # Nightly Docker acceptance + k6 smoke (03:17 UTC); PR/push gating is unchanged.
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       run_docker_acceptance:
@@ -39,7 +42,24 @@ jobs:
       - name: Import contracts (when configured)
         run: if [ -f .importlinter ]; then uv run lint-imports; else echo "no .importlinter; skipped"; fi
       # Non-docker unit tests: integration tests are gated by INTEGRATION (unset here).
-      - run: uv run pytest -q
+      # Coverage floor (ratchet, see docs/development.md). Tracing slows the timing-sensitive event-loop offload
+      # tests past their budgets, so that file runs separately without coverage.
+      - run: uv run pytest -q --ignore=tests/unit/test_event_loop_offload.py --cov=core --cov=modules --cov=apps --cov-report=term:skip-covered --cov-fail-under=68
+      - run: uv run pytest -q tests/unit/test_event_loop_offload.py
+
+  monitoring-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Pinned to the same tag as docker-compose.monitoring.yml; promtool ships in the Prometheus image.
+      - name: promtool check rules and config
+        run: |
+          printf x > /tmp/metrics_token
+          docker run --rm -v "$PWD/infrastructure/monitoring:/m:ro" --entrypoint promtool prom/prometheus:v3.5.0 check rules /m/alerts.yml
+          docker run --rm -v "$PWD/infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro"             -v "$PWD/infrastructure/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro"             -v /tmp/metrics_token:/run/secrets/metrics_token:ro             --entrypoint promtool prom/prometheus:v3.5.0 check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/infrastructure/monitoring:/m:ro" --entrypoint amtool prom/alertmanager:v0.28.1 check-config /m/alertmanager.yml
+      - name: promtool unit tests
+        run: docker run --rm -v "$PWD/infrastructure/monitoring:/m:ro" -w /m --entrypoint promtool prom/prometheus:v3.5.0 test rules alerts.test.yml
 
   frontend:
     runs-on: ubuntu-latest
@@ -60,7 +80,8 @@ jobs:
         run: npm run format:check --workspace apps/web
         env:
           FORMAT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
-      - run: npm test --workspace apps/web
+      # Coverage floors are in apps/web/vitest.config.ts (ratchet, see docs/development.md).
+      - run: npm run test:coverage --workspace apps/web
       - run: npm run build
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
@@ -97,7 +118,7 @@ jobs:
       - run: make build
 
   acceptance:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_docker_acceptance }}
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_docker_acceptance) }}
     needs: [build]
     runs-on: ubuntu-latest
     steps:
@@ -127,6 +148,39 @@ jobs:
           WEB_PORT=3300
           ENVEOF
       - run: make test
+
+  # Nightly (and manual-acceptance) k6 smoke at 10% scenario length. scripts/load-test.sh builds its own disposable
+  # stack, so this does not depend on the acceptance stack being up; it fails the job on any SLO threshold (exit 99).
+  load-smoke:
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_docker_acceptance) }}
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Create disposable CI configuration
+        run: |
+          cat > .env <<'ENVEOF'
+          PUBLIC_ORIGIN=http://localhost:3300
+          SECURE_COOKIES=false
+          SETUP_TOKEN=bbd-os-disposable-test-token
+          CSRF_SIGNING_SECRET=bbd-os-disposable-test-csrf-secret
+          SESSION_LIFETIME_HOURS=24
+          POSTGRES_PASSWORD=bbd-os-ci-database-only
+          DATABASE_URL=postgresql+asyncpg://bbd:bbd-os-ci-database-only@postgres:5432/bbd
+          REDIS_URL=redis://redis:6379/0
+          DATA_DIR=/data
+          WEB_PORT=3300
+          ENVEOF
+      # SLO_LATENCY_SCALE=2: shared 2-vCPU runners are slower than the reference host in docs/slo.md.
+      - name: k6 smoke against SLO thresholds
+        run: LOAD_DURATION_SCALE=0.1 SLO_LATENCY_SCALE=2 LOAD_OUT_DIR=test-results/load bash scripts/load-test.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: k6-smoke
+          path: test-results/load
 
   gitleaks:
     runs-on: ubuntu-latest

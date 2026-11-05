@@ -105,7 +105,7 @@ Production telemetry is additive: it never changes business behaviour, every rec
 docker compose -f docker-compose.yml -f docker-compose.monitoring.yml --profile monitoring up -d
 ```
 
-Prometheus (`127.0.0.1:9090`) and Grafana (`127.0.0.1:3001`, dashboard folder "Umwelt-OS", "Umwelt-OS overview") bind to loopback only; use an SSH tunnel for remote access. Rules live in `infrastructure/monitoring/alerts.yml`; no Alertmanager is bundled, so alerts are visible in the Prometheus UI and Grafana until you add a receiver. Including the overlay file without `--profile monitoring` only switches on the worker metrics ports (internal to the compose network).
+Prometheus (`127.0.0.1:9090`) and Grafana (`127.0.0.1:3001`, dashboard folder "Umwelt-OS", "Umwelt-OS overview") bind to loopback only; use an SSH tunnel for remote access. Rules live in `infrastructure/monitoring/alerts.yml`; Alertmanager (`127.0.0.1:9093`, `infrastructure/monitoring/alertmanager.yml`) delivers firing and resolved alerts to a generic webhook whose URL is read from the git-ignored file `infrastructure/monitoring/alert_webhook_url.local` (single line, no trailing newline; override the path with `ALERT_WEBHOOK_URL_FILE`). The file must exist before `up`; use any URL (for example a local request-catcher) until you have a real receiver. Rules are unit-tested in CI with `promtool test rules infrastructure/monitoring/alerts.test.yml`. Including the overlay file without `--profile monitoring` only switches on the worker metrics ports (internal to the compose network).
 
 ### Metrics catalogue
 
