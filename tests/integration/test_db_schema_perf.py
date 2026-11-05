@@ -50,9 +50,9 @@ async def test_generated_column_scores_equal_the_inline_expression(committed_eng
 async def test_migration_0014_schema_state(committed_engine: AsyncEngine) -> None:
     async with committed_engine.connect() as connection:
         generated = await connection.scalar(text(
-            "SELECT attgenerated FROM pg_attribute WHERE attrelid = 'document_chunks'::regclass AND attname = 'content_tsv'"
+            "SELECT attgenerated::text FROM pg_attribute WHERE attrelid = 'document_chunks'::regclass AND attname = 'content_tsv'"
         ))
-        assert generated == "s"  # STORED
+        assert generated == "s"  # STORED (cast: asyncpg returns the "char" type as bytes)
         names = {row[0] for row in (await connection.execute(text(
             "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()"))).all()}
         assert "ix_document_chunks_content_tsv_gin" in names
