@@ -110,6 +110,10 @@ max-statements = 60
 # Frozen initial migration: W291 hits trailing spaces inside multi-line SQL string literals,
 # which must not be edited (historical revision text, ancestry and behaviour stay unchanged).
 "infrastructure/postgres/migrations/versions/0001_init.py" = ["W291"]
+# Owner-run dev tool: every subprocess is a fixed-argument docker/git call resolved from PATH (no shell, no
+# untrusted input), so S603/S607 are noise. C901/PLR0912: _verify_target is a linear sequence of ownership
+# checks that reads worse when split.
+"scripts/dev_workspace.py" = ["S603", "S607", "C901", "PLR0912"]
 
 [tool.mypy]
 python_version = "3.12"

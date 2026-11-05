@@ -72,7 +72,7 @@ async def test_build_runs_on_autocommit_with_timeouts_lifted_and_reset() -> None
     await indexing.build_vector_index_concurrently(_Engine(_Connection(log)), generation_id, 3)  # type: ignore[arg-type]
     name = indexing.vector_index_name(generation_id)
     assert log == [
-        "options:AUTOCOMMIT", "SET statement_timeout = 0", "SET lock_timeout = 0",
+        "options:AUTOCOMMIT", f"SET statement_timeout = {indexing.HNSW_BUILD_STATEMENT_TIMEOUT_MS}", "SET lock_timeout = 0",
         "SELECT pg_advisory_lock(hashtext(:name))",
         "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid",  # invalid-leftover probe
         f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name}",

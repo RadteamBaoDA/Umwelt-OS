@@ -1454,12 +1454,16 @@ def vector_index_statements(generation_id: UUID, dimensions: int) -> tuple[str, 
     return drop, create
 
 
+# Upper bound for one concurrent HNSW build, including its wait for older transactions to finish.
+HNSW_BUILD_STATEMENT_TIMEOUT_MS = 2 * 60 * 60 * 1000
+
+
 async def build_vector_index_concurrently(engine: AsyncEngine, generation_id: UUID, dimensions: int) -> None:
     """Build one generation's HNSW index with ``CREATE INDEX CONCURRENTLY`` on its own autocommit connection.
 
     Takes no lock that blocks writes to ``search_index_items`` (the previous in-transaction build did) but must
     not be called while the caller's own transaction holds writes on that table, because the concurrent build
-    waits for them. Statement/lock timeouts are lifted for the build and reset afterwards. An *invalid*
+    waits for them. The statement timeout is raised to ``HNSW_BUILD_STATEMENT_TIMEOUT_MS`` (finite, 2 h) and the lock timeout lifted for the build and reset afterwards. An *invalid*
     index left by an earlier interrupted build is dropped first (``IF NOT EXISTS`` would silently keep it),
     and a build that fails here drops its own invalid leftover before re-raising so a retry starts clean.
 
@@ -1474,7 +1478,10 @@ async def build_vector_index_concurrently(engine: AsyncEngine, generation_id: UU
         connection = await raw.execution_options(isolation_level="AUTOCOMMIT")
         locked = False
         try:
-            await connection.execute(text("SET statement_timeout = 0"))
+            # Finite on purpose (was 0 = unbounded): the build waits for older open transactions, so an
+            # idle-in-transaction session would otherwise hang it forever. On timeout the invalid leftover is
+            # dropped below and the next indexing pass retries. See docs/operations.md "Search HNSW indexes".
+            await connection.execute(text(f"SET statement_timeout = {HNSW_BUILD_STATEMENT_TIMEOUT_MS}"))
             await connection.execute(text("SET lock_timeout = 0"))
             # Session-level advisory lock keyed by the index name serializes builders of the same generation
             # (the generation row lock is released before the build). Without it a second finalize would see the

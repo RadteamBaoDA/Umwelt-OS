@@ -127,7 +127,7 @@ for path, tree in trees.items():
                 unresolved.append({**where, 'reason': 'expanded_args', 'callee': target[1]})
             else:
                 args = defs[target].args
-                required = {k.arg for k, default in zip(args.kwonlyargs, args.kw_defaults)
+                required = {k.arg for k, default in zip(args.kwonlyargs, args.kw_defaults, strict=True)
                             if default is None and k.arg in watch}
                 accepted = {a.arg for a in args.posonlyargs + args.args + args.kwonlyargs}
                 missing = sorted(required - given)
