@@ -16,6 +16,16 @@ services:
       - ./apps:/app/apps
       - ./core:/app/core
 
+  chat-worker:
+    volumes:
+      - ./apps:/app/apps
+      - ./core:/app/core
+
+  model-worker:
+    volumes:
+      - ./apps:/app/apps
+      - ./core:/app/core
+
   web:
     build:
       target: dependencies

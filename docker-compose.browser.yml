@@ -48,6 +48,12 @@ services:
       - default
       - connectors_internal
 
+  # reconcile_connectors runs on this worker and calls n8n over connectors_internal.
+  cron-worker:
+    networks:
+      - default
+      - connectors_internal
+
 networks:
   connectors_internal:
     internal: true
@@ -57,4 +63,3 @@ networks:
   # Do not set enable_ipv6 here without reviewing the ip6tables drop list in docker/browser-entrypoint.sh.
   browser_egress:
     driver: bridge
-

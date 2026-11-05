@@ -135,6 +135,8 @@ services:
       dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.ChatWorkerSettings"]
     env_file: .env
+    environment:
+      LANGFUSE_ENABLED: "false"
     healthcheck:
       test: ["CMD", "arq", "--check", "apps.worker.main.ChatWorkerSettings"]
       interval: 30s
@@ -166,6 +168,8 @@ services:
       dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.ModelWorkerSettings"]
     env_file: .env
+    environment:
+      LANGFUSE_ENABLED: "false"
     healthcheck:
       test: ["CMD", "arq", "--check", "apps.worker.main.ModelWorkerSettings"]
       interval: 30s
