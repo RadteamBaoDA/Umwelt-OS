@@ -49,7 +49,7 @@ describe('frame document delivery and CSP', () => {
   it('shell header CSP is at least as strict as the in-document meta policy and only frameable by the app', () => {
     const csp = buildFrameShellCsp('https://app.test');
     const meta = /content="([^"]+)"/.exec(buildCspMetaTag('https://app.test'))![1];
-    expect(csp).toBe(`${meta}; frame-ancestors 'self'`);
+    expect(csp).toBe(`${meta}; frame-ancestors 'self'; sandbox allow-scripts`);
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("script-src 'unsafe-inline' https://app.test/vendor/genui/");

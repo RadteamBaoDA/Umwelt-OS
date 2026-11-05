@@ -1,5 +1,6 @@
 import type { NextConfig } from 'next';
 import createNextIntlPlugin from 'next-intl/plugin';
+import { API_FALLBACK_CSP } from './src/core/csp';
 
 /**
  * The Content-Security-Policy is deliberately NOT set here: src/proxy.ts emits it per request with a nonce
@@ -25,6 +26,7 @@ const nextConfig: NextConfig = {
     return [
       // Not the widget frame shell (/genui-frame): it must be framable (X-Frame-Options DENY) and sets its own headers.
       { source: '/((?!genui-frame$).*)', headers: securityHeaders },
+      { source: '/api/:path*', headers: [{ key: 'Content-Security-Policy', value: API_FALLBACK_CSP }] },
       // Sandboxed (opaque-origin) generative-UI iframes load these modules cross-origin, so they need CORS + CORP.
       {
         source: '/vendor/genui/:path*',

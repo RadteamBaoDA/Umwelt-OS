@@ -42,3 +42,10 @@ export function buildAppCsp(nonce: string, isDev: boolean): string {
     "frame-ancestors 'none'",
   ].join('; ');
 }
+
+/**
+ * Strict fallback CSP for `/api/*`: those paths are excluded from the proxy.ts nonce policy and are served by the FastAPI
+ * backend (rewrite), which sets no CSP itself except the media route (`default-src 'none'; sandbox`, same or stricter).
+ * API responses are never documents, so nothing may load, run or frame. `/_next/*` static chunks are not documents either; no header there.
+ */
+export const API_FALLBACK_CSP = "default-src 'none'; frame-ancestors 'none'; sandbox";

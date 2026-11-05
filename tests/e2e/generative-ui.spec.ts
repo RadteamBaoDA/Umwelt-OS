@@ -176,6 +176,7 @@ test.describe('render_sandboxed_ui', () => {
     expect(shellCsp).toContain("default-src 'none'");
     expect(shellCsp).toContain(`script-src 'unsafe-inline' ${new URL(baseURL!).origin}/vendor/genui/`);
     expect(shellCsp).toContain("connect-src 'none'");
+    expect(shellCsp).toContain('sandbox allow-scripts');
     expect(shell.headers()['x-frame-options']).toBeUndefined();
     // No host nonce reaches the frame document.
     const hostNonce = /'nonce-([^']+)'/.exec(hostCsp)?.[1];
@@ -243,5 +244,19 @@ test.describe('vendored library headers', () => {
     expect(headers['cache-control']).toContain('immutable');
     expect(headers['cache-control']).toContain('max-age=31536000');
     expect(headers['content-type']).toMatch(/javascript/);
+  });
+});
+
+test.describe('frame shell opened top-level (window.name injection)', () => {
+  test('a planted window.name never executes in the app origin', async ({ page, baseURL }) => {
+    // Attacker page: plant a script in window.name, then navigate the top-level tab to the shell.
+    await page.goto('about:blank');
+    await page.evaluate(() => { window.name = '<script>document.title="PWNED";window.__pwned=1;</script>'; });
+    await page.goto(`${baseURL}/genui-frame`);
+    await expect(page).not.toHaveTitle(/PWNED/);
+    expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+    // CSP `sandbox` gives the document an opaque origin, so storage access throws.
+    expect(await page.evaluate(() => window.origin)).toBe('null');
+    expect(await page.evaluate(() => { try { localStorage.length; return 'allowed'; } catch { return 'blocked'; } })).toBe('blocked');
   });
 });

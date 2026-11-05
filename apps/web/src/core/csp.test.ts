@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAppCsp, createCspNonce } from './csp';
+import { API_FALLBACK_CSP, buildAppCsp, createCspNonce } from './csp';
 
 describe('app CSP', () => {
   it('uses the nonce with strict-dynamic and no script unsafe-inline in production', () => {
@@ -22,5 +22,11 @@ describe('app CSP', () => {
     const a = createCspNonce();
     expect(a).not.toBe(createCspNonce());
     expect(a).toMatch(/^[A-Za-z0-9+/=]+$/);
+  });
+});
+
+describe('API fallback CSP', () => {
+  it('is fully restrictive and sandboxed', () => {
+    expect(API_FALLBACK_CSP).toBe("default-src 'none'; frame-ancestors 'none'; sandbox");
   });
 });
