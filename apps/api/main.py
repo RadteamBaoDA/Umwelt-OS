@@ -25,7 +25,7 @@ from core.metrics_http import MetricsMiddleware, metrics_enabled
 from core.model_gateway.pool import close_pinned_clients
 from core.modules import ModuleRegistry, ordered_router_specs, register_modules
 from core.publication import PublicationGateMiddleware
-from core.realtime.routes import MAX_STREAMS_PER_API_PROCESS
+from core.realtime.routes import MAX_STREAMS_PER_API_PROCESS, run_realtime_wakeup_listener
 from core.redis_client import create_api_redis
 from core.telemetry import install_log_redaction
 from core.tools import ToolRegistry
@@ -84,6 +84,7 @@ def _make_lifespan(redis: ArqRedis, engine: AsyncEngine) -> Callable[[FastAPI], 
         """
         configure_default_executor()
         metrics_tasks = _start_metrics_tasks(_app)
+        metrics_tasks.append(spawn_background(run_realtime_wakeup_listener(redis), "realtime-wakeup-listener"))
 
         async def wake_poller(job_name: str, defer_seconds: float = 1.0) -> None:
             """Enqueue an immediate run of a worker poller after an API commit (best-effort)."""

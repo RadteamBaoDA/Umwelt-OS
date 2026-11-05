@@ -70,7 +70,7 @@ services:
       # Keep API and worker disabled unless the explicit observability overlay is included.
       LANGFUSE_ENABLED: "false"
     healthcheck:
-      test: ["CMD", "arq", "--check", "apps.worker.main.WorkerSettings"]
+      test: ["CMD", "python", "-m", "core.worker_healthcheck", "bbd:worker:health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -105,7 +105,7 @@ services:
     environment:
       LANGFUSE_ENABLED: "false"
     healthcheck:
-      test: ["CMD", "arq", "--check", "apps.worker.main.CronWorkerSettings"]
+      test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:cron:health-check"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -138,7 +138,7 @@ services:
     environment:
       LANGFUSE_ENABLED: "false"
     healthcheck:
-      test: ["CMD", "arq", "--check", "apps.worker.main.ChatWorkerSettings"]
+      test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:chat:health-check"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -171,7 +171,7 @@ services:
     environment:
       LANGFUSE_ENABLED: "false"
     healthcheck:
-      test: ["CMD", "arq", "--check", "apps.worker.main.ModelWorkerSettings"]
+      test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:model:health-check"]
       interval: 30s
       timeout: 10s
       retries: 3

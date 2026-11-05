@@ -16,9 +16,17 @@ def test_collector_scheduler_flag_defaults_on_and_reads_env(monkeypatch) -> None
     assert Settings().collector_scheduler_enabled is False
 
 
+class _ComposeLoader(yaml.SafeLoader):
+    """SafeLoader that tolerates Compose merge tags (``!reset``/``!override``) by loading their plain value."""
+
+
+for _tag in ("!reset", "!override"):
+    _ComposeLoader.add_multi_constructor(_tag, lambda loader, _suffix, node: loader.construct_sequence(node))
+
+
 def test_compose_split_keeps_browser_and_n8n_separate() -> None:
-    browser = yaml.safe_load((ROOT / "docker-compose.browser.yml").read_text())
-    legacy = yaml.safe_load((ROOT / "docker-compose.connectors.yml").read_text())
+    browser = yaml.load((ROOT / "docker-compose.browser.yml").read_text(), Loader=_ComposeLoader)  # noqa: S506  # SafeLoader subclass
+    legacy = yaml.load((ROOT / "docker-compose.connectors.yml").read_text(), Loader=_ComposeLoader)  # noqa: S506  # SafeLoader subclass
     assert "browser" in browser["services"] and "n8n" not in browser["services"]
     assert {"connectors_internal", "browser_egress"} <= set(browser["networks"])
     assert legacy["include"] == ["docker-compose.browser.yml"]

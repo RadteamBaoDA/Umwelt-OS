@@ -22,12 +22,37 @@ from core.config import Settings
 from core.errors import DomainError
 from core.events.model import EventOutbox
 from core.events.registry import get_event_registry
+from core.heavy_work.slots import HEAVY_JOB_MAX_TRIES, MAX_OPERATION_SECONDS
 from core.worker_context import worker_session_factory
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import InternalJobScope
 
 DISPATCH_STALE_AFTER = timedelta(seconds=30)
+# Heavy-slot jobs retry on slot contention (>= ~435 s of minimum backoff over HEAVY_JOB_MAX_TRIES) and then hold the
+# slot up to MAX_OPERATION_SECONDS, all under the same claim. Re-claiming after 30 s would enqueue a duplicate job id
+# and void the original's claim check, so their reclaim window must outlast that worst case.
+HEAVY_DISPATCH_JOBS = frozenset({"process_uploaded_file", "process_graph_operation"})
+HEAVY_STALE_AFTER = timedelta(seconds=2.5 + 5 + 7.5 * (HEAVY_JOB_MAX_TRIES - 2) + MAX_OPERATION_SECONDS + 315)
 DISPATCH_SCAN_STATE = "ingestion_dispatch_scan_state"
+
+
+def stale_after_for(job_name: str) -> timedelta:
+    """Return how long a ``queued`` claim for ``job_name`` is trusted before the dispatcher may re-claim it."""
+    return HEAVY_STALE_AFTER if job_name in HEAVY_DISPATCH_JOBS else DISPATCH_STALE_AFTER
+
+
+def stale_queued_clause(now: datetime) -> Any:
+    """SQL predicate for ``queued`` rows whose claim is older than their own job's reclaim window.
+
+    Heavy-slot event types use ``HEAVY_STALE_AFTER``; all others keep ``DISPATCH_STALE_AFTER``. A row that was
+    never stamped (``dispatched_at`` NULL) is always reclaimable.
+    """
+    routes = get_event_registry().routes
+    heavy_types = sorted(name for name, route in routes.items() if route.job_name in HEAVY_DISPATCH_JOBS)
+    stale = or_(EventOutbox.dispatched_at.is_(None),
+                and_(EventOutbox.type.not_in(heavy_types), EventOutbox.dispatched_at < now - DISPATCH_STALE_AFTER),
+                and_(EventOutbox.type.in_(heavy_types), EventOutbox.dispatched_at < now - HEAVY_STALE_AFTER))
+    return and_(EventOutbox.status == "queued", stale)
 
 
 def valid_event_envelope(event: EventOutbox | Any, scope: InternalJobScope) -> bool:
@@ -121,8 +146,7 @@ async def _reserve_dispatch_page(
                 EventOutbox.id, EventOutbox.status, EventOutbox.dispatched_at, EventOutbox.created_at,
             ).where(EventOutbox.type.in_(list(get_event_registry().routes)), or_(
                 and_(EventOutbox.status == "pending", EventOutbox.next_attempt_at <= now),
-                and_(EventOutbox.status == "queued", or_(EventOutbox.dispatched_at.is_(None),
-                    EventOutbox.dispatched_at < now - DISPATCH_STALE_AFTER)),
+                stale_queued_clause(now),
             ))
             page = statement.where(EventOutbox.created_at <= ceiling)
             if cursor is not None:

@@ -1,0 +1,20 @@
+# Opt-in Langfuse export overlay. Include it explicitly (see docs/observability.md):
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+# The base file forces LANGFUSE_ENABLED=false; this overlay hands the value from .env back to every Python
+# process that makes model calls. TELEMETRY_EGRESS_APPROVED and the LANGFUSE_* credentials already reach them via env_file.
+services:
+  api:
+    environment:
+      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
+  worker:
+    environment:
+      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
+  cron-worker:
+    environment:
+      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
+  chat-worker:
+    environment:
+      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
+  model-worker:
+    environment:
+      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
