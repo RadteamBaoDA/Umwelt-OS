@@ -1,6 +1,6 @@
 # Umwelt-OS remediation — trạng thái (state)
 
-- Cập nhật: 2026-11-05
+- Cập nhật: 2026-11-05 (lần 2: đã push nhánh WIP + lưu patch trong `docs/wip/`)
 - Plan gốc: `docs/superpowers/plans/2026-11-04-code-quality-remediation-plan.md`
 - Đã merge: [PR #1](https://github.com/RadteamBaoDA/Umwelt-OS/pull/1) → `feature/fix-ui` (merge commit `cc5045b2`, head `186e8120` của `feature/fix-ui-quality`)
 - Dừng theo yêu cầu owner ("Stop toàn bộ") — goal đã clear.
@@ -19,13 +19,20 @@ Kết quả kiểm tra cuối (local, `186e8120`): pytest **6491 passed / 0 fail
 
 ## 2. Chưa hoàn thành
 
-### 2.1 Work package chưa merge
-| Mục | Trạng thái | Việc cần làm |
+### 2.1 Work package chưa merge (đã lưu để làm sau)
+| Mục | Trạng thái | Nơi lưu |
 |---|---|---|
-| **wp/boundaries** (plan §3.7: bỏ import vào nội bộ module khác, descriptor `dependencies` đúng thực tế, import-linter) | Đang implement dở (5 commit local), **chưa review** | Làm lại trên `feature/fix-ui` mới; ratchet `test_descriptor_dependencies` về 0; thêm `.importlinter` (CI đã có bước chạy khi file tồn tại) |
-| **wp/outbox-events** (chuyển outbox + dispatcher vào `core/events`, registry consumer qua descriptor, validate emitted/consumed events, replay CLI) | Đã Opus approve nhưng **không merge**: xung đột với event-driven wake (`notify_on_commit`) và dispatcher của worker-cron | Implement lại trên base mới, giữ `notify_on_commit` trong `publish_event` core |
+| **wp/boundaries** (plan §3.7: bỏ import vào nội bộ module khác, read projection có tài liệu, descriptor `dependencies` đúng thực tế, import-linter) | Đang implement dở, **chưa review**. Thử merge vào `feature/fix-ui` (2026-11-05): 8 file xung đột (giải quyết được) nhưng code còn vỡ ruff gate (hàng trăm E402 do khối re-export đặt trước import) ⇒ không merge để giữ `fix-ui` xanh | Nhánh remote `wp/boundaries` (`b7fcb69b`); patch `docs/wip/wp-boundaries.patch` (diff từ `a28b5da3`, 196 file, +1570/−508) |
+| **wp/outbox-events** (chuyển outbox + dispatcher vào `core/events`, registry consumer qua descriptor, validate emitted/consumed events, replay CLI) | Đã Opus approve nhưng **không merge**: xung đột sâu với event-driven wake (`notify_on_commit` trong `publish_event`) và dispatcher của worker-cron | Nhánh remote `wp/outbox-events` (`593eeb4a`); patch `docs/wip/wp-outbox-events.patch` (diff từ `a28b5da3`, 26 file, +1510/−527) |
 
-> Hai nhánh này **chỉ có trong container**, chưa push lên remote — container bị reset là mất. Nếu cần giữ, push `wp/boundaries`, `wp/outbox-events`.
+**Cách tiếp tục:**
+```bash
+git switch -c wp/boundaries-v2 origin/feature/fix-ui
+git merge origin/wp/boundaries   # hoặc: git apply --3way docs/wip/wp-boundaries.patch
+```
+- boundaries: giải quyết 8 xung đột (`Makefile`, `scripts/dev.ps1` giữ bản HEAD; `news/backfill_attribution.py` gộp import; các `public.py` lấy khối re-export), rồi sửa E402 (đưa khối re-export xuống sau import hoặc dùng `__getattr__` lazy), ratchet `tests/unit/core/test_descriptor_dependencies.py` về 0, thêm `.importlinter`, chạy `lint-imports`.
+- outbox-events: port lên base mới, giữ `notify_on_commit(session, "dispatch_pending_work")` và `index_pending_chunks` trong `publish_event` ở `core/events`, giữ `_valid_cleanup_envelope`/`_envelope_uuid_fields` của dispatcher hiện tại.
+- Cả hai cần Opus review lại + full suite + integration trước khi merge.
 
 ### 2.2 Kiểm thử chưa chạy / chưa đạt
 | Mục | Trạng thái |
@@ -56,10 +63,9 @@ Kết quả kiểm tra cuối (local, `186e8120`): pytest **6491 passed / 0 fail
 - Lớp `.ccr-docker/` (CA proxy + tiktoken cache để build Docker trong sandbox) là cấu hình cục bộ, không commit.
 
 ## 3. Thứ tự đề xuất khi tiếp tục
-1. Push `wp/boundaries`, `wp/outbox-events` để giữ lại (hoặc làm lại từ đầu trên `feature/fix-ui`).
-2. Hoàn thành outbox-events (port lên base mới) → boundaries + import-linter.
-3. Chạy integration đầy đủ + Playwright `rest`; điều tra triệt để lỗi `test_connector_backend_transition` khi chạy cả bộ.
-4. Chạy integration Wave 4b (MinIO, HNSW, bulk contracts).
-5. Chạy load test k6, ghi số liệu vào `docs/performance-report.md`.
-6. Xử lý các minor ở mục 2.3, rồi chấm lại scorecard (mục tiêu ≥ 9/10).
-7. Chạy `datasources` ở môi trường có internet.
+1. Hoàn thành outbox-events (port lên base mới) → boundaries + import-linter.
+2. Chạy integration đầy đủ + Playwright `rest`; điều tra triệt để lỗi `test_connector_backend_transition` khi chạy cả bộ.
+3. Chạy integration Wave 4b (MinIO, HNSW, bulk contracts).
+4. Chạy load test k6, ghi số liệu vào `docs/performance-report.md`.
+5. Xử lý các minor ở mục 2.3, rồi chấm lại scorecard (mục tiêu ≥ 9/10).
+6. Chạy `datasources` ở môi trường có internet.
