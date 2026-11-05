@@ -644,11 +644,9 @@ async def _verify_artifacts(
             raise McpTransportError("MCP stdio absolute argument is outside the reviewed manifest")
     if profile.runtime_kind != "native":
         try:
-            entry = Path(
+            entry = Path(  # noqa: ASYNC240  # one resolve() of a reviewed manifest path during startup validation
                 cast("str", profile.entry_script)
-            ).resolve(
-                strict=True
-            )  # non-native profiles always carry a script  # noqa: ASYNC240  # one resolve() of a reviewed manifest path during startup validation
+            ).resolve(strict=True)  # non-native profiles always carry a script
             entry.relative_to(plan.root)
         except (OSError, RuntimeError, ValueError) as exc:
             raise McpTransportError("MCP stdio entry script is unavailable") from exc

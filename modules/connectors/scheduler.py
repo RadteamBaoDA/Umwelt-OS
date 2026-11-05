@@ -375,8 +375,8 @@ async def _stale_reason(
         and row.backend_revision == request.backend_revision
         and await connectors.require_collection_fence(
             session,
-            source,
-            connectors.CollectionFence(  # type: ignore[arg-type]
+            source,  # type: ignore[arg-type]
+            connectors.CollectionFence(
                 source_generation=request.source_generation,
                 connector_revision=request.connector_revision,
                 backend_revision=request.backend_revision,

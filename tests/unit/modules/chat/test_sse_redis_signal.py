@@ -38,8 +38,10 @@ class FakePubSub:
         self.redis.subscribed.append(channel)
 
     async def get_message(
-        self, ignore_subscribe_messages: bool = False, timeout: float = 0.0
-    ) -> dict[str, Any] | None:  # noqa: ASYNC109  # mirrors redis PubSub API
+        self,
+        ignore_subscribe_messages: bool = False,
+        timeout: float = 0.0,  # noqa: ASYNC109  # mirrors redis PubSub API
+    ) -> dict[str, Any] | None:
         assert ignore_subscribe_messages is True
         if not self.queue and timeout:
             self.redis.waits.append(timeout)

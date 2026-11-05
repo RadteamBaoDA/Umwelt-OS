@@ -65,9 +65,9 @@ async def read_owner_export_privacy(session: AsyncSession, owner_id: int = 1):  
     )
 
 
-async def ensure_ai_config_unchanged(
+async def ensure_ai_config_unchanged(  # type: ignore[no-untyped-def]
     session_factory, settings, redis, scope, snapshot, role, mapping
-) -> None:  # type: ignore[no-untyped-def]
+) -> None:
     """Fresh-session recheck at ``before_send``: raise when settings/access drifted since the snapshot."""
     from modules.settings import public as settings_public
 

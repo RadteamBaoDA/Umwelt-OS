@@ -440,9 +440,9 @@ async def _authorize_scheduled_rebuild(
             raise GraphOperationError("graph_rebuild_dependencies_uncommitted")
 
 
-async def _claim(
+async def _claim(  # noqa: C901
     factory: async_sessionmaker[AsyncSession], adm: _Admission, operation_id: UUID
-) -> UUID | None:  # noqa: C901
+) -> UUID | None:
     """Claim partition then intent in one short transaction; expired uncertain writers never become new extraction."""
     async with factory() as session:
         await _admit(session, adm)
@@ -2073,11 +2073,11 @@ async def _fresh_fact_action(
     )
 
 
-async def _finish(
+async def _finish(  # noqa: C901, PLR0912, PLR0915
     factory: async_sessionmaker[AsyncSession],
     adm: _Admission,
     operation_id: UUID,
-    token: UUID,  # noqa: C901, PLR0912, PLR0915
+    token: UUID,
     status: str,
     error_code: str | None,
     *,

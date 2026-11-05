@@ -1194,9 +1194,9 @@ async def activate_source(
             access_fence=access_fence,
         )
     elif (
-        payload.secret_action == "replace"
+        payload.secret_action == "replace"  # noqa: S105  # label/URL/enum value, not a credential
         and row.desired_configuration.get("auth_method") != "http_header"
-    ):  # noqa: S105  # label/URL/enum value, not a credential
+    ):
         raise HTTPException(
             status_code=422, detail="This provider does not accept a replacement token"
         )

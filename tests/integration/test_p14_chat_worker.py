@@ -33,9 +33,13 @@ TOKENS = 300
 
 
 def _docker(*args: str, timeout: float = 120) -> str:
-    result = subprocess.run(
-        ["docker", *args], capture_output=True, text=True, check=True, timeout=timeout
-    )  # noqa: S603, S607  # test-only
+    result = subprocess.run(  # noqa: S603  # test-only
+        ["docker", *args],  # noqa: S607  # test-only
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=timeout,
+    )
     return result.stdout.strip()
 
 

@@ -95,8 +95,9 @@ async def test_scoped_query_runs_as_reader_and_returns_rows(
         async with AsyncSession(committed_engine) as session:
             for table in ("observations", "source_observations", "ingestion_batches"):
                 await session.execute(
-                    text(f"DELETE FROM {table} WHERE source_id = :id"), {"id": seed.source_id}
-                )  # noqa: S608
+                    text(f"DELETE FROM {table} WHERE source_id = :id"),  # noqa: S608
+                    {"id": seed.source_id},
+                )
             await session.commit()
 
 
@@ -231,8 +232,9 @@ async def test_guc_and_foreign_pid_fence_rows_do_not_widen_the_views(
             await session.execute(text("DELETE FROM chat_sql.query_fence"))
             for table in ("observations", "source_observations", "ingestion_batches"):
                 await session.execute(
-                    text(f"DELETE FROM {table} WHERE source_id = :id"), {"id": seed.source_id}
-                )  # noqa: S608
+                    text(f"DELETE FROM {table} WHERE source_id = :id"),  # noqa: S608
+                    {"id": seed.source_id},
+                )
             await session.commit()
 
 

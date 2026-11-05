@@ -67,8 +67,8 @@ async def erase_account_checkpoints_page(
             run.claim_generation += 1
         for name in present:
             await session.execute(
-                text(f"DELETE FROM {name} WHERE thread_id = :thread_id"),
-                {  # noqa: S608  # table names come from the pinned internal checkpoint table set; ids are bound
+                text(f"DELETE FROM {name} WHERE thread_id = :thread_id"),  # noqa: S608  # table names come from the pinned internal checkpoint table set; ids are bound
+                {
                     "thread_id": run.checkpoint_thread_id,
                 },
             )

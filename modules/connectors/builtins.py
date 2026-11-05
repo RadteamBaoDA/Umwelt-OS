@@ -285,9 +285,9 @@ def _snapshot(row: Any) -> _RowSnapshot | None:
     )
 
 
-async def _oldest_source(
+async def _oldest_source(  # type: ignore[no-untyped-def]
     session: AsyncSession, provider: str, *, scope: WorkspaceContext, gate: bool
-):  # type: ignore[no-untyped-def]
+):
     """Oldest non-archived Source ORM row for the provider, or None."""
     rows = await sources.list_provider_sources(
         session, frozenset({provider}), scope=scope, multi_workspace_enabled=gate

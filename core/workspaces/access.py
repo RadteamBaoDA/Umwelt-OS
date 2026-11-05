@@ -460,8 +460,11 @@ async def assert_resource_access(
     from core.workspaces.public import lock_resource_grants, read_resource_grants
 
     grants = await read_resource_grants(
-        session, scope=scope, kind=kind, resource_ids=(resource_id,)
-    )  # type: ignore[arg-type]
+        session,
+        scope=scope,
+        kind=kind,  # type: ignore[arg-type]
+        resource_ids=(resource_id,),
+    )
     if not grants or grants[0].resource_revision != expected_revision:
         raise HTTPException(status_code=404, detail="Resource not found")
     await lock_resource_grants(session, scope=scope, grants=grants)

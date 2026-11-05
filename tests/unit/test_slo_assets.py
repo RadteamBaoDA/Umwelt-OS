@@ -55,11 +55,11 @@ def test_load_test_runner_is_disposable_and_pinned() -> None:
 def test_k6_scripts_load_with_stubbed_runtime() -> None:
     """scripts/check-k6-scripts.mjs imports every k6 script against stubs and validates scenarios/thresholds."""
     result = subprocess.run(  # noqa: S603  # test-only subprocess with fixed arguments
-        ["node", str(ROOT / "scripts/check-k6-scripts.mjs")],
+        ["node", str(ROOT / "scripts/check-k6-scripts.mjs")],  # noqa: S607  # node from PATH is the test toolchain
         capture_output=True,
         text=True,
         timeout=60,
-        check=False,  # noqa: S607  # node from PATH is the test toolchain
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert "k6 scripts OK" in result.stdout

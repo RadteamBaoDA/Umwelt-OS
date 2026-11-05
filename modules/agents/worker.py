@@ -498,8 +498,9 @@ async def _delete_checkpoints(session: AsyncSession, thread_id: str) -> None:
     """Delete every pinned saver row for a terminal run before its private evidence can linger."""
     for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
         await session.execute(
-            text(f"DELETE FROM {table} WHERE thread_id = :thread_id"), {"thread_id": thread_id}
-        )  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
+            text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
+            {"thread_id": thread_id},
+        )
 
 
 async def _enqueue_generation(redis: ArqRedis, run_id: UUID, generation: int) -> bool:

@@ -375,9 +375,9 @@ def map_coingecko(
                 currency=quote_ccy,
                 symbol=coingecko_series_symbol(coin_id) if symbol_by_id else symbol,
                 quality="provider_reported",
-                timestamp_basis=basis,
+                timestamp_basis=basis,  # type: ignore[arg-type]
                 modified_at=modified,
-                provider_fields=fields,  # type: ignore[arg-type]
+                provider_fields=fields,
             )
         )
     return records

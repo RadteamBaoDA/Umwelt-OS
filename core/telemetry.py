@@ -48,8 +48,9 @@ class TraceContext(BaseModel):
 
 
 _trace: contextvars.ContextVar[TraceContext] = contextvars.ContextVar(
-    "trace_context", default=TraceContext()
-)  # noqa: B039  # TraceContext is an immutable dataclass
+    "trace_context",
+    default=TraceContext(),  # noqa: B039  # TraceContext is an immutable dataclass
+)
 
 
 def current_trace() -> TraceContext:
@@ -547,9 +548,9 @@ async def read_snapshots(redis: Any) -> list[dict[str, Any]]:
     return out
 
 
-def instrument_job(
+def instrument_job(  # noqa: UP047  # keep TypeVar/TypeAlias spelling; PEP 695 rewrite is style-only
     fn: F, *, run_id_kind: str | None = None, success_return_outcome: str = "ok"
-) -> F:  # noqa: UP047  # keep TypeVar/TypeAlias spelling; PEP 695 rewrite is style-only
+) -> F:
     """Wrap an ARQ job to record queue delay, duration and outcome by function name; behavior is unchanged.
 
     ``run_id_kind`` ("agent_run_id"/"ingestion_run_id") binds the first argument; domain jobs can

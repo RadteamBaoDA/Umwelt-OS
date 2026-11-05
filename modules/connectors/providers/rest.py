@@ -124,8 +124,8 @@ async def fetch_bounded(
     resolve: Resolver = resolve_public,
     transport: httpx.AsyncBaseTransport | None = None,
     max_bytes: int = MAX_PAGE_BYTES,
-    timeout: float = REQUEST_TIMEOUT_SECONDS,
-    json_body: bytes | None = None,  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
+    timeout: float = REQUEST_TIMEOUT_SECONDS,  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
+    json_body: bytes | None = None,
 ) -> Fetched:
     """GET (or, with ``json_body``, POST that JSON to) one URL through the pinned public destination with byte, status and time bounds.
 

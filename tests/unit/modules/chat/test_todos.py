@@ -174,9 +174,9 @@ def test_tool_runner_errors_are_data(args: Any, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_specs_and_prompt_are_opt_in() -> None:
-    names = lambda **kw: {
+    names = lambda **kw: {  # noqa: E731  # terse test stub
         s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, **kw)
-    }  # noqa: E731  # terse test stub
+    }
     assert not {TOOL_MANAGE_TODOS, TOOL_GET_TODOS} & names()
     assert {TOOL_MANAGE_TODOS, TOOL_GET_TODOS} <= names(include_todos=True)
     assert "manage_todos" not in build_generative_ui_system_prompt(locale="en-US")

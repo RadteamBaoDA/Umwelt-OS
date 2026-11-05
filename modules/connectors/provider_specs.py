@@ -290,12 +290,12 @@ def _unknown(kind: str = "provider", unit: str = "http_calls", cost: int = 1) ->
     """Build the conservative quota window for a provider whose official daily limit is unpublished."""
     return QuotaWindowPolicy(
         "official_unknown_calls_utc_day",
-        kind,
+        kind,  # type: ignore[arg-type]
         "day",
-        unit,
+        unit,  # type: ignore[arg-type]
         None,
         cost,
-        "official_unknown",  # type: ignore[arg-type]
+        "official_unknown",
     )
 
 
@@ -331,15 +331,15 @@ def _spec(
     return FreeProviderSpec(
         id=id_,
         hosts=hosts,
-        data_kind=kind,
+        data_kind=kind,  # type: ignore[arg-type]
         key_required=key,
-        default_interval_minutes=interval,  # type: ignore[arg-type]
+        default_interval_minutes=interval,
         terms_url=terms_url,
-        eligibility=eligibility,
+        eligibility=eligibility,  # type: ignore[arg-type]
         attribution=attribution,
         execution=execution,  # type: ignore[arg-type]
         label=label,
-        category=category,
+        category=category,  # type: ignore[arg-type]
         endpoints=endpoints,
         quota=quota,
         secret_location=secret,  # type: ignore[arg-type]
@@ -746,8 +746,8 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
             ),
         ),
         key=True,
-        secret="header",
-    ),  # noqa: S106  # label/URL/enum value, not a credential
+        secret="header",  # noqa: S106  # label/URL/enum value, not a credential
+    ),
     # Existing C1 adapter. 12/UTC-day is the conservative pilot cap until the provider reset
     # anchor is evidenced; the official 25/day fact is recorded separately.
     _spec(
@@ -775,9 +775,9 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
             ),
         ),
         key=True,
-        secret="query",
+        secret="query",  # noqa: S106  # label/URL/enum value, not a credential
         implemented=True,
-    ),  # noqa: S106  # label/URL/enum value, not a credential
+    ),
     # ---- Built-in RSS/Atom world-data feeds. Feed-only title/summary/link; the linked page is never fetched.
     # Eligibility follows each publisher's published terms; where a free-reuse statement is not explicit it is review.
     _spec(
@@ -1149,8 +1149,8 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
             ),
         ),
         key=True,
-        secret="query",
-    ),  # noqa: S106  # label/URL/enum value, not a credential
+        secret="query",  # noqa: S106  # label/URL/enum value, not a credential
+    ),
     _spec(
         "finnhub_news",
         "Finnhub market news",
@@ -1175,8 +1175,8 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
             ),
         ),
         key=True,
-        secret="header",
-    ),  # noqa: S106  # label/URL/enum value, not a credential
+        secret="header",  # noqa: S106  # label/URL/enum value, not a credential
+    ),
     _spec(
         "newsapi",
         "NewsAPI top headlines (US business)",
@@ -1201,8 +1201,8 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
             ),
         ),
         key=True,
-        secret="header",
-    ),  # noqa: S106  # label/URL/enum value, not a credential
+        secret="header",  # noqa: S106  # label/URL/enum value, not a credential
+    ),
     _spec(
         "openweathermap",
         "OpenWeather current conditions",
@@ -1227,8 +1227,8 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
             ),
         ),
         key=True,
-        secret="query",
-    ),  # noqa: S106  # label/URL/enum value, not a credential
+        secret="query",  # noqa: S106  # label/URL/enum value, not a credential
+    ),
     _spec(
         "openaq",
         "OpenAQ latest air quality",
@@ -1242,8 +1242,8 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
         ("/v3/locations/{location}/sensors",),
         (_day(48, kind="credential"), _unknown("credential")),
         key=True,
-        secret="header",
-    ),  # noqa: S106  # label/URL/enum value, not a credential
+        secret="header",  # noqa: S106  # label/URL/enum value, not a credential
+    ),
     _spec(
         "nasa_firms",
         "NASA FIRMS active fires (VIIRS, 24h)",
@@ -1257,8 +1257,8 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
         ("/api/country/csv/{MAP_KEY}/VIIRS_SNPP_NRT/{country}/1",),
         (_day(16, kind="credential"), _unknown("credential")),
         key=True,
-        secret="path",
-    ),  # noqa: S106  # label/URL/enum value, not a credential
+        secret="path",  # noqa: S106  # label/URL/enum value, not a credential
+    ),
 )
 
 # The built-in expansion (RSS, JSON, bespoke and keyed presets) was checked later than the original 21 presets;

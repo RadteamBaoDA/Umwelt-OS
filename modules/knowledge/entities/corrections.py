@@ -77,9 +77,9 @@ class CorrectionConflictError(ValueError):
         message: str,
         *,
         entity_ids: list[UUID] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
-        membership_ids: list[UUID] = [],
-        relationship_ids: list[UUID] = [],
-    ) -> None:  # noqa: B006  # never mutated; FastAPI/DTO copies the default
+        membership_ids: list[UUID] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
+        relationship_ids: list[UUID] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
+    ) -> None:
         """Build a conflict DTO containing the involved entity and support IDs."""
         super().__init__(message)
         self.conflict = EntityCorrectionConflict(
@@ -321,9 +321,9 @@ def _conflict(
     message: str,
     *,
     entity_ids: list[UUID] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
-    membership_ids: list[UUID] = [],
-    relationship_ids: list[UUID] = [],
-) -> CorrectionConflictError:  # noqa: B006  # never mutated; FastAPI/DTO copies the default
+    membership_ids: list[UUID] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
+    relationship_ids: list[UUID] = [],  # noqa: B006  # never mutated; FastAPI/DTO copies the default
+) -> CorrectionConflictError:
     """Build a structured correction conflict with the supplied affected IDs."""
     return CorrectionConflictError(
         code,

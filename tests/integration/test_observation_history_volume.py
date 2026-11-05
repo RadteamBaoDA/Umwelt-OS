@@ -137,6 +137,6 @@ async def test_history_window_scales_to_two_week_fifteen_minute_series(
             .all()
         )
         # The harness runs pytest -q, which hides captured stdout, so the plan goes to a temp file.
-        Path(tempfile.gettempdir(), "history-plan.txt").write_text(
+        Path(tempfile.gettempdir(), "history-plan.txt").write_text(  # noqa: ASYNC240  # test fixture file access
             "\n".join(plan), encoding="utf-8"
-        )  # noqa: ASYNC240  # test fixture file access
+        )

@@ -1652,8 +1652,8 @@ async def _schedule_transient_retry(
         delay = (
             max(0.5, exc.retry_after)
             if isinstance(exc, ConnectorRetryError) and exc.retry_after is not None
-            else random.uniform(0.5, min(60.0, 2.0**work.stage.attempts))
-        )  # noqa: S311  # retry backoff jitter, not a security value
+            else random.uniform(0.5, min(60.0, 2.0**work.stage.attempts))  # noqa: S311  # retry backoff jitter, not a security value
+        )
         work.stage.status = "retrying"
         work.stage.error_code = "transient_failure"
         work.stage.next_attempt_at = datetime.now(UTC) + timedelta(seconds=delay)

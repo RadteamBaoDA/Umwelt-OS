@@ -1710,8 +1710,12 @@ def _coverage(records: Sequence[IngestionRecord]) -> Literal["returned_snapshot"
 
 
 async def _get_body(
-    run: Run, request: Any, *, max_bytes: int, timeout: float | None = None
-) -> rest.Fetched:  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
+    run: Run,
+    request: Any,
+    *,
+    max_bytes: int,
+    timeout: float | None = None,  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
+) -> rest.Fetched:
     """One gated send (terms + quota + fences before the wire); no redirects, bounded bytes."""
     extra: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
     if getattr(request, "body", None) is not None:  # read-only POST search (VietnamWorks)

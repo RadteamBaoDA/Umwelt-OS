@@ -156,8 +156,8 @@ async def parse_file_bounded(
     """
     try:
         is_small_text = (
-            mime in _IN_PROCESS_TEXT_MIMES and path.stat().st_size <= _IN_PROCESS_MAX_BYTES
-        )  # noqa: ASYNC240  # single stat() of a local temp file; negligible blocking
+            mime in _IN_PROCESS_TEXT_MIMES and path.stat().st_size <= _IN_PROCESS_MAX_BYTES  # noqa: ASYNC240  # single stat() of a local temp file; negligible blocking
+        )
     except OSError:
         is_small_text = False
     if is_small_text:
