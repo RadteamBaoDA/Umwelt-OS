@@ -34,6 +34,7 @@ class SourceDescriptor(ModuleDescriptor):
     navigation: tuple[dict[str, str], ...] = ({"label": "Sources", "href": "/sources"},)
     settings_schema: dict[str, object] | None = None
     routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.sources.system_routes", 55),
         RouterSpec("modules.sources.routes", 60),
     )
     erasure_module: str | None = "modules.sources.erasure"

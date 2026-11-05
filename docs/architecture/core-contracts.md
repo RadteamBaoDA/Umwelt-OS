@@ -71,8 +71,8 @@ document and brief access projections (`documents`, `dashboard`) and translation
 Still imported (allow-listed in `.importlinter`, contracts `core-does-not-import-modules` and `layers`):
 
 * `core/modules.py`: imports each `modules.*.descriptor` by design (the composition root).
-* `core/system/routes.py`: `modules.sources.public` purge-operation reads and the `OperationRead` response model;
-  moving the route would reorder the recorded route table (`tests/fixtures/api_route_table.json`).
+* `modules/sources/system_routes.py` (Sources-owned, mounted under `/api/v1/system` at order 55): the purge-operation
+  read; core no longer imports `modules.sources`.
 
 See `docs/architecture/module-boundaries.md` for the module-to-module rules.
 

@@ -162,7 +162,7 @@ def _raw(update_id: int = 11) -> TelegramRawDelivery:
 @pytest.fixture(autouse=True)
 def _tuple_tolerant_json_counter(monkeypatch: pytest.MonkeyPatch) -> None:
     """Let ``GitHubSegmentProof`` validate its tuple ``raw_items`` (the same shim the adapter tests use)."""
-    from modules.connectors.github import schemas as github_schemas
+    from modules.ingestion import github_proof as github_schemas
 
     original = github_schemas._bounded_json_counts
     monkeypatch.setattr(

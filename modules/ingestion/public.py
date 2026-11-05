@@ -16,6 +16,14 @@ package and are re-exported here under their original names.
 from modules.ingestion.models import SourceIngestionState as SourceIngestionStateReadProjection
 
 # isort: split
+from modules.ingestion.github_proof import (
+    GITHUB_RESOURCES,
+    MAX_GITHUB_PAGE_BYTES,
+    GitHubBindingFence,
+    GitHubHintClaimProof,
+    GitHubResource,
+    GitHubSegmentProof,
+)
 from modules.ingestion.schemas import (
     ChatAttachmentRead,
     CollectionState,
@@ -177,6 +185,12 @@ from modules.ingestion._scope import (
 )
 
 __all__ = [
+    "GITHUB_RESOURCES",
+    "MAX_GITHUB_PAGE_BYTES",
+    "GitHubBindingFence",
+    "GitHubHintClaimProof",
+    "GitHubResource",
+    "GitHubSegmentProof",
     "COLLECTION_STATS_MAX_BYTES",
     "NORMALIZATION_VERSION",
     "OUTBOX_GENERAL_RETENTION_DAYS",
