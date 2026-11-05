@@ -123,7 +123,7 @@ async def run_realtime_wakeup_listener(redis: Any) -> None:
                     notify_realtime_wakeup(workspace_id)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001  # boundary: Redis outage degrades to SQL polling
+        except Exception:  # boundary: Redis outage degrades to SQL polling
             logging.getLogger(__name__).warning("realtime wake-up listener disconnected", exc_info=True)
         finally:
             with contextlib.suppress(Exception):

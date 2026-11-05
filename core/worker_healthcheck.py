@@ -7,6 +7,7 @@ Usage: ``python -m core.worker_healthcheck <health key>``; exit code 0 healthy, 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 
 from core.config import Settings
@@ -21,10 +22,8 @@ async def _alive(key: str) -> bool:
     except Exception:  # noqa: BLE001 - the probe's only output is its exit code
         return False
     finally:
-        try:
+        with contextlib.suppress(Exception):  # closing must never change the verdict
             await redis.aclose()
-        except Exception:  # noqa: BLE001 - closing must never change the verdict
-            pass
 
 
 def main(argv: list[str]) -> int:
