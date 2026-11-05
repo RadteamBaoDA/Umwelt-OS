@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet('setup', 'dev', 'stop', 'migrate', 'seed', 'reset-preview', 'reset', 'lint', 'typecheck', 'test', 'build')]
+  [ValidateSet('setup', 'dev', 'stop', 'migrate', 'seed', 'reset-preview', 'reset', 'lint', 'typecheck', 'test', 'load-test', 'build')]
   [string]$Task,
   [string]$PytestTarget,
   [string]$E2eTarget,
@@ -251,6 +251,50 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
         if ($null -eq $previousAllowPublic) { Remove-Item Env:E2E_ALLOW_PUBLIC_PROVIDERS -ErrorAction SilentlyContinue }
         else { $env:E2E_ALLOW_PUBLIC_PROVIDERS = $previousAllowPublic }
       }
+    }
+    'load-test' {
+      # Mirrors scripts/load-test.sh: disposable Compose project + fake model, k6 from the pinned image on its network.
+      $k6Image = if ($env:K6_IMAGE) { $env:K6_IMAGE } else { 'grafana/k6:0.57.0' }
+      $scenario = if ($env:LOAD_SCENARIO) { $env:LOAD_SCENARIO } else { 'all.js' }
+      if ($scenario -notmatch '^[a-z_]+\.js$' -or -not (Test-Path (Join-Path 'tests/load' $scenario))) { throw "Unknown LOAD_SCENARIO: $scenario" }
+      $outDir = if ($env:LOAD_OUT_DIR) { $env:LOAD_OUT_DIR } else { Join-Path 'test-results/load' ([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')) }
+      New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+      $outDir = (Resolve-Path $outDir).Path
+      $project = 'bbd-os-test-' + [guid]::NewGuid().ToString('N').Substring(0, 10)
+      $compose = @('compose', '-p', $project, '-f', 'docker-compose.yml', '-f', 'docker-compose.test.yml')
+      $saved = @{}
+      foreach ($name in 'WEB_PORT', 'API_TEST_PORT', 'TEST_POSTGRES_PORT', 'TEST_PUBLIC_ORIGIN') { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+      $ports = @()
+      while ($ports.Count -lt 3) { $candidate = Get-FreePort; if ($candidate -notin $ports) { $ports += $candidate } }
+      try {
+        $env:WEB_PORT = [string]$ports[0]
+        $env:API_TEST_PORT = [string]$ports[1]
+        $env:TEST_POSTGRES_PORT = [string]$ports[2]
+        $env:TEST_PUBLIC_ORIGIN = "http://localhost:$($ports[0])"
+        Invoke-Checked 'docker' ($compose + @('up', '-d', '--build'))
+        $network = (& docker network ls --filter "label=com.docker.compose.project=$project" --format '{{.Name}}' | Select-Object -First 1)
+        if (-not $network) { throw "Compose network for $project not found" }
+        $scale = { param($name, $default) if ([Environment]::GetEnvironmentVariable($name)) { [Environment]::GetEnvironmentVariable($name) } else { $default } }
+        $k6Args = @(
+          'run', '--rm', '--network', $network,
+          '-v', "$((Resolve-Path 'tests/load').Path):/scripts:ro", '-v', "${outDir}:/out",
+          '-e', 'API_URL=http://api:8000', '-e', "PUBLIC_ORIGIN=$($env:TEST_PUBLIC_ORIGIN)",
+          '-e', 'E2E_SETUP_TOKEN=bbd-os-disposable-test-token', '-e', 'FAKE_MODEL_URL=http://fake-model:8000/v1',
+          '-e', "LOAD_DURATION_SCALE=$(& $scale 'LOAD_DURATION_SCALE' '1')",
+          '-e', "SLO_LATENCY_SCALE=$(& $scale 'SLO_LATENCY_SCALE' '1')",
+          '-e', "SEED_DOCS=$(& $scale 'SEED_DOCS' '8')",
+          $k6Image, 'run', '--summary-export', '/out/summary.json', "/scripts/$scenario"
+        )
+        # k6 exits 99 when an SLO threshold is crossed; surface that after the stack logs are saved.
+        & docker @k6Args
+        $k6Status = $LASTEXITCODE
+      } finally {
+        & docker @($compose + @('ps', '-a')) 2>&1 | Out-File -Encoding utf8 (Join-Path $outDir 'compose-ps.txt')
+        & docker @($compose + @('logs', '--no-color', '--timestamps', '--tail', '2000')) 2>&1 | Out-File -Encoding utf8 (Join-Path $outDir 'compose-logs.txt')
+        & docker @($compose + @('down', '--volumes', '--remove-orphans'))
+        foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+      }
+      if ($k6Status -ne 0) { throw "k6 exited with $k6Status (99 = SLO threshold crossed). Results: $outDir" }
     }
     'build' {
       Invoke-Checked 'npm' @('run', 'build')

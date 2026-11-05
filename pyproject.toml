@@ -73,7 +73,10 @@ packages = ["core", "apps", "modules"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["integration: requires disposable PostgreSQL and Redis services"]
+markers = [
+    "integration: requires disposable PostgreSQL and Redis services",
+    "benchmark: opt-in micro-benchmarks, run with RUN_BENCHMARKS=1 (tests/benchmarks)",
+]
 
 [tool.ruff]
 line-length = 100
