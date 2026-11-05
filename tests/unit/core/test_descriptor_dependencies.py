@@ -62,7 +62,7 @@ def scan_imports() -> dict[str, set[str]]:
             # Nested lifecycle packages (modules/knowledge/documents) belong to their own id.
             if _owner_of("modules." + ".".join(source.relative_to(ROOT / "modules").parts[:-1]), prefixes) != module_id:
                 continue
-            for node in ast.walk(ast.parse(source.read_text())):
+            for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
                 names: list[str] = []
                 if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
                     names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]

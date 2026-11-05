@@ -111,7 +111,7 @@ def test_read_projections_are_never_written_through() -> None:
     offenders: list[str] = []
     checked = 0
     for path in (ROOT / "modules").rglob("*.py"):
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         aliases = _projection_aliases(tree)
         if not aliases:
             continue
