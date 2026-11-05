@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 
 from modules.knowledge.entities import public as ent
+from tests.unit.entity_patching import patch_entities
 
 NOW = datetime(2026, 5, 1, tzinfo=UTC)
 WS = uuid4()
@@ -64,9 +65,9 @@ def _session(rows: list[Any], children: dict[Any, tuple[list[Any], list[Any]]], 
 def _patched(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Neutralize admission, counts, source generations and field-support checks."""
     calls = SimpleNamespace(field_checks=[], generations=[])
-    monkeypatch.setattr(ent, "_admit", AsyncMock())
-    monkeypatch.setattr(ent, "_actor", lambda _scope: 7)
-    monkeypatch.setattr(ent, "_entity_export_count", AsyncMock(return_value=5))
+    patch_entities(monkeypatch, "_admit", AsyncMock())
+    patch_entities(monkeypatch, "_actor", lambda _scope: 7)
+    patch_entities(monkeypatch, "_entity_export_count", AsyncMock(return_value=5))
     monkeypatch.setattr(ent.sources, "export_eligible_source_ids", lambda **_k: [])
 
     async def generations(session: Any, ids: set[Any], **_k: Any) -> dict[Any, int]:
@@ -77,8 +78,8 @@ def _patched(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         calls.field_checks.append((entity.id, field))
         return field == "name"
 
-    monkeypatch.setattr(ent, "_entity_export_source_generations", generations)
-    monkeypatch.setattr(ent, "_entity_export_field_is_supported", supported)
+    patch_entities(monkeypatch, "_entity_export_source_generations", generations)
+    patch_entities(monkeypatch, "_entity_export_field_is_supported", supported)
     return calls
 
 

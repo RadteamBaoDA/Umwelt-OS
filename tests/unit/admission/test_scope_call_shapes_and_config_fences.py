@@ -20,6 +20,7 @@ from core.model_gateway.schemas import (
     RequestPolicy,
 )
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
+from tests.unit.entity_patching import patch_entities
 
 ROOT = Path(__file__).resolve().parents[3]
 OWNER = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=2)
@@ -159,9 +160,9 @@ async def test_entity_export_validation_builds_workspace_bound_source_fence(monk
         source_fences=[EntitySourceExportFence(source_id=uuid4(), generation=1)],
         alias_digest="0" * 64, evidence_digest="0" * 64,
     )
-    monkeypatch.setattr(entities_public, "_admit", AsyncMock())
-    monkeypatch.setattr(entities_public, "_actor", lambda scope: 1)
-    monkeypatch.setattr(entities_public, "_entity_export_count", AsyncMock(return_value=1))
+    patch_entities(monkeypatch, "_admit", AsyncMock())
+    patch_entities(monkeypatch, "_actor", lambda scope: 1)
+    patch_entities(monkeypatch, "_entity_export_count", AsyncMock(return_value=1))
     captured = {}
 
     async def eligible(session, fences, *, scope, multi_workspace_enabled):

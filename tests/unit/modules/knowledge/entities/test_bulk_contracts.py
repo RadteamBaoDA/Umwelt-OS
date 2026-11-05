@@ -9,6 +9,7 @@ from sqlalchemy.dialects import postgresql
 
 from modules.knowledge.entities import public as entities
 from modules.knowledge.relationships import public as relationships
+from tests.unit.entity_patching import patch_entities
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -74,7 +75,7 @@ def _no_admission(monkeypatch):
     async def admit(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(entities, "_admit", admit)
+    patch_entities(monkeypatch, "_admit", admit)
 
 
 @pytest.mark.asyncio

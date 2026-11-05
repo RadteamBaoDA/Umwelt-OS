@@ -51,6 +51,7 @@ from modules.knowledge.entities.schemas import (
     canonicalize_name,
 )
 from modules.knowledge.relationships.schemas import CorrectionRelationshipRef
+from tests.unit.entity_patching import patch_entity_attr
 
 
 def _make_sample_entity(
@@ -135,7 +136,7 @@ def _admitted() -> object:
     admitted = AsyncMock(return_value=MagicMock())
     with (
         patch("modules.knowledge.entities.corrections._admit", admitted),
-        patch("modules.knowledge.entities.public._admit", admitted),
+        patch_entity_attr("_admit", admitted),
         patch("modules.knowledge.relationships.public._admit", admitted),
     ):
         yield
@@ -461,7 +462,7 @@ class TestPreviewsAndExecution:
         )
 
         with (
-            patch("modules.knowledge.entities.public.resolve_canonical_entity_id", AsyncMock(return_value=ent_id)),
+            patch_entity_attr("resolve_canonical_entity_id", AsyncMock(return_value=ent_id)),
             patch("modules.knowledge.entities.corrections._discover", side_effect=_conflict("mock_err", "Mock error")),
         ):
             preview = await preview_split(session, ent_id, payload, **KW)
@@ -489,7 +490,7 @@ class TestPreviewsAndExecution:
         tgt_id = uuid4()
         payload = EntityMergeRequest(into_id=tgt_id, expected_revision=1, expected_into_revision=1, reason="test")
 
-        with patch("modules.knowledge.entities.public.resolve_canonical_entity_id", AsyncMock(side_effect=[uuid4(), tgt_id])):
+        with patch_entity_attr("resolve_canonical_entity_id", AsyncMock(side_effect=[uuid4(), tgt_id])):
             with pytest.raises(CorrectionConflictError) as exc_info:
                 await merge_entity(session, src_id, payload, **KW)
             assert exc_info.value.conflict.code == "redirected_entity"
@@ -518,7 +519,7 @@ class TestPreviewsAndExecution:
         )
 
         with (
-            patch("modules.knowledge.entities.public.resolve_canonical_entity_id", AsyncMock(side_effect=[src.id, tgt.id])),
+            patch_entity_attr("resolve_canonical_entity_id", AsyncMock(side_effect=[src.id, tgt.id])),
             patch("modules.knowledge.entities.corrections._locked_closure", AsyncMock(return_value=closure)),
             patch("modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()),
             patch("modules.knowledge.entities.corrections._temporal_correction", AsyncMock()),
@@ -562,7 +563,7 @@ class TestPreviewsAndExecution:
         )
 
         with (
-            patch("modules.knowledge.entities.public.resolve_canonical_entity_id", AsyncMock(return_value=src.id)),
+            patch_entity_attr("resolve_canonical_entity_id", AsyncMock(return_value=src.id)),
             patch("modules.knowledge.entities.corrections._locked_closure", AsyncMock(return_value=closure)),
             patch("modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()),
             patch("modules.knowledge.entities.corrections._temporal_correction", AsyncMock()),
@@ -607,12 +608,12 @@ class TestPreviewsAndExecution:
         )
 
         with (
-            patch("modules.knowledge.entities.public.resolve_canonical_entity_id", AsyncMock(return_value=ent.id)),
+            patch_entity_attr("resolve_canonical_entity_id", AsyncMock(return_value=ent.id)),
             patch("modules.knowledge.entities.corrections._locked_closure", AsyncMock(return_value=closure)),
             patch("modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()),
             patch("modules.knowledge.entities.corrections._temporal_correction", AsyncMock()),
             patch("modules.knowledge.entities.corrections.commit_with_replay", AsyncMock()),
-            patch("modules.knowledge.entities.public.record_owner_action", AsyncMock()),
+            patch_entity_attr("record_owner_action", AsyncMock()),
             patch("modules.knowledge.relationships.public.remove_entity_closure", AsyncMock(return_value=[])),
         ):
             result = await suppress_candidates(session, ent.id, payload, **KW)
