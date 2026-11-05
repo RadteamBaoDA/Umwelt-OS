@@ -118,12 +118,17 @@ class _FakeResult:
         """Return one deterministic row."""
         return [{"symbol": "BTC", "avg_val": 1}]
 
+    def scalar_one(self) -> int:
+        """Return the fake reader backend pid."""
+        return 4242
+
 
 class _RecordingConn:
     """Async connection double recording executed SQL, bind params and rollbacks; optionally failing the model query."""
 
-    def __init__(self, *, fail: bool = False) -> None:
-        """Start with empty logs."""
+    def __init__(self, *, fail: bool = False, events: list[str] | None = None) -> None:
+        """Start with empty logs; ``events`` (optional) is a log shared with the app-side double for ordering."""
+        self.events = events if events is not None else []
         self.statements: list[str] = []
         self.params: list[Any] = []
         self.rollbacks = 0
@@ -139,6 +144,7 @@ class _RecordingConn:
     async def execute(self, statement: Any, params: Any = None) -> _FakeResult:
         """Record the statement; raise on the bounded model query when ``fail`` is set."""
         self.statements.append(str(statement))
+        self.events.append("reader:" + str(statement))
         self.params.append(params)
         if self.fail and "_bounded_query" in str(statement):
             raise RuntimeError("division by zero")
@@ -146,6 +152,7 @@ class _RecordingConn:
 
     async def rollback(self) -> None:
         """Count rollbacks."""
+        self.events.append("reader:rollback")
         self.rollbacks += 1
 
 
@@ -161,40 +168,81 @@ class _FakeEngine:
         return self.conn
 
 
+class _FakeAppConn:
+    """App-role connection double: records fence statements and commit into the shared event log."""
+
+    def __init__(self, events: list[str]) -> None:
+        """Share the ordering log."""
+        self.events = events
+
+    async def __aenter__(self) -> _FakeAppConn:
+        """Begin the short app transaction."""
+        self.events.append("app:begin")
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        """Commit (or abort) the app transaction."""
+        self.events.append("app:commit")
+
+    async def execute(self, statement: Any, params: Any = None) -> None:
+        """Record the fence statement."""
+        self.events.append("app:" + str(statement).split()[0])
+        self.last_params = params
+
+
+class _FakeAppEngine:
+    """App engine double: ``begin()`` yields a recording connection."""
+
+    def __init__(self, events: list[str]) -> None:
+        """Share the ordering log."""
+        self.events = events
+
+    def begin(self) -> _FakeAppConn:
+        """Return a recording app connection."""
+        return _FakeAppConn(self.events)
+
+
 class _NoQuerySession:
     """Session double: the SQL path must not touch the app session for the model query."""
+
+    def __init__(self, bind: Any = None) -> None:
+        """Expose ``bind`` like ``AsyncSession.bind`` (the app engine used for the fence)."""
+        self.bind = bind
 
     async def execute(self, *_: Any, **__: Any) -> Any:
         """Fail loudly if the app connection is used."""
         raise AssertionError("model SQL must not run on the application session")
 
 
-def _patch_engine(monkeypatch: pytest.MonkeyPatch, conn: _RecordingConn) -> None:
-    """Route ``_reader_engine`` to the recording double."""
+def _patch_engine(monkeypatch: pytest.MonkeyPatch, conn: _RecordingConn) -> _FakeAppEngine:
+    """Route ``_reader_engine`` to the recording double; return an app engine sharing its event log."""
     monkeypatch.setattr(db_query, "_reader_engine", lambda: _FakeEngine(conn))
+    return _FakeAppEngine(conn.events)
 
 
-async def test_user_sql_runs_on_reader_connection_after_scope_and_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Scope settings and READ ONLY precede the model SQL; the transaction is rolled back; app session is untouched."""
+async def test_user_sql_runs_on_reader_after_app_fence_and_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Order: reader pid, app upsert+commit, READ ONLY, model SQL, reader rollback, app delete; no set_config."""
     conn = _RecordingConn()
-    _patch_engine(monkeypatch, conn)
+    app = _patch_engine(monkeypatch, conn)
     user_sql = "SELECT symbol, AVG(value) AS avg_val FROM scoped_observations GROUP BY symbol"
-    workspace_id, source_id = uuid4(), uuid4()
     out = await db_query._execute_sql_mode(
-        _NoQuerySession(),  # type: ignore[arg-type]
+        _NoQuerySession(app),  # type: ignore[arg-type]
         user_sql,
-        workspace_id=workspace_id,
-        allowed_source_ids=[source_id],
+        workspace_id=uuid4(),
+        allowed_source_ids=[uuid4()],
         limit=10,
         evidence_list=[],
     )
-    stmts = conn.statements
-    user_idx = next(i for i, s in enumerate(stmts) if user_sql in s)
-    ro_idx = next(i for i, s in enumerate(stmts) if s == "SET TRANSACTION READ ONLY")
-    cfg_idx = [i for i, s in enumerate(stmts) if "set_config" in s]
-    assert len(cfg_idx) == 2 and max(cfg_idx) < ro_idx < user_idx
-    assert {p["value"] for p in conn.params if p and "value" in p} == {str(workspace_id), str(source_id)}
-    assert not any("ROLE" in s for s in stmts)
+    ev = conn.events
+    assert not any("set_config" in e for e in ev)
+    steps = [
+        "reader:SELECT pg_backend_pid()", "app:begin", "app:INSERT", "app:commit",
+        "reader:SET TRANSACTION READ ONLY",
+    ]
+    assert ev[: len(steps)] == steps
+    assert user_sql in ev[len(steps) + 1]  # statement_timeout sits between READ ONLY and the model query
+    assert ev[-4:] == ["reader:rollback", "app:begin", "app:DELETE", "app:commit"]
+    assert not any("ROLE" in s for s in conn.statements)
     assert conn.rollbacks == 1
     assert '"avg_val": 1' in out and '"mode": "sql"' in out
 
@@ -218,12 +266,14 @@ async def test_invalid_sql_is_rejected_before_any_statement_executes(monkeypatch
 async def test_model_query_error_still_rolls_back_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
     """A query that raises still rolls the reader transaction back and surfaces the original error."""
     conn = _RecordingConn(fail=True)
-    _patch_engine(monkeypatch, conn)
+    app = _patch_engine(monkeypatch, conn)
     with pytest.raises(RuntimeError, match="division by zero"):
         await db_query._run_sql_as_reader(
-            "SELECT 1 / 0 FROM scoped_observations", workspace_id=uuid4(), allowed_source_ids=[uuid4()], max_rows=5,
+            "SELECT 1 / 0 FROM scoped_observations", app_engine=app,  # type: ignore[arg-type]
+            workspace_id=uuid4(), allowed_source_ids=[uuid4()], max_rows=5,
         )
     assert conn.rollbacks == 1
+    assert conn.events[-3:] == ["app:begin", "app:DELETE", "app:commit"]  # fence removed even on error
 
 
 async def test_sql_mode_fails_closed_without_reader_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -253,9 +303,10 @@ async def test_non_uuid_ids_fail_before_any_statement_executes(
 ) -> None:
     """Anything that is not a uuid.UUID instance (even a valid-looking str) is refused before any I/O."""
     conn = _RecordingConn()
-    _patch_engine(monkeypatch, conn)
+    app = _patch_engine(monkeypatch, conn)
     with pytest.raises(TypeError):
         await db_query._run_sql_as_reader(
-            "SELECT 1 FROM scoped_observations", workspace_id=workspace_id, allowed_source_ids=source_ids, max_rows=5,
+            "SELECT 1 FROM scoped_observations", app_engine=app,  # type: ignore[arg-type]
+            workspace_id=workspace_id, allowed_source_ids=source_ids, max_rows=5,
         )
     assert conn.statements == []
