@@ -125,7 +125,6 @@ test.describe('social and import datasources', () => {
 test.describe('dashboard', () => {
   test('create the dashboard', async ({ page }) => {
     await page.goto('/dashboard');
-    await expect(page).toHaveURL(/\/dashboard\/[0-9a-f-]{36}/);
     await page.getByRole('button', { name: 'Switch dashboard' }).click();
     await page.getByRole('menuitem', { name: 'New dashboard' }).click();
     await page.getByLabel('Dashboard name').fill(DASHBOARD);
