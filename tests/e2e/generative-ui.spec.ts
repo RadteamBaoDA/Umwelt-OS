@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { test as plainTest } from '@playwright/test';
 import { test, expect } from './fixtures';
 
 // Generative UI port (real browser, real built web app). The API is mocked with page.route (same pattern as
@@ -247,16 +248,26 @@ test.describe('vendored library headers', () => {
   });
 });
 
-test.describe('frame shell opened top-level (window.name injection)', () => {
-  test('a planted window.name never executes in the app origin', async ({ page, baseURL }) => {
-    // Attacker page: plant a script in window.name, then navigate the top-level tab to the shell.
-    await page.goto('about:blank');
-    await page.evaluate(() => { window.name = '<script>document.title="PWNED";window.__pwned=1;</script>'; });
-    await page.goto(`${baseURL}/genui-frame`);
-    await expect(page).not.toHaveTitle(/PWNED/);
-    expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
-    // CSP `sandbox` gives the document an opaque origin, so storage access throws.
-    expect(await page.evaluate(() => window.origin)).toBe('null');
-    expect(await page.evaluate(() => { try { localStorage.length; return 'allowed'; } catch { return 'blocked'; } })).toBe('blocked');
+// Plain Playwright test: the shell route needs no auth or backend, so skip the owner-session fixture.
+plainTest.describe('frame shell opened top-level (window.name injection)', () => {
+  plainTest('a planted window.name never executes in the app origin', async ({ page, context, baseURL }) => {
+    // Same-origin window.open keeps the name (a cross-site top-level navigation would clear it and make this test vacuous).
+    const payload = '<script>document.title="PWNED";window.__pwned=1;</script>';
+    // Record the name as the shell document starts, before the shell script clears it: proves the payload reached the shell.
+    await context.addInitScript(() => {
+      (window as unknown as { __nameAtStart?: string }).__nameAtStart = window.name;
+    });
+    await page.goto(`${baseURL}/vendor/genui/d3.mjs`);
+    const popupPromise = page.waitForEvent('popup');
+    await page.evaluate((html) => { window.open('/genui-frame', html); }, payload);
+    const popup = await popupPromise;
+    await popup.waitForLoadState('load');
+    expect(new URL(popup.url()).pathname).toBe('/genui-frame');
+    expect(await popup.evaluate(() => (window as unknown as { __nameAtStart?: string }).__nameAtStart)).toBe(payload);
+    await expect(popup).not.toHaveTitle(/PWNED/);
+    expect(await popup.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+    // CSP `sandbox` alone (independent of the shell script's top-level check) gives the document an opaque origin.
+    expect(await popup.evaluate(() => self.origin)).toBe('null');
+    expect(await popup.evaluate(() => { try { localStorage.length; return 'allowed'; } catch { return 'blocked'; } })).toBe('blocked');
   });
 });

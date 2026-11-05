@@ -20,7 +20,7 @@ export const FRAME_SHELL_PATH = '/genui-frame';
  */
 export function buildFrameShellCsp(origin: string): string {
   const vendor = origin ? ` ${origin}/vendor/genui/` : '';
-  return `default-src 'none'; script-src 'unsafe-inline'${vendor}; style-src 'unsafe-inline'${vendor}; img-src data: blob:; font-src data:; connect-src 'none'; frame-ancestors 'self'; sandbox allow-scripts`;
+  return `default-src 'none'; script-src 'unsafe-inline'${vendor}; style-src 'unsafe-inline'${vendor}; img-src data: blob:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts`;
 }
 
 /**

@@ -223,6 +223,18 @@ interface FullscreenDialogProps {
   onPreviewLoad: (event: React.SyntheticEvent<HTMLIFrameElement>) => void;
 }
 
+/**
+ * Cheap non-cryptographic string hash (djb2) used only as a React `key` so the preview iframe remounts when its HTML changes.
+ *
+ * @param value - String to hash.
+ * @returns Base-36 hash combined with the length (collisions only skip a remount of identical-length documents).
+ */
+function hashString(value: string): string {
+  let h = 5381;
+  for (let i = 0; i < value.length; i += 1) h = ((h << 5) + h + value.charCodeAt(i)) | 0;
+  return `${value.length}-${(h >>> 0).toString(36)}`;
+}
+
 /** Fullscreen preview dialog hosting a strictly sandboxed `<iframe sandbox="allow-scripts">`. */
 function FullscreenDialog(props: FullscreenDialogProps) {
   const { title, labels, open, onOpenChange, exportable, copied, onCopy, onDownload, previewHtml, frameNonce, onPreviewLoad } = props;
@@ -254,6 +266,8 @@ function FullscreenDialog(props: FullscreenDialogProps) {
         <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-background">
           {open && previewHtml && (
             <iframe
+              // The document travels in `name`, which does not navigate on change: remount when the HTML changes.
+              key={hashString(previewHtml)}
               title={`${title} fullscreen preview`}
               sandbox="allow-scripts"
               {...frameDocumentProps(previewHtml)}

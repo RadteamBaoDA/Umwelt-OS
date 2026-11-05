@@ -22,6 +22,7 @@ describe('app CSP', () => {
     const a = createCspNonce();
     expect(a).not.toBe(createCspNonce());
     expect(a).toMatch(/^[A-Za-z0-9+/=]+$/);
+    expect(atob(a)).toHaveLength(16);
   });
 });
 

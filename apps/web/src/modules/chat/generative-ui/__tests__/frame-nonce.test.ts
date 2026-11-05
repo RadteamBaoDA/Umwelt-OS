@@ -52,6 +52,7 @@ describe('frame document delivery and CSP', () => {
     expect(csp).toBe(`${meta}; frame-ancestors 'self'; sandbox allow-scripts`);
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("base-uri 'none'; form-action 'none'");
     expect(csp).toContain("script-src 'unsafe-inline' https://app.test/vendor/genui/");
   });
 });

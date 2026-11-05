@@ -14,6 +14,10 @@
 		-Server
 	}
 
+	# The widget frame shell is framed by the app itself (its CSP sets frame-ancestors 'self'), so drop the blanket DENY here.
+	@genuiframe path /genui-frame
+	header @genuiframe -X-Frame-Options
+
 	# Vendored generative-UI libraries are fetched cross-origin by opaque-origin sandbox iframes (CORS + CORP required).
 	@genui path /vendor/genui/*
 	header @genui {

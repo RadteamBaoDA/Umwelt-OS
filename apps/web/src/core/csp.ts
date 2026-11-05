@@ -7,12 +7,12 @@
 export const NONCE_HEADER = 'x-nonce';
 
 /**
- * Creates an unguessable per-request nonce (128 random bits, base64).
+ * Creates an unguessable per-request nonce (128 random bits from `crypto.getRandomValues`, base64).
  *
  * @returns A base64 string safe to embed in a CSP source expression and an HTML attribute.
  */
 export function createCspNonce(): string {
-  return btoa(crypto.randomUUID());
+  return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
 }
 
 /**

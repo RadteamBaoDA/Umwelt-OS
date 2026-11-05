@@ -35,7 +35,7 @@ export const PREVIEW_FRAME_CONTENT = '<head></head><body><div id="umwelt-sandbox
  */
 export function buildCspMetaTag(origin = typeof window !== 'undefined' ? window.location.origin : ''): string {
   const vendor = origin ? ` ${origin}/vendor/genui/` : '';
-  return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'${vendor}; style-src 'unsafe-inline'${vendor}; img-src data: blob:; font-src data:; connect-src 'none'">`;
+  return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'${vendor}; style-src 'unsafe-inline'${vendor}; img-src data: blob:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">`;
 }
 
 /** Default CSP tag for the current origin (evaluated at import time; prefer `buildCspMetaTag` at render time). */
