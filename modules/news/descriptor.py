@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from core.module_descriptor import ModuleDescriptor, RouterSpec
+from core.module_descriptor import EventConsumerSpec, ModuleDescriptor, RouterSpec
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,10 @@ class NewsDescriptor(ModuleDescriptor):
     )
     erasure_module: str | None = "modules.news.erasure"
     erasure_order: int = 140
+    event_consumers: tuple[EventConsumerSpec, ...] = (
+        EventConsumerSpec("news.document.ready", "process_news_document_ready",
+                          ("modules.ingestion", "modules.knowledge.documents"), "modules.ingestion.public:DocumentReadyEventHandler"),
+    )
 
 
 descriptor = NewsDescriptor()

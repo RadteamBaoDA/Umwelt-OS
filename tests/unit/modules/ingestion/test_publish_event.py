@@ -80,7 +80,7 @@ async def test_run_event_is_stamped_with_principal_and_source_and_added_pending(
 async def test_event_without_a_run_is_stamped_without_lineage_lookups():
     """Events that name no run only receive the principal identity."""
     session = Session()
-    await publish(session, event("ingestion.other", {"note": "x"}))
+    await publish(session, event("ingestion.stage.requested", {"note": "x"}))
     assert session.added[0].payload == {
         "note": "x", "workspace_id": str(WORKSPACE), "actor_user_id": 7, "membership_revision": 3,
     }
@@ -91,7 +91,7 @@ async def test_event_without_a_run_is_stamped_without_lineage_lookups():
 async def test_a_claimed_principal_field_must_match_exactly(claimed):
     """Pre-filled identity fields are never overwritten: a different value or type is a 404."""
     with pytest.raises(DomainError) as exc:
-        await publish(Session(), event("ingestion.other", dict(claimed)))
+        await publish(Session(), event("ingestion.stage.requested", dict(claimed)))
     assert (exc.value.status_code, exc.value.detail) == (404, "Event identity not found")
 
 
@@ -142,7 +142,7 @@ async def test_member_workspace_scope_still_uses_the_actor_identity():
     """A workspace member context is stamped with its own user id."""
     member = WorkspaceContext(workspace_id=WORKSPACE, user_id=9, membership_revision=3, role="owner")
     session = Session()
-    await publish(session, event("ingestion.other", {}), scope=member)
+    await publish(session, event("ingestion.stage.requested", {}), scope=member)
     assert session.added[0].actor_user_id == 9
 
 

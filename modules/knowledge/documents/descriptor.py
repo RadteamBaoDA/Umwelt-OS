@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from core.module_descriptor import ModuleDescriptor, RouterSpec
+from core.module_descriptor import EventConsumerSpec, ModuleDescriptor, RouterSpec
 
 
 @dataclass(frozen=True)
@@ -26,8 +26,10 @@ class DocumentDescriptor(ModuleDescriptor):
         "/api/v1/documents/dashboard-projections",
         "/api/v1/documents/{document_id}/versions/{version_number}/interaction",
     )
-    emitted_events: tuple[str, ...] = ("document.cleanup.requested",)
-    consumed_events: tuple[str, ...] = ("document.cleanup.requested",)
+    emitted_events: tuple[str, ...] = (
+        "document.cleanup.requested", "source.purge.progressed", "document.version.ready", "news.document.ready",
+    )
+    consumed_events: tuple[str, ...] = ("document.cleanup.requested", "document.version.ready")
     tools: tuple[str, ...] = ("knowledge.get_document", "knowledge.list_documents")
     navigation: tuple[dict[str, str], ...] = (
         {"label": "Documents", "href": "/knowledge/documents"},
@@ -38,6 +40,14 @@ class DocumentDescriptor(ModuleDescriptor):
     )
     erasure_module: str | None = "modules.knowledge.documents.erasure"
     erasure_order: int = 80
+    event_consumers: tuple[EventConsumerSpec, ...] = (
+        EventConsumerSpec("document.cleanup.requested", "process_document_cleanup",
+                          ("modules.knowledge.documents",),
+                          "modules.ingestion.public:DocumentCleanupEventHandler"),
+        EventConsumerSpec("document.version.ready", "process_document_ready",
+                          ("modules.ingestion", "modules.knowledge.documents"),
+                          "modules.ingestion.public:DocumentReadyEventHandler"),
+    )
 
 
 descriptor = DocumentDescriptor()
