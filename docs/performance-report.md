@@ -286,3 +286,26 @@ Same procedure, host and compose-override mechanism, with the CPU moved from pos
 k6 exit 99: only `ingest_queue_age_ms` crossed. Giving chat-worker 0.4 CPU fixed the chat TTFT tail, but the ingest path got worse (queue age p95 8.96 s to 15.3 s) because postgres at 0.3 CPU and the worker share the ingestion bursts.
 
 Peak `docker stats` samples (about 12 s interval, CPU % of one core): api 49 % of 0.5, chat-worker 39 % of 0.4 (near cap), worker 26 % of 0.5, cron-worker 11 % of 0.1, model-worker 11 % of 0.1, postgres 20 % of 0.3, redis 2 %. Peak memory: api 540 MiB, worker 282 MiB, chat-worker 272 MiB, model-worker 289 MiB, cron-worker 273 MiB, postgres 249 MiB, redis 5 MiB, all far below limits. Neither split satisfied all SLOs at 2 CPU; the ingest queue age SLO needs a split that keeps the worker/postgres share from the first run while keeping chat-worker at 0.4 (for example by trimming api below 0.5), which was not tried. Single run, so tail values carry noise.
+
+#### Cron-worker split (2026-11-06)
+
+Hypothesis: the ingest queue age was driven by the cron-worker (outbox dispatcher) sitting at its 0.1 CPU cap in both earlier runs. Same procedure and host, one full run (`LOAD_DURATION_SCALE=1`), only the CPU split changed: api 0.4 / 1.5 GiB, postgres 0.3 / 2.5 GiB, worker 0.4 / 1.5 GiB, chat-worker 0.4 / 1.0 GiB, model-worker 0.1 / 768 MiB, cron-worker 0.3 / 512 MiB, redis 0.1 / 256 MiB (total 2.0 CPU, about 8.0 GiB). k6 exit 0: every SLO threshold passed. Still not target-host evidence.
+
+| SLO | Metric | First split | Rebalanced split | Cron-worker split | Threshold | Result |
+|---|---|---|---|---|---|---|
+| SLO-1 | `http_req_failed` | 0.00 % | 0.00 % | 0.00 % (0 of 1119) | < 0.5 % | pass |
+| SLO-2a | dashboards p95 / p99 | 22.7 / 52.7 ms | 25.9 / 80.6 ms | 90.8 / 220.4 ms | 400 / 800 ms | pass |
+| SLO-2b | search p95 / p99 | 33.3 / 202.3 ms | 65.3 / 72.7 ms | 164.2 / 290.2 ms | 800 / 1500 ms | pass |
+| SLO-2c | documents p95 / p99 | 40.0 / 74.4 ms | 40.0 / 68.5 ms | 87.1 / 145.0 ms | 300 / 600 ms | pass |
+| SLO-3 | chat TTFT p95 / p99 | 3020 / 8120 ms | 638 / 1357 ms | 845 / 1430 ms | p95 < 2000, p99 < 4000 ms | pass |
+| SLO-3b | chat send p95 | 43 ms | 103 ms | 110 ms | 500 ms | pass |
+| SLO-4 | ingest lag p95 / p99 | 9130 / 17540 ms | 15316 / 34406 ms | 3459 / 3865 ms | 30 / 60 s | pass |
+| SLO-5 | SSE open p95 | 86.7 ms | 95.7 ms | 106.6 ms | 500 ms | pass |
+| SLO-6 | ingest queue age p95 | 8960 ms | 15290 ms | 2733 ms | 5 s | pass |
+| SLO-7 | checks | 100 % | 100 % | 100 % (1233) | > 99 % | pass |
+
+Peak `docker stats` samples (8 s sleep between samples, CPU % of one core): chat-worker 40 % of 0.4 (at cap), api 40 % of 0.4 (at cap), worker 39 % of 0.4 (at cap), cron-worker 31 % of 0.3 (at cap), model-worker 11 % of 0.1, postgres 7 % of 0.3, redis 1 % of 0.1. Peak memory all far below limits (api 540 MiB, cron-worker 290 MiB, chat-worker 276 MiB, postgres 261 MiB, model-worker 259 MiB, worker 248 MiB).
+
+Verdict: the hypothesis is supported. Raising cron-worker from 0.1 to 0.3 CPU (paid for by api and worker at 0.4) cut queue age p95 from 15.3 s to 2.7 s and ingest lag p95 from 15.3 s to 3.5 s, and this is the first 2 CPU split that passes every SLO. The cron-worker used its whole 0.3 allowance, so the dispatcher was CPU-starved, not postgres. This is a single run and the split was changed in several services at once (api and worker went 0.5 to 0.4), so the cron-worker share is the strongest explanation rather than isolated proof; dashboards and search latencies rose, still well within thresholds.
+
+Dispatcher cadence (from code): `dispatch_pending_work` runs as a cron safety net every 30 s (`apps/worker/main.py:474`, `CronSpec(dispatch_pending_work, 30, run_at_startup=True)`) and is also woken on commit of every published outbox event (`core/events/publisher.py:79`, `notify_on_commit(session, "dispatch_pending_work")`). Each pass reserves one page of at most 100 outbox identities (`core/events/dispatch.py:208` and `:219`, `.limit(100)`). Queue age therefore has no config-set floor beyond the commit wake; the 30 s period only bounds recovery when a wake is lost, so queue age under load is set by how fast the cron-worker can drain 100-row pages, which is CPU-bound.
