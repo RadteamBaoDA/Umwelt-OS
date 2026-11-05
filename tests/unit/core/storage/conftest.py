@@ -55,7 +55,7 @@ def memory_fence() -> MemoryFence:
 @pytest.fixture(scope="session")
 def moto_endpoint() -> Iterator[str]:
     """Run one in-process moto S3 server for the session and yield its endpoint URL."""
-    server = ThreadedMotoServer(port=0, verbose=False)
+    server = ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
     server.start()
     host, port = server.get_host_and_port()
     yield f"http://{host}:{port}"
