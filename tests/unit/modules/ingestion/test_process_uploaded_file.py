@@ -16,7 +16,7 @@ from modules.ingestion import worker
 from modules.ingestion.parsers import ParsedDocument
 
 RUN_ID, STAGE_ID, DOC_ID, SOURCE_ID = uuid4(), uuid4(), uuid4(), uuid4()
-NOW = datetime.now(UTC)
+# Leases are computed from the real clock at use time: the worker compares them against datetime.now(UTC).
 RAW = f"workspaces/{uuid4()}/documents/{DOC_ID}/a.pdf"
 
 
@@ -45,7 +45,7 @@ class Env:
             env.log.append(("lock", kw.get("expected") is not None))
             if kw.get("expected") is not None:
                 env.stage.status = "running"
-                env.stage.lease_expires_at = NOW + timedelta(minutes=1)
+                env.stage.lease_expires_at = datetime.now(UTC) + timedelta(minutes=1)
             return env.work
 
         async def enabled(*_a, **_k):
@@ -138,7 +138,7 @@ async def test_claim_phase_early_exits(monkeypatch):
     await env.run_event()
     assert env.log == [("lock", False)]
     env = Env(monkeypatch, stage_status="running")
-    env.stage.lease_expires_at = NOW + timedelta(minutes=1)
+    env.stage.lease_expires_at = datetime.now(UTC) + timedelta(minutes=1)
     await env.run_event()
     assert env.log == [("lock", False)]
     env = Env(monkeypatch, extraction=False)

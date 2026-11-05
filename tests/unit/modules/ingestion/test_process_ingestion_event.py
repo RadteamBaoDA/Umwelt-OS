@@ -17,7 +17,7 @@ from modules.ingestion import worker
 
 RUN_ID = uuid4()
 STAGE_ID = uuid4()
-NOW = datetime.now(UTC)
+# Leases are computed from the real clock at use time: the worker compares them against datetime.now(UTC).
 
 
 class Env:
@@ -33,7 +33,7 @@ class Env:
         )
         self.run = SimpleNamespace(id=RUN_ID, status="queued")
         self.event = SimpleNamespace(status="pending", next_attempt_at=None)
-        expires = NOW + timedelta(minutes=5) if lease == "future" else NOW - timedelta(seconds=1)
+        expires = datetime.now(UTC) + timedelta(minutes=5) if lease == "future" else datetime.now(UTC) - timedelta(seconds=1)
         self.state = SimpleNamespace(lease_run_id=RUN_ID, lease_expires_at=expires)
         self.work = SimpleNamespace(
             scope=InternalJobScope(workspace_id=uuid4(), actor_user_id=7, membership_revision=3), access_fence="fence", source=SimpleNamespace(id=uuid4(), generation=1, status="active"),
@@ -134,7 +134,7 @@ async def test_missing_observations_fail_the_stage_after_rollback(monkeypatch):
         env.log.append(("lock", kw.get("expected") is not None))
         if kw.get("expected") is not None:
             env.stage.status = "running"
-            env.stage.lease_expires_at = NOW + timedelta(minutes=1)
+            env.stage.lease_expires_at = datetime.now(UTC) + timedelta(minutes=1)
         return env.work
 
     monkeypatch.setattr(worker, "_lock_worker_event", lock)
@@ -154,7 +154,7 @@ async def test_claim_phase_early_exits(monkeypatch):
     assert env.log == [("lock", False)]
 
     env = Env(monkeypatch, stage_status="running")
-    env.stage.lease_expires_at = NOW + timedelta(minutes=1)
+    env.stage.lease_expires_at = datetime.now(UTC) + timedelta(minutes=1)
     await env.run_event()
     assert env.log == [("lock", False)]
 
@@ -162,7 +162,7 @@ async def test_claim_phase_early_exits(monkeypatch):
     await env.run_event()
     assert env.log == [("lock", False), "rollback", ("fail", "retry_exhausted")]
 
-    for state in (None, SimpleNamespace(lease_run_id=uuid4(), lease_expires_at=NOW + timedelta(minutes=1)),
+    for state in (None, SimpleNamespace(lease_run_id=uuid4(), lease_expires_at=datetime.now(UTC) + timedelta(minutes=1)),
                   SimpleNamespace(lease_run_id=RUN_ID, lease_expires_at=None)):
         env = Env(monkeypatch)
         env.work.state = state

@@ -104,7 +104,9 @@ async def test_changed_native_param_resets_cursor_to_now_minus_window(monkeypatc
     await collection._run_gdelt(run)
     reset = datetime.fromisoformat(accepted[0]["cursor_after"])
     assert before - timedelta(hours=24, minutes=1) <= reset <= datetime.now(UTC) - timedelta(hours=23, minutes=59)
-    assert "startdatetime=" in urls[0] and reset.strftime("%Y%m%d") in urls[0]
+    # The request window starts 10 minutes before the cursor (clock skew), so compare the exact stamp:
+    # comparing only the date failed between 00:00 and 00:10 UTC when the skew crossed midnight.
+    assert "startdatetime=" in urls[0] and (reset - timedelta(minutes=10)).strftime("%Y%m%d%H%M%S") in urls[0]
     assert run.extras["native_fp"] == po.native_fingerprint("gdelt_economy", {"gdelt_query": "oil"})
 
 

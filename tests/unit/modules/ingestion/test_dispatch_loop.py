@@ -232,7 +232,7 @@ async def test_claim_skips_and_fails_per_rule(monkeypatch):
     assert event.status == "failed"
 
     event = outbox()
-    live = SimpleNamespace(status="running", lease_expires_at=NOW + timedelta(minutes=1))
+    live = SimpleNamespace(status="running", lease_expires_at=datetime.now(UTC) + timedelta(minutes=10))
     session = Session(event, stage=live)  # an in-flight worker keeps its original timestamp
     factory, _ = claim_env(monkeypatch, session)
     assert not await dispatcher._claim_for_dispatch(factory, dispatcher._DispatchClaim(), uuid4(), "pending", None,
