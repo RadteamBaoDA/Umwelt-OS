@@ -30,10 +30,12 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run ruff check core apps modules tests infrastructure/postgres/migrations scripts/check_function_length.py
+      - run: uv run ruff check core apps modules tests infrastructure/postgres/migrations scripts/check_function_length.py scripts/check_file_size.py
       - run: uv run mypy core apps modules
       - name: Function length gate (max 100 lines)
         run: uv run python scripts/check_function_length.py
+      - name: File size ratchet (limit 1500 lines)
+        run: uv run python scripts/check_file_size.py
       - name: GenUI parity
         run: uv run python scripts/check_genui_parity.py
       - name: Import contracts (when configured)
