@@ -15,6 +15,7 @@ from modules.chat import retrieval, worker
 from modules.chat.schemas import AnswerContext
 from modules.knowledge.documents import _chat_evidence
 from modules.sources import public as sources_public
+from tests.unit.modules.chat._worker_patch import patch_worker
 from tests.unit.typing_regressions.test_none_handling_regressions import _evidence
 
 SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
@@ -33,10 +34,10 @@ def _ctx(interval: float | None = 2.0) -> Any:
 async def _flush_fence(
     monkeypatch: pytest.MonkeyPatch, c: Any, revalidate: AsyncMock,
 ) -> worker._FenceOutcome:
-    monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, SimpleNamespace(status="streaming"))))
-    monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(return_value=False))
-    monkeypatch.setattr(worker, "_privacy_cancel_locked", AsyncMock())
-    monkeypatch.setattr(worker, "revalidate_context_fence", revalidate)
+    patch_worker(monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, SimpleNamespace(status="streaming"))))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=False))
+    patch_worker(monkeypatch, "_privacy_cancel_locked", AsyncMock())
+    patch_worker(monkeypatch, "revalidate_context_fence", revalidate)
     session = SimpleNamespace(commit=AsyncMock())
     outcome, _run = await worker._fence_live_run(session, c, check_evidence=True, budgeted=True)  # type: ignore[arg-type]
     return outcome
@@ -81,9 +82,9 @@ async def test_budget_zero_or_missing_setting_always_runs_the_full_revalidation(
 async def test_non_flush_fences_are_never_lightweight(monkeypatch: pytest.MonkeyPatch) -> None:
     c = _ctx(2.0)
     revalidate = AsyncMock(return_value=(True, []))
-    monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, SimpleNamespace(status="streaming"))))
-    monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(return_value=False))
-    monkeypatch.setattr(worker, "revalidate_context_fence", revalidate)
+    patch_worker(monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, SimpleNamespace(status="streaming"))))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=False))
+    patch_worker(monkeypatch, "revalidate_context_fence", revalidate)
     c.last_full_revalidation = asyncio.get_running_loop().time()
     await worker._fence_live_run(SimpleNamespace(commit=AsyncMock()), c, check_evidence=True)  # type: ignore[arg-type]
     assert revalidate.await_args.kwargs["lightweight"] is False

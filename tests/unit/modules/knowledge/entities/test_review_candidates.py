@@ -14,6 +14,7 @@ import pytest
 
 import modules.knowledge.documents.public as documents_public
 from modules.knowledge.entities import public as ent
+from tests.unit.entity_patching import patch_entities
 
 NOW = datetime(2026, 5, 1, tzinfo=UTC)
 WS = uuid4()
@@ -62,7 +63,7 @@ def _fence() -> Any:
 def harness(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Patch admission, version fences, evidence reads and entity refs; expose the session builder."""
     state = SimpleNamespace(endpoint_rows=[], refs=[], fences={VERSION: _fence()})
-    monkeypatch.setattr(ent, "_admit", AsyncMock())
+    patch_entities(monkeypatch, "_admit", AsyncMock())
 
     async def fences(session: Any, ids: list[Any], **_k: Any) -> dict[Any, Any]:
         return state.fences
@@ -77,7 +78,7 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
 
     monkeypatch.setattr(documents_public, "review_version_fences", fences)
     monkeypatch.setattr(documents_public, "read_evidence_refs", evidence)
-    monkeypatch.setattr(ent, "get_entity_refs", entity_refs)
+    patch_entities(monkeypatch, "get_entity_refs", entity_refs)
 
     def make_session(rows: list[Any]) -> Any:
         async def execute(_statement: Any) -> Any:

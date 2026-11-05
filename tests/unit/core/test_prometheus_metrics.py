@@ -319,15 +319,21 @@ async def test_outbox_sampler_sets_backlog_and_lag() -> None:
         async def __aexit__(self, *_exc: object) -> None:
             """Exit."""
 
-        async def execute(self, _statement: object) -> _Result:
+        async def execute(self, _statement: object, _params: object = None) -> _Result:
             """Return the canned row."""
             return _Result(self.row)
 
-    row = SimpleNamespace(pending=7, oldest=datetime.now(UTC) - timedelta(seconds=90))
+    row = SimpleNamespace(
+        pending=7, oldest=datetime.now(UTC) - timedelta(seconds=90), rows_total=1234, backlog=5)
     await sample_outbox(lambda: _Session(row))  # type: ignore[arg-type]
+    assert _sample("umwelt_outbox_rows_total") == 1234
+    assert _sample("umwelt_outbox_purge_backlog") == 5
     assert _sample("umwelt_outbox_pending_count") == 7
     assert _sample("umwelt_outbox_oldest_pending_age_seconds") == pytest.approx(90, abs=2)
-    await sample_outbox(lambda: _Session(SimpleNamespace(pending=0, oldest=None)))  # type: ignore[arg-type]
+    await sample_outbox(lambda: _Session(
+        SimpleNamespace(pending=0, oldest=None, rows_total=-1, backlog=None)))  # type: ignore[arg-type]
+    assert _sample("umwelt_outbox_rows_total") == 0  # never-analyzed table reports reltuples -1
+    assert _sample("umwelt_outbox_purge_backlog") == 0
     assert _sample("umwelt_outbox_pending_count") == 0
     assert _sample("umwelt_outbox_oldest_pending_age_seconds") == 0
 

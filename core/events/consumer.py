@@ -12,11 +12,14 @@ Delivery contract (unchanged by the move to ``core.events``):
   to the workspace). Consumers must therefore be commutative or fenced: compare ``Source.generation`` /
   document version numbers / ``occurred_at`` against durable state and ignore stale effects, never assume a
   predecessor event was handled.
-* **Idempotency.** There is no dedicated processed-events table (adding one needs a migration). The existing
-  ``event_outbox.status`` is the processed marker: workers acknowledge with ``mark_event_delivered`` inside
-  the transaction that applies the effect, so ``delivered`` means "effect committed". ``already_delivered``
-  below is the guard a consumer calls before applying work; effects must still be individually idempotent
-  because the acknowledgement and the effect are only atomic when the consumer commits them together.
+* **Idempotency.** There is deliberately no processed-events table. ``core/events/registry.py`` rejects more
+  than one consumer per event type, so ``event_outbox.status`` plus the exact ``dispatched_at`` claim fence
+  *is* the per-consumer processed marker. Each consumer writes its ack (``mark_event_delivered``) in the
+  effect's own transaction under ``FOR UPDATE``, so ``delivered`` means "effect committed". A stale re-claim
+  gets a new ``dispatched_at``, so late jobs from older claims are rejected by the fence; replay re-arms an
+  event by resetting ``dispatched_at``. A dedicated table becomes necessary only if fan-out (more than one
+  consumer per event type) is ever allowed. Effects must still be individually idempotent.
+  ``already_delivered`` below is not used by production code; it is kept as a documented read-only guard.
 """
 
 from typing import Any

@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.connectors import provisioning
+from modules.connectors.provisioning import _activation, _workflow_steps
 
 SOURCE_ID = uuid4()
 WORKSPACE_ID = uuid4()
@@ -63,7 +64,7 @@ def test_workflow_operation_retirement_branches() -> None:
     assert dispatched.error_code == "workflow_operation_pending"
 
     idle_enabled = _row(workflow_id="w1")
-    with patch.object(provisioning, "_new_deactivation", return_value={"kind": "deactivate"}):
+    with patch.object(_activation, "_new_deactivation", return_value={"kind": "deactivate"}):
         provisioning._retire_workflow_operation_for_saved_configuration(
             idle_enabled, prior_enabled=True, source_generation=2, scope=SCOPE, access_fence=FENCE)
     assert idle_enabled.workflow_operation == {"kind": "deactivate"} and idle_enabled.error_code == "deactivation_pending"
@@ -121,7 +122,7 @@ def test_acknowledgement_matching_rules() -> None:
     original = dict(operation)
 
     def matches(kind: str, workflow_id: str | None, **step_over: object) -> bool:
-        with patch.object(provisioning, "_retained_operation_matches", return_value=True):
+        with patch.object(_workflow_steps, "_retained_operation_matches", return_value=True):
             return provisioning._acknowledgement_matches(
                 row, {**operation, "workflow_id": "w1"}, _step(kind, **step_over), original,  # type: ignore[arg-type]
                 source_id=SOURCE_ID, operation_id=__import__("uuid").UUID(operation["id"]), step_id="s1",

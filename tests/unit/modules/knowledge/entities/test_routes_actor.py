@@ -9,6 +9,7 @@ import pytest
 
 from core.workspaces.schemas import WorkspaceContext
 from modules.knowledge.entities import routes
+from tests.unit.entity_patching import patch_entity_attr
 
 SCOPE = WorkspaceContext(user_id=7, workspace_id=uuid4(), role="owner", membership_revision=1)
 
@@ -38,7 +39,7 @@ async def test_review_service_rejects_foreign_actor_before_any_read_or_write(fn:
     from modules.knowledge.entities import public
 
     session = AsyncMock()
-    with patch.object(public, "_admit", AsyncMock(return_value=MagicMock())), pytest.raises(ForbiddenError) as err:
+    with patch_entity_attr("_admit", AsyncMock(return_value=MagicMock())), pytest.raises(ForbiddenError) as err:
         await getattr(public, fn)(
             session, uuid4(), MagicMock(), scope=SCOPE, multi_workspace_enabled=False, actor_id=999,
         )

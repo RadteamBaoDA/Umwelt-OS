@@ -27,12 +27,12 @@ LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 
-Use the correct regional Langfuse host or the HTTPS origin of the owner-selected self-hosted service. Credentials are passed only to API and worker containers and are never sent to the browser. The exporter requires an HTTPS origin without userinfo, path, query, or fragment, does not follow redirects, and does not use environment proxy variables. The owner must explicitly approve the destination and protect `.env`; do not put keys in Compose files, command arguments, screenshots, or logs.
+Use the correct regional Langfuse host or the HTTPS origin of the owner-selected self-hosted service. Credentials are passed only to the API and the four worker containers and are never sent to the browser. The exporter requires an HTTPS origin without userinfo, path, query, or fragment, does not follow redirects, and does not use environment proxy variables. The owner must explicitly approve the destination and protect `.env`; do not put keys in Compose files, command arguments, screenshots, or logs.
 
 Start the optional profile by including the overlay on the normal Compose command, for example:
 
 ```powershell
-docker compose -f docker-compose.yml -f infrastructure/observability/compose.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
 ```
 
 To disable export and return to the base deployment, recreate the services without the overlay:
@@ -42,7 +42,7 @@ docker compose down
 docker compose -f docker-compose.yml up -d
 ```
 
-The base `api` and `worker` then force the exporter off even if `.env` still contains enabled flags and keys. No Langfuse containers, local database, ClickHouse, or object store are added by this profile. Incomplete settings leave export disabled without affecting startup. The application does not probe the remote endpoint at startup, and an enabled flag does not prove that spans were received.
+The base `api`, `worker`, `cron-worker`, `chat-worker` and `model-worker` then force the exporter off even if `.env` still contains enabled flags and keys. No Langfuse containers, local database, ClickHouse, or object store are added by this profile. Incomplete settings leave export disabled without affecting startup. The application does not probe the remote endpoint at startup, and an enabled flag does not prove that spans were received.
 
 The exporter uses Langfuse's current OpenTelemetry HTTP/JSON endpoint (`POST /api/public/otel/v1/traces`) with Basic authentication and ingestion version 4. It does not use the legacy v3 batch-ingestion API. See [Langfuse OpenTelemetry integration](https://langfuse.com/integrations/native/opentelemetry) and the [Langfuse API reference](https://api.reference.langfuse.com/); the v3 ingestion endpoint is deprecated and scheduled to stop accepting trace events on Langfuse Cloud on 2026-11-16. The application does not expose remote delivery state in its health or metrics APIs, so absent spans mean delivery is unknown until checked in Langfuse.
 
@@ -125,6 +125,8 @@ Labels are bounded: route templates (never raw paths or ids), fixed job/queue na
 | `umwelt_arq_queue_oldest_job_age_seconds` | gauge | `queue` | api | Age of the oldest *due* job (deferred jobs excluded). |
 | `umwelt_outbox_pending_count` | gauge | none | api | `event_outbox` rows in `pending`/`queued`. |
 | `umwelt_outbox_oldest_pending_age_seconds` | gauge | none | api | Outbox lag. |
+| `umwelt_outbox_rows_total` | gauge | none | api | Estimated `event_outbox` rows (`pg_class.reltuples`, not `count(*)`). |
+| `umwelt_outbox_purge_backlog` | gauge | none | api | `delivered`/`failed` rows already past retention (capped at 100k per status); 0 when the hourly purge keeps up. |
 | `umwelt_cron_job_duration_seconds` | histogram | `job` | cron-worker, chat-worker | Scheduled-job run time (scheduled ticks, wake-ups and catch-up runs, recorded once per lease-guarded run by `core.cron.record_cron_run`; lease-held skips are not recorded). |
 | `umwelt_cron_job_last_success_timestamp_seconds` | gauge | `job` | cron-worker, chat-worker | Unix time of last success. |
 | `umwelt_cron_job_failures_total` | counter | `job` | cron-worker, chat-worker | Failed runs. |
@@ -176,6 +178,10 @@ The oldest due job has waited over 5 minutes: workers are stuck or down even if 
 ### UmweltOutboxLagHigh
 
 Undelivered outbox events are older than 5 minutes: the `dispatch_pending_work` cron is not running or is failing. Check `UmweltCronJobFailing` / `UmweltCronJobStale` for `dispatch_pending_work`, the queue age alert, and the database. Events are durable and at-least-once; recovery after the worker returns is automatic.
+
+### UmweltOutboxPurgeBacklog
+
+Terminal `event_outbox` rows past their retention cutoff stayed above zero for 6 hours. The hourly purge deletes at most 1000 rows per run (24k/day), so either `purge_delivered_outbox` is failing (check `UmweltCronJobFailing` for it) or the inflow exceeds that bound. See [operations](operations.md#why-event_outbox-is-not-partitioned) for the revisit trigger and the bounded drain loop to add first.
 
 ### UmweltCronJobFailing
 

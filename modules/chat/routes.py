@@ -1076,13 +1076,17 @@ async def mutate_message(
     )
 
 
+_TERMINAL_RUN_STATUSES = ("completed", "cancelled", "failed")
+
+
 @dataclass
 class _PollState:
     """Mutable outcome of one SSE poll, shared between the stream loop and its locked poll.
 
     ``current_seq`` is the last event sequence delivered (carried across polls); the flags are
     per-poll results the loop reads after the poll finishes. ``stop`` ends the stream without a
-    further status frame (the run, parent or privacy fence is gone or was already reported).
+    further status frame (the run, parent or privacy fence is gone or was already reported, or a
+    terminal run's final batch was just delivered with nothing left queued).
     """
 
     current_seq: int
@@ -1173,7 +1177,8 @@ async def _publish_locked_events(
     The auth row is read in the same transaction and snapshot as the event read (I5), so no frame
     follows a revocation. The joined chunk is yielded BEFORE the caller commits: the ASGI send
     then finds the transport drained and the bytes are written while every lock is still held.
-    Sets ``state`` flags (``auth_expired``, ``batch_sent``, ``terminal_without_event``).
+    Sets ``state`` flags (``auth_expired``, ``batch_sent``, ``terminal_without_event``, and ``stop``
+    when the delivered batch drained a terminal run).
     """
     account_id = await _auth_row_current(session, token_hash)
     if account_id is None or current_run.actor_user_id != account_id:
@@ -1194,8 +1199,12 @@ async def _publish_locked_events(
         # ONE send -> one non-blocking transport.write, under the locks.
         yield chunk
         state.batch_sent = True
+        # A terminal run whose backlog fit in this batch has nothing left to send: end now instead of
+        # idling one more fallback interval holding the permit and pub/sub. The loop reads ``stop``
+        # only after the poll commits, so locks are released first.
+        state.stop = not state.batch_full and current_run.status in _TERMINAL_RUN_STATUSES
     else:
-        state.terminal_without_event = current_run.status in ("completed", "cancelled", "failed")
+        state.terminal_without_event = current_run.status in _TERMINAL_RUN_STATUSES
 
 
 async def _locked_poll(

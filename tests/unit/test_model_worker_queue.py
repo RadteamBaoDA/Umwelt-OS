@@ -13,6 +13,7 @@ from apps.worker.main import HEAVY_SLOT_JOBS, ModelWorkerSettings, WorkerSetting
 from core.config import Settings
 from core.system import health as health_module
 from core.worker_queues import MODEL_JOBS, MODEL_QUEUE, queue_for
+from tests.unit.entity_patching import patch_entities
 from tests.unit.typing_regressions.test_none_handling_regressions import (
     _factory,
     _recovery_session,
@@ -98,7 +99,7 @@ async def test_claims_honour_lease_seconds_parameter(monkeypatch: pytest.MonkeyP
 
     now = datetime(2026, 1, 1, tzinfo=UTC)
     scope = InternalJobScope(workspace_id=uuid4(), actor_user_id=1, membership_revision=1)
-    monkeypatch.setattr(entities, "_admit", AsyncMock())
+    patch_entities(monkeypatch, "_admit", AsyncMock())
     for module, kwargs in ((entities, {}), (timeline, {})):
         for seconds in (None, 195):
             work = SimpleNamespace(status="pending", lease_expires_at=None, attempt=0, next_attempt_at=now,

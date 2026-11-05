@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from modules.knowledge.entities import public
+from tests.unit.entity_patching import patch_entities
 
 _SCOPE = SimpleNamespace(workspace_id=uuid4())
 
@@ -18,12 +19,12 @@ async def _admit(*_a: Any, **_k: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_list_entities_escapes_like_wildcards(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(public, "_admit", _admit)
+    patch_entities(monkeypatch, "_admit", _admit)
 
     async def aliases(*_a: Any, **_k: Any) -> dict[Any, Any]:
         return {}
 
-    monkeypatch.setattr(public, "_aliases", aliases)
+    patch_entities(monkeypatch, "_aliases", aliases)
     seen: list[Any] = []
 
     class _Session:
@@ -68,7 +69,7 @@ class _Session:
 
 @pytest.mark.asyncio
 async def test_membership_fresh_insert_is_one_statement(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(public, "_admit", _admit)
+    patch_entities(monkeypatch, "_admit", _admit)
     entity_id, mid = uuid4(), uuid4()
     session = _Session([(mid, entity_id)])
     assert await public.record_extraction_membership(session, **_args(entity_id)) == mid  # type: ignore[arg-type]
@@ -77,7 +78,7 @@ async def test_membership_fresh_insert_is_one_statement(monkeypatch: pytest.Monk
 
 @pytest.mark.asyncio
 async def test_membership_conflict_reads_back_and_checks_entity(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(public, "_admit", _admit)
+    patch_entities(monkeypatch, "_admit", _admit)
     entity_id, mid = uuid4(), uuid4()
     session = _Session([None, (mid, entity_id)])
     assert await public.record_extraction_membership(session, **_args(entity_id)) == mid  # type: ignore[arg-type]

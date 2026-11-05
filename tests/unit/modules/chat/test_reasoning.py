@@ -14,6 +14,7 @@ from modules.chat import routes, worker
 from modules.chat.models import Message, StreamEvent
 from modules.chat.retrieval import format_grounded_context
 from modules.chat.schemas import AnswerContext
+from tests.unit.modules.chat._worker_patch import patch_worker
 from tests.unit.modules.chat.test_p14_generation_worker import _Gen
 from tests.unit.typing_regressions.test_none_handling_regressions import _evidence, _factory
 
@@ -52,7 +53,7 @@ async def test_reasoning_streams_before_answer_and_persists(monkeypatch: pytest.
 
 
 async def test_reasoning_is_capped_and_flagged(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(worker, "REASONING_MAX_CHARS", 10)
+    patch_worker(monkeypatch, "REASONING_MAX_CHARS", 10)
     gen = _gen(monkeypatch, [{"reasoning_content": "a" * 8}, {"reasoning_content": "b" * 8}, {"content": "x"}])
     await gen.run()
     message = next(m for m in gen.added if isinstance(m, Message))
@@ -96,9 +97,9 @@ async def test_mark_failed_only_exposes_gateway_error_text(
     monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: str,
 ) -> None:
     run, session = await _failed_event(exc)
-    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
-    monkeypatch.setattr(worker, "_require_privacy_fence", AsyncMock())
-    monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(return_value=5))
+    patch_worker(monkeypatch, "lock_export_privacy", AsyncMock())
+    patch_worker(monkeypatch, "_require_privacy_fence", AsyncMock())
+    patch_worker(monkeypatch, "_next_event_seq", AsyncMock(return_value=5))
     await worker._mark_failed(uuid4(), _factory(session), 4, None, exc, scope=None)
     event = session.add.call_args.args[0]
     assert event.data == {"status": "failed", "error": expected}

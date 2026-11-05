@@ -27,6 +27,7 @@ from modules.chat.models import Message, StreamEvent
 from modules.chat.schemas import WEB_SEARCH_OUTCOME_KEY, AnswerContext
 from modules.chat.web_search import WebSearchError, WebSearchResult
 from modules.chat.web_search import search as real_search
+from tests.unit.modules.chat._worker_patch import patch_worker
 from tests.unit.modules.chat.test_p14_generation_worker import _Gen
 from tests.unit.typing_regressions.test_none_handling_regressions import (
     _config,
@@ -86,14 +87,14 @@ class _Search:
         self.fence = AsyncMock(return_value=SimpleNamespace(local_only=False))
         self.quota = AsyncMock(return_value=True)
         self.cancelled = AsyncMock(return_value=False)
-        monkeypatch.setattr(worker, "_lock_live_response", self.lock)
-        monkeypatch.setattr(worker, "is_run_cancelled", self.cancelled)
+        patch_worker(monkeypatch, "_lock_live_response", self.lock)
+        patch_worker(monkeypatch, "is_run_cancelled", self.cancelled)
         monkeypatch.setattr(worker.settings_public, "lock_ai_settings_for_share", AsyncMock(side_effect=lock_settings))
         monkeypatch.setattr(worker.settings_public, "get_ai_execution_config", AsyncMock(side_effect=config_read))
         monkeypatch.setattr(worker.sources_public, "get_source_fence", self.fence)
         monkeypatch.setattr(worker.web, "consume_daily_quota", self.quota)
         monkeypatch.setattr(worker.web, "search", self.search)
-        monkeypatch.setattr(worker, "approved_web_search_transport", MagicMock(return_value=object()))
+        patch_worker(monkeypatch, "approved_web_search_transport", MagicMock(return_value=object()))
 
     async def _search(self, *_a: Any, **_k: Any) -> list[WebSearchResult]:
         self.steps.append("egress")
@@ -172,7 +173,7 @@ async def test_provider_failures_are_unavailable(monkeypatch: pytest.MonkeyPatch
 
 async def test_transport_policy_denial_is_network_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     s = _Search(monkeypatch)
-    monkeypatch.setattr(worker, "approved_web_search_transport",
+    patch_worker(monkeypatch, "approved_web_search_transport",
                         MagicMock(side_effect=EndpointNetworkPolicyError("denied")))
     assert (await s.run()).outcome == {"status": "unavailable", "reason": "network_denied", "result_count": 0}
     s.search.assert_not_awaited()
@@ -198,7 +199,7 @@ async def test_missing_ai_settings_row_is_not_configured(monkeypatch: pytest.Mon
 
 async def test_host_denied_spends_one_daily_quota(monkeypatch: pytest.MonkeyPatch) -> None:
     s = _Search(monkeypatch)
-    monkeypatch.setattr(worker, "approved_web_search_transport", MagicMock(side_effect=EndpointNetworkPolicyError("host")))
+    patch_worker(monkeypatch, "approved_web_search_transport", MagicMock(side_effect=EndpointNetworkPolicyError("host")))
     assert (await s.run()).outcome == {"status": "unavailable", "reason": "network_denied", "result_count": 0}
     s.quota.assert_awaited_once()
 
@@ -206,7 +207,7 @@ async def test_host_denied_spends_one_daily_quota(monkeypatch: pytest.MonkeyPatc
 async def test_timeout_is_cancelled_before_rollback_once_body_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:
     """P3-1: the deadline is disarmed before the fence rollback, so a slow rollback is not cancelled."""
     s = _Search(monkeypatch)
-    monkeypatch.setattr(worker, "WEB_SEARCH_FENCE_SECONDS", 0.05)
+    patch_worker(monkeypatch, "WEB_SEARCH_FENCE_SECONDS", 0.05)
 
     async def slow_rollback() -> None:
         await asyncio.sleep(0.15)  # longer than the fence deadline
@@ -226,7 +227,7 @@ async def test_timeout_is_cancelled_before_rollback_once_body_is_sent(monkeypatc
 
 async def test_fence_wait_timeout_is_unavailable_and_released(monkeypatch: pytest.MonkeyPatch) -> None:
     s = _Search(monkeypatch)
-    monkeypatch.setattr(worker, "WEB_SEARCH_FENCE_SECONDS", 0.05)
+    patch_worker(monkeypatch, "WEB_SEARCH_FENCE_SECONDS", 0.05)
 
     async def slow_lock(*_a: Any, **_k: Any) -> None:
         await asyncio.sleep(1)  # the privacy key is held elsewhere
@@ -309,7 +310,7 @@ async def test_fence_released_after_body_written_before_response(
         transport._delegate.handle_async_request = spy  # type: ignore[method-assign]
         return transport
 
-    monkeypatch.setattr(worker, "approved_web_search_transport", factory)
+    patch_worker(monkeypatch, "approved_web_search_transport", factory)
     async with server:
         run = await s.run("hello world")
     assert run.outcome == {"status": "used", "reason": None, "result_count": 1}
@@ -324,7 +325,7 @@ async def test_nat64_metadata_answer_is_network_denied(monkeypatch: pytest.Monke
     s = _Search(monkeypatch)
     monkeypatch.setattr(worker.web, "search", real_search)
     delegate = AsyncMock()
-    monkeypatch.setattr(worker, "approved_web_search_transport", lambda *_a, **_k: ApprovedEndpointTransport(
+    patch_worker(monkeypatch, "approved_web_search_transport", lambda *_a, **_k: ApprovedEndpointTransport(
         httpx.URL("https://api.tavily.com"), (), delegate, allow_global=True))
     answer = (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("64:ff9b::a9fe:a9fe", 443, 0, 0))
     with patch.object(asyncio.get_running_loop(), "getaddrinfo", AsyncMock(return_value=[answer])):
@@ -346,12 +347,12 @@ class _WebGen(_Gen):
         self.session.execute = AsyncMock(return_value=SimpleNamespace(
             fetchone=lambda: (uuid4(), uuid4(), {"_web_search": {"requested": True}}, False, uuid4(), 1)))
         self.run_row = SimpleNamespace(status="streaming", retrieval_context={"_web_search": {"requested": True}})
-        monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, self.run_row)))
+        patch_worker(monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, self.run_row)))
         context = AnswerContext(query="q", evidence=evidence if evidence is not None else [_evidence(content="Doc.")],
                                 has_sufficient_evidence=True)
-        monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
+        patch_worker(monkeypatch, "build_context", AsyncMock(return_value=context))
         self.search = AsyncMock(return_value=web_run)
-        monkeypatch.setattr(worker, "_search_for_run", self.search)
+        patch_worker(monkeypatch, "_search_for_run", self.search)
         self.prompts: list[Any] = []
 
     async def stream(self, **kwargs: Any) -> AsyncIterator[str]:
@@ -466,13 +467,13 @@ def _blocking_search(started: asyncio.Event, record: dict[str, Any]) -> Any:
 async def test_retrieval_error_keeps_type_and_cancels_search(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = _WebGen(monkeypatch, ["x"], None)
     started, record = asyncio.Event(), {}
-    monkeypatch.setattr(worker, "_search_for_run", _blocking_search(started, record))
+    patch_worker(monkeypatch, "_search_for_run", _blocking_search(started, record))
 
     async def failing_build(*_a: Any, **_k: Any) -> Any:
         await started.wait()
         raise ValueError("retrieval broke")
 
-    monkeypatch.setattr(worker, "build_context", failing_build)
+    patch_worker(monkeypatch, "build_context", failing_build)
     await gen.run()
     exc = gen.failed.await_args.args[4]
     assert type(exc) is ValueError  # not an ExceptionGroup
@@ -482,10 +483,10 @@ async def test_retrieval_error_keeps_type_and_cancels_search(monkeypatch: pytest
 async def test_shutdown_cancels_and_awaits_search_then_releases(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = _WebGen(monkeypatch, ["x"], None)
     started, record = asyncio.Event(), {}
-    monkeypatch.setattr(worker, "_search_for_run", _blocking_search(started, record))
-    monkeypatch.setattr(worker, "build_context", lambda *a, **k: asyncio.sleep(3600))
+    patch_worker(monkeypatch, "_search_for_run", _blocking_search(started, record))
+    patch_worker(monkeypatch, "build_context", lambda *a, **k: asyncio.sleep(3600))
     release = AsyncMock()
-    monkeypatch.setattr(worker, "_release_on_shutdown", release)
+    patch_worker(monkeypatch, "_release_on_shutdown", release)
     task = asyncio.create_task(gen.run())
     await started.wait()
     before = {t for t in asyncio.all_tasks() if t is not asyncio.current_task() and t is not task}
@@ -568,7 +569,7 @@ async def test_presend_timeout_refences_before_fallback(monkeypatch: pytest.Monk
                     for endpoint in ("https://api.tavily.com", fallback_endpoint)]
     privacy = PrivacySettings(allow_remote_web_search=True, web_search_destinations=destinations)
     s = _Search(monkeypatch, _web_config(privacy=privacy, web_search_fallbacks=(fallback,)))
-    monkeypatch.setattr(worker, "WEB_SEARCH_FENCE_SECONDS", 0.05)
+    patch_worker(monkeypatch, "WEB_SEARCH_FENCE_SECONDS", 0.05)
     calls = 0
 
     async def attempt(*_a: Any, **_k: Any) -> list[WebSearchResult]:

@@ -1,6 +1,9 @@
 services:
   api:
     command: ["uvicorn", "apps.api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    environment:
+      # --reload runs a single process; the image default of 2 would also demand CSRF_SIGNING_SECRET.
+      WEB_CONCURRENCY: "1"
     volumes:
       - ./apps:/app/apps
       - ./core:/app/core
@@ -12,6 +15,16 @@ services:
       - ./core:/app/core
 
   cron-worker:
+    volumes:
+      - ./apps:/app/apps
+      - ./core:/app/core
+
+  chat-worker:
+    volumes:
+      - ./apps:/app/apps
+      - ./core:/app/core
+
+  model-worker:
     volumes:
       - ./apps:/app/apps
       - ./core:/app/core

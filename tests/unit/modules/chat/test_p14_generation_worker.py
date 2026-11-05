@@ -18,6 +18,7 @@ from modules.chat import routes, worker
 from modules.chat.models import Message, StreamEvent
 from modules.chat.schemas import AnswerContext
 from modules.settings.public import VizRouterResolved
+from tests.unit.modules.chat._worker_patch import patch_worker
 from tests.unit.typing_regressions.test_none_handling_regressions import (
     _config,
     _evidence,
@@ -109,17 +110,17 @@ class _Gen:
         for name in ("commit", "flush", "rollback", "close", "begin"):
             setattr(self.session, name, AsyncMock())
         seq = iter(range(100, 10_000))
-        monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(SimpleNamespace(workspace_id=uuid4()), SimpleNamespace())))
-        monkeypatch.setattr(worker, "_lock_live_response", AsyncMock(return_value=(True, MagicMock())))
-        monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(return_value=False))
-        monkeypatch.setattr(worker, "revalidate_context_fence", self.fence)
-        monkeypatch.setattr(worker, "_privacy_cancel_locked", self.privacy_cancel)
-        monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
-        monkeypatch.setattr(worker, "build_context", AsyncMock(return_value=context))
+        patch_worker(monkeypatch, "_admit_job", AsyncMock(return_value=(SimpleNamespace(workspace_id=uuid4()), SimpleNamespace())))
+        patch_worker(monkeypatch, "_lock_live_response", AsyncMock(return_value=(True, MagicMock())))
+        patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=False))
+        patch_worker(monkeypatch, "revalidate_context_fence", self.fence)
+        patch_worker(monkeypatch, "_privacy_cancel_locked", self.privacy_cancel)
+        patch_worker(monkeypatch, "_next_event_seq", AsyncMock(side_effect=lambda *a, **k: next(seq)))
+        patch_worker(monkeypatch, "build_context", AsyncMock(return_value=context))
         monkeypatch.setattr(worker.settings_public, "get_ai_execution_config",
                             AsyncMock(return_value=_config(defaults=ModelDefaults())))
-        monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=self.stream))
-        monkeypatch.setattr(worker, "_mark_failed", self.failed)
+        patch_worker(monkeypatch, "ModelGateway", lambda **kw: SimpleNamespace(stream=self.stream))
+        patch_worker(monkeypatch, "_mark_failed", self.failed)
         # Internal router by default: the pre-request classification step must not consume the scripted session reads.
         monkeypatch.setattr(worker.settings_public, "resolve_viz_router", AsyncMock(return_value=VizRouterResolved()))
 
@@ -152,7 +153,7 @@ async def test_200_single_char_tokens_coalesce(monkeypatch: pytest.MonkeyPatch) 
 
 
 async def test_size_threshold_flushes_at_256_chars(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(worker, "STREAM_FLUSH_SECONDS", 3600.0)
+    patch_worker(monkeypatch, "STREAM_FLUSH_SECONDS", 3600.0)
     gen = _Gen(monkeypatch, ["x"] + ["y" * 100] * 6)
     await gen.run()
     # first token flushes at once (last_flush=-inf); 100/200/300 chars flushes at 300; the rest is the final flush
@@ -160,7 +161,7 @@ async def test_size_threshold_flushes_at_256_chars(monkeypatch: pytest.MonkeyPat
 
 
 async def test_time_threshold_flushes_and_final_flush_publishes_remainder(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(worker, "STREAM_FLUSH_CHARS", 10_000)
+    patch_worker(monkeypatch, "STREAM_FLUSH_CHARS", 10_000)
     gen = _Gen(monkeypatch, ["a", "b", "__SLEEP__", "c", "d"])
     await gen.run()
     assert gen.deltas == ["a", "bc", "d"]  # a: first flush; c arrives after the flush interval; d is the final flush
@@ -170,7 +171,7 @@ async def test_time_threshold_flushes_and_final_flush_publishes_remainder(monkey
 
 
 async def test_fence_revalidated_for_every_flush(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(worker, "STREAM_FLUSH_SECONDS", 3600.0)
+    patch_worker(monkeypatch, "STREAM_FLUSH_SECONDS", 3600.0)
     gen = _Gen(monkeypatch, ["x"] + ["y" * 100] * 6)
     await gen.run()
     locked = [c for c in gen.fence.await_args_list if c.kwargs.get("lock_evidence")]
@@ -178,7 +179,7 @@ async def test_fence_revalidated_for_every_flush(monkeypatch: pytest.MonkeyPatch
 
 
 async def test_fence_failure_between_flushes_drops_buffer_and_redacts(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(worker, "STREAM_FLUSH_SECONDS", 3600.0)
+    patch_worker(monkeypatch, "STREAM_FLUSH_SECONDS", 3600.0)
     gen = _Gen(monkeypatch, ["x"] + ["SECRET" * 20] * 6)
     results = iter([(True, []), (False, ["consent"])])  # flush 1 ok, flush 2 fails
     gen.fence.side_effect = lambda *a, **k: next(results, (False, ["consent"]))
@@ -203,9 +204,9 @@ async def test_recover_requeues_pending_and_fails_abandoned_streaming(monkeypatc
     session.scalar = AsyncMock(side_effect=[7, run, object(), run, 7])
     session.add = MagicMock()
     session.commit = AsyncMock()
-    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
-    monkeypatch.setattr(worker, "_require_privacy_fence", AsyncMock())
-    monkeypatch.setattr(worker, "_scope_for_run", AsyncMock(return_value=SimpleNamespace()))
+    patch_worker(monkeypatch, "lock_export_privacy", AsyncMock())
+    patch_worker(monkeypatch, "_require_privacy_fence", AsyncMock())
+    patch_worker(monkeypatch, "_scope_for_run", AsyncMock(return_value=SimpleNamespace()))
     redis = SimpleNamespace(enqueue_job=AsyncMock())
     factory = _factory(session)
     result = await worker.recover_chat_runs({"session_factory": factory, "redis": redis})
@@ -233,9 +234,9 @@ async def test_shutdown_before_any_delta_returns_run_to_pending(monkeypatch: pyt
     order: list[str] = []
     run = SimpleNamespace(status="streaming", conversation_id=uuid4(), workspace_id=uuid4())
     session = _release_session(run, None, order)
-    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock(side_effect=lambda *_a, **_k: order.append("privacy")))
+    patch_worker(monkeypatch, "lock_export_privacy", AsyncMock(side_effect=lambda *_a, **_k: order.append("privacy")))
     failed = AsyncMock()
-    monkeypatch.setattr(worker, "_mark_failed", failed)
+    patch_worker(monkeypatch, "_mark_failed", failed)
     await worker._release_on_shutdown(uuid4(), _factory(session), None)
     assert run.status == "pending" and order == ["privacy", "delete"]
     sql = [str(c.args[0]) for c in session.scalar.await_args_list[:3]]
@@ -249,9 +250,9 @@ async def test_shutdown_before_any_delta_returns_run_to_pending(monkeypatch: pyt
 async def test_cancel_near_job_timeout_fails_instead_of_pending(monkeypatch: pytest.MonkeyPatch) -> None:
     run = SimpleNamespace(status="streaming", conversation_id=uuid4(), workspace_id=uuid4())
     session = _release_session(run, None, [])
-    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
+    patch_worker(monkeypatch, "lock_export_privacy", AsyncMock())
     failed = AsyncMock()
-    monkeypatch.setattr(worker, "_mark_failed", failed)
+    patch_worker(monkeypatch, "_mark_failed", failed)
     await worker._release_on_shutdown(uuid4(), _factory(session), None, True)
     assert run.status == "streaming"
     failed.assert_awaited_once()
@@ -265,10 +266,10 @@ async def test_handler_cancel_at_job_timeout_requests_failure(monkeypatch: pytes
         raise asyncio.CancelledError
         yield ""  # pragma: no cover
 
-    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=cancelled))
-    monkeypatch.setattr(worker, "CHAT_JOB_TIMEOUT", 0)  # elapsed since claim >= timeout - margin
+    patch_worker(monkeypatch, "ModelGateway", lambda **kw: SimpleNamespace(stream=cancelled))
+    patch_worker(monkeypatch, "CHAT_JOB_TIMEOUT", 0)  # elapsed since claim >= timeout - margin
     release = AsyncMock()
-    monkeypatch.setattr(worker, "_release_on_shutdown", release)
+    patch_worker(monkeypatch, "_release_on_shutdown", release)
     with pytest.raises(asyncio.CancelledError):
         await gen.run()
     assert release.await_args.args[3] is True
@@ -286,7 +287,7 @@ async def test_external_cancel_inside_session_call_still_releases_on_fresh_sessi
 
     gen.session.scalar = AsyncMock(side_effect=hang)
     release = AsyncMock()
-    monkeypatch.setattr(worker, "_release_on_shutdown", release)
+    patch_worker(monkeypatch, "_release_on_shutdown", release)
     task = asyncio.create_task(gen.run())
     await asyncio.wait_for(blocked.wait(), 2)
     task.cancel()
@@ -300,9 +301,9 @@ async def test_external_cancel_inside_session_call_still_releases_on_fresh_sessi
 async def test_shutdown_after_partial_deltas_fails_truthfully(monkeypatch: pytest.MonkeyPatch) -> None:
     run = SimpleNamespace(status="streaming", conversation_id=uuid4(), workspace_id=uuid4())
     session = _release_session(run, uuid4(), [])
-    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
+    patch_worker(monkeypatch, "lock_export_privacy", AsyncMock())
     failed = AsyncMock()
-    monkeypatch.setattr(worker, "_mark_failed", failed)
+    patch_worker(monkeypatch, "_mark_failed", failed)
     rid = uuid4()
     await worker._release_on_shutdown(rid, _factory(session), {"rev": 1})
     assert run.status == "streaming"
@@ -318,9 +319,9 @@ async def test_cancelled_generation_releases_run_bounded_and_reraises(monkeypatc
         raise asyncio.CancelledError
         yield ""  # pragma: no cover
 
-    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=cancelled))
+    patch_worker(monkeypatch, "ModelGateway", lambda **kw: SimpleNamespace(stream=cancelled))
     release = AsyncMock()
-    monkeypatch.setattr(worker, "_release_on_shutdown", release)
+    patch_worker(monkeypatch, "_release_on_shutdown", release)
     with pytest.raises(asyncio.CancelledError):
         await gen.run()
     release.assert_awaited_once()
@@ -337,9 +338,9 @@ async def test_shutdown_release_never_raises_and_is_bounded(monkeypatch: pytest.
     async def hang(*_a: Any) -> None:
         await asyncio.sleep(3600)
 
-    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=cancelled))
-    monkeypatch.setattr(worker, "_release_on_shutdown", hang)
-    monkeypatch.setattr(worker, "SHUTDOWN_RELEASE_TIMEOUT", 0.05)
+    patch_worker(monkeypatch, "ModelGateway", lambda **kw: SimpleNamespace(stream=cancelled))
+    patch_worker(monkeypatch, "_release_on_shutdown", hang)
+    patch_worker(monkeypatch, "SHUTDOWN_RELEASE_TIMEOUT", 0.05)
     with pytest.raises(asyncio.CancelledError):  # the timeout is swallowed; cancellation still propagates
         await gen.run()
 
@@ -367,8 +368,8 @@ async def test_recover_fails_expired_pending_instead_of_requeueing(monkeypatch: 
     session.scalar = AsyncMock(side_effect=[run, object(), run, 0])
     session.add = MagicMock()
     session.commit = AsyncMock()
-    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
-    monkeypatch.setattr(worker, "_next_event_seq", AsyncMock(return_value=1))
+    patch_worker(monkeypatch, "lock_export_privacy", AsyncMock())
+    patch_worker(monkeypatch, "_next_event_seq", AsyncMock(return_value=1))
     redis = SimpleNamespace(enqueue_job=AsyncMock())
     result = await worker.recover_chat_runs({"session_factory": _factory(session), "redis": redis})
     assert result == {"requeued": 0, "failed": 1}
@@ -388,7 +389,7 @@ async def test_stream_iterator_closed_and_cancel_check_throttled(monkeypatch: py
         finally:
             closed.append(True)
 
-    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
+    patch_worker(monkeypatch, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     checks = worker.is_run_cancelled
     await gen.run()
     assert closed == [True]
@@ -409,10 +410,10 @@ async def test_early_stop_closes_gateway_stream(monkeypatch: pytest.MonkeyPatch)
         finally:
             closed.append(True)
 
-    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
+    patch_worker(monkeypatch, "ModelGateway", lambda **kw: SimpleNamespace(stream=stream))
     started: list[bool] = []
-    monkeypatch.setattr(worker, "is_run_cancelled", AsyncMock(side_effect=lambda *a, **k: bool(started)))
-    monkeypatch.setattr(worker, "_mark_cancelled", AsyncMock())
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(side_effect=lambda *a, **k: bool(started)))
+    patch_worker(monkeypatch, "_mark_cancelled", AsyncMock())
     await gen.run()
     assert closed == [True]
 
@@ -421,7 +422,7 @@ async def test_cancel_during_claim_commit_releases_and_reraises(monkeypatch: pyt
     gen = _Gen(monkeypatch, [])
     gen.session.commit = AsyncMock(side_effect=asyncio.CancelledError)
     release = AsyncMock()
-    monkeypatch.setattr(worker, "_release_on_shutdown", release)
+    patch_worker(monkeypatch, "_release_on_shutdown", release)
     with pytest.raises(asyncio.CancelledError):
         await gen.run()
     release.assert_awaited_once()
@@ -449,7 +450,7 @@ async def test_fail_expired_pending_skips_run_released_to_pending_before_lock(mo
     session.scalar = AsyncMock(side_effect=[run, object(), run])
     session.add = MagicMock()
     session.commit = AsyncMock()
-    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
+    patch_worker(monkeypatch, "lock_export_privacy", AsyncMock())
     await worker._fail_expired_pending(uuid4(), _factory(session))
     assert run.status == "pending"
     session.add.assert_not_called()

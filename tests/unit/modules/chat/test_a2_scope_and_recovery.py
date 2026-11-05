@@ -13,6 +13,7 @@ from core.workspaces.schemas import InternalJobScope
 from modules.chat import public as chat_public
 from modules.chat import routes, worker
 from modules.chat.models import Message
+from tests.unit.modules.chat._worker_patch import patch_worker
 from tests.unit.modules.chat.test_p14_generation_worker import _Gen
 
 WS = uuid4()
@@ -76,18 +77,18 @@ async def test_lock_live_response_requires_admitted_job() -> None:
 
 
 async def test_privacy_fence_without_scope_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
+    patch_worker(monkeypatch, "lock_export_privacy", AsyncMock())
     with pytest.raises(worker.PrivacyFenceChanged):
         await worker._require_privacy_fence(MagicMock(), {}, scope=None)
 
 
 async def test_admission_denied_redacts_and_never_reaches_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = _Gen(monkeypatch, ["a"])
-    monkeypatch.setattr(worker, "_admit_job", AsyncMock(side_effect=worker.PrivacyFenceChanged("denied")))
+    patch_worker(monkeypatch, "_admit_job", AsyncMock(side_effect=worker.PrivacyFenceChanged("denied")))
     redact = AsyncMock()
-    monkeypatch.setattr(worker, "_mark_privacy_cancelled", redact)
+    patch_worker(monkeypatch, "_mark_privacy_cancelled", redact)
     built: list[Any] = []
-    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: built.append(kw))
+    patch_worker(monkeypatch, "ModelGateway", lambda **kw: built.append(kw))
     await gen.run()
     redact.assert_awaited_once()
     assert built == [] and not any(isinstance(m, Message) for m in gen.added)
@@ -95,14 +96,14 @@ async def test_admission_denied_redacts_and_never_reaches_the_model(monkeypatch:
 
 async def test_gateway_and_config_use_the_job_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     gen = _Gen(monkeypatch, ["a"])
-    monkeypatch.setattr(worker, "_admit_job", AsyncMock(return_value=(SCOPE, object())))
+    patch_worker(monkeypatch, "_admit_job", AsyncMock(return_value=(SCOPE, object())))
     seen: dict[str, Any] = {}
 
     def build(**kw: Any) -> Any:
         seen.update(kw)
         return SimpleNamespace(stream=gen.stream)
 
-    monkeypatch.setattr(worker, "ModelGateway", build)
+    patch_worker(monkeypatch, "ModelGateway", build)
     await gen.run()
     assert seen["scope"] is SCOPE
     config_call = worker.settings_public.get_ai_execution_config
@@ -154,7 +155,7 @@ async def test_duplicate_dispatch_second_claim_is_a_noop(monkeypatch: pytest.Mon
     gen = _Gen(monkeypatch, ["a"])
     gen.session.execute = AsyncMock(return_value=SimpleNamespace(fetchone=lambda: None))  # lost the claim
     built: list[Any] = []
-    monkeypatch.setattr(worker, "ModelGateway", lambda **kw: built.append(kw))
+    patch_worker(monkeypatch, "ModelGateway", lambda **kw: built.append(kw))
     await gen.run()
     assert built == [] and gen.added == []
     gen.failed.assert_not_awaited()
@@ -171,7 +172,7 @@ async def test_stale_late_completion_publishes_nothing(monkeypatch: pytest.Monke
             raise worker.ResponseNoLongerActive("terminal")
         return True, MagicMock()
 
-    monkeypatch.setattr(worker, "_lock_live_response", lock)
+    patch_worker(monkeypatch, "_lock_live_response", lock)
     await gen.run()
     assert not any(isinstance(m, Message) for m in gen.added)
     assert not any(getattr(e, "event_type", "") == "message.done" for e in gen.added)

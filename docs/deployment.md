@@ -31,7 +31,7 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 | Service | Memory limit / reservation | CPU shares | Key settings |
 |---|---|---|---|
 | postgres | 2.5 GiB / 1 GiB (`shm_size` 1 GiB) | 768 | `max_connections=120 shared_buffers=1GB effective_cache_size=2GB work_mem=16MB maintenance_work_mem=256MB` |
-| redis | 384 MiB / 64 MiB | 128 | `maxmemory 256mb`, `noeviction` (never drop queued ARQ jobs; writes fail loudly instead) |
+| redis | 640 MiB / 64 MiB | 128 | `maxmemory 512mb`, `noeviction` (never drop queued ARQ jobs; writes fail loudly instead) |
 | api | 1 GiB / 512 MiB | 1024 | `WEB_CONCURRENCY=2`, uvicorn `asyncio` + `httptools` via `apps.api.protocol:NoDelayHttpToolsProtocol` (sets TCP_NODELAY; pre-bound multi-worker sockets lack it) (no `--proxy-headers`: uvicorn never takes the client address from request headers), keep-alive 15 s, graceful shutdown 8 s, `--limit-concurrency 400`; `stop_grace_period` 15 s |
 | worker | 1 GiB / 256 MiB | 512 | `max_jobs=6`, DB pool 7 + 10 |
 | chat-worker | 768 MiB / 256 MiB | 512 | `max_jobs=15`, `job_timeout=600`, DB pool 10 + 10 |
@@ -96,7 +96,7 @@ Recommended for any deployment that runs more than one API or worker replica. Pu
 
 Redis stays `noeviction`: queued ARQ jobs, sessions and rate-limit counters are never evicted. When memory reaches `maxmemory`, writes fail with `OOM`. The API maps any unhandled Redis failure (down, failing over or `OOM`) to a retryable `503` with `Retry-After: 5` and error code `QUEUE_UNAVAILABLE` instead of a generic 500; durable outbox rows are re-enqueued by their recovery scans once Redis accepts writes again. `/api/v1/system/health` reports `components.redis.queue_writable` (false above 95% of `maxmemory`, which also sets `overall` to `degraded`); alert on that flag rather than on a failed enqueue.
 
-Recommended `maxmemory`: at least 256 MB (the shipped value) and about 25% of the Redis host's RAM; queue payloads are identity-only, so growth means a stalled consumer, not data volume. For HA run Redis with one replica and three Sentinels (quorum 2, `down-after-milliseconds 5000`, `failover-timeout 30000`), the same `requirepass`/`masterauth` on both nodes and `min-replicas-to-write 1`, then set `REDIS_SENTINELS`, `REDIS_MASTER_NAME` (and `REDIS_SENTINEL_PASSWORD` if the Sentinels are password-protected). The compose stack ships a single Redis; the Sentinel topology is operator-provided. Clients use `retry_on_timeout`, a 5 s socket timeout and a 30 s health check, so a failover shows up as a few `QUEUE_UNAVAILABLE` responses, not a restart.
+Recommended `maxmemory`: at least 256 MB (shipped: 512 MB) and about 25% of the Redis host's RAM; queue payloads are identity-only, so growth means a stalled consumer, not data volume. For HA run Redis with one replica and three Sentinels (quorum 2, `down-after-milliseconds 5000`, `failover-timeout 30000`), the same `requirepass`/`masterauth` on both nodes and `min-replicas-to-write 1`, then set `REDIS_SENTINELS`, `REDIS_MASTER_NAME` (and `REDIS_SENTINEL_PASSWORD` if the Sentinels are password-protected). The compose stack ships a single Redis; the Sentinel topology is operator-provided. Clients use `retry_on_timeout`, a 5 s socket timeout and a 30 s health check, so a failover shows up as a few `QUEUE_UNAVAILABLE` responses, not a restart.
 
 ## Client IP and `X-Forwarded-For`
 
@@ -118,7 +118,7 @@ Set `AUTH_TRUST_FORWARDED_FOR=true` (or the header) to get a separate bucket per
 - **Global privacy lock.** Every chat flush (10 Hz per active chat, `STREAM_FLUSH_SECONDS = 0.1`), every SSE batch publish and every export takes the exclusive owner-wide advisory lock. If waits grow, raise `STREAM_FLUSH_SECONDS` to 0.25 (2.5x fewer lock acquisitions, at most 150 ms more delta latency); the real fix is shared locks for chat/SSE readers.
 - **Exports hold the lock** through collection, rendering and the final fences, so chat streaming pauses during an export.
 - **MCP registry is per API process.** With `WEB_CONCURRENCY=2` a connection refresh updates only the process that served it; the other process keeps its startup registry until restart. Execution re-checks the database, so it is safe but inconsistent.
-- **Redis `noeviction` at 256 MB.** When Redis is full, login fails closed, arq enqueue fails (chat stays pending until recovery) and gateway leases fail. Alert on `components.redis.memory`.
+- **Redis `noeviction` at 512 MB.** When Redis is full, login fails closed, arq enqueue fails (chat stays pending until recovery) and gateway leases fail. Alert on `components.redis.memory`.
 
 ## Realtime event stream
 
@@ -152,7 +152,7 @@ The design target is a 2-core, 8 GiB host with remote AI inference. Capacity on 
 
 ## Optional Langfuse telemetry
 
-The base Compose deployment does not include or contact Langfuse: `api`, `worker`, `model-worker` and `chat-worker` force `LANGFUSE_ENABLED=false`, even when `.env` retains opt-in values. For the opt-in HTTPS remote profile, follow [Observability and Langfuse](observability.md), configure the explicit owner egress approval and backend-only project credentials in `.env`, and include `infrastructure/observability/compose.yml` in the Compose command; its environment mapping overrides the base setting. Disable export by running `docker compose down` and restarting with `docker compose -f docker-compose.yml up -d`. Only metadata-only model-call spans are sent; content capture is unavailable. Remote availability does not affect API/worker health or core writes. No performance comparison has been measured yet; target-host measurements remain deferred.
+The Compose deployment does not include a Langfuse container and does not contact Langfuse unless `.env` opts in (`LANGFUSE_ENABLED` defaults to false). For the opt-in HTTPS remote export, follow [Observability and Langfuse](observability.md) and configure the explicit owner egress approval and backend-only project credentials in `.env`. Disable export by setting `LANGFUSE_ENABLED=false` in `.env` and recreating the services. Only metadata-only model-call spans are sent; content capture is unavailable. Remote availability does not affect API/worker health or core writes. No performance comparison has been measured yet; target-host measurements remain deferred.
 
 ## Agent Chat lifecycle migration
 

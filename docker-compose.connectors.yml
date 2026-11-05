@@ -12,6 +12,9 @@ x-logging: &default-logging
 
 services:
   n8n:
+    # The base file gates n8n behind the "n8n" profile; including this overlay is the opt-in.
+    profiles: !reset []
+    image: umwelt-os-n8n-connectors:2.5.2
     build:
       context: .
       dockerfile: docker/n8n-connectors.Dockerfile

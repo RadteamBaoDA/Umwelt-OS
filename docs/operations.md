@@ -66,6 +66,12 @@ Migration `0017_chat_sql_login_role` creates the passwordless `umwelt_chat_sql_l
 
 Declarative time partitioning needs the partition key in every primary/unique key. `chat_stream_events` relies on `UNIQUE(event_id)` and `UNIQUE(response_id, seq)` for idempotent writes and `realtime_replay_events` on its `(workspace_id, user_id, sequence)` primary key; none can include `created_at` without weakening those guarantees, so a swap-in migration is not safe. Both tables stay bounded by retention (`purge_expired_chat_runs`, realtime replay trimming) plus the tightened autovacuum settings above. Revisit if retention cannot keep up.
 
+### Why `event_outbox` is not partitioned
+
+Producers use deterministic `uuid5` event ids and rely on the primary-key `IntegrityError` to deduplicate (`modules/knowledge/documents/worker.py`, `_cleanup.py`); a partitioned `(id, created_at)` primary key would silently stop enforcing that uniqueness. About 28 lookups go by `id` alone and cannot prune partitions. Single-user volume is small and the hourly purge (1000 rows per run, 24k/day) keeps up. Revisit when `umwelt_outbox_rows_total` exceeds about 5M or `UmweltOutboxPurgeBacklog` persists; first add a bounded drain loop to the purge before considering partitioning.
+
+Known debt: `set_event_delivery` (`modules/ingestion/_outbox.py`) is an unconditional status update, so a late duplicate job could flip a quarantined `failed` row to `delivered`. The effect stays idempotent, so this is not a correctness loss.
+
 ### Search HNSW indexes
 
 `activate_generation` no longer builds the per-generation HNSW index inside the activating transaction (which blocked writes to `search_index_items`). The generation is finalized in this order: commit the pruning transaction, `CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_search_vector_<generation>` on a separate autocommit connection (`statement_timeout` 2 h via `HNSW_BUILD_STATEMENT_TIMEOUT_MS`, `lock_timeout` lifted), then re-lock (access fence, then generation row) and activate. A failed or cancelled build drops its own invalid index; a retry also drops any invalid leftover first. If the generation changed during the build, nothing is activated and the next indexing pass re-finalizes (the built index is reused).
@@ -118,3 +124,10 @@ All recurring jobs run on the `cron-worker` service (`apps.worker.main.CronWorke
 ```
 
 Apply with `aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-configuration file://lifecycle.json` (MinIO: `mc ilm rule add`). Do not add an expiration rule for `workspaces/`; deletion of originals is owned by the application. Backups and bucket versioning/replication are the provider's responsibility.
+
+### Database role model
+
+- Migration user (= database owner in the default setup): owns the schema and the `chat_sql` views.
+- `umwelt_app` (NOLOGIN group role, Alembic `0020`): holds database `TEMPORARY` and `pg_*advisory*` `EXECUTE`, which `0019` revoked from PUBLIC. It is granted to the migration user and the database owner. When the runtime role (`DATABASE_URL`) differs from the migration/admin role (`DATABASE_DIRECT_URL`), `python -m core.chat_sql_provision` (run by `migrate`) executes `GRANT umwelt_app TO <runtime user>` idempotently; do it by hand if you do not run that script.
+- `umwelt_chat_sql_login`: reader login, never a member of `umwelt_app`, so it has no temp tables or advisory locks.
+- The legacy `umwelt_chat_sql_reader` role (0013) is dropped by `0020`; the downgrade recreates it.

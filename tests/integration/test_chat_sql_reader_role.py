@@ -196,3 +196,30 @@ async def test_app_role_keeps_advisory_locks_and_temp_tables(committed_engine: A
     async with committed_engine.begin() as conn:
         await conn.execute(text("SELECT pg_advisory_xact_lock(1)"))
         await conn.execute(text("CREATE TEMP TABLE t_0019 (x int) ON COMMIT DROP"))
+
+
+async def test_legacy_reader_role_absent_and_app_group_holds_grants(
+    committed_engine: AsyncEngine, reader_engine: AsyncEngine
+) -> None:
+    """0020: legacy role dropped; app user gets TEMP + advisory via umwelt_app; the reader gets neither."""
+    async with committed_engine.connect() as conn:
+        legacy = await conn.scalar(text("SELECT count(*) FROM pg_roles WHERE rolname = 'umwelt_chat_sql_reader'"))
+        member = await conn.scalar(text("SELECT pg_has_role(current_user, 'umwelt_app', 'member')"))
+        temp = await conn.scalar(text("SELECT has_database_privilege(current_user, current_database(), 'TEMPORARY')"))
+        adv = await conn.scalar(text("SELECT has_function_privilege(current_user, 'pg_advisory_lock(bigint)', 'EXECUTE')"))
+    assert legacy == 0 and member and temp and adv
+    async with committed_engine.connect() as conn:
+        attrs = (await conn.execute(text("SELECT rolcanlogin, rolsuper FROM pg_roles WHERE rolname = 'umwelt_app'"))).one()
+        reader_member = await conn.scalar(text("SELECT pg_has_role('umwelt_chat_sql_login', 'umwelt_app', 'MEMBER')"))
+    assert tuple(attrs) == (False, False) and reader_member is False
+    async with reader_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT pg_has_role(current_user, 'umwelt_app', 'member'), "
+                    "has_database_privilege(current_user, current_database(), 'TEMPORARY'), "
+                    "has_function_privilege(current_user, 'pg_advisory_lock(bigint)', 'EXECUTE')"
+                )
+            )
+        ).one()
+    assert tuple(row) == (False, False, False)

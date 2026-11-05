@@ -238,8 +238,8 @@ async def test_only_a_full_batch_repolls_without_sleeping(monkeypatch: pytest.Mo
     async for chunk in response.body_iterator:  # type: ignore[attr-defined]
         if chunk:
             timeline.append(f"batch:{chunk.count('event: message.delta')}")
-    # 64 (full) -> straight to the next poll; 36 (partial) -> sleep; then the terminal run ends.
-    assert timeline == ["batch:64", "batch:36", "sleep:0.1"]
+    # 64 (full) -> straight to the next poll; 36 (partial) on a terminal run -> ends with no trailing sleep.
+    assert timeline == ["batch:64", "batch:36"]
 
 
 async def test_batch_is_capped_by_bytes_and_the_rest_follows_without_sleeping(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -261,7 +261,7 @@ async def test_batch_is_capped_by_bytes_and_the_rest_follows_without_sleeping(mo
     assert [b.count("event: message.delta") for b in batches] == [2, 1]
     assert f"id: {RID}:3\n" in batches[1]
     assert store.seq_floors[:2] == [0, 2]
-    assert sleeps == [0.1]
+    assert sleeps == []  # the final batch of the terminal run ends the stream; no trailing wait
 
 
 async def test_permit_and_txn_released_when_send_fails_mid_stream(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -10,6 +10,7 @@ Covers:
 """
 
 import copy
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -77,7 +78,9 @@ def _fence(source_id=None, generation: int = 1, status: str = "active") -> Sourc
 @pytest.fixture(autouse=True)
 def _admitted_access():
     """Owner admission is covered by scope tests; these exercise provisioning state transitions."""
-    with patch("modules.connectors.provisioning._connector_access", AsyncMock(return_value=ACCESS)):
+    with ExitStack() as stack:
+        for name in ("_activation", "_common", "_credential_ops", "_fences", "_native", "_observation", "_status"):
+            stack.enter_context(patch(f"modules.connectors.provisioning.{name}._connector_access", AsyncMock(return_value=ACCESS)))
         yield
 
 
@@ -196,7 +199,7 @@ class TestCredentialMaskingAndRedaction:
         desired = ConnectorProvisioning(source_id=source_id, source_generation=1, desired_revision=2, credential_revision=1)
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning._read_retained_connector_rows",
+        with patch("modules.connectors.provisioning._credential_ops._read_retained_connector_rows",
                    return_value=(_fence(source_id), desired, {"collector": cred})), \
              patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=True)):
             result = await complete_credential_operation(
@@ -239,8 +242,8 @@ class TestCredentialMaskingAndRedaction:
         session = AsyncMock()
         session.scalar = AsyncMock(side_effect=[native, grant])
 
-        with patch("modules.connectors.provisioning._read_scoped_source", return_value=MagicMock()), \
-             patch("modules.connectors.provisioning.github_grant_has_active_peer", return_value=True):
+        with patch("modules.connectors.provisioning._fences._read_scoped_source", return_value=MagicMock()), \
+             patch("modules.connectors.provisioning._fences.github_grant_has_active_peer", return_value=True):
             await clear_retired_source_credentials(session, source_id, **FLAG)
 
         assert native.encrypted_token is None
@@ -265,7 +268,7 @@ class TestCredentialMaskingAndRedaction:
         session = AsyncMock()
         session.scalar = AsyncMock(return_value=grant)
 
-        with patch("modules.connectors.provisioning._read_scoped_source", return_value=MagicMock()):
+        with patch("modules.connectors.provisioning._fences._read_scoped_source", return_value=MagicMock()):
             await finish_deleted_source_grant_revoke(
                 session, source_id, "provider_revoked", access_fence=ACCESS,
                 grant_operation_id=grant_operation_id, token_revision=3, **FLAG,
@@ -435,8 +438,8 @@ class TestConnectorLifecycleStateTransitions:
         session = AsyncMock()
         session.add = MagicMock()
 
-        with patch("modules.connectors.provisioning.sources.lock_source", return_value=_fence(source_id)), \
-             patch("modules.connectors.provisioning.sources.get_connector_source", AsyncMock(return_value=None)),              patch("modules.connectors.provisioning._lock_connector_rows", return_value=(_fence(source_id), None, {})):
+        with patch("modules.sources.public.lock_source", return_value=_fence(source_id)), \
+             patch("modules.sources.public.get_connector_source", AsyncMock(return_value=None)),              patch("modules.connectors.provisioning._activation._lock_connector_rows", return_value=(_fence(source_id), None, {})):
             row = await save_desired(session, source_id, source_generation=1, expected_revision=0, configuration={"url": "https://example.com"}, **FLAG)
 
         assert row is not None
@@ -454,7 +457,7 @@ class TestConnectorLifecycleStateTransitions:
         source_id = uuid4()
         session = AsyncMock()
         session.add = MagicMock()
-        with patch("modules.connectors.provisioning.sources.lock_source", return_value=_fence(source_id)),              patch("modules.connectors.provisioning._lock_connector_rows", return_value=(_fence(source_id), None, {})),              patch("modules.connectors.provisioning.sources.get_connector_source", AsyncMock(return_value=object())),              patch("modules.connectors.collection.supports_native", lambda s: supported):
+        with patch("modules.sources.public.lock_source", return_value=_fence(source_id)),              patch("modules.connectors.provisioning._activation._lock_connector_rows", return_value=(_fence(source_id), None, {})),              patch("modules.sources.public.get_connector_source", AsyncMock(return_value=object())),              patch("modules.connectors.collection.supports_native", lambda s: supported):
             row = await save_desired(session, source_id, source_generation=1, expected_revision=0, configuration={}, **FLAG)
         assert row is not None and row.execution_backend == expected
 
@@ -470,8 +473,8 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.sources.lock_source", return_value=_fence(source_id)), \
-             patch("modules.connectors.provisioning._lock_connector_rows", return_value=(_fence(source_id), existing, {})):
+        with patch("modules.sources.public.lock_source", return_value=_fence(source_id)), \
+             patch("modules.connectors.provisioning._activation._lock_connector_rows", return_value=(_fence(source_id), existing, {})):
             row = await save_desired(session, source_id, source_generation=1, expected_revision=1, configuration={}, **FLAG)
 
         assert row is None
@@ -490,8 +493,8 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.sources.lock_source", return_value=_fence(source_id)), \
-             patch("modules.connectors.provisioning._lock_connector_rows", return_value=(_fence(source_id), existing, {})):
+        with patch("modules.sources.public.lock_source", return_value=_fence(source_id)), \
+             patch("modules.connectors.provisioning._activation._lock_connector_rows", return_value=(_fence(source_id), existing, {})):
             row = await save_desired(session, source_id, source_generation=1, expected_revision=1, configuration={"url": "https://new.example.com"}, **FLAG)
 
         assert row is not None
@@ -518,9 +521,9 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.lock_connector", return_value=(source, row, {})), \
-             patch("modules.connectors.provisioning._read_connector_rows", return_value=(source, row, {})), \
-             patch("modules.connectors.provisioning._operation_matches", AsyncMock(return_value=True)):
+        with patch("modules.connectors.provisioning._activation.lock_connector", return_value=(source, row, {})), \
+             patch("modules.connectors.provisioning._activation._read_connector_rows", return_value=(source, row, {})), \
+             patch("modules.connectors.provisioning._activation._operation_matches", AsyncMock(return_value=True)):
             op_id = await begin_enable(
                 session,
                 source_id=source_id,
@@ -551,8 +554,8 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.lock_connector", return_value=(source, row, {})), \
-             patch("modules.connectors.provisioning._read_connector_rows", return_value=(source, row, {})):
+        with patch("modules.connectors.provisioning._activation.lock_connector", return_value=(source, row, {})), \
+             patch("modules.connectors.provisioning._activation._read_connector_rows", return_value=(source, row, {})):
             op_id = await begin_enable(
                 session,
                 source_id=source_id,
@@ -580,7 +583,7 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.lock_connector", return_value=(MagicMock(), row, {})):
+        with patch("modules.connectors.provisioning._activation.lock_connector", return_value=(MagicMock(), row, {})):
             result = await reject_activation(session, source_id, revision=3, error_code="config_invalid", **FLAG)
 
         assert result is True
@@ -620,9 +623,9 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning.lock_retained_connector_effect", return_value=None), \
-             patch("modules.connectors.provisioning._read_retained_connector_rows", return_value=(source, row, {})), \
-             patch("modules.connectors.provisioning.commit_retained_connector_effect", new_callable=AsyncMock), \
+        with patch("modules.connectors.provisioning._workflow_steps.lock_retained_connector_effect", return_value=None), \
+             patch("modules.connectors.provisioning._workflow_steps._read_retained_connector_rows", return_value=(source, row, {})), \
+             patch("modules.connectors.provisioning._workflow_steps.commit_retained_connector_effect", new_callable=AsyncMock), \
              patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=True)):
 
             # Claim step
@@ -662,8 +665,8 @@ class TestConnectorLifecycleStateTransitions:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning._lock_connector_rows", return_value=(source, row, {})), \
-             patch("modules.connectors.provisioning.clear_retired_source_credentials", new_callable=AsyncMock) as mock_clear:
+        with patch("modules.connectors.provisioning._fences._lock_connector_rows", return_value=(source, row, {})), \
+             patch("modules.connectors.provisioning._fences.clear_retired_source_credentials", new_callable=AsyncMock) as mock_clear:
             result = await fence_source_collection(session, source, **FLAG)
 
         assert result is True

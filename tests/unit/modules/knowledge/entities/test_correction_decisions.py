@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from modules.knowledge.entities import public as ent
+from tests.unit.entity_patching import patch_entities
 
 NOW = datetime(2026, 5, 1, tzinfo=UTC)
 DOC, VER = uuid4(), uuid4()
@@ -46,7 +47,7 @@ def _session(memberships: list[Any], evidence: list[Any], documents: list[Any]) 
 @pytest.fixture(autouse=True)
 def _admit(monkeypatch: pytest.MonkeyPatch) -> None:
     """Skip admission."""
-    monkeypatch.setattr(ent, "_admit", AsyncMock())
+    patch_entities(monkeypatch, "_admit", AsyncMock())
 
 
 async def _decide(session: Any, candidates: dict[str, tuple[str, set[UUID]]], **kw: Any) -> Any:

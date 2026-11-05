@@ -18,6 +18,8 @@ from modules.connectors.credentials import (
 )
 from modules.connectors.n8n import build_workflow
 from modules.connectors.provider_specs import TERMS_INELIGIBLE
+from modules.connectors.provisioning import _backend
+from modules.sources import public as sources_public
 
 SOURCE_ID = uuid4()
 KEY = Fernet.generate_key().decode("ascii")
@@ -61,8 +63,8 @@ class _Locks:
 
     def __enter__(self):
         self.p = [
-            patch.object(provisioning, "lock_connector", AsyncMock(return_value=(self.fence, self.r, self.slots))),
-            patch.object(provisioning, "fence_active_requests", AsyncMock()),
+            patch.object(_backend, "lock_connector", AsyncMock(return_value=(self.fence, self.r, self.slots))),
+            patch.object(_backend, "fence_active_requests", AsyncMock()),
         ]
         self.fenced = self.p[1].start()
         self.p[0].start()
@@ -138,12 +140,12 @@ class _Advance:
     def __enter__(self):
         fence = SimpleNamespace(status="active", generation=1, local_only=False)
         self.p = [
-            patch.object(provisioning, "lock_connector", AsyncMock(return_value=(fence, self.r, {}))),
-            patch.object(provisioning, "_connector_observation", lambda *a, **k: None),
-            patch.object(provisioning, "commit_connector_observation", AsyncMock()),
-            patch.object(provisioning, "fence_active_requests", AsyncMock()),
-            patch.object(provisioning, "_new_deactivation", lambda r, g, **k: {"kind": "deactivate", "step": {"state": "prepared"}}),
-            patch.object(provisioning, "drive_workflow_operation", AsyncMock(return_value=True)),
+            patch.object(_backend, "lock_connector", AsyncMock(return_value=(fence, self.r, {}))),
+            patch.object(_backend, "_connector_observation", lambda *a, **k: None),
+            patch.object(_backend, "commit_connector_observation", AsyncMock()),
+            patch.object(_backend, "fence_active_requests", AsyncMock()),
+            patch.object(_backend, "_new_deactivation", lambda r, g, **k: {"kind": "deactivate", "step": {"state": "prepared"}}),
+            patch.object(_backend, "drive_workflow_operation", AsyncMock(return_value=True)),
             patch.object(activation, "activate_native_in_uow", AsyncMock(return_value="")),
         ]
         self.m = [p.start() for p in self.p]
@@ -251,7 +253,7 @@ async def test_resolve_retry_and_confirm():
     r = row(transition_phase="reconciliation_required", backend_revision=2, old_workflow_id="wf1")
     session = SimpleNamespace(flush=AsyncMock())
     kw = {"scope": object(), "multi_workspace_enabled": True, "access_fence": object()}
-    with _Locks(r), patch.object(provisioning, "_new_deactivation", lambda *a, **k: {"kind": "deactivate"}):
+    with _Locks(r), patch.object(_backend, "_new_deactivation", lambda *a, **k: {"kind": "deactivate"}):
         await provisioning.resolve_backend_transition_in_uow(session, SOURCE_ID, 3, "retry", **kw)
         assert r.transition_phase == "deactivating_old" and r.workflow_operation == {"kind": "deactivate"}
         r.transition_phase = "reconciliation_required"
@@ -428,7 +430,7 @@ async def test_collection_fence_proves_backend_and_carried_revision(backend, row
     source = SimpleNamespace(id=SOURCE_ID, workspace_id=uuid4(), status="active", generation=1)
     session = SimpleNamespace(scalar=AsyncMock(return_value=r))
     current = SimpleNamespace(workspace_id=source.workspace_id, status="active", generation=1)
-    with patch.object(provisioning.sources, "get_source_fence", AsyncMock(return_value=current)):
+    with patch.object(sources_public, "get_source_fence", AsyncMock(return_value=current)):
         ok = await provisioning.require_collection_fence(
             session, source, 1, 3, backend_revision=carried, scope=object(), multi_workspace_enabled=True)
     assert ok is expected

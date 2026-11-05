@@ -212,3 +212,22 @@ Throughput: 1118 HTTP requests, 5.26 req/s, 539 iterations; `chat_completion_ms`
 Resources at about 100 s into the run (`docker stats --no-stream`): api 17.9 % CPU / 554 MiB of 1 GiB; chat-worker 9.1 % / 269 MiB of 768 MiB; worker 8.3 % / 262 MiB of 1 GiB; postgres 5.1 % / 232 MiB of 2.5 GiB; cron-worker 0.4 % / 264 MiB of 512 MiB; model-worker 0.1 % / 252 MiB of 768 MiB; web 46 MiB; redis 4 MiB. `pg_stat_activity` (one sample): 20 connections, 1 active, 19 idle on `ClientRead`, 0 idle in transaction, no lock or IO waits.
 
 Observation: the only SLO miss is TTFT p95 (2.59 s vs 2 s) with a 2.2 s floor (min 2230 ms) for a one-token fake reply while API reads are about 15 ms. Ingest queue age shows the same 2.2 s floor, so a fixed dispatch delay (about 2 s) shared by the chat and ingestion job paths is the likely cause (hypothesis, not yet traced: check the outbox/arq poll interval and the 0.4 s stream flush). The machine is far from saturated, so this is latency from a tick, not load. Not tuned and no threshold changed; per the SLO policy a threshold is not relaxed to make a run pass.
+
+### Re-run after the SSE terminal-close fix (2026-11-05, same host and procedure)
+
+Root cause of the TTFT miss above (traced, then fixed in `4c61573b`): after the poll that delivered the batch containing `message.done`, the chat SSE handler waited one more `STREAM_SIGNAL_FALLBACK_INTERVAL` (2.0 s) for a wake that never came (the worker had finished) before a second poll saw "terminal and no newer events" and closed the stream. Every finished stream therefore held its concurrency permit and Redis pub/sub subscription 2 s too long, and the k6 `chat_ttft_ms` (measured to stream end) carried that floor. The handler now ends the stream right after yielding a terminal run's final, non-size-capped batch. Same full `all.js` run (`LOAD_DURATION_SCALE=1`, `grafana/k6:0.57.0`, fake model, 8 seed documents, project `bbd-os-test-k6b`, `scripts/load-test.sh` replicated by hand as before).
+
+| SLO | Metric | Baseline (`6fc29ba4`) | After fix | Threshold | Result |
+|---|---|---|---|---|---|
+| SLO-1 | `http_req_failed` | 0.00 % (0 of 1118) | 0.00 % (0 of 1089) | < 0.5 % | pass |
+| SLO-2a | dashboards p95 / p99 | 21.7 / 28.0 ms | 40.9 / 59.9 ms | 400 / 800 ms | pass |
+| SLO-2b | search p95 / p99 | 36.1 / 52.3 ms | 48.3 / 80.3 ms | 800 / 1500 ms | pass |
+| SLO-2c | documents p95 / p99 | 20.8 / 26.1 ms | 39.0 / 68.3 ms | 300 / 600 ms | pass |
+| SLO-3 | chat TTFT p50 / p95 / p99 | 2422 / 2594 / 2915 ms | 544 / 714 / 948 ms | p95 < 2000, p99 < 4000 ms | pass |
+| SLO-3b | chat send p95 | 44 ms | 64 ms | 500 ms | pass |
+| SLO-4 | ingest lag p95 / p99 | 2252 / 2307 ms | 2357 / 2394 ms | 30 / 60 s | pass |
+| SLO-5 | SSE open p95 | 35 ms | 49 ms | 500 ms | pass |
+| SLO-6 | ingest queue age p95 | 2225 ms | 2338 ms | 5 s | pass |
+| SLO-7 | checks | 100 % (1234) | 100 % (1208) | > 99 % | pass |
+
+All thresholds passed (k6 exit 0). `chat_completion_ms` avg fell from 2.5 s to 0.56 s. The ~2.2 s floor on ingest lag and queue age is unchanged, so it is a separate fixed dispatch delay on the ingestion path (not traced; within its SLO). Read-path latencies are slightly higher than the baseline run, within run-to-run noise on a shared development host. `tests/integration/test_p14_chat_sse.py` (4) and `test_p14_chat_worker.py` (5) passed on the same stack.

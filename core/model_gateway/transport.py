@@ -9,6 +9,8 @@ from contextvars import ContextVar
 
 import httpx
 
+from core.net_policy import is_public_address
+
 logger = logging.getLogger(__name__)
 
 # The send fence holds the privacy lock through resolution, so DNS must fail fast.
@@ -48,39 +50,7 @@ def _address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     return address
 
 
-_DENY_V6 = tuple(
-    ipaddress.IPv6Network(v)
-    for v in ("2001::/32", "2002::/16", "64:ff9b:1::/48", "::/96", "fec0::/10")  # Teredo, 6to4, local NAT64, compat
-)
-_DENY_V4 = tuple(ipaddress.IPv4Network(v) for v in ("100.64.0.0/10", "192.88.99.0/24"))
-_NAT64_WKP = ipaddress.IPv6Network("64:ff9b::/96")  # RFC 6052 fixes the layout only for this prefix
-
-
-def _is_public(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """Return whether an address is publicly routable.
-
-    Tunnel prefixes whose embedded IPv4 is attacker-choosable (Teredo, 6to4, local-use NAT64, IPv4-compatible)
-    are denied outright, before any unwrapping; only IPv4-mapped and well-known NAT64 are unwrapped and re-checked.
-    ``is_global`` alone is wrong on Python 3.12 (NAT64 ``64:ff9b::a9fe:a9fe``, multicast and ``fec0::/10``
-    all report True), so every non-public property is checked explicitly.
-    """
-    if isinstance(address, ipaddress.IPv6Address):
-        if address.ipv4_mapped is not None:
-            return _is_public(address.ipv4_mapped)
-        if any(address in network for network in _DENY_V6):
-            return False
-        if address in _NAT64_WKP:
-            return _is_public(ipaddress.IPv4Address(address.packed[12:]))
-    elif any(address in network for network in _DENY_V4):
-        return False
-    return address.is_global and not (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_multicast
-        or address.is_reserved
-        or address.is_unspecified
-    )
+_is_public = is_public_address  # shared policy lives in core.net_policy
 
 
 class _NotifyOnEnd(httpx.AsyncByteStream):

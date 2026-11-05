@@ -23,6 +23,7 @@ import httpx
 
 from core.async_runtime import run_dns_lookup
 from core.heavy_work import to_thread_joined
+from core.net_policy import is_public_address
 from modules.connectors.providers.feed_catalog import _retry_deadline
 from modules.connectors.public import ProviderRateLimited, overlap_floor
 from modules.connectors.selection import SKEW
@@ -84,7 +85,7 @@ async def resolve_public(host: str, port: int) -> list[str]:
     except (OSError, TimeoutError) as exc:
         raise UnsafeDestination("host_unresolvable") from exc
     addresses = [str(item[4][0]) for item in infos]
-    if not addresses or any(not ip_address(address).is_global for address in addresses):
+    if not addresses or any(not is_public_address(ip_address(address)) for address in addresses):
         raise UnsafeDestination("non_public_destination")
     return addresses
 
@@ -127,7 +128,7 @@ async def fetch_bounded(
         raise UnsafeDestination("url_not_allowed")
     port = parts.port or (443 if parts.scheme == "https" else 80)
     addresses = await resolve(parts.hostname, port)
-    if not addresses or any(not ip_address(address).is_global for address in addresses):
+    if not addresses or any(not is_public_address(ip_address(address)) for address in addresses):
         raise UnsafeDestination("non_public_destination")
     # Several public APIs (NWS, Wikimedia, CISA) reject UA-less clients; caller headers (e.g. SEC's contact
     # User-Agent) always win, compared case-insensitively.
