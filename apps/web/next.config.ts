@@ -26,6 +26,7 @@ const nextConfig: NextConfig = {
     return [
       // Not the widget frame shell (/genui-frame): it must be framable (X-Frame-Options DENY) and sets its own headers.
       { source: '/((?!genui-frame$).*)', headers: securityHeaders },
+      // Defence in depth only: Next does not apply headers() to externally rewritten responses; FastAPI ApiDefaultHeadersMiddleware is the effective layer.
       { source: '/api/:path*', headers: [{ key: 'Content-Security-Policy', value: API_FALLBACK_CSP }] },
       // Sandboxed (opaque-origin) generative-UI iframes load these modules cross-origin, so they need CORS + CORP.
       {
