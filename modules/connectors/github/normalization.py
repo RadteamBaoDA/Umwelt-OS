@@ -39,8 +39,10 @@ def normalize_github_record(
         commit_value = commit if isinstance(commit, dict) else {}
         author = commit_value.get("author") if isinstance(commit_value.get("author"), dict) else {}
         committer = commit_value.get("committer") if isinstance(commit_value.get("committer"), dict) else {}
-        assert author is not None  # noqa: S101  # mypy narrowing invariant
-        assert committer is not None  # noqa: S101  # mypy narrowing invariant
+        if author is None:
+            raise RuntimeError("invariant violated: author must not be None")
+        if committer is None:
+            raise RuntimeError("invariant violated: committer must not be None")
         fields = {
             key: value for key, value in {
                 "sha": raw.get("sha"), "html_url": raw.get("html_url"),
@@ -56,8 +58,10 @@ def normalize_github_record(
     commit_value = commit if isinstance(commit, dict) else {}
     author = commit_value.get("author") if isinstance(commit_value.get("author"), dict) else {}
     committer = commit_value.get("committer") if isinstance(commit_value.get("committer"), dict) else {}
-    assert committer is not None  # noqa: S101  # mypy narrowing invariant
-    assert author is not None  # noqa: S101  # mypy narrowing invariant
+    if committer is None:
+        raise RuntimeError("invariant violated: committer must not be None")
+    if author is None:
+        raise RuntimeError("invariant violated: author must not be None")
     published_value = (
         committer.get("date") or author.get("date") if kind == "commit"
         else raw.get("published_at") or raw.get("created_at")

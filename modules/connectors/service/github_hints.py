@@ -522,7 +522,8 @@ async def _lock_hint_admission_rows(
         ConnectorProvisioning.source_id == binding.source_id,
     ).with_for_update())
     if target.intent == "visibility_lost" and source.status in {"active", "paused"} and provisioned is not None and provisioned.source_generation == source.generation:
-        assert source_locked is not None  # noqa: S101  # mypy narrowing invariant
+        if source_locked is None:
+            raise RuntimeError("invariant violated: source_locked must not be None")
         await sources.prepare_source_pause_for_connector_in_uow(
             session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
             access_fence=access_fence, source_fence=source_locked,
@@ -629,7 +630,8 @@ async def _admit_visibility_loss(ctx: _HintAdmission) -> GitHubHintEnqueueResult
     visibility_hint = next((hint for hint in pause_hints if (
         hint.resource == target.resource and hint.locator_kind == target.locator_kind and hint.locator == target.locator
     )), None)
-    assert ctx.source is not None and ctx.source_locked is not None  # noqa: S101  # mypy narrowing invariant
+    if ctx.source is None or ctx.source_locked is None:
+        raise RuntimeError("invariant violated: ctx.source and ctx.source_locked must not be None")
     paused = await sources.pause_source_for_connector_in_uow(
         session, binding.source_id, scope=scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
         access_fence=ctx.access_fence, source_fence=ctx.source_locked,
@@ -1069,7 +1071,8 @@ def _acknowledge_prepared_github_hint(
         hint.state = disposition
         hint.next_attempt_at = now
     if release:
-        assert capacity is not None  # noqa: S101  # mypy narrowing invariant
+        if capacity is None:
+            raise RuntimeError("invariant violated: capacity must not be None")
         capacity.pending_count -= 1
         hint.capacity_reserved = False
     return True

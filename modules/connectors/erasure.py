@@ -385,7 +385,8 @@ async def erase_account_remote_page(
     if plan.workflow_ids or plan.credential_ids or plan.workflow_name:
         await _delete_remote_n8n_objects(factory, settings, scope, plan)
     if plan.grant_token is not None:
-        assert plan.grant_identity is not None  # noqa: S101  # mypy narrowing invariant
+        if plan.grant_identity is None:
+            raise RuntimeError("invariant violated: plan.grant_identity must not be None")
         await _revoke_erased_github_grant(factory, settings, scope, plan.grant_token, plan.grant_identity)
     return False, {"after": str(plan.source_id)}
 

@@ -586,7 +586,8 @@ FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = tuple(
 )
 
 _BY_ID = {spec.id: spec for spec in FREE_PROVIDER_SPECS}
-assert len(_BY_ID) == len(FREE_PROVIDER_SPECS)  # noqa: S101  # import-time catalog invariant (not narrowing)
+if len(_BY_ID) != len(FREE_PROVIDER_SPECS):
+    raise RuntimeError("invariant violated: duplicate provider id in FREE_PROVIDER_SPECS")
 
 
 def get_provider_spec(provider_id: str | None) -> FreeProviderSpec | None:

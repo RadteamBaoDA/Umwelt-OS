@@ -47,7 +47,8 @@ DefaultWrite = Annotated[WorkspaceContext, Depends(require_default_workspace_wri
 def _flag(request: Request) -> bool:
     """Return the actual configured multi-workspace flag; never defaulted or inferred."""
     flag = request.app.state.settings.multi_workspace_enabled
-    assert isinstance(flag, bool)  # noqa: S101  # mypy narrowing invariant
+    if not isinstance(flag, bool):
+        raise TypeError("invariant violated: unexpected type for flag")
     return flag
 
 

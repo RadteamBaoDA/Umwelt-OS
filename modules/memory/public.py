@@ -380,7 +380,9 @@ async def _verify_export_document_evidence(
             raise ConflictError("Memory export cannot verify incomplete document provenance")
         return
     try:
-        assert prov.version_id is not None and prov.chunk_id is not None  # complete_doc  # noqa: S101  # mypy narrowing invariant
+        # complete_doc
+        if prov.version_id is None or prov.chunk_id is None:
+            raise RuntimeError("invariant violated: prov.version_id and prov.chunk_id must not be None")
         refs = await documents_public.read_evidence_refs(
             session, [(prov.version_id, prov.chunk_id)], scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
@@ -435,7 +437,8 @@ async def _fence_export_source(
             prov.doc_evidence = None
     else:
         prov.safe["source_id"] = source_id
-        assert source is not None  # noqa: S101  # mypy narrowing invariant
+        if source is None:
+            raise RuntimeError("invariant violated: source must not be None")
         prov.source_fence_data = {"source_id": source.id, "source_generation": source.generation}
 
 
@@ -1948,7 +1951,9 @@ class MemoryService:
                 _privacy_select(scope).with_for_update().execution_options(populate_existing=True)
             )
         if rec is None:
-            assert fence is not None  # only the locked branch reaches an insert  # noqa: S101  # mypy narrowing invariant
+            # only the locked branch reaches an insert
+            if fence is None:
+                raise RuntimeError("invariant violated: fence must not be None")
             rec = MemoryPrivacyRecord(
                 workspace_id=scope.workspace_id,
                 owner_id=_actor(scope),

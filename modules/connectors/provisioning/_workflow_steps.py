@@ -355,7 +355,8 @@ async def defer_unknown_workflow_create(
     now = datetime.now(UTC)
     if latest is not None and now <= latest:
         now = latest + timedelta(microseconds=1)
-    assert row is not None  # noqa: S101  # mypy narrowing invariant
+    if row is None:
+        raise RuntimeError("invariant violated: row must not be None")
     row.updated_at = now
     await session.flush()
     return True

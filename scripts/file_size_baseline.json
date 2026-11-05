@@ -1,0 +1,19 @@
+{
+  "modules/agents/harness.py": 1911,
+  "modules/agents/public.py": 2124,
+  "modules/automations/execution.py": 1820,
+  "modules/chat/public.py": 2166,
+  "modules/chat/routes.py": 1559,
+  "modules/connectors/collection.py": 2248,
+  "modules/connectors/provisioning_routes.py": 1580,
+  "modules/connectors/worker.py": 1545,
+  "modules/dashboard/public.py": 2381,
+  "modules/ingestion/worker.py": 1896,
+  "modules/knowledge/relationships/public.py": 1881,
+  "modules/knowledge/temporal/worker.py": 2066,
+  "modules/memory/public.py": 2518,
+  "modules/search/indexing.py": 1628,
+  "modules/settings/public.py": 1533,
+  "modules/sources/public.py": 2213,
+  "modules/timeline/public.py": 2310
+}

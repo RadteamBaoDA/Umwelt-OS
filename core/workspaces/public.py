@@ -398,7 +398,8 @@ async def invitation_target(session: AsyncSession, digest: str) -> InvitationTar
                                .execution_options(populate_existing=True))
     if not _invitation_live(row, digest):
         raise HTTPException(status_code=410, detail="Invitation is no longer available")
-    assert row is not None  # noqa: S101  # mypy narrowing invariant
+    if row is None:
+        raise RuntimeError("invariant violated: row must not be None")
     return InvitationTarget(row.id, row.workspace_id, row.invited_by_user_id, row.email)
 
 
@@ -466,7 +467,8 @@ async def accept_invitation_in_uow(
     if (not _invitation_live(invitation, digest) or issuer is None or issuer.role != "owner"
             or issuer.owner_user_id != target.owner_user_id or workspace.owner_user_id != target.owner_user_id):
         raise HTTPException(status_code=410, detail="Invitation is no longer available")
-    assert invitation is not None  # noqa: S101  # mypy narrowing invariant
+    if invitation is None:
+        raise RuntimeError("invariant violated: invitation must not be None")
     if invitation.email != target.email or invitation.invited_by_user_id != target.owner_user_id:
         raise HTTPException(status_code=410, detail="Invitation is no longer available")
     if email != invitation.email:

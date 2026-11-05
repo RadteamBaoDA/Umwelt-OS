@@ -1360,7 +1360,8 @@ async def _publish_extraction(session: AsyncSession, snap: _Snapshot, response: 
     published = await _publish_entities(session, snap, extracted, plan, match_fingerprints, evidence_by_chunk)
     await _publish_relationships(session, snap, extracted, published)
     mapping = snap.mapping
-    assert mapping is not None  # noqa: S101  # mypy narrowing invariant
+    if mapping is None:
+        raise RuntimeError("invariant violated: mapping must not be None")
     if await entities.finish_extraction_work(
         session, claim.work_id, claim.lease_owner, facts=published.facts, review=published.review,
         model=actual_model or mapping.model, usage=usage, scope=claim.scope,

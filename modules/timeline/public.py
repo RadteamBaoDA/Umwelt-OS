@@ -398,7 +398,8 @@ def _cursor_decode(value: str | None, fingerprint: str) -> dict[str, Any]:
                 parsed_instant = datetime.fromisoformat(key[0])
                 if parsed_instant.tzinfo is None or parsed_instant.utcoffset() is None:
                     raise ValueError("cursor timestamp must be aware")
-                assert parsed_instant is not None  # noqa: S101  # mypy narrowing invariant
+                if parsed_instant is None:
+                    raise RuntimeError("invariant violated: parsed_instant must not be None")
                 if parsed_instant.utcoffset() != timedelta(0) or parsed_instant.astimezone(UTC).isoformat() != key[0]:
                     raise ValueError("cursor timestamp is not canonical UTC")
         except (ValueError, TypeError) as exc:
@@ -486,7 +487,9 @@ async def list_event_evidence(
     event_row = await session.scalar(select(Event).where(
         Event.id == event_id, Event.workspace_id == scope.workspace_id,
     ))
-    assert event_row is not None  # id was just selected above  # noqa: S101  # mypy narrowing invariant
+    # id was just selected above
+    if event_row is None:
+        raise RuntimeError("invariant violated: event_row must not be None")
     result = await _event_read(session, event_row, scope=scope,
                                multi_workspace_enabled=multi_workspace_enabled)
     return result.evidence if result else None
@@ -669,7 +672,7 @@ async def list_correlation_signals(
     return CorrelationSignalPage(items=signals[:limit], truncated=truncated)
 
 
-async def _list_partition(
+async def _list_partition(  # noqa: C901, PLR0912
     session: AsyncSession, query: TimelineQuery, partition: int, key: Any, limit: int, *, scope: Scope,
 ) -> list[Event]:
     """Read a stable occurrence partition with shared visibility and type filters applied."""
@@ -695,7 +698,9 @@ async def _list_partition(
         statement = statement.where(Event.date_precision == "timed")
         if query.date_from is not None:
             start, _ = day_window(query.date_from, query.timezone)
-            assert query.date_to is not None  # validated together with date_from  # noqa: S101  # mypy narrowing invariant
+            # validated together with date_from
+            if query.date_to is None:
+                raise RuntimeError("invariant violated: query.date_to must not be None")
             _, end = day_window(query.date_to - timedelta(days=1), query.timezone)
             statement = statement.where(Event.started_at >= start, Event.started_at < end)
         if query.entity_id is not None:
@@ -774,7 +779,8 @@ async def _list_page(
         if len(rows) > room:
             last = rows[room - 1]
             value = last.started_at if partition == 0 else last.occurred_date if partition == 1 else last.created_at
-            assert value is not None  # noqa: S101  # mypy narrowing invariant
+            if value is None:
+                raise RuntimeError("invariant violated: value must not be None")
             next_position = {"v": 1, "f": fingerprint, "p": partition, "k": [value.isoformat(), str(last.id)]}
             break
         partition += 1
@@ -1174,7 +1180,9 @@ async def schedule_extraction_work(
             TimelineExtractionWork.extractor_version == extractor_version,
             TimelineExtractionWork.prompt_version == prompt_version,
         ))
-    assert work_id is not None  # the conflicting identity row exists  # noqa: S101  # mypy narrowing invariant
+    # the conflicting identity row exists
+    if work_id is None:
+        raise RuntimeError("invariant violated: work_id must not be None")
     await session.flush()
     # GitHub events are produced deterministically by the connector mapper and are canonical;
     # model extraction would only add duplicates. Terminal-block the work (an error code the

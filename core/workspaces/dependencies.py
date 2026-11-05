@@ -179,7 +179,8 @@ async def require_workspace_observer_read(
     except (HTTPException, DomainError) as exc:
         if exc.status_code != 404 or account.id != 1 or workspace_id is None:
             raise
-    assert selected is not None  # noqa: S101  # mypy narrowing invariant
+    if selected is None:
+        raise RuntimeError("invariant violated: selected must not be None")
     viewer = await resolve_admin_workspace_context(
         session, actor_user_id=account.id, workspace_id=selected,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,

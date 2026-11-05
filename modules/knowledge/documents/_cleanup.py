@@ -641,7 +641,9 @@ async def publish_source_cleanup_wakeup(
         session, event_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     ) is not None:
         return False
-    assert scope.source_id is not None and scope.source_generation is not None  # proven by the resolver  # noqa: S101  # mypy narrowing invariant
+    # proven by the resolver
+    if scope.source_id is None or scope.source_generation is None:
+        raise RuntimeError("invariant violated: scope.source_id and scope.source_generation must not be None")
     try:
         await ingestion.publish_event(session, DomainEvent(
             id=event_id, type="source.purge.progressed", version=1, occurred_at=datetime.now(UTC),

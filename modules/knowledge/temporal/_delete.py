@@ -257,11 +257,13 @@ async def _authorize_recoveries(
     Fact authorization receives only the fact-bearing receipts (bulk/cleanup).
     """
     if node_actions:
-        assert context.authorize_node_recovery is not None  # noqa: S101  # mypy narrowing invariant
+        if context.authorize_node_recovery is None:
+            raise RuntimeError("invariant violated: context.authorize_node_recovery must not be None")
         await context.authorize_node_recovery(receipts, node_actions)
     if fact_actions:
         fact_receipts = tuple(item for item in receipts if item.phase in _FACT_PHASES)
-        assert context.authorize_fact_recovery is not None  # noqa: S101  # mypy narrowing invariant
+        if context.authorize_fact_recovery is None:
+            raise RuntimeError("invariant violated: context.authorize_fact_recovery must not be None")
         await context.authorize_fact_recovery(fact_receipts, fact_actions)
 
 
@@ -311,7 +313,8 @@ async def _prove_missing_facts(
         )
         if remaining_support:
             # Current exact absence is required before consulting another operation's rebuild proof.
-            assert latest_intent is not None  # noqa: S101  # mypy narrowing invariant
+            if latest_intent is None:
+                raise RuntimeError("invariant violated: latest_intent must not be None")
             if not await _authorize_cross_rebuild_absence(
                 context, "fact", missing_fact_id, episode_id=UUID(str(episode_id)),
                 endpoints=(latest_intent.source_node_id, latest_intent.target_node_id),
@@ -966,7 +969,8 @@ def _fact_replacement_converged(
 ) -> bool:
     """Prove the live fact equals the owner snapshot, excludes this episode and matches the latest journal."""
     snapshot = action.replacement
-    assert snapshot is not None  # noqa: S101  # mypy narrowing invariant
+    if snapshot is None:
+        raise RuntimeError("invariant violated: snapshot must not be None")
     dims = context.embedding.dimensions
     snapshot_fingerprint = _fact_recovery_fingerprint(_replacement_edge(snapshot), dims)
     return bool(
