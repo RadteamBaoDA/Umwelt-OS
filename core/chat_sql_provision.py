@@ -20,7 +20,6 @@ import re
 import sys
 
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from core.config import Settings
@@ -85,11 +84,8 @@ async def provision(settings: Settings) -> int:
     engine = create_async_engine(settings.admin_database_url, isolation_level="AUTOCOMMIT", hide_parameters=True)
     try:
         async with engine.connect() as conn:
-            try:
-                # Best effort: keep the (already non-secret) statement out of the server log when allowed.
-                await conn.exec_driver_sql("SET log_statement = 'none'")
-            except DBAPIError:
-                pass  # insufficient privilege: the verifier alone is still safe to log
+            # Only the salted SCRAM verifier crosses the wire, so the statement is safe to appear in server logs;
+            # no session-level SET here (the PgBouncer session-state guard forbids it).
             await conn.exec_driver_sql(f"ALTER ROLE {LOGIN_ROLE} PASSWORD '{verifier}'")
     except Exception as exc:  # noqa: BLE001 - deliberately generic; str(exc) would carry statement text
         orig = getattr(exc, "orig", None)
