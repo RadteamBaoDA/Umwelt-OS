@@ -94,3 +94,37 @@ async def test_requeue_of_nothing_issues_no_statement():
     session = FakeSession([])
     assert await replay.requeue(session, [], now=datetime.now(UTC)) == 0
     assert session.statements == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", sorted(replay.DESTRUCTIVE_TYPES))
+async def test_destructive_types_are_refused_without_the_allow_flag(event_type, capsys):
+    """Purge/cleanup/purge-cancelled rows are listed with status but never re-queued without the flag."""
+    row = SimpleNamespace(id=uuid4(), type=event_type, created_at=datetime.now(UTC))
+    session = FakeSession([row])
+    args = replay.parse_args([*OWNER, "--event-id", str(uuid4()), "--execute"])
+    assert await replay.run(args, session) == 2
+    assert session.commits == 0 and len(session.statements) == 1
+    assert "DESTRUCTIVE" in capsys.readouterr().out
+    allowed = replay.parse_args([*OWNER, "--event-id", str(uuid4()), "--execute", "--allow-destructive"])
+    session = FakeSession([row])
+    assert await replay.run(allowed, session) == 0
+    assert session.commits == 1 and "event_outbox.status = 'failed'" in _sql(session.statements[1])
+
+
+@pytest.mark.asyncio
+async def test_destructive_dry_run_reports_type_and_status(capsys):
+    """A dry run is allowed but flags destructive rows and shows type/status."""
+    row = SimpleNamespace(id=uuid4(), type="source.purge.requested", created_at=datetime.now(UTC))
+    args = replay.parse_args([*OWNER, "--type", "source.purge.requested", "--since", "2026-01-01T00:00:00Z"])
+    assert await replay.run(args, FakeSession([row])) == 0
+    out = capsys.readouterr().out
+    assert "source.purge.requested status=failed" in out and "DESTRUCTIVE" in out
+
+
+def test_stage_events_stay_replayable_without_destructive_flag() -> None:
+    """Routine stage recovery must not require ``--allow-destructive``."""
+    from core.events.replay import is_destructive
+
+    for event_type in ("ingestion.stage.requested", "connector.crawl.requested", "ingestion.normalize.requested"):
+        assert not is_destructive(event_type)
