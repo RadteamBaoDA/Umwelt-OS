@@ -22,6 +22,7 @@ depends_on: str | Sequence[str] | None = None
 
 _LEGACY = "umwelt_chat_sql_reader"
 _GROUP = "umwelt_app"
+_READER = "umwelt_chat_sql_login"
 _ADVISORY = r"p.proname LIKE 'pg\_%advisory\_%' AND n.nspname = 'pg_catalog'"
 _FUNCTIONS = "SELECT p.oid::regprocedure AS f FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE "
 _MEMBERS = (
@@ -43,6 +44,15 @@ def upgrade() -> None:
         "DO $$ DECLARE fn regprocedure; app text; BEGIN "  # noqa: S608  # module constants
         "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + _GROUP + "') THEN "  # module constant
         "CREATE ROLE " + _GROUP + " NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF; "
+        # A pre-existing role of this name is not trusted: force the safe attributes (INHERIT is a member-side
+        # property, so none is needed here), detach the reader and fail loudly if it still reaches the group.
+        "ALTER ROLE " + _GROUP + " NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; "
+        "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + _READER + "') THEN "
+        "REVOKE " + _GROUP + " FROM " + _READER + "; "
+        "IF pg_has_role('" + _READER + "', '" + _GROUP + "', 'MEMBER') THEN "
+        "RAISE EXCEPTION '" + _READER + " must not be a direct or indirect member of " + _GROUP + "'; END IF; END IF; "
+        "RAISE NOTICE '" + _GROUP + " members: %', (SELECT coalesce(string_agg(pg_get_userbyid(member)::text, ', '), '(none)') "
+        "FROM pg_auth_members WHERE roleid = '" + _GROUP + "'::regrole); "
         "EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO " + _GROUP + "', current_database()); "
         f"FOR fn IN {_FUNCTIONS}{_ADVISORY} LOOP "
         "EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO " + _GROUP + "', fn); END LOOP; "

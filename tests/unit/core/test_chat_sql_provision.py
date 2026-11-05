@@ -44,8 +44,8 @@ def test_non_ascii_or_spaced_password_rejected(bad: str) -> None:
 class _Conn:
     """Fake connection recording SQL and optionally failing the ALTER."""
 
-    def __init__(self, log: list[str], fail: Exception | None) -> None:
-        self.log, self.fail = log, fail
+    def __init__(self, log: list[str], fail: Exception | None, unsafe: bool = False) -> None:
+        self.log, self.fail, self.unsafe = log, fail, unsafe
 
     async def __aenter__(self) -> _Conn:
         return self
@@ -53,17 +53,18 @@ class _Conn:
     async def __aexit__(self, *a: Any) -> None:
         return None
 
-    async def exec_driver_sql(self, sql: str) -> None:
+    async def exec_driver_sql(self, sql: str) -> Any:
         self.log.append(sql)
         if self.fail and sql.startswith("ALTER"):
             raise self.fail
+        return SimpleNamespace(first=lambda: (1,) if self.unsafe and sql.startswith("SELECT") else None)
 
 
 class _Engine:
     """Fake engine yielding one fake connection."""
 
-    def __init__(self, log: list[str], fail: Exception | None) -> None:
-        self.conn = _Conn(log, fail)
+    def __init__(self, log: list[str], fail: Exception | None, unsafe: bool = False) -> None:
+        self.conn = _Conn(log, fail, unsafe)
 
     def connect(self) -> _Conn:
         return self.conn
@@ -114,3 +115,32 @@ def test_distinct_runtime_user_only_when_usernames_differ() -> None:
     assert mod.distinct_runtime_user(same) is None  # type: ignore[arg-type]
     assert mod.distinct_runtime_user(diff) == "app"  # type: ignore[arg-type]
     assert asyncio.run(mod.grant_runtime_role(same)) == 0  # type: ignore[arg-type]
+
+
+def _runtime_settings(user: str) -> Any:
+    return SimpleNamespace(database_url=f"postgresql+asyncpg://{user}:p@h/db", admin_database_url="postgresql+asyncpg://adm:p@h/db")
+
+
+def test_grant_refuses_reader_login_as_runtime_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reader login must never be granted the app group."""
+    log: list[str] = []
+    monkeypatch.setattr(mod, "create_async_engine", lambda url, **kw: _Engine(log, None))
+    assert asyncio.run(mod.grant_runtime_role(_runtime_settings(mod.LOGIN_ROLE))) == 1
+    assert log == []
+
+
+def test_grant_refuses_unsafe_group_role(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """A loginable/superuser umwelt_app blocks the grant with a generic message."""
+    log: list[str] = []
+    monkeypatch.setattr(mod, "create_async_engine", lambda url, **kw: _Engine(log, None, unsafe=True))
+    assert asyncio.run(mod.grant_runtime_role(_runtime_settings("app"))) == 1
+    assert not any(s.startswith("GRANT") for s in log)
+    assert "unsafe attributes" in capsys.readouterr().err
+
+
+def test_grant_runs_for_safe_group_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With safe attributes the grant is issued."""
+    log: list[str] = []
+    monkeypatch.setattr(mod, "create_async_engine", lambda url, **kw: _Engine(log, None))
+    assert asyncio.run(mod.grant_runtime_role(_runtime_settings("app"))) == 0
+    assert 'GRANT umwelt_app TO "app"' in log
