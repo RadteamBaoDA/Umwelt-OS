@@ -18,6 +18,7 @@ from core.config import Settings
 from core.errors import DomainError, error_status
 from core.events import DomainEvent
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change, make_source_change
+from core.worker_context import worker_session_factory
 from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.workspaces.access import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
@@ -319,7 +320,7 @@ async def process_source_purge(ctx: dict[str, object], event_id: str) -> None:
     unlink, Redis enqueue or external I/O. Copy continuation is five seconds; replay uses
     the early held AccessFence. Canonical capture and coverage arming commit atomically.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     flag = _configured_flag(ctx)
     identifier = UUID(event_id)
     async with factory() as session:
@@ -531,7 +532,7 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
     count/continuation commit atomically. Cache eviction follows with original epoch,
     generation, dispatch and stage CAS; success additionally waits all retained receipts.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     redis = cast(Redis, ctx["redis"])
     flag = _configured_flag(ctx)
     identifier = UUID(event_id)
@@ -608,7 +609,7 @@ async def reconcile_source_coverage(ctx: dict[str, object]) -> int:
     IDs. Release each workspace transaction before the next. Only admitted scoped pending
     IDs/exact retained operations reach content/outbox locks. No Redis/network enqueue.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     flag = _configured_flag(ctx)
     # ARQ copies ctx per job: only the shared worker_cursors dict (Redis first) survives between passes.
     shared = isinstance(ctx.get(STATE_KEY), dict)

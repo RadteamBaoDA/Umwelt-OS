@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.http_cache import set_private_no_store as _no_store
 from core.publication import require_publication_gate
 from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_observer_read
@@ -39,11 +40,6 @@ from modules.settings.public import module_dependency
 router = APIRouter(prefix="/api/v1", tags=["news"], dependencies=[Depends(module_dependency("news"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
 WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
-
-
-def _no_store(response: Response) -> None:
-    """Prevent shared caches from retaining owner-specific current story evidence."""
-    response.headers["Cache-Control"] = "private, no-store"
 
 
 def _require_owner(scope: WorkspaceContext | AdminWorkspaceReadContext) -> None:

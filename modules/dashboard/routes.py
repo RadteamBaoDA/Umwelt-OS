@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core import publication
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.http_cache import set_private_no_store as _no_store
 from core.rate_limit import require_budget
 from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_observer_read, require_workspace_write
@@ -68,11 +69,6 @@ def _static_cache(response: Response) -> None:
     gadget dialog reopens instead of queueing it behind live gadget polling.
     """
     response.headers["Cache-Control"] = "private, max-age=3600"
-
-
-def _no_store(response: Response) -> None:
-    """Prevent private configuration and lifecycle metadata from entering shared caches."""
-    response.headers["Cache-Control"] = "private, no-store"
 
 
 async def _call[T](operation: Awaitable[T]) -> T:

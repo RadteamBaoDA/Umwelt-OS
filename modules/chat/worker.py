@@ -27,6 +27,7 @@ from core.model_gateway.client import (
     ModelGatewayError,
     PrivacyPolicyDenied,
 )
+from core.model_gateway.factory import ModelGatewayFactory
 from core.model_gateway.schemas import (
     AIExecutionConfig,
     ModelMapping,
@@ -39,6 +40,7 @@ from core.model_gateway.transport import (
     body_sent,
 )
 from core.model_gateway.wire import wire_protocol_for
+from core.worker_context import worker_session_factory
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.chat import media, signals
@@ -730,14 +732,12 @@ async def _rewrite_web_query(
             ):
                 raise PrivacyPolicyDenied("Configuration changed before web query rewrite")
 
-        gateway = ModelGateway(
-            evidence=settings_public.capability_evidence(session_factory, config),
-            redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key,
-            destination_id=config.endpoint_destination_id or "remote", timeout_seconds=REWRITE_TIMEOUT_SECONDS,
-            scope=scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
-            configuration_revision=config.configuration_revision, before_send=recheck_send,
-            approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs),
-            allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind,
+        gateway = ModelGatewayFactory.for_settings(
+            session_factory, redis, scope, settings.ai_allowed_endpoint_cidrs,
+            evidence_provider=settings_public.capability_evidence, gateway_cls=ModelGateway,
+        ).create(
+            config, timeout_seconds=REWRITE_TIMEOUT_SECONDS, before_send=recheck_send,
+            destination_id=config.endpoint_destination_id or "remote",
         )
         # User messages only: assistant output may carry private evidence that must not reach the search provider.
         window = [
@@ -986,7 +986,7 @@ async def purge_expired_chat_runs(ctx: dict[str, object]) -> int:
         effect identities and uncertainty tombstones and never makes an external effect replayable.
         Each candidate is its own short transaction; the privacy lock is never held across items.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     page_size = 100
     removed = 0
     async with factory() as session:
@@ -1599,19 +1599,12 @@ async def _resolve_ai_setup(
 
 def _build_gateway(c: _RunCtx, ai_config: AIExecutionConfig, send_fence: _SendAttemptFence) -> ModelGateway:
     """Construct the ``ModelGateway`` whose ``before_send`` is the per-attempt fence (lazy; no I/O)."""
-    return ModelGateway(
-        evidence=settings_public.capability_evidence(c.session_factory, ai_config),
-        redis=c.redis,
-        base_url=ai_config.gateway_base_url,
-        api_key=ai_config.gateway_api_key,
-        destination_id=ai_config.endpoint_destination_id or "remote",
-        timeout_seconds=float(ai_config.request_timeout_seconds),
-        scope=c.scope,
-        gateway_identity=ai_config.gateway_identity, model_identity=ai_config.model_identity,
-        configuration_revision=ai_config.configuration_revision,
-        before_send=send_fence.before_send,
-        approved_endpoint_cidrs=tuple(c.settings.ai_allowed_endpoint_cidrs),
-        allow_public_endpoints=ai_config.allow_public_providers, kind=ai_config.gateway_kind,
+    return ModelGatewayFactory.for_settings(
+        c.session_factory, c.redis, c.scope, c.settings.ai_allowed_endpoint_cidrs,
+        evidence_provider=settings_public.capability_evidence, gateway_cls=ModelGateway,
+    ).create(
+        ai_config, timeout_seconds=float(ai_config.request_timeout_seconds),
+        before_send=send_fence.before_send, destination_id=ai_config.endpoint_destination_id or "remote",
     )
 
 
@@ -2767,11 +2760,10 @@ async def _external_route_decision(
         ):
             raise PrivacyPolicyDenied("Visualization router configuration changed before send")
 
-    gateway = ModelGateway(
-        redis=redis, base_url=config.gateway_base_url, api_key=config.gateway_api_key, destination_id=destination,
-        timeout_seconds=15.0, scope=scope, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
-        configuration_revision=config.configuration_revision, before_send=recheck_send,
-        approved_endpoint_cidrs=config.endpoint_allowed_cidrs, allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind,
+    gateway = ModelGatewayFactory(
+        session_factory, redis, scope, config.endpoint_allowed_cidrs, gateway_cls=ModelGateway,
+    ).create(
+        config, timeout_seconds=15.0, before_send=recheck_send, destination_id=destination, with_evidence=False,
     )
     if resolved.api == "decisions":
         category = await viz.classify_decisions(gateway, mapping, policy, window, before_send=recheck_send)
@@ -3012,7 +3004,7 @@ async def process_chat_response(ctx: dict[str, object], response_id: str) -> Non
         response_id: String UUID of the ResponseRun to execute.
     """
     settings = cast(Settings, ctx["settings"])
-    session_factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    session_factory = worker_session_factory(ctx)
     redis = cast(Redis, ctx.get("redis"))
     await run_response_generation(UUID(response_id), session_factory, settings, redis)
 
@@ -3055,7 +3047,7 @@ async def recover_chat_runs(ctx: dict[str, object]) -> dict[str, int]:
     privacy-redaction fallback. Pending runs untouched for RECOVER_PENDING_MAX_AGE (by `updated_at`, which
     a release-to-pending refreshes) are failed instead of re-enqueued.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     redis = cast(Any, ctx["redis"])
     now = datetime.now(UTC)
     async with factory() as session:

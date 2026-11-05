@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.pagination import fingerprint_payload
+from core.pagination import b64url_encode, fingerprint_payload
 from core.realtime import commit_with_replay
 from core.workspaces.schemas import (
     AccessFence,
@@ -709,7 +709,7 @@ def _news_projection_cursor_fingerprint(
 def _encode_news_projection_cursor(created_at: datetime, document_id: UUID, fingerprint: str) -> str:
     """Encode the bounded keyset and its exact owner/source/filter context."""
     raw = json.dumps([created_at.astimezone(UTC).isoformat(), str(document_id), fingerprint], separators=(",", ":"))
-    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+    return b64url_encode(raw.encode())
 
 
 def _decode_news_projection_cursor(cursor: str, fingerprint: str) -> tuple[datetime, UUID]:

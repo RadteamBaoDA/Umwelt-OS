@@ -7,14 +7,16 @@ recomputes. The pieces below are the parts that were copy-pasted verbatim; modul
 queries, DTOs and fence models.
 
 Adopted by: ``modules.goals.public``, ``modules.tasks.public`` and ``modules.dashboard.public``
-(byte bound only; its cursors also bind admission revisions).
+(byte bound only; its cursors also bind admission revisions), ``modules.news.topics`` and
+``modules.sources.public`` (byte bound + digests; their cursors bind admission/filter fingerprints) and
+``modules.memory.public`` (digests only; it tracks omitted records while paging).
 
-Remaining copies, to be migrated by later work (same cursor grammar unless noted):
+Divergent copies kept on purpose (different cursor grammar and/or digest input, see
+``docs/architecture/workspace-access-helpers.md``); the old line numbers are historical:
 ``modules/timeline/public.py`` (245, 298), ``modules/chat/public.py`` (1102, 1334),
-``modules/news/topics.py`` (572, 611), ``modules/sources/public.py`` (312, 353),
 ``modules/knowledge/relationships/public.py`` (1609, 1689), ``modules/knowledge/observations/public.py``
 (179, 267), ``modules/knowledge/entities/public.py`` (236, 400), ``modules/knowledge/documents/public.py``
-(388, 604) and ``modules/memory/public.py`` (417, 487).
+(388, 604) and ``modules/memory/public.py`` (417, 487; it adopted only the digest helpers above).
 """
 
 from __future__ import annotations

@@ -13,6 +13,7 @@ from core import worker_cursors
 from core.config import Settings
 from core.errors import DomainError
 from core.realtime import commit_with_replay
+from core.worker_context import worker_session_factory as _factory
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.ingestion import public as ingestion
@@ -49,11 +50,6 @@ async def _ensure_recovery_checkpoint(session: AsyncSession, workspace_id: UUID)
     if checkpoint is None:
         session.add(NewsRecoveryCheckpoint(workspace_id=workspace_id))
         await session.flush()
-
-
-def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
-    """Read the worker-owned async database session factory from ARQ context."""
-    return cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
 
 
 @dataclass(frozen=True)

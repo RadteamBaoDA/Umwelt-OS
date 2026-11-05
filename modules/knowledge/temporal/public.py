@@ -43,8 +43,13 @@ from modules.sources import public as sources
 from modules.sources.schemas import SourceFence
 
 
-def _actor(scope: Scope) -> int:
-    """The durable actor of a typed scope."""
+def _operator_actor(scope: Scope) -> int:
+    """Return the durable actor of a typed scope, deliberately DIVERGENT from ``admission.actor_id``.
+
+    Only ``WorkspaceContext`` yields ``user_id``; an ``AdminWorkspaceReadContext`` yields the
+    *operator* (``actor_user_id``) so admin reads are attributed to the operator, whereas the
+    canonical helper would yield the data owner.
+    """
     return scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
 
 
@@ -493,7 +498,7 @@ async def request_reconcile(
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     selection = request.model_dump(mode="json", exclude_none=True)
     condition = await _scope_condition(session, selection, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    run = GraphReconcileRun(workspace_id=scope.workspace_id, actor_user_id=_actor(scope),
+    run = GraphReconcileRun(workspace_id=scope.workspace_id, actor_user_id=_operator_actor(scope),
                             scope=selection, status="pending")
     session.add(run)
     await session.flush()

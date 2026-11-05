@@ -11,12 +11,8 @@ from uuid import UUID
 from core.realtime import commit_with_replay
 from core.tools import ToolDefinition, ToolRegistry, ToolResult, ToolRisk
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import InternalJobScope, Scope
-
-
-def _actor(scope: Scope) -> int:
-    """Return the acting owner ID: the stamped actor of a job scope or the request user."""
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+from core.workspaces.admission import actor_id as _actor
+from core.workspaces.schemas import Scope
 
 
 @dataclass(frozen=True)

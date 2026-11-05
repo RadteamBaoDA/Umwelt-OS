@@ -23,6 +23,7 @@ from core import telemetry
 from core.config import Settings
 from core.errors import ConflictError, DomainError, NotFoundError, RateLimitedError
 from core.ids import uuid7
+from core.worker_context import worker_session_factory
 from core.workspaces.models import WorkspaceMembership
 from core.workspaces.schemas import InternalJobScope, Scope
 from modules.connectors import provider_terms, provisioning
@@ -826,7 +827,7 @@ async def dispatch_due_collections(ctx: dict[str, object]) -> int:
     settings = cast(Settings, ctx["settings"])
     if not settings.collector_scheduler_enabled:
         return 0
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     now = datetime.now(UTC)
     stale = await _recover_expired_slots(factory, now)
     await _create_due_requests(factory, now, settings.multi_workspace_enabled)

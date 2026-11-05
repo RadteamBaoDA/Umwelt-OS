@@ -35,6 +35,8 @@ from core.realtime import (
 )
 from core.storage import get_storage_backend
 from core.telemetry import count, set_trace, timed
+from core.worker_context import worker_multi_workspace_flag as _worker_flag
+from core.worker_context import worker_session_factory
 from core.worker_retry import retry_with_backoff
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
@@ -147,14 +149,6 @@ class WorkerState:
     normalization_rows: tuple[tuple[ObservationNormalization, SourceObservation], ...] = ()
     document_preparation: documents.NormalizedDocumentPreparation | None = None
     observation_preparation: observations.IngestionObservationPreparation | None = None
-
-
-def _worker_flag(ctx: dict[str, object]) -> bool:
-    """Require the configured boolean; no absent/default rollout context is accepted."""
-    enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
-    if type(enabled) is not bool:
-        raise TypeError("Actual workspace rollout flag required")
-    return enabled
 
 
 def _capture_worker_claim(work: WorkerState) -> WorkerClaim:
@@ -1116,7 +1110,7 @@ async def process_ingestion_event(ctx: dict[str, object], event_id: str) -> None
     on transient failure schedule a retry (``_schedule_transient_retry``) -> otherwise settle the stage
     (``_complete_ingestion_stage``). Any unexpected error settles the stage as ``stage_failed``.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     enabled = _worker_flag(ctx)
     identifier = UUID(event_id)
     event_types = ("ingestion.stage.requested", "connector.crawl.requested")
@@ -1641,7 +1635,7 @@ async def process_normalize_event(ctx: dict[str, object], event_id: str) -> None
     no bound on all queue wakeups, crashes or infrastructure failures.
     Source ownership remains held and a newer token or run is never modified.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     enabled = _worker_flag(ctx)
     identifier = UUID(event_id)
     box = _ClaimBox()
@@ -1800,7 +1794,7 @@ async def process_uploaded_file(ctx: dict[str, object], event_id: str) -> None:
     ``_publish_extraction``; any exception during parse or publication is recorded by
     ``_record_extraction_failure``.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     settings = cast(Settings, ctx["settings"])
     enabled = _worker_flag(ctx)
     identifier = UUID(event_id)
@@ -1852,7 +1846,7 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
     """
     from core.auth.public import get_active_account
 
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     settings = cast(Settings, ctx["settings"])
     enabled = _worker_flag(ctx)
     if enabled:
@@ -1875,7 +1869,7 @@ async def purge_collection_receipts(ctx: dict[str, object]) -> int:
 
     Also purges old connector request/send/quota history and delivered ingestion stage outbox rows.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     async with factory() as session:
         deleted = await ingestion_api.purge_expired_collection_receipts(session, limit=500)
         await session.commit()

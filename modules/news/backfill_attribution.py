@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.database import make_session_factory
+from core.worker_context import worker_session_factory
 from modules.knowledge.documents.models import NormalizedVersionProvenance as Provenance
 from modules.knowledge.documents.schemas import ProviderRecordMetadata
 from modules.news.models import NewsObservation
@@ -110,7 +111,7 @@ async def backfill_attribution(
 
 async def backfill_news_attribution(ctx: dict[str, object]) -> int:
     """Worker cron: write at most a bounded batch per run; a no-op once every row is filled."""
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     return (await backfill_attribution(factory, apply=True, limit=PAGE_SIZE * 4))["filled"]
 
 

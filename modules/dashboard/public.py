@@ -9,7 +9,6 @@ through the shared replay transaction.
 from __future__ import annotations
 
 import asyncio
-import base64
 import binascii
 import hashlib
 import json
@@ -31,6 +30,7 @@ from core.errors import (
     ValidationFailedError,
 )
 from core.export_pages import serialize_bounded_page
+from core.pagination import b64url_decode, b64url_encode
 from core.realtime import commit_with_replay, make_dashboard_change
 from core.workspaces.admission import actor_id as _actor
 from core.workspaces.admission import admit_scope
@@ -897,7 +897,7 @@ def _encode_dashboard_export_cursor(
         access_fence.membership_revision, access_fence.configuration_revision,
         {}, "created_at_asc_id_asc", snapshot_at.isoformat(), created_at.isoformat(), str(identifier),
     ], separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_dashboard_export_cursor(
@@ -907,8 +907,8 @@ def _decode_dashboard_export_cursor(
     try:
         if len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError
         value = json.loads(raw)
         expected_scope = [
@@ -942,7 +942,7 @@ def _encode_owner_export_cursor(
         access_fence.membership_revision, access_fence.configuration_revision,
         {}, sort, snapshot_at.isoformat(), position_at.isoformat(), str(identifier),
     ], separators=(",", ":")).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_owner_export_cursor(
@@ -952,8 +952,8 @@ def _decode_owner_export_cursor(
     try:
         if len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError
         sort = "generated_at_asc_id_asc" if record_kind == "daily_briefs" else "created_at_asc_id_asc"
         expected_scope = [

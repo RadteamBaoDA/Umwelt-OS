@@ -375,10 +375,10 @@ async def test_list_capabilities_reads_postgres_rows_matching_current_identity()
 def test_every_model_gateway_construction_uses_a_derived_config() -> None:
     root = Path(__file__).resolve().parents[4] / "modules"
     offenders = []
-    for path in root.rglob("*.py"):
+    for path in [*root.rglob("*.py"), root.parent / "core" / "model_gateway" / "factory.py"]:
         text = path.read_text(encoding="utf-8")
         if re.search(r"(?<![A-Za-z_])ModelGateway\(", text) and not re.search(r"derive_for_role|derive_for_mapping|resolve_draft_provider", text):
-            offenders.append(str(path.relative_to(root)))
+            offenders.append(str(path.relative_to(root.parent)))
     assert not offenders, f"ModelGateway built without derive_for_role: {offenders}"
 
 
@@ -423,7 +423,7 @@ def test_derive_carries_provider_kind():
 def test_every_model_gateway_construction_passes_kind():
     root = Path(__file__).resolve().parents[4] / "modules"
     offenders = []
-    for path in root.rglob("*.py"):
+    for path in [*root.rglob("*.py"), root.parent / "core" / "model_gateway" / "factory.py"]:
         text = path.read_text(encoding="utf-8")
         for match in re.finditer(r"(?<![A-Za-z_])ModelGateway\(", text):
             call = text[match.end(): match.end() + 1200]
@@ -433,7 +433,7 @@ def test_every_model_gateway_construction_passes_kind():
                 if depth == 0:
                     break
             if "kind=" not in call[:end]:
-                offenders.append(f"{path.relative_to(root)}:{text[:match.start()].count(chr(10)) + 1}")
+                offenders.append(f"{path.relative_to(root.parent)}:{text[:match.start()].count(chr(10)) + 1}")
     assert not offenders, f"ModelGateway built without kind=: {offenders}"
 
 

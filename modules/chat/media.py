@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from core.auth.dependencies import derive_key
 from core.model_gateway.schemas import AIExecutionConfig
 from core.model_gateway.transport import EndpointNetworkPolicyError, approved_transport
+from core.pagination import b64url_encode
 
 USER_AGENT = "Umwelt-OS"
 PROXY_PATH = "/api/v1/media/proxy"
@@ -106,7 +107,7 @@ def sign_media_url(secret: str, url: str, *, now: float | None = None, subject: 
     check_upstream_url(url)
     body = json.dumps({"u": url, "e": int((now or time.time()) + TOKEN_TTL_SECONDS), "s": subject},
                       separators=(",", ":"))
-    payload = base64.urlsafe_b64encode(body.encode()).decode().rstrip("=")
+    payload = b64url_encode(body.encode())
     sig = hmac.new(_key(secret), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 

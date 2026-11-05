@@ -14,18 +14,18 @@ from sqlalchemy import Select, delete, desc, exists, false, func, or_, select, t
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import ConflictError, ForbiddenError
+from core.pagination import b64url_decode, b64url_encode
 from core.realtime import (
     ReplayDraft,
     commit_with_replay,
     make_timeline_change,
     make_timeline_collection_change,
 )
-from core.workspaces import public as workspaces
+from core.workspaces import public as workspaces  # noqa: F401  (patch target for fence tests)
+from core.workspaces.admission import ALL_SCOPE_TYPES, admit_scope
 from core.workspaces.admission import actor_id as _actor
 from core.workspaces.schemas import (
     AccessFence,
-    AdminWorkspaceReadContext,
-    InternalJobScope,
     Scope,
     WorkspaceContext,
 )
@@ -64,21 +64,14 @@ async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,
 ) -> AccessFence:
-    """Require owner scope and capture or lock authorization before event locks."""
-    if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext, InternalJobScope)):
-        raise TypeError("An explicit timeline workspace scope is required")
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise ForbiddenError("Workspace owner required")
-    if lock and isinstance(scope, AdminWorkspaceReadContext):
-        raise ForbiddenError("Admin workspace access is read-only")
-    if type(multi_workspace_enabled) is not bool:
-        raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    if lock:
-        return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
-        )
-    return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    """Require owner scope and capture or lock authorization before event locks.
+
+    Thin wrapper over ``core.workspaces.admission.admit_scope`` (typed scopes labelled ``timeline workspace``,
+    admin viewers read-only); keeps the module-private name. No commit; the caller owns the transaction.
+    """
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
+        allowed_scopes=ALL_SCOPE_TYPES, scope_label="timeline workspace", admin_read_only_on_lock=True,
     )
 from modules.timeline.seed import (
     ensure_demo_events,  # re-export: used by documents seed
@@ -116,7 +109,7 @@ def _encode_timeline_export_cursor(owner_id: int, workspace_id: UUID, snapshot_a
     """Bind a keyset position to its current owner and immutable snapshot cutoff."""
     value = {"v": 1, "owner": owner_id, "workspace": str(workspace_id), "kind": "events", "snapshot": snapshot_at.astimezone(UTC).isoformat(),
              "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id)}
-    return base64.urlsafe_b64encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).decode().rstrip("=")
+    return b64url_encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
 
 
 def _decode_timeline_export_cursor(cursor: str, owner_id: int, workspace_id: UUID) -> tuple[datetime, datetime, UUID]:
@@ -124,7 +117,7 @@ def _decode_timeline_export_cursor(cursor: str, owner_id: int, workspace_id: UUI
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        value = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+        value = json.loads(b64url_decode(cursor))
         if not isinstance(value, dict) or set(value) != {"v", "owner", "workspace", "kind", "snapshot", "at", "id"}:
             raise ValueError
         if value["v"] != 1 or value["owner"] != owner_id or value["workspace"] != str(workspace_id) or value["kind"] != "events":
@@ -370,7 +363,7 @@ def day_window(day: date, timezone: str) -> tuple[datetime, datetime]:
 def _cursor_encode(value: dict[str, object]) -> str:
     """Encode bounded canonical JSON into an opaque URL-safe cursor."""
     raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return b64url_encode(raw)
 
 
 def _cursor_decode(value: str | None, fingerprint: str) -> dict[str, Any]:

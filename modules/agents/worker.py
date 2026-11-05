@@ -24,6 +24,7 @@ from core.errors import DomainError
 from core.modules import register_modules
 from core.realtime import commit_with_replay
 from core.tools import ToolRegistry
+from core.worker_context import worker_session_factory
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.agents.access import admit, admit_run, run_epoch
@@ -660,7 +661,7 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
     module state, source generations, exact tool contracts and PostgreSQL lease ownership.
     """
     settings = cast(Settings, ctx["settings"])
-    session_factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    session_factory = worker_session_factory(ctx)
     engine = cast(AsyncEngine, ctx["db_engine"])
     redis = cast(ArqRedis, ctx["redis"])  # arq worker context carries its ArqRedis pool
     registry = cast(ToolRegistry, ctx["agent_tool_registry"])
@@ -791,7 +792,7 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
     bounded scan, independent of the activity-delivery cursor.
     """
     global _activity_reconcile_cursor
-    session_factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    session_factory = worker_session_factory(ctx)
     engine = cast(AsyncEngine, ctx["db_engine"])
     redis = cast(ArqRedis, ctx["redis"])
     flag = cast(Settings, ctx["settings"]).multi_workspace_enabled

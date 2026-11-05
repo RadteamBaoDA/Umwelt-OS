@@ -23,6 +23,7 @@ from core.model_gateway.client import ModelGateway, ModelGatewayError, PrivacyPo
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
 from core.realtime import commit_with_replay, make_index_change
+from core.worker_context import worker_session_factory
 from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
@@ -485,7 +486,7 @@ async def index_pending_chunks(ctx: dict[str, object]) -> int:
     a denied, disabled or unavailable subject is skipped without touching its rows, and the
     cursor advances past the scanned page so no single subject can monopolize indexing.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     redis = cast(Redis, ctx["redis"])
     settings = cast(Settings, ctx["settings"])
     # ARQ copies ctx per job: without the worker-installed dict this is a per-job throwaway.

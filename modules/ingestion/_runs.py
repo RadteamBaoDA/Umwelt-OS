@@ -1,6 +1,5 @@
 """Run reads, history, retry and observability projections (internal; import through ``public``)."""
 
-import base64
 import json
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -13,7 +12,7 @@ from sqlalchemy.orm import aliased
 from core.errors import ConflictError, ForbiddenError, NotFoundError, ValidationFailedError
 from core.events import DomainEvent
 from core.ids import uuid7
-from core.pagination import decode_cursor, encode_cursor
+from core.pagination import b64url_decode, b64url_encode, decode_cursor, encode_cursor
 from core.realtime import (
     commit_with_replay,
     make_ingestion_change,
@@ -137,7 +136,7 @@ def _encode_history_cursor(position: tuple[datetime, UUID], binding: str) -> str
     """Encode a scoped v2 cursor around the existing timestamp/UUID pagination primitive."""
     raw = json.dumps({"v": 2, "binding": binding, "position": encode_cursor(*position)},
                      separators=(",", ":")).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_history_cursor(cursor: str, binding: str) -> tuple[datetime, UUID]:
@@ -145,8 +144,8 @@ def _decode_history_cursor(cursor: str, binding: str) -> tuple[datetime, UUID]:
     try:
         if not isinstance(cursor, str) or not 1 <= len(cursor) <= 4096 or "=" in cursor:
             raise ValueError("Invalid cursor encoding")
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError("Noncanonical cursor")
         envelope = json.loads(raw)
         if (not isinstance(envelope, dict) or set(envelope) != {"v", "binding", "position"}

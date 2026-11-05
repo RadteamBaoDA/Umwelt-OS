@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import ForbiddenError
-from core.pagination import decode_cursor, encode_cursor
+from core.pagination import b64url_decode, b64url_encode, decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_graph_change
 from core.workspaces.admission import ALL_SCOPE_TYPES, admit_scope
 from core.workspaces.admission import actor_id as _actor
@@ -134,7 +134,7 @@ def _encode_entity_export_cursor(owner_id: int, workspace_id: UUID, snapshot_at:
                           "snapshot": snapshot_at.astimezone(UTC).isoformat(),
                           "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id)},
                          sort_keys=True, separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    return b64url_encode(payload)
 
 
 def _decode_entity_export_cursor(cursor: str, owner_id: int, workspace_id: UUID) -> tuple[datetime, datetime, UUID]:
@@ -142,7 +142,7 @@ def _decode_entity_export_cursor(cursor: str, owner_id: int, workspace_id: UUID)
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        raw = b64url_decode(cursor)
         value = json.loads(raw)
         if not isinstance(value, dict) or set(value) != {"v", "owner", "workspace", "kind", "snapshot", "at", "id"}:
             raise ValueError
@@ -627,7 +627,7 @@ def _decode_identity_cursor(cursor: str, entity_id: UUID, message: str) -> tuple
     try:
         if len(cursor) > 1024:
             raise ValueError
-        identity, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+        identity, position = json.loads(b64url_decode(cursor))
         if identity != str(entity_id):
             raise ValueError
         return position, decode_cursor(position)
@@ -670,7 +670,7 @@ async def list_entity_history(
     next_cursor = None
     if more and rows:
         position = encode_cursor(rows[-1].created_at, rows[-1].id)
-        next_cursor = base64.urlsafe_b64encode(json.dumps([str(entity_id), position]).encode()).decode().rstrip("=")
+        next_cursor = b64url_encode(json.dumps([str(entity_id), position]).encode())
     membership_position = None
     if membership_cursor:
         membership_position, _ = _decode_identity_cursor(
@@ -690,9 +690,9 @@ async def list_entity_history(
         membership_page.items = [item for item in membership_page.items if item.source_id in permitted]
     membership_next = None
     if membership_page and membership_page.next_cursor:
-        membership_next = base64.urlsafe_b64encode(json.dumps([
+        membership_next = b64url_encode(json.dumps([
             str(entity_id), membership_page.next_cursor,
-        ]).encode()).decode().rstrip("=")
+        ]).encode())
     return EntityHistoryPage(items=[EntityHistoryItem(
         id=row.id, recorded_at=row.created_at, operation=row.operation,
         affected_ids=row.affected_ids, revisions=row.revisions,
@@ -1321,7 +1321,7 @@ async def list_entity_evidence_bulk(
 def _review_cursor(timestamp: datetime, work_id: UUID, index: int) -> str:
     """Encode a review item position as unpadded URL-safe JSON cursor data."""
     raw = json.dumps([timestamp.isoformat(), str(work_id), index], separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_review_cursor(value: str) -> tuple[datetime, UUID, int]:

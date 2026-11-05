@@ -1,6 +1,5 @@
 """Document CRUD, owner listing/cursors, content append and retention purge of old versions."""
 
-import base64
 import binascii
 import json
 from collections.abc import Callable, Sequence
@@ -24,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import ConflictError, ForbiddenError, ValidationFailedError
-from core.pagination import decode_cursor, encode_cursor
+from core.pagination import b64url_decode, b64url_encode, decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_knowledge_change
 from core.workspaces.schemas import (
     AccessFence,
@@ -285,7 +284,7 @@ def _encode_document_owner_cursor(
     """
     payload = [kind, str(fence.workspace_id), fence.user_id, fence.membership_revision,
                fence.configuration_revision, str(resource_id) if resource_id is not None else None, position]
-    return base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    return b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
 
 
 def _decode_document_owner_cursor(
@@ -300,8 +299,8 @@ def _decode_document_owner_cursor(
     try:
         if type(cursor) is not str or not 1 <= len(cursor) <= 2048 or "=" in cursor:
             raise ValueError("Invalid cursor encoding")
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError("Invalid cursor encoding")
         payload = json.loads(raw)
         if (not isinstance(payload, list) or len(payload) != 7 or type(payload[2]) is not int

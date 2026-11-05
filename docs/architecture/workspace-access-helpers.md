@@ -3,8 +3,8 @@
 Canonical implementations live in `core/workspaces/admission.py`. The pre-existing
 `core/workspaces/access.py` owns lock/CAS primitives and is imported by
 `core.workspaces.public`, so the new helpers sit beside it to avoid an import cycle.
-Module copies are **not** replaced by this work package; each module package adopts
-the helpers using the mapping below. Fence primitives are resolved through
+Behaviour-identical module copies have since been replaced (see the adoption sections at the end of this
+file for the final state and the copies deliberately kept); the mapping below documents the original variants. Fence primitives are resolved through
 `core.workspaces.public` at call time, so existing monkeypatches keep working.
 
 ## `_actor(scope) -> int` (21 copies) -> `admission.actor_id`
@@ -59,3 +59,34 @@ Export helpers: `core/export_pages.py` holds the snapshot cursor, byte-bound and
 goals, tasks and dashboard exports; the remaining `export_page`/`validate_export_fences` copies are
 listed in that module's docstring for later adoption.
 
+
+## Adoption status: dedupe package (final state)
+
+* `_actor`: every behaviour-identical copy now uses `admission.actor_id` (tools/browser, tools/browser_public,
+  tools/mcp_repository, automations/scope, agents/access `actor`, ingestion/_scope `_actor_id`). The only
+  remaining divergent copy is `knowledge/temporal/public.py`, renamed `_operator_actor` and documented:
+  an `AdminWorkspaceReadContext` yields the operator (`actor_user_id`), not the data owner.
+* `_require_owner` (tools/browser_public, tools/mcp_repository, automations/scope) is the new
+  `admission.require_workspace_owner` (type check plus member 403, no fence read). `news/routes._require_owner`
+  stays (role-string admin_viewer check).
+* `_admit` wrappers: timeline/public (typed scopes `timeline workspace`, admin read-only on lock), news/topics
+  (no scope-type check, admin read-only on lock), memory/public (Workspace/Job scopes `Memory workspace`, no admin
+  viewers), tools/browser_public, tools/mcp_repository `admit`, automations/scope and news/stories
+  (`owner_only=False`) now delegate to `admit_scope`; the module-private names remain as thin wrappers so
+  call sites and monkeypatches are unchanged.
+* Still intentionally separate (documented above as DIVERGENT/unrelated): knowledge/relationships/public
+  (flag check precedes admin-lock denial), search/indexing (non-locking compare, 409), connectors OAuth/GitHub
+  routes (request-bound), knowledge/temporal/worker (stored `_Admission` fence), tools/mcp_runtime method,
+  dashboard/live_map_routes pacing helper.
+
+Worker and route helpers consolidated in the same package: `core/worker_context.py`
+(`worker_session_factory`, `worker_multi_workspace_flag`, `resolve_owner_job_scope`) replaces the private
+`_factory`/`_worker_flag`/`_workspace_job_scope` copies and the inline `cast(async_sessionmaker..., ctx["session_factory"])`
+expressions; `core/http_cache.set_private_no_store` replaces five `_no_store` route helpers.
+
+Export helpers: `news/topics` and `sources/public` now use `serialize_bounded_page`, `content_digest`
+and `dto_digest` from `core/export_pages.py`; `memory/public` uses the digest helpers. The remaining modules
+(timeline, chat, relationships, observations, entities, documents) keep their own cursor grammars (bound to
+owner/workspace/admission revisions, which differ on the wire) and digest inputs (canonical JSON of
+`model_dump(mode="json")`, not `model_dump_json`), so they are divergent by design; they do use
+`core.pagination.b64url_encode/b64url_decode` for the shared base64 mechanics.

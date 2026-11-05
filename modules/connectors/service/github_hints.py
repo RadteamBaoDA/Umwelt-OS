@@ -29,6 +29,7 @@ from core.errors import (
     ValidationFailedError,
 )
 from core.ids import uuid7
+from core.pagination import b64url_encode
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.connectors.models import (
     ConnectorProvisioning,
@@ -378,7 +379,7 @@ async def list_github_event_bindings(
             "app": app_id, "installation": installation_id,
             "repository": repository_id, "after": str(page[-1]),
         }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-        next_cursor = base64.urlsafe_b64encode(token).decode().rstrip("=")
+        next_cursor = b64url_encode(token)
         if len(next_cursor) > 512:
             raise ValueError("GitHub binding cursor exceeds its bound")
     return GitHubEventBindingPage(items=tuple(bindings), next_cursor=next_cursor)

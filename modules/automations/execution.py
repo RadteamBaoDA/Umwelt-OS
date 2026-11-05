@@ -44,6 +44,7 @@ from core.config import Settings
 from core.errors import DomainError, error_status
 from core.ids import uuid7
 from core.realtime import commit_with_replay
+from core.worker_context import worker_session_factory
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.agents import public as agents
@@ -1306,7 +1307,7 @@ async def _action_step(
     remains review-only because the external effect may already have happened; it is never replayed.
     The external effect is sent after the preparing session closes, via ``_EXTERNAL_DISPATCHERS``.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     async with factory() as session:
         prepared = await _prepare_action(
             ctx, session, factory, run_id, ordinal, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -1411,7 +1412,7 @@ async def _generate_brief(
     *, scope: Scope, multi_workspace_enabled: bool,
 ) -> str:
     """Generate through Dashboard only while the persisted trigger evidence remains eligible."""
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     try:
         async with factory() as session:
             # Model I/O follows, so admission is non-locking; the transaction is released after generation.
@@ -1493,7 +1494,7 @@ async def _start_agent(
     rather than a second one; that is why this action is safe to resume. A rejection raised before
     the run row is written is a clean failure.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     registry = ctx.get("agent_tool_registry")
     if session_hash is None or registry is None:
         await _mark(factory, run.id, ordinal, "failed", "agent_unavailable", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
@@ -1713,7 +1714,7 @@ async def process_run(ctx: dict[str, Any], run_id: str) -> str:
     workspace owner must still be that owner (else the row is left untouched, never rebased), and the
     automations module must still be enabled for that workspace.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     multi_workspace_enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
     rid, now = UUID(run_id), datetime.now(UTC)
     async with factory() as session:

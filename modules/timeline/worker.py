@@ -36,6 +36,8 @@ from core.model_gateway.schemas import (
     RequestPolicy,
 )
 from core.realtime import commit_with_replay, make_timeline_change
+from core.worker_context import resolve_owner_job_scope as _workspace_job_scope
+from core.worker_context import worker_session_factory as _factory
 from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.worker_queues import queue_for
 from core.workspaces import public as workspaces
@@ -56,26 +58,6 @@ from modules.timeline.extraction import (
 from modules.timeline.models import Event, TimelineExtractionWork
 
 ROLE = "background"
-
-
-def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
-    """Resolve the worker's configured asynchronous session factory."""
-    return cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
-
-
-async def _workspace_job_scope(
-    session: AsyncSession, workspace_id: UUID, *, multi_workspace_enabled: bool,
-) -> InternalJobScope | None:
-    """Resolve an owner-backed scope from the durable extraction workspace binding."""
-    owner = await workspaces.resolve_workspace_owner_context(
-        session, workspace_id, multi_workspace_enabled=multi_workspace_enabled,
-    )
-    if owner is None:
-        return None
-    return InternalJobScope(
-        workspace_id=workspace_id, actor_user_id=owner.user_id,
-        membership_revision=owner.membership_revision,
-    )
 
 
 async def _dependency_snapshot(config: AIExecutionConfig, redis: Redis, *, scope: Scope) -> tuple[str, bool]:

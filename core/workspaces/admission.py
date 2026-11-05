@@ -46,6 +46,18 @@ def require_owner_scope(scope: Scope, *, allowed: tuple[type, ...] = (WorkspaceC
         raise TypeError(f"An explicit {label} scope is required")
 
 
+def require_workspace_owner(scope: Scope) -> None:
+    """Require an explicit owner-capable scope: ``TypeError`` for untyped scopes, 403 for members.
+
+    Accepts ``WorkspaceContext`` (owner role only) and ``InternalJobScope`` (already admitted
+    against the stamped owner). Pure; no I/O, so it runs before any session await. This is the
+    type check plus member denial that ``admit_scope`` performs, without a fence read.
+    """
+    require_owner_scope(scope)
+    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
+        raise ForbiddenError(detail="Workspace owner required")
+
+
 async def admit_scope(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,

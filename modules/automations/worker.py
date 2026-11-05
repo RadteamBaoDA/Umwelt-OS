@@ -6,10 +6,10 @@ from typing import Any, cast
 
 from arq.connections import ArqRedis
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core import worker_cursors
 from core.config import Settings
+from core.worker_context import worker_session_factory
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope
 from modules.automations import execution, producers, scheduler
@@ -33,7 +33,7 @@ async def reconcile_automation_runs(ctx: dict[str, Any]) -> int:
     queued runs and pending inbox rows of a just-disabled rule still drain. Each workspace runs in its
     own sessions under its owner's durable scope; an admission denial skips only that workspace.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     from modules.settings.public import module_is_enabled
 
     flag = cast(Settings, ctx["settings"]).multi_workspace_enabled

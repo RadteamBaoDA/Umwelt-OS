@@ -1,6 +1,5 @@
 """Version listing/cursors and review-version fences."""
 
-import base64
 import binascii
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,7 +13,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import ValidationFailedError
-from core.pagination import decode_cursor, encode_cursor
+from core.pagination import b64url_decode, b64url_encode, decode_cursor, encode_cursor
 from core.workspaces.schemas import (
     AdminWorkspaceReadContext,
     Scope,
@@ -145,7 +144,7 @@ async def get_ready_version_ref(
 
 def encode_version_cursor(version_number: int) -> str:
     """Encode a version number as canonical unpadded URL-safe base64."""
-    return base64.urlsafe_b64encode(str(version_number).encode()).decode().rstrip("=")
+    return b64url_encode(str(version_number).encode())
 
 
 def decode_version_cursor(cursor: str) -> int:
@@ -153,10 +152,8 @@ def decode_version_cursor(cursor: str) -> int:
     try:
         if "=" in cursor:
             raise ValueError("Cursor must be unpadded")
-        raw = base64.b64decode(
-            cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True
-        )
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError("Cursor is not canonical URL-safe base64")
         version_number = int(raw)
     except (ValueError, TypeError, binascii.Error) as exc:

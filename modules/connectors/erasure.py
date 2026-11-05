@@ -18,6 +18,7 @@ from core.auth.deletion_service import authorize_account_erasure
 from core.auth.erasure_contracts import AccountErasureScope
 from core.config import Settings
 from core.erasure_sql import AccountErasureOwner
+from core.worker_context import worker_session_factory
 from modules.connectors.credentials import N8nCredentials
 from modules.connectors.models import (
     ConnectorAdmissionSlot,
@@ -374,7 +375,7 @@ async def erase_account_remote_page(
     before all network I/O and the source UUID checkpoints
     progress only after remote deletion succeeds, making 404 a safe retry result.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     settings = cast(Settings, ctx["settings"])
     after = UUID(cursor["after"]) if "after" in cursor else None
     async with factory() as session:

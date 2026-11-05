@@ -1,6 +1,5 @@
 """Owner data export: fenced, byte-bounded pages of document headers and revisions."""
 
-import base64
 import binascii
 import json
 from collections.abc import Callable, Sequence
@@ -21,6 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.pagination import b64url_decode, b64url_encode
 from core.workspaces.schemas import (
     AccessFence,
     InternalJobScope,
@@ -73,7 +73,7 @@ def _encode_document_export_cursor(
         "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id),
     }
     raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_document_export_cursor(
@@ -83,7 +83,7 @@ def _decode_document_export_cursor(
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError("Invalid document export cursor")
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        raw = b64url_decode(cursor)
         payload = json.loads(raw)
         if not isinstance(payload, dict) or set(payload) != {
             "v", "owner", "workspace", "kind", "membership_revision", "configuration_revision",

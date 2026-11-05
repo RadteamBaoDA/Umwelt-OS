@@ -1,6 +1,5 @@
 """Provider snapshot reads for the typed provider-record evidence surface."""
 
-import base64
 import binascii
 import json
 import re
@@ -14,6 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.pagination import b64url_decode, b64url_encode
 from core.workspaces.schemas import (
     Scope,
 )
@@ -88,7 +88,7 @@ def _encode_provider_cursor(created_at: datetime, document_id: UUID) -> str:
     encoded = json.dumps(
         [created_at.astimezone(UTC).isoformat(), str(document_id)], separators=(",", ":")
     ).encode("utf-8")
-    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+    return b64url_encode(encoded)
 
 
 def _decode_provider_cursor(cursor: str) -> tuple[datetime, UUID]:
@@ -96,7 +96,7 @@ def _decode_provider_cursor(cursor: str) -> tuple[datetime, UUID]:
     if not cursor or len(cursor) > 1024:
         raise ValueError("Invalid provider snapshot cursor")
     try:
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        raw = b64url_decode(cursor)
         values = json.loads(raw)
         if not isinstance(values, list) or len(values) != 2 or not all(isinstance(x, str) for x in values):
             raise ValueError

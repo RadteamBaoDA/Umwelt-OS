@@ -38,6 +38,7 @@ from core.job_denial import admit_retry_stale, denial_code, terminalize
 from core.model_gateway.client import ModelGateway, PrivacyPolicyDenied
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
 from core.realtime import commit_with_replay
+from core.worker_context import worker_session_factory
 from core.worker_retry import retry_with_backoff
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
@@ -1517,7 +1518,7 @@ async def process_graph_operation(ctx: dict[str, object], operation_id_value: st
     a lost database connection can release capacity earlier and proves no remote
     cessation. Contention retries without a domain claim.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     operation_id = UUID(operation_id_value)
     token = None
     # Fence first: durable lineage + account/workspace/membership admission and the
@@ -1937,7 +1938,7 @@ async def recover_graph_work(ctx: dict[str, object]) -> int:
     short transactions (25 due rows). Denied, disabled or revoked workspaces are skipped without
     mutation. The graph is probed only after a workspace with blocked work is admitted.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     redis = cast(ArqRedis, ctx["redis"])
     settings = cast(Settings, ctx["settings"])
     dependency_state: GraphState | None = None

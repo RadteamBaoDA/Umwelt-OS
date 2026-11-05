@@ -1,6 +1,5 @@
 """Public module contracts and API boundary for the chat capability."""
 
-import base64 as _base64
 import binascii as _binascii
 import hashlib as _hashlib
 import json as _json
@@ -34,6 +33,7 @@ from core.errors import (
     NotFoundError,
     ValidationFailedError,
 )
+from core.pagination import b64url_decode, b64url_encode
 from core.telemetry import RunMeta as _RunMeta
 from core.workspaces import public as _workspaces
 from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
@@ -848,7 +848,7 @@ def _encode_chat_export_cursor(
         "at": position_at.astimezone(_UTC).isoformat(), "id": str(position_id),
     }
     raw = _json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    return _base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_chat_export_cursor(
@@ -858,7 +858,7 @@ def _decode_chat_export_cursor(
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError("Invalid chat export cursor")
-        raw = _base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        raw = b64url_decode(cursor)
         payload = _json.loads(raw)
         if not isinstance(payload, dict) or set(payload) != {"v", "owner", "kind", "snapshot", "at", "id"}:
             raise ValueError("Invalid chat export cursor")
@@ -1749,7 +1749,7 @@ def _encode_cleanup_cursor(
     payload = {"v": 1, "operation": str(scope.operation_id), "fingerprint": _cleanup_scope_fingerprint(scope),
                "kind": kind, "after": str(after) if after else None}
     raw = _json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    return _base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_cleanup_cursor(
@@ -1759,7 +1759,7 @@ def _decode_cleanup_cursor(
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError("Invalid Chat copied-evidence cursor")
-        raw = _base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        raw = b64url_decode(cursor)
         payload = _json.loads(raw)
         if (not isinstance(payload, dict)
                 or set(payload) != {"v", "operation", "fingerprint", "kind", "after"}

@@ -1,6 +1,5 @@
 """Owner-scoped observation revision writes, selection and bounded reads."""
 
-import base64
 import hashlib
 import json
 from collections.abc import Sequence
@@ -30,7 +29,12 @@ from sqlalchemy.orm import aliased
 
 from core.errors import NotFoundError
 from core.ids import uuid7
-from core.pagination import decode_fingerprinted_cursor, encode_fingerprinted_cursor
+from core.pagination import (
+    b64url_decode,
+    b64url_encode,
+    decode_fingerprinted_cursor,
+    encode_fingerprinted_cursor,
+)
 from core.workspaces import public as workspaces
 from core.workspaces.admission import actor_id as _actor
 from core.workspaces.admission import admit_scope
@@ -85,7 +89,7 @@ def _observation_export_cursor(
              "configuration_revision": access_fence.configuration_revision,
              "snapshot": snapshot_at.astimezone(UTC).isoformat(),
              "at": accepted_at.astimezone(UTC).isoformat(), "id": str(row_id)}
-    return base64.urlsafe_b64encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).decode().rstrip("=")
+    return b64url_encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
 
 
 def _decode_observation_export_cursor(
@@ -95,7 +99,7 @@ def _decode_observation_export_cursor(
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        value = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+        value = json.loads(b64url_decode(cursor))
         if not isinstance(value, dict) or set(value) != {
             "v", "owner", "workspace", "kind", "membership_revision", "configuration_revision",
             "snapshot", "at", "id",

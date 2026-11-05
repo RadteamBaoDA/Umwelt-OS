@@ -27,6 +27,7 @@ from core.ids import uuid7
 from core.model_gateway.client import ModelGateway, ModelGatewayError
 from core.model_gateway.schemas import AIExecutionConfig, RequestPolicy
 from core.telemetry import count, observe_ms
+from core.worker_context import worker_session_factory as _factory
 from core.worker_queues import queue_for
 from core.workspaces.public import (
     lock_access_fence,
@@ -83,11 +84,6 @@ class Claim:
     visibility_hash: str
     target_language: str
     config_hash: str
-
-
-def _factory(ctx: dict[str, object]) -> async_sessionmaker[AsyncSession]:
-    """Return the worker context's session factory (the ARQ ``session_factory`` entry)."""
-    return cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
 
 
 def _ready(now: datetime) -> Any:

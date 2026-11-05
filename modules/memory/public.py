@@ -1,6 +1,5 @@
 """Public contract and service interface for selective memory, candidates, and privacy management."""
 
-import base64
 import binascii
 import hashlib
 import json
@@ -27,15 +26,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.errors import (
     ConflictError,
     DomainError,
-    ForbiddenError,
     PayloadTooLargeError,
     UnavailableError,
     ValidationFailedError,
 )
-from core.pagination import decode_cursor, encode_cursor
+from core.export_pages import content_digest, dto_digest
+from core.pagination import b64url_decode, b64url_encode, decode_cursor, encode_cursor
 from core.realtime import commit_with_replay
-from core.workspaces import public as workspaces
+from core.workspaces import public as workspaces  # noqa: F401  (patch target for fence tests)
 from core.workspaces.admission import actor_id as _actor
+from core.workspaces.admission import admit_scope
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.memory.models import Memory, MemoryCandidate, MemoryPrivacyRecord
 from modules.memory.schemas import (
@@ -115,23 +115,13 @@ async def _admit(
 ) -> AccessFence:
     """Require owner scope and capture or lock authorization before any Memory query or lock.
 
-    Members stay denied (403) before any statement runs; W3 sharing adds grants later. The
-    access fence itself rejects non-default workspaces, so private Memory never leaves the
-    actor's actual default workspace. ``lock=True`` takes the fence ahead of the privacy,
-    Source and Document locks; otherwise a non-locking snapshot is returned.
+    Thin wrapper over ``core.workspaces.admission.admit_scope`` (Workspace/Job scopes only, labelled ``Memory workspace``;
+    no admin viewers). Members stay denied (403) before any statement runs. ``lock=True`` takes the fence ahead of
+    the privacy, Source and Document locks; otherwise a non-locking snapshot is returned. No commit.
     """
-    if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
-        raise TypeError("An explicit Memory workspace scope is required")
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise ForbiddenError("Workspace owner required")
-    if type(multi_workspace_enabled) is not bool:
-        raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    if lock:
-        return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
-        )
-    return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
+        allowed_scopes=(WorkspaceContext, InternalJobScope), scope_label="Memory workspace",
     )
 MEMORY_EXPORT_PAGE_MAX_BYTES = 16_777_216
 _DOCUMENT_MEMORY_CLEANUP_REASON = "Source document evidence removed"
@@ -182,7 +172,7 @@ def page_cursor_binding(scope: Scope, **filters: object) -> str:
 def bind_page_cursor(position: str, binding: str) -> str:
     """Wrap a timestamp/UUID cursor in a canonical envelope carrying its workspace binding."""
     raw = json.dumps({"v": 2, "binding": binding, "position": position}, separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return b64url_encode(raw)
 
 
 def unbind_page_cursor(cursor: str, binding: str) -> str:
@@ -190,9 +180,9 @@ def unbind_page_cursor(cursor: str, binding: str) -> str:
     try:
         if not 1 <= len(cursor) <= 2048 or "=" in cursor:
             raise ValueError("Invalid cursor encoding")
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        raw = b64url_decode(cursor)
         envelope = json.loads(raw)
-        if (base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor or not isinstance(envelope, dict)
+        if (b64url_encode(raw) != cursor or not isinstance(envelope, dict)
                 or set(envelope) != {"v", "binding", "position"} or envelope["v"] != 2
                 or envelope["binding"] != binding or not isinstance(envelope["position"], str)):
             raise ValueError("Cursor binding does not match")
@@ -209,7 +199,7 @@ def _encode_memory_export_cursor(
         [owner_id, record_kind, snapshot_at.isoformat(), created_at.isoformat(), str(identifier)],
         separators=(",", ":"),
     ).encode()
-    return base64.urlsafe_b64encode(value).decode().rstrip("=")
+    return b64url_encode(value)
 
 
 def _decode_memory_export_cursor(
@@ -219,8 +209,8 @@ def _decode_memory_export_cursor(
     try:
         if len(cursor) > 512 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError
         values = json.loads(raw)
         if not isinstance(values, list) or len(values) != 5 or values[:2] != [owner_id, record_kind]:
@@ -566,7 +556,7 @@ async def export_page(
         fences.append(MemoryExportFence(
             record_kind="memory" if record_kind == "memories" else "candidate", id=row.id,
             created_at=row.created_at, updated_at=row.updated_at,
-            content_digest=hashlib.sha256(raw).hexdigest(), **provenance_fence,
+            content_digest=content_digest(raw), **provenance_fence,
         ))
     return MemoryExportPage(
         owner_id=owner_id, record_kind=record_kind, snapshot_at=snapshot_at,
@@ -613,7 +603,7 @@ async def validate_export_fences(
             return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         item = (_memory_export_read(cast(Memory, row), provenance) if record_kind == "memories"
                 else _candidate_export_read(cast(MemoryCandidate, row), provenance))
-        digest = hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest()
+        digest = dto_digest(item)
         if digest != fence.content_digest:
             return MemoryExportFenceValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
         expected_source_fence = fence.model_dump(exclude={"record_kind", "id", "created_at", "updated_at", "content_digest"}, exclude_none=True)
@@ -855,7 +845,7 @@ def _encode_document_memory_cleanup_cursor(
          str(after) if after else None],
         separators=(",", ":"),
     ).encode("utf-8")
-    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+    return b64url_encode(value)
 
 
 def _decode_document_memory_cleanup_cursor(
@@ -865,8 +855,8 @@ def _decode_document_memory_cleanup_cursor(
     try:
         if len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError
         payload = json.loads(raw)
         if (not isinstance(payload, list) or len(payload) != 4
@@ -1144,7 +1134,7 @@ def _source_memory_cursor(scope: SourceCopiedEvidenceScope, kind: str, after: UU
          str(after) if after else None],
         separators=(",", ":"),
     ).encode("utf-8")
-    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+    return b64url_encode(value)
 
 
 def _decode_source_memory_cursor(cursor: str, scope: SourceCopiedEvidenceScope) -> tuple[str, UUID | None]:
@@ -1152,8 +1142,8 @@ def _decode_source_memory_cursor(cursor: str, scope: SourceCopiedEvidenceScope) 
     try:
         if len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError
         payload = json.loads(raw)
         if (not isinstance(payload, list) or len(payload) != 6 or payload[0] != 1

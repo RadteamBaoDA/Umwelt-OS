@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
 from core.workspaces import public as workspaces
+from core.workspaces.admission import actor_id
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.ingestion.models import (
     CollectorCredential,
@@ -33,9 +34,7 @@ _SOURCE_PURGE_PRODUCERS = {
 }
 
 
-def _actor_id(scope: Scope) -> int:
-    """Extract the validated principal identity without granting resource authority."""
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+_actor_id = actor_id  # canonical helper; private name kept for sibling ingestion modules
 
 
 async def _admit_ingestion_scope(

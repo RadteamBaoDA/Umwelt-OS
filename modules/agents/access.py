@@ -15,7 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import ConflictError, ForbiddenError
 from core.workspaces import public as workspaces
+from core.workspaces.admission import actor_id
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
+
+actor = actor_id  # canonical helper; module-public name kept for agents callers
 
 
 class _EpochRow(Protocol):
@@ -25,11 +28,6 @@ class _EpochRow(Protocol):
     owner_id: int
     membership_revision: int | None
     configuration_revision: int | None
-
-
-def actor(scope: Scope) -> int:
-    """Return the principal recorded by a real workspace or durable job scope."""
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
 
 
 async def admit(

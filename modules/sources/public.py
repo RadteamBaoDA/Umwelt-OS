@@ -1,4 +1,3 @@
-import base64
 import binascii
 import hashlib
 import json
@@ -31,12 +30,12 @@ from core.errors import (
     ConflictError,
     ForbiddenError,
     NotFoundError,
-    PayloadTooLargeError,
     ValidationFailedError,
 )
 from core.events import DomainEvent
+from core.export_pages import content_digest, dto_digest, serialize_bounded_page
 from core.ids import uuid7
-from core.pagination import decode_cursor, encode_cursor
+from core.pagination import b64url_decode, b64url_encode, decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_source_change
 from core.tools.schemas import ToolDestination
 from core.workspaces import public as workspaces
@@ -249,7 +248,7 @@ def _cursor_fingerprint(fence: AccessFence, scope: Scope, *filters: object) -> s
 def _encode_source_page_cursor(created_at: datetime, identifier: UUID, fingerprint: str) -> str:
     """Wrap the existing keyset primitive with the exact admitted request fingerprint."""
     raw = json.dumps([2, fingerprint, encode_cursor(created_at, identifier)], separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_source_page_cursor(cursor: str, fingerprint: str) -> tuple[datetime, UUID]:
@@ -257,8 +256,8 @@ def _decode_source_page_cursor(cursor: str, fingerprint: str) -> tuple[datetime,
     try:
         if len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError
         values = json.loads(raw)
         if not isinstance(values, list) or len(values) != 3 or values[:2] != [2, fingerprint]:
@@ -280,7 +279,7 @@ def _encode_source_export_cursor(
         [2, "sources", snapshot_fingerprint, snapshot_at.isoformat(), created_at.isoformat(), str(identifier)],
         separators=(",", ":"),
     ).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    return b64url_encode(payload)
 
 
 def _decode_source_export_cursor(cursor: str, fingerprint: str) -> tuple[datetime, datetime, UUID]:
@@ -288,8 +287,8 @@ def _decode_source_export_cursor(cursor: str, fingerprint: str) -> tuple[datetim
     try:
         if len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError
         values = json.loads(raw)
         if not isinstance(values, list) or len(values) != 6 or values[:2] != [2, "sources"]:
@@ -360,13 +359,10 @@ async def export_page(
     )).all())
     has_more, rows = len(rows) > limit, rows[:limit]
     items = [_source_export_read(row) for row in rows]
-    encoded_items = [item.model_dump_json().encode("utf-8") for item in items]
-    payload_bytes = 2 + sum(map(len, encoded_items)) + max(0, len(items) - 1)
-    if payload_bytes > 16_777_216:
-        raise PayloadTooLargeError(detail="Source export page exceeds its byte bound")
+    encoded_items, payload_bytes = serialize_bounded_page(items, label="Source")
     fences = [SourceMetadataExportFence(
         source_id=row.id, workspace_id=scope.workspace_id, created_at=row.created_at, updated_at=row.updated_at,
-        generation=row.generation, content_digest=hashlib.sha256(raw).hexdigest(),
+        generation=row.generation, content_digest=content_digest(raw),
     ) for row, raw in zip(rows, encoded_items, strict=True)]
     return SourceMetadataExportPage(
         owner_id=owner_id, workspace_id=scope.workspace_id, record_kind="sources", snapshot_at=snapshot_at,
@@ -410,7 +406,7 @@ async def validate_export_fences(
         item = _source_export_read(row)
         if (item.generation != fence.generation or item.created_at != fence.created_at
                 or item.updated_at != fence.updated_at
-                or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest):
+                or dto_digest(item) != fence.content_digest):
             return SourceMetadataExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
     return SourceMetadataExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 

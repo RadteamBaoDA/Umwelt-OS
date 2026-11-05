@@ -1,7 +1,6 @@
 """Owner-scoped agent run creation, lookup, and cancellation contracts."""
 
 import asyncio
-import base64
 import binascii
 import hashlib
 import json
@@ -26,7 +25,7 @@ from core.errors import (
     error_status,
 )
 from core.ids import uuid7
-from core.pagination import decode_cursor, encode_cursor
+from core.pagination import b64url_decode, b64url_encode, decode_cursor, encode_cursor
 from core.realtime import commit_with_replay
 from core.telemetry import RunMeta as _RunMeta
 from core.tools import ToolRegistry, ToolRisk
@@ -831,7 +830,7 @@ def _encode_agent_cleanup_cursor(
         "after": str(after) if after else None, "unavailable": unavailable,
     }
     raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_agent_cleanup_cursor(
@@ -841,7 +840,7 @@ def _decode_agent_cleanup_cursor(
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError("Invalid Agent copied-evidence cursor")
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        raw = b64url_decode(cursor)
         payload = json.loads(raw)
         if (
             not isinstance(payload, dict)

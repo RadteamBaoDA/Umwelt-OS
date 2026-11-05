@@ -9,7 +9,6 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.auth.deletion_service import authorize_account_erasure
 from core.auth.erasure_contracts import AccountErasureScope
@@ -17,6 +16,7 @@ from core.config import Settings
 from core.erasure_sql import AccountErasureOwner
 from core.storage import get_storage_backend
 from core.storage.admission import workspace_storage_lease
+from core.worker_context import worker_session_factory
 from modules.knowledge.documents.models import Document, DocumentCleanupOperation
 
 from . import models as _models  # noqa: F401 - register this owner's tables
@@ -50,7 +50,7 @@ async def erase_account_storage_page(
     """
     from modules.knowledge.documents.public import lock_raw_uri_identity
 
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     settings = cast(Settings, ctx["settings"])
     async with workspace_storage_lease(factory, scope.workspace_id, exclusive=True):
         async with factory() as session:

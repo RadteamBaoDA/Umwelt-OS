@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.model_gateway.client import ModelGateway, ModelGatewayError
+from core.model_gateway.factory import ModelGatewayFactory
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import RequestPolicy
 from core.workspaces.schemas import Scope
@@ -274,19 +275,12 @@ async def _apply_configured_reranking(
             evidence_items, scope_kw,
         )
 
-        gateway = ModelGateway(
-            evidence=settings_public.capability_evidence(session_factory, config),
-            redis=redis,
-            base_url=config.gateway_base_url or "http://localhost:8000",
-            api_key=config.gateway_api_key,
-            destination_id=destination_id,
-            timeout_seconds=config.request_timeout_seconds,
-            scope=scope_kw["scope"],
-            gateway_identity=config.gateway_identity, model_identity=config.model_identity,
-            configuration_revision=config.configuration_revision,
-            before_send=egress.before_send,
-            approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
-            allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind,
+        gateway = ModelGatewayFactory(
+            session_factory, redis, scope_kw["scope"], config.endpoint_allowed_cidrs,
+            evidence_provider=settings_public.capability_evidence, gateway_cls=ModelGateway,
+        ).create(
+            config, timeout_seconds=config.request_timeout_seconds, before_send=egress.before_send,
+            destination_id=destination_id, base_url=config.gateway_base_url or "http://localhost:8000",
         )
 
         # Release the outer session's snapshot/locks before the network call; the egress hook

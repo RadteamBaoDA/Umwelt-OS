@@ -19,6 +19,8 @@ from core.errors import DomainError
 from core.events import DomainEvent
 from core.realtime import commit_with_replay
 from core.storage import get_storage_backend
+from core.worker_context import worker_multi_workspace_flag as _worker_flag
+from core.worker_context import worker_session_factory
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.ingestion import public as ingestion
@@ -387,14 +389,6 @@ class _Attempt:
     evict: bool = False
 
 
-def _worker_flag(ctx: dict[str, object]) -> bool:
-    """Return the actual workspace rollout flag from worker settings; ``TypeError`` if not a real bool."""
-    enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
-    if type(enabled) is not bool:
-        raise TypeError("Actual workspace rollout flag required")
-    return enabled
-
-
 async def _admit_cleanup(
     session: AsyncSession, event_id: UUID, flag: bool, *, status: str = "queued",
 ) -> _Admitted | None:
@@ -691,7 +685,7 @@ async def reconcile_document_memory_cleanup(ctx: dict[str, object]) -> int:
     Identity-only discovery excludes legacy NULL-epoch receipts; each ID is admitted and
     published in its own session. Like all cleanup work it is not module-gated.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     global _memory_reconcile_cursor
     flag = _worker_flag(ctx)
     async with factory() as session:
@@ -712,7 +706,7 @@ async def reconcile_document_memory_cleanup(ctx: dict[str, object]) -> int:
 async def reconcile_document_agent_cleanup(ctx: dict[str, object]) -> int:
     """Fairly scan one bounded UUID page of receipts with a nonterminal Agent stage."""
     global _agent_reconcile_cursor
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     flag = _worker_flag(ctx)
     async with factory() as session:
         operation_ids = await documents.pending_document_agent_cleanup_ids(
@@ -735,7 +729,7 @@ async def reconcile_document_copied_stage_cleanup(ctx: dict[str, object]) -> int
     pending one. Terminal unavailable stages are excluded by the Documents query.
     """
     global _copied_stage_reconcile_cursor
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     flag = _worker_flag(ctx)
     async with factory() as session:
         operation_ids = await documents.pending_document_copied_stage_cleanup_ids(
@@ -1358,7 +1352,7 @@ async def process_document_cleanup(ctx: dict[str, object], event_id: str) -> Non
     and re-admission. Error recovery compares plain-scalar snapshots to durable state before
     writing; without a snapshot the dispatcher reclaims stale queued work.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     settings = cast(Settings, ctx["settings"])
     redis = cast(Redis, ctx["redis"])
     flag = _worker_flag(ctx)

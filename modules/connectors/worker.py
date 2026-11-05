@@ -17,6 +17,7 @@ from core.config import Settings
 from core.errors import DomainError
 from core.ids import uuid7
 from core.realtime import commit_with_replay
+from core.worker_context import worker_session_factory
 from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
@@ -903,7 +904,7 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     Discovery is deployment-wide; each admitted operation resolves its own URL/key/kill switch.
     """
     settings = cast(Settings, ctx["settings"])
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     flag = settings.multi_workspace_enabled
     state = _cursor_ctx(ctx)
     completed = await dispatch_github_webhooks(ctx)
@@ -1473,7 +1474,7 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
     then at most one deferred-Source recovery and one hint wake. Returns the progress count.
     """
     settings = cast(Settings, ctx["settings"])
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     flag = settings.multi_workspace_enabled
     now = datetime.now(UTC)
     progressed = await expire_github_webhook_details(factory, now=now)
@@ -1526,7 +1527,7 @@ async def process_collection_request(ctx: dict[str, object], request_id: str) ->
 
     executor = ctx.get("collection_executor") or execute_collection
     settings = cast(Settings, ctx["settings"])
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     async with factory() as session:
         admission = await scheduler.admit_collection_request(
             session, UUID(request_id), multi_workspace_enabled=settings.multi_workspace_enabled)

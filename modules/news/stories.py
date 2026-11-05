@@ -18,7 +18,9 @@ from sqlalchemy import Select, and_, func, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.errors import ForbiddenError, ValidationFailedError
+from core.pagination import b64url_encode
 from core.workspaces import public as workspaces
+from core.workspaces.admission import admit_scope
 from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.connectors.provider_specs import get_provider_spec
 from modules.knowledge.documents import public as documents
@@ -47,10 +49,8 @@ FUZZY_THRESHOLD = 0.92
 
 async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> AccessFence:
     """Admit story reads (owner or member) before source selection, counts, or enrichment."""
-    if type(multi_workspace_enabled) is not bool:
-        raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, owner_only=False,
     )
 
 
@@ -357,7 +357,7 @@ def _filter_hash(filters: StoryFilter) -> str:
 def _encode_cursor(cursor: StoryCursor) -> str:
     """Serialize and sign no data, using canonical base64 plus owner/filter binding."""
     raw = cursor.model_dump_json(exclude_none=False)
-    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+    return b64url_encode(raw.encode())
 
 
 def _decode_cursor(value: str, access_fence: AccessFence, filters: StoryFilter) -> StoryCursor:
@@ -911,7 +911,7 @@ def _encode_detail_cursor(
         "after": [str(value) for value in after], "source_selection_incomplete": source_selection_incomplete,
         "sort": DETAIL_CURSOR_SORT,
     }, sort_keys=True, separators=(",", ":"))
-    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+    return b64url_encode(raw.encode())
 
 
 def _decode_detail_cursor(
@@ -934,7 +934,7 @@ def _decode_detail_cursor(
             or (requested_source_ids and sorted(map(str, requested_source_ids)) != sorted(parts["source_ids"]))
             or not isinstance(parts["source_selection_incomplete"], bool)
             or not isinstance(parts["after"], list) or len(parts["after"]) != 3
-            or base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=") != value
+            or b64url_encode(raw.encode()) != value
         ):
             raise ValueError
         as_of = datetime.fromisoformat(parts["as_of"])

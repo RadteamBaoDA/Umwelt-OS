@@ -1,4 +1,3 @@
-import base64
 import binascii
 import json
 from copy import deepcopy
@@ -27,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from core.errors import ForbiddenError
-from core.pagination import decode_cursor, encode_cursor
+from core.pagination import b64url_decode, b64url_encode, decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_graph_change
 from core.workspaces import public as workspaces
 from core.workspaces.admission import actor_id as _actor
@@ -411,7 +410,7 @@ def _decode_bound_cursor(cursor: str, fingerprint: str, message: str) -> tuple[d
     try:
         if len(cursor) > 1024:
             raise ValueError
-        bound, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+        bound, position = json.loads(b64url_decode(cursor))
         if bound != fingerprint:
             raise ValueError
         return decode_cursor(position)
@@ -517,9 +516,9 @@ async def _list_relationships_as_of(
     more, rows = len(rows) > limit, rows[:limit]
     next_cursor = None
     if more and rows:
-        next_cursor = base64.urlsafe_b64encode(json.dumps([
+        next_cursor = b64url_encode(json.dumps([
             fingerprint, encode_cursor(rows[-1].recorded_at, rows[-1].relationship_id),
-        ]).encode()).decode().rstrip("=")
+        ]).encode())
     items, unavailable = [], []
     for history in rows:
         if history.deleted:
@@ -748,9 +747,9 @@ async def list_relationships(
     rows = rows[:limit]
     next_cursor = None
     if has_more and rows:
-        next_cursor = base64.urlsafe_b64encode(json.dumps([
+        next_cursor = b64url_encode(json.dumps([
             fingerprint, encode_cursor(rows[-1].created_at, rows[-1].id),
-        ]).encode()).decode().rstrip("=")
+        ]).encode())
     items = []
     for row in rows:
         try:
@@ -805,9 +804,9 @@ async def list_relationship_evidence(
     rows = rows[:limit]
     next_cursor = None
     if more and rows:
-        next_cursor = base64.urlsafe_b64encode(json.dumps([
+        next_cursor = b64url_encode(json.dumps([
             fingerprint, encode_cursor(rows[-1].extracted_at, rows[-1].id),
-        ]).encode()).decode().rstrip("=")
+        ]).encode())
     evidence = await _evidence_read(session, rows, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     permitted = set()
     for source_id in sorted({ref.source_id for ref in evidence}):
@@ -822,7 +821,7 @@ async def list_relationship_evidence(
 def _encode_neighbor_cursor(focus_id: UUID, created_at: datetime, relationship_id: UUID) -> str:
     """Bind a relationship cursor to its focus entity before encoding it."""
     raw = json.dumps([str(focus_id), encode_cursor(created_at, relationship_id)], separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_neighbor_cursor(cursor: str, focus_id: UUID) -> tuple[object, UUID]:
@@ -830,8 +829,8 @@ def _decode_neighbor_cursor(cursor: str, focus_id: UUID) -> tuple[object, UUID]:
     if len(cursor) > 512 or "=" in cursor:
         raise ValueError("Invalid neighbor cursor")
     try:
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError("Invalid neighbor cursor")
         focus, cursor_value = json.loads(raw)
         if focus != str(focus_id):
@@ -1676,7 +1675,7 @@ def _encode_relationship_export_cursor(
                       "snapshot": snapshot_at.astimezone(UTC).isoformat(),
                       "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id)},
                      sort_keys=True, separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_relationship_export_cursor(cursor: str, owner_id: int, workspace_id: UUID) -> tuple[datetime, datetime, UUID]:
@@ -1684,7 +1683,7 @@ def _decode_relationship_export_cursor(cursor: str, owner_id: int, workspace_id:
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        raw = b64url_decode(cursor)
         value = json.loads(raw)
         if not isinstance(value, dict) or set(value) != {"v", "owner", "workspace", "kind", "snapshot", "at", "id"}:
             raise ValueError

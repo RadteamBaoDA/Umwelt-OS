@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
 from core.errors import DomainError
+from core.worker_context import worker_session_factory
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import InternalJobScope, Scope
 from modules.ingestion import public
@@ -370,7 +371,7 @@ async def dispatch_pending_work(ctx: dict[str, object]) -> int:
     Phases: ``_reserve_dispatch_page`` (under the scheduling lock) -> per identity ``_claim_for_dispatch``
     (committed claim) -> Redis enqueue -> on failure ``_return_claim_to_pending``.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     redis = cast(ArqRedis, ctx["redis"])
     enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
     if type(enabled) is not bool:
