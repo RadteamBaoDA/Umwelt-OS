@@ -197,7 +197,10 @@ def test_drop_legacy_chat_sql_reader_role_and_app_group_migration() -> None:
     assert "DROP ROLE umwelt_chat_sql_reader" in up.stdout and "dependent_objects_still_exist" in up.stdout
     assert "CREATE ROLE umwelt_app NOLOGIN" in up.stdout
     assert "GRANT TEMPORARY ON DATABASE %I TO umwelt_app" in up.stdout and "GRANT umwelt_app TO %I" in up.stdout
-    assert "umwelt_chat_sql_login" not in up.stdout  # the reader login never joins the group
+    assert "ALTER ROLE umwelt_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS" in up.stdout
+    assert "REVOKE umwelt_app FROM umwelt_chat_sql_login" in up.stdout
+    assert "pg_has_role('umwelt_chat_sql_login', 'umwelt_app', 'MEMBER')" in up.stdout and "RAISE EXCEPTION" in up.stdout
+    assert "GRANT umwelt_app TO umwelt_chat_sql_login" not in up.stdout  # the reader login never joins the group
     down = _alembic("downgrade", "0020_drop_legacy_chat_sql_reader_role:0019_chat_sql_reader_no_public_writes", "--sql")
     assert down.returncode == 0, down.stderr
     assert "DROP ROLE umwelt_app" in down.stdout

@@ -208,6 +208,10 @@ async def test_legacy_reader_role_absent_and_app_group_holds_grants(
         temp = await conn.scalar(text("SELECT has_database_privilege(current_user, current_database(), 'TEMPORARY')"))
         adv = await conn.scalar(text("SELECT has_function_privilege(current_user, 'pg_advisory_lock(bigint)', 'EXECUTE')"))
     assert legacy == 0 and member and temp and adv
+    async with committed_engine.connect() as conn:
+        attrs = (await conn.execute(text("SELECT rolcanlogin, rolsuper FROM pg_roles WHERE rolname = 'umwelt_app'"))).one()
+        reader_member = await conn.scalar(text("SELECT pg_has_role('umwelt_chat_sql_login', 'umwelt_app', 'MEMBER')"))
+    assert tuple(attrs) == (False, False) and reader_member is False
     async with reader_engine.connect() as conn:
         row = (
             await conn.execute(

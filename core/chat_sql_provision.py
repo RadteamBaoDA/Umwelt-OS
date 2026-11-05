@@ -114,15 +114,28 @@ async def grant_runtime_role(settings: Settings) -> int:
     """Grant ``umwelt_app`` to a distinct runtime user; return an exit code (0 ok or nothing to do, 1 failed).
 
     Independent of the reader URL so separate-role deployments work with the SQL tool disabled. Idempotent;
-    the quoted identifier comes from the configured URL, never from request input.
+    the quoted identifier comes from the configured URL, never from request input. Refuses (exit 1, generic
+    message) when the runtime user is the chat SQL reader login or ``umwelt_app`` is loginable/superuser.
     """
     runtime = distinct_runtime_user(settings)
     if not runtime:
         return 0
+    if runtime == LOGIN_ROLE:
+        print(f"The runtime user must not be {LOGIN_ROLE}.", file=sys.stderr)
+        return 1
     quoted = '"' + runtime.replace('"', '""') + '"'
     engine = create_async_engine(settings.admin_database_url, isolation_level="AUTOCOMMIT", hide_parameters=True)
     try:
         async with engine.connect() as conn:
+            # Refuse to widen a group role that someone made loginable or superuser (migration 0020 resets it).
+            unsafe = (
+                await conn.exec_driver_sql(
+                    f"SELECT 1 FROM pg_roles WHERE rolname = '{APP_GROUP_ROLE}' AND (rolcanlogin OR rolsuper)"  # noqa: S608  # module constant
+                )
+            ).first()
+            if unsafe:
+                print(f"{APP_GROUP_ROLE} has unsafe attributes; refusing to grant it.", file=sys.stderr)
+                return 1
             await conn.exec_driver_sql(f"GRANT {APP_GROUP_ROLE} TO {quoted}")
     except Exception as exc:  # noqa: BLE001 - deliberately generic; str(exc) would carry statement text
         orig = getattr(exc, "orig", None)
