@@ -31,9 +31,6 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     env_file: .env
-    environment:
-      # env_file can retain owner opt-in values; base deployment must force remote export off.
-      LANGFUSE_ENABLED: "false"
     init: true
     volumes:
       - app-data:/data
@@ -66,9 +63,6 @@ services:
       dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.WorkerSettings"]
     env_file: .env
-    environment:
-      # Keep API and worker disabled unless the explicit observability overlay is included.
-      LANGFUSE_ENABLED: "false"
     healthcheck:
       test: ["CMD", "python", "-m", "core.worker_healthcheck", "bbd:worker:health"]
       interval: 30s
@@ -102,8 +96,6 @@ services:
       dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.CronWorkerSettings"]
     env_file: .env
-    environment:
-      LANGFUSE_ENABLED: "false"
     healthcheck:
       test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:cron:health-check"]
       interval: 30s
@@ -135,8 +127,6 @@ services:
       dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.ChatWorkerSettings"]
     env_file: .env
-    environment:
-      LANGFUSE_ENABLED: "false"
     healthcheck:
       test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:chat:health-check"]
       interval: 30s
@@ -168,8 +158,6 @@ services:
       dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.ModelWorkerSettings"]
     env_file: .env
-    environment:
-      LANGFUSE_ENABLED: "false"
     healthcheck:
       test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:model:health-check"]
       interval: 30s

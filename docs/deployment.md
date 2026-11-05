@@ -152,7 +152,7 @@ The design target is a 2-core, 8 GiB host with remote AI inference. Capacity on 
 
 ## Optional Langfuse telemetry
 
-The base Compose deployment does not include or contact Langfuse: `api`, `worker`, `cron-worker`, `model-worker` and `chat-worker` force `LANGFUSE_ENABLED=false`, even when `.env` retains opt-in values. For the opt-in HTTPS remote profile, follow [Observability and Langfuse](observability.md), configure the explicit owner egress approval and backend-only project credentials in `.env`, and include `docker-compose.observability.yml` in the Compose command; its environment mapping overrides the base setting. Disable export by running `docker compose down` and restarting with `docker compose -f docker-compose.yml up -d`. Only metadata-only model-call spans are sent; content capture is unavailable. Remote availability does not affect API/worker health or core writes. No performance comparison has been measured yet; target-host measurements remain deferred.
+The Compose deployment does not include a Langfuse container and does not contact Langfuse unless `.env` opts in (`LANGFUSE_ENABLED` defaults to false). For the opt-in HTTPS remote export, follow [Observability and Langfuse](observability.md) and configure the explicit owner egress approval and backend-only project credentials in `.env`. Disable export by setting `LANGFUSE_ENABLED=false` in `.env` and recreating the services. Only metadata-only model-call spans are sent; content capture is unavailable. Remote availability does not affect API/worker health or core writes. No performance comparison has been measured yet; target-host measurements remain deferred.
 
 ## Agent Chat lifecycle migration
 

@@ -50,6 +50,13 @@ OUTBOX_PENDING = Gauge(
 OUTBOX_LAG = Gauge(
     "umwelt_outbox_oldest_pending_age_seconds", "Age of the oldest undelivered outbox row (0 when none).",
     registry=REGISTRY)
+OUTBOX_ROWS_TOTAL = Gauge(
+    "umwelt_outbox_rows_total", "Estimated total event_outbox rows (pg_class.reltuples, not an exact count).",
+    registry=REGISTRY)
+OUTBOX_PURGE_BACKLOG = Gauge(
+    "umwelt_outbox_purge_backlog",
+    "Terminal event_outbox rows already past their retention cutoff (bounded count; 0 when the purge keeps up).",
+    registry=REGISTRY)
 CRON_DURATION = Histogram(
     "umwelt_cron_job_duration_seconds", "Scheduled job run time by job name.", ("job",),
     buckets=_JOB_BUCKETS, registry=REGISTRY)

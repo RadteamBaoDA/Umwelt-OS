@@ -128,6 +128,7 @@ def _start_metrics_tasks(app: FastAPI) -> list[asyncio.Task[None]]:
     if not metrics_enabled(app_settings):
         return []
     samplers = build_api_samplers(app.state.redis, app.state.session_factory, (default_queue_name, MODEL_QUEUE, CHAT_QUEUE, CRON_QUEUE),
+        outbox_retention_days=app_settings.outbox_retention_days,
     )
     return [
         spawn_background(monitor_event_loop_lag(), "metrics-loop-lag"),
