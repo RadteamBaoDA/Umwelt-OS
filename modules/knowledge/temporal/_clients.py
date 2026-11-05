@@ -209,7 +209,8 @@ def _make_clients(context: OperationAuthorization, gateway: ModelGateway) -> tup
 
 async def _authorize(context: OperationAuthorization, capability: Literal["reasoning", "embedding"]) -> None:
     """Enforce owner freshness and aggregate outbound model-call limits."""
-    assert context.model_calls is not None  # noqa: S101  # mypy narrowing invariant
+    if context.model_calls is None:
+        raise RuntimeError("invariant violated: context.model_calls must not be None")
     context.model_calls[0] += 1
     if context.model_calls[0] > MAX_MODEL_CALLS:
         raise GraphOperationError("graph_model_call_budget_exhausted")

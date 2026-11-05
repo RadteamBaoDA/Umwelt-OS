@@ -2197,7 +2197,8 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
     run = Run(ctx=ctx, factory=factory, settings=settings, attempt=attempt, gate=gate)
     lost = asyncio.Event()
     main = asyncio.current_task()
-    assert main is not None  # noqa: S101  # mypy narrowing invariant
+    if main is None:
+        raise RuntimeError("invariant violated: main must not be None")
     beat = asyncio.create_task(_heartbeat(factory, attempt, main, lost))
     settle: dict[str, Any] | None = None
     try:

@@ -1096,7 +1096,8 @@ def _scrub_agent_scope_payloads(
             approval_fences = _strict_agent_fences(approval.source_fences) if approval is not None else None
             if approval_fences is not None:
                 classified = True
-                assert approval is not None  # noqa: S101  # mypy narrowing invariant
+                if approval is None:
+                    raise RuntimeError("invariant violated: approval must not be None")
                 matched = _fences_match_agent_scope(approval.source_fences, records)
         if matched:
             # Input provenance justifies clearing derived arguments. Output references may identify
@@ -1276,7 +1277,8 @@ async def _cleanup_finalized_marker(
             work.session, run_id, workspace_id=work.workspace_id,
         )
         unresolved = work.scrub(approvals, effects, calls)
-        assert marker is not None  # noqa: S101  # mypy narrowing invariant
+        if marker is None:
+            raise RuntimeError("invariant violated: marker must not be None")
         marker.state = "unavailable" if unresolved else "finalized"
         work.unavailable = work.unavailable or unresolved or marker.state == "unavailable"
     work.advance(run_id)
@@ -1309,7 +1311,8 @@ async def _cleanup_unavailable_marker(
         work.advance(run_id)
         work.unavailable = True
         return None
-    assert marker is not None  # noqa: S101  # mypy narrowing invariant
+    if marker is None:
+        raise RuntimeError("invariant violated: marker must not be None")
     marker.matched_identity = matching
     marker.state = "pending"
     _revoke_run_for_cleanup(run)

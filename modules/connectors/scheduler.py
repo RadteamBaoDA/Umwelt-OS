@@ -368,7 +368,8 @@ async def admit_collection_request(
             .values(status="cancelled", error_code=denied))
         await session.commit()
         return None
-    assert rows is not None  # noqa: S101  # mypy narrowing invariant
+    if rows is None:
+        raise RuntimeError("invariant violated: rows must not be None")
     source_fence, row, source, request = rows
     now = datetime.now(UTC)
     if request is None or request.status != "queued" or request.available_at > now:

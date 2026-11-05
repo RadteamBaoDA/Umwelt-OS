@@ -310,7 +310,7 @@ async def set_read(
     )
 
 
-async def _classify_highlight_row(
+async def _classify_highlight_row(  # noqa: C901, PLR0912
     session: AsyncSession, row: Notification, document_id: UUID, known_versions: set[UUID],
     *, scope: Scope, multi_workspace_enabled: bool,
 ) -> tuple[str, UUID | None]:
@@ -357,7 +357,9 @@ async def _classify_highlight_row(
         if version_id is not None and version_id != parsed_version:
             return "undecidable", None
         version_id = version_id or parsed_version
-    assert version_id is not None  # every surviving branch above resolved a version  # noqa: S101  # mypy narrowing invariant
+    # every surviving branch above resolved a version
+    if version_id is None:
+        raise RuntimeError("invariant violated: version_id must not be None")
     if not exact_match and version_id not in known_versions:
         from modules.knowledge.documents import public as documents
 
@@ -424,7 +426,9 @@ async def scrub_document_evidence(
         if verdict == "undecidable":
             (unavailable if final_reference_page else provisional).append(row.id)
             continue
-        assert version_id is not None  # every scrub verdict carries a resolved version  # noqa: S101  # mypy narrowing invariant
+        # every scrub verdict carries a resolved version
+        if version_id is None:
+            raise RuntimeError("invariant violated: version_id must not be None")
         row.document_id = document_id
         row.document_version_id = version_id
         row.title = None

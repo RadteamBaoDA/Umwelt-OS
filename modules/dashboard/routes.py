@@ -399,7 +399,8 @@ async def list_brief_revisions(
     flag = request.app.state.settings.multi_workspace_enabled
     if scope.role in {"owner", "admin_viewer"}:
         return await briefs.list_briefs(session, date, _timezone(timezone), scope=scope, multi_workspace_enabled=flag)
-    assert isinstance(scope, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
+    if not isinstance(scope, WorkspaceContext):
+        raise TypeError("invariant violated: unexpected type for scope")
     shared = await brief_sharing.list_shared_briefs(session, date, _timezone(timezone), scope=scope, multi_workspace_enabled=flag)
     await _gate_member(request, session, scope, shared, flag)
     return [item.brief for item in shared]

@@ -66,7 +66,8 @@ def validate_telegram_record_delivery(
     except (OverflowError, OSError, ValueError) as exc:
         raise ValueError("Telegram raw timestamps are invalid") from exc
     observed_at = edited_at if edited_present else published_at
-    assert observed_at is not None  # noqa: S101  # mypy narrowing invariant
+    if observed_at is None:
+        raise RuntimeError("invariant violated: observed_at must not be None")
     expected_version = f"telegram:{proof.epoch}:{proof.update_id}:{observed_at.isoformat()}"
     if (
         metadata.provider != "telegram"

@@ -52,7 +52,8 @@ def _document_scope(scope: Scope, *, allow_member: bool = False) -> tuple[Column
         Document.source_id.in_(sources.export_eligible_source_ids(scope=scope)),
     )
     if member:
-        assert isinstance(scope, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
+        if not isinstance(scope, WorkspaceContext):
+            raise TypeError("invariant violated: unexpected type for scope")
         predicates += (Document.id.in_(workspaces.granted_resource_ids(scope=scope, kind="document")),)
     return predicates
 

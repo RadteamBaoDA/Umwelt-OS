@@ -129,7 +129,8 @@ def is_member_scope(scope: Scope) -> bool:
 
 def _member_grants(scope: Scope) -> Select[Any]:
     """Document-id projection of this member's active grants (members are always WorkspaceContext)."""
-    assert isinstance(scope, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
+    if not isinstance(scope, WorkspaceContext):
+        raise TypeError("invariant violated: unexpected type for scope")
     return workspaces.granted_resource_ids(scope=scope, kind="document")
 
 

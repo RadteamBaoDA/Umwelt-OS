@@ -440,7 +440,8 @@ async def _read_rss_page_body(
         if total_bytes > _RSS_MAX_BYTES:
             raise ValueError("RSS pagination exceeded the 25 MiB limit")
         return body, total_bytes, None
-    assert client is not None  # noqa: S101  # mypy narrowing invariant
+    if client is None:
+        raise RuntimeError("invariant violated: client must not be None")
     from modules.connectors.providers.rest import _pinned_request, resolve_public
 
     rss_parts = urlsplit(current_url)

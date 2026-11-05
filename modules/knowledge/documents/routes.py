@@ -71,7 +71,8 @@ async def _gate_member_read(
     """
     if scope.role in {"owner", "admin_viewer"}:
         return
-    assert isinstance(scope, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
+    if not isinstance(scope, WorkspaceContext):
+        raise TypeError("invariant violated: unexpected type for scope")
     flag = request.app.state.settings.multi_workspace_enabled
     unique = tuple(dict.fromkeys(document_ids))
     grants = await read_resource_grants(session, scope=scope, kind="document", resource_ids=unique) if unique else ()

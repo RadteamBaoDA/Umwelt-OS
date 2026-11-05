@@ -399,7 +399,9 @@ def _validate_fact_group(
         observed.add(normalized)
         seen.add(normalized)
         captured_sources.add(item.source_id)
-        assert item.document_id is not None  # all-None triples were handled above  # noqa: S101  # mypy narrowing invariant
+        # all-None triples were handled above
+        if item.document_id is None:
+            raise RuntimeError("invariant violated: item.document_id must not be None")
         captured_documents.add(item.document_id)
     return not (exemplar.fact_kind == "stories" and not observed)
 
@@ -1165,7 +1167,8 @@ async def claim_brief_slot(session: AsyncSession, automation_id: UUID, *, scope:
     row = await session.scalar(select(BriefScheduleRow).where(
         BriefScheduleRow.workspace_id == scope.workspace_id, BriefScheduleRow.owner_id == actor,
     ).with_for_update())
-    assert row is not None  # noqa: S101  # mypy narrowing invariant
+    if row is None:
+        raise RuntimeError("invariant violated: row must not be None")
     if row.schedule_owner == "automation" and row.automation_id != automation_id:
         raise BriefSlotOwned
     row.schedule_owner, row.automation_id = "automation", automation_id

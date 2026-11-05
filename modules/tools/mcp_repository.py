@@ -159,7 +159,7 @@ async def list_connections(session: AsyncSession, *, scope: Scope) -> tuple[Conn
     return tuple(to_connection_read(row) for row in rows)
 
 
-async def save_connection(
+async def save_connection(  # noqa: C901, PLR0912
     session: AsyncSession, connection_id: UUID | None,
     expected_revision: int, draft: ConnectionDraft, *, scope: Scope, encryption_key: str,
     deployment_profile_hash: str | None = None,
@@ -217,8 +217,10 @@ async def save_connection(
         raise ValueError("stdio connections cannot retain an existing bearer credential")
     if op.action == "replace":
         row.credential_revision += 1
-        assert op is not None  # noqa: S101  # mypy narrowing invariant
-        assert op.value is not None  # noqa: S101  # mypy narrowing invariant
+        if op is None:
+            raise RuntimeError("invariant violated: op must not be None")
+        if op.value is None:
+            raise RuntimeError("invariant violated: op.value must not be None")
         row.encrypted_credential = encrypt_connection_credential(
             op.value.get_secret_value(), key=encryption_key, owner_id=owner_id,
             connection_id=row.id, credential_revision=row.credential_revision)

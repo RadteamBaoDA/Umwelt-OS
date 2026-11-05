@@ -114,7 +114,8 @@ async def account_deletion_status(
     operation = await receipt_operation(session, _hash(token)) if token else None
     if operation is None:
         raise HTTPException(status_code=404, detail={"code": "deletion_receipt_unavailable"})
-    assert token is not None  # noqa: S101  # mypy narrowing invariant
+    if token is None:
+        raise RuntimeError("invariant violated: token must not be None")
     seconds = RECEIPT_SECONDS if operation.expires_at is None else max(1, int((operation.expires_at - datetime.now(UTC)).total_seconds()))
     set_receipt_cookie(request, response, token, seconds)
     return deletion_status(operation)

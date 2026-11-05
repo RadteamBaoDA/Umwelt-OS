@@ -454,7 +454,8 @@ def _pause_prepared_github_hints(hints: list[GithubSourceHint], capacity: Github
         hint.claim_expires_at = None
         hint.capacity_reserved = False
     if releases:
-        assert capacity is not None  # noqa: S101  # mypy narrowing invariant
+        if capacity is None:
+            raise RuntimeError("invariant violated: capacity must not be None")
         capacity.pending_count -= releases
     return len(current)
 

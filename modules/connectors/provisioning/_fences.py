@@ -183,7 +183,8 @@ async def _apply_collection_fence(
                     and envelope.get("activation_id") == activation.get("id")
                 ):
                     if envelope.get("state") == "prepared":
-                        assert credential is not None  # noqa: S101  # mypy narrowing invariant
+                        if credential is None:
+                            raise RuntimeError("invariant violated: credential must not be None")
                         credential.operation_id = None
                         credential.operation_envelope = None
                         credential.state = "ready" if credential.credential_id else "queued"
