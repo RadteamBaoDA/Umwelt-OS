@@ -6,6 +6,7 @@ from datetime import timedelta
 from functools import wraps
 from typing import Any, ClassVar, cast
 
+from arq.connections import ArqRedis
 from arq.constants import default_queue_name
 from arq.worker import func as _arq_func
 from redis.asyncio import Redis
@@ -61,7 +62,7 @@ from core.system.health import (
 from core.telemetry import install_log_redaction, instrument_job, set_process_role
 from core.tracing import configure_tracing, instrument_engine, traced_job
 from core.worker_dlq import dead_letter
-from core.worker_queues import MODEL_QUEUE
+from core.worker_queues import MODEL_QUEUE, pin_default_queue
 from modules.agents.worker import (
     compose_agent_registry,
     process_agent_run,
@@ -205,6 +206,8 @@ async def _boot_runtime(
     settings = Settings()
     validate_event_contracts()  # fail fast on undeclared outbox event types / handlers
     ctx["settings"] = settings
+    # arq defaults this pool to the worker's own queue; bare enqueues (outbox dispatch) must hit the default queue.
+    pin_default_queue(cast(ArqRedis, ctx["redis"]))
     # SAFE PER PROCESS: this lock only serialises overlapping cron calls of one process so they cannot regress the
     # scan cursor. It is not a cross-replica mutex: every claim is fenced in SQL (FOR UPDATE SKIP LOCKED, leases,
     # dispatched_at), so replicas scanning from their own cursors never double-claim an outbox event.
@@ -307,6 +310,7 @@ async def chat_startup(ctx: dict[str, object]) -> None:
     ctx["settings"] = settings
     install_log_redaction()
     set_process_role("chat-worker")
+    pin_default_queue(cast(ArqRedis, ctx["redis"]))  # see _boot_runtime
     engine, factory = make_session_factory_for_role(
         settings,
         pool_size=CHAT_DB_POOL[0],
@@ -329,6 +333,7 @@ async def model_startup(ctx: dict[str, object]) -> None:
     ctx["settings"] = settings
     install_log_redaction()
     set_process_role("model-worker")
+    pin_default_queue(cast(ArqRedis, ctx["redis"]))  # see _boot_runtime
     engine, factory = make_session_factory_for_role(
         settings,
         pool_size=MODEL_DB_POOL[0],
