@@ -1,0 +1,102 @@
+# promtool unit tests for alerts.yml. Run: promtool test rules infrastructure/monitoring/alerts.test.yml
+# (CI job `monitoring-rules`). Each alert has a firing case and a quiet case so threshold/`for:` regressions are caught.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: outbox lag fires after 5m above threshold
+    interval: 1m
+    input_series:
+      - series: 'umwelt_outbox_oldest_pending_age_seconds{process="cron-worker"}'
+        values: '400+0x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: UmweltOutboxLagHigh
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: UmweltOutboxLagHigh
+        exp_alerts:
+          - exp_labels: {severity: page, process: cron-worker}
+            exp_annotations:
+              summary: "Oldest undelivered outbox event is over 5 minutes old"
+              runbook: "docs/observability.md#umweltoutboxlaghigh"
+
+  - name: outbox lag quiet when events are fresh
+    interval: 1m
+    input_series:
+      - series: 'umwelt_outbox_oldest_pending_age_seconds{process="cron-worker"}'
+        values: '5+0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: UmweltOutboxLagHigh
+        exp_alerts: []
+
+  - name: queue age fires for the stuck queue only
+    interval: 1m
+    input_series:
+      - series: 'umwelt_arq_queue_oldest_job_age_seconds{queue="arq:default"}'
+        values: '600+0x20'
+      - series: 'umwelt_arq_queue_oldest_job_age_seconds{queue="arq:chat"}'
+        values: '10+0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UmweltQueueOldestJobTooOld
+        exp_alerts:
+          - exp_labels: {severity: page, queue: "arq:default"}
+            exp_annotations:
+              summary: "Oldest job in arq:default has waited over 5 minutes"
+              runbook: "docs/observability.md#umweltqueueoldestjobtooold"
+
+  - name: cron stale fires when a frequent job stops succeeding
+    interval: 1m
+    input_series:
+      # Last success at t=0, then silence; the job kept being attempted every minute (duration count grows).
+      - series: 'umwelt_cron_job_last_success_timestamp_seconds{job="dispatch_pending_work",instance="cron-worker:9100"}'
+        values: '0+0x60'
+      - series: 'umwelt_cron_job_duration_seconds_count{job="dispatch_pending_work",instance="cron-worker:9100"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UmweltCronJobStale
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: UmweltCronJobStale
+        exp_alerts:
+          - exp_labels: {severity: page, job: dispatch_pending_work, instance: "cron-worker:9100"}
+            exp_annotations:
+              summary: "Scheduled job dispatch_pending_work has not succeeded for 15 minutes although it normally runs every few minutes"
+              runbook: "docs/observability.md#umweltcronjobstale"
+
+  - name: cron stale ignores rarely running jobs
+    interval: 1m
+    input_series:
+      - series: 'umwelt_cron_job_last_success_timestamp_seconds{job="daily_digest",instance="cron-worker:9100"}'
+        values: '0+0x60'
+      # One run in 60 minutes: rate far below 1/600 per second.
+      - series: 'umwelt_cron_job_duration_seconds_count{job="daily_digest",instance="cron-worker:9100"}'
+        values: '0+0x30 1+0x30'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: UmweltCronJobStale
+        exp_alerts: []
+
+  - name: event loop lag fires after sustained stall
+    interval: 1m
+    input_series:
+      - series: 'umwelt_event_loop_lag_seconds{process="api"}'
+        values: '0.9+0x20'
+      - series: 'umwelt_event_loop_lag_seconds{process="worker"}'
+        values: '0.01+0x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: UmweltEventLoopLagHigh
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: UmweltEventLoopLagHigh
+        exp_alerts:
+          - exp_labels: {severity: ticket, process: api}
+            exp_annotations:
+              summary: "api event loop stalled for more than 0.5 s"
+              runbook: "docs/observability.md#umwelteventlooplaghigh"
