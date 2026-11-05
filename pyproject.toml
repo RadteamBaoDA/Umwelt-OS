@@ -48,6 +48,7 @@ browser = [
     "crawlee[beautifulsoup,playwright]>=1,<2",
 ]
 dev = [
+    "import-linter>=2.3,<3",
     "mypy>=1.17,<2",
     "pytest>=8.4,<9",
     "pytest-asyncio>=1.1,<2",

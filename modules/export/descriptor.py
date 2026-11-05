@@ -15,6 +15,20 @@ class ExportDescriptor(ModuleDescriptor):
     description: str = "Bounded owner-authorized JSON, Markdown, and CSV projections."
     enabled: bool = True
     dependencies: tuple[str, ...] = ()
+    optional_dependencies: tuple[str, ...] = (
+        "chat",
+        "dashboard",
+        "goals",
+        "knowledge.documents",
+        "knowledge.entities",
+        "knowledge.observations",
+        "knowledge.relationships",
+        "knowledge.timeline",
+        "memory",
+        "news",
+        "sources",
+        "tasks",
+    )
     scheduled_jobs: tuple[str, ...] = ()
     provides: tuple[str, ...] = ("portable_exports",)
     requires: tuple[str, ...] = ()

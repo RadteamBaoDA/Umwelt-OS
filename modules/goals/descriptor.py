@@ -15,6 +15,7 @@ class GoalsDescriptor(ModuleDescriptor):
     description: str = "Track strategic goals, milestones, and approved plan execution."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("tasks",)
+    optional_dependencies: tuple[str, ...] = ("agents", "knowledge.entities")
     provides: tuple[str, ...] = ("goals",)
     requires: tuple[str, ...] = ("tasks",)
     routes: tuple[str, ...] = (

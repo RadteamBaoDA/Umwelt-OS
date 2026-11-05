@@ -36,6 +36,7 @@ reset:
 lint:
 	uv run ruff check core apps modules tests infrastructure/postgres/migrations
 	uv run python scripts/check_genui_parity.py
+	uv run lint-imports
 	npm run lint
 
 typecheck:

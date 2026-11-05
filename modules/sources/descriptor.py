@@ -13,6 +13,15 @@ class SourceDescriptor(ModuleDescriptor):
     description: str = "Manage collection identities and source lifecycle."
     enabled: bool = True
     dependencies: tuple[str, ...] = ()
+    optional_dependencies: tuple[str, ...] = (
+        "chat",
+        "connectors",
+        "dashboard",
+        "ingestion",
+        "knowledge.documents",
+        "memory",
+        "tools",
+    )
     scheduled_jobs: tuple[str, ...] = ()
     provides: tuple[str, ...] = ("sources",)
     requires: tuple[str, ...] = ()

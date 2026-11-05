@@ -15,6 +15,17 @@ class NewsDescriptor(ModuleDescriptor):
     description: str = "Owner-managed topic interests with story clustering and explainable relevance scoring."
     enabled: bool = True
     dependencies: tuple[str, ...] = ()
+    optional_dependencies: tuple[str, ...] = (
+        "connectors",
+        "goals",
+        "ingestion",
+        "knowledge.documents",
+        "knowledge.entities",
+        "knowledge.observations",
+        "knowledge.timeline",
+        "search",
+        "sources",
+    )
     scheduled_jobs: tuple[str, ...] = ("process_news_document_ready",)
     provides: tuple[str, ...] = ("news", "topics")
     requires: tuple[str, ...] = ()

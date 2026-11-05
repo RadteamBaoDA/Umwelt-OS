@@ -596,10 +596,7 @@ async def _owner_visible_projection(
 ) -> ResourceAccessProjection:
     """Run the owning module's hooks (lock, shareability, projection); invisible -> 404."""
     if kind == "document":
-        from modules.knowledge.documents.public import (
-            lock_document_ids,
-            read_document_access_projection,
-        )
+        from core.capabilities import lock_document_ids, read_document_access_projection
 
         if not await lock_document_ids(
             session, [resource_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -607,7 +604,7 @@ async def _owner_visible_projection(
             raise HTTPException(status_code=404, detail="Resource not found")
         projection = await read_document_access_projection(session, resource_id, scope=scope)
     else:
-        from modules.dashboard.public import check_brief_shareable, read_brief_access_projection
+        from core.capabilities import check_brief_shareable, read_brief_access_projection
 
         await check_brief_shareable(
             session, resource_id, scope=scope, member_user_id=member_user_id,
@@ -633,11 +630,11 @@ async def list_resource_shares(
         raise HTTPException(status_code=403, detail="Workspace owner required")
     # Read-only visibility: projection hook only, no row locks or shareability check.
     if resource_type == "document":
-        from modules.knowledge.documents.public import read_document_access_projection
+        from core.capabilities import read_document_access_projection
 
         projection = await read_document_access_projection(session, resource_id, scope=scope)
     else:
-        from modules.dashboard.public import read_brief_access_projection
+        from core.capabilities import read_brief_access_projection
 
         projection = await read_brief_access_projection(
             session, resource_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -739,7 +736,7 @@ async def _purge_translations(
     """Drop every actor's derived translations of a brief whose share ended (documents have none)."""
     if resource_type != "brief":
         return
-    from modules.translations.public import purge_resource_translations
+    from core.capabilities import purge_resource_translations
 
     for resource_id in resource_ids:
         await purge_resource_translations(session, workspace_id, "daily_brief", resource_id)

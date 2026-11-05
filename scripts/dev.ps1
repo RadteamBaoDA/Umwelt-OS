@@ -123,6 +123,7 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
     'lint' {
       Invoke-Checked 'uv' @('run', 'ruff', 'check', 'core', 'apps', 'modules', 'tests', 'infrastructure/postgres/migrations')
       Invoke-Checked 'uv' @('run', 'python', 'scripts/check_genui_parity.py')
+      Invoke-Checked 'uv' @('run', 'lint-imports')
       Invoke-Checked 'npm' @('run', 'lint')
     }
     'typecheck' {

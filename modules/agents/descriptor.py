@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from core.module_descriptor import ModuleDescriptor, RouterSpec
+from core.module_descriptor import CapabilitySpec, ModuleDescriptor, RouterSpec
 
 
 @dataclass(frozen=True)
@@ -15,6 +15,14 @@ class AgentDescriptor(ModuleDescriptor):
     description: str = "Bounded assistant and owner-configured specialist orchestration."
     enabled: bool = True
     dependencies: tuple[str, ...] = ("tools", "chat")
+    optional_dependencies: tuple[str, ...] = (
+        "automations",
+        "goals",
+        "knowledge.documents",
+        "memory",
+        "sources",
+        "tasks",
+    )
     scheduled_jobs: tuple[str, ...] = ("process_agent_run",)
     provides: tuple[str, ...] = ("agent_runs",)
     requires: tuple[str, ...] = ("tool_registry",)
@@ -26,6 +34,9 @@ class AgentDescriptor(ModuleDescriptor):
     settings_schema: dict[str, object] | None = None
     routers: tuple[RouterSpec, ...] = (
         RouterSpec("modules.agents.routes", 460),
+    )
+    capabilities: tuple[CapabilitySpec, ...] = (
+        CapabilitySpec("agents.erase_account_checkpoints_page", "modules.agents.public:erase_account_checkpoints_page"),
     )
     erasure_module: str | None = "modules.agents.erasure"
     erasure_order: int = 10

@@ -54,11 +54,11 @@ from core.auth.schemas import (
     SetupStatus,
 )
 from core.auth.service import hash_password, verify_login_password, verify_password
+from core.capabilities import set_initial_owner_display_name
 from core.config import Settings
 from core.database import get_session
 from core.errors import DomainError
 from core.telemetry import log_event
-from modules.settings.public import set_initial_owner_display_name
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 logger = logging.getLogger("bbd.auth")

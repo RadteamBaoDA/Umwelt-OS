@@ -15,6 +15,7 @@ class TasksDescriptor(ModuleDescriptor):
     description: str = "Manage actionable tasks, due dates, statuses, and optimistic revisions."
     enabled: bool = True
     dependencies: tuple[str, ...] = ()
+    optional_dependencies: tuple[str, ...] = ("agents", "goals", "knowledge.entities")
     provides: tuple[str, ...] = ("tasks",)
     requires: tuple[str, ...] = ()
     routes: tuple[str, ...] = (

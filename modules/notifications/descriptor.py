@@ -15,6 +15,7 @@ class NotificationsDescriptor(ModuleDescriptor):
     description: str = "Deduplicated, owner-read-tracked actionable notifications."
     enabled: bool = True
     dependencies: tuple[str, ...] = ()
+    optional_dependencies: tuple[str, ...] = ("knowledge.documents", "sources")
     provides: tuple[str, ...] = ("notifications",)
     requires: tuple[str, ...] = ()
     routes: tuple[str, ...] = ("/api/v1/notifications", "/api/v1/notifications/{id}")
