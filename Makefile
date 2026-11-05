@@ -34,7 +34,8 @@ reset:
 	python scripts/dev_workspace.py reset --name "$$WORKSPACE" --confirm "$$CONFIRM_FINGERPRINT"
 
 lint:
-	uv run ruff check core apps modules tests infrastructure/postgres/migrations scripts/check_function_length.py scripts/check_file_size.py
+	uv run ruff format --check core apps modules tests scripts
+	uv run ruff check core apps modules tests scripts infrastructure/postgres/migrations
 	uv run python scripts/check_genui_parity.py
 	uv run python scripts/check_function_length.py
 	uv run python scripts/check_file_size.py

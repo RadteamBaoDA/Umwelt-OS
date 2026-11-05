@@ -17,7 +17,9 @@ RUN_ID = uuid4()
 class FakeSession:
     """Serve the locked run, then approvals, then in-flight effects; record execute/commit order."""
 
-    def __init__(self, row: Any, approvals: list[Any], effects: list[Any], events: list[str]) -> None:
+    def __init__(
+        self, row: Any, approvals: list[Any], effects: list[Any], events: list[str]
+    ) -> None:
         """Queue the three result sets."""
         self.row, self.sets, self.events = row, [approvals, effects], events
 
@@ -50,26 +52,47 @@ class FakeSession:
 def _row(**over: Any) -> SimpleNamespace:
     """Build a running AgentRun double claimed by generation 1."""
     values: dict[str, Any] = {
-        "claim_generation": 1, "status": "running", "active_seconds": 10, "claim_started_at": "t",
-        "updated_at": None, "evidence_revoked": False, "cancel_requested": False, "token_usage": None,
-        "token_usage_unknown": False, "source_fences": None, "activities": [], "checkpoint_thread_id": "thread",
-        "dispatch_generation": 1, "completed_at": None, "error_code": None, "owner_id": 1,
-        "auth_session_hash": "h", "id": RUN_ID,
+        "claim_generation": 1,
+        "status": "running",
+        "active_seconds": 10,
+        "claim_started_at": "t",
+        "updated_at": None,
+        "evidence_revoked": False,
+        "cancel_requested": False,
+        "token_usage": None,
+        "token_usage_unknown": False,
+        "source_fences": None,
+        "activities": [],
+        "checkpoint_thread_id": "thread",
+        "dispatch_generation": 1,
+        "completed_at": None,
+        "error_code": None,
+        "owner_id": 1,
+        "auth_session_hash": "h",
+        "id": RUN_ID,
     }
     values.update(over)
     return SimpleNamespace(**values)
 
 
 def _setup(
-    monkeypatch: pytest.MonkeyPatch, row: Any, *, approvals: list[Any] | None = None,
-    effects: list[Any] | None = None, alive: bool = True,
+    monkeypatch: pytest.MonkeyPatch,
+    row: Any,
+    *,
+    approvals: list[Any] | None = None,
+    effects: list[Any] | None = None,
+    alive: bool = True,
 ) -> tuple[Any, list[str], AsyncMock]:
     """Wire the fake session, checkpoint deletion, liveness probes and publisher."""
     events: list[str] = []
     session = FakeSession(row, approvals or [], effects or [], events)
     context = SimpleNamespace(
-        run_id=RUN_ID, scope=SimpleNamespace(workspace_id=uuid4()), claim_generation=1, elapsed=lambda: 2.2,
-        unobservable_model_usage=False, multi_workspace_enabled=False,
+        run_id=RUN_ID,
+        scope=SimpleNamespace(workspace_id=uuid4()),
+        claim_generation=1,
+        elapsed=lambda: 2.2,
+        unobservable_model_usage=False,
+        multi_workspace_enabled=False,
     )
 
     async def delete_checkpoints(_session: Any, thread: str) -> None:
@@ -79,7 +102,9 @@ def _setup(
     publish = AsyncMock()
     monkeypatch.setattr(worker, "_delete_checkpoints", delete_checkpoints)
     monkeypatch.setattr(worker, "publish_agent_activity_safely", publish)
-    monkeypatch.setattr("core.auth.public.revalidate_account_session", AsyncMock(return_value=alive))
+    monkeypatch.setattr(
+        "core.auth.public.revalidate_account_session", AsyncMock(return_value=alive)
+    )
     monkeypatch.setattr("modules.chat.public.has_live_agent_run_link", AsyncMock(return_value=True))
     return (lambda: session, context), events, publish
 
@@ -110,10 +135,23 @@ async def test_continue_requeues_and_folds_usage(monkeypatch: pytest.MonkeyPatch
     state = {"token_usage": 5, "token_usage_unknown": True, "source_fences": {"records": []}}
     await _run(setup, state=state, outcome="continue")
     assert events == ["lock_run", "select_set", "select_set", "fail_started_calls", "commit"]
-    assert (row.active_seconds, row.claim_started_at, row.token_usage, row.token_usage_unknown) == (13, None, 5, True)
+    assert (row.active_seconds, row.claim_started_at, row.token_usage, row.token_usage_unknown) == (
+        13,
+        None,
+        5,
+        True,
+    )
     assert row.source_fences == {"records": []}
-    assert (effect.state, effect.payload, approval.status) == ("requires_review", None, "requires_review")
-    assert (row.status, row.dispatch_generation, row.activities[-1]["status"]) == ("queued", 2, "queued")
+    assert (effect.state, effect.payload, approval.status) == (
+        "requires_review",
+        None,
+        "requires_review",
+    )
+    assert (row.status, row.dispatch_generation, row.activities[-1]["status"]) == (
+        "queued",
+        2,
+        "queued",
+    )
     assert publish.await_args.kwargs["status"] == "queued"
 
 
@@ -139,25 +177,47 @@ async def test_waiting_approval_parks_when_authorized(monkeypatch: pytest.Monkey
 @pytest.mark.asyncio
 async def test_waiting_approval_cancels_when_session_dead(monkeypatch: pytest.MonkeyPatch) -> None:
     """A dead session cancels the run, scrubs pending approvals and erases the checkpoint."""
-    pending = SimpleNamespace(action_id="p", status="pending", resolved_at=None, arguments={"a": 1}, source_fences={"b": 1})
-    done = SimpleNamespace(action_id="d", status="approved", resolved_at=None, arguments={"a": 1}, source_fences={"b": 1})
+    pending = SimpleNamespace(
+        action_id="p",
+        status="pending",
+        resolved_at=None,
+        arguments={"a": 1},
+        source_fences={"b": 1},
+    )
+    done = SimpleNamespace(
+        action_id="d",
+        status="approved",
+        resolved_at=None,
+        arguments={"a": 1},
+        source_fences={"b": 1},
+    )
     row = _row()
     setup, events, _publish = _setup(monkeypatch, row, approvals=[pending, done], alive=False)
     await _run(setup, state={"waiting_approval": True}, outcome="continue")
-    assert (row.status, row.cancel_requested) == ("cancelled", True) and row.completed_at is not None
+    assert (row.status, row.cancel_requested) == (
+        "cancelled",
+        True,
+    ) and row.completed_at is not None
     assert (pending.status, pending.arguments, pending.source_fences) == ("cancelled", None, {})
     assert (done.status, done.arguments) == ("approved", {"a": 1})
     assert "delete_checkpoints:thread" in events
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("active", "outcome", "code", "unknown"), [
-    (10, "segment_timeout", "segment_timeout", True),
-    (10, "run_limit_exceeded", "run_limit_exceeded", False),
-    (299, "continue", "active_time_limit", False),
-])
+@pytest.mark.parametrize(
+    ("active", "outcome", "code", "unknown"),
+    [
+        (10, "segment_timeout", "segment_timeout", True),
+        (10, "run_limit_exceeded", "run_limit_exceeded", False),
+        (299, "continue", "active_time_limit", False),
+    ],
+)
 async def test_failure_outcomes(
-    monkeypatch: pytest.MonkeyPatch, active: int, outcome: str, code: str, unknown: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    active: int,
+    outcome: str,
+    code: str,
+    unknown: bool,
 ) -> None:
     """Non-continuing outcomes (or an exhausted budget) fail the run with the right code."""
     row = _row(active_seconds=active)

@@ -252,7 +252,9 @@ class TestImportanceScoreCalculations:
 
         # When candidate is a duplicate, should_auto_accept is always False even if opt-in is True
         existing = [high_quality]
-        eval_dup = evaluate_candidate(high_quality, "preference", existing, auto_accept_enabled=True)
+        eval_dup = evaluate_candidate(
+            high_quality, "preference", existing, auto_accept_enabled=True
+        )
         assert eval_dup.is_duplicate is True
         assert eval_dup.should_auto_accept is False
 

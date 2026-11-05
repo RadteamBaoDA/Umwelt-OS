@@ -79,18 +79,29 @@ def derive_mcp_public_endpoint(settings: Settings) -> tuple[str, str, str]:
 logger = logging.getLogger(__name__)
 
 
-def _select_grant_and_capability(discovery: Any, grants: Any, fence: ExecutionFence) -> tuple[Any, Any]:
+def _select_grant_and_capability(
+    discovery: Any, grants: Any, fence: ExecutionFence
+) -> tuple[Any, Any]:
     """Find the fence's grant and the discovered capability that grant reviewed (either may be ``None``)."""
     grant = next((item for item in grants if item.id == fence.grant_id), None)
-    capability = next((
-        item for item in discovery.capabilities
-        if grant is not None and item.id == grant.capability_id
-    ), None)
+    capability = next(
+        (
+            item
+            for item in discovery.capabilities
+            if grant is not None and item.id == grant.capability_id
+        ),
+        None,
+    )
     return grant, capability
 
 
 def _selection_matches_fence(
-    connection: Any, discovery: Any, grant: Any, capability: Any, fence: ExecutionFence, destination_id: str,
+    connection: Any,
+    discovery: Any,
+    grant: Any,
+    capability: Any,
+    fence: ExecutionFence,
+    destination_id: str,
 ) -> bool:
     """Return whether the current connection, discovery, grant and capability equal the reviewed fence.
 
@@ -169,10 +180,15 @@ class McpRuntime:
             revalidate_fence=self.revalidate_fence,
         )
 
-    async def _admit(self, session: AsyncSession, scope: Scope, *, lock: bool = False) -> AccessFence:
+    async def _admit(
+        self, session: AsyncSession, scope: Scope, *, lock: bool = False
+    ) -> AccessFence:
         """Owner admission; lock only in short commit sessions, never across MCP network I/O."""
         return await mcp_repository.admit(
-            session, scope=scope, multi_workspace_enabled=self.settings.multi_workspace_enabled, lock=lock,
+            session,
+            scope=scope,
+            multi_workspace_enabled=self.settings.multi_workspace_enabled,
+            lock=lock,
         )
 
     async def authenticate_inbound(self, raw: str) -> InboundPrincipal:
@@ -203,11 +219,15 @@ class McpRuntime:
                 if not await mcp_repository.revalidate_inbound_principal(session, identity):
                     return None
                 owner = await workspaces.resolve_workspace_owner_context(
-                    session, identity.workspace_id, multi_workspace_enabled=flag,
+                    session,
+                    identity.workspace_id,
+                    multi_workspace_enabled=flag,
                 )
             if owner is None or owner.user_id != identity.owner_id:
                 return None
-            scope = InternalJobScope(identity.workspace_id, owner.user_id, owner.membership_revision)
+            scope = InternalJobScope(
+                identity.workspace_id, owner.user_id, owner.membership_revision
+            )
 
             source_ids = frozenset(identity.source_ids)
             if len(source_ids) > 100:
@@ -227,11 +247,13 @@ class McpRuntime:
                 return None
             effective_source_ids = frozenset(str(item.id) for item in page.items)
 
-            supported_names = frozenset({
-                "knowledge.get_document",
-                "knowledge.list_documents",
-                "search.query",
-            })
+            supported_names = frozenset(
+                {
+                    "knowledge.get_document",
+                    "knowledge.list_documents",
+                    "search.query",
+                }
+            )
             capabilities = frozenset(identity.capabilities) & frozenset({"source.read"})
             definitions = {
                 definition.name: definition
@@ -384,7 +406,10 @@ class McpRuntime:
                 captured_profile_hash=captured_profile_hash,
             )
             await commit_with_replay(
-                session, [], scope=scope, multi_workspace_enabled=self.settings.multi_workspace_enabled,
+                session,
+                [],
+                scope=scope,
+                multi_workspace_enabled=self.settings.multi_workspace_enabled,
                 access_fence=fence,
             )
             return result
@@ -398,9 +423,14 @@ class McpRuntime:
         """Commit a complete validated discovery only against its captured revision and profile hash."""
         async with self.session_factory() as session:
             fence = await self._admit(session, scope, lock=True)
-            result = await mcp_repository.persist_discovery(session, connection_id, payload, scope=scope)
+            result = await mcp_repository.persist_discovery(
+                session, connection_id, payload, scope=scope
+            )
             await commit_with_replay(
-                session, [], scope=scope, multi_workspace_enabled=self.settings.multi_workspace_enabled,
+                session,
+                [],
+                scope=scope,
+                multi_workspace_enabled=self.settings.multi_workspace_enabled,
                 access_fence=fence,
             )
             return result
@@ -420,9 +450,12 @@ class McpRuntime:
         additionally requires a successful draft check for the same profile hash.
         """
         profile_id = connection.deployment_profile_id
-        if (connection.transport != McpTransport.STDIO or profile_id is None
-                or connection.deployment_profile_hash != reviewed_profile_hash
-                or not await self.admission.lease_current()):
+        if (
+            connection.transport != McpTransport.STDIO
+            or profile_id is None
+            or connection.deployment_profile_hash != reviewed_profile_hash
+            or not await self.admission.lease_current()
+        ):
             raise mcp_repository.McpConflict("MCP stdio profile authority is no longer current")
         if self.profile_catalog.get_identity(profile_id) != reviewed_profile_hash:
             raise mcp_repository.McpConflict("MCP stdio deployment profile changed")
@@ -432,16 +465,26 @@ class McpRuntime:
             current = mcp_repository.to_connection_read(row)
             check_hash = row.draft_check_profile_hash
             credential_present = row.encrypted_credential is not None or row.auth_method != "none"
-        if (current.id != connection.id or current.revision != connection.revision
-                or current.deployment_profile_id != profile_id
-                or current.deployment_profile_hash != reviewed_profile_hash
-                or connection.id != current.id or connection.revision != current.revision
-                or credential_present):
-            raise mcp_repository.McpConflict("MCP stdio connection changed before profile resolution")
+        if (
+            current.id != connection.id
+            or current.revision != connection.revision
+            or current.deployment_profile_id != profile_id
+            or current.deployment_profile_hash != reviewed_profile_hash
+            or connection.id != current.id
+            or connection.revision != current.revision
+            or credential_present
+        ):
+            raise mcp_repository.McpConflict(
+                "MCP stdio connection changed before profile resolution"
+            )
         if operation_kind == "discovery" and check_hash != reviewed_profile_hash:
-            raise mcp_repository.McpConflict("MCP stdio discovery requires a successful current profile check")
+            raise mcp_repository.McpConflict(
+                "MCP stdio discovery requires a successful current profile check"
+            )
         if not await self.admission.lease_current():
-            raise mcp_repository.McpConflict("MCP stdio admission lease expired during profile resolution")
+            raise mcp_repository.McpConflict(
+                "MCP stdio admission lease expired during profile resolution"
+            )
         return self.profile_catalog.resolve(
             profile_id,
             reviewed_profile_hash=reviewed_profile_hash,
@@ -449,7 +492,10 @@ class McpRuntime:
         )
 
     async def connection_is_current(
-        self, scope: Scope, connection_id: UUID, revision: int,
+        self,
+        scope: Scope,
+        connection_id: UUID,
+        revision: int,
         expected_profile_hash: str | None = None,
     ) -> bool:
         """Compare current owner revision, profile hash and admission lease after bounded reads.
@@ -464,7 +510,8 @@ class McpRuntime:
                 await self._admit(session, scope)
                 connections = await mcp_repository.list_runtime_connections(session, scope=scope)
             is_current = any(
-                item.id == connection_id and item.revision == revision
+                item.id == connection_id
+                and item.revision == revision
                 and item.deployment_profile_hash == expected_profile_hash
                 for item in connections
             )
@@ -484,14 +531,20 @@ class McpRuntime:
             if not destination_id.startswith("mcp-client:"):
                 raise PermissionError("Unknown MCP destination identity")
             try:
-                if str(UUID(destination_id.removeprefix("mcp-client:"))) != destination_id.removeprefix("mcp-client:"):
+                if str(
+                    UUID(destination_id.removeprefix("mcp-client:"))
+                ) != destination_id.removeprefix("mcp-client:"):
                     raise ValueError("Noncanonical client identity")
             except ValueError as exc:
                 raise PermissionError("Unknown MCP destination identity") from exc
         async with self.session_factory() as session:
             await self._admit(session, scope)
             return await mcp_repository.resolve_capability_fence(
-                session, connection_id, grant_id, destination_id, scope=scope,
+                session,
+                connection_id,
+                grant_id,
+                destination_id,
+                scope=scope,
             )
 
     def _profile_identity_current(self, connection: Any, fence: ExecutionFence) -> bool:
@@ -501,9 +554,13 @@ class McpRuntime:
         reviewed hash; an HTTP connection must carry no profile hash. Pure catalog lookup, no I/O.
         """
         if connection.transport == McpTransport.STDIO:
-            return connection.deployment_profile_id is not None and self.profile_catalog.get_identity(
-                connection.deployment_profile_id,
-            ) == fence.deployment_profile_hash
+            return (
+                connection.deployment_profile_id is not None
+                and self.profile_catalog.get_identity(
+                    connection.deployment_profile_id,
+                )
+                == fence.deployment_profile_hash
+            )
         return fence.deployment_profile_hash is None
 
     async def revalidate_fence(self, scope: Scope, fence: ExecutionFence) -> bool:
@@ -522,7 +579,9 @@ class McpRuntime:
             if not destination_id.startswith("mcp-client:"):
                 return False
             try:
-                if str(UUID(destination_id.removeprefix("mcp-client:"))) != destination_id.removeprefix("mcp-client:"):
+                if str(
+                    UUID(destination_id.removeprefix("mcp-client:"))
+                ) != destination_id.removeprefix("mcp-client:"):
                     return False
             except ValueError:
                 return False
@@ -531,23 +590,32 @@ class McpRuntime:
         try:
             async with self.session_factory() as session:
                 await self._admit(session, scope)
-                if not await mcp_repository.revalidate_capability_fence(session, fence, scope=scope):
+                if not await mcp_repository.revalidate_capability_fence(
+                    session, fence, scope=scope
+                ):
                     return False
                 selection = await mcp_repository.get_current_selection(
-                    session, fence.connection_id, scope=scope,
+                    session,
+                    fence.connection_id,
+                    scope=scope,
                 )
             if selection is None:
                 return False
             connection, discovery, grants = selection
             grant, capability = _select_grant_and_capability(discovery, grants, fence)
-            if not _selection_matches_fence(connection, discovery, grant, capability, fence, destination_id):
+            if not _selection_matches_fence(
+                connection, discovery, grant, capability, fence, destination_id
+            ):
                 return False
             if not self._profile_identity_current(connection, fence):
                 return False
             if grant is None or capability is None:
                 raise RuntimeError("invariant violated: grant and capability must not be None")
             expected_definition = build_mcp_tool_definition(
-                connection, discovery.id, capability, grant,
+                connection,
+                discovery.id,
+                capability,
+                grant,
             )
             selected_sources = frozenset(fence.source_ids)
             async with self.session_factory() as session:
@@ -561,17 +629,24 @@ class McpRuntime:
                     owner_all=False,
                     destination=ToolDestination.REMOTE,
                 )
-            if page.next_cursor is not None or frozenset(item.id for item in page.items) != selected_sources:
+            if (
+                page.next_cursor is not None
+                or frozenset(item.id for item in page.items) != selected_sources
+            ):
                 return False
             if not await self.admission.lease_current():
                 return False
             # No await follows this enabled public catalog check and successful return.
-            current_definition = next((
-                item for item in self.registry.list_tools(
-                    allowed_tools=frozenset({expected_definition.name}),
-                )
-                if item.name == expected_definition.name
-            ), None)
+            current_definition = next(
+                (
+                    item
+                    for item in self.registry.list_tools(
+                        allowed_tools=frozenset({expected_definition.name}),
+                    )
+                    if item.name == expected_definition.name
+                ),
+                None,
+            )
             return (
                 current_definition is not None
                 and current_definition.version == expected_definition.version
@@ -592,27 +667,35 @@ class McpRuntime:
             await mcp_repository.list_runtime_connections(session, scope=scope)
         async with self.session_factory() as session:
             await self._admit(session, scope)
-            selection = await mcp_repository.get_current_selection(session, connection_id, scope=scope)
+            selection = await mcp_repository.get_current_selection(
+                session, connection_id, scope=scope
+            )
         if selection is None:
             self.dispatch.unregister_connection(connection_id)
             return ()
         connection, discovery, grants = selection
-        if (not connection.enabled
-                or connection.transport not in {McpTransport.STREAMABLE_HTTP, McpTransport.STDIO}):
+        if not connection.enabled or connection.transport not in {
+            McpTransport.STREAMABLE_HTTP,
+            McpTransport.STDIO,
+        }:
             self.dispatch.unregister_connection(connection_id)
             return ()
         if connection.transport == McpTransport.STDIO:
             try:
-                if (connection.deployment_profile_id is None
-                        or connection.deployment_profile_hash is None
-                        or self.profile_catalog.get_identity(connection.deployment_profile_id)
-                        != connection.deployment_profile_hash):
+                if (
+                    connection.deployment_profile_id is None
+                    or connection.deployment_profile_hash is None
+                    or self.profile_catalog.get_identity(connection.deployment_profile_id)
+                    != connection.deployment_profile_hash
+                ):
                     self.dispatch.unregister_connection(connection_id)
                     return ()
             except mcp_repository.McpUnavailable:
                 self.dispatch.unregister_connection(connection_id)
                 return ()
-        return self.dispatch.register_selected_capabilities(scope.workspace_id, connection, discovery, grants)
+        return self.dispatch.register_selected_capabilities(
+            scope.workspace_id, connection, discovery, grants
+        )
 
     async def hydrate_connections(self) -> None:
         """Hydrate enabled owner connections per workspace without contacting providers.
@@ -623,24 +706,38 @@ class McpRuntime:
         flag = self.settings.multi_workspace_enabled
         async with self.session_factory() as session:
             # ponytail: first 100 workspace owners at startup; cursor-page when installs exceed it
-            pairs = (await session.execute(
-                select(McpConnection.workspace_id, McpConnection.owner_id)
-                .where(McpConnection.enabled.is_(True)).distinct()
-                .order_by(McpConnection.workspace_id, McpConnection.owner_id).limit(100)
-            )).all()
+            pairs = (
+                await session.execute(
+                    select(McpConnection.workspace_id, McpConnection.owner_id)
+                    .where(McpConnection.enabled.is_(True))
+                    .distinct()
+                    .order_by(McpConnection.workspace_id, McpConnection.owner_id)
+                    .limit(100)
+                )
+            ).all()
         for workspace_id, row_owner_id in pairs:
             try:
                 async with self.session_factory() as session:
                     owner = await workspaces.resolve_workspace_owner_context(
-                        session, workspace_id, multi_workspace_enabled=flag,
+                        session,
+                        workspace_id,
+                        multi_workspace_enabled=flag,
                     )
                     if owner is None or owner.user_id != row_owner_id:
                         continue
                     scope = InternalJobScope(workspace_id, owner.user_id, owner.membership_revision)
                     await self._admit(session, scope)
-                    connections = await mcp_repository.list_runtime_connections(session, scope=scope)
+                    connections = await mcp_repository.list_runtime_connections(
+                        session, scope=scope
+                    )
                 for connection in connections:
                     await self.refresh_connection(scope, connection.id)
-            except (HTTPException, DomainError, mcp_repository.McpConflict, mcp_repository.McpNotFound,
-                    mcp_repository.McpUnavailable, SQLAlchemyError) as exc:
+            except (
+                HTTPException,
+                DomainError,
+                mcp_repository.McpConflict,
+                mcp_repository.McpNotFound,
+                mcp_repository.McpUnavailable,
+                SQLAlchemyError,
+            ) as exc:
                 logger.warning("MCP hydrate skipped a workspace (%s)", type(exc).__name__)

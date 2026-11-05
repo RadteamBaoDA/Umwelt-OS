@@ -28,6 +28,7 @@ from modules.sources.public import SourceReadProjection as Source
 @dataclass(frozen=True)
 class ToolDocumentRead:
     """Detached current-version document metadata exposed to the registered tool owner."""
+
     id: UUID
     document_version_id: UUID
     source_id: UUID
@@ -41,14 +42,20 @@ class ToolDocumentRead:
 @dataclass(frozen=True)
 class ToolDocumentPage:
     """Carry a bounded detached document page and opaque continuation cursor."""
+
     items: tuple[ToolDocumentRead, ...]
     next_cursor: str | None
 
 
 async def get_tool_document(
-    session: AsyncSession, document_id: UUID, *, source_ids: frozenset[UUID],
-    scope: Scope, multi_workspace_enabled: bool,
-    owner_all: bool = False, destination: ToolDestination = ToolDestination.LOCAL,
+    session: AsyncSession,
+    document_id: UUID,
+    *,
+    source_ids: frozenset[UUID],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    owner_all: bool = False,
+    destination: ToolDestination = ToolDestination.LOCAL,
 ) -> ToolDocumentRead | None:
     """Read a query-time active/current document DTO under exact source and destination fences.
 
@@ -57,10 +64,20 @@ async def get_tool_document(
     the eventual sender immediately before remote transmission. ``owner_all`` means every
     Source of the admitted workspace, never other workspaces.
     """
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     statement = (
-        select(Document.id, DocumentVersion.id, Document.source_id, Source.generation, Document.title,
-               Document.content_type, DocumentVersion.version_number, Document.created_at)
+        select(
+            Document.id,
+            DocumentVersion.id,
+            Document.source_id,
+            Source.generation,
+            Document.title,
+            Document.content_type,
+            DocumentVersion.version_number,
+            Document.created_at,
+        )
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .where(
@@ -96,7 +113,9 @@ async def revalidate_tool_document_fences(
     A single missing, changed, out-of-scope, inactive, unready or remote-local-only row denies the
     full page, including its cursor. The projection returns no persistence models or write access.
     """
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if len(fences) > 100:
         return False
     expected: dict[UUID, tuple[UUID, UUID, int]] = {}
@@ -106,7 +125,8 @@ async def revalidate_tool_document_fences(
             or not isinstance(fence.document_id, UUID)
             or not isinstance(fence.document_version_id, UUID)
             or not isinstance(fence.source_id, UUID)
-            or type(fence.source_generation) is not int or fence.source_generation < 1
+            or type(fence.source_generation) is not int
+            or fence.source_generation < 1
             or fence.chunk_id is not None
         ):
             return False
@@ -115,7 +135,9 @@ async def revalidate_tool_document_fences(
         if fence.document_id in expected:
             return False
         expected[fence.document_id] = (
-            fence.document_version_id, fence.source_id, fence.source_generation,
+            fence.document_version_id,
+            fence.source_id,
+            fence.source_generation,
         )
     if not expected:
         return True
@@ -146,9 +168,15 @@ async def revalidate_tool_document_fences(
 
 
 async def list_tool_documents(
-    session: AsyncSession, *, limit: int, cursor: str | None,
-    source_ids: frozenset[UUID], scope: Scope, multi_workspace_enabled: bool,
-    owner_all: bool = False, destination: ToolDestination = ToolDestination.LOCAL,
+    session: AsyncSession,
+    *,
+    limit: int,
+    cursor: str | None,
+    source_ids: frozenset[UUID],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    owner_all: bool = False,
+    destination: ToolDestination = ToolDestination.LOCAL,
 ) -> ToolDocumentPage:
     """Page only active/current rows allowed by source and destination before cursor creation.
 
@@ -157,16 +185,27 @@ async def list_tool_documents(
     """
     if not 1 <= limit <= 100:
         raise ValueError("Document tool page size is outside its supported bound")
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     statement = (
-        select(Document.id, DocumentVersion.id, Document.source_id, Source.generation, Document.title,
-               Document.content_type, DocumentVersion.version_number, Document.created_at)
+        select(
+            Document.id,
+            DocumentVersion.id,
+            Document.source_id,
+            Source.generation,
+            Document.title,
+            Document.content_type,
+            DocumentVersion.version_number,
+            Document.created_at,
+        )
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
         .where(
             *_document_scope(scope),
             Document.current_version == DocumentVersion.version_number,
-            Document.extraction_status.in_(("ready", "succeeded")), Source.status == "active",
+            Document.extraction_status.in_(("ready", "succeeded")),
+            Source.status == "active",
         )
     )
     if not owner_all:
@@ -177,10 +216,16 @@ async def list_tool_documents(
         statement = statement.where(Source.local_only.is_(False))
     if cursor:
         timestamp, identifier = decode_cursor(cursor)
-        statement = statement.where(tuple_(Document.created_at, Document.id) < (timestamp, identifier))
-    rows = list((await session.execute(
-        statement.order_by(desc(Document.created_at), desc(Document.id)).limit(limit + 1)
-    )).all())
+        statement = statement.where(
+            tuple_(Document.created_at, Document.id) < (timestamp, identifier)
+        )
+    rows = list(
+        (
+            await session.execute(
+                statement.order_by(desc(Document.created_at), desc(Document.id)).limit(limit + 1)
+            )
+        ).all()
+    )
     more = len(rows) > limit
     page = rows[:limit]
     next_cursor = encode_cursor(page[-1].created_at, page[-1].id) if more and page else None

@@ -38,12 +38,20 @@ def test_context_is_immutable():
 @pytest.mark.asyncio
 async def test_observer_dependency_resolves_admin_view_and_rechecks_fence(monkeypatch):
     workspace_id = uuid4()
-    account = AccountRead(id=1, email=None, default_workspace_id=uuid4(), email_verified_at=None,
-                          email_verification_source=None)
+    account = AccountRead(
+        id=1,
+        email=None,
+        default_workspace_id=uuid4(),
+        email_verified_at=None,
+        email_verification_source=None,
+    )
     viewer = AdminWorkspaceReadContext(1, workspace_id, 7, 2, 3)
     request = SimpleNamespace(
-        method="GET", state=SimpleNamespace(account=account),
-        app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False))),
+        method="GET",
+        state=SimpleNamespace(account=account),
+        app=SimpleNamespace(
+            state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False))
+        ),
     )
     resolve = AsyncMock(return_value=viewer)
     fence = AsyncMock()
@@ -51,7 +59,10 @@ async def test_observer_dependency_resolves_admin_view_and_rechecks_fence(monkey
     session = object()
     monkeypatch.setattr("core.workspaces.dependencies.resolve_admin_workspace_context", resolve)
     monkeypatch.setattr("core.workspaces.dependencies.read_access_fence", fence)
-    monkeypatch.setattr("core.workspaces.dependencies.authenticated_session_ref", lambda _request: AccountSessionRef(1, "a" * 64))
+    monkeypatch.setattr(
+        "core.workspaces.dependencies.authenticated_session_ref",
+        lambda _request: AccountSessionRef(1, "a" * 64),
+    )
     monkeypatch.setattr("core.workspaces.dependencies.require_publication_gate", publication_gate)
 
     result = await require_workspace_observer_read(request, object(), session, str(workspace_id))

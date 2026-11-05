@@ -48,8 +48,13 @@ class FakeSession:
 
 def _kwargs(**over: Any) -> dict[str, Any]:
     base = {
-        "provider_id": "binance", "workspace_id": uuid4(), "request_id": uuid4(), "admission_token": uuid4(),
-        "attempt": 1, "send_sequence": 0, "request_target": "https://data-api.binance.vision/api/v3/ticker/price",
+        "provider_id": "binance",
+        "workspace_id": uuid4(),
+        "request_id": uuid4(),
+        "admission_token": uuid4(),
+        "attempt": 1,
+        "send_sequence": 0,
+        "request_target": "https://data-api.binance.vision/api/v3/ticker/price",
         "now": NOW,
     }
     return base | over
@@ -58,10 +63,15 @@ def _kwargs(**over: Any) -> dict[str, Any]:
 def test_window_bounds_are_utc_floors() -> None:
     assert quota.window_bounds("second", NOW)[0] == datetime(2026, 10, 8, 13, 45, 30, tzinfo=UTC)
     assert quota.window_bounds("minute", NOW)[1] == datetime(2026, 10, 8, 13, 46, tzinfo=UTC)
-    assert quota.window_bounds("day", NOW) == (datetime(2026, 10, 8, tzinfo=UTC), datetime(2026, 10, 9, tzinfo=UTC))
+    assert quota.window_bounds("day", NOW) == (
+        datetime(2026, 10, 8, tzinfo=UTC),
+        datetime(2026, 10, 9, tzinfo=UTC),
+    )
     december = datetime(2026, 12, 31, 23, 59, tzinfo=UTC)
     assert quota.window_bounds("month", december) == (
-        datetime(2026, 12, 1, tzinfo=UTC), datetime(2027, 1, 1, tzinfo=UTC))
+        datetime(2026, 12, 1, tzinfo=UTC),
+        datetime(2027, 1, 1, tzinfo=UTC),
+    )
 
 
 def test_subject_hash_has_no_workspace_and_shares_credentials() -> None:
@@ -69,7 +79,9 @@ def test_subject_hash_has_no_workspace_and_shares_credentials() -> None:
     fingerprint = quota.credential_fingerprint("secret-key", deployment_key="deploy")
     assert "secret-key" not in fingerprint
     same = quota.subject_hash(policy, "coingecko", credential=fingerprint, egress=None)
-    assert same == quota.subject_hash(policy, "coingecko", credential=fingerprint, egress="other-egress")
+    assert same == quota.subject_hash(
+        policy, "coingecko", credential=fingerprint, egress="other-egress"
+    )
     assert same != quota.subject_hash(policy, "coingecko", credential=None, egress=None)
     other = quota.credential_fingerprint("secret-key", deployment_key="other")
     assert other != fingerprint
@@ -85,14 +97,26 @@ async def test_debit_orders_windows_and_debits_each_atomically() -> None:
     upserts = session.sql[1:]
     assert len(upserts) == 3
     for statement in upserts:
-        assert "ON CONFLICT (provider_id, budget_kind, subject_hash, policy_key, window_start) DO UPDATE" in statement
-        assert "used_units + " in statement.replace("connector_quota_windows.used_units + ", "used_units + ")
+        assert (
+            "ON CONFLICT (provider_id, budget_kind, subject_hash, policy_key, window_start) DO UPDATE"
+            in statement
+        )
+        assert "used_units + " in statement.replace(
+            "connector_quota_windows.used_units + ", "used_units + "
+        )
         assert "blocked_until" in statement
         assert "workspace" not in statement
-    assert sum("used_units + %(used_units_2)s" in statement and "<=" in statement for statement in upserts) == 2
+    assert (
+        sum(
+            "used_units + %(used_units_2)s" in statement and "<=" in statement
+            for statement in upserts
+        )
+        == 2
+    )
     units = {(d.policy_key, d.units) for d in session.added if isinstance(d, ConnectorQuotaDebit)}
     assert units == {
-        ("pilot_request_weight_utc_day", 2), ("pilot_request_weight_utc_minute", 2),
+        ("pilot_request_weight_utc_day", 2),
+        ("pilot_request_weight_utc_minute", 2),
         ("official_request_weight_unknown", 2),
     }
 

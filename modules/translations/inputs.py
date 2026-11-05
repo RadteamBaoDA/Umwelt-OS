@@ -24,42 +24,71 @@ _OWNERS = {
 
 
 async def _load(
-    session: AsyncSession, scope: WorkspaceContext, resource_type: str, resource_id: UUID,
-    *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    scope: WorkspaceContext,
+    resource_type: str,
+    resource_id: UUID,
+    *,
+    multi_workspace_enabled: bool,
 ) -> TranslationInput | None:
     """Load the translation input for a resource through its owner module's public reader (lazy import avoids cycles); None unless it belongs to the scope's workspace and type."""
     module, reader, id_kw = _OWNERS[resource_type]
-    read: Any = getattr(import_module(module), reader)  # lazy: avoids import cycles with owner modules
+    read: Any = getattr(
+        import_module(module), reader
+    )  # lazy: avoids import cycles with owner modules
     found: TranslationInput | None = await read(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, **{id_kw: resource_id},
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        **{id_kw: resource_id},
     )
-    if found is not None and (found.workspace_id != scope.workspace_id or found.resource_type != resource_type):
+    if found is not None and (
+        found.workspace_id != scope.workspace_id or found.resource_type != resource_type
+    ):
         return None
     return found
 
 
 async def load_translation_input(
-    session: AsyncSession, scope: WorkspaceContext, item: TranslationItemRequest,
-    *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    scope: WorkspaceContext,
+    item: TranslationItemRequest,
+    *,
+    multi_workspace_enabled: bool,
 ) -> TranslationInput | None:
     """Return the currently authorized input, or None (callers map None to a uniform 404)."""
     return await _load(
-        session, scope, item.resource_type, item.resource_id, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope,
+        item.resource_type,
+        item.resource_id,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
 def _adapter(resource_type: str) -> Any:
     """Build the per-resource-type authorization adapter registered with the access layer."""
+
     async def authorize(
-        session: AsyncSession, *, scope: WorkspaceContext, resource_id: UUID, multi_workspace_enabled: bool,
+        session: AsyncSession,
+        *,
+        scope: WorkspaceContext,
+        resource_id: UUID,
+        multi_workspace_enabled: bool,
     ) -> ResourceAuthorization | None:
         """Authorize one resource for the scope: its revision, content hash and visibility hash, or None when unreadable (uniform 404)."""
         source = await _load(
-            session, scope, resource_type, resource_id, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            scope,
+            resource_type,
+            resource_id,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         if source is None:
             return None
-        return ResourceAuthorization(source.resource_revision, content_hash(source), source.visibility_hash)
+        return ResourceAuthorization(
+            source.resource_revision, content_hash(source), source.visibility_hash
+        )
 
     return authorize
 

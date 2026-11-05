@@ -30,7 +30,9 @@ def secret_fingerprint(key: str, secret: str) -> str:
         if len(raw_key) != 32:
             raise ValueError
     except (ValueError, UnicodeEncodeError) as exc:
-        raise CredentialEncryptionUnavailable("Connector credential encryption is unavailable") from exc
+        raise CredentialEncryptionUnavailable(
+            "Connector credential encryption is unavailable"
+        ) from exc
     return hmac.new(raw_key, secret.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
@@ -47,7 +49,9 @@ def encrypt_credential_input(
     try:
         cipher = key_ring(key)
     except (ValueError, UnicodeEncodeError) as exc:
-        raise CredentialEncryptionUnavailable("Connector credential encryption is unavailable") from exc
+        raise CredentialEncryptionUnavailable(
+            "Connector credential encryption is unavailable"
+        ) from exc
     payload = json.dumps(
         {
             "source_id": str(source_id),
@@ -75,7 +79,9 @@ def decrypt_credential_input(
         plaintext = key_ring(key).decrypt(ciphertext.encode("ascii"))
         payload = json.loads(plaintext)
     except (ValueError, UnicodeEncodeError, InvalidToken, json.JSONDecodeError) as exc:
-        raise CredentialEncryptionUnavailable("Stored connector credential input is unavailable") from exc
+        raise CredentialEncryptionUnavailable(
+            "Stored connector credential input is unavailable"
+        ) from exc
     if (
         payload.get("source_id") != str(source_id)
         or payload.get("slot") != slot
@@ -83,7 +89,9 @@ def decrypt_credential_input(
         or not isinstance(payload.get("request"), dict)
         or not isinstance(payload.get("binding"), dict)
     ):
-        raise CredentialEncryptionUnavailable("Stored connector credential input binding is invalid")
+        raise CredentialEncryptionUnavailable(
+            "Stored connector credential input binding is invalid"
+        )
     return payload["request"], payload["binding"]
 
 
@@ -99,7 +107,9 @@ def encrypt_native_token(
 ) -> str:
     """Encrypt a Telegram token with source, operation, revision, provider, bot, and fingerprint binding."""
     raw = token.encode("utf-8")
-    if not 1 <= len(raw) <= 512 or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in token):
+    if not 1 <= len(raw) <= 512 or any(
+        char.isspace() or ord(char) < 32 or ord(char) == 127 for char in token
+    ):
         raise ValueError("Telegram token is invalid")
     if not verified_bot_id.isdecimal() or len(verified_bot_id) > 20:
         raise ValueError("Telegram bot identity is invalid")
@@ -123,7 +133,8 @@ def encrypt_native_token(
 def decrypt_native_token(key: str, credential: NativeCredentialSnapshot) -> str:
     """Decrypt only a ready Telegram binding whose encrypted owner metadata matches every fence."""
     if (
-        credential.state != "ready" or credential.encrypted_token is None
+        credential.state != "ready"
+        or credential.encrypted_token is None
         or credential.verified_bot_id is None
     ):
         raise CredentialEncryptionUnavailable("Stored native connector credential is unavailable")
@@ -144,40 +155,65 @@ def decrypt_native_token(key: str, credential: NativeCredentialSnapshot) -> str:
         or credential.bound_bot_id != credential.verified_bot_id
         or binding.get("token_fingerprint") != secret_fingerprint(key, token)
     ):
-        raise CredentialEncryptionUnavailable("Stored native connector credential binding is invalid")
+        raise CredentialEncryptionUnavailable(
+            "Stored native connector credential binding is invalid"
+        )
     return token
 
 
-def _rest_binding(source_generation: int, configuration_revision: int, header_name: str, key: str, secret: str) -> dict[str, object]:
+def _rest_binding(
+    source_generation: int, configuration_revision: int, header_name: str, key: str, secret: str
+) -> dict[str, object]:
     """Return the resolved-binding record stored beside a REST header credential (fingerprint, never the secret)."""
     return {
-        "provider": "rest_header", "source_generation": source_generation,
-        "configuration_revision": configuration_revision, "header_name": header_name,
+        "provider": "rest_header",
+        "source_generation": source_generation,
+        "configuration_revision": configuration_revision,
+        "header_name": header_name,
         "secret_fingerprint": secret_fingerprint(key, secret),
     }
 
 
 def encrypt_rest_secret(
-    key: str, *, source_id: UUID, operation_id: UUID, source_generation: int,
-    configuration_revision: int, header_name: str, secret: str,
+    key: str,
+    *,
+    source_id: UUID,
+    operation_id: UUID,
+    source_generation: int,
+    configuration_revision: int,
+    header_name: str,
+    secret: str,
 ) -> str:
     """Encrypt an owner-entered REST header secret bound to source, operation, revision and header."""
     raw = secret.encode("utf-8")
-    if not 1 <= len(raw) <= 512 or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in secret):
+    if not 1 <= len(raw) <= 512 or any(
+        char.isspace() or ord(char) < 32 or ord(char) == 127 for char in secret
+    ):
         raise ValueError("REST credential is invalid")
     return encrypt_credential_input(
-        key, source_id=source_id, slot="native:rest_header", operation_id=operation_id,
+        key,
+        source_id=source_id,
+        slot="native:rest_header",
+        operation_id=operation_id,
         request={"secret": secret},
-        binding=_rest_binding(source_generation, configuration_revision, header_name, key, secret))
+        binding=_rest_binding(source_generation, configuration_revision, header_name, key, secret),
+    )
 
 
 def decrypt_rest_secret(
-    key: str, ciphertext: str, *, source_id: UUID, operation_id: UUID, source_generation: int,
-    configuration_revision: int, header_name: str,
+    key: str,
+    ciphertext: str,
+    *,
+    source_id: UUID,
+    operation_id: UUID,
+    source_generation: int,
+    configuration_revision: int,
+    header_name: str,
 ) -> str:
     """Decrypt only when the stored binding matches every current fence; never returns on mismatch."""
     request, binding = decrypt_credential_input(
-        key, ciphertext, source_id=source_id, slot="native:rest_header", operation_id=operation_id)
+        key, ciphertext, source_id=source_id, slot="native:rest_header", operation_id=operation_id
+    )
     secret = request.get("secret")
     if not isinstance(secret, str) or binding != _rest_binding(
         source_generation, configuration_revision, header_name, key, secret

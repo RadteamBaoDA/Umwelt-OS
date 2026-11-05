@@ -87,13 +87,17 @@ def create_index_concurrently(name: str, table: str, definition: str) -> None:
     with context.autocommit_block():
         op.execute("SET lock_timeout = 0")
         if not context.as_sql:
-            invalid = op.get_bind().execute(
-                text(
-                    "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
-                    "WHERE c.relname = :name AND NOT i.indisvalid"
-                ),
-                {"name": name},
-            ).first()
+            invalid = (
+                op.get_bind()
+                .execute(
+                    text(
+                        "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                        "WHERE c.relname = :name AND NOT i.indisvalid"
+                    ),
+                    {"name": name},
+                )
+                .first()
+            )
             if invalid is not None:
                 op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
         op.execute(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON {table} {definition}")

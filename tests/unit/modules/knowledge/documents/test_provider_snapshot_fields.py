@@ -18,8 +18,12 @@ from modules.knowledge.documents.schemas import (
 
 def _meta(provider: str, fields: dict, **over):  # type: ignore[no-untyped-def,type-arg]
     base = {
-        "provider": provider, "identity": "id-1", "timestamp_basis": "collection",
-        "coverage": "returned_snapshot", "content_truncated": False, "source_fields": fields,
+        "provider": provider,
+        "identity": "id-1",
+        "timestamp_basis": "collection",
+        "coverage": "returned_snapshot",
+        "content_truncated": False,
+        "source_fields": fields,
     }
     base.update(over)
     return ProviderRecordMetadata(**base)
@@ -45,7 +49,13 @@ def test_telegram_and_world_data_pairing_rules() -> None:
 
 def test_feed_providers_share_the_feed_allowlist() -> None:
     provider = BUILTIN_FEED_PROVIDER_IDS[0]
-    ok = {"title": "t", "summary": "s", "guid": "g", "publisher": "p", "published_at": "2026-01-01T00:00:00Z"}
+    ok = {
+        "title": "t",
+        "summary": "s",
+        "guid": "g",
+        "publisher": "p",
+        "published_at": "2026-01-01T00:00:00Z",
+    }
     assert _meta(provider, ok).source_fields == ok
     assert "form" in _meta("sec_edgar", {"form": "10-K", "cik": "123"}).source_fields
     _rejects(provider, {"form": "10-K"}, "unsupported source fields")
@@ -65,25 +75,52 @@ def test_string_lists_are_bounded() -> None:
     _rejects("youtube", {"tags": ["x" * 256]}, "Provider tags must be a bounded string list")
     _rejects("youtube", {"tags": [1]}, "Provider tags must be a bounded string list")
     assert _meta("google_calendar", {"recurrence": ["x" * 1000]}).source_fields["recurrence"]
-    _rejects("google_calendar", {"recurrence": ["x" * 1001]}, "Provider recurrence must be a bounded string list")
+    _rejects(
+        "google_calendar",
+        {"recurrence": ["x" * 1001]},
+        "Provider recurrence must be a bounded string list",
+    )
 
 
 def test_boolean_and_integer_fields() -> None:
-    assert _meta("github_releases", {"draft": True, "prerelease": False}).source_fields["draft"] is True
+    assert (
+        _meta("github_releases", {"draft": True, "prerelease": False}).source_fields["draft"]
+        is True
+    )
     _rejects("github_releases", {"draft": 1}, "Provider draft must be boolean")
     assert _meta("hn_top", {"time": 5, "id": 0, "deleted": False}).source_fields["time"] == 5
     _rejects("hn_top", {"time": -1}, "Provider time must be a non-negative integer")
     _rejects("hn_top", {"id": True}, "Provider id must be a non-negative integer")
     _rejects("hn_top", {"id": "5"}, "Provider id must be a non-negative integer")
-    _rejects("openalex", {"cited_by_count": 1.5}, "Provider cited_by_count must be a non-negative integer")
+    _rejects(
+        "openalex",
+        {"cited_by_count": 1.5},
+        "Provider cited_by_count must be a non-negative integer",
+    )
 
 
 def test_https_links_without_credentials() -> None:
     assert _meta("bluesky", {"canonical_url": "https://example.com/p"}).source_fields
-    for bad in ("http://example.com", "https://u:p@example.com", "https:///nohost", 5, "https://e.com/" + "a" * 2048):
-        _rejects("bluesky", {"canonical_url": bad}, "Provider canonical_url must be an HTTPS link without credentials")
-    _rejects("hn_top", {"url": "ftp://x.test"}, "Provider url must be an HTTPS link without credentials")
-    _rejects("google_drive", {"web_view_link": "http://x.test"}, "Provider web_view_link must be an HTTPS link")
+    for bad in (
+        "http://example.com",
+        "https://u:p@example.com",
+        "https:///nohost",
+        5,
+        "https://e.com/" + "a" * 2048,
+    ):
+        _rejects(
+            "bluesky",
+            {"canonical_url": bad},
+            "Provider canonical_url must be an HTTPS link without credentials",
+        )
+    _rejects(
+        "hn_top", {"url": "ftp://x.test"}, "Provider url must be an HTTPS link without credentials"
+    )
+    _rejects(
+        "google_drive",
+        {"web_view_link": "http://x.test"},
+        "Provider web_view_link must be an HTTPS link",
+    )
     _rejects("google_calendar", {"html_link": None}, "Provider html_link must be an HTTPS link")
 
 
@@ -92,22 +129,42 @@ def test_release_url_must_target_github_com() -> None:
     for bad in ("https://evil.com/o/r", "http://github.com/o/r", "https://u@github.com/o/r"):
         _rejects("github", {"html_url": bad}, "Provider release URL must target github.com")
     _rejects("github", {"html_url": 5}, "Provider release URL must use HTTPS")
-    _rejects("github", {"html_url": "https://github.com/" + "a" * 2048}, "Provider release URL must use HTTPS")
+    _rejects(
+        "github",
+        {"html_url": "https://github.com/" + "a" * 2048},
+        "Provider release URL must use HTTPS",
+    )
 
 
 def test_iso_timestamps_require_offsets() -> None:
     assert _meta("bluesky", {"created_at": "2026-01-01T00:00:00Z"}).source_fields
     assert _meta("bluesky", {"created_at": "2026-01-01T00:00:00+02:00"}).source_fields
     _rejects("bluesky", {"created_at": "yesterday"}, "Provider created_at must be an ISO timestamp")
-    _rejects("bluesky", {"created_at": "2026-01-01T00:00:00"}, "Provider created_at must include a timezone")
-    _rejects("youtube", {"provider_updated_at": "nope"}, "Provider provider_updated_at must be an ISO timestamp")
-    _rejects("google_drive", {"modified_time": "2026-01-01"}, "Provider modified_time must include a timezone")
+    _rejects(
+        "bluesky",
+        {"created_at": "2026-01-01T00:00:00"},
+        "Provider created_at must include a timezone",
+    )
+    _rejects(
+        "youtube",
+        {"provider_updated_at": "nope"},
+        "Provider provider_updated_at must be an ISO timestamp",
+    )
+    _rejects(
+        "google_drive",
+        {"modified_time": "2026-01-01"},
+        "Provider modified_time must include a timezone",
+    )
 
 
 def test_calendar_start_end_accept_dates_and_offset_timestamps() -> None:
     assert _meta("google_calendar", {"start": "2026-01-01", "end": "2026-01-02"}).source_fields
     assert _meta("google_calendar", {"start": "2026-01-01T10:00:00Z"}).source_fields
-    _rejects("google_calendar", {"start": "2026-01-01T10:00:00"}, "Provider start timestamp must include a timezone")
+    _rejects(
+        "google_calendar",
+        {"start": "2026-01-01T10:00:00"},
+        "Provider start timestamp must include a timezone",
+    )
     _rejects("google_calendar", {"end": "garbage"}, "Provider end must be an ISO date or timestamp")
 
 

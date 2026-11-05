@@ -24,7 +24,9 @@ async def test_before_request_forwarded_to_every_call(monkeypatch):
 
     monkeypatch.setattr(telegram, "_telegram_call", fake_call)
     result = await telegram.validate_telegram_scope(
-        "123456:" + "A" * 35, ("-100123",), before_request=fence,
+        "123456:" + "A" * 35,
+        ("-100123",),
+        before_request=fence,
     )
     assert result.verified_chat_ids == ("-100123",)
     assert [m for m, _ in seen] == ["getMe", "getWebhookInfo", "getChat", "getChatMember"]

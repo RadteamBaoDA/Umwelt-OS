@@ -35,47 +35,197 @@ if TYPE_CHECKING:
 
 HnList = Literal["top", "new", "best", "ask", "show"]
 GdeltTimespan = Literal["1h", "6h", "24h", "3d", "7d"]
-GdeltLang = Literal["english", "vietnamese", "chinese", "japanese", "korean", "french", "german", "spanish"]
-GdeltCountry = Literal["US", "VN", "CN", "JP", "GB", "DE", "FR", "IN", "KR", "SG", "AU", "RU", "BR", "CA"]
+GdeltLang = Literal[
+    "english", "vietnamese", "chinese", "japanese", "korean", "french", "german", "spanish"
+]
+GdeltCountry = Literal[
+    "US", "VN", "CN", "JP", "GB", "DE", "FR", "IN", "KR", "SG", "AU", "RU", "BR", "CA"
+]
 UsgsMagnitude = Literal["significant", "4.5", "2.5", "1.0", "all"]
 UsgsPeriod = Literal["hour", "day", "week"]
 EonetCategory = Literal[
-    "drought", "dustHaze", "earthquakes", "floods", "landslides", "manmade", "seaLakeIce", "severeStorms",
-    "snow", "tempExtremes", "volcanoes", "waterColor", "wildfires",
+    "drought",
+    "dustHaze",
+    "earthquakes",
+    "floods",
+    "landslides",
+    "manmade",
+    "seaLakeIce",
+    "severeStorms",
+    "snow",
+    "tempExtremes",
+    "volcanoes",
+    "waterColor",
+    "wildfires",
 ]
 EonetStatus = Literal["open", "all"]
 GdacsType = Literal["EQ", "TC", "FL", "VO", "WF", "DR"]
 GdacsAlert = Literal["Green", "Orange", "Red"]
 NwsSeverity = Literal["Extreme", "Severe", "Moderate", "Minor"]
 NwsArea = Literal[
-    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY",
-    "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH",
-    "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+    "AL",
+    "AK",
+    "AZ",
+    "AR",
+    "CA",
+    "CO",
+    "CT",
+    "DE",
+    "DC",
+    "FL",
+    "GA",
+    "HI",
+    "ID",
+    "IL",
+    "IN",
+    "IA",
+    "KS",
+    "KY",
+    "LA",
+    "ME",
+    "MD",
+    "MA",
+    "MI",
+    "MN",
+    "MS",
+    "MO",
+    "MT",
+    "NE",
+    "NV",
+    "NH",
+    "NJ",
+    "NM",
+    "NY",
+    "NC",
+    "ND",
+    "OH",
+    "OK",
+    "OR",
+    "PA",
+    "RI",
+    "SC",
+    "SD",
+    "TN",
+    "TX",
+    "UT",
+    "VT",
+    "VA",
+    "WA",
+    "WV",
+    "WI",
+    "WY",
 ]
 NvdSeverity = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 Region = Literal[
-    "world", "southeast_asia", "vietnam", "east_asia", "south_asia", "europe", "north_america",
-    "south_america", "africa", "oceania", "middle_east",
+    "world",
+    "southeast_asia",
+    "vietnam",
+    "east_asia",
+    "south_asia",
+    "europe",
+    "north_america",
+    "south_america",
+    "africa",
+    "oceania",
+    "middle_east",
 ]
 
 WikiLanguage = Literal["en", "vi", "ja", "zh", "fr", "de", "es", "ko"]
 SatnogsStatus = Literal["good", "bad", "unknown"]
 IsoCountry = Literal[
-    "VN", "US", "JP", "CN", "GB", "DE", "FR", "IN", "KR", "SG", "AU", "CA", "BR", "ID", "TH", "MY", "PH", "IT", "ES",
-    "RU", "MX", "ZA", "TR", "NL", "CH",
+    "VN",
+    "US",
+    "JP",
+    "CN",
+    "GB",
+    "DE",
+    "FR",
+    "IN",
+    "KR",
+    "SG",
+    "AU",
+    "CA",
+    "BR",
+    "ID",
+    "TH",
+    "MY",
+    "PH",
+    "IT",
+    "ES",
+    "RU",
+    "MX",
+    "ZA",
+    "TR",
+    "NL",
+    "CH",
 ]
 WbIndicator = Literal["gdp", "gdp_growth", "inflation_cpi", "unemployment", "population", "fdi"]
 # Union of every currency any FX provider below lists; per-provider membership is checked in validate_options.
 FxCurrency = Literal[
-    "EUR", "USD", "JPY", "GBP", "CNY", "VND", "KRW", "SGD", "AUD", "CAD", "THB", "INR", "CHF", "HKD", "IDR", "MYR",
-    "PHP", "BGN", "CZK", "DKK", "HUF", "PLN", "RON", "SEK", "ISK", "NOK", "TRY", "BRL", "ILS", "MXN", "NZD", "ZAR",
+    "EUR",
+    "USD",
+    "JPY",
+    "GBP",
+    "CNY",
+    "VND",
+    "KRW",
+    "SGD",
+    "AUD",
+    "CAD",
+    "THB",
+    "INR",
+    "CHF",
+    "HKD",
+    "IDR",
+    "MYR",
+    "PHP",
+    "BGN",
+    "CZK",
+    "DKK",
+    "HUF",
+    "PLN",
+    "RON",
+    "SEK",
+    "ISK",
+    "NOK",
+    "TRY",
+    "BRL",
+    "ILS",
+    "MXN",
+    "NZD",
+    "ZAR",
 ]
 OecdArea = Literal[
-    "USA", "CHN", "JPN", "DEU", "GBR", "FRA", "ITA", "CAN", "KOR", "IND", "BRA", "AUS", "ESP", "MEX", "TUR", "IDN",
+    "USA",
+    "CHN",
+    "JPN",
+    "DEU",
+    "GBR",
+    "FRA",
+    "ITA",
+    "CAN",
+    "KOR",
+    "IND",
+    "BRA",
+    "AUS",
+    "ESP",
+    "MEX",
+    "TUR",
+    "IDN",
 ]
 CryptoPair = Literal[
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "TRXUSDT", "LINKUSDT", "DOTUSDT",
-    "LTCUSDT", "AVAXUSDT",
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "DOGEUSDT",
+    "TRXUSDT",
+    "LINKUSDT",
+    "DOTUSDT",
+    "LTCUSDT",
+    "AVAXUSDT",
 ]
 # VNDirect finfo ticker/index code: uppercase alphanumerics only, so it can never carry URL syntax into a request.
 VnSymbol = Annotated[str, StringConstraints(pattern=r"^[A-Z0-9]{2,10}$")]
@@ -91,23 +241,93 @@ MAX_JOB_KEYWORDS = 5
 DEFAULT_JOB_KEYWORDS = ("developer",)
 MAX_ITVIEC_SEARCHES = 3  # keyword x city search pages per ITviec run (each page is ~0.5 MB)
 CoinId = Literal[
-    "btc-bitcoin", "eth-ethereum", "bnb-binance-coin", "sol-solana", "xrp-xrp", "ada-cardano", "doge-dogecoin",
-    "ltc-litecoin", "dot-polkadot", "trx-tron",
+    "btc-bitcoin",
+    "eth-ethereum",
+    "bnb-binance-coin",
+    "sol-solana",
+    "xrp-xrp",
+    "ada-cardano",
+    "doge-dogecoin",
+    "ltc-litecoin",
+    "dot-polkadot",
+    "trx-tron",
 ]
 COIN_SYMBOLS = {
-    "btc-bitcoin": "BTC", "eth-ethereum": "ETH", "bnb-binance-coin": "BNB", "sol-solana": "SOL", "xrp-xrp": "XRP",
-    "ada-cardano": "ADA", "doge-dogecoin": "DOGE", "ltc-litecoin": "LTC", "dot-polkadot": "DOT", "trx-tron": "TRX",
+    "btc-bitcoin": "BTC",
+    "eth-ethereum": "ETH",
+    "bnb-binance-coin": "BNB",
+    "sol-solana": "SOL",
+    "xrp-xrp": "XRP",
+    "ada-cardano": "ADA",
+    "doge-dogecoin": "DOGE",
+    "ltc-litecoin": "LTC",
+    "dot-polkadot": "DOT",
+    "trx-tron": "TRX",
 }
 # Curated currency sets per provider (ECB daily reference set; Frankfurter adds EUR and VND; open.er-api list).
-ECB_CURRENCIES = frozenset({
-    "USD", "JPY", "BGN", "CZK", "DKK", "GBP", "HUF", "PLN", "RON", "SEK", "CHF", "ISK", "NOK", "TRY", "AUD", "BRL",
-    "CAD", "CNY", "HKD", "IDR", "ILS", "INR", "KRW", "MXN", "MYR", "NZD", "PHP", "SGD", "THB", "ZAR",
-})
+ECB_CURRENCIES = frozenset(
+    {
+        "USD",
+        "JPY",
+        "BGN",
+        "CZK",
+        "DKK",
+        "GBP",
+        "HUF",
+        "PLN",
+        "RON",
+        "SEK",
+        "CHF",
+        "ISK",
+        "NOK",
+        "TRY",
+        "AUD",
+        "BRL",
+        "CAD",
+        "CNY",
+        "HKD",
+        "IDR",
+        "ILS",
+        "INR",
+        "KRW",
+        "MXN",
+        "MYR",
+        "NZD",
+        "PHP",
+        "SGD",
+        "THB",
+        "ZAR",
+    }
+)
 FRANKFURTER_CURRENCIES = ECB_CURRENCIES | {"EUR", "VND"}
-OER_CURRENCIES = frozenset({
-    "USD", "EUR", "JPY", "GBP", "CNY", "VND", "KRW", "SGD", "AUD", "CAD", "THB", "INR", "CHF", "HKD", "IDR", "MYR", "PHP",
-})
-OER_DEFAULT_QUOTES = ("VND", "EUR", "JPY", "GBP", "CNY")  # mirrors macro.OPEN_ER_QUOTES for base USD
+OER_CURRENCIES = frozenset(
+    {
+        "USD",
+        "EUR",
+        "JPY",
+        "GBP",
+        "CNY",
+        "VND",
+        "KRW",
+        "SGD",
+        "AUD",
+        "CAD",
+        "THB",
+        "INR",
+        "CHF",
+        "HKD",
+        "IDR",
+        "MYR",
+        "PHP",
+    }
+)
+OER_DEFAULT_QUOTES = (
+    "VND",
+    "EUR",
+    "JPY",
+    "GBP",
+    "CNY",
+)  # mirrors macro.OPEN_ER_QUOTES for base USD
 # World Bank indicator -> (id, metric name, unit shown on the record)
 WB_INDICATORS = {
     "gdp": ("NY.GDP.MKTP.CD", "gdp_current_usd"),
@@ -117,7 +337,9 @@ WB_INDICATORS = {
     "population": ("SP.POP.TOTL", "population"),
     "fdi": ("BX.KLT.DINV.WD.GD.ZS", "fdi_net_inflows_pct_gdp"),
 }
-COINPAPRIKA_GAP_SECONDS = 1.1  # the pilot quota allows one call per second; calls in one run are spaced past it
+COINPAPRIKA_GAP_SECONDS = (
+    1.1  # the pilot quota allows one call per second; calls in one run are spaced past it
+)
 MAX_COINS = 5
 
 ISO_COUNTRY_PATTERN = r"^[A-Z]{2}$"
@@ -155,8 +377,20 @@ OPTION_FIELDS: dict[str, tuple[str, ...]] = {
 ALL_OPTION_NAMES = frozenset(name for names in OPTION_FIELDS.values() for name in names)
 
 # max_items only ever lowers an adapter's own request cap (never raises a fail-closed one).
-UPSTREAM_CAPS = {"hn_top": 30, "gdelt_economy": 50, "emsc_quakes": 50, "nvd": 20, "launch_library": 25}
-_DEFAULT_COUNT = {"hn_top": 10, "gdelt_economy": 5, "emsc_quakes": 50, "nvd": 20, "launch_library": 10}
+UPSTREAM_CAPS = {
+    "hn_top": 30,
+    "gdelt_economy": 50,
+    "emsc_quakes": 50,
+    "nvd": 20,
+    "launch_library": 25,
+}
+_DEFAULT_COUNT = {
+    "hn_top": 10,
+    "gdelt_economy": 5,
+    "emsc_quakes": 50,
+    "nvd": 20,
+    "launch_library": 10,
+}
 
 # Bounding boxes (lat_min, lat_max, lon_min, lon_max). None = whole world. None crosses the antimeridian.
 REGION_BOXES: dict[str, tuple[float, float, float, float] | None] = {
@@ -173,10 +407,29 @@ REGION_BOXES: dict[str, tuple[float, float, float, float] | None] = {
     "middle_east": (12.0, 42.0, 34.0, 63.0),
 }
 
-_FIPS = {"US": "US", "VN": "VM", "CN": "CH", "JP": "JA", "GB": "UK", "DE": "GM", "FR": "FR", "IN": "IN",
-         "KR": "KS", "SG": "SN", "AU": "AS", "RU": "RS", "BR": "BR", "CA": "CA"}  # GDELT sourcecountry takes FIPS codes
-_GDELT_WINDOWS = {"1h": timedelta(hours=1), "6h": timedelta(hours=6), "24h": timedelta(hours=24),
-                  "3d": timedelta(days=3), "7d": timedelta(days=7)}
+_FIPS = {
+    "US": "US",
+    "VN": "VM",
+    "CN": "CH",
+    "JP": "JA",
+    "GB": "UK",
+    "DE": "GM",
+    "FR": "FR",
+    "IN": "IN",
+    "KR": "KS",
+    "SG": "SN",
+    "AU": "AS",
+    "RU": "RS",
+    "BR": "BR",
+    "CA": "CA",
+}  # GDELT sourcecountry takes FIPS codes
+_GDELT_WINDOWS = {
+    "1h": timedelta(hours=1),
+    "6h": timedelta(hours=6),
+    "24h": timedelta(hours=24),
+    "3d": timedelta(days=3),
+    "7d": timedelta(days=7),
+}
 _LEVEL = re.compile(r"\bLevel\s*([1-4])\b", re.IGNORECASE)
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _OPERATOR = re.compile(r"(?i)\b(?:site|domain|domainis|sourcelang|sourcecountry)\s*:")
@@ -224,9 +477,18 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
     if provider == "nvd" and (cfg.get("max_items") or 0) > UPSTREAM_CAPS["nvd"]:
         raise ValueError("NVD returns at most 20 CVEs per sync")
     for name in (
-        "eonet_categories", "gdacs_event_types", "gdacs_alert_levels", "nws_severity", "nvd_severity", "fx_quotes",
-        "oecd_countries", "crypto_symbols", "coin_ids", "vn_symbols",
-        "job_cities", "job_levels",
+        "eonet_categories",
+        "gdacs_event_types",
+        "gdacs_alert_levels",
+        "nws_severity",
+        "nvd_severity",
+        "fx_quotes",
+        "oecd_countries",
+        "crypto_symbols",
+        "coin_ids",
+        "vn_symbols",
+        "job_cities",
+        "job_levels",
     ):
         values = cfg.get(name)
         if values is not None and len(set(values)) != len(values):
@@ -234,11 +496,21 @@ def validate_options(provider: str, cfg: Mapping[str, Any]) -> None:
     keywords = [k.casefold() for k in cfg.get("job_keywords") or ()]
     if len(set(keywords)) != len(keywords):
         raise ValueError("Selections must be unique")
-    if provider == "itviec_jobs" and len(selected_job_keywords(cfg)) * max(1, len(cfg.get("job_cities") or ())) > MAX_ITVIEC_SEARCHES:
-        raise ValueError(f"ITviec allows at most {MAX_ITVIEC_SEARCHES} keyword x city searches per source")
+    if (
+        provider == "itviec_jobs"
+        and len(selected_job_keywords(cfg)) * max(1, len(cfg.get("job_cities") or ()))
+        > MAX_ITVIEC_SEARCHES
+    ):
+        raise ValueError(
+            f"ITviec allows at most {MAX_ITVIEC_SEARCHES} keyword x city searches per source"
+        )
     if len(cfg.get("coin_ids") or ()) > MAX_COINS:
         raise ValueError(f"At most {MAX_COINS} coins per source")
-    listed = {"ecb": ECB_CURRENCIES, "frankfurter": FRANKFURTER_CURRENCIES, "open_er_api": OER_CURRENCIES}.get(provider)
+    listed = {
+        "ecb": ECB_CURRENCIES,
+        "frankfurter": FRANKFURTER_CURRENCIES,
+        "open_er_api": OER_CURRENCIES,
+    }.get(provider)
     if listed is not None:
         quotes = cfg.get("fx_quotes") or ()
         for currency in (cfg.get("fx_base"), *quotes):
@@ -274,8 +546,10 @@ def _usgs_url(cfg: Mapping[str, Any]) -> str | None:
     mag, period = cfg.get("usgs_min_magnitude"), cfg.get("usgs_period")
     if mag is None and period is None:
         return None
-    return ("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/"
-            f"{mag or '4.5'}_{period or 'day'}.geojson")
+    return (
+        "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/"
+        f"{mag or '4.5'}_{period or 'day'}.geojson"
+    )
 
 
 def _emsc_url(provider: str, cfg: Mapping[str, Any]) -> str | None:
@@ -283,8 +557,10 @@ def _emsc_url(provider: str, cfg: Mapping[str, Any]) -> str | None:
     if cfg.get("min_magnitude") is None and not cfg.get("max_items"):
         return None
     mag = cfg.get("min_magnitude")
-    return ("https://www.seismicportal.eu/fdsnws/event/1/query"
-            f"?limit={_count(provider, cfg)}&format=json&minmag={'4' if mag is None else format(mag, 'g')}")
+    return (
+        "https://www.seismicportal.eu/fdsnws/event/1/query"
+        f"?limit={_count(provider, cfg)}&format=json&minmag={'4' if mag is None else format(mag, 'g')}"
+    )
 
 
 def _gdacs_url(cfg: Mapping[str, Any]) -> str | None:
@@ -312,11 +588,15 @@ def _ioda_url(cfg: Mapping[str, Any], now: datetime) -> str | None:
     from modules.connectors.providers import security
 
     start = int((now - timedelta(days=1)).timestamp())
-    return (f"{security.IODA_BASE}?from={start}&until={int(now.timestamp())}&entityType=country"
-            f"&entityCode={cfg['ioda_country']}&limit={security._IODA_MAX_EVENTS}")
+    return (
+        f"{security.IODA_BASE}?from={start}&until={int(now.timestamp())}&entityType=country"
+        f"&entityCode={cfg['ioda_country']}&limit={security._IODA_MAX_EVENTS}"
+    )
 
 
-def build_url(provider: str, cfg: Mapping[str, Any], *, cursor: str | None, now: datetime) -> str | None:
+def build_url(
+    provider: str, cfg: Mapping[str, Any], *, cursor: str | None, now: datetime
+) -> str | None:
     """Return the request URL for ``provider`` under ``cfg``, or ``None`` when today's request applies.
 
     ``cursor`` (an ISO instant) is pushed as a native start parameter for ``gdelt_economy``
@@ -325,7 +605,11 @@ def build_url(provider: str, cfg: Mapping[str, Any], *, cursor: str | None, now:
     """
     if provider == "hn_top":
         listing = cfg.get("hn_list")
-        return None if listing in (None, "top") else f"https://hacker-news.firebaseio.com/v0/{listing}stories.json"
+        return (
+            None
+            if listing in (None, "top")
+            else f"https://hacker-news.firebaseio.com/v0/{listing}stories.json"
+        )
     if provider == "gdelt_economy":
         return _gdelt_url(cfg, cursor)
     if provider == "usgs":
@@ -363,9 +647,17 @@ def _wave_f_url(provider: str, cfg: Mapping[str, Any], now: datetime) -> str | N
         return None if lang == "en" else json_feed.wiki_url(provider, lang, now)
     if provider == "satnogs_observations":
         status = cfg.get("satnogs_status")
-        return None if status in (None, "good") else f"https://network.satnogs.org/api/observations/?format=json&status={status}"
+        return (
+            None
+            if status in (None, "good")
+            else f"https://network.satnogs.org/api/observations/?format=json&status={status}"
+        )
     if provider == "disease_sh":
-        return f"https://disease.sh/v3/covid-19/countries/{cfg['disease_country']}" if cfg.get("disease_country") else None
+        return (
+            f"https://disease.sh/v3/covid-19/countries/{cfg['disease_country']}"
+            if cfg.get("disease_country")
+            else None
+        )
     if provider == "world_bank":
         country = cfg.get("wb_country") or "VN"
         indicator = WB_INDICATORS[cfg.get("wb_indicator") or "gdp"][0]
@@ -381,7 +673,9 @@ def _wave_f_url(provider: str, cfg: Mapping[str, Any], now: datetime) -> str | N
         return f"https://api.frankfurter.dev/v2/rates?base={base}&quotes={','.join(quotes)}"
     if provider == "open_er_api":
         oer_base = cfg.get("fx_base")
-        return None if oer_base in (None, "USD") else f"https://open.er-api.com/v6/latest/{oer_base}"
+        return (
+            None if oer_base in (None, "USD") else f"https://open.er-api.com/v6/latest/{oer_base}"
+        )
     if provider == "oecd_cli":
         if not cfg.get("oecd_countries"):
             return None
@@ -438,7 +732,12 @@ def map_options(provider: str, cfg: Mapping[str, Any]) -> dict[str, Any]:
         indicator, metric = WB_INDICATORS[cfg.get("wb_indicator") or "gdp"]
         return {"indicators": ((cfg.get("wb_country") or "VN", indicator, metric),)}
     if provider == "binance" and cfg.get("crypto_symbols"):
-        return {"pairs": tuple((s, s.removesuffix("USDT"), "USDT") for s in _ordered(CryptoPair, cfg["crypto_symbols"]))}
+        return {
+            "pairs": tuple(
+                (s, s.removesuffix("USDT"), "USDT")
+                for s in _ordered(CryptoPair, cfg["crypto_symbols"])
+            )
+        }
     if provider == "vn_stock":
         return {"symbols": selected_vn_symbols(cfg)}
     if provider == "frankfurter" and (cfg.get("fx_base") or cfg.get("fx_quotes")):
@@ -448,7 +747,9 @@ def map_options(provider: str, cfg: Mapping[str, Any]) -> dict[str, Any]:
         return {"base": cfg["fx_base"]}
     if provider == "disease_sh" and cfg.get("disease_country"):
         return {"country": cfg["disease_country"]}
-    if provider in ("wikipedia_mostread", "wikipedia_top_views") and cfg.get("wiki_language") not in (None, "en"):
+    if provider in ("wikipedia_mostread", "wikipedia_top_views") and cfg.get(
+        "wiki_language"
+    ) not in (None, "en"):
         return {"wiki_language": cfg["wiki_language"]}
     return {}
 
@@ -458,15 +759,23 @@ def _gdelt_url(cfg: Mapping[str, Any], cursor: str | None) -> str | None:
     from modules.connectors.providers import gdelt
     from modules.connectors.selection import SKEW
 
-    plain = not any(cfg.get(k) for k in ("gdelt_query", "gdelt_timespan", "gdelt_source_lang", "gdelt_source_country"))
+    plain = not any(
+        cfg.get(k)
+        for k in ("gdelt_query", "gdelt_timespan", "gdelt_source_lang", "gdelt_source_country")
+    )
     if plain and not cfg.get("max_items") and cursor is None:
         return None
     params: dict[str, Any] = {
-        "query": _gdelt_query(cfg), "mode": "artlist", "format": "json", "maxrecords": _count("gdelt_economy", cfg),
+        "query": _gdelt_query(cfg),
+        "mode": "artlist",
+        "format": "json",
+        "maxrecords": _count("gdelt_economy", cfg),
     }
     start = _parse_cursor(cursor)
     if start is not None:
-        params["startdatetime"] = (start - SKEW).strftime("%Y%m%d%H%M%S")  # GDELT: replaces timespan
+        params["startdatetime"] = (start - SKEW).strftime(
+            "%Y%m%d%H%M%S"
+        )  # GDELT: replaces timespan
     else:
         params["timespan"] = cfg.get("gdelt_timespan") or "24h"
     return f"{gdelt._BASE}?{urlencode(params)}"
@@ -474,7 +783,11 @@ def _gdelt_url(cfg: Mapping[str, Any], cursor: str | None) -> str | None:
 
 def _eonet_url(cfg: Mapping[str, Any]) -> str | None:
     """EONET v3 events URL with optional category/days narrowing; ``None`` at defaults."""
-    if cfg.get("eonet_categories") is None and cfg.get("eonet_status") is None and cfg.get("eonet_days") is None:
+    if (
+        cfg.get("eonet_categories") is None
+        and cfg.get("eonet_status") is None
+        and cfg.get("eonet_days") is None
+    ):
         return None
     url = f"https://eonet.gsfc.nasa.gov/api/v3/events?status={cfg.get('eonet_status') or 'open'}&limit=50"
     if cfg.get("eonet_categories"):
@@ -492,10 +805,14 @@ def _nvd_url(cfg: Mapping[str, Any], now: datetime) -> str | None:
 
     fmt = "%Y-%m-%dT%H:%M:%S.000"
     start = (now - timedelta(days=cfg.get("nvd_window_days") or 1)).strftime(fmt)
-    url = (f"{security.NVD_BASE}?resultsPerPage={_count('nvd', cfg)}&pubStartDate={start}"
-           f"&pubEndDate={now.strftime(fmt)}")
+    url = (
+        f"{security.NVD_BASE}?resultsPerPage={_count('nvd', cfg)}&pubStartDate={start}"
+        f"&pubEndDate={now.strftime(fmt)}"
+    )
     severities: Sequence[str] = cfg.get("nvd_severity") or []
-    if len(severities) == 1:  # NVD takes one cvssV3Severity; several are banded client-side in filter_records
+    if (
+        len(severities) == 1
+    ):  # NVD takes one cvssV3Severity; several are banded client-side in filter_records
         url += f"&cvssV3Severity={severities[0]}"
     if cfg.get("nvd_keyword"):
         url += f"&keywordSearch={quote(cfg['nvd_keyword'], safe='')}"
@@ -532,21 +849,31 @@ def native_fingerprint(provider: str, cfg: Mapping[str, Any]) -> str | None:
     """
     params: dict[str, Any]
     if provider == "gdelt_economy":
-        params = {"q": cfg.get("gdelt_query") or "economy", "t": cfg.get("gdelt_timespan") or "24h",
-                  "l": cfg.get("gdelt_source_lang"), "c": cfg.get("gdelt_source_country")}
+        params = {
+            "q": cfg.get("gdelt_query") or "economy",
+            "t": cfg.get("gdelt_timespan") or "24h",
+            "l": cfg.get("gdelt_source_lang"),
+            "c": cfg.get("gdelt_source_country"),
+        }
     elif provider == "emsc_quakes":
         params = {"m": 4.0 if cfg.get("min_magnitude") is None else float(cfg["min_magnitude"])}
     elif provider == "gdacs_events":
-        params = {"t": _ordered(GdacsType, cfg.get("gdacs_event_types") or get_args(GdacsType)),
-                  "a": _ordered(GdacsAlert, cfg.get("gdacs_alert_levels") or ("Orange", "Red"))}
+        params = {
+            "t": _ordered(GdacsType, cfg.get("gdacs_event_types") or get_args(GdacsType)),
+            "a": _ordered(GdacsAlert, cfg.get("gdacs_alert_levels") or ("Orange", "Red")),
+        }
     elif provider == "nws_alerts":
-        params = {"s": _ordered(NwsSeverity, cfg.get("nws_severity") or ("Extreme", "Severe")),
-                  "a": cfg.get("nws_area")}
+        params = {
+            "s": _ordered(NwsSeverity, cfg.get("nws_severity") or ("Extreme", "Severe")),
+            "a": cfg.get("nws_area"),
+        }
     elif provider == "satnogs_observations":
         params = {"s": cfg.get("satnogs_status") or "good"}
     else:
         return None
-    digest = hashlib.sha256(json.dumps(params, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    digest = hashlib.sha256(
+        json.dumps(params, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     return f"n1:{digest[:16]}"
 
 
@@ -560,7 +887,9 @@ def default_window(provider: str, cfg: Mapping[str, Any]) -> timedelta:
 def _coordinates(record: IngestionRecord) -> tuple[float, float] | None:
     """Return ``(lat, lon)`` from the typed measurement, else from the mapped summary text, else ``None``."""
     world = (record.metadata.get("provider_record") or {}).get("world_data") or {}
-    if isinstance(world.get("latitude"), (int, float)) and isinstance(world.get("longitude"), (int, float)):
+    if isinstance(world.get("latitude"), (int, float)) and isinstance(
+        world.get("longitude"), (int, float)
+    ):
         return float(world["latitude"]), float(world["longitude"])
     for pattern in _COORDS:
         if match := pattern.search(record.content):
@@ -589,7 +918,9 @@ def _severity_band(score: float | None) -> str | None:
     return "LOW" if score < 4 else "MEDIUM" if score < 7 else "HIGH" if score < 9 else "CRITICAL"
 
 
-def filter_records(provider: str, cfg: Mapping[str, Any], records: Sequence[IngestionRecord]) -> list[IngestionRecord]:
+def filter_records(
+    provider: str, cfg: Mapping[str, Any], records: Sequence[IngestionRecord]
+) -> list[IngestionRecord]:
     """Apply the client-side per-type filters (region, KEV flag, NVD bands, FX quote subset, Kp and advisory thresholds).
 
     Runs on mapped records before incremental selection. With no relevant option the input is returned as is.
@@ -599,21 +930,56 @@ def filter_records(provider: str, cfg: Mapping[str, Any], records: Sequence[Inge
     if region and provider in OPTION_FIELDS and "region" in OPTION_FIELDS[provider]:
         out = [r for r in out if in_region(r, region)]
     if provider == "cisa_kev" and cfg.get("kev_ransomware_only"):
-        out = [r for r in out if (((r.metadata.get("provider_record") or {}).get("world_data") or {})
-                                  .get("provider_fields") or {}).get("knownRansomwareCampaignUse") == "Known"]
+        out = [
+            r
+            for r in out
+            if (
+                ((r.metadata.get("provider_record") or {}).get("world_data") or {}).get(
+                    "provider_fields"
+                )
+                or {}
+            ).get("knownRansomwareCampaignUse")
+            == "Known"
+        ]
     if provider in ("ecb", "open_er_api") and cfg.get("fx_quotes"):
         wanted_quotes = set(cfg["fx_quotes"])
-        out = [r for r in out if (((r.metadata.get("provider_record") or {}).get("world_data") or {})
-                                  .get("provider_fields") or {}).get("quote") in wanted_quotes]
+        out = [
+            r
+            for r in out
+            if (
+                ((r.metadata.get("provider_record") or {}).get("world_data") or {}).get(
+                    "provider_fields"
+                )
+                or {}
+            ).get("quote")
+            in wanted_quotes
+        ]
     if provider == "noaa_kp" and cfg.get("kp_min"):
-        out = [r for r in out if (((r.metadata.get("provider_record") or {}).get("world_data") or {})
-                                  .get("value") or 0) >= cfg["kp_min"]]
+        out = [
+            r
+            for r in out
+            if (
+                ((r.metadata.get("provider_record") or {}).get("world_data") or {}).get("value")
+                or 0
+            )
+            >= cfg["kp_min"]
+        ]
     if provider == "us_travel_advisories" and cfg.get("advisory_min_level"):
         # A title without "Level N" (e.g. "Worldwide Caution") cannot be ranked, so it is kept rather than hidden.
-        out = [r for r in out if (m := _LEVEL.search(str(r.metadata.get("title", "")))) is None
-               or int(m.group(1)) >= cfg["advisory_min_level"]]
+        out = [
+            r
+            for r in out
+            if (m := _LEVEL.search(str(r.metadata.get("title", "")))) is None
+            or int(m.group(1)) >= cfg["advisory_min_level"]
+        ]
     if provider == "nvd" and cfg.get("nvd_severity"):
         wanted = set(cfg["nvd_severity"])
-        out = [r for r in out if _severity_band(
-            ((r.metadata.get("provider_record") or {}).get("world_data") or {}).get("value")) in wanted]
+        out = [
+            r
+            for r in out
+            if _severity_band(
+                ((r.metadata.get("provider_record") or {}).get("world_data") or {}).get("value")
+            )
+            in wanted
+        ]
     return out

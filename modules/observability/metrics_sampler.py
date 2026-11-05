@@ -65,7 +65,10 @@ _OUTBOX_SIZE_SQL = text(
 
 
 async def sample_outbox(
-    session_factory: async_sessionmaker[AsyncSession], *, retention_days: int = 30, include_size: bool = True,
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    retention_days: int = 30,
+    include_size: bool = True,
 ) -> None:
     """Set the outbox pending count and lag and, when ``include_size``, the row total and purge backlog.
 
@@ -79,25 +82,39 @@ async def sample_outbox(
         row = (await session.execute(_OUTBOX_BACKLOG_SQL)).one()
         size = None
         if include_size:
-            size = (await session.execute(_OUTBOX_SIZE_SQL, {
-                "general_cutoff": now - timedelta(days=max(1, retention_days)) - _PURGE_GRACE,
-                "stage_cutoff": now - OUTBOX_RETENTION - _PURGE_GRACE,
-            })).one()
+            size = (
+                await session.execute(
+                    _OUTBOX_SIZE_SQL,
+                    {
+                        "general_cutoff": now
+                        - timedelta(days=max(1, retention_days))
+                        - _PURGE_GRACE,
+                        "stage_cutoff": now - OUTBOX_RETENTION - _PURGE_GRACE,
+                    },
+                )
+            ).one()
     if size is not None:
         OUTBOX_ROWS_TOTAL.set(max(0, int(size.rows_total or 0)))
         OUTBOX_PURGE_BACKLOG.set(int(size.backlog or 0))
     OUTBOX_PENDING.set(int(row.pending))
     oldest: datetime | None = row.oldest
-    OUTBOX_LAG.set(max(0.0, (datetime.now(UTC) - oldest).total_seconds()) if oldest is not None else 0.0)
+    OUTBOX_LAG.set(
+        max(0.0, (datetime.now(UTC) - oldest).total_seconds()) if oldest is not None else 0.0
+    )
 
 
 def build_api_samplers(
-    redis: Any, session_factory: async_sessionmaker[AsyncSession], queues: Iterable[str],
-    *, outbox_retention_days: int = 30,
+    redis: Any,
+    session_factory: async_sessionmaker[AsyncSession],
+    queues: Iterable[str],
+    *,
+    outbox_retention_days: int = 30,
 ) -> list[tuple[str, Sampler]]:
     """Return the named samplers the API metrics loop runs: ``arq_queues`` and ``outbox``."""
     queue_names = tuple(queues)
-    last_size_at = float("-inf")  # monotonic time of the last size/backlog query; per-sampler-set closure state
+    last_size_at = float(
+        "-inf"
+    )  # monotonic time of the last size/backlog query; per-sampler-set closure state
 
     async def queues_sampler() -> None:
         """Sample arq queue depth and oldest-job age from Redis."""

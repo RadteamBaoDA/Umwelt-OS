@@ -57,20 +57,35 @@ from modules.sources.public import SourceReadProjection as Source
 
 
 async def observability_quality_summary(
-    session: AsyncSession, *, instance_operator: bool,
+    session: AsyncSession,
+    *,
+    instance_operator: bool,
 ) -> dict[str, int]:
     """Return global document counts only to an explicitly admitted instance operator."""
     if instance_operator is not True:
         raise ForbiddenError("Instance operator required")
     document_count = int(await session.scalar(select(func.count()).select_from(Document)) or 0)
-    orphan_chunks = int(await session.scalar(select(func.count()).select_from(DocumentChunk).outerjoin(
-        DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id,
-    ).where(DocumentVersion.id.is_(None))) or 0)
+    orphan_chunks = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(DocumentChunk)
+            .outerjoin(
+                DocumentVersion,
+                DocumentVersion.id == DocumentChunk.document_version_id,
+            )
+            .where(DocumentVersion.id.is_(None))
+        )
+        or 0
+    )
     return {"document_count": document_count, "orphan_chunks": orphan_chunks}
 
 
 async def _assert_new_document_key(
-    session: AsyncSession, source_id: UUID, external_id: str | None, *, scope: Scope,
+    session: AsyncSession,
+    source_id: UUID,
+    external_id: str | None,
+    *,
+    scope: Scope,
 ) -> None:
     """Reject an occupied/tombstoned exact external key under the caller-held Source lock.
 
@@ -80,13 +95,29 @@ async def _assert_new_document_key(
     """
     if external_id is None:
         return
-    document = await session.scalar(select(Document).where(
-        Document.source_id == source_id, Document.external_id == external_id,
-    ).order_by(Document.id).with_for_update().execution_options(populate_existing=True))
-    identity = await session.scalar(select(NormalizedDocumentIdentity).where(
-        NormalizedDocumentIdentity.source_id == source_id, NormalizedDocumentIdentity.external_id == external_id,
-    ).order_by(NormalizedDocumentIdentity.id).with_for_update().execution_options(populate_existing=True))
-    if any(row is not None and row.workspace_id != scope.workspace_id for row in (document, identity)):
+    document = await session.scalar(
+        select(Document)
+        .where(
+            Document.source_id == source_id,
+            Document.external_id == external_id,
+        )
+        .order_by(Document.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    identity = await session.scalar(
+        select(NormalizedDocumentIdentity)
+        .where(
+            NormalizedDocumentIdentity.source_id == source_id,
+            NormalizedDocumentIdentity.external_id == external_id,
+        )
+        .order_by(NormalizedDocumentIdentity.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if any(
+        row is not None and row.workspace_id != scope.workspace_id for row in (document, identity)
+    ):
         raise RuntimeError("document_key_namespace_changed")
     if identity is not None and identity.tombstoned_at is not None:
         raise ValueError("Document identifier was previously deleted")
@@ -95,7 +126,11 @@ async def _assert_new_document_key(
 
 
 async def create_document(
-    session: AsyncSession, payload: DocumentCreate, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    payload: DocumentCreate,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
 ) -> Document:
     """Create an owner workspace root/version under early Source/key locks and scoped replay.
 
@@ -106,8 +141,9 @@ async def create_document(
     if not isinstance(scope, WorkspaceContext):
         raise TypeError("Manual document creation requires a workspace owner")
     _require_document_owner(scope)
-    locked = await sources.lock_source_set(session, (payload.source_id,), scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
+    locked = await sources.lock_source_set(
+        session, (payload.source_id,), scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     source_fence, access_fence = locked.fences[0], locked.access_fence
     if source_fence.status != "active":
         raise ValueError("Cannot add documents to an inactive source")
@@ -126,22 +162,31 @@ async def create_document(
     try:
         await session.flush()
         version = DocumentVersion(
-                document_id=document.id,
-                version_number=1,
-                content=payload.content,
-                content_hash=digest,
+            document_id=document.id,
+            version_number=1,
+            content=payload.content,
+            content_hash=digest,
         )
         session.add(version)
         if await add_content_chunks(session, version):
-            await _publish_document_ready(session, document, version, scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+            await _publish_document_ready(
+                session,
+                document,
+                version,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence,
+                source_fence=source_fence,
+            )
         # Load generated metadata under the original locks, before the final commit releases them.
         await session.flush()
         await session.refresh(document)
         await commit_with_replay(
             session,
             [make_knowledge_change(payload.source_id, document.id, 1, scope=scope)],
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
     except IntegrityError:
         await session.rollback()
@@ -150,23 +195,36 @@ async def create_document(
 
 
 async def document_metadata(
-    session: AsyncSession, document_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    document_ids: list[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> dict[UUID, tuple[str, str | None]]:
     """Return ``{document_id: (title, mime_type)}`` for the given ids (metadata only, never content).
 
     Read-only batch projection for the automations producer sweep; callers pass at most one
     sweep page of ids. Unknown ids are simply absent.
     """
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if len(document_ids) > 100 or len(set(document_ids)) != len(document_ids):
         raise ValueError("Document metadata page must contain at most 100 unique IDs")
-    rows = await session.execute(select(Document.id, Document.title, Document.mime_type).where(
-        Document.id.in_(document_ids), *_document_scope(scope)).limit(100))
+    rows = await session.execute(
+        select(Document.id, Document.title, Document.mime_type)
+        .where(Document.id.in_(document_ids), *_document_scope(scope))
+        .limit(100)
+    )
     return {row[0]: (row[1], row[2]) for row in rows.all()}
 
 
 async def get_document(
-    session: AsyncSession, document_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    document_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> Document | None:
     """Read one owned retained root after real admission, without granting member visibility.
 
@@ -175,30 +233,49 @@ async def get_document(
     Documents routes; external callers must migrate to detached owner projections.
     """
     await _admit_document_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
-    return await session.scalar(select(Document).where(
-        Document.id == document_id, *_document_scope(scope, allow_member=True),
-    ).execution_options(populate_existing=True))
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True
+    )
+    return await session.scalar(
+        select(Document)
+        .where(
+            Document.id == document_id,
+            *_document_scope(scope, allow_member=True),
+        )
+        .execution_options(populate_existing=True)
+    )
 
 
 async def read_document_access_projection(
-    session: AsyncSession, resource_id: UUID, *, scope: Scope,
+    session: AsyncSession,
+    resource_id: UUID,
+    *,
+    scope: Scope,
 ) -> ResourceAccessProjection | None:
     """Return the share-binding revision (current_version) of one in-scope Document, else None.
 
     Caller admitted ``scope``; a member sees only active-grant Documents. Detached, no locks.
     """
-    row = (await session.execute(select(Document.workspace_id, Document.current_version).where(
-        Document.id == resource_id, *_document_scope(scope, allow_member=True),
-    ))).one_or_none()
+    row = (
+        await session.execute(
+            select(Document.workspace_id, Document.current_version).where(
+                Document.id == resource_id,
+                *_document_scope(scope, allow_member=True),
+            )
+        )
+    ).one_or_none()
     if row is None:
         return None
     return ResourceAccessProjection(
-        workspace_id=row[0], resource_id=resource_id, resource_revision=row[1], available=True)
+        workspace_id=row[0], resource_id=resource_id, resource_revision=row[1], available=True
+    )
 
 
 async def existing_document_ids(
-    session: AsyncSession, document_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    document_ids: list[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[UUID]:
     """Return sorted IDs for at most 100 retained documents in the admitted owner workspace.
 
@@ -207,17 +284,28 @@ async def existing_document_ids(
     """
     if len(document_ids) > 100 or any(type(identifier) is not UUID for identifier in document_ids):
         raise ValueError("Document identity batch exceeds 100 IDs")
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if not document_ids:
         return []
-    rows = await session.scalars(select(Document.id).where(
-        Document.id.in_(set(document_ids)), *_document_scope(scope),
-    ).order_by(Document.id).limit(100))
+    rows = await session.scalars(
+        select(Document.id)
+        .where(
+            Document.id.in_(set(document_ids)),
+            *_document_scope(scope),
+        )
+        .order_by(Document.id)
+        .limit(100)
+    )
     return list(rows.all())
 
 
 async def list_indexable_workspace_ids(
-    session: AsyncSession, *, after: UUID | None = None, limit: int = 100,
+    session: AsyncSession,
+    *,
+    after: UUID | None = None,
+    limit: int = 100,
 ) -> tuple[UUID, ...]:
     """Discover at most 100 workspaces with ready current chunks for automatic indexing.
 
@@ -235,7 +323,8 @@ async def list_indexable_workspace_ids(
         .where(
             Document.current_version == DocumentVersion.version_number,
             Document.extraction_status.in_(("ready", "succeeded")),
-            Source.status == "active", Source.local_only.is_(False),
+            Source.status == "active",
+            Source.local_only.is_(False),
         )
     )
     if after is not None:
@@ -247,7 +336,10 @@ async def list_indexable_workspace_ids(
 
 
 async def list_ready_document_workspace_ids(
-    session: AsyncSession, *, after: UUID | None = None, limit: int = 100,
+    session: AsyncSession,
+    *,
+    after: UUID | None = None,
+    limit: int = 100,
 ) -> tuple[UUID, ...]:
     """Discover bounded workspace identities with a ready current Document version.
 
@@ -274,20 +366,35 @@ async def list_ready_document_workspace_ids(
 
 
 def _encode_document_owner_cursor(
-    position: str, *, kind: str, fence: AccessFence, resource_id: UUID | None,
+    position: str,
+    *,
+    kind: str,
+    fence: AccessFence,
+    resource_id: UUID | None,
 ) -> str:
     """Wrap an existing keyset position in actor/workspace/epoch and exact selector context.
 
     This public wire value is neither a grant nor a signed snapshot. Source/root predicates
     remain mandatory on every page. No secret/key infrastructure or legacy fallback exists.
     """
-    payload = [kind, str(fence.workspace_id), fence.user_id, fence.membership_revision,
-               fence.configuration_revision, str(resource_id) if resource_id is not None else None, position]
+    payload = [
+        kind,
+        str(fence.workspace_id),
+        fence.user_id,
+        fence.membership_revision,
+        fence.configuration_revision,
+        str(resource_id) if resource_id is not None else None,
+        position,
+    ]
     return b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
 
 
 def _decode_document_owner_cursor(
-    cursor: str, *, kind: str, fence: AccessFence, resource_id: UUID | None,
+    cursor: str,
+    *,
+    kind: str,
+    fence: AccessFence,
+    resource_id: UUID | None,
 ) -> str:
     """Validate canonical bounded cursor context before returning the existing keyset position.
 
@@ -302,13 +409,23 @@ def _decode_document_owner_cursor(
         if b64url_encode(raw) != cursor:
             raise ValueError("Invalid cursor encoding")
         payload = json.loads(raw)
-        if (not isinstance(payload, list) or len(payload) != 7 or type(payload[2]) is not int
-                or type(payload[3]) is not int or payload[3] <= 0
-                or type(payload[4]) is not int or payload[4] <= 0
-                or type(payload[6]) is not str or not payload[6]):
+        if (
+            not isinstance(payload, list)
+            or len(payload) != 7
+            or type(payload[2]) is not int
+            or type(payload[3]) is not int
+            or payload[3] <= 0
+            or type(payload[4]) is not int
+            or payload[4] <= 0
+            or type(payload[6]) is not str
+            or not payload[6]
+        ):
             raise ValueError("Invalid cursor shape")
         if [payload[0], payload[1], payload[2], payload[5]] != [
-            kind, str(fence.workspace_id), fence.user_id, str(resource_id) if resource_id is not None else None,
+            kind,
+            str(fence.workspace_id),
+            fence.user_id,
+            str(resource_id) if resource_id is not None else None,
         ]:
             raise ValueError("Invalid cursor context")
     except (ValueError, TypeError, UnicodeError, binascii.Error) as exc:
@@ -319,8 +436,14 @@ def _decode_document_owner_cursor(
 
 
 async def list_documents(
-    session: AsyncSession, limit: int, cursor: str | None, source_id: UUID | None, *,
-    scope: Scope, multi_workspace_enabled: bool, exclude_measurements: bool = False,
+    session: AsyncSession,
+    limit: int,
+    cursor: str | None,
+    source_id: UUID | None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    exclude_measurements: bool = False,
 ) -> tuple[list[Document], str | None]:
     """Page <=100 retained owner roots, constraining workspace/Source before limit and cursor.
 
@@ -334,7 +457,8 @@ async def list_documents(
     if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)):
         raise TypeError("Document list requires a workspace owner")
     fence = await _admit_document_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True
+    )
     if not 1 <= limit <= 100:
         raise ValueError("Document page size must be between 1 and 100")
     statement = select(Document).where(*_document_scope(scope, allow_member=True))
@@ -345,27 +469,47 @@ async def list_documents(
         # level would form an import cycle.
         from modules.connectors.public import FREE_PROVIDER_SPECS
 
-        measurement_providers = [spec.id for spec in FREE_PROVIDER_SPECS if spec.data_kind == "measurement"]
-        statement = statement.where(Document.source_id.not_in(
-            select(Source.id).where(Source.provider.in_(measurement_providers))))
+        measurement_providers = [
+            spec.id for spec in FREE_PROVIDER_SPECS if spec.data_kind == "measurement"
+        ]
+        statement = statement.where(
+            Document.source_id.not_in(
+                select(Source.id).where(Source.provider.in_(measurement_providers))
+            )
+        )
     statement = statement.order_by(desc(Document.created_at), desc(Document.id))
     if cursor is not None:
-        timestamp, identifier = decode_cursor(_decode_document_owner_cursor(
-            cursor, kind="documents", fence=fence, resource_id=source_id))
+        timestamp, identifier = decode_cursor(
+            _decode_document_owner_cursor(
+                cursor, kind="documents", fence=fence, resource_id=source_id
+            )
+        )
         statement = statement.where(
             tuple_(Document.created_at, Document.id) < (timestamp, identifier)
         )
     rows = list((await session.scalars(statement.limit(limit + 1))).all())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    next_cursor = _encode_document_owner_cursor(encode_cursor(rows[-1].created_at, rows[-1].id),
-        kind="documents", fence=fence, resource_id=source_id) if has_more and rows else None
+    next_cursor = (
+        _encode_document_owner_cursor(
+            encode_cursor(rows[-1].created_at, rows[-1].id),
+            kind="documents",
+            fence=fence,
+            resource_id=source_id,
+        )
+        if has_more and rows
+        else None
+    )
     return rows, next_cursor
 
 
 async def update_document(
-    session: AsyncSession, document_id: UUID, payload: DocumentPatch, *,
-    scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    document_id: UUID,
+    payload: DocumentPatch,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
 ) -> Document | None:
     """Patch an exact owner root freshly under Source→Document locks, then scoped replay.
 
@@ -375,15 +519,24 @@ async def update_document(
     """
     if not isinstance(scope, WorkspaceContext):
         raise TypeError("Document metadata writes require a workspace owner")
-    source_id = await _read_document_source_id(session, document_id, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
+    source_id = await _read_document_source_id(
+        session, document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if source_id is None:
         return None
-    locked = await sources.lock_source_set(session, (source_id,), scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
-    document = await session.scalar(select(Document).where(
-        Document.id == document_id, Document.source_id == source_id, *_document_scope(scope),
-    ).with_for_update().execution_options(populate_existing=True))
+    locked = await sources.lock_source_set(
+        session, (source_id,), scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    document = await session.scalar(
+        select(Document)
+        .where(
+            Document.id == document_id,
+            Document.source_id == source_id,
+            *_document_scope(scope),
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if document is None:
         return None
     changed = False
@@ -395,17 +548,35 @@ async def update_document(
         metadata_value = payload.metadata or {}
         changed = changed or document.metadata_json != metadata_value
         document.metadata_json = metadata_value
-    drafts = [make_knowledge_change(document.source_id, document.id, document.current_version, scope=scope)] if changed else []
+    drafts = (
+        [
+            make_knowledge_change(
+                document.source_id, document.id, document.current_version, scope=scope
+            )
+        ]
+        if changed
+        else []
+    )
     await session.flush()
     await session.refresh(document)
-    await commit_with_replay(session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=locked.access_fence)
+    await commit_with_replay(
+        session,
+        drafts,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=locked.access_fence,
+    )
     return document
 
 
 async def append_content(
-    session: AsyncSession, document_id: UUID, expected_version: int, content: str, *,
-    scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    document_id: UUID,
+    expected_version: int,
+    content: str,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
 ) -> Document | None:
     """Append one owner revision under early active Source→Document locks and scoped replay.
 
@@ -416,18 +587,22 @@ async def append_content(
     """
     if not isinstance(scope, WorkspaceContext):
         raise TypeError("Document content writes require a workspace owner")
-    source_id = await _read_document_source_id(session, document_id, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
+    source_id = await _read_document_source_id(
+        session, document_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if source_id is None:
         return None
-    locked = await sources.lock_source_set(session, (source_id,), scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
+    locked = await sources.lock_source_set(
+        session, (source_id,), scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     source_fence, access_fence = locked.fences[0], locked.access_fence
     if source_fence.status != "active":
         return None
     document = await session.scalar(
-        select(Document).where(Document.id == document_id, Document.source_id == source_id, *_document_scope(scope))
-        .with_for_update().execution_options(populate_existing=True)
+        select(Document)
+        .where(Document.id == document_id, Document.source_id == source_id, *_document_scope(scope))
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if document is None:
         return None
@@ -445,42 +620,60 @@ async def append_content(
     if document.current_version != expected_version:
         raise ValueError("Document revision is stale")
     max_number = await session.scalar(
-        select(func.coalesce(func.max(DocumentVersion.version_number), 0))
-        .where(DocumentVersion.document_id == document.id)
+        select(func.coalesce(func.max(DocumentVersion.version_number), 0)).where(
+            DocumentVersion.document_id == document.id
+        )
     )
     next_version = int(max_number or 0) + 1
     digest = await content_hash_async(content)
     version = DocumentVersion(
-            document_id=document_id,
-            version_number=next_version,
-            content=content,
-            content_hash=digest,
+        document_id=document_id,
+        version_number=next_version,
+        content=content,
+        content_hash=digest,
     )
     session.add(version)
     document.current_version = next_version
     document.content_hash = digest
     if await add_content_chunks(session, version):
-        await _publish_document_ready(session, document, version, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence, source_fence=source_fence)
+        await _publish_document_ready(
+            session,
+            document,
+            version,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+            source_fence=source_fence,
+        )
     await session.flush()
     await session.refresh(document)
     await commit_with_replay(
         session,
         [make_knowledge_change(document.source_id, document.id, next_version, scope=scope)],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     return document
 
 
-async def count_source_documents(session: AsyncSession, source_id: UUID, *, scope: Scope, cap: int = 1000) -> int:
+async def count_source_documents(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, cap: int = 1000
+) -> int:
     """Return an owner-UI-only document count for one source, saturating at ``cap``.
 
     The caller has admitted ``scope``; the workspace and purge predicate sit inside the capped
     subquery so the cap never counts foreign rows.
     """
-    capped = select(Document.id).where(
-        Document.source_id == source_id, *_document_scope(scope),
-    ).limit(cap).subquery()
+    capped = (
+        select(Document.id)
+        .where(
+            Document.source_id == source_id,
+            *_document_scope(scope),
+        )
+        .limit(cap)
+        .subquery()
+    )
     return int(await session.scalar(select(func.count()).select_from(capped)) or 0)
 
 
@@ -510,9 +703,16 @@ async def purge_expired_document_versions(
         .exists()
     )
     expired = or_(
-        *(and_(Document.source_id == sid, DocumentVersion.observed_at < cutoff) for sid, cutoff in cutoffs)
+        *(
+            and_(Document.source_id == sid, DocumentVersion.observed_at < cutoff)
+            for sid, cutoff in cutoffs
+        )
     )
-    conditions = [DocumentVersion.version_number != Document.current_version, not_(bookmarked), expired]
+    conditions = [
+        DocumentVersion.version_number != Document.current_version,
+        not_(bookmarked),
+        expired,
+    ]
     if is_protected is not None:
         conditions.append(not_(is_protected(DocumentVersion.id)))
     doomed = (

@@ -34,13 +34,22 @@ async def get_operation(
     # PRODUCTION FIX: the inline OperationRead(...) omitted required stage fields (ValidationError -> 500).
     enabled = request.app.state.settings.multi_workspace_enabled
     try:
-        scope = await resolve_source_purge_job_scope(session, operation_id, multi_workspace_enabled=enabled)
+        scope = await resolve_source_purge_job_scope(
+            session, operation_id, multi_workspace_enabled=enabled
+        )
         operation = (
-            None if scope is None
-            else await read_source_purge_operation(session, operation_id, scope=scope, multi_workspace_enabled=enabled)
+            None
+            if scope is None
+            else await read_source_purge_operation(
+                session, operation_id, scope=scope, multi_workspace_enabled=enabled
+            )
         )
     except (HTTPException, DomainError) as exc:
-        if exc.status_code in {401, 403, 409}:  # the job's actor lost access: indistinguishable from unknown
+        if exc.status_code in {
+            401,
+            403,
+            409,
+        }:  # the job's actor lost access: indistinguishable from unknown
             raise HTTPException(status_code=404, detail="Operation not found") from exc
         raise
     finally:

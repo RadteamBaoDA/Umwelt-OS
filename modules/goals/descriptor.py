@@ -34,9 +34,7 @@ class GoalsDescriptor(ModuleDescriptor):
     )
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.goals.routes", 340),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.goals.routes", 340),)
     erasure_module: str | None = "modules.goals.erasure"
     erasure_order: int = 60
 

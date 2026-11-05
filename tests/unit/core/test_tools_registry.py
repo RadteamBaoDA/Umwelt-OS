@@ -156,7 +156,9 @@ class TestToolPolicy:
     def test_evaluate_read_only_permitted(self) -> None:
         """ToolPolicy automatically permits read-only tools without confirmation requirements."""
         policy = ToolPolicy()
-        defn = ToolDefinition(name="data.get", risk=ToolRisk.READ_ONLY, confirmation_required=False, module="data")
+        defn = ToolDefinition(
+            name="data.get", risk=ToolRisk.READ_ONLY, confirmation_required=False, module="data"
+        )
         decision = policy.evaluate("actor_1", defn, {})
         assert decision.allowed is True
         assert decision.requires_approval is False
@@ -164,7 +166,9 @@ class TestToolPolicy:
     def test_evaluate_read_only_with_confirmation_requires_approval(self) -> None:
         """ToolPolicy requires approval for read-only tools if confirmation_required is set."""
         policy = ToolPolicy()
-        defn = ToolDefinition(name="data.inspect", risk=ToolRisk.READ_ONLY, confirmation_required=True, module="data")
+        defn = ToolDefinition(
+            name="data.inspect", risk=ToolRisk.READ_ONLY, confirmation_required=True, module="data"
+        )
         decision = policy.evaluate("actor_1", defn, {})
         assert decision.allowed is False
         assert decision.requires_approval is True
@@ -197,8 +201,11 @@ class TestToolRegistryAsync:
     @pytest.fixture
     def test_module_registry(self) -> dict[str, Any]:
         """Provide a descriptor registry enabling tools and sample test modules."""
+
         class DummyModule:
-            def __init__(self, mod_id: str, dependencies: tuple[str, ...] = (), enabled: bool = True):
+            def __init__(
+                self, mod_id: str, dependencies: tuple[str, ...] = (), enabled: bool = True
+            ):
                 self.id = mod_id
                 self.dependencies = dependencies
                 self.enabled = enabled
@@ -283,14 +290,18 @@ class TestToolRegistryAsync:
         filtered = registry.list_tools(allowed_tools=frozenset(["other.tool"]))
         assert len(filtered) == 0
 
-    def test_list_tools_per_call_modules_override(self, test_module_registry: dict[str, Any]) -> None:
+    def test_list_tools_per_call_modules_override(
+        self, test_module_registry: dict[str, Any]
+    ) -> None:
         """A per-call modules map replaces the shared registry state for that call only."""
         registry = ToolRegistry(module_registry=test_module_registry)
 
         async def dummy_handler(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
             return {}
 
-        registry.register_tool(ToolDefinition(name="mod.disabled", module="disabled_module"), dummy_handler)
+        registry.register_tool(
+            ToolDefinition(name="mod.disabled", module="disabled_module"), dummy_handler
+        )
         assert registry.list_tools() == []
         override = dict(test_module_registry)
         override["disabled_module"] = SimpleNamespace(enabled=True, dependencies=())
@@ -299,14 +310,21 @@ class TestToolRegistryAsync:
 
     @pytest.fixture(autouse=True)
     def mock_refresh_module_registry(
-        self, monkeypatch: pytest.MonkeyPatch, test_module_registry: dict[str, Any],
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        test_module_registry: dict[str, Any],
     ) -> None:
         """Mock _refresh_module_registry to return the fixture modules without a live db session."""
         from unittest.mock import AsyncMock
-        monkeypatch.setattr(ToolRegistry, "_refresh_module_registry", AsyncMock(return_value=test_module_registry))
+
+        monkeypatch.setattr(
+            ToolRegistry, "_refresh_module_registry", AsyncMock(return_value=test_module_registry)
+        )
 
     @pytest.mark.asyncio
-    async def test_invoke_tool_success_read_only(self, test_module_registry: dict[str, Any]) -> None:
+    async def test_invoke_tool_success_read_only(
+        self, test_module_registry: dict[str, Any]
+    ) -> None:
         """invoke_tool successfully executes an authorized read-only tool."""
         registry = ToolRegistry(module_registry=test_module_registry)
 
@@ -331,7 +349,8 @@ class TestToolRegistryAsync:
         registry.register_tool(defn, add_handler)
 
         principal = ToolExecutionPrincipal(
-            actor_id="user_owner", scope=SCOPE,
+            actor_id="user_owner",
+            scope=SCOPE,
             is_owner=True,
             allowed_tools=frozenset(["math.add"]),
             destinations=frozenset(["local_dest"]),
@@ -345,7 +364,9 @@ class TestToolRegistryAsync:
             "principal_revalidator": revalidator,
         }
 
-        result = await registry.invoke_tool("math.add", {"x": 5, "y": 7}, principal, context=context)
+        result = await registry.invoke_tool(
+            "math.add", {"x": 5, "y": 7}, principal, context=context
+        )
         assert result.success is True
         assert result.data == {"sum": 12}
         assert result.error is None
@@ -361,7 +382,9 @@ class TestToolRegistryAsync:
         assert result.error_code == "tool_unavailable"
 
     @pytest.mark.asyncio
-    async def test_invoke_tool_not_allowed_for_principal(self, test_module_registry: dict[str, Any]) -> None:
+    async def test_invoke_tool_not_allowed_for_principal(
+        self, test_module_registry: dict[str, Any]
+    ) -> None:
         """invoke_tool returns forbidden if tool is not in principal.allowed_tools."""
         registry = ToolRegistry(module_registry=test_module_registry)
 
@@ -371,13 +394,17 @@ class TestToolRegistryAsync:
         defn = ToolDefinition(name="restricted.tool", module="sample_module")
         registry.register_tool(defn, noop)
 
-        principal = ToolExecutionPrincipal(actor_id="user_1", scope=SCOPE, is_owner=True, allowed_tools=frozenset())
+        principal = ToolExecutionPrincipal(
+            actor_id="user_1", scope=SCOPE, is_owner=True, allowed_tools=frozenset()
+        )
         result = await registry.invoke_tool("restricted.tool", {}, principal)
         assert result.success is False
         assert result.error_code == "forbidden"
 
     @pytest.mark.asyncio
-    async def test_invoke_tool_invalid_argument_schema(self, test_module_registry: dict[str, Any]) -> None:
+    async def test_invoke_tool_invalid_argument_schema(
+        self, test_module_registry: dict[str, Any]
+    ) -> None:
         """invoke_tool returns invalid_arguments when input fails JSON schema validation."""
         registry = ToolRegistry(module_registry=test_module_registry)
 
@@ -386,25 +413,35 @@ class TestToolRegistryAsync:
 
         defn = ToolDefinition(
             name="strict.input",
-            input_schema={"type": "object", "required": ["count"], "properties": {"count": {"type": "integer"}}},
+            input_schema={
+                "type": "object",
+                "required": ["count"],
+                "properties": {"count": {"type": "integer"}},
+            },
             module="sample_module",
         )
         registry.register_tool(defn, noop)
 
         principal = ToolExecutionPrincipal(
-            actor_id="user_1", scope=SCOPE, is_owner=True,
+            actor_id="user_1",
+            scope=SCOPE,
+            is_owner=True,
             allowed_tools=frozenset(["strict.input"]),
             destinations=frozenset(["dest"]),
         )
         context = {"destination_id": "dest"}
 
         # Passing string instead of integer
-        result = await registry.invoke_tool("strict.input", {"count": "not-an-int"}, principal, context=context)
+        result = await registry.invoke_tool(
+            "strict.input", {"count": "not-an-int"}, principal, context=context
+        )
         assert result.success is False
         assert result.error_code == "invalid_arguments"
 
     @pytest.mark.asyncio
-    async def test_invoke_tool_approval_required_rejection(self, test_module_registry: dict[str, Any]) -> None:
+    async def test_invoke_tool_approval_required_rejection(
+        self, test_module_registry: dict[str, Any]
+    ) -> None:
         """invoke_tool returns approval_required for write actions without approval verifier."""
         registry = ToolRegistry(module_registry=test_module_registry)
 
@@ -415,7 +452,9 @@ class TestToolRegistryAsync:
         registry.register_tool(defn, write_handler)
 
         principal = ToolExecutionPrincipal(
-            actor_id="user_1", scope=SCOPE, is_owner=True,
+            actor_id="user_1",
+            scope=SCOPE,
+            is_owner=True,
             allowed_tools=frozenset(["db.write"]),
             destinations=frozenset(["dest"]),
         )

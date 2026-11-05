@@ -21,7 +21,9 @@ class WorkspaceStorageBusy(RuntimeError):
 
 
 @contextmanager
-def workspace_filesystem_lease(root: Path, workspace_id: UUID, *, erase: bool = False) -> Iterator[None]:
+def workspace_filesystem_lease(
+    root: Path, workspace_id: UUID, *, erase: bool = False
+) -> Iterator[None]:
     """Fence originals at their destination independently of database connections.
 
     A nonblocking exclusive OS file lock serializes upload/erasure per workspace across
@@ -38,7 +40,12 @@ def workspace_filesystem_lease(root: Path, workspace_id: UUID, *, erase: bool = 
     base = Path(root).resolve()
     directory = base / ".storage-fences"
     marker = directory / f"{workspace_id}.lock"
-    if directory.is_symlink() or directory.is_junction() or marker.is_symlink() or marker.is_junction():
+    if (
+        directory.is_symlink()
+        or directory.is_junction()
+        or marker.is_symlink()
+        or marker.is_junction()
+    ):
         raise ValueError("Storage fence cannot contain a symlink or junction")
     directory.mkdir(parents=True, exist_ok=True)
     # Never truncate/replace this inode: another process can already be waiting on its lock.
@@ -79,7 +86,10 @@ def workspace_filesystem_lease(root: Path, workspace_id: UUID, *, erase: bool = 
 
 @asynccontextmanager
 async def workspace_storage_lease(
-    factory: async_sessionmaker[AsyncSession], workspace_id: UUID, *, exclusive: bool = False,
+    factory: async_sessionmaker[AsyncSession],
+    workspace_id: UUID,
+    *,
+    exclusive: bool = False,
 ) -> AsyncIterator[AsyncConnection]:
     """Hold a nonblocking session advisory lease without a transaction over file I/O.
 
@@ -90,27 +100,35 @@ async def workspace_storage_lease(
     SQL ownership alone cannot prove physical writer cessation.
     """
     if not isinstance(workspace_id, UUID):
-        raise TypeError('Storage admission requires a workspace UUID')
-    key = int.from_bytes(hashlib.blake2b(workspace_id.bytes, digest_size=8, person=b'bbd-storage').digest(), 'big', signed=True)
-    acquire = 'pg_try_advisory_lock' if exclusive else 'pg_try_advisory_lock_shared'
-    release = 'pg_advisory_unlock' if exclusive else 'pg_advisory_unlock_shared'
+        raise TypeError("Storage admission requires a workspace UUID")
+    key = int.from_bytes(
+        hashlib.blake2b(workspace_id.bytes, digest_size=8, person=b"bbd-storage").digest(),
+        "big",
+        signed=True,
+    )
+    acquire = "pg_try_advisory_lock" if exclusive else "pg_try_advisory_lock_shared"
+    release = "pg_advisory_unlock" if exclusive else "pg_advisory_unlock_shared"
     # Session lease: never a transaction-pooled connection.
     async with AsyncExitStack() as stack:
         try:
-            connection = await stack.enter_async_context(direct_engine(factory.kw['bind']).connect())
+            connection = await stack.enter_async_context(
+                direct_engine(factory.kw["bind"]).connect()
+            )
         except PoolTimeoutError as exc:
             # The bounded direct pool (DB_DIRECT_POOL_SIZE) is exhausted by concurrent leases: report busy
             # (retryable) rather than a 500.
-            raise WorkspaceStorageBusy('Workspace storage lease capacity is exhausted') from exc
-        acquired = await connection.scalar(text(f'SELECT {acquire}(:key)'), {'key': key})
+            raise WorkspaceStorageBusy("Workspace storage lease capacity is exhausted") from exc
+        acquired = await connection.scalar(text(f"SELECT {acquire}(:key)"), {"key": key})
         await connection.commit()
         if not acquired:
-            raise WorkspaceStorageBusy('Workspace storage is still active')
+            raise WorkspaceStorageBusy("Workspace storage is still active")
         try:
             yield connection
         finally:
             try:
-                await asyncio.shield(connection.execute(text(f'SELECT {release}(:key)'), {'key': key}))
+                await asyncio.shield(
+                    connection.execute(text(f"SELECT {release}(:key)"), {"key": key})
+                )
                 await connection.commit()
             except BaseException:
                 await connection.invalidate()

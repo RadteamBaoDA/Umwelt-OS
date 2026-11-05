@@ -48,7 +48,10 @@ def _path_problems(text: str, root: Path) -> list[str]:
             line, symbol = int(match.group(1)), match.group(2)
             if not 1 <= line <= len(lines):
                 problems.append(f"line out of range: {token} (file has {len(lines)} lines)")
-            elif symbol and not any(symbol in ln for ln in lines[max(0, line - 1 - _SYMBOL_WINDOW):line + _SYMBOL_WINDOW]):
+            elif symbol and not any(
+                symbol in ln
+                for ln in lines[max(0, line - 1 - _SYMBOL_WINDOW) : line + _SYMBOL_WINDOW]
+            ):
                 problems.append(f"symbol not near line: {token}")
     return problems
 
@@ -71,7 +74,9 @@ def check(doc: Path, root: Path, allow_not_ported: bool) -> tuple[list[str], dic
             if not row[col]:
                 problems.append(f"{rid}: empty {col}")
         if status not in STATUSES:
-            problems.append(f"{rid}: invalid status '{status}' (allowed: {', '.join(sorted(STATUSES))})")
+            problems.append(
+                f"{rid}: invalid status '{status}' (allowed: {', '.join(sorted(STATUSES))})"
+            )
             continue
         counts[status] = counts.get(status, 0) + 1
         if status == "not-ported" and not allow_not_ported:

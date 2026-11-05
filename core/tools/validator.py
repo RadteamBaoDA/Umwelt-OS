@@ -64,7 +64,9 @@ def validate_json_schema(instance: Any, schema: dict[str, Any], path: str = "$")
     are never copied into diagnostics, logs, or caller-visible error text.
     """
     try:
-        instance_bytes = json.dumps(instance, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        instance_bytes = json.dumps(instance, allow_nan=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
         if len(instance_bytes) > MAX_INSTANCE_BYTES:
             return ["Schema or data exceeds the configured size limit"]
         validator = _get_or_compile_validator(schema)

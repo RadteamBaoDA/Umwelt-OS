@@ -135,7 +135,11 @@ def _member_grants(scope: Scope) -> Select[Any]:
 
 
 async def _admit(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, allow_member: bool = False,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    allow_member: bool = False,
 ) -> AccessFence:
     """Admit Search access before candidates or generation rows are read; members only when allowed.
 
@@ -143,14 +147,18 @@ async def _admit(
     ``allow_member``).
     """
     return await admit_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        owner_only=not allow_member, check_flag=False,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        owner_only=not allow_member,
+        check_flag=False,
     )
 
 
 @dataclass(frozen=True)
 class NewsSimilarityRead:
     """Return stored-vector cosine similarity plus its active generation identity."""
+
     left_chunk_id: UUID
     right_chunk_id: UUID
     cosine_similarity: float
@@ -165,13 +173,18 @@ class NewsSimilarityRead:
 @dataclass(frozen=True)
 class NewsSimilarityResult:
     """Distinguish usable bounded matches from missing or incompatible index capability."""
+
     items: tuple[NewsSimilarityRead, ...]
     capability: str
 
 
 async def compare_news_evidence_embeddings(
-    session: AsyncSession, incoming_chunk_id: UUID, candidate_chunk_ids: tuple[UUID, ...],
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    incoming_chunk_id: UUID,
+    candidate_chunk_ids: tuple[UUID, ...],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> NewsSimilarityResult:
     """Compare only active stored embeddings for current visible news chunks.
 
@@ -184,9 +197,12 @@ async def compare_news_evidence_embeddings(
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if not candidate_chunk_ids:
         return NewsSimilarityResult(items=(), capability="no_candidates")
-    generation = await session.scalar(select(IndexGeneration).where(
-        IndexGeneration.workspace_id == scope.workspace_id, IndexGeneration.status == "active",
-    ))
+    generation = await session.scalar(
+        select(IndexGeneration).where(
+            IndexGeneration.workspace_id == scope.workspace_id,
+            IndexGeneration.status == "active",
+        )
+    )
     if generation is None or generation.dimensions is None:
         return NewsSimilarityResult(items=(), capability="index_unavailable")
     incoming = aliased(SearchIndexItem, name="news_incoming_index_item")
@@ -201,13 +217,21 @@ async def compare_news_evidence_embeddings(
     right_chunk = aliased(DocumentChunk, name="news_candidate_chunk")
     stmt = (
         select(
-            incoming.chunk_id, candidate.chunk_id,
+            incoming.chunk_id,
+            candidate.chunk_id,
             (1.0 - incoming.embedding.op("<=>")(candidate.embedding)).label("similarity"),
-            IndexGeneration.id, IndexGeneration.model_id, IndexGeneration.model_version,
-            IndexGeneration.response_model_id, IndexGeneration.dimensions, IndexGeneration.gateway_identity,
+            IndexGeneration.id,
+            IndexGeneration.model_id,
+            IndexGeneration.model_version,
+            IndexGeneration.response_model_id,
+            IndexGeneration.dimensions,
+            IndexGeneration.gateway_identity,
         )
         .join(IndexGeneration, IndexGeneration.id == incoming.generation_id)
-        .join(candidate, (candidate.generation_id == incoming.generation_id) & (candidate.status == "succeeded"))
+        .join(
+            candidate,
+            (candidate.generation_id == incoming.generation_id) & (candidate.status == "succeeded"),
+        )
         .join(left_chunk, left_chunk.id == incoming.chunk_id)
         .join(left_version, left_version.id == left_chunk.document_version_id)
         .join(left_doc, left_doc.id == left_version.document_id)
@@ -217,17 +241,22 @@ async def compare_news_evidence_embeddings(
         .join(right_doc, right_doc.id == right_version.document_id)
         .join(right_source, right_source.id == right_doc.source_id)
         .where(
-            incoming.chunk_id == incoming_chunk_id, incoming.status == "succeeded",
-            incoming.generation_id == generation.id, IndexGeneration.status == "active",
+            incoming.chunk_id == incoming_chunk_id,
+            incoming.status == "succeeded",
+            incoming.generation_id == generation.id,
+            IndexGeneration.status == "active",
             candidate.chunk_id.in_(candidate_chunk_ids),
             IndexGeneration.workspace_id == scope.workspace_id,
-            left_doc.workspace_id == scope.workspace_id, right_doc.workspace_id == scope.workspace_id,
+            left_doc.workspace_id == scope.workspace_id,
+            right_doc.workspace_id == scope.workspace_id,
             left_doc.current_version == left_version.version_number,
             right_doc.current_version == right_version.version_number,
             left_doc.extraction_status.in_(("ready", "succeeded")),
             right_doc.extraction_status.in_(("ready", "succeeded")),
-            left_source.status == "active", right_source.status == "active",
-            left_source.local_only.is_(False), right_source.local_only.is_(False),
+            left_source.status == "active",
+            right_source.status == "active",
+            left_source.local_only.is_(False),
+            right_source.local_only.is_(False),
         )
     )
     rows: list[Any] = list((await session.execute(stmt.limit(101))).all())
@@ -236,35 +265,57 @@ async def compare_news_evidence_embeddings(
     if not rows:
         return NewsSimilarityResult(items=(), capability="embeddings_unavailable")
     values = []
-    for left_id, right_id, score, generation_id, model, version, response, dimensions, gateway_identity in rows:
+    for (
+        left_id,
+        right_id,
+        score,
+        generation_id,
+        model,
+        version,
+        response,
+        dimensions,
+        gateway_identity,
+    ) in rows:
         value = float(score)
         if not math.isfinite(value) or value < -1.00001 or value > 1.00001:
             return NewsSimilarityResult(items=(), capability="invalid_vector_result")
-        values.append(NewsSimilarityRead(
-            left_chunk_id=left_id, right_chunk_id=right_id,
-            cosine_similarity=max(-1.0, min(1.0, value)), generation_id=generation_id,
-            model_id=model, model_version=version, response_model_id=response,
-            dimensions=dimensions, gateway_identity=gateway_identity,
-        ))
+        values.append(
+            NewsSimilarityRead(
+                left_chunk_id=left_id,
+                right_chunk_id=right_id,
+                cosine_similarity=max(-1.0, min(1.0, value)),
+                generation_id=generation_id,
+                model_id=model,
+                model_version=version,
+                response_model_id=response,
+                dimensions=dimensions,
+                gateway_identity=gateway_identity,
+            )
+        )
     return NewsSimilarityResult(items=tuple(values), capability="available")
 
 
 def _cursor_scope(
-    request: SearchRequest, destination: ToolDestination = ToolDestination.LOCAL,
+    request: SearchRequest,
+    destination: ToolDestination = ToolDestination.LOCAL,
     source_generation_fences: dict[UUID, int] | None = None,
 ) -> str:
     """Bind cursors to request, destination and exact source generations."""
     content = request.model_dump(exclude={"cursor", "limit"}, mode="json")
     content["destination"] = destination.value
     content["source_generations"] = sorted(
-        ((str(source_id), generation) for source_id, generation in (source_generation_fences or {}).items())
+        (
+            (str(source_id), generation)
+            for source_id, generation in (source_generation_fences or {}).items()
+        )
     )
     # Default json.dumps separators keep cursors issued before the shared helper valid.
     return fingerprint_payload(content, length=16, separators=(", ", ": "))
 
 
 def _offset(
-    request: SearchRequest, destination: ToolDestination = ToolDestination.LOCAL,
+    request: SearchRequest,
+    destination: ToolDestination = ToolDestination.LOCAL,
     source_generation_fences: dict[UUID, int] | None = None,
 ) -> int:
     """Decode a canonical cursor bound to request, destination class and supported offsets."""
@@ -272,24 +323,36 @@ def _offset(
         return 0
     try:
         return decode_scoped_offset(
-            request.cursor, _cursor_scope(request, destination, source_generation_fences),
+            request.cursor,
+            _cursor_scope(request, destination, source_generation_fences),
             max_offset=MAX_RANKED_CANDIDATES,
         )
-    except (HTTPException, DomainError) as exc:  # core helper raises the transport error; this module raises DomainError
+    except (
+        HTTPException,
+        DomainError,
+    ) as exc:  # core helper raises the transport error; this module raises DomainError
         raise ValidationFailedError(detail="Invalid search cursor") from exc
 
 
 def _encode_cursor(
-    request: SearchRequest, offset: int, destination: ToolDestination = ToolDestination.LOCAL,
+    request: SearchRequest,
+    offset: int,
+    destination: ToolDestination = ToolDestination.LOCAL,
     source_generation_fences: dict[UUID, int] | None = None,
 ) -> str:
     """Encode request/destination scope and ranked offset as unpadded URL-safe base64."""
-    return encode_scoped_offset(_cursor_scope(request, destination, source_generation_fences), offset)
+    return encode_scoped_offset(
+        _cursor_scope(request, destination, source_generation_fences), offset
+    )
 
 
 def _filters(
-    statement: Select[Any], request: SearchRequest, destination: ToolDestination = ToolDestination.LOCAL,
-    source_generation_fences: dict[UUID, int] | None = None, *, workspace_id: UUID,
+    statement: Select[Any],
+    request: SearchRequest,
+    destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+    *,
+    workspace_id: UUID,
 ) -> Select[Any]:
     """Apply privacy, source-generation, type and effective-date predicates before ranking."""
     statement = statement.where(Document.workspace_id == workspace_id)
@@ -301,21 +364,31 @@ def _filters(
             and_(Document.source_id == source_id, Source.generation == generation)
             for source_id, generation in source_generation_fences.items()
         ]
-        statement = statement.where(or_(*generation_conditions) if generation_conditions else false())
+        statement = statement.where(
+            or_(*generation_conditions) if generation_conditions else false()
+        )
     if filters.source_ids:
         statement = statement.where(Document.source_id.in_(filters.source_ids))
     if filters.content_types:
         statement = statement.where(Document.content_type.in_(filters.content_types))
     if filters.date_from is not None:
-        statement = statement.where(func.coalesce(Document.published_at, Document.observed_at, DocumentVersion.observed_at) >= filters.date_from)
+        statement = statement.where(
+            func.coalesce(Document.published_at, Document.observed_at, DocumentVersion.observed_at)
+            >= filters.date_from
+        )
     if filters.date_to is not None:
-        statement = statement.where(func.coalesce(Document.published_at, Document.observed_at, DocumentVersion.observed_at) <= filters.date_to)
+        statement = statement.where(
+            func.coalesce(Document.published_at, Document.observed_at, DocumentVersion.observed_at)
+            <= filters.date_to
+        )
     return statement
 
 
 def _visible_rows(
-    *columns: Any, destination: ToolDestination = ToolDestination.LOCAL,
-    source_generation_fences: dict[UUID, int] | None = None, workspace_id: UUID,
+    *columns: Any,
+    destination: ToolDestination = ToolDestination.LOCAL,
+    source_generation_fences: dict[UUID, int] | None = None,
+    workspace_id: UUID,
     grants: Select[Any] | None = None,
 ) -> Select[Any]:
     """Build a fresh active/current query with destination, generation fences and member grants."""
@@ -346,30 +419,48 @@ def _visible_rows(
 
 
 async def _lexical_ids(
-    session: AsyncSession, request: SearchRequest,
+    session: AsyncSession,
+    request: SearchRequest,
     destination: ToolDestination = ToolDestination.LOCAL,
     source_generation_fences: dict[UUID, int] | None = None,
-    *, workspace_id: UUID, grants: Select[Any] | None = None,
+    *,
+    workspace_id: UUID,
+    grants: Select[Any] | None = None,
 ) -> list[UUID]:
     """Retrieve bounded candidates after active/current, privacy and generation SQL filters."""
     # Stored generated column ``content_tsv`` (= to_tsvector('simple', content)) with a GIN index: identical
     # match and ts_rank_cd scores to the former inline expression, without re-parsing every candidate.
     vector = DocumentChunk.content_tsv
     query = func.websearch_to_tsquery(text("'simple'"), request.query)
-    statement = _filters(
-        _visible_rows(DocumentChunk.id, destination=destination, workspace_id=workspace_id, grants=grants), request, destination,
-        source_generation_fences, workspace_id=workspace_id,
-    ).where(vector.op("@@")(query)).order_by(
-        func.ts_rank_cd(vector, query).desc(), DocumentChunk.id,
-    ).limit(MAX_CANDIDATES)
+    statement = (
+        _filters(
+            _visible_rows(
+                DocumentChunk.id, destination=destination, workspace_id=workspace_id, grants=grants
+            ),
+            request,
+            destination,
+            source_generation_fences,
+            workspace_id=workspace_id,
+        )
+        .where(vector.op("@@")(query))
+        .order_by(
+            func.ts_rank_cd(vector, query).desc(),
+            DocumentChunk.id,
+        )
+        .limit(MAX_CANDIDATES)
+    )
     return list((await session.scalars(statement)).all())
 
 
 async def _vector_ids(
-    session: AsyncSession, request: SearchRequest, generation: IndexGeneration,
-    values: list[float], destination: ToolDestination = ToolDestination.LOCAL,
+    session: AsyncSession,
+    request: SearchRequest,
+    generation: IndexGeneration,
+    values: list[float],
+    destination: ToolDestination = ToolDestination.LOCAL,
     source_generation_fences: dict[UUID, int] | None = None,
-    *, workspace_id: UUID,
+    *,
+    workspace_id: UUID,
 ) -> list[UUID]:
     """Retrieve bounded cosine candidates after destination and generation fences."""
     dimensions = generation.dimensions
@@ -380,23 +471,30 @@ async def _vector_ids(
     # the planner from proving the index predicate and force a sequential scan.
     generation_literal = str(UUID(str(generation.id)))
     clauses = [
-        f"i.generation_id = '{generation_literal}'", "i.status = 'succeeded'", "i.embedding IS NOT NULL",
-        "v.version_number = d.current_version", "d.extraction_status IN ('ready', 'succeeded')",
-        "s.status = 'active'", "g.workspace_id = CAST(:workspace_id AS uuid)",
+        f"i.generation_id = '{generation_literal}'",
+        "i.status = 'succeeded'",
+        "i.embedding IS NOT NULL",
+        "v.version_number = d.current_version",
+        "d.extraction_status IN ('ready', 'succeeded')",
+        "s.status = 'active'",
+        "g.workspace_id = CAST(:workspace_id AS uuid)",
         "d.workspace_id = CAST(:workspace_id AS uuid)",
     ]
     if destination != ToolDestination.LOCAL:
         clauses.append("s.local_only = false")
     params: dict[str, object] = {
         "workspace_id": str(workspace_id),
-        "embedding": json.dumps(values), "limit": MAX_CANDIDATES,
+        "embedding": json.dumps(values),
+        "limit": MAX_CANDIDATES,
     }
     if source_generation_fences is not None:
         if not source_generation_fences:
             clauses.append("false")
         else:
             fence_clauses = []
-            for index, (source_id, source_generation) in enumerate(source_generation_fences.items()):
+            for index, (source_id, source_generation) in enumerate(
+                source_generation_fences.items()
+            ):
                 source_key = f"fence_source_{index}"
                 generation_key = f"fence_generation_{index}"
                 fence_clauses.append(
@@ -441,11 +539,24 @@ async def _vector_ids(
 
 
 async def _embed_query_vector(
-    session: AsyncSession, redis: Redis, settings: Settings, request: SearchRequest,
-    *, generation: IndexGeneration, config: AIExecutionConfig, mapping: ModelMapping,
-    policy: RequestPolicy, offset: int, admitted_fence: AccessFence,
-    source_generation_fences: dict[UUID, int] | None, scope: Scope, multi_workspace_enabled: bool,
-    before_embedding_send: Callable[[AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]] | None,
+    session: AsyncSession,
+    redis: Redis,
+    settings: Settings,
+    request: SearchRequest,
+    *,
+    generation: IndexGeneration,
+    config: AIExecutionConfig,
+    mapping: ModelMapping,
+    policy: RequestPolicy,
+    offset: int,
+    admitted_fence: AccessFence,
+    source_generation_fences: dict[UUID, int] | None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    before_embedding_send: Callable[
+        [AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]
+    ]
+    | None,
     release_during_embed: bool,
 ) -> list[float]:
     """Return the query embedding, from the short-lived cache or a freshly authorized gateway call.
@@ -458,7 +569,11 @@ async def _embed_query_vector(
     recheck. Raises ``ValueError`` when the response model identity differs from the generation's.
     """
     cache_key = _query_vector_cache_key(
-        scope.workspace_id, generation, config, mapping, request.query,
+        scope.workspace_id,
+        generation,
+        config,
+        mapping,
+        request.query,
     )
     cached_values = (
         _get_cached_query_vector(cache_key)
@@ -470,30 +585,51 @@ async def _embed_query_vector(
 
     async def recheck_send() -> None:
         """Reload gateway and privacy state immediately before embedding the query."""
-        if await workspaces.read_access_fence(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        ) != admitted_fence:
+        if (
+            await workspaces.read_access_fence(
+                session,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+            != admitted_fence
+        ):
             raise PrivacyPolicyDenied("Search embedding denied: workspace access changed")
         latest, latest_mapping, latest_policy = await configured_embedding(
-            session, settings, redis, scope=scope,
+            session,
+            settings,
+            redis,
+            scope=scope,
         )
-        if (latest.configuration_revision != config.configuration_revision
-                or latest.endpoint_destination_id != config.endpoint_destination_id
-                or latest.gateway_identity != config.gateway_identity or latest_mapping != mapping
-                or not may_send(latest_policy, "embedding", latest_mapping,
-                                latest.endpoint_destination_id or "remote",
-                                bool(latest.gateway_api_key), "embeddings")):
+        if (
+            latest.configuration_revision != config.configuration_revision
+            or latest.endpoint_destination_id != config.endpoint_destination_id
+            or latest.gateway_identity != config.gateway_identity
+            or latest_mapping != mapping
+            or not may_send(
+                latest_policy,
+                "embedding",
+                latest_mapping,
+                latest.endpoint_destination_id or "remote",
+                bool(latest.gateway_api_key),
+                "embeddings",
+            )
+        ):
             raise PrivacyPolicyDenied("Search embedding denied by current settings")
         if before_embedding_send is not None:
             await before_embedding_send(
-                latest, latest_mapping, latest_policy, dict(source_generation_fences or {}),
+                latest,
+                latest_mapping,
+                latest_policy,
+                dict(source_generation_fences or {}),
             )
         if release_during_embed:
             await session.commit()
 
     if release_during_embed:
         await session.commit()
-    response = await gateway(config, redis, recheck_send, scope=scope).embed("embedding", mapping, policy, [request.query])
+    response = await gateway(config, redis, recheck_send, scope=scope).embed(
+        "embedding", mapping, policy, [request.query]
+    )
     values, returned_model = embedding_values(response, generation.dimensions)
     if returned_model != generation.response_model_id:
         raise ValueError("Embedding response identity changed")
@@ -502,10 +638,21 @@ async def _embed_query_vector(
 
 
 async def _hybrid_vector_candidates(
-    session: AsyncSession, redis: Redis, settings: Settings, request: SearchRequest,
-    *, destination: ToolDestination, source_generation_fences: dict[UUID, int] | None,
-    offset: int, admitted_fence: AccessFence, scope: Scope, multi_workspace_enabled: bool,
-    before_embedding_send: Callable[[AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]] | None,
+    session: AsyncSession,
+    redis: Redis,
+    settings: Settings,
+    request: SearchRequest,
+    *,
+    destination: ToolDestination,
+    source_generation_fences: dict[UUID, int] | None,
+    offset: int,
+    admitted_fence: AccessFence,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    before_embedding_send: Callable[
+        [AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]
+    ]
+    | None,
     release_during_embed: bool,
 ) -> tuple[list[UUID], str, list[str]]:
     """Run the vector leg of a hybrid search; return ``(vector_ids, effective_mode, warnings)``.
@@ -513,28 +660,50 @@ async def _hybrid_vector_candidates(
     Any gateway/Redis/value/OS failure, a database error (after rollback) or an HTTP-shaped 503
     degrades to lexical-only with ``FALLBACK_WARNING``; other HTTP-shaped errors propagate.
     """
-    generation = await session.scalar(select(IndexGeneration).where(
-        IndexGeneration.workspace_id == scope.workspace_id, IndexGeneration.status == "active",
-    ))
+    generation = await session.scalar(
+        select(IndexGeneration).where(
+            IndexGeneration.workspace_id == scope.workspace_id,
+            IndexGeneration.status == "active",
+        )
+    )
     try:
         config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
         if config.endpoint_policy_denied:
             raise ValueError("Saved endpoint is denied by deployment network policy")
         if (
-            generation is None or generation.dimensions is None or mapping is None
-            or mapping.model != generation.model_id or mapping.version != generation.model_version
-            or generation.gateway_identity != config.model_identity or not policy.embeddings_allowed
+            generation is None
+            or generation.dimensions is None
+            or mapping is None
+            or mapping.model != generation.model_id
+            or mapping.version != generation.model_version
+            or generation.gateway_identity != config.model_identity
+            or not policy.embeddings_allowed
         ):
             raise ValueError("No permitted active embedding generation")
         values = await _embed_query_vector(
-            session, redis, settings, request, generation=generation, config=config, mapping=mapping,
-            policy=policy, offset=offset, admitted_fence=admitted_fence,
-            source_generation_fences=source_generation_fences, scope=scope,
+            session,
+            redis,
+            settings,
+            request,
+            generation=generation,
+            config=config,
+            mapping=mapping,
+            policy=policy,
+            offset=offset,
+            admitted_fence=admitted_fence,
+            source_generation_fences=source_generation_fences,
+            scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
-            before_embedding_send=before_embedding_send, release_during_embed=release_during_embed,
+            before_embedding_send=before_embedding_send,
+            release_during_embed=release_during_embed,
         )
         vector = await _vector_ids(
-            session, request, generation, values, destination, source_generation_fences,
+            session,
+            request,
+            generation,
+            values,
+            destination,
+            source_generation_fences,
             workspace_id=scope.workspace_id,
         )
         return vector, "hybrid", []
@@ -550,9 +719,16 @@ async def _hybrid_vector_candidates(
 
 
 async def _hydrate_hits(
-    session: AsyncSession, request: SearchRequest, selected: list[UUID], ranked: dict[UUID, float],
-    *, destination: ToolDestination, source_generation_fences: dict[UUID, int] | None,
-    scope: Scope, grants: Any, member: bool,
+    session: AsyncSession,
+    request: SearchRequest,
+    selected: list[UUID],
+    ranked: dict[UUID, float],
+    *,
+    destination: ToolDestination,
+    source_generation_fences: dict[UUID, int] | None,
+    scope: Scope,
+    grants: Any,
+    member: bool,
 ) -> tuple[list[SearchHit], dict[UUID, tuple[UUID, UUID, UUID, int]]]:
     """Hydrate the selected page into hits plus the exact (document, version, source, generation) fences.
 
@@ -560,62 +736,109 @@ async def _hydrate_hits(
     A member page with any vanished chunk fails whole (409) instead of returning a partial page;
     owners silently skip vanished chunks. The extra look-ahead chunk is never hydrated.
     """
-    rows: Sequence[Any] = (await session.execute(_filters(
-        _visible_rows(
-            DocumentChunk.id,
-            DocumentChunk.content,
-            DocumentVersion.id,
-            DocumentVersion.version_number,
-            DocumentVersion.observed_at,
-            Document.id,
-            Document.title,
-            Document.observed_at,
-            Document.published_at,
-            Document.content_type,
-            Document.canonical_url,
-            Source.id,
-            Source.name,
-            Source.type,
-            Source.generation,
-            destination=destination,
-            source_generation_fences=source_generation_fences,
-            workspace_id=scope.workspace_id, grants=grants,
-        ), request, destination, source_generation_fences, workspace_id=scope.workspace_id,
-    ).where(DocumentChunk.id.in_(selected)))).all() if selected else []
+    rows: Sequence[Any] = (
+        (
+            await session.execute(
+                _filters(
+                    _visible_rows(
+                        DocumentChunk.id,
+                        DocumentChunk.content,
+                        DocumentVersion.id,
+                        DocumentVersion.version_number,
+                        DocumentVersion.observed_at,
+                        Document.id,
+                        Document.title,
+                        Document.observed_at,
+                        Document.published_at,
+                        Document.content_type,
+                        Document.canonical_url,
+                        Source.id,
+                        Source.name,
+                        Source.type,
+                        Source.generation,
+                        destination=destination,
+                        source_generation_fences=source_generation_fences,
+                        workspace_id=scope.workspace_id,
+                        grants=grants,
+                    ),
+                    request,
+                    destination,
+                    source_generation_fences,
+                    workspace_id=scope.workspace_id,
+                ).where(DocumentChunk.id.in_(selected))
+            )
+        ).all()
+        if selected
+        else []
+    )
     visible = {row[0]: row for row in rows}
     items: list[SearchHit] = []
     expected_fences: dict[UUID, tuple[UUID, UUID, UUID, int]] = {}
-    for chunk_id in selected[:request.limit]:
+    for chunk_id in selected[: request.limit]:
         if chunk_id not in visible:
             if member:
                 raise _stale_member_read()
             continue
         (
-            chunk_id, content, version_id, version_number, version_observed, document_id,
-            title, document_observed, published_at, content_type, canonical_url,
-            source_id, source_name, source_type, source_generation,
+            chunk_id,
+            content,
+            version_id,
+            version_number,
+            version_observed,
+            document_id,
+            title,
+            document_observed,
+            published_at,
+            content_type,
+            canonical_url,
+            source_id,
+            source_name,
+            source_type,
+            source_generation,
         ) = visible[chunk_id]
         expected_fences[chunk_id] = (document_id, version_id, source_id, source_generation)
         excerpt = content[:500]
-        items.append(SearchHit(
-            document_id=document_id, document_version_id=version_id, version_number=version_number, chunk_id=chunk_id,
-            title=title, excerpt=excerpt, score=ranked[chunk_id],
-            source=SearchSource(id=source_id, name=source_name, type=source_type),
-            observed_at=document_observed or version_observed,
-            published_at=published_at, content_type=content_type,
-            citation=Citation(sourceId=source_id, documentId=document_id, chunkId=chunk_id,
-                              title=title, url=canonical_url,
-                              observedAt=document_observed or version_observed, quote=excerpt),
-        ))
+        items.append(
+            SearchHit(
+                document_id=document_id,
+                document_version_id=version_id,
+                version_number=version_number,
+                chunk_id=chunk_id,
+                title=title,
+                excerpt=excerpt,
+                score=ranked[chunk_id],
+                source=SearchSource(id=source_id, name=source_name, type=source_type),
+                observed_at=document_observed or version_observed,
+                published_at=published_at,
+                content_type=content_type,
+                citation=Citation(
+                    sourceId=source_id,
+                    documentId=document_id,
+                    chunkId=chunk_id,
+                    title=title,
+                    url=canonical_url,
+                    observedAt=document_observed or version_observed,
+                    quote=excerpt,
+                ),
+            )
+        )
     return items, expected_fences
 
 
 async def search(
-    session: AsyncSession, redis: Redis, settings: Settings, request: SearchRequest,
-    *, destination: ToolDestination = ToolDestination.LOCAL,
+    session: AsyncSession,
+    redis: Redis,
+    settings: Settings,
+    request: SearchRequest,
+    *,
+    destination: ToolDestination = ToolDestination.LOCAL,
     source_generation_fences: dict[UUID, int] | None = None,
-    scope: Scope, multi_workspace_enabled: bool,
-    before_embedding_send: Callable[[AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]] | None = None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    before_embedding_send: Callable[
+        [AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]
+    ]
+    | None = None,
     release_during_embed: bool = False,
 ) -> SearchResponse:
     """Retrieve current evidence only within an admitted owner workspace and destination policy.
@@ -641,12 +864,20 @@ async def search(
     if member and (destination != ToolDestination.LOCAL or source_generation_fences is not None):
         raise ForbiddenError(detail="Workspace owner required")
     admitted_fence = await _admit(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        allow_member=True,
     )
     grants = _member_grants(scope) if member else None
     offset = _offset(request, destination, source_generation_fences)
     lexical = await _lexical_ids(
-        session, request, destination, source_generation_fences, workspace_id=scope.workspace_id, grants=grants,
+        session,
+        request,
+        destination,
+        source_generation_fences,
+        workspace_id=scope.workspace_id,
+        grants=grants,
     )
     vector: list[UUID] = []
     effective_mode = "lexical"
@@ -654,37 +885,69 @@ async def search(
     # Members never rerank or embed: embeddings use the owner's AI config and global statistics.
     if request.mode == "hybrid" and not member:
         vector, effective_mode, warnings = await _hybrid_vector_candidates(
-            session, redis, settings, request, destination=destination,
-            source_generation_fences=source_generation_fences, offset=offset,
-            admitted_fence=admitted_fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            before_embedding_send=before_embedding_send, release_during_embed=release_during_embed,
+            session,
+            redis,
+            settings,
+            request,
+            destination=destination,
+            source_generation_fences=source_generation_fences,
+            offset=offset,
+            admitted_fence=admitted_fence,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            before_embedding_send=before_embedding_send,
+            release_during_embed=release_during_embed,
         )
     ranked: dict[UUID, float] = {}
     for candidates in (lexical, vector) if effective_mode == "hybrid" else (lexical,):
         for rank, chunk_id in enumerate(candidates, 1):
             ranked[chunk_id] = ranked.get(chunk_id, 0.0) + 1 / (60 + rank)
     ordered = sorted(ranked, key=lambda chunk_id: (-ranked[chunk_id], str(chunk_id)))
-    selected = ordered[offset:offset + request.limit + 1]
+    selected = ordered[offset : offset + request.limit + 1]
     items, expected_fences = await _hydrate_hits(
-        session, request, selected, ranked, destination=destination,
-        source_generation_fences=source_generation_fences, scope=scope, grants=grants, member=member,
+        session,
+        request,
+        selected,
+        ranked,
+        destination=destination,
+        source_generation_fences=source_generation_fences,
+        scope=scope,
+        grants=grants,
+        member=member,
     )
     current_ids = await _revalidate_tool_result_fences(
-        session, expected_fences, destination, source_generation_fences, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, allow_member=member,
+        session,
+        expected_fences,
+        destination,
+        source_generation_fences,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        allow_member=member,
     )
     if member and (
         current_ids != set(expected_fences)
         or await workspaces.read_access_fence(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        ) != admitted_fence
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        != admitted_fence
     ):
         raise _stale_member_read()
     items = [item for item in items if item.chunk_id in current_ids]
-    next_cursor = _encode_cursor(
-        request, offset + request.limit, destination, source_generation_fences,
-    ) if len(selected) > request.limit else None
-    return SearchResponse(items=items, next_cursor=next_cursor, effective_mode=effective_mode, warnings=warnings)
+    next_cursor = (
+        _encode_cursor(
+            request,
+            offset + request.limit,
+            destination,
+            source_generation_fences,
+        )
+        if len(selected) > request.limit
+        else None
+    )
+    return SearchResponse(
+        items=items, next_cursor=next_cursor, effective_mode=effective_mode, warnings=warnings
+    )
 
 
 def _stale_member_read() -> DomainError:
@@ -697,7 +960,10 @@ async def _revalidate_tool_result_fences(
     expected: dict[UUID, tuple[UUID, UUID, UUID, int]],
     destination: ToolDestination,
     source_generation_fences: dict[UUID, int] | None,
-    *, scope: Scope, multi_workspace_enabled: bool, allow_member: bool = False,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    allow_member: bool = False,
 ) -> set[UUID]:
     """Return exact active/current source-generation tuples still eligible in a fresh query.
 
@@ -708,7 +974,10 @@ async def _revalidate_tool_result_fences(
     if not expected:
         return set()
     await _admit(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=allow_member,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        allow_member=allow_member,
     )
     statement = (
         select(DocumentChunk.id, DocumentVersion.id, Document.id, Source.id, Source.generation)
@@ -748,7 +1017,8 @@ async def revalidate_tool_search_fences(
     source_ids: frozenset[UUID],
     owner_all: bool = False,
     destination: ToolDestination = ToolDestination.REMOTE,
-    scope: Scope, multi_workspace_enabled: bool,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Require every bounded native Search result fence to remain exact and currently eligible.
 
@@ -766,7 +1036,8 @@ async def revalidate_tool_search_fences(
             or not isinstance(fence.document_id, UUID)
             or not isinstance(fence.document_version_id, UUID)
             or not isinstance(fence.source_id, UUID)
-            or type(fence.source_generation) is not int or fence.source_generation < 1
+            or type(fence.source_generation) is not int
+            or fence.source_generation < 1
             or not isinstance(fence.chunk_id, UUID)
         ):
             return False
@@ -774,64 +1045,122 @@ async def revalidate_tool_search_fences(
             return False
         if fence.chunk_id in expected:
             return False
-        previous_generation = source_generations.setdefault(fence.source_id, fence.source_generation)
+        previous_generation = source_generations.setdefault(
+            fence.source_id, fence.source_generation
+        )
         if previous_generation != fence.source_generation:
             return False
         expected[fence.chunk_id] = (
-            fence.document_id, fence.document_version_id,
-            fence.source_id, fence.source_generation,
+            fence.document_id,
+            fence.document_version_id,
+            fence.source_id,
+            fence.source_generation,
         )
     if not expected:
         return True
     valid = await _revalidate_tool_result_fences(
-        session, expected, destination, source_generations, scope=scope,
+        session,
+        expected,
+        destination,
+        source_generations,
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
     return valid == set(expected)
 
 
 async def index_status(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
-    settings: Settings, redis: Redis,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    settings: Settings,
+    redis: Redis,
 ) -> SearchIndexStatus:
     """Report this workspace's latest run or distinguish pending, unconfigured and no-data states."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    generation = await session.scalar(select(IndexGeneration).where(
-        IndexGeneration.workspace_id == scope.workspace_id,
-    ).order_by(IndexGeneration.created_at.desc()).limit(1))
+    generation = await session.scalar(
+        select(IndexGeneration)
+        .where(
+            IndexGeneration.workspace_id == scope.workspace_id,
+        )
+        .order_by(IndexGeneration.created_at.desc())
+        .limit(1)
+    )
     if generation is None:
-        has_data = await session.scalar(select(DocumentChunk.id).join(
-            DocumentVersion, DocumentVersion.id == DocumentChunk.document_version_id,
-        ).join(Document, Document.id == DocumentVersion.document_id).join(
-            Source, Source.id == Document.source_id,
-        ).where(
-            Document.workspace_id == scope.workspace_id,
-            Document.current_version == DocumentVersion.version_number,
-            Document.extraction_status.in_(("ready", "succeeded")),
-            Source.status == "active", Source.local_only.is_(False),
-        ).limit(1))
+        has_data = await session.scalar(
+            select(DocumentChunk.id)
+            .join(
+                DocumentVersion,
+                DocumentVersion.id == DocumentChunk.document_version_id,
+            )
+            .join(Document, Document.id == DocumentVersion.document_id)
+            .join(
+                Source,
+                Source.id == Document.source_id,
+            )
+            .where(
+                Document.workspace_id == scope.workspace_id,
+                Document.current_version == DocumentVersion.version_number,
+                Document.extraction_status.in_(("ready", "succeeded")),
+                Source.status == "active",
+                Source.local_only.is_(False),
+            )
+            .limit(1)
+        )
         if has_data is None:
             status = "no_data"
         else:
-            config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
-            status = "pending" if not config.endpoint_policy_denied and may_send(
-                policy, "embedding", mapping, config.endpoint_destination_id or "remote",
-                bool(config.gateway_api_key), "embeddings",
-            ) else "unconfigured"
-        return SearchIndexStatus(run_id=None, status=status, model_id=None, dimensions=None, indexed_items=0, failed_items=0)
-    counts = dict((await session.execute(
-        select(SearchIndexItem.status, func.count()).where(SearchIndexItem.generation_id == generation.id).group_by(SearchIndexItem.status)
-    )).all())
-    return SearchIndexStatus(run_id=generation.id, status=generation.status, model_id=generation.model_id,
-                             dimensions=generation.dimensions, indexed_items=counts.get("succeeded", 0),
-                             failed_items=counts.get("failed", 0))
+            config, mapping, policy = await configured_embedding(
+                session, settings, redis, scope=scope
+            )
+            status = (
+                "pending"
+                if not config.endpoint_policy_denied
+                and may_send(
+                    policy,
+                    "embedding",
+                    mapping,
+                    config.endpoint_destination_id or "remote",
+                    bool(config.gateway_api_key),
+                    "embeddings",
+                )
+                else "unconfigured"
+            )
+        return SearchIndexStatus(
+            run_id=None,
+            status=status,
+            model_id=None,
+            dimensions=None,
+            indexed_items=0,
+            failed_items=0,
+        )
+    counts = dict(
+        (
+            await session.execute(
+                select(SearchIndexItem.status, func.count())
+                .where(SearchIndexItem.generation_id == generation.id)
+                .group_by(SearchIndexItem.status)
+            )
+        ).all()
+    )
+    return SearchIndexStatus(
+        run_id=generation.id,
+        status=generation.status,
+        model_id=generation.model_id,
+        dimensions=generation.dimensions,
+        indexed_items=counts.get("succeeded", 0),
+        failed_items=counts.get("failed", 0),
+    )
 
 
 async def search_tasks_and_goals(
     session: AsyncSession,
     task_filter: TaskFilter,
     goal_filter: GoalFilter,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[TaskPage, GoalPage]:
     """Return bounded owner pages by delegating all task and goal reads to their public APIs.
 
@@ -849,9 +1178,15 @@ async def search_tasks_and_goals(
     from modules.tasks import public as tasks
 
     task_page = await tasks.list_tasks(
-        session, task_filter, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        task_filter,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     goal_page = await goals.list_goals(
-        session, goal_filter, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        goal_filter,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     return task_page, goal_page

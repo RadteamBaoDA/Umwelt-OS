@@ -37,32 +37,48 @@ class _Harness:
         """Build request, session, redis and patch all collaborators for ``purpose``."""
         self.calls: list[str] = []
         self.settings = SimpleNamespace(
-            multi_workspace_enabled=True, secure_cookies=False, session_lifetime_hours=1,
-            google_client_id="id", google_client_secret=_Secret(),
+            multi_workspace_enabled=True,
+            secure_cookies=False,
+            session_lifetime_hours=1,
+            google_client_id="id",
+            google_client_secret=_Secret(),
         )
         self.cookies = {
-            "bbd_google_binding": BINDING, routes.CSRF_COOKIE: "csrf-cookie", routes.SESSION_COOKIE: "sess-cookie",
+            "bbd_google_binding": BINDING,
+            routes.CSRF_COOKIE: "csrf-cookie",
+            routes.SESSION_COOKIE: "sess-cookie",
         }
         self.transaction = {
-            "purpose": purpose, "binding": routes._hash(BINDING), **transaction,
+            "purpose": purpose,
+            "binding": routes._hash(BINDING),
+            **transaction,
         }
         self.request = SimpleNamespace(
             app=SimpleNamespace(state=SimpleNamespace(settings=self.settings)),
-            query_params={"state": "st"}, cookies=self.cookies, headers={}, client=None,
+            query_params={"state": "st"},
+            cookies=self.cookies,
+            headers={},
+            client=None,
         )
         self.redis = MagicMock()
         self.redis.getdel = AsyncMock(return_value=routes.json.dumps(self.transaction))
         self.redis.set = AsyncMock(return_value=True)
         self.session = MagicMock()
         self.session.scalar = AsyncMock(return_value=None)
-        self.session.add = MagicMock(side_effect=lambda obj: self.calls.append(f"add:{type(obj).__name__}"))
+        self.session.add = MagicMock(
+            side_effect=lambda obj: self.calls.append(f"add:{type(obj).__name__}")
+        )
         self.session.delete = AsyncMock(side_effect=lambda obj: self.calls.append("delete"))
         self.session.commit = AsyncMock(side_effect=lambda: self.calls.append("commit"))
         self.session.rollback = AsyncMock(side_effect=lambda: self.calls.append("rollback"))
         self.userinfo = {"iss": GOOGLE_ISSUER, "sub": SUB, "email": EMAIL, "email_verified": True}
-        client = SimpleNamespace(google=SimpleNamespace(
-            authorize_access_token=AsyncMock(side_effect=lambda req: {"userinfo": self.userinfo}),
-        ))
+        client = SimpleNamespace(
+            google=SimpleNamespace(
+                authorize_access_token=AsyncMock(
+                    side_effect=lambda req: {"userinfo": self.userinfo}
+                ),
+            )
+        )
         monkeypatch.setattr(routes, "google_client", lambda settings: client)
         monkeypatch.setattr(routes, "_new_csrf", lambda settings: ("csrf-token", "csrf-cookie-new"))
         self.audit = MagicMock()
@@ -82,15 +98,25 @@ class _Harness:
 
 def _owner(owner_id: int = 5, email: str = EMAIL) -> SimpleNamespace:
     """Build a fake locked owner row."""
-    return SimpleNamespace(id=owner_id, email=email, email_verified_at=None, email_verification_source=None)
+    return SimpleNamespace(
+        id=owner_id, email=email, email_verified_at=None, email_verification_source=None
+    )
 
 
 # --- invitation branch -----------------------------------------------------------------------
 
-def _invitation(monkeypatch: pytest.MonkeyPatch, target_email: str = EMAIL, **extra: Any) -> _Harness:
+
+def _invitation(
+    monkeypatch: pytest.MonkeyPatch, target_email: str = EMAIL, **extra: Any
+) -> _Harness:
     """Harness for an invitation callback with a matching CSRF cookie hash."""
-    h = _Harness(monkeypatch, "invitation", invitation_hash="inv-hash",
-                 csrf_cookie_hash=routes._hash("csrf-cookie"), **extra)
+    h = _Harness(
+        monkeypatch,
+        "invitation",
+        invitation_hash="inv-hash",
+        csrf_cookie_hash=routes._hash("csrf-cookie"),
+        **extra,
+    )
 
     async def target(session: Any, digest: str) -> Any:
         """Resolve the invitation target."""
@@ -102,7 +128,9 @@ def _invitation(monkeypatch: pytest.MonkeyPatch, target_email: str = EMAIL, **ex
 
 
 @pytest.mark.asyncio
-async def test_invitation_csrf_hash_mismatch_returns_error_without_redis(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_invitation_csrf_hash_mismatch_returns_error_without_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A CSRF cookie that does not match the transaction hash never reaches Redis or SQL."""
     h = _invitation(monkeypatch)
     h.cookies[routes.CSRF_COOKIE] = "other"
@@ -139,7 +167,9 @@ async def test_invitation_email_mismatch_rolls_back(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
-async def test_invitation_success_sets_enrollment_cookie_after_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_invitation_success_sets_enrollment_cookie_after_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Success rolls back reads, stores a 5-minute NX proof and redirects to the invitation page."""
     h = _invitation(monkeypatch)
     response = await h.run()
@@ -149,15 +179,23 @@ async def test_invitation_success_sets_enrollment_cookie_after_rollback(monkeypa
     assert args[0].startswith("auth:google:enrollment:")
     assert kwargs == {"ex": 300, "nx": True}
     proof = routes.json.loads(args[1])
-    assert proof == {"invitation_hash": "inv-hash", "email": EMAIL, "issuer": GOOGLE_ISSUER,
-                     "subject": SUB, "csrf_cookie_hash": routes._hash("csrf-cookie")}
+    assert proof == {
+        "invitation_hash": "inv-hash",
+        "email": EMAIL,
+        "issuer": GOOGLE_ISSUER,
+        "subject": SUB,
+        "csrf_cookie_hash": routes._hash("csrf-cookie"),
+    }
     assert "bbd_google_enrollment" in h.set_cookie_names(response)
     h.audit.assert_not_called()
 
 
 # --- login branch ----------------------------------------------------------------------------
 
-def _login(monkeypatch: pytest.MonkeyPatch, owner: Any, identity: Any, owner_id: int | None = 5) -> _Harness:
+
+def _login(
+    monkeypatch: pytest.MonkeyPatch, owner: Any, identity: Any, owner_id: int | None = 5
+) -> _Harness:
     """Harness for a login callback resolving ``owner``/``identity``."""
     h = _Harness(monkeypatch, "login")
     h.session.scalar = AsyncMock(return_value=owner_id)
@@ -186,7 +224,9 @@ async def test_login_inactive_account_rolls_back_to_error(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_login_success_issues_session_without_reauthentication(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_login_success_issues_session_without_reauthentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Success commits a new AuthSession with reauthenticated_at=None and redirects to /app."""
     h = _login(monkeypatch, _owner(), SimpleNamespace(owner_id=5))
     response = await h.run()
@@ -211,7 +251,10 @@ async def test_login_integrity_error_rolls_back_to_error(monkeypatch: pytest.Mon
 
 # --- link branch -----------------------------------------------------------------------------
 
-def _link(monkeypatch: pytest.MonkeyPatch, auth: Any = None, owner: Any = None, **tx: Any) -> _Harness:
+
+def _link(
+    monkeypatch: pytest.MonkeyPatch, auth: Any = None, owner: Any = None, **tx: Any
+) -> _Harness:
     """Harness for a link callback with a locked owner, auth session and no prior identity."""
     h = _Harness(monkeypatch, "link", owner_id=5, session_hash="tok-hash", **tx)
     h.session.scalar = AsyncMock(return_value=None)
@@ -225,11 +268,15 @@ def _link(monkeypatch: pytest.MonkeyPatch, auth: Any = None, owner: Any = None, 
 
 def _auth(token_hash: str = "tok-hash") -> SimpleNamespace:
     """Build a fake locked auth session."""
-    return SimpleNamespace(token_hash=token_hash, reauthenticated_at=datetime.now(UTC) - timedelta(minutes=1))
+    return SimpleNamespace(
+        token_hash=token_hash, reauthenticated_at=datetime.now(UTC) - timedelta(minutes=1)
+    )
 
 
 @pytest.mark.asyncio
-async def test_link_non_int_owner_id_returns_without_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_link_non_int_owner_id_returns_without_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A malformed owner id returns the error redirect before any lock, so nothing is rolled back."""
     h = _link(monkeypatch, _auth())
     h.transaction["owner_id"] = True
@@ -265,7 +312,9 @@ async def test_link_requires_recent_reauthentication(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_link_success_replaces_session_and_verifies_matching_email(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_link_success_replaces_session_and_verifies_matching_email(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Success deletes the old session, links the identity, verifies the mailbox and carries reauth."""
     auth = _auth()
     owner = _owner()

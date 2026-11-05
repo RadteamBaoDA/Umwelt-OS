@@ -24,14 +24,22 @@ from tests.integration.fake_model import fake_text
 pytestmark = pytest.mark.skipif(
     os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
-requires_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="requires the docker CLI")
+requires_docker = pytest.mark.skipif(
+    shutil.which("docker") is None, reason="requires the docker CLI"
+)
 
 FAKE_BASE_URL = "http://fake-model:8000/v1"
 TOKENS = 300
 
 
 def _docker(*args: str, timeout: float = 120) -> str:
-    result = subprocess.run(["docker", *args], capture_output=True, text=True, check=True, timeout=timeout)  # noqa: S603, S607  # test-only
+    result = subprocess.run(  # noqa: S603  # test-only
+        ["docker", *args],  # noqa: S607  # test-only
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=timeout,
+    )
     return result.stdout.strip()
 
 
@@ -49,7 +57,9 @@ def _start_after_exit(container: str, wait_seconds: float = 90) -> None:
         _docker("wait", container, timeout=30)
     finally:
         _docker("start", container)
-        assert _docker("inspect", "-f", "{{.State.Running}}", container) == "true", "container not restarted"
+        assert _docker("inspect", "-f", "{{.State.Running}}", container) == "true", (
+            "container not restarted"
+        )
 
 
 def _service_container(service: str) -> str:
@@ -57,11 +67,18 @@ def _service_container(service: str) -> str:
     port = urlsplit(os.getenv("API_URL", "http://localhost:38000")).port
     api_id = _docker("ps", "--filter", f"publish={port}", "-q").split()
     assert len(api_id) == 1, f"expected exactly one container publishing {port}"
-    project = _docker("inspect", "-f", '{{index .Config.Labels "com.docker.compose.project"}}', api_id[0])
+    project = _docker(
+        "inspect", "-f", '{{index .Config.Labels "com.docker.compose.project"}}', api_id[0]
+    )
     assert project.startswith("bbd-os-test-"), f"refusing project {project}"
     found = _docker(
-        "ps", "-a", "-q", "--filter", f"label=com.docker.compose.project={project}",
-        "--filter", f"label=com.docker.compose.service={service}",
+        "ps",
+        "-a",
+        "-q",
+        "--filter",
+        f"label=com.docker.compose.project={project}",
+        "--filter",
+        f"label=com.docker.compose.service={service}",
     ).split()
     assert len(found) == 1, f"expected one {service} container, got {found}"
     return found[0]
@@ -80,7 +97,10 @@ async def _wait_api_ready(client: AsyncClient, timeout: float = 90) -> None:  # 
 
 
 async def configure_fake_model(
-    client: AsyncClient, *, allow_embeddings: bool = False, extra_defaults: dict[str, dict[str, object]] | None = None,
+    client: AsyncClient,
+    *,
+    allow_embeddings: bool = False,
+    extra_defaults: dict[str, dict[str, object]] | None = None,
     extra_models: tuple[dict[str, str], ...] = (),
 ) -> None:
     """Save the fake-model server as the `default` provider and map the chat and brief roles to `fake-chat`.
@@ -92,27 +112,50 @@ async def configure_fake_model(
     """
     models = [{"id": "fake-chat", "type": "llm"}, *extra_models]
     common = {
-        "defaults": {"chat": {"model": "fake-chat", "destination": "remote", "provider_id": "default"},
-                     "brief": {"model": "fake-chat", "destination": "remote", "provider_id": "default"},
-                     **(extra_defaults or {})},
+        "defaults": {
+            "chat": {"model": "fake-chat", "destination": "remote", "provider_id": "default"},
+            "brief": {"model": "fake-chat", "destination": "remote", "provider_id": "default"},
+            **(extra_defaults or {}),
+        },
         "request_timeout_seconds": 30,
     }
     current = (await client.get("/api/v1/settings/ai")).json()
-    created = await client.put("/api/v1/settings/ai", json={
-        **common,
-        "providers": [{"id": "default", "kind": "custom", "label": "fake", "base_url": FAKE_BASE_URL,
-                       "credential_action": "replaced", "api_key": "fake-model-key", "models": models}],
-        "expected_revision": current["configuration_revision"],
-    })
+    created = await client.put(
+        "/api/v1/settings/ai",
+        json={
+            **common,
+            "providers": [
+                {
+                    "id": "default",
+                    "kind": "custom",
+                    "label": "fake",
+                    "base_url": FAKE_BASE_URL,
+                    "credential_action": "replaced",
+                    "api_key": "fake-model-key",
+                    "models": models,
+                }
+            ],
+            "expected_revision": current["configuration_revision"],
+        },
+    )
     assert created.status_code == 200, created.text
     body = created.json()
     destination = next(p["destination_id"] for p in body["providers"] if p["id"] == "default")
     assert destination, body
-    consent = {"allow_remote_reasoning": True, "reasoning_destinations": [destination],
-               "allow_remote_embeddings": allow_embeddings, "embedding_destinations": [destination] if allow_embeddings else []}
-    saved = await client.put("/api/v1/settings/ai", json={
-        **common, "privacy": consent, "expected_revision": body["configuration_revision"],  # providers omitted = keep stored
-    })
+    consent = {
+        "allow_remote_reasoning": True,
+        "reasoning_destinations": [destination],
+        "allow_remote_embeddings": allow_embeddings,
+        "embedding_destinations": [destination] if allow_embeddings else [],
+    }
+    saved = await client.put(
+        "/api/v1/settings/ai",
+        json={
+            **common,
+            "privacy": consent,
+            "expected_revision": body["configuration_revision"],  # providers omitted = keep stored
+        },
+    )
     assert saved.status_code == 200, saved.text
 
 
@@ -128,13 +171,18 @@ async def chat_ready(ready_owner_client: AsyncClient) -> AsyncClient:
 
 async def _send(client: AsyncClient, prompt: str) -> str:
     conversation = (await client.post("/api/v1/conversations", json={})).json()["id"]
-    sent = await client.post(f"/api/v1/conversations/{conversation}/messages", json={"content": prompt})
+    sent = await client.post(
+        f"/api/v1/conversations/{conversation}/messages", json={"content": prompt}
+    )
     assert sent.status_code == 202, sent.text
     return str(sent.json()["response_id"])
 
 
 async def _events(
-    client: AsyncClient, response_id: str, last_id: str | None, stop_after: int | None = None,
+    client: AsyncClient,
+    response_id: str,
+    last_id: str | None,
+    stop_after: int | None = None,
 ) -> AsyncIterator[tuple[str, str, dict[str, object]]]:
     """Yield (event_id, event, data) frames until message.done / terminal status, or `stop_after` frames.
 
@@ -145,7 +193,10 @@ async def _events(
     seen = 0
     async with asyncio.timeout(120):
         async with client.stream(
-            "GET", f"/api/v1/responses/{response_id}/events", headers=headers, timeout=120,
+            "GET",
+            f"/api/v1/responses/{response_id}/events",
+            headers=headers,
+            timeout=120,
         ) as response:
             assert response.status_code == 200
             frame: dict[str, str] = {}
@@ -158,9 +209,14 @@ async def _events(
                     data = json.loads(frame.get("data", "{}") or "{}")
                     yield frame["id"], frame["event"], data
                     seen += 1
-                    if frame["event"] == "message.done" or (
-                        frame["event"] == "status" and data.get("status") in {"failed", "cancelled"}
-                    ) or (stop_after is not None and seen >= stop_after):
+                    if (
+                        frame["event"] == "message.done"
+                        or (
+                            frame["event"] == "status"
+                            and data.get("status") in {"failed", "cancelled"}
+                        )
+                        or (stop_after is not None and seen >= stop_after)
+                    ):
                         return
                 frame = {}
 
@@ -185,13 +241,16 @@ async def test_chat_survives_api_restart_via_arq_not_in_process(chat_ready: Asyn
     assert seqs == list(range(1, len(seqs) + 1)), "seq values must be contiguous with no duplicates"
     assert received[-1][1] == "message.done" and received[-1][2]["status"] == "completed"
     streamed = "".join(str(data["text"]) for _, event, data in received if event == "message.delta")
-    assert streamed == fake_text(TOKENS)  # grounded answers may rewrite the final text; the stream is verbatim
+    assert streamed == fake_text(
+        TOKENS
+    )  # grounded answers may rewrite the final text; the stream is verbatim
 
 
 @pytest.mark.asyncio
 @requires_docker
 async def test_stopped_chat_worker_leaves_run_pending_then_completes_when_started(
-    chat_ready: AsyncClient, committed_engine: AsyncEngine,
+    chat_ready: AsyncClient,
+    committed_engine: AsyncEngine,
 ) -> None:
     client = chat_ready
     worker_container = _service_container("chat-worker")
@@ -201,9 +260,14 @@ async def test_stopped_chat_worker_leaves_run_pending_then_completes_when_starte
 
         async def status() -> str:
             async with committed_engine.connect() as connection:
-                return str((await connection.execute(
-                    text("SELECT status FROM chat_response_runs WHERE id = :id"), {"id": response_id},
-                )).scalar_one())
+                return str(
+                    (
+                        await connection.execute(
+                            text("SELECT status FROM chat_response_runs WHERE id = :id"),
+                            {"id": response_id},
+                        )
+                    ).scalar_one()
+                )
 
         await asyncio.sleep(2)
         assert await status() == "pending"  # nothing generates in the API process
@@ -219,12 +283,19 @@ async def test_stopped_chat_worker_leaves_run_pending_then_completes_when_starte
 async def _run_status(engine: AsyncEngine, response_id: str) -> str:
     """Read one chat run's committed status."""
     async with engine.connect() as connection:
-        return str((await connection.execute(
-            text("SELECT status FROM chat_response_runs WHERE id = :id"), {"id": response_id},
-        )).scalar_one())
+        return str(
+            (
+                await connection.execute(
+                    text("SELECT status FROM chat_response_runs WHERE id = :id"),
+                    {"id": response_id},
+                )
+            ).scalar_one()
+        )
 
 
-async def _wait_status(engine: AsyncEngine, response_id: str, wanted: set[str], seconds: float) -> str:
+async def _wait_status(
+    engine: AsyncEngine, response_id: str, wanted: set[str], seconds: float
+) -> str:
     """Poll until the run status is in `wanted`; fail at the deadline (bounded by asyncio.timeout)."""
     current = ""
     try:
@@ -239,7 +310,8 @@ async def _wait_status(engine: AsyncEngine, response_id: str, wanted: set[str], 
 @pytest.mark.asyncio
 @requires_docker
 async def test_chat_worker_sigterm_drains_running_run_to_completion(
-    chat_ready: AsyncClient, committed_engine: AsyncEngine,
+    chat_ready: AsyncClient,
+    committed_engine: AsyncEngine,
 ) -> None:
     """SIGTERM mid-stream: arq drains the running job (job_completion_wait ~ CHAT_JOB_TIMEOUT + 5, compose
     stop_grace_period 660 s), so the run is never handed back; it streams on to `completed` with the full text."""
@@ -250,11 +322,20 @@ async def test_chat_worker_sigterm_drains_running_run_to_completion(
         await _wait_status(committed_engine, response_id, {"streaming"}, 30)
         await asyncio.to_thread(_docker, "kill", "--signal=SIGTERM", worker_container)
         # Drain contract: the run must go streaming -> completed, never back to pending/failed.
-        assert await _wait_status(committed_engine, response_id, {"completed", "pending", "failed"}, 60) == "completed"
+        assert (
+            await _wait_status(
+                committed_engine, response_id, {"completed", "pending", "failed"}, 60
+            )
+            == "completed"
+        )
     finally:
         await asyncio.to_thread(_start_after_exit, worker_container)
     streamed = "".join(
-        [str(data["text"]) async for _, event, data in _events(client, response_id, None) if event == "message.delta"]
+        [
+            str(data["text"])
+            async for _, event, data in _events(client, response_id, None)
+            if event == "message.delta"
+        ]
     )
     assert streamed == fake_text(60)
 
@@ -262,7 +343,8 @@ async def test_chat_worker_sigterm_drains_running_run_to_completion(
 @pytest.mark.asyncio
 @requires_docker
 async def test_chat_worker_sigterm_leaves_unstarted_run_pending_then_completes(
-    chat_ready: AsyncClient, committed_engine: AsyncEngine,
+    chat_ready: AsyncClient,
+    committed_engine: AsyncEngine,
 ) -> None:
     """A run enqueued after SIGTERM is not picked up (arq stops polling while draining): it stays `pending`
     while the in-flight run finishes, and completes once the worker is restarted, with contiguous event seqs."""
@@ -274,17 +356,26 @@ async def test_chat_worker_sigterm_leaves_unstarted_run_pending_then_completes(
         await _wait_status(committed_engine, running_id, {"streaming"}, 30)
         await asyncio.to_thread(_docker, "kill", "--signal=SIGTERM", worker_container)
         pending_id = await _send(client, "hello [fake:tokens=5,delay_ms=5]")
-        assert await _wait_status(committed_engine, running_id, {"completed", "pending", "failed"}, 60) == "completed"
+        assert (
+            await _wait_status(committed_engine, running_id, {"completed", "pending", "failed"}, 60)
+            == "completed"
+        )
         await asyncio.sleep(2)
-        assert await _run_status(committed_engine, pending_id) == "pending"  # nobody left to start it
+        assert (
+            await _run_status(committed_engine, pending_id) == "pending"
+        )  # nobody left to start it
     finally:
         await asyncio.to_thread(_start_after_exit, worker_container)
     await _wait_status(committed_engine, pending_id, {"completed"}, 60)
     async with committed_engine.connect() as connection:
-        rows = (await connection.execute(
-            text("SELECT seq, event_id FROM chat_stream_events WHERE response_id = :id ORDER BY seq"),
-            {"id": pending_id},
-        )).all()
+        rows = (
+            await connection.execute(
+                text(
+                    "SELECT seq, event_id FROM chat_stream_events WHERE response_id = :id ORDER BY seq"
+                ),
+                {"id": pending_id},
+            )
+        ).all()
     seqs = [r[0] for r in rows]
     assert seqs == list(range(1, len(seqs) + 1)) and len({r[1] for r in rows}) == len(rows)
 
@@ -294,14 +385,24 @@ async def test_reranker_role_probe_and_chat_with_reranking(chat_ready: AsyncClie
     """Regression: /rerank replies used to fail SDK parsing (probe 500, reranking silently unavailable)."""
     client = chat_ready
     await configure_fake_model(
-        client, allow_embeddings=True, extra_models=({"id": "fake-rerank", "type": "reranker"},),
-        extra_defaults={"reranker": {"model": "fake-rerank", "destination": "remote", "provider_id": "default"}},
+        client,
+        allow_embeddings=True,
+        extra_models=({"id": "fake-rerank", "type": "reranker"},),
+        extra_defaults={
+            "reranker": {"model": "fake-rerank", "destination": "remote", "provider_id": "default"}
+        },
     )
-    probe = await client.post("/api/v1/settings/models/reranker/test", json={"capability": "reranking"})
+    probe = await client.post(
+        "/api/v1/settings/models/reranker/test", json={"capability": "reranking"}
+    )
     assert probe.status_code == 200 and probe.json()["result"] == "supported", probe.text
     # Saving settings invalidates earlier capability proofs; re-prove streaming for the chat role.
-    stream_probe = await client.post("/api/v1/settings/models/chat/test", json={"capability": "streaming"})
-    assert stream_probe.status_code == 200 and stream_probe.json()["result"] == "supported", stream_probe.text
+    stream_probe = await client.post(
+        "/api/v1/settings/models/chat/test", json={"capability": "streaming"}
+    )
+    assert stream_probe.status_code == 200 and stream_probe.json()["result"] == "supported", (
+        stream_probe.text
+    )
 
     response_id = await _send(client, "hello [fake:tokens=5]")
     frames = [frame async for frame in _events(client, response_id, None)]

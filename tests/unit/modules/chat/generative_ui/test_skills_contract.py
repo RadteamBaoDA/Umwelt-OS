@@ -11,13 +11,7 @@ from modules.chat.generative_ui.skill_backend import (
     validate_skill_document,
 )
 
-SKILLS_DIR = (
-    Path(__file__).resolve().parents[5]
-    / "modules"
-    / "chat"
-    / "generative_ui"
-    / "skills"
-)
+SKILLS_DIR = Path(__file__).resolve().parents[5] / "modules" / "chat" / "generative_ui" / "skills"
 SKILL_FILES = sorted(SKILLS_DIR.glob("*/SKILL.md"))
 PROCEDURAL_SKILLS = ["master-agent-playbook", "agent-skills-vol2"]
 STALE_INLINE_STYLE_FENCE = "```html\n<style>"
@@ -40,7 +34,16 @@ def test_every_skill_has_valid_frontmatter_and_design_tokens(path: Path) -> None
     meta = validate_skill_document(path.parent.name, text)
     assert meta.name == path.parent.name
     assert meta.description
-    for token in ("--bg", "--surface", "--text", "--muted", "--line", "--accent", "--danger", "--chart-1"):
+    for token in (
+        "--bg",
+        "--surface",
+        "--text",
+        "--muted",
+        "--line",
+        "--accent",
+        "--danger",
+        "--chart-1",
+    ):
         assert token in text, f"{path.parent.name} missing design token {token}"
     assert "sendPrompt" in text
 
@@ -90,9 +93,7 @@ def test_no_inline_style_blocks_in_html_examples(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert STALE_INLINE_STYLE_FENCE not in text
     for fence in re.findall(r"```html\n(.*?)```", text, re.DOTALL):
-        assert "<style" not in fence.lower(), (
-            "inline <style> in html fence:\n" + fence[:200]
-        )
+        assert "<style" not in fence.lower(), "inline <style> in html fence:\n" + fence[:200]
 
 
 @pytest.mark.parametrize("name", PROCEDURAL_SKILLS)
@@ -111,9 +112,7 @@ def test_js_fences_never_show_bare_top_level_await_imports(name: str) -> None:
     assert fences, "expected js fenced examples in procedural skills"
     for fence in fences:
         if "await import(" in fence:
-            assert "function" in fence, (
-                "bare top-level await import in js fence:\n" + fence
-            )
+            assert "function" in fence, "bare top-level await import in js fence:\n" + fence
 
 
 @pytest.mark.parametrize("name", PROCEDURAL_SKILLS)

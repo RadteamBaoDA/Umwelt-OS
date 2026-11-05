@@ -43,7 +43,10 @@ async def test_large_object_uses_multipart_and_reports_exact_sha256(make_s3: Any
     payload = b"a" * (5 * MIB) + b"b" * (5 * MIB) + b"tail"
     key = _key()
     stored = await backend.put_stream(
-        key, _chunks(*(payload[i : i + MIB] for i in range(0, len(payload), MIB))), 20 * MIB, workspace_id=WORKSPACE,
+        key,
+        _chunks(*(payload[i : i + MIB] for i in range(0, len(payload), MIB))),
+        20 * MIB,
+        workspace_id=WORKSPACE,
     )
     assert (stored.size, stored.sha256) == (len(payload), hashlib.sha256(payload).hexdigest())
     head = await _raw(backend, "head_object", Key=key)
@@ -55,7 +58,9 @@ async def test_oversize_mid_multipart_aborts_without_leaving_parts_or_object(mak
     backend = make_s3(part_size_bytes=5 * MIB)
     key = _key()
     with pytest.raises(ValueError, match="size limit"):
-        await backend.put_stream(key, _chunks(b"x" * (6 * MIB), b"y" * (6 * MIB)), 8 * MIB, workspace_id=WORKSPACE)
+        await backend.put_stream(
+            key, _chunks(b"x" * (6 * MIB), b"y" * (6 * MIB)), 8 * MIB, workspace_id=WORKSPACE
+        )
     assert not await backend.exists(key)
     assert (await _raw(backend, "list_multipart_uploads")).get("Uploads", []) == []
 
@@ -83,7 +88,9 @@ async def test_existing_object_is_never_overwritten(make_s3: Any) -> None:
     assert b"".join([b async for b in backend.open_stream(key)]) == b"first"
 
 
-async def test_staging_mode_publishes_via_copy_cleans_staging_and_never_overwrites(make_s3: Any) -> None:
+async def test_staging_mode_publishes_via_copy_cleans_staging_and_never_overwrites(
+    make_s3: Any,
+) -> None:
     backend = make_s3(conditional_put=False)
     key = _key()
     await backend.put_stream(key, _chunks(b"first"), 100, workspace_id=WORKSPACE)
@@ -100,7 +107,9 @@ async def test_prefix_and_server_side_encryption_are_applied(make_s3: Any) -> No
     await backend.put_stream(key, _chunks(b"data"), 100, workspace_id=WORKSPACE)
     listed = await _raw(backend, "list_objects_v2")
     assert [item["Key"] for item in listed["Contents"]] == [f"umwelt/{key}"]
-    assert (await _raw(backend, "head_object", Key=f"umwelt/{key}"))["ServerSideEncryption"] == "AES256"
+    assert (await _raw(backend, "head_object", Key=f"umwelt/{key}"))[
+        "ServerSideEncryption"
+    ] == "AES256"
     assert await backend.list_prefix(f"workspaces/{WORKSPACE}") == [key]
 
 
@@ -108,7 +117,9 @@ async def test_list_prefix_requires_directory_boundary(make_s3: Any) -> None:
     backend = make_s3()
     other = UUID(int=0x110)
     await backend.put_stream(_key(), _chunks(b"a"), 10, workspace_id=WORKSPACE)
-    await backend.put_stream(build_document_key(other, uuid4(), ".bin"), _chunks(b"a"), 10, workspace_id=other)
+    await backend.put_stream(
+        build_document_key(other, uuid4(), ".bin"), _chunks(b"a"), 10, workspace_id=other
+    )
     assert len(await backend.list_prefix(f"workspaces/{WORKSPACE}")) == 1
     assert len(await backend.list_prefix("workspaces")) == 2
 
@@ -144,7 +155,9 @@ async def test_download_to_temp_is_bounded_and_always_cleaned(make_s3: Any) -> N
             pytest.fail("missing object")
 
 
-async def test_default_download_streams_through_api_with_length_and_attachment(make_s3: Any) -> None:
+async def test_default_download_streams_through_api_with_length_and_attachment(
+    make_s3: Any,
+) -> None:
     backend = make_s3()
     key = _key(".txt")
     await backend.put_stream(key, _chunks(b"hello"), 100, workspace_id=WORKSPACE)
@@ -157,9 +170,13 @@ async def test_default_download_streams_through_api_with_length_and_attachment(m
 
 
 async def test_presigned_download_is_short_lived_attachment_with_forced_type(make_s3: Any) -> None:
-    backend = make_s3(presigned_downloads=True, presign_ttl_seconds=3600)  # over-long TTL is clamped to 60 s
+    backend = make_s3(
+        presigned_downloads=True, presign_ttl_seconds=3600
+    )  # over-long TTL is clamped to 60 s
     key = _key(".html")
-    await backend.put_stream(key, _chunks(b"<script>alert(1)</script>"), 100, workspace_id=WORKSPACE)
+    await backend.put_stream(
+        key, _chunks(b"<script>alert(1)</script>"), 100, workspace_id=WORKSPACE
+    )
     response = await backend.afile_response(key, media_type="text/plain", filename="evil.html")
     assert response.status_code == 307
     url = response.headers["location"]
@@ -174,7 +191,9 @@ async def test_presigned_download_is_short_lived_attachment_with_forced_type(mak
     assert fetched.headers["content-type"].startswith("text/plain")
 
 
-async def test_orphan_sweep_removes_old_unreferenced_uploads_and_stale_staging_only(make_s3: Any) -> None:
+async def test_orphan_sweep_removes_old_unreferenced_uploads_and_stale_staging_only(
+    make_s3: Any,
+) -> None:
     backend = make_s3()
     kept, orphan = _key(), _key()
     for key in (kept, orphan):
@@ -221,11 +240,23 @@ def test_attachment_disposition_quotes_non_ascii() -> None:
 
 def test_factory_builds_s3_backend_with_postgres_fence(moto_endpoint: str) -> None:
     settings = SimpleNamespace(
-        storage_backend="s3", s3_bucket="bkt", s3_region="us-east-1", s3_endpoint_url=moto_endpoint,
-        s3_access_key_id=SecretStr("k"), s3_secret_access_key=SecretStr("s"), s3_prefix="/pfx/", s3_sse="aws:kms",
-        s3_sse_kms_key_id="key-1", s3_path_style=True, s3_conditional_put=True, s3_part_size_bytes=5 * MIB,
-        storage_presigned_downloads=False, storage_presigned_ttl_seconds=60, s3_presign_endpoint_url=None,
-        upload_max_bytes=123, database_url="postgresql+asyncpg://u:p@localhost:1/db",
+        storage_backend="s3",
+        s3_bucket="bkt",
+        s3_region="us-east-1",
+        s3_endpoint_url=moto_endpoint,
+        s3_access_key_id=SecretStr("k"),
+        s3_secret_access_key=SecretStr("s"),
+        s3_prefix="/pfx/",
+        s3_sse="aws:kms",
+        s3_sse_kms_key_id="key-1",
+        s3_path_style=True,
+        s3_conditional_put=True,
+        s3_part_size_bytes=5 * MIB,
+        storage_presigned_downloads=False,
+        storage_presigned_ttl_seconds=60,
+        s3_presign_endpoint_url=None,
+        upload_max_bytes=123,
+        database_url="postgresql+asyncpg://u:p@localhost:1/db",
     )
     backend = get_storage_backend(settings)
     assert isinstance(backend, S3StorageBackend)

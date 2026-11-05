@@ -27,7 +27,9 @@ CONV = uuid4()
 class FakeSession:
     """Minimal AsyncSession stand-in recording adds/deletes and serving canned rows."""
 
-    def __init__(self, existing: list[ChatTodo] | None = None, foreign: set[UUID] | None = None) -> None:
+    def __init__(
+        self, existing: list[ChatTodo] | None = None, foreign: set[UUID] | None = None
+    ) -> None:
         self.existing = existing or []
         self.foreign = foreign or set()
         self.added: list[ChatTodo] = []
@@ -56,6 +58,7 @@ class FakeSession:
 
 _REAL_CONVERSATION = todos._conversation  # captured before the autouse fixture swaps it
 
+
 @pytest.fixture(autouse=True)
 def _patch(monkeypatch: pytest.MonkeyPatch) -> None:
     async def conv(session: Any, scope: Any, conversation_id: UUID, *, lock: bool = False) -> Any:
@@ -74,7 +77,9 @@ def _item(title: str, **kw: Any) -> todos.TodoItem:
     return todos.TodoItem(title=title, **kw)
 
 
-def _replace(session: FakeSession, items: list[todos.TodoItem], scope: WorkspaceContext = SCOPE) -> list[ChatTodo]:
+def _replace(
+    session: FakeSession, items: list[todos.TodoItem], scope: WorkspaceContext = SCOPE
+) -> list[ChatTodo]:
     return asyncio.run(todos.replace_todos(session, scope, CONV, items))
 
 
@@ -85,17 +90,29 @@ def test_replace_assigns_ids_and_stable_order() -> None:
 
 
 def test_replace_keeps_valid_existing_id_and_deletes_missing() -> None:
-    keep, drop = ChatTodo(id=uuid4(), title="old", position=0), ChatTodo(id=uuid4(), title="gone", position=1)
+    keep, drop = (
+        ChatTodo(id=uuid4(), title="old", position=0),
+        ChatTodo(id=uuid4(), title="gone", position=1),
+    )
     session = FakeSession([keep, drop])
     rows = _replace(session, [_item("new", id=str(keep.id))])
-    assert rows == [keep] and keep.title == "new" and session.deleted == [drop] and not session.added
+    assert (
+        rows == [keep] and keep.title == "new" and session.deleted == [drop] and not session.added
+    )
 
 
 def test_replace_regenerates_malformed_duplicate_and_foreign_ids() -> None:
     foreign, dup = uuid4(), uuid4()
     session = FakeSession(foreign={foreign})
-    rows = _replace(session, [_item("x", id="not-a-uuid"), _item("y", id=str(foreign)),
-                              _item("z", id=str(dup)), _item("w", id=str(dup))])
+    rows = _replace(
+        session,
+        [
+            _item("x", id="not-a-uuid"),
+            _item("y", id=str(foreign)),
+            _item("z", id=str(dup)),
+            _item("w", id=str(dup)),
+        ],
+    )
     ids = [r.id for r in rows]
     assert len(set(ids)) == 4 and foreign not in ids and ids.count(dup) == 1
 
@@ -104,8 +121,13 @@ def test_replace_bounds_and_validation() -> None:
     with pytest.raises(todos.TodoError):
         _replace(FakeSession(), [_item("t")] * 51)
     assert len(_replace(FakeSession(), [_item(f"t{i}") for i in range(50)])) == 50
-    for bad in ({"title": ""}, {"title": "x" * 201}, {"title": "a", "description": "d" * 1001},
-                {"title": "a", "emoji": "e" * 9}, {"title": "a", "status": "done"}):
+    for bad in (
+        {"title": ""},
+        {"title": "x" * 201},
+        {"title": "a", "description": "d" * 1001},
+        {"title": "a", "emoji": "e" * 9},
+        {"title": "a", "status": "done"},
+    ):
         with pytest.raises(ValueError):
             todos.TodoItem(**bad)
 
@@ -117,7 +139,9 @@ def test_foreign_workspace_is_denied() -> None:
     assert err.value.code == "not_found"
 
 
-def _run_tool(name: str, args: Any, session: FakeSession, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+def _run_tool(
+    name: str, args: Any, session: FakeSession, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, Any]:
     async def scope(_s: Any, _owner: int) -> WorkspaceContext:
         return SCOPE
 
@@ -134,7 +158,9 @@ def _run_tool(name: str, args: Any, session: FakeSession, monkeypatch: pytest.Mo
 
 
 def test_tool_runner_manage_and_get(monkeypatch: pytest.MonkeyPatch) -> None:
-    out = _run_tool("manage_todos", {"todos": [{"title": "a", "emoji": "x"}]}, FakeSession(), monkeypatch)
+    out = _run_tool(
+        "manage_todos", {"todos": [{"title": "a", "emoji": "x"}]}, FakeSession(), monkeypatch
+    )
     assert out["todos"][0]["title"] == "a" and out["_commits"] == 1
     row = ChatTodo(id=uuid4(), title="t", description="", emoji="", status="pending", position=0)
     assert _run_tool("get_todos", {}, FakeSession([row]), monkeypatch)["todos"][0]["title"] == "t"
@@ -148,7 +174,9 @@ def test_tool_runner_errors_are_data(args: Any, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_specs_and_prompt_are_opt_in() -> None:
-    names = lambda **kw: {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, **kw)}  # noqa: E731  # terse test stub
+    names = lambda **kw: {  # noqa: E731  # terse test stub
+        s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False, **kw)
+    }
     assert not {TOOL_MANAGE_TODOS, TOOL_GET_TODOS} & names()
     assert {TOOL_MANAGE_TODOS, TOOL_GET_TODOS} <= names(include_todos=True)
     assert "manage_todos" not in build_generative_ui_system_prompt(locale="en-US")
@@ -192,7 +220,13 @@ async def test_conversation_lookup_is_owner_scoped() -> None:
 def test_replace_stamps_source_response_id_only_when_given() -> None:
     run = uuid4()
     session = FakeSession()
-    rows = asyncio.run(todos.replace_todos(session, SCOPE, CONV, [todos.TodoItem(title="a")], source_response_id=run))
+    rows = asyncio.run(
+        todos.replace_todos(
+            session, SCOPE, CONV, [todos.TodoItem(title="a")], source_response_id=run
+        )
+    )
     assert rows[0].source_response_id == run
-    owner_rows = asyncio.run(todos.replace_todos(FakeSession(), SCOPE, CONV, [todos.TodoItem(title="b")]))
+    owner_rows = asyncio.run(
+        todos.replace_todos(FakeSession(), SCOPE, CONV, [todos.TodoItem(title="b")])
+    )
     assert owner_rows[0].source_response_id is None

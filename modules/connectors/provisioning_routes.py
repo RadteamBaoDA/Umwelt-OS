@@ -82,7 +82,13 @@ def _invalid_detail(prefix: str, exc: Exception) -> str:
     return f"{prefix}: {exc}" if type(exc) is ValueError else prefix
 
 
-async def _owner_access(session: AsyncSession, request: Request, scope: WorkspaceContext, *, expected: AccessFence | None = None) -> AccessFence:
+async def _owner_access(
+    session: AsyncSession,
+    request: Request,
+    scope: WorkspaceContext,
+    *,
+    expected: AccessFence | None = None,
+) -> AccessFence:
     """Reject members and lock original account/session/workspace before domain access.
 
     Existing write dependencies retain CSRF admission. Capture this fence once;
@@ -92,15 +98,22 @@ async def _owner_access(session: AsyncSession, request: Request, scope: Workspac
     if scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
     return await lock_access_fence(
-        session, scope=scope, expected=expected,
+        session,
+        scope=scope,
+        expected=expected,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         auth_sessions=(authenticated_session_ref(request),),
     )
 
 
 async def _validation_send_fence(
-    session: AsyncSession, request: Request, source: ConnectorSource, revision: int, *,
-    scope: WorkspaceContext, access_fence: AccessFence,
+    session: AsyncSession,
+    request: Request,
+    source: ConnectorSource,
+    revision: int,
+    *,
+    scope: WorkspaceContext,
+    access_fence: AccessFence,
     native_snapshot: NativeCredentialSnapshot | None,
 ) -> None:
     """Fence every owner Telegram probe against original access/Source/native identity.
@@ -114,25 +127,49 @@ async def _validation_send_fence(
     try:
         await _owner_access(session, request, scope, expected=access_fence)
         current_source, row, _slots = await provisioning.lock_connector(
-            session, source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
-            multi_workspace_enabled=gate, expected_access_fence=access_fence,
+            session,
+            source.id,
+            provisioning._ALL_CREDENTIAL_SLOTS,
+            scope=scope,
+            multi_workspace_enabled=gate,
+            expected_access_fence=access_fence,
         )
-        if (current_source is None or current_source.status != "active"
-                or current_source.workspace_id != source.workspace_id
-                or current_source.generation != source.generation
-                or (row.desired_revision if row is not None else 0) != revision):
-            raise HTTPException(status_code=409, detail="Original Telegram validation scope changed")
+        if (
+            current_source is None
+            or current_source.status != "active"
+            or current_source.workspace_id != source.workspace_id
+            or current_source.generation != source.generation
+            or (row.desired_revision if row is not None else 0) != revision
+        ):
+            raise HTTPException(
+                status_code=409, detail="Original Telegram validation scope changed"
+            )
         native = await session.scalar(
-            select(ConnectorNativeCredential).where(ConnectorNativeCredential.source_id == source.id)
-            .with_for_update().execution_options(populate_existing=True)
+            select(ConnectorNativeCredential)
+            .where(ConnectorNativeCredential.source_id == source.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if native_snapshot is None:
             matches = native is None
         else:
-            matches = native is not None and native_snapshot.access_fence == access_fence and all(
-                getattr(native, field) == getattr(native_snapshot, field)
-                for field in ("source_id", "operation_id", "source_generation", "configuration_revision",
-                              "verified_bot_id", "bound_bot_id", "encrypted_token", "state", "validated_at")
+            matches = (
+                native is not None
+                and native_snapshot.access_fence == access_fence
+                and all(
+                    getattr(native, field) == getattr(native_snapshot, field)
+                    for field in (
+                        "source_id",
+                        "operation_id",
+                        "source_generation",
+                        "configuration_revision",
+                        "verified_bot_id",
+                        "bound_bot_id",
+                        "encrypted_token",
+                        "state",
+                        "validated_at",
+                    )
+                )
             )
         if not matches:
             raise HTTPException(status_code=409, detail="Original Telegram credential changed")
@@ -142,6 +179,7 @@ async def _validation_send_fence(
 
 class ConnectorSettingsRequest(BaseModel):
     """Validate revisioned connector configuration and auth mode input."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=0)
@@ -161,6 +199,7 @@ class ConnectorSettingsRequest(BaseModel):
 
 class DraftValidationRequest(ConnectorSettingsRequest):
     """Add the source generation required to validate a connector draft."""
+
     expected_source_generation: int = Field(ge=1)
     secret_action: Literal["keep", "replace"] = "keep"  # noqa: S105  # label/URL/enum value, not a credential
     secret: SecretStr | None = None
@@ -174,6 +213,7 @@ class DraftValidationRequest(ConnectorSettingsRequest):
 
 class ActivationRequest(BaseModel):
     """Represent a revisioned activation and keep/replace secret action."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
@@ -204,6 +244,7 @@ def _validate_secret_action(action: str, secret: SecretStr | None) -> None:
 
 class ActivationRead(BaseModel):
     """Expose connector activation revisions, state, and recovery support."""
+
     workspace_id: UUID
     source_id: UUID
     desired_revision: int
@@ -212,13 +253,16 @@ class ActivationRead(BaseModel):
     error_code: str | None
     credential_recovery: str = "supported"
     execution_backend: Literal["native", "n8n"] = "n8n"
-    transition_phase: Literal["idle", "draining", "deactivating_old", "activating_new", "reconciliation_required"] = "idle"
+    transition_phase: Literal[
+        "idle", "draining", "deactivating_old", "activating_new", "reconciliation_required"
+    ] = "idle"
     target_backend: Literal["native", "n8n"] | None = None
     backend_revision: int = 1
 
 
 class BackendTransitionRequest(BaseModel):
     """Request a revision-fenced backend switch, or an n8n template upgrade when the target is unchanged."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
@@ -227,6 +271,7 @@ class BackendTransitionRequest(BaseModel):
 
 class BackendResolveRequest(BaseModel):
     """Leave reconciliation_required: retry the old-workflow stop or confirm it inactive out of band."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
@@ -235,6 +280,7 @@ class BackendResolveRequest(BaseModel):
 
 class NativeRestCredentialRequest(BaseModel):
     """Owner re-entry of the REST header secret for the native backend; write-only, never echoed."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
@@ -249,6 +295,7 @@ class NativeRestCredentialRequest(BaseModel):
 
 class ConnectorConfigurationRead(BaseModel):
     """Expose source-scoped connector settings without returning secret values."""
+
     workspace_id: UUID
     source_id: UUID
     source_type: str
@@ -269,12 +316,22 @@ class ConnectorConfigurationRead(BaseModel):
 
 class DraftValidationRead(BaseModel):
     """Report successful draft validation against a source generation."""
+
     source_id: UUID
     source_generation: int
     expected_revision: int
     validated_at: datetime
     validation_status: Literal["valid"]
-    checks: tuple[Literal["configuration", "public_url_policy", "provider_identity", "provider_scope", "receive_mode"], ...]
+    checks: tuple[
+        Literal[
+            "configuration",
+            "public_url_policy",
+            "provider_identity",
+            "provider_scope",
+            "receive_mode",
+        ],
+        ...,
+    ]
     verified_bot_id: str | None = Field(default=None, max_length=20)
     scope_verified: bool | None = None
 
@@ -291,31 +348,46 @@ async def get_configuration(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     await _owner_access(session, request, scope)
-    source = await sources.get_connector_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await sources.get_connector_source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     if source.type == "mcp":
-        row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        row = await provisioning.activation_status(
+            session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+        )
         configuration = dict(source.configuration or {})
         configuration.setdefault("schedule_interval_minutes", 60)
         configuration.setdefault("timezone", "Asia/Ho_Chi_Minh")
         return ConnectorConfigurationRead(
-            workspace_id=source.workspace_id, source_id=source.id, source_type=source.type, provider=source.provider,
-            source_generation=source.generation, configuration=configuration,
+            workspace_id=source.workspace_id,
+            source_id=source.id,
+            source_type=source.type,
+            provider=source.provider,
+            source_generation=source.generation,
+            configuration=configuration,
             expected_revision=row.desired_revision if row is not None else 0,
-            auth_method="none", auth_header_name=None,
+            auth_method="none",
+            auth_header_name=None,
             desired_enabled=bool(row and row.desired_enabled),
             activation_state=row.state if row is not None else "saved_not_active",
             activation_error_code=row.error_code if row is not None else None,
-            provider_credential_configured=False, provider_credential_state=None,
+            provider_credential_configured=False,
+            provider_credential_state=None,
         )
-    snapshot = await connector_owner.get_connector_configuration(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    snapshot = await connector_owner.get_connector_configuration(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Source not found")
     if snapshot.source_type not in registry.SUPPORTED_TYPES:
-        raise HTTPException(status_code=409, detail="This source has no managed connector configuration")
+        raise HTTPException(
+            status_code=409, detail="This source has no managed connector configuration"
+        )
     return ConnectorConfigurationRead(
-        workspace_id=snapshot.workspace_id, source_id=snapshot.source_id,
+        workspace_id=snapshot.workspace_id,
+        source_id=snapshot.source_id,
         source_type=snapshot.source_type,
         provider=snapshot.provider,
         source_generation=snapshot.source_generation,
@@ -354,45 +426,74 @@ async def validate_draft_configuration(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source.status != "active" or source.type not in registry.SUPPORTED_TYPES:
         raise HTTPException(status_code=409, detail="Active packaged connector required")
     if payload.expected_source_generation != source.generation:
-        raise HTTPException(status_code=409, detail="Source generation changed; reload before validating")
-    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        raise HTTPException(
+            status_code=409, detail="Source generation changed; reload before validating"
+        )
+    row = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     current_revision = row.desired_revision if row is not None else 0
     if payload.expected_revision != current_revision:
-        raise HTTPException(status_code=409, detail="Connector configuration revision changed; reload before validating")
+        raise HTTPException(
+            status_code=409,
+            detail="Connector configuration revision changed; reload before validating",
+        )
     _check_draft_auth_mode(source, payload)
     try:
         source_configuration = serialize_source_configuration(source, payload.configuration)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=_invalid_detail("Draft provider configuration is invalid", exc)) from exc
+        raise HTTPException(
+            status_code=422, detail=_invalid_detail("Draft provider configuration is invalid", exc)
+        ) from exc
     candidate = source.model_copy(update={"configuration": source_configuration})
     try:
         data = registry.validate(candidate)
     except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=_invalid_detail("Draft connector configuration is invalid", exc)) from exc
+        raise HTTPException(
+            status_code=422, detail=_invalid_detail("Draft connector configuration is invalid", exc)
+        ) from exc
     bot_id: str | None = None
     scope_verified: bool | None = None
     if source.provider == "telegram":
         bot_id = await _validate_telegram_draft(
-            session, request, source_id, source, payload, candidate, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            request,
+            source_id,
+            source,
+            payload,
+            candidate,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
         scope_verified = True
-        checks: tuple[str, ...] = ("configuration", "provider_identity", "provider_scope", "receive_mode")
+        checks: tuple[str, ...] = (
+            "configuration",
+            "provider_identity",
+            "provider_scope",
+            "receive_mode",
+        )
     elif source.provider is not None:
         checks = ("configuration", "provider_identity", "provider_scope", "receive_mode")
         scope_verified = True
     else:
         if payload.auth_method == "http_header" and source.type != "api":
-            raise HTTPException(status_code=422, detail="Header authentication is supported only for REST sources")
+            raise HTTPException(
+                status_code=422, detail="Header authentication is supported only for REST sources"
+            )
         try:
             await session.rollback()
             await validate_public_url(data["url"])
         except (KeyError, TypeError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail="Draft connector configuration is invalid") from exc
+            raise HTTPException(
+                status_code=422, detail="Draft connector configuration is invalid"
+            ) from exc
         checks = ("configuration", "public_url_policy")
     return DraftValidationRead(
         source_id=source_id,
@@ -413,24 +514,45 @@ def _check_draft_auth_mode(source: ConnectorSource, payload: DraftValidationRequ
     ``none`` is accepted for it. Header-auth providers must use the ``Authorization`` header.
     """
     expected_auth = (
-        "telegram_bot_token" if source.provider == "telegram"
-        else "http_header" if source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
-        else "none" if source.provider else None
+        "telegram_bot_token"
+        if source.provider == "telegram"
+        else "http_header"
+        if source.provider
+        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
+        else "none"
+        if source.provider
+        else None
     )
     if source.provider == "mastodon" and payload.auth_method == "none":
-        expected_auth = "none"  # Mastodon's bearer token is optional: public reads need no credential.
+        expected_auth = (
+            "none"  # Mastodon's bearer token is optional: public reads need no credential.
+        )
     if expected_auth is not None and payload.auth_method != expected_auth:
-        raise HTTPException(status_code=422, detail="Authentication mode does not match the provider")
-    if expected_auth == "http_header" and source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS and payload.auth_header_name != "Authorization":
-        raise HTTPException(status_code=422, detail="Provider bearer credentials require the Authorization header")
+        raise HTTPException(
+            status_code=422, detail="Authentication mode does not match the provider"
+        )
+    if (
+        expected_auth == "http_header"
+        and source.provider
+        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
+        and payload.auth_header_name != "Authorization"
+    ):
+        raise HTTPException(
+            status_code=422, detail="Provider bearer credentials require the Authorization header"
+        )
     if source.provider is None and payload.auth_method == "telegram_bot_token":
-        raise HTTPException(status_code=422, detail="Telegram authentication requires a Telegram source")
+        raise HTTPException(
+            status_code=422, detail="Telegram authentication requires a Telegram source"
+        )
     if payload.auth_method == "http_header" and source.type != "api":
-        raise HTTPException(status_code=422, detail="Header authentication is supported only for REST sources")
+        raise HTTPException(
+            status_code=422, detail="Header authentication is supported only for REST sources"
+        )
 
 
 async def _telegram_validation_token(
-    request: Request, payload: DraftValidationRequest,
+    request: Request,
+    payload: DraftValidationRequest,
     previous: NativeCredentialSnapshot | None,
 ) -> str:
     """Return the bot token to validate: the submitted replacement or the decrypted retained one.
@@ -446,12 +568,21 @@ async def _telegram_validation_token(
     try:
         return decrypt_native_token(key, previous)
     except CredentialEncryptionUnavailable as exc:
-        raise HTTPException(status_code=503, detail="Stored Telegram credential is unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Stored Telegram credential is unavailable"
+        ) from exc
 
 
 async def _validate_telegram_draft(
-    session: AsyncSession, request: Request, source_id: UUID, source: ConnectorSource, payload: DraftValidationRequest,
-    candidate: ConnectorSource, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    request: Request,
+    source_id: UUID,
+    source: ConnectorSource,
+    payload: DraftValidationRequest,
+    candidate: ConnectorSource,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
     access_fence: AccessFence,
 ) -> str:
     """Verify the Telegram bot identity and chat scope for a draft; return the verified bot id.
@@ -462,13 +593,18 @@ async def _validate_telegram_draft(
     """
     try:
         previous = await provisioning.get_retained_native_credential_snapshot(
-            session, source_id, source_generation=source.generation,
+            session,
+            source_id,
+            source_generation=source.generation,
             connector_revision=payload.expected_revision,
-            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
         )
     except ValueError as exc:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Connector configuration changed; reload before validating") from exc
+        raise HTTPException(
+            status_code=409, detail="Connector configuration changed; reload before validating"
+        ) from exc
     validation_access_fence = previous.access_fence if previous is not None else access_fence
     if validation_access_fence != access_fence:
         raise HTTPException(status_code=409, detail="Original Telegram access changed")
@@ -478,36 +614,59 @@ async def _validate_telegram_draft(
 
     try:
         verified = await validate_telegram_scope(
-            token, tuple(cast("list[str]", candidate.configuration["telegram_chat_ids"])),
+            token,
+            tuple(cast("list[str]", candidate.configuration["telegram_chat_ids"])),
             before_request=lambda: _validation_send_fence(
-                session, request, source, payload.expected_revision, scope=scope,
-                access_fence=validation_access_fence, native_snapshot=previous,
+                session,
+                request,
+                source,
+                payload.expected_revision,
+                scope=scope,
+                access_fence=validation_access_fence,
+                native_snapshot=previous,
             ),
         )
     except ProviderRateLimited as exc:
         raise HTTPException(status_code=503, detail="Telegram provider rate limit reached") from exc
     except (TimeoutError, httpx.TimeoutException) as exc:
-        raise HTTPException(status_code=503, detail="Telegram validation outcome is unknown") from exc
+        raise HTTPException(
+            status_code=503, detail="Telegram validation outcome is unknown"
+        ) from exc
     except (ValueError, httpx.HTTPError) as exc:
         status = 503 if getattr(exc, "code", None) == "telegram_provider_unavailable" else 422
-        detail = "Telegram validation outcome is unknown" if status == 503 else "Telegram bot identity and channel scope could not be verified"
+        detail = (
+            "Telegram validation outcome is unknown"
+            if status == 503
+            else "Telegram bot identity and channel scope could not be verified"
+        )
         raise HTTPException(status_code=status, detail=detail) from exc
     await _validation_send_fence(
-        session, request, source, payload.expected_revision, scope=scope,
-        access_fence=validation_access_fence, native_snapshot=previous,
+        session,
+        request,
+        source,
+        payload.expected_revision,
+        scope=scope,
+        access_fence=validation_access_fence,
+        native_snapshot=previous,
     )
     if previous is not None and previous.bound_bot_id not in (None, verified.verified_bot_id):
-        raise HTTPException(status_code=409, detail="A different Telegram bot requires a new source")
+        raise HTTPException(
+            status_code=409, detail="A different Telegram bot requires a new source"
+        )
     return verified.verified_bot_id
 
 
-async def _source(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> ConnectorSource:
+async def _source(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+) -> ConnectorSource:
     """Read the explicit admitted workspace Source; foreign/missing IDs share HTTP 404.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
     actual rollout flag; members have no Source/configuration/credential access. Service bearer capability remains distinct from principal scope.
     """
-    source = await sources.get_connector_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await sources.get_connector_source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     return source
@@ -521,7 +680,10 @@ class CoinSearchRead(BaseModel):
 
 @router.get("/{source_id}/coingecko/coins", response_model=CoinSearchRead)
 async def search_coingecko_coins(
-    source_id: UUID, session: Session, request: Request, _owner: OwnerRead,
+    source_id: UUID,
+    session: Session,
+    request: Request,
+    _owner: OwnerRead,
     q: str = Query(min_length=2, max_length=80),
 ) -> CoinSearchRead:
     """Search CoinGecko's public catalog for one owner source with a current Demo key.
@@ -536,14 +698,25 @@ async def search_coingecko_coins(
     access_fence = await _owner_access(session, request, scope)
     source = await _source(session, source_id, scope=scope, multi_workspace_enabled=multi)
     if source.provider != "coingecko" or source.status not in {"active", "paused"}:
-        raise HTTPException(status_code=422, detail="Source is not an editable CoinGecko datasource")
-    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi, scope=scope)
+        raise HTTPException(
+            status_code=422, detail="Source is not an editable CoinGecko datasource"
+        )
+    row = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi, scope=scope
+    )
     credential = await session.get(ConnectorRestCredential, source_id)
-    if (row is None or credential is None or credential.state != "ready"
-            or credential.encrypted_secret is None or credential.header_name != "x-cg-demo-api-key"
-            or credential.source_generation != source.generation
-            or credential.configuration_revision != row.desired_revision):
-        raise HTTPException(status_code=409, detail="Save a CoinGecko Demo API key before searching coins")
+    if (
+        row is None
+        or credential is None
+        or credential.state != "ready"
+        or credential.encrypted_secret is None
+        or credential.header_name != "x-cg-demo-api-key"
+        or credential.source_generation != source.generation
+        or credential.configuration_revision != row.desired_revision
+    ):
+        raise HTTPException(
+            status_code=409, detail="Save a CoinGecko Demo API key before searching coins"
+        )
     terms_revision = await provider_terms.require_terms_eligible(session, source)
     source_generation, configuration_revision = source.generation, row.desired_revision
     credential_revision, operation_id = row.credential_revision, credential.operation_id
@@ -551,36 +724,59 @@ async def search_coingecko_coins(
     try:
         encryption_key = settings.connector_credential_encryption_key.get_secret_value()
         secret = decrypt_rest_secret(
-            encryption_key, ciphertext, source_id=source_id, operation_id=operation_id,
-            source_generation=source_generation, configuration_revision=configuration_revision,
+            encryption_key,
+            ciphertext,
+            source_id=source_id,
+            operation_id=operation_id,
+            source_generation=source_generation,
+            configuration_revision=configuration_revision,
             header_name="x-cg-demo-api-key",
         )
     except CredentialEncryptionUnavailable as exc:
-        raise HTTPException(status_code=503, detail="Stored CoinGecko key is unavailable; re-enter it") from exc
+        raise HTTPException(
+            status_code=503, detail="Stored CoinGecko key is unavailable; re-enter it"
+        ) from exc
     fingerprint = quota.credential_fingerprint(secret, deployment_key=encryption_key)
-    await session.rollback()  # Release the owner/Source read transaction before DNS or provider I/O.
+    await (
+        session.rollback()
+    )  # Release the owner/Source read transaction before DNS or provider I/O.
 
     async def before_send() -> None:
         """Recheck the original owner, source, terms and key then debit the shared budget before wire send."""
         try:
             await _owner_access(session, request, scope, expected=access_fence)
             current = await _source(session, source_id, scope=scope, multi_workspace_enabled=multi)
-            current_row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi, scope=scope)
+            current_row = await provisioning.activation_status(
+                session, source_id, multi_workspace_enabled=multi, scope=scope
+            )
             current_credential = await session.get(ConnectorRestCredential, source_id)
-            if (current.status not in {"active", "paused"} or current.provider != "coingecko"
-                    or current.generation != source_generation or current_row is None
-                    or current_row.desired_revision != configuration_revision
-                    or current_row.credential_revision != credential_revision
-                    or current_credential is None or current_credential.state != "ready"
-                    or current_credential.operation_id != operation_id
-                    or current_credential.header_name != "x-cg-demo-api-key"):
-                raise HTTPException(status_code=409, detail="CoinGecko source or key changed; search again")
+            if (
+                current.status not in {"active", "paused"}
+                or current.provider != "coingecko"
+                or current.generation != source_generation
+                or current_row is None
+                or current_row.desired_revision != configuration_revision
+                or current_row.credential_revision != credential_revision
+                or current_credential is None
+                or current_credential.state != "ready"
+                or current_credential.operation_id != operation_id
+                or current_credential.header_name != "x-cg-demo-api-key"
+            ):
+                raise HTTPException(
+                    status_code=409, detail="CoinGecko source or key changed; search again"
+                )
             if await provider_terms.require_terms_eligible(session, current) != terms_revision:
                 raise HTTPException(status_code=409, detail="CoinGecko terms changed; search again")
             await quota.debit_send(
-                session, provider_id="coingecko", workspace_id=scope.workspace_id,
-                request_id=uuid7(), admission_token=uuid7(), attempt=0, send_sequence=1,
-                request_target="coingecko:coins/list", credential=fingerprint,
+                session,
+                provider_id="coingecko",
+                workspace_id=scope.workspace_id,
+                request_id=uuid7(),
+                admission_token=uuid7(),
+                attempt=0,
+                send_sequence=1,
+                request_target="coingecko:coins/list",
+                credential=fingerprint,
             )
             await session.commit()
         except BaseException:
@@ -590,23 +786,43 @@ async def search_coingecko_coins(
     try:
         coins = await coin_catalog.load_catalog(secret, before_send)
     except quota.QuotaDeferred as exc:
-        raise HTTPException(status_code=429, detail="CoinGecko request budget is exhausted; try again later") from exc
+        raise HTTPException(
+            status_code=429, detail="CoinGecko request budget is exhausted; try again later"
+        ) from exc
     except ProviderRateLimited as exc:
-        await quota.defer_provider(session, provider_id="coingecko", until=exc.next_eligible_at, credential=fingerprint)
+        await quota.defer_provider(
+            session, provider_id="coingecko", until=exc.next_eligible_at, credential=fingerprint
+        )
         await session.commit()
-        raise HTTPException(status_code=429, detail="CoinGecko is rate limiting catalog requests; try again later") from exc
+        raise HTTPException(
+            status_code=429, detail="CoinGecko is rate limiting catalog requests; try again later"
+        ) from exc
     except rest.ProviderHttpError as exc:
-        detail = "CoinGecko rejected the Demo API key" if exc.status_code in {401, 403} else "CoinGecko coin catalog is unavailable"
+        detail = (
+            "CoinGecko rejected the Demo API key"
+            if exc.status_code in {401, 403}
+            else "CoinGecko coin catalog is unavailable"
+        )
         raise HTTPException(status_code=502, detail=detail) from exc
-    except (rest.CollectionIncomplete, rest.UnsafeDestination, ValueError, TimeoutError, httpx.HTTPError) as exc:
-        raise HTTPException(status_code=502, detail="CoinGecko coin catalog is unavailable") from exc
+    except (
+        rest.CollectionIncomplete,
+        rest.UnsafeDestination,
+        ValueError,
+        TimeoutError,
+        httpx.HTTPError,
+    ) as exc:
+        raise HTTPException(
+            status_code=502, detail="CoinGecko coin catalog is unavailable"
+        ) from exc
     finally:
         await session.rollback()
     return CoinSearchRead(items=coin_catalog.search_catalog(coins, q))
 
 
 @router.get("/catalog")
-async def get_catalog(session: Session, request: Request, _owner: OwnerRead) -> list[catalog.CatalogEntry]:
+async def get_catalog(
+    session: Session, request: Request, _owner: OwnerRead
+) -> list[catalog.CatalogEntry]:
     """Return connector catalog entries to an authorized owner.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
@@ -619,6 +835,7 @@ async def get_catalog(session: Session, request: Request, _owner: OwnerRead) -> 
 
 class N8nWorkflowRead(BaseModel):
     """One n8n-backed source with its workflow binding, provisioning state and collection health."""
+
     source_id: UUID
     source_name: str
     source_type: str
@@ -634,9 +851,14 @@ class N8nWorkflowRead(BaseModel):
     next_due_at: datetime | None
 
 
-@router.get("/n8n/workflows", response_model=list[N8nWorkflowRead],
-            dependencies=[Depends(module_dependency("connectors"))])
-async def list_n8n_workflows(session: Session, request: Request, _owner: OwnerRead) -> list[N8nWorkflowRead]:
+@router.get(
+    "/n8n/workflows",
+    response_model=list[N8nWorkflowRead],
+    dependencies=[Depends(module_dependency("connectors"))],
+)
+async def list_n8n_workflows(
+    session: Session, request: Request, _owner: OwnerRead
+) -> list[N8nWorkflowRead]:
     """List up to 200 of the owner workspace's sources whose execution backend is n8n.
 
     Owner-only (members get 403) and workspace-scoped: provisioning rows are restricted to Source ids
@@ -648,28 +870,56 @@ async def list_n8n_workflows(session: Session, request: Request, _owner: OwnerRe
         raise HTTPException(status_code=403, detail="Workspace owner required")
     flag = request.app.state.settings.multi_workspace_enabled
     in_scope = sources.ingestion_lifecycle_projection(scope=scope).subquery()
-    rows = list((await session.scalars(
-        select(ConnectorProvisioning).where(
-            ConnectorProvisioning.execution_backend == "n8n",
-            ConnectorProvisioning.source_id.in_(select(in_scope.c.id)),
-        ).order_by(ConnectorProvisioning.source_id).limit(200)
-    )).all())
+    rows = list(
+        (
+            await session.scalars(
+                select(ConnectorProvisioning)
+                .where(
+                    ConnectorProvisioning.execution_backend == "n8n",
+                    ConnectorProvisioning.source_id.in_(select(in_scope.c.id)),
+                )
+                .order_by(ConnectorProvisioning.source_id)
+                .limit(200)
+            )
+        ).all()
+    )
     status = await sources.list_connector_status(
-        session, [row.source_id for row in rows], scope=scope, multi_workspace_enabled=flag)
-    due = dict((await session.execute(
-        select(ConnectorSchedule.source_id, ConnectorSchedule.next_due_at)
-        .where(ConnectorSchedule.source_id.in_(list(status)), ConnectorSchedule.workspace_id == scope.workspace_id)
-    )).tuples().all()) if status else {}
+        session, [row.source_id for row in rows], scope=scope, multi_workspace_enabled=flag
+    )
+    due = (
+        dict(
+            (
+                await session.execute(
+                    select(ConnectorSchedule.source_id, ConnectorSchedule.next_due_at).where(
+                        ConnectorSchedule.source_id.in_(list(status)),
+                        ConnectorSchedule.workspace_id == scope.workspace_id,
+                    )
+                )
+            )
+            .tuples()
+            .all()
+        )
+        if status
+        else {}
+    )
     return [
         N8nWorkflowRead(
-            source_id=row.source_id, source_name=status[row.source_id].name, source_type=status[row.source_id].type,
-            provider=status[row.source_id].provider, workflow_id=row.workflow_id, state=row.state,
-            error_code=row.error_code, transition_phase=row.transition_phase,
-            last_success_at=status[row.source_id].last_success_at, last_error_at=status[row.source_id].last_error_at,
-            last_error_code=status[row.source_id].last_error_code, collected_at=status[row.source_id].collected_at,
+            source_id=row.source_id,
+            source_name=status[row.source_id].name,
+            source_type=status[row.source_id].type,
+            provider=status[row.source_id].provider,
+            workflow_id=row.workflow_id,
+            state=row.state,
+            error_code=row.error_code,
+            transition_phase=row.transition_phase,
+            last_success_at=status[row.source_id].last_success_at,
+            last_error_at=status[row.source_id].last_error_at,
+            last_error_code=status[row.source_id].last_error_code,
+            collected_at=status[row.source_id].collected_at,
             next_due_at=due.get(row.source_id),
         )
-        for row in rows if row.source_id in status
+        for row in rows
+        if row.source_id in status
     ]
 
 
@@ -678,7 +928,8 @@ async def put_configuration(
     source_id: UUID,
     payload: ConnectorSettingsRequest,
     session: Session,
-    request: Request, _owner: OwnerWrite,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> ActivationRead:
     """Save revision-checked desired settings without starting a new activation.
 
@@ -694,33 +945,70 @@ async def put_configuration(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source.status != "active" or source.type not in registry.SUPPORTED_TYPES:
         raise HTTPException(status_code=409, detail="Active packaged connector required")
     # Local-service providers fetch private addresses; only the instance operator's LAN is in scope.
     # Collection re-checks as the backstop, but fail clearly at save time.
-    if source.provider in collection.HEADER_AUTH_PROVIDERS and not is_instance_operator(request.state.auth_session):
-        raise HTTPException(status_code=403, detail="Local-service connectors are restricted to the instance operator")
-    pending = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    if pending is not None and pending.state == "disabled" and pending.error_code == "deactivation_pending":
-        raise HTTPException(status_code=409, detail="Wait for source deactivation to finish before saving")
+    if source.provider in collection.HEADER_AUTH_PROVIDERS and not is_instance_operator(
+        request.state.auth_session
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Local-service connectors are restricted to the instance operator",
+        )
+    pending = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
+    if (
+        pending is not None
+        and pending.state == "disabled"
+        and pending.error_code == "deactivation_pending"
+    ):
+        raise HTTPException(
+            status_code=409, detail="Wait for source deactivation to finish before saving"
+        )
     if pending is not None and pending.transition_phase != "idle":
-        raise HTTPException(status_code=409, detail="Wait for the backend transition to finish before saving")
+        raise HTTPException(
+            status_code=409, detail="Wait for the backend transition to finish before saving"
+        )
     expected_auth = (
-        "telegram_bot_token" if source.provider == "telegram"
-        else "http_header" if source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
-        else "none" if source.provider else None
+        "telegram_bot_token"
+        if source.provider == "telegram"
+        else "http_header"
+        if source.provider
+        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
+        else "none"
+        if source.provider
+        else None
     )
     if source.provider == "mastodon" and payload.auth_method == "none":
-        expected_auth = "none"  # Mastodon's bearer token is optional: public reads need no credential.
+        expected_auth = (
+            "none"  # Mastodon's bearer token is optional: public reads need no credential.
+        )
     if expected_auth is not None and payload.auth_method != expected_auth:
-        raise HTTPException(status_code=422, detail="Authentication mode does not match the provider")
-    if expected_auth == "http_header" and source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS and payload.auth_header_name != "Authorization":
-        raise HTTPException(status_code=422, detail="Provider bearer credentials require the Authorization header")
+        raise HTTPException(
+            status_code=422, detail="Authentication mode does not match the provider"
+        )
+    if (
+        expected_auth == "http_header"
+        and source.provider
+        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
+        and payload.auth_header_name != "Authorization"
+    ):
+        raise HTTPException(
+            status_code=422, detail="Provider bearer credentials require the Authorization header"
+        )
     if source.provider is None and payload.auth_method == "telegram_bot_token":
-        raise HTTPException(status_code=422, detail="Telegram authentication requires a Telegram source")
+        raise HTTPException(
+            status_code=422, detail="Telegram authentication requires a Telegram source"
+        )
     if payload.auth_method == "http_header" and source.type != "api":
-        raise HTTPException(status_code=422, detail="Header authentication is supported only for REST sources")
+        raise HTTPException(
+            status_code=422, detail="Header authentication is supported only for REST sources"
+        )
     try:
         source_configuration = serialize_source_configuration(source, payload.configuration)
     except ValueError as exc:
@@ -744,18 +1032,34 @@ async def put_configuration(
         payload.expected_revision,
         source_configuration,
         desired_configuration,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
     if saved_result is None:
-        raise HTTPException(status_code=409, detail="Source or connector revision changed while configuration was validated")
+        raise HTTPException(
+            status_code=409,
+            detail="Source or connector revision changed while configuration was validated",
+        )
     saved, row = saved_result
-    unresolved = await provisioning.unresolved_credential_error(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    unresolved = await provisioning.unresolved_credential_error(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     row.state = "reconciliation_required" if unresolved else "saved_not_active"
     row.error_code = unresolved
-    await commit_with_replay(session, [
-        make_source_change(saved.id, saved.generation, saved.status, connector_state=row.state, scope=scope),
-    ], access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    return await _activation_read(session, source_id, row, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(
+                saved.id, saved.generation, saved.status, connector_state=row.state, scope=scope
+            ),
+        ],
+        access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    )
+    return await _activation_read(
+        session, source_id, row, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
 
 
 @router.post("/{source_id}/validate", response_model=ActivationRead)
@@ -770,18 +1074,28 @@ async def validate_configuration(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     await _owner_access(session, request, scope)
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     try:
         data = registry.validate(source)
         if "url" in data:
             await session.rollback()
             await validate_public_url(data["url"])
     except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=_invalid_detail("Connector configuration is invalid", exc)) from exc
-    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        raise HTTPException(
+            status_code=422, detail=_invalid_detail("Connector configuration is invalid", exc)
+        ) from exc
+    row = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if row is None:
-        raise HTTPException(status_code=409, detail="Save connector configuration before validation")
-    return await _activation_read(session, source_id, row, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        raise HTTPException(
+            status_code=409, detail="Save connector configuration before validation"
+        )
+    return await _activation_read(
+        session, source_id, row, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
 
 
 @router.get("/{source_id}/activation", response_model=ActivationRead)
@@ -796,19 +1110,28 @@ async def get_activation(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     await _owner_access(session, request, scope)
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
+    row = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if row is None:
         # No row yet: report the backend a first save would pick (mirrors public.py), not a fixed n8n default.
         return ActivationRead(
-            workspace_id=scope.workspace_id, source_id=source_id,
+            workspace_id=scope.workspace_id,
+            source_id=source_id,
             desired_revision=0,
             applied_revision=0,
             state="saved_not_active",
             error_code=None,
-            execution_backend="native" if native_dispatch_supported(source.type, source.provider) else "n8n",
+            execution_backend="native"
+            if native_dispatch_supported(source.type, source.provider)
+            else "n8n",
         )
-    return await _activation_read(session, source_id, row, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    return await _activation_read(
+        session, source_id, row, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
 
 
 @router.post("/{source_id}/activate", response_model=ActivationRead)
@@ -833,13 +1156,22 @@ async def activate_source(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     row = await _check_activation_preconditions(
-        session, source_id, source, payload, multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        source_id,
+        source,
+        payload,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
     backend = _choose_backend(payload.execution_backend, row, source)
     if backend == "native":
-        return await activate_native(session, request, scope, source, payload, access_fence=access_fence)
+        return await activate_native(
+            session, request, scope, source, payload, access_fence=access_fence
+        )
     if backend != row.execution_backend and not _is_fresh(row):
         raise HTTPException(status_code=409, detail="Use backend-transition to change the backend")
     settings = request.app.state.settings
@@ -850,37 +1182,74 @@ async def activate_source(
     validation_access_fence = access_fence
     if source.provider == "telegram":
         validation_access_fence = await _stage_telegram_activation(
-            session, request, source_id, source, payload, activation_id=activation_id, encryption_key=encryption_key,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            request,
+            source_id,
+            source,
+            payload,
+            activation_id=activation_id,
+            encryption_key=encryption_key,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
-    elif payload.secret_action == "replace" and row.desired_configuration.get("auth_method") != "http_header":  # noqa: S105  # label/URL/enum value, not a credential
-        raise HTTPException(status_code=422, detail="This provider does not accept a replacement token")
+    elif (
+        payload.secret_action == "replace"  # noqa: S105  # label/URL/enum value, not a credential
+        and row.desired_configuration.get("auth_method") != "http_header"
+    ):
+        raise HTTPException(
+            status_code=422, detail="This provider does not accept a replacement token"
+        )
 
     # Save/validation may have held native rows; restart from original admission
     # before staging all earlier bundle parents. Commit native save separately.
     if source.provider == "telegram":
-        await commit_with_replay(session, [], scope=scope,
-                                 multi_workspace_enabled=multi_workspace_enabled,
-                                 access_fence=validation_access_fence)
+        await commit_with_replay(
+            session,
+            [],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=validation_access_fence,
+        )
     else:
         await session.rollback()
     access_fence = await _owner_access(session, request, scope, expected=access_fence)
     source_fence, locked_row, _slots = await provisioning.lock_connector(
-        session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence,
+        session,
+        source_id,
+        provisioning._ALL_CREDENTIAL_SLOTS,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=access_fence,
     )
-    if (source_fence is None or locked_row is None or source_fence.generation != source.generation
-            or source_fence.status != "active" or locked_row.desired_revision != payload.expected_revision):
+    if (
+        source_fence is None
+        or locked_row is None
+        or source_fence.generation != source.generation
+        or source_fence.status != "active"
+        or locked_row.desired_revision != payload.expected_revision
+    ):
         raise HTTPException(status_code=409, detail="Original activation configuration changed")
     row = locked_row
-    if row.execution_backend != "n8n":  # fresh native->n8n switch (checked above); a new backend revision fences old work
+    if (
+        row.execution_backend != "n8n"
+    ):  # fresh native->n8n switch (checked above); a new backend revision fences old work
         row.execution_backend = "n8n"
         row.backend_revision += 1
     try:
         required_credentials, credential_intents = await _stage_bundle_credentials(
-            session, source_id, source, row, payload, activation_id=activation_id, encryption_key=encryption_key,
-            webhook_token=webhook_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=access_fence, source_fence=source_fence,
+            session,
+            source_id,
+            source,
+            row,
+            payload,
+            activation_id=activation_id,
+            encryption_key=encryption_key,
+            webhook_token=webhook_token,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+            source_fence=source_fence,
         )
     except (CredentialEncryptionUnavailable, ValueError) as exc:
         await session.rollback()
@@ -895,12 +1264,25 @@ async def activate_source(
         activation_id,
         required_credentials,
         credential_intents,
-     multi_workspace_enabled=multi_workspace_enabled, scope=scope, access_fence=access_fence):
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+        access_fence=access_fence,
+    ):
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Connector activation changed; reload and retry")
-    await commit_with_replay(session, [
-        make_source_change(source.id, source.generation, source.status, connector_state=row.state, scope=scope),
-    ], access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        raise HTTPException(
+            status_code=409, detail="Connector activation changed; reload and retry"
+        )
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(
+                source.id, source.generation, source.status, connector_state=row.state, scope=scope
+            ),
+        ],
+        access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    )
 
     credentials = N8nCredentials(n8n.service_url, api_key)
     api = N8nApi(n8n.service_url, api_key, settings)
@@ -910,31 +1292,53 @@ async def activate_source(
         api,
         credentials,
         encryption_key,
-     multi_workspace_enabled=multi_workspace_enabled, scope=scope, access_fence=access_fence)
-    return await _read_activation_outcome(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+        access_fence=access_fence,
+    )
+    return await _read_activation_outcome(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
 
 
 async def _read_activation_outcome(
-    session: AsyncSession, source_id: UUID, *, multi_workspace_enabled: bool, scope: WorkspaceContext,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    multi_workspace_enabled: bool,
+    scope: WorkspaceContext,
 ) -> ActivationRead:
     """Read the post-drive activation state and map non-active outcomes to HTTP errors.
 
     Read-only. 404 if the state vanished, 422 when n8n rejected a credential, 503 while
     reconciliation is still pending; otherwise the projected ``ActivationRead``.
     """
-    latest = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    latest = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if latest is None:
         raise HTTPException(status_code=404, detail="Connector state disappeared during activation")
     if latest.state != "active":
         if latest.state == "saved_not_active" and latest.error_code == "n8n_credential_rejected":
-            raise HTTPException(status_code=422, detail="n8n rejected a connector credential; review it and retry")
-        raise HTTPException(status_code=503, detail="Connector activation is pending reconciliation")
-    return await _activation_read(session, source_id, latest, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+            raise HTTPException(
+                status_code=422, detail="n8n rejected a connector credential; review it and retry"
+            )
+        raise HTTPException(
+            status_code=503, detail="Connector activation is pending reconciliation"
+        )
+    return await _activation_read(
+        session, source_id, latest, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
 
 
 async def _check_activation_preconditions(
-    session: AsyncSession, source_id: UUID, source: ConnectorSource, payload: ActivationRequest,
-    *, multi_workspace_enabled: bool, scope: WorkspaceContext,
+    session: AsyncSession,
+    source_id: UUID,
+    source: ConnectorSource,
+    payload: ActivationRequest,
+    *,
+    multi_workspace_enabled: bool,
+    scope: WorkspaceContext,
 ) -> ConnectorProvisioning:
     """Read the activation row and reject stale, in-flight, or changed state (HTTP 409).
 
@@ -942,26 +1346,38 @@ async def _check_activation_preconditions(
     reconciling, pending deactivation, backend transition, unresolved credential operation,
     then source status/generation. Returns the row narrowed to non-``None``.
     """
-    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    row = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if row is None or row.desired_revision != payload.expected_revision:
         raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
     if row.state == "provisioning":
-        raise HTTPException(status_code=409, detail="Connector activation is already being reconciled")
+        raise HTTPException(
+            status_code=409, detail="Connector activation is already being reconciled"
+        )
     if row.state == "disabled" and row.error_code == "deactivation_pending":
-        raise HTTPException(status_code=409, detail="Wait for source deactivation to finish before enabling")
+        raise HTTPException(
+            status_code=409, detail="Wait for source deactivation to finish before enabling"
+        )
     if row.transition_phase not in ("idle", "activating_new"):
         raise HTTPException(status_code=409, detail="A backend transition is in progress")
-    if await provisioning.unresolved_credential_error(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope):
+    if await provisioning.unresolved_credential_error(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    ):
         raise HTTPException(
             status_code=409,
             detail="An n8n credential operation is pending or requires recovery",
         )
     if source.status != "active" or source.generation != row.source_generation:
-        raise HTTPException(status_code=409, detail="Source changed; save its current configuration before enabling")
+        raise HTTPException(
+            status_code=409, detail="Source changed; save its current configuration before enabling"
+        )
     return row
 
 
-def _require_n8n_activation_settings(n8n: Any, settings: Any, source: ConnectorSource) -> tuple[str, str, str]:
+def _require_n8n_activation_settings(
+    n8n: Any, settings: Any, source: ConnectorSource
+) -> tuple[str, str, str]:
     """Return ``(api_key, webhook_token, encryption_key)`` or raise the matching HTTP 503.
 
     The owner kill switch blocks new n8n activation (existing workflows are left as they are).
@@ -976,18 +1392,30 @@ def _require_n8n_activation_settings(n8n: Any, settings: Any, source: ConnectorS
         raise HTTPException(status_code=503, detail="n8n provisioning is not configured")
     webhook_token = n8n.webhook_token
     if not webhook_token:
-        raise HTTPException(status_code=503, detail="Manual trigger authentication is not configured")
+        raise HTTPException(
+            status_code=503, detail="Manual trigger authentication is not configured"
+        )
     encryption_key = settings.connector_credential_encryption_key.get_secret_value()
     try:
         secret_fingerprint(encryption_key, "connector-key-validation")
     except CredentialEncryptionUnavailable as exc:
-        raise HTTPException(status_code=503, detail="Connector credential encryption is not configured") from exc
+        raise HTTPException(
+            status_code=503, detail="Connector credential encryption is not configured"
+        ) from exc
     return api_key, webhook_token, encryption_key
 
 
 async def _stage_telegram_activation(
-    session: AsyncSession, request: Request, source_id: UUID, source: ConnectorSource, payload: ActivationRequest,
-    *, activation_id: UUID, encryption_key: str, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    request: Request,
+    source_id: UUID,
+    source: ConnectorSource,
+    payload: ActivationRequest,
+    *,
+    activation_id: UUID,
+    encryption_key: str,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
     access_fence: AccessFence,
 ) -> AccessFence:
     """Verify the Telegram bot, then save its encrypted native credential for this activation.
@@ -1001,13 +1429,18 @@ async def _stage_telegram_activation(
 
     try:
         previous = await provisioning.get_retained_native_credential_snapshot(
-            session, source_id, source_generation=source.generation,
+            session,
+            source_id,
+            source_generation=source.generation,
             connector_revision=payload.expected_revision,
-            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
         )
     except ValueError as exc:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Connector configuration changed; reload before enabling") from exc
+        raise HTTPException(
+            status_code=409, detail="Connector configuration changed; reload before enabling"
+        ) from exc
     validation_access_fence = previous.access_fence if previous is not None else access_fence
     if validation_access_fence != access_fence:
         raise HTTPException(status_code=409, detail="Original Telegram access changed")
@@ -1017,61 +1450,106 @@ async def _stage_telegram_activation(
         try:
             native_token = decrypt_native_token(encryption_key, previous)
         except CredentialEncryptionUnavailable as exc:
-            raise HTTPException(status_code=503, detail="Stored Telegram credential is unavailable") from exc
+            raise HTTPException(
+                status_code=503, detail="Stored Telegram credential is unavailable"
+            ) from exc
     else:
         native_token = payload.secret.get_secret_value() if payload.secret else ""
     await session.rollback()
     try:
         verified = await validate_telegram_scope(
-            native_token, tuple(cast("list[str]", source.configuration.get("telegram_chat_ids", ()))),
+            native_token,
+            tuple(cast("list[str]", source.configuration.get("telegram_chat_ids", ()))),
             before_request=lambda: _validation_send_fence(
-                session, request, source, payload.expected_revision, scope=scope,
-                access_fence=validation_access_fence, native_snapshot=previous,
+                session,
+                request,
+                source,
+                payload.expected_revision,
+                scope=scope,
+                access_fence=validation_access_fence,
+                native_snapshot=previous,
             ),
         )
     except ProviderRateLimited as exc:
         raise HTTPException(status_code=503, detail="Telegram provider rate limit reached") from exc
     except (TimeoutError, httpx.TimeoutException) as exc:
-        raise HTTPException(status_code=503, detail="Telegram validation outcome is unknown") from exc
+        raise HTTPException(
+            status_code=503, detail="Telegram validation outcome is unknown"
+        ) from exc
     except (ValueError, httpx.HTTPError) as exc:
         status = 503 if getattr(exc, "code", None) == "telegram_provider_unavailable" else 422
-        detail = "Telegram validation outcome is unknown" if status == 503 else "Telegram bot identity and channel scope could not be verified"
+        detail = (
+            "Telegram validation outcome is unknown"
+            if status == 503
+            else "Telegram bot identity and channel scope could not be verified"
+        )
         raise HTTPException(status_code=status, detail=detail) from exc
     if previous is not None and previous.bound_bot_id not in (None, verified.verified_bot_id):
-        raise HTTPException(status_code=409, detail="A different Telegram bot requires a new source")
+        raise HTTPException(
+            status_code=409, detail="A different Telegram bot requires a new source"
+        )
     await _validation_send_fence(
-        session, request, source, payload.expected_revision, scope=scope,
-        access_fence=validation_access_fence, native_snapshot=previous,
+        session,
+        request,
+        source,
+        payload.expected_revision,
+        scope=scope,
+        access_fence=validation_access_fence,
+        native_snapshot=previous,
     )
     native_bot_id = verified.verified_bot_id
     ciphertext = encrypt_native_token(
-        encryption_key, source_id=source_id, operation_id=activation_id,
-        source_generation=source.generation, configuration_revision=payload.expected_revision,
-        token=native_token, verified_bot_id=native_bot_id,
+        encryption_key,
+        source_id=source_id,
+        operation_id=activation_id,
+        source_generation=source.generation,
+        configuration_revision=payload.expected_revision,
+        token=native_token,
+        verified_bot_id=native_bot_id,
     )
     try:
         await provisioning.save_native_credential(
-            session, source_id=source_id, operation_id=activation_id,
-            source_generation=source.generation, connector_revision=payload.expected_revision,
-            encrypted_token=ciphertext, token_fingerprint=secret_fingerprint(encryption_key, native_token),
-            verified_bot_id=native_bot_id, validated_at=verified.validated_at,
+            session,
+            source_id=source_id,
+            operation_id=activation_id,
+            source_generation=source.generation,
+            connector_revision=payload.expected_revision,
+            encrypted_token=ciphertext,
+            token_fingerprint=secret_fingerprint(encryption_key, native_token),
+            verified_bot_id=native_bot_id,
+            validated_at=verified.validated_at,
             access_fence=validation_access_fence,
             expected_native_operation_id=previous.operation_id if previous is not None else None,
-            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
         )
     except ValueError as exc:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Telegram credential identity or revision changed") from exc
+        raise HTTPException(
+            status_code=409, detail="Telegram credential identity or revision changed"
+        ) from exc
     except IntegrityError as exc:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Telegram bot identity is already reserved") from exc
+        raise HTTPException(
+            status_code=409, detail="Telegram bot identity is already reserved"
+        ) from exc
     return validation_access_fence
 
 
 async def _stage_bundle_credentials(
-    session: AsyncSession, source_id: UUID, source: ConnectorSource, row: ConnectorProvisioning, payload: ActivationRequest,
-    *, activation_id: UUID, encryption_key: str, webhook_token: str, scope: WorkspaceContext,
-    multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    source_id: UUID,
+    source: ConnectorSource,
+    row: ConnectorProvisioning,
+    payload: ActivationRequest,
+    *,
+    activation_id: UUID,
+    encryption_key: str,
+    webhook_token: str,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
     """Prepare the collector, manual-trigger and (for header auth) provider credential assignments.
 
@@ -1083,19 +1561,33 @@ async def _stage_bundle_credentials(
     credential_intents: dict[str, dict[str, object]] = {}
     required_credentials: dict[str, dict[str, object]] = {}
 
-    collector = await provisioning.get_managed_credential(session, source_id, "collector", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    collector = await provisioning.get_managed_credential(
+        session,
+        source_id,
+        "collector",
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    )
     collector_token: str | None = None
     collector_binding = collector.resolved_binding if collector is not None else None
-    collector_scope: Literal["mcp:collect", "ingestion:write"] = "mcp:collect" if source.type == "mcp" else "ingestion:write"
+    collector_scope: Literal["mcp:collect", "ingestion:write"] = (
+        "mcp:collect" if source.type == "mcp" else "ingestion:write"
+    )
     if not (
-        collector is not None and collector.state == "ready" and collector.credential_id
+        collector is not None
+        and collector.state == "ready"
+        and collector.credential_id
         and isinstance(collector_binding, dict)
         and collector_binding.get("source_generation") == source.generation
         and collector_binding.get("scope") == collector_scope
     ):
         collector_token = await ingestion.create_collector_credential_in_uow(
-            session, source_id, credential_scope=collector_scope, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            credential_scope=collector_scope,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
             source_fence=source_fence,
         )
         collector_binding = {
@@ -1118,7 +1610,13 @@ async def _stage_bundle_credentials(
     if intent is not None:
         credential_intents["collector"] = intent
 
-    manual = await provisioning.get_managed_credential(session, source_id, "manual_trigger", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    manual = await provisioning.get_managed_credential(
+        session,
+        source_id,
+        "manual_trigger",
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    )
     required, intent = prepare_credential_assignment(
         source_id=source_id,
         activation_id=activation_id,
@@ -1135,12 +1633,20 @@ async def _stage_bundle_credentials(
         credential_intents["manual_trigger"] = intent
 
     if row.desired_configuration.get("auth_method") == "http_header":
-        provider = await provisioning.get_managed_credential(session, source_id, "provider", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        provider = await provisioning.get_managed_credential(
+            session,
+            source_id,
+            "provider",
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
+        )
         provider_header = str(row.desired_configuration.get("auth_header_name", ""))
         if payload.secret_action == "keep":  # noqa: S105  # label/URL/enum value, not a credential
             provider_binding = provider.resolved_binding if provider is not None else None
             if (
-                provider is None or provider.state != "ready" or not provider.credential_id
+                provider is None
+                or provider.state != "ready"
+                or not provider.credential_id
                 or not isinstance(provider_binding, dict)
                 or provider_binding.get("header_name") != provider_header
             ):
@@ -1171,7 +1677,8 @@ async def _stage_bundle_credentials(
 async def deactivate_source(
     source_id: UUID,
     session: Session,
-    request: Request, _owner: OwnerWrite,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> ActivationRead:
     """Pause connector collection and persist the resulting activation state.
 
@@ -1181,21 +1688,41 @@ async def deactivate_source(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
-    source = await sources.pause_source_for_connector(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await sources.pause_source_for_connector(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
-    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    row = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if row is None:
         raise HTTPException(status_code=409, detail="No connector provisioning state exists")
-    await commit_with_replay(session, [
-        make_source_change(source.id, source.generation, source.status, connector_state=row.state, scope=scope),
-    ], access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    return await _activation_read(session, source_id, row, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(
+                source.id, source.generation, source.status, connector_state=row.state, scope=scope
+            ),
+        ],
+        access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    )
+    return await _activation_read(
+        session, source_id, row, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
 
 
 async def _capture_telegram_revocation(
-    session: AsyncSession, request: Request, source_id: UUID, source: ConnectorSource,
-    row: ConnectorProvisioning, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    request: Request,
+    source_id: UUID,
+    source: ConnectorSource,
+    row: ConnectorProvisioning,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
     access_fence: AccessFence,
 ) -> NativeCredentialRevocationSnapshot:
     """Capture the Telegram credential revocation snapshot, then restart from the original access.
@@ -1206,9 +1733,13 @@ async def _capture_telegram_revocation(
     """
     try:
         revocation_snapshot = await provisioning.get_native_credential_revocation_snapshot(
-            session, source_id, source_generation=source.generation,
-            connector_revision=row.desired_revision, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            source_generation=source.generation,
+            connector_revision=row.desired_revision,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
     except ValueError as exc:
         await session.rollback()
@@ -1228,7 +1759,8 @@ async def remove_provider_credential(
     source_id: UUID,
     expected_revision: Annotated[int, Query(ge=1)],
     session: Session,
-    request: Request, _owner: OwnerWrite,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> ActivationRead:
     """Disable provider authentication and queue or perform a fenced credential deletion.
 
@@ -1243,8 +1775,12 @@ async def remove_provider_credential(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
-    source = await sources.get_connector_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await sources.get_connector_source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
+    row = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source is None or row is None:
         raise HTTPException(status_code=404, detail="Connector not found")
     if row.desired_revision != expected_revision:
@@ -1254,7 +1790,9 @@ async def remove_provider_credential(
         or row.state != "disabled"
         or row.error_code == "deactivation_pending"
     ):
-        raise HTTPException(status_code=409, detail="Pause the source before removing its provider credential")
+        raise HTTPException(
+            status_code=409, detail="Pause the source before removing its provider credential"
+        )
     # Detach everything needed before any rollback so no expired ORM row is read afterwards.
     desired = dict(row.desired_configuration)
     desired["auth_method"] = "none"
@@ -1262,8 +1800,14 @@ async def remove_provider_credential(
     revocation_snapshot = None
     if source.provider == "telegram":
         revocation_snapshot = await _capture_telegram_revocation(
-            session, request, source_id, source, row, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            request,
+            source_id,
+            source,
+            row,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
     saved = await connector_owner.save_connector_configuration(
         session,
@@ -1272,14 +1816,17 @@ async def remove_provider_credential(
         dict(source.configuration),
         desired,
         allow_paused=True,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
     if saved is None:
         raise HTTPException(status_code=409, detail="Connector configuration revision changed")
     saved_source, updated = saved
     updated.state = "disabled"
     if source.provider in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS:
-        local_credential = await session.get(ConnectorRestCredential, source_id, with_for_update=True)
+        local_credential = await session.get(
+            ConnectorRestCredential, source_id, with_for_update=True
+        )
         if local_credential is not None:
             # Native local/workspace-app tokens have no external credential operation to reconcile.
             await session.delete(local_credential)
@@ -1287,39 +1834,96 @@ async def remove_provider_credential(
     if revocation_snapshot is not None:
         try:
             await provisioning.revoke_native_credential_in_uow(
-                session, source_id, source_generation=saved_source.generation,
-                connector_revision=updated.desired_revision, release_bot_reservation=True,
+                session,
+                source_id,
+                source_generation=saved_source.generation,
+                connector_revision=updated.desired_revision,
+                release_bot_reservation=True,
                 access_fence=revocation_snapshot.access_fence,
                 expected_native_operation_id=revocation_snapshot.operation_id,
-                multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                scope=scope,
             )
         except ValueError as exc:
             await session.rollback()
-            raise HTTPException(status_code=409, detail="Telegram credential revision changed") from exc
-        await commit_with_replay(session, [
-            make_source_change(saved_source.id, saved_source.generation, saved_source.status, connector_state=updated.state, scope=scope),
-        ], access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-        return await _activation_read(session, source_id, updated, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+            raise HTTPException(
+                status_code=409, detail="Telegram credential revision changed"
+            ) from exc
+        await commit_with_replay(
+            session,
+            [
+                make_source_change(
+                    saved_source.id,
+                    saved_source.generation,
+                    saved_source.status,
+                    connector_state=updated.state,
+                    scope=scope,
+                ),
+            ],
+            access_fence=access_fence,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
+        )
+        return await _activation_read(
+            session,
+            source_id,
+            updated,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
+        )
     intent = await provisioning.create_delete_intent_in_uow(
-        session, source_id, "provider", updated.desired_revision, access_fence=access_fence,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        source_id,
+        "provider",
+        updated.desired_revision,
+        access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
     if intent is None:
-        existing = await provisioning.get_managed_credential(session, source_id, "provider", multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        existing = await provisioning.get_managed_credential(
+            session,
+            source_id,
+            "provider",
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
+        )
         if existing is not None and existing.credential_id is not None:
-            raise HTTPException(status_code=409, detail="Provider credential operation cannot be changed until its current operation settles")
+            raise HTTPException(
+                status_code=409,
+                detail="Provider credential operation cannot be changed until its current operation settles",
+            )
         updated.error_code = None
     else:
         updated, _, _ = intent
         updated.error_code = "credential_delete_pending"
-    await commit_with_replay(session, [
-        make_source_change(saved_source.id, saved_source.generation, saved_source.status, connector_state=updated.state, scope=scope),
-    ], access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    return await _activation_read(session, source_id, updated, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(
+                saved_source.id,
+                saved_source.generation,
+                saved_source.status,
+                connector_state=updated.state,
+                scope=scope,
+            ),
+        ],
+        access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    )
+    return await _activation_read(
+        session, source_id, updated, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
 
 
 async def _activation_read(
-    session: AsyncSession, source_id: UUID, row: ConnectorProvisioning, *, scope: Scope, multi_workspace_enabled: bool
+    session: AsyncSession,
+    source_id: UUID,
+    row: ConnectorProvisioning,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> ActivationRead:
     """Project durable activation state and unresolved credential errors.
 
@@ -1328,20 +1932,21 @@ async def _activation_read(
     """
     state = row.state
     error_code = row.error_code
-    unresolved = await provisioning.unresolved_credential_error(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    unresolved = await provisioning.unresolved_credential_error(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if unresolved:
         error_code = unresolved
         if state != "disabled":
             state = "reconciliation_required"
     return ActivationRead(
-        workspace_id=scope.workspace_id, source_id=source_id,
+        workspace_id=scope.workspace_id,
+        source_id=source_id,
         desired_revision=row.desired_revision,
         applied_revision=row.applied_revision,
         state=state,
         error_code=error_code,
-        credential_recovery=(
-            "unsupported_operation" if unresolved else "supported"
-        ),
+        credential_recovery=("unsupported_operation" if unresolved else "supported"),
         execution_backend=row.execution_backend,
         transition_phase=row.transition_phase,
         target_backend=row.target_backend,
@@ -1355,16 +1960,22 @@ async def _activation_read(
 def _is_fresh(row: ConnectorProvisioning) -> bool:
     """A row that was never activated may switch backend without a transition."""
     return (
-        row.applied_revision == 0 and row.applied_backend_revision == 0 and not row.workflow_id
+        row.applied_revision == 0
+        and row.applied_backend_revision == 0
+        and not row.workflow_id
         and row.transition_phase == "idle"
     )
 
 
-def _choose_backend(requested: str | None, row: ConnectorProvisioning, source: ConnectorSource) -> str:
+def _choose_backend(
+    requested: str | None, row: ConnectorProvisioning, source: ConnectorSource
+) -> str:
     """Omitted backend preserves an activated source; a fresh supported source defaults to native."""
     if row.transition_phase == "activating_new" and row.target_backend:
         if requested not in (None, row.target_backend):
-            raise HTTPException(status_code=409, detail="Finish the pending backend transition first")
+            raise HTTPException(
+                status_code=409, detail="Finish the pending backend transition first"
+            )
         return row.target_backend
     if requested is not None:
         return requested
@@ -1383,8 +1994,13 @@ _NATIVE_ERRORS = {
 
 
 async def activate_native(
-    session: AsyncSession, request: Request, scope: WorkspaceContext, source: ConnectorSource,
-    payload: ActivationRequest, *, access_fence: AccessFence,
+    session: AsyncSession,
+    request: Request,
+    scope: WorkspaceContext,
+    source: ConnectorSource,
+    payload: ActivationRequest,
+    *,
+    access_fence: AccessFence,
 ) -> ActivationRead:
     """Activate the native backend in one transaction; no n8n key, credential or workflow is involved.
 
@@ -1394,42 +2010,77 @@ async def activate_native(
     """
     gate = request.app.state.settings.multi_workspace_enabled
     if payload.secret_action == "replace":  # noqa: S105  # label/URL/enum value, not a credential
-        raise HTTPException(status_code=422, detail="Native credentials are entered with the credential endpoint")
+        raise HTTPException(
+            status_code=422, detail="Native credentials are entered with the credential endpoint"
+        )
     await session.rollback()
     access_fence = await _owner_access(session, request, scope, expected=access_fence)
     source_fence, row, slots = await provisioning.lock_connector(
-        session, source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=scope,
-        multi_workspace_enabled=gate, expected_access_fence=access_fence)
+        session,
+        source.id,
+        provisioning._ALL_CREDENTIAL_SLOTS,
+        scope=scope,
+        multi_workspace_enabled=gate,
+        expected_access_fence=access_fence,
+    )
     if (
-        source_fence is None or row is None or source_fence.generation != source.generation
-        or row.desired_revision != payload.expected_revision or row.transition_phase not in ("idle", "activating_new")
+        source_fence is None
+        or row is None
+        or source_fence.generation != source.generation
+        or row.desired_revision != payload.expected_revision
+        or row.transition_phase not in ("idle", "activating_new")
         or row.state == "provisioning"
-        or any(slot.state in {"dispatching", "reconciliation_required", "delete_pending"} for slot in slots.values())
+        or any(
+            slot.state in {"dispatching", "reconciliation_required", "delete_pending"}
+            for slot in slots.values()
+        )
     ):
         await session.rollback()
         raise HTTPException(status_code=409, detail="Original activation configuration changed")
     if row.transition_phase == "idle" and row.execution_backend != "native":
         if not _is_fresh(row):
             await session.rollback()
-            raise HTTPException(status_code=409, detail="Use backend-transition to change the backend")
+            raise HTTPException(
+                status_code=409, detail="Use backend-transition to change the backend"
+            )
         row.execution_backend = "native"
         row.backend_revision += 1
-    error = await activate_native_in_uow(session, source.id, source_fence, row, scope=scope, multi_workspace_enabled=gate)
+    error = await activate_native_in_uow(
+        session, source.id, source_fence, row, scope=scope, multi_workspace_enabled=gate
+    )
     if error:
         await session.rollback()
         status, detail = _NATIVE_ERRORS[error]
         raise HTTPException(status_code=status, detail=detail)
     await scheduler.clear_collection_block(
-        session, source.id, connector_revision=row.applied_revision, credential_revision=row.credential_revision,
-        workspace_id=scope.workspace_id)
-    await commit_with_replay(session, [
-        make_source_change(source.id, source.generation, source.status, connector_state=row.state, scope=scope),
-    ], access_fence=access_fence, multi_workspace_enabled=gate, scope=scope)
-    return await _activation_read(session, source.id, row, multi_workspace_enabled=gate, scope=scope)
+        session,
+        source.id,
+        connector_revision=row.applied_revision,
+        credential_revision=row.credential_revision,
+        workspace_id=scope.workspace_id,
+    )
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(
+                source.id, source.generation, source.status, connector_state=row.state, scope=scope
+            ),
+        ],
+        access_fence=access_fence,
+        multi_workspace_enabled=gate,
+        scope=scope,
+    )
+    return await _activation_read(
+        session, source.id, row, multi_workspace_enabled=gate, scope=scope
+    )
 
 
 async def _drive_transition(
-    session: AsyncSession, request: Request, scope: WorkspaceContext, source_id: UUID, access_fence: AccessFence,
+    session: AsyncSession,
+    request: Request,
+    scope: WorkspaceContext,
+    source_id: UUID,
+    access_fence: AccessFence,
 ) -> ActivationRead:
     """Advance a persisted transition with the n8n API when it is configured, then project its state."""
     settings = request.app.state.settings
@@ -1437,16 +2088,30 @@ async def _drive_transition(
     n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
     api = N8nApi(n8n.service_url, n8n.api_key, settings) if n8n.api_key else None
     await provisioning.advance_backend_transition(
-        session, source_id, api, scope=scope, multi_workspace_enabled=gate, access_fence=access_fence)
-    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=gate, scope=scope)
+        session,
+        source_id,
+        api,
+        scope=scope,
+        multi_workspace_enabled=gate,
+        access_fence=access_fence,
+    )
+    row = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=gate, scope=scope
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="Connector state disappeared during transition")
-    return await _activation_read(session, source_id, row, multi_workspace_enabled=gate, scope=scope)
+    return await _activation_read(
+        session, source_id, row, multi_workspace_enabled=gate, scope=scope
+    )
 
 
 @router.post("/{source_id}/backend-transition", response_model=ActivationRead, status_code=202)
 async def start_backend_transition(
-    source_id: UUID, payload: BackendTransitionRequest, session: Session, request: Request, _owner: OwnerWrite,
+    source_id: UUID,
+    payload: BackendTransitionRequest,
+    session: Session,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> ActivationRead:
     """Invalidate the backend revision, stop admission, fence work, stop the old backend, then activate the target.
 
@@ -1470,17 +2135,37 @@ async def start_backend_transition(
     await session.rollback()
     access_fence = await _owner_access(session, request, scope, expected=access_fence)
     row = await provisioning.begin_backend_transition_in_uow(
-        session, source_id, payload.expected_revision, payload.target_backend,
-        scope=scope, multi_workspace_enabled=gate, access_fence=access_fence)
-    await commit_with_replay(session, [
-        make_source_change(source.id, source.generation, source.status, connector_state=row.state, scope=scope),
-    ], access_fence=access_fence, multi_workspace_enabled=gate, scope=scope)
+        session,
+        source_id,
+        payload.expected_revision,
+        payload.target_backend,
+        scope=scope,
+        multi_workspace_enabled=gate,
+        access_fence=access_fence,
+    )
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(
+                source.id, source.generation, source.status, connector_state=row.state, scope=scope
+            ),
+        ],
+        access_fence=access_fence,
+        multi_workspace_enabled=gate,
+        scope=scope,
+    )
     return await _drive_transition(session, request, scope, source_id, access_fence)
 
 
-@router.post("/{source_id}/backend-transition/resolve", response_model=ActivationRead, status_code=202)
+@router.post(
+    "/{source_id}/backend-transition/resolve", response_model=ActivationRead, status_code=202
+)
 async def resolve_backend_transition(
-    source_id: UUID, payload: BackendResolveRequest, session: Session, request: Request, _owner: OwnerWrite,
+    source_id: UUID,
+    payload: BackendResolveRequest,
+    session: Session,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> ActivationRead:
     """Resolve reconciliation_required: ``retry`` re-sends the idempotent n8n stop; ``confirm_inactive`` is the
     owner attestation, made after checking in n8n that the old workflow is inactive. Neither admits a backend."""
@@ -1491,15 +2176,27 @@ async def resolve_backend_transition(
     await session.rollback()
     access_fence = await _owner_access(session, request, scope, expected=access_fence)
     await provisioning.resolve_backend_transition_in_uow(
-        session, source_id, payload.expected_revision, payload.action,
-        scope=scope, multi_workspace_enabled=gate, access_fence=access_fence)
-    await commit_with_replay(session, [], access_fence=access_fence, multi_workspace_enabled=gate, scope=scope)
+        session,
+        source_id,
+        payload.expected_revision,
+        payload.action,
+        scope=scope,
+        multi_workspace_enabled=gate,
+        access_fence=access_fence,
+    )
+    await commit_with_replay(
+        session, [], access_fence=access_fence, multi_workspace_enabled=gate, scope=scope
+    )
     return await _drive_transition(session, request, scope, source_id, access_fence)
 
 
 @router.put("/{source_id}/credentials/native-rest", response_model=ActivationRead)
 async def reenter_native_rest_credential(
-    source_id: UUID, payload: NativeRestCredentialRequest, session: Session, request: Request, _owner: OwnerWrite,
+    source_id: UUID,
+    payload: NativeRestCredentialRequest,
+    session: Session,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> ActivationRead:
     """Owner re-enters a native REST or local-service header secret (write-only, encrypted, never echoed).
 
@@ -1515,21 +2212,41 @@ async def reenter_native_rest_credential(
     key = settings.connector_credential_encryption_key.get_secret_value()
     access_fence = await _owner_access(session, request, scope)
     source = await _source(session, source_id, multi_workspace_enabled=gate, scope=scope)
-    row = await provisioning.activation_status(session, source_id, multi_workspace_enabled=gate, scope=scope)
+    row = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=gate, scope=scope
+    )
     desired = dict(row.desired_configuration) if row is not None else {}
-    keyed_header = collection.KEYED_PROVIDERS.get(source.provider or "")  # keyed preset: fixed placement (header | query:<param> | path:<token>)
-    workspace_app_header = "Authorization" if source.provider in {"notion", "slack", "mastodon", "x"} else None
+    keyed_header = collection.KEYED_PROVIDERS.get(
+        source.provider or ""
+    )  # keyed preset: fixed placement (header | query:<param> | path:<token>)
+    workspace_app_header = (
+        "Authorization" if source.provider in {"notion", "slack", "mastodon", "x"} else None
+    )
     local_header = (
-        "Authorization" if source.provider in collection.HEADER_AUTH_PROVIDERS
-        and desired.get("auth_method") == "http_header" and desired.get("auth_header_name") == "Authorization"
+        "Authorization"
+        if source.provider in collection.HEADER_AUTH_PROVIDERS
+        and desired.get("auth_method") == "http_header"
+        and desired.get("auth_header_name") == "Authorization"
         else None
     )
-    if source.status != "active" or source.type != "api" or row is None or (
-        keyed_header is None and local_header is None and workspace_app_header is None and (
-            source.provider is not None
-            or desired.get("auth_method") != "http_header" or not desired.get("auth_header_name"))
+    if (
+        source.status != "active"
+        or source.type != "api"
+        or row is None
+        or (
+            keyed_header is None
+            and local_header is None
+            and workspace_app_header is None
+            and (
+                source.provider is not None
+                or desired.get("auth_method") != "http_header"
+                or not desired.get("auth_header_name")
+            )
+        )
     ):
-        raise HTTPException(status_code=422, detail="This source does not use REST header authentication")
+        raise HTTPException(
+            status_code=422, detail="This source does not use REST header authentication"
+        )
     if row.desired_revision != payload.expected_revision:
         raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
     if keyed_header is not None:
@@ -1539,23 +2256,41 @@ async def reenter_native_rest_credential(
         try:
             validate_key(str(source.provider), payload.secret.get_secret_value())
         except ProviderPayloadError as exc:
-            raise HTTPException(status_code=422, detail="The API key is not acceptable for this provider") from exc
-    header_name = keyed_header or local_header or workspace_app_header or str(desired["auth_header_name"])
+            raise HTTPException(
+                status_code=422, detail="The API key is not acceptable for this provider"
+            ) from exc
+    header_name = (
+        keyed_header or local_header or workspace_app_header or str(desired["auth_header_name"])
+    )
     operation_id = uuid7()
     try:
         ciphertext = encrypt_rest_secret(
-            key, source_id=source_id, operation_id=operation_id, source_generation=source.generation,
-            configuration_revision=payload.expected_revision, header_name=header_name,
-            secret=payload.secret.get_secret_value())
+            key,
+            source_id=source_id,
+            operation_id=operation_id,
+            source_generation=source.generation,
+            configuration_revision=payload.expected_revision,
+            header_name=header_name,
+            secret=payload.secret.get_secret_value(),
+        )
         fingerprint = secret_fingerprint(key, payload.secret.get_secret_value())
     except CredentialEncryptionUnavailable as exc:
-        raise HTTPException(status_code=503, detail="Connector credential encryption is not configured") from exc
+        raise HTTPException(
+            status_code=503, detail="Connector credential encryption is not configured"
+        ) from exc
     await session.rollback()
     access_fence = await _owner_access(session, request, scope, expected=access_fence)
     source_fence, row, _slots = await provisioning.lock_connector(
-        session, source_id, scope=scope, multi_workspace_enabled=gate, expected_access_fence=access_fence)
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=gate,
+        expected_access_fence=access_fence,
+    )
     if (
-        source_fence is None or row is None or source_fence.generation != source.generation
+        source_fence is None
+        or row is None
+        or source_fence.generation != source.generation
         or row.desired_revision != payload.expected_revision
     ):
         await session.rollback()
@@ -1573,8 +2308,22 @@ async def reenter_native_rest_credential(
     credential.state = "ready"
     row.credential_revision += 1
     await scheduler.clear_collection_block(
-        session, source_id, credential_revision=row.credential_revision, workspace_id=scope.workspace_id)
-    await commit_with_replay(session, [
-        make_source_change(source.id, source.generation, source.status, connector_state=row.state, scope=scope),
-    ], access_fence=access_fence, multi_workspace_enabled=gate, scope=scope)
-    return await _activation_read(session, source_id, row, multi_workspace_enabled=gate, scope=scope)
+        session,
+        source_id,
+        credential_revision=row.credential_revision,
+        workspace_id=scope.workspace_id,
+    )
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(
+                source.id, source.generation, source.status, connector_state=row.state, scope=scope
+            ),
+        ],
+        access_fence=access_fence,
+        multi_workspace_enabled=gate,
+        scope=scope,
+    )
+    return await _activation_read(
+        session, source_id, row, multi_workspace_enabled=gate, scope=scope
+    )

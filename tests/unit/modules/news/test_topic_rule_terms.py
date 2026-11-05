@@ -59,7 +59,12 @@ async def test_resolve_topic_terms_filters_and_merges_keywords_with_entity_names
     result = await resolve_topic_terms(session, [row.id], **KW)  # type: ignore[arg-type]
     assert result == {row.id: ["rates", "fed", "Acme"]}
     sql = sql_text(session.statements[0])
-    assert "owner_id = 7" in sql and "deleted_at IS NULL" in sql and "is_active IS true" in sql and f"workspace_id = '{WS}'" in sql
+    assert (
+        "owner_id = 7" in sql
+        and "deleted_at IS NULL" in sql
+        and "is_active IS true" in sql
+        and f"workspace_id = '{WS}'" in sql
+    )
     assert await resolve_topic_terms(session, [], **KW) == {}  # type: ignore[arg-type]
 
 
@@ -78,4 +83,6 @@ async def test_deleted_entity_drops_only_itself(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(entities, "get_entity_refs", fake_refs)
     result = await resolve_topic_terms(CaptureSession([row]), [row.id], **KW)  # type: ignore[arg-type]
     assert result == {row.id: ["Live Corp"]}
-    assert [r.name for r in await topics._visible_entity_refs(None, [live, dead], **KW)] == ["Live Corp"]  # type: ignore[arg-type]
+    assert [r.name for r in await topics._visible_entity_refs(None, [live, dead], **KW)] == [
+        "Live Corp"
+    ]  # type: ignore[arg-type]

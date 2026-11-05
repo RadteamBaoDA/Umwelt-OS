@@ -91,7 +91,9 @@ class TestDocumentCreateAndPatch:
         # Min length: 1
         assert DocumentCreate(source_id=source_id, title="A", content="text").title == "A"
         # Max length: 500
-        assert DocumentCreate(source_id=source_id, title="x" * 500, content="text").title == "x" * 500
+        assert (
+            DocumentCreate(source_id=source_id, title="x" * 500, content="text").title == "x" * 500
+        )
 
         with pytest.raises(ValidationError):
             DocumentCreate(source_id=source_id, title="", content="text")

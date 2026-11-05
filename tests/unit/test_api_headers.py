@@ -15,7 +15,9 @@ def _client() -> TestClient:
 
     @app.get("/own")
     def own() -> PlainTextResponse:
-        return PlainTextResponse("ok", headers={"Content-Security-Policy": "default-src 'none'; sandbox"})
+        return PlainTextResponse(
+            "ok", headers={"Content-Security-Policy": "default-src 'none'; sandbox"}
+        )
 
     return TestClient(app)
 

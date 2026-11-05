@@ -20,21 +20,36 @@ def _cipher(key: str) -> Fernet:
 
 
 def encrypt_connection_credential(
-    value: str, *, key: str, owner_id: int, connection_id: UUID, credential_revision: int,
+    value: str,
+    *,
+    key: str,
+    owner_id: int,
+    connection_id: UUID,
+    credential_revision: int,
 ) -> str:
     """Encrypt a nonempty bearer secret with authenticated domain and record/revision binding."""
     if not value or len(value.encode("utf-8")) > 8192 or credential_revision < 1:
         raise ValueError("MCP credential is empty or outside the supported bounds")
-    payload = json.dumps({
-        "domain": "mcp-connection", "owner_id": owner_id,
-        "connection_id": str(connection_id), "credential_revision": credential_revision,
-        "value": value,
-    }, separators=(",", ":")).encode("utf-8")
+    payload = json.dumps(
+        {
+            "domain": "mcp-connection",
+            "owner_id": owner_id,
+            "connection_id": str(connection_id),
+            "credential_revision": credential_revision,
+            "value": value,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
     return _cipher(key).encrypt(payload).decode("ascii")
 
 
 def decrypt_connection_credential(
-    envelope: str, *, key: str, owner_id: int, connection_id: UUID, credential_revision: int,
+    envelope: str,
+    *,
+    key: str,
+    owner_id: int,
+    connection_id: UUID,
+    credential_revision: int,
 ) -> str:
     """Decrypt only for the exact owner, connection and credential revision encoded in the envelope."""
     try:
@@ -42,14 +57,20 @@ def decrypt_connection_credential(
     except (InvalidToken, ValueError, UnicodeEncodeError, json.JSONDecodeError) as exc:
         raise ValueError("MCP credential envelope is invalid") from exc
     expected = {
-        "domain": "mcp-connection", "owner_id": owner_id,
-        "connection_id": str(connection_id), "credential_revision": credential_revision,
+        "domain": "mcp-connection",
+        "owner_id": owner_id,
+        "connection_id": str(connection_id),
+        "credential_revision": credential_revision,
     }
     actual = {name: payload.get(name) for name in expected}
-    if not hmac.compare_digest(
-        json.dumps(actual, sort_keys=True, separators=(",", ":")),
-        json.dumps(expected, sort_keys=True, separators=(",", ":")),
-    ) or not isinstance(payload.get("value"), str) or not payload["value"]:
+    if (
+        not hmac.compare_digest(
+            json.dumps(actual, sort_keys=True, separators=(",", ":")),
+            json.dumps(expected, sort_keys=True, separators=(",", ":")),
+        )
+        or not isinstance(payload.get("value"), str)
+        or not payload["value"]
+    ):
         raise ValueError("MCP credential envelope context does not match")
     return str(payload["value"])
 

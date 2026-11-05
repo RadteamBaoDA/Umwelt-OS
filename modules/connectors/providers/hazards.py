@@ -20,7 +20,9 @@ from modules.connectors.providers.macro import (
 from modules.ingestion.public import IngestionRecord
 
 NASA_EONET_URL = "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=50"
-_MAX_EVENTS = 50  # equals the request limit; more is reported incomplete rather than truncated silently
+_MAX_EVENTS = (
+    50  # equals the request limit; more is reported incomplete rather than truncated silently
+)
 _MAX_SOURCES = 5
 _LOG = logging.getLogger(__name__)
 _ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -47,11 +49,18 @@ def _truncated(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 def _map_event(
-    event_id: str, title: str, event: dict[str, object], collected_at: datetime,
+    event_id: str,
+    title: str,
+    event: dict[str, object],
+    collected_at: datetime,
 ) -> IngestionRecord:
     """Map one event with a valid id/title to a record; malformed geometry/magnitude raises ``ProviderPayloadError``."""
     geometry = event.get("geometry")
-    if not isinstance(geometry, list) or not geometry or not all(isinstance(g, dict) for g in geometry):
+    if (
+        not isinstance(geometry, list)
+        or not geometry
+        or not all(isinstance(g, dict) for g in geometry)
+    ):
         raise ProviderPayloadError("nasa_eonet_geometry_invalid")
     dated = [(provider_instant(g.get("date"), collected_at, unit="iso"), g) for g in geometry]
     observed, latest = max(dated, key=lambda pair: pair[0])
@@ -75,29 +84,59 @@ def _map_event(
         except ValueError as exc:
             raise ProviderPayloadError("nasa_eonet_magnitude_invalid") from exc
     categories_raw = event.get("categories")
-    categories = [
-        c for c in (_clean(cat.get("title"), 60) for cat in categories_raw if isinstance(cat, dict)) if c
-    ] if isinstance(categories_raw, list) else []
+    categories = (
+        [
+            c
+            for c in (
+                _clean(cat.get("title"), 60) for cat in categories_raw if isinstance(cat, dict)
+            )
+            if c
+        ]
+        if isinstance(categories_raw, list)
+        else []
+    )
     sources_raw = event.get("sources")
-    links = [
-        u for u in (_clean(s.get("url"), 300) for s in sources_raw if isinstance(s, dict))
-        if u and u.startswith(("http://", "https://"))
-    ][:_MAX_SOURCES] if isinstance(sources_raw, list) else []
+    links = (
+        [
+            u
+            for u in (_clean(s.get("url"), 300) for s in sources_raw if isinstance(s, dict))
+            if u and u.startswith(("http://", "https://"))
+        ][:_MAX_SOURCES]
+        if isinstance(sources_raw, list)
+        else []
+    )
     closed = _clean(event.get("closed"), 40)
     category_text = ", ".join(categories)
-    content = f"{title} [{category_text or 'uncategorized'}]" + (f" Sources: {' '.join(links)}" if links else "")
+    content = f"{title} [{category_text or 'uncategorized'}]" + (
+        f" Sources: {' '.join(links)}" if links else ""
+    )
     event_ms = int(observed.timestamp() * 1000)
     fields: dict[str, str | float | int | None] = {
-        "categories": category_text or None, "closed": closed, "latitude": lat, "longitude": lon,
-        "event_time": event_ms, "magnitude_unit": unit,
+        "categories": category_text or None,
+        "closed": closed,
+        "latitude": lat,
+        "longitude": lon,
+        "event_time": event_ms,
+        "magnitude_unit": unit,
     }
     return build_record(
-        provider="nasa_eonet", identity=event_id, content=content, title=title[:500],
-        observed_at=observed, collected_at=collected_at,
+        provider="nasa_eonet",
+        identity=event_id,
+        content=content,
+        title=title[:500],
+        observed_at=observed,
+        collected_at=collected_at,
         version=content_version("nasa_eonet", event_id, event_ms, closed, value),
-        metric="natural_event", value=value, unit=unit or "event", symbol=None,
-        region=_clean(event.get("description"), 80), latitude=lat, longitude=lon,
-        quality="provider_reported", timestamp_basis="provider_modified", modified_at=observed,
+        metric="natural_event",
+        value=value,
+        unit=unit or "event",
+        symbol=None,
+        region=_clean(event.get("description"), 80),
+        latitude=lat,
+        longitude=lon,
+        quality="provider_reported",
+        timestamp_basis="provider_modified",
+        modified_at=observed,
         provider_fields=fields,
     )
 
@@ -123,7 +162,9 @@ def map_nasa_eonet(payload: object, collected_at: datetime) -> list[IngestionRec
             skipped += 1  # no stable identity: one bad event must not fail the batch
             continue
         if event_id in seen:
-            raise ProviderPayloadError("nasa_eonet_event_invalid")  # duplicate ids break snapshot integrity
+            raise ProviderPayloadError(
+                "nasa_eonet_event_invalid"
+            )  # duplicate ids break snapshot integrity
         seen.add(event_id)
         title = _clean(event.get("title"), 300)
         if not title:
@@ -162,7 +203,11 @@ def map_noaa_kp(payload: object, collected_at: datetime) -> list[IngestionRecord
     ``time_tag`` is the bin start in UTC (sent without a zone). Kp is a 0-9 index; anything else, a
     non-list body or a malformed row raises ``ProviderPayloadError`` instead of yielding a partial series.
     """
-    if not isinstance(payload, list) or not payload or not all(isinstance(r, dict) for r in payload):
+    if (
+        not isinstance(payload, list)
+        or not payload
+        or not all(isinstance(r, dict) for r in payload)
+    ):
         raise ProviderPayloadError("noaa_kp_response_invalid")
     rows = []
     for row in payload:
@@ -179,16 +224,26 @@ def map_noaa_kp(payload: object, collected_at: datetime) -> list[IngestionRecord
     for observed, kp, row in rows[-_KP_MAX_ROWS:]:
         tag, text = observed.isoformat(), decimal_text(kp)
         running, stations = row.get("a_running"), row.get("station_count")
-        records.append(build_record(
-            provider="noaa_kp", identity=f"noaa_kp:{tag}", content=f"Planetary Kp index {tag}: {text}",
-            title="NOAA planetary Kp index", observed_at=observed, collected_at=collected_at,
-            version=content_version("noaa_kp", tag, text), metric="kp_index", value=kp, unit="kp",
-            quality="provider_reported",
-            provider_fields={
-                "time_tag": tag, "a_running": running if type(running) is int else None,
-                "station_count": stations if type(stations) is int else None,
-            },
-        ))
+        records.append(
+            build_record(
+                provider="noaa_kp",
+                identity=f"noaa_kp:{tag}",
+                content=f"Planetary Kp index {tag}: {text}",
+                title="NOAA planetary Kp index",
+                observed_at=observed,
+                collected_at=collected_at,
+                version=content_version("noaa_kp", tag, text),
+                metric="kp_index",
+                value=kp,
+                unit="kp",
+                quality="provider_reported",
+                provider_fields={
+                    "time_tag": tag,
+                    "a_running": running if type(running) is int else None,
+                    "station_count": stations if type(stations) is int else None,
+                },
+            )
+        )
     return records
 
 

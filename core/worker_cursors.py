@@ -10,6 +10,7 @@ same object, e.g. search indexing, can treat it as such):
   * ``_unsynced:<key>``  -> ``"1"`` while the last Redis write failed (local value beats Redis)
 Cursor keys must never start with ``_``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -48,20 +49,26 @@ async def read_cursor(ctx: dict[str, object], key: str, allowed: Collection[str]
         raise KeyError(key)
     state = _state(ctx)
     _, cursor = _parse(state.get(key))
-    gen = state.get(f"_gen:{key}", "0")  # recorded before the await: a concurrent write must not be masked
+    gen = state.get(
+        f"_gen:{key}", "0"
+    )  # recorded before the await: a concurrent write must not be masked
     redis = cast(Redis | None, ctx.get("redis"))
     if redis is not None and f"_unsynced:{key}" not in state:
         try:
             remote = await redis.get(key)
             if remote is not None:
                 remote_ok, remote_cursor = _parse(remote)
-                if remote_ok and state.get(f"_gen:{key}", "0") == gen:  # else keep the newer local value
+                if (
+                    remote_ok and state.get(f"_gen:{key}", "0") == gen
+                ):  # else keep the newer local value
                     cursor = remote_cursor
         except Exception:  # noqa: BLE001 - best-effort cursor store
             _log.debug("cursor read failed", exc_info=True)
     if state.get(f"_gen:{key}", "0") != gen:
         _, cursor = _parse(state.get(key))
-        gen = state.get(f"_gen:{key}", "0")  # worked from the newest local value, so our next write may land
+        gen = state.get(
+            f"_gen:{key}", "0"
+        )  # worked from the newest local value, so our next write may land
     else:
         state[key] = str(cursor) if cursor is not None else ""
     # Clone the _GENS mapping onto this job's ctx dict so shallow-copied ARQ contexts never share state.
@@ -72,7 +79,9 @@ async def read_cursor(ctx: dict[str, object], key: str, allowed: Collection[str]
     return cursor
 
 
-async def write_cursor(ctx: dict[str, object], key: str, cursor: UUID | None, allowed: Collection[str]) -> None:
+async def write_cursor(
+    ctx: dict[str, object], key: str, cursor: UUID | None, allowed: Collection[str]
+) -> None:
     """Stale-write guard: the write is skipped when another job wrote this key after this job read it."""
     if key not in allowed:
         raise KeyError(key)

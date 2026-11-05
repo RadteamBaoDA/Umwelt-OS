@@ -50,8 +50,11 @@ from modules.knowledge.temporal._types import (
 
 _NODE_LINKS_ERROR = "graph_node_link_inventory_invalid"
 _PHASE_ORDER = {
-    "canonical_node_write_intent": 0, "shell_write_intent": 1,
-    "bulk_ids_intent": 2, "bulk_write_intent": 3, "cleanup_write_intent": 4,
+    "canonical_node_write_intent": 0,
+    "shell_write_intent": 1,
+    "bulk_ids_intent": 2,
+    "bulk_write_intent": 3,
+    "cleanup_write_intent": 4,
 }
 
 
@@ -73,8 +76,10 @@ class _NodeReconcileState:
         """Return the converged/unresolved outcome after every action was classified."""
         return CanonicalNodeRecoveryOutcome(
             converged=not self.unresolved,
-            retained_ids=tuple(sorted(self.retained)), deleted_ids=tuple(sorted(self.deleted)),
-            replaced_ids=tuple(sorted(self.replaced)), unwritten_ids=tuple(sorted(self.unwritten)),
+            retained_ids=tuple(sorted(self.retained)),
+            deleted_ids=tuple(sorted(self.deleted)),
+            replaced_ids=tuple(sorted(self.replaced)),
+            unwritten_ids=tuple(sorted(self.unwritten)),
             unresolved_ids=tuple(sorted(set(self.unresolved))),
             reason="converged" if not self.unresolved else "exact_node_state_unresolved",
         )
@@ -82,8 +87,11 @@ class _NodeReconcileState:
     def unknown_outcome(self, action_ids: set[str]) -> CanonicalNodeRecoveryOutcome:
         """Return the not-converged outcome used after a timeout or unexpected failure."""
         return CanonicalNodeRecoveryOutcome(
-            converged=False, retained_ids=tuple(sorted(self.retained)), deleted_ids=tuple(sorted(self.deleted)),
-            replaced_ids=tuple(sorted(self.replaced)), unwritten_ids=tuple(sorted(self.unwritten)),
+            converged=False,
+            retained_ids=tuple(sorted(self.retained)),
+            deleted_ids=tuple(sorted(self.deleted)),
+            replaced_ids=tuple(sorted(self.replaced)),
+            unwritten_ids=tuple(sorted(self.unwritten)),
             unresolved_ids=tuple(sorted(set(self.unresolved) | action_ids)),
             reason="graph_node_recovery_outcome_unknown",
         )
@@ -100,18 +108,23 @@ class _NodeWritePlan:
 
 
 def _node_recovery_unavailable(
-    context: OperationAuthorization, receipts: tuple[GraphWriteReceipt, ...],
+    context: OperationAuthorization,
+    receipts: tuple[GraphWriteReceipt, ...],
     actions: tuple[CanonicalNodeRecoveryAction, ...],
 ) -> bool:
     """Report whether the owner callback is missing or receipt/action counts are out of bounds."""
-    return (context.authorize_node_recovery is None
-            or not 1 <= len(receipts) <= MAX_RECOVERY_WITNESSES or not actions
-            or len(actions) > MAX_SUPPORT
-            or len({item.graph_entity_uuid for item in actions}) != len(actions))
+    return (
+        context.authorize_node_recovery is None
+        or not 1 <= len(receipts) <= MAX_RECOVERY_WITNESSES
+        or not actions
+        or len(actions) > MAX_SUPPORT
+        or len({item.graph_entity_uuid for item in actions}) != len(actions)
+    )
 
 
 def _validate_node_request(
-    context: OperationAuthorization, receipts: tuple[GraphWriteReceipt, ...],
+    context: OperationAuthorization,
+    receipts: tuple[GraphWriteReceipt, ...],
     actions: tuple[CanonicalNodeRecoveryAction, ...],
 ) -> str:
     """Return the single episode id after proving receipts and actions stay inside the authorized partition.
@@ -126,33 +139,51 @@ def _validate_node_request(
         binding.graph_entity_uuid for receipt in receipts for binding in receipt.canonical_bindings
     }
     authorized_node_ids.update(
-        entity_id for receipt in receipts if receipt.phase == "bulk_write_intent"
+        entity_id
+        for receipt in receipts
+        if receipt.phase == "bulk_write_intent"
         for entity_id, _, state in receipt.prior_entity_state_fingerprints
-        if any(candidate_id == entity_id and candidate_state is not None
-               for candidate_id, candidate_state in receipt.intended_entity_state_fingerprints)
+        if any(
+            candidate_id == entity_id and candidate_state is not None
+            for candidate_id, candidate_state in receipt.intended_entity_state_fingerprints
+        )
     )
     total_ids = {
-        value for item in receipts
+        value
+        for item in receipts
         for value in (*item.entity_ids, *item.mention_ids, *item.fact_ids)
     }
     total_ids.update(link.edge_id for item in receipts for link in item.incident_links)
     action_ids = {item.graph_entity_uuid for item in actions}
     expected_link_count = sum(len(item.expected_incident_links) for item in actions)
-    if (len(episode_ids) != 1 or not episode_ids <= set(context.partition_episode_ids)
-            or mapping_revisions != {context.mapping_revision}
-            or any(item.group_id != context.group_id or item.operation_id != context.operation_id
-                   for item in receipts)
-            or len(total_ids | action_ids | {
-                link.edge_id for action in actions for link in action.expected_incident_links
-            }) > MAX_SUPPORT or expected_link_count > MAX_SUPPORT
-            or not action_ids <= authorized_node_ids):
+    if (
+        len(episode_ids) != 1
+        or not episode_ids <= set(context.partition_episode_ids)
+        or mapping_revisions != {context.mapping_revision}
+        or any(
+            item.group_id != context.group_id or item.operation_id != context.operation_id
+            for item in receipts
+        )
+        or len(
+            total_ids
+            | action_ids
+            | {link.edge_id for action in actions for link in action.expected_incident_links}
+        )
+        > MAX_SUPPORT
+        or expected_link_count > MAX_SUPPORT
+        or not action_ids <= authorized_node_ids
+    ):
         raise GraphOperationError("graph_node_recovery_outside_authorized_partition")
     return next(iter(episode_ids))
 
 
 async def _classify_absent_node(
-    driver: Any, context: OperationAuthorization, receipts: tuple[GraphWriteReceipt, ...],
-    action: CanonicalNodeRecoveryAction, episode_id: str, state: _NodeReconcileState,
+    driver: Any,
+    context: OperationAuthorization,
+    receipts: tuple[GraphWriteReceipt, ...],
+    action: CanonicalNodeRecoveryAction,
+    episode_id: str,
+    state: _NodeReconcileState,
 ) -> None:
     """Classify a missing node for a delete action as deleted, unwritten or unresolved.
 
@@ -162,18 +193,25 @@ async def _classify_absent_node(
     downgrades the node to unresolved.
     """
     node_id = action.graph_entity_uuid
-    prior_node_state = next((
-        (exists, fingerprint)
-        for receipt in receipts
-        for candidate_id, exists, fingerprint in receipt.prior_entity_state_fingerprints
-        if candidate_id == node_id
-    ), None)
+    prior_node_state = next(
+        (
+            (exists, fingerprint)
+            for receipt in receipts
+            for candidate_id, exists, fingerprint in receipt.prior_entity_state_fingerprints
+            if candidate_id == node_id
+        ),
+        None,
+    )
     cleanup_deleted = any(
         receipt.phase == "cleanup_write_intent"
         and (node_id, None) in receipt.intended_entity_state_fingerprints
-        and (receipt.rebuild_absence_observed == "node"
-             or any(candidate_id == node_id and exists and fingerprint is not None
-                    for candidate_id, exists, fingerprint in receipt.prior_entity_state_fingerprints))
+        and (
+            receipt.rebuild_absence_observed == "node"
+            or any(
+                candidate_id == node_id and exists and fingerprint is not None
+                for candidate_id, exists, fingerprint in receipt.prior_entity_state_fingerprints
+            )
+        )
         for receipt in receipts
     )
     if cleanup_deleted:
@@ -181,15 +219,22 @@ async def _classify_absent_node(
     elif prior_node_state is not None and not prior_node_state[0]:
         state.unwritten.append(node_id)
     elif await _authorize_cross_rebuild_absence(
-        context, "node", node_id, episode_id=UUID(str(episode_id)),
+        context,
+        "node",
+        node_id,
+        episode_id=UUID(str(episode_id)),
     ):
         state.deleted.append(node_id)
     else:
         state.unresolved.append(node_id)
     if action.action == "delete_for_rebuild" and not await _incident_ids_absent(
-        driver, [link.edge_id for item in receipts
-                 if node_id in item.entity_ids
-                 for link in item.incident_links]
+        driver,
+        [
+            link.edge_id
+            for item in receipts
+            if node_id in item.entity_ids
+            for link in item.incident_links
+        ]
         + [link.edge_id for link in action.expected_incident_links],
         context.group_id,
     ):
@@ -199,8 +244,11 @@ async def _classify_absent_node(
 
 
 def _build_replacement_node(
-    context: OperationAuthorization, action: CanonicalNodeRecoveryAction, entity: Any,
-    binding: CanonicalEntityBinding | None, candidate: CandidateNodeReplacement | None,
+    context: OperationAuthorization,
+    action: CanonicalNodeRecoveryAction,
+    entity: Any,
+    binding: CanonicalEntityBinding | None,
+    candidate: CandidateNodeReplacement | None,
 ) -> Any:
     """Build the replacement ``EntityNode`` from the binding (preferred) or the candidate seed fields."""
     from graphiti_core.nodes import EntityNode
@@ -213,8 +261,11 @@ def _build_replacement_node(
             raise RuntimeError("invariant violated: candidate must not be None")
         node_name, node_summary = candidate.node_name, candidate.node_summary
     return EntityNode(
-        uuid=action.graph_entity_uuid, group_id=context.group_id,
-        name=node_name, summary=node_summary, attributes={},
+        uuid=action.graph_entity_uuid,
+        group_id=context.group_id,
+        name=node_name,
+        summary=node_summary,
+        attributes={},
         # Label assignment is additive (SET n:$(labels)), so preserve the exact current physical labels.
         labels=(list(entity.labels) if entity is not None else ["Entity"]),
         created_at=(entity.created_at if entity is not None else action.replacement_created_at),
@@ -222,20 +273,28 @@ def _build_replacement_node(
 
 
 def _plan_node_write(
-    context: OperationAuthorization, receipts: tuple[GraphWriteReceipt, ...],
-    action: CanonicalNodeRecoveryAction, entity: Any, episode_id: str,
+    context: OperationAuthorization,
+    receipts: tuple[GraphWriteReceipt, ...],
+    action: CanonicalNodeRecoveryAction,
+    entity: Any,
+    episode_id: str,
 ) -> _NodeWritePlan | None:
     """Resolve binding/candidate and the intended replacement; None means the action stays unresolved."""
-    binding = action.replacement_binding or next((
-        item for receipt in receipts for item in receipt.canonical_bindings
-        if item.graph_entity_uuid == action.graph_entity_uuid
-    ), None)
+    binding = action.replacement_binding or next(
+        (
+            item
+            for receipt in receipts
+            for item in receipt.canonical_bindings
+            if item.graph_entity_uuid == action.graph_entity_uuid
+        ),
+        None,
+    )
     candidate = action.replacement_candidate
-    if (candidate is not None and (
+    if candidate is not None and (
         candidate.group_id != context.group_id
         or episode_id in candidate.support_episode_ids
         or not set(candidate.support_episode_ids) <= set(context.partition_episode_ids)
-    )):
+    ):
         return None
     if action.action != "replace_from_current_support":
         return _NodeWritePlan(binding, candidate, None, None)
@@ -245,42 +304,67 @@ def _plan_node_write(
         return None
     replacement = _build_replacement_node(context, action, entity, binding, candidate)
     intended_fingerprint = _entity_state_fingerprint(
-        replacement, context.embedding.dimensions, writer_intended=True,
+        replacement,
+        context.embedding.dimensions,
+        writer_intended=True,
     )
     return _NodeWritePlan(binding, candidate, replacement, intended_fingerprint)
 
 
 def _node_cleanup_receipt(
-    context: OperationAuthorization, episode_id: str, action: CanonicalNodeRecoveryAction,
-    entity: Any, current_fingerprint: str | None, plan: _NodeWritePlan,
+    context: OperationAuthorization,
+    episode_id: str,
+    action: CanonicalNodeRecoveryAction,
+    entity: Any,
+    current_fingerprint: str | None,
+    plan: _NodeWritePlan,
 ) -> GraphWriteReceipt:
     """Build the pre-mutation cleanup receipt for one node action."""
     binding, candidate = plan.binding, plan.candidate
     return GraphWriteReceipt(
-        operation_id=context.operation_id, lease_token=context.lease_token,
-        episode_id=UUID(episode_id), group_id=context.group_id,
+        operation_id=context.operation_id,
+        lease_token=context.lease_token,
+        episode_id=UUID(episode_id),
+        group_id=context.group_id,
         mapping_revision=context.mapping_revision,
-        desired_support_digest=hashlib.sha256(json.dumps(
-            [action.graph_entity_uuid, action.action, current_fingerprint,
-             plan.intended_fingerprint], separators=(",", ":"),
-        ).encode()).hexdigest(),
+        desired_support_digest=hashlib.sha256(
+            json.dumps(
+                [
+                    action.graph_entity_uuid,
+                    action.action,
+                    current_fingerprint,
+                    plan.intended_fingerprint,
+                ],
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest(),
         phase="cleanup_write_intent",
         entity_ids=(action.graph_entity_uuid,),
         intended_entity_state_fingerprints=((action.graph_entity_uuid, plan.intended_fingerprint),),
-        prior_entity_state_fingerprints=((
-            action.graph_entity_uuid, entity is not None, current_fingerprint,
-        ),),
+        prior_entity_state_fingerprints=(
+            (
+                action.graph_entity_uuid,
+                entity is not None,
+                current_fingerprint,
+            ),
+        ),
         canonical_bindings=_receipt_bindings((binding,)) if binding is not None else (),
-        candidate_field_support=(tuple(
-            (action.graph_entity_uuid, field_name, digest, support_ids)
-            for field_name, digest, support_ids in candidate.field_support
-        ) if candidate is not None else ()),
+        candidate_field_support=(
+            tuple(
+                (action.graph_entity_uuid, field_name, digest, support_ids)
+                for field_name, digest, support_ids in candidate.field_support
+            )
+            if candidate is not None
+            else ()
+        ),
         incident_links=action.expected_incident_links,
     )
 
 
 async def _recheck_node_before_write(
-    driver: Any, context: OperationAuthorization, action: CanonicalNodeRecoveryAction,
+    driver: Any,
+    context: OperationAuthorization,
+    action: CanonicalNodeRecoveryAction,
     current_fingerprint: str | None,
 ) -> bool:
     """Re-read the node and its links after the intent; True only if both still equal the classified state."""
@@ -295,15 +379,22 @@ async def _recheck_node_before_write(
             raise
     if latest is not None:
         _require_group([latest], context.group_id)
-    return not ((_entity_state_fingerprint(latest, context.embedding.dimensions)
-                 if latest is not None else None)
-                != current_fingerprint
-                or await _read_exact_links(driver, context, action.graph_entity_uuid, _NODE_LINKS_ERROR)
-                != action.expected_incident_links)
+    return not (
+        (
+            _entity_state_fingerprint(latest, context.embedding.dimensions)
+            if latest is not None
+            else None
+        )
+        != current_fingerprint
+        or await _read_exact_links(driver, context, action.graph_entity_uuid, _NODE_LINKS_ERROR)
+        != action.expected_incident_links
+    )
 
 
 async def _delete_node_and_confirm(
-    driver: Any, context: OperationAuthorization, action: CanonicalNodeRecoveryAction,
+    driver: Any,
+    context: OperationAuthorization,
+    action: CanonicalNodeRecoveryAction,
     state: _NodeReconcileState,
 ) -> None:
     """Delete the node (typed rebuild or plain orphan) and record it deleted only if it reads back absent."""
@@ -327,8 +418,11 @@ async def _delete_node_and_confirm(
 
 
 async def _replace_node_and_confirm(
-    driver: Any, context: OperationAuthorization, action: CanonicalNodeRecoveryAction,
-    plan: _NodeWritePlan, state: _NodeReconcileState,
+    driver: Any,
+    context: OperationAuthorization,
+    action: CanonicalNodeRecoveryAction,
+    plan: _NodeWritePlan,
+    state: _NodeReconcileState,
 ) -> None:
     """Save the replacement, drop the stale vector and record success only if the read-back matches."""
     from graphiti_core.nodes import EntityNode
@@ -341,29 +435,39 @@ async def _replace_node_and_confirm(
     records, _, _ = await driver.execute_query(
         "MATCH (entity:Entity {uuid: $entity_id, group_id: $group_id}) "
         "SET entity.name_embedding = null RETURN entity.uuid AS entity_id",
-        entity_id=node_id, group_id=context.group_id,
+        entity_id=node_id,
+        group_id=context.group_id,
     )
-    if (not isinstance(records, list) or len(records) != 1
-            or not isinstance(records[0], dict)
-            or records[0].get("entity_id") != node_id):
+    if (
+        not isinstance(records, list)
+        or len(records) != 1
+        or not isinstance(records[0], dict)
+        or records[0].get("entity_id") != node_id
+    ):
         state.unresolved.append(node_id)
         return
     saved = await EntityNode.get_by_uuid(driver, node_id)
     await saved.load_name_embedding(driver)
-    if (_entity_state_fingerprint(saved, context.embedding.dimensions)
-            == plan.intended_fingerprint
-            and saved.group_id == context.group_id
-            and await _read_exact_links(driver, context, node_id, _NODE_LINKS_ERROR)
-            == action.expected_incident_links):
+    if (
+        _entity_state_fingerprint(saved, context.embedding.dimensions) == plan.intended_fingerprint
+        and saved.group_id == context.group_id
+        and await _read_exact_links(driver, context, node_id, _NODE_LINKS_ERROR)
+        == action.expected_incident_links
+    ):
         state.replaced.append(node_id)
     else:
         state.unresolved.append(node_id)
 
 
 async def _write_node_action(
-    driver: Any, context: OperationAuthorization, actions: tuple[CanonicalNodeRecoveryAction, ...],
-    action: CanonicalNodeRecoveryAction, receipt: GraphWriteReceipt, current_fingerprint: str | None,
-    plan: _NodeWritePlan, state: _NodeReconcileState,
+    driver: Any,
+    context: OperationAuthorization,
+    actions: tuple[CanonicalNodeRecoveryAction, ...],
+    action: CanonicalNodeRecoveryAction,
+    receipt: GraphWriteReceipt,
+    current_fingerprint: str | None,
+    plan: _NodeWritePlan,
+    state: _NodeReconcileState,
 ) -> None:
     """Journal the intent, reauthorize with the extended history, recheck, then delete or replace.
 
@@ -385,9 +489,13 @@ async def _write_node_action(
 
 
 async def _reconcile_node_action(
-    driver: Any, context: OperationAuthorization, receipts: tuple[GraphWriteReceipt, ...],
-    actions: tuple[CanonicalNodeRecoveryAction, ...], action: CanonicalNodeRecoveryAction,
-    episode_id: str, state: _NodeReconcileState,
+    driver: Any,
+    context: OperationAuthorization,
+    receipts: tuple[GraphWriteReceipt, ...],
+    actions: tuple[CanonicalNodeRecoveryAction, ...],
+    action: CanonicalNodeRecoveryAction,
+    episode_id: str,
+    state: _NodeReconcileState,
 ) -> None:
     """Classify and, when required, apply one node recovery action, updating ``state`` in place.
 
@@ -398,12 +506,15 @@ async def _reconcile_node_action(
     node_id = action.graph_entity_uuid
     entity = await _load_action_entity(driver, context, node_id)
     links = await _read_exact_links(driver, context, node_id, _NODE_LINKS_ERROR)
-    if (links != action.expected_incident_links
-            and not (entity is None and not links and action.action == "delete_for_rebuild")):
+    if links != action.expected_incident_links and not (
+        entity is None and not links and action.action == "delete_for_rebuild"
+    ):
         state.unresolved.append(node_id)
         return
     current_fingerprint = (
-        _entity_state_fingerprint(entity, context.embedding.dimensions) if entity is not None else None
+        _entity_state_fingerprint(entity, context.embedding.dimensions)
+        if entity is not None
+        else None
     )
     if current_fingerprint != action.expected_current_state_fingerprint:
         state.unresolved.append(node_id)
@@ -423,7 +534,9 @@ async def _reconcile_node_action(
         return
     receipt = _node_cleanup_receipt(context, episode_id, action, entity, current_fingerprint, plan)
     try:
-        await _write_node_action(driver, context, actions, action, receipt, current_fingerprint, plan, state)
+        await _write_node_action(
+            driver, context, actions, action, receipt, current_fingerprint, plan, state
+        )
     except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
         state.unresolved.append(node_id)
 
@@ -443,15 +556,18 @@ class _FactReconcileState:
     def final_outcome(self) -> ExactFactRecoveryOutcome:
         """Return the converged/unresolved outcome after every action was classified."""
         return ExactFactRecoveryOutcome(
-            converged=not self.unresolved, replaced_ids=tuple(sorted(self.replaced)),
-            deleted_ids=tuple(sorted(self.deleted)), unresolved_ids=tuple(sorted(self.unresolved)),
+            converged=not self.unresolved,
+            replaced_ids=tuple(sorted(self.replaced)),
+            deleted_ids=tuple(sorted(self.deleted)),
+            unresolved_ids=tuple(sorted(self.unresolved)),
             reason="converged" if not self.unresolved else "exact_fact_state_unresolved",
         )
 
     def unknown_outcome(self, action_ids: set[str]) -> ExactFactRecoveryOutcome:
         """Return the not-converged outcome used after a timeout or unexpected failure."""
         return ExactFactRecoveryOutcome(
-            converged=False, replaced_ids=tuple(sorted(self.replaced)),
+            converged=False,
+            replaced_ids=tuple(sorted(self.replaced)),
             deleted_ids=tuple(sorted(self.deleted)),
             unresolved_ids=tuple(sorted(set(self.unresolved) | action_ids)),
             reason="graph_fact_recovery_outcome_unknown",
@@ -459,15 +575,19 @@ class _FactReconcileState:
 
 
 def _fact_recovery_unavailable(
-    context: OperationAuthorization, receipts: tuple[GraphWriteReceipt, ...],
+    context: OperationAuthorization,
+    receipts: tuple[GraphWriteReceipt, ...],
     actions: tuple[ExactFactRecoveryAction, ...],
 ) -> bool:
     """Report whether the owner callback is missing or receipt/action counts and order are invalid."""
-    return (context.authorize_fact_recovery is None
-            or not 1 <= len(receipts) <= MAX_RECOVERY_WITNESSES or not actions
-            or len(actions) > MAX_SUPPORT
-            or len({item.fact_id for item in actions}) != len(actions)
-            or tuple(sorted(actions, key=lambda item: item.fact_id)) != actions)
+    return (
+        context.authorize_fact_recovery is None
+        or not 1 <= len(receipts) <= MAX_RECOVERY_WITNESSES
+        or not actions
+        or len(actions) > MAX_SUPPORT
+        or len({item.fact_id for item in actions}) != len(actions)
+        or tuple(sorted(actions, key=lambda item: item.fact_id)) != actions
+    )
 
 
 def _fact_proofs(receipts: tuple[GraphWriteReceipt, ...]) -> dict[str, tuple[str, str, bool]]:
@@ -480,14 +600,17 @@ def _fact_proofs(receipts: tuple[GraphWriteReceipt, ...]) -> dict[str, tuple[str
             prior = prior_by_id[fact_id]
             intended = intended_by_id[fact_id]
             proof_by_id[fact_id] = (prior.source_node_id, prior.target_node_id, prior.existed)
-            if (intended.source_node_id != prior.source_node_id
-                    or intended.target_node_id != prior.target_node_id):
+            if (
+                intended.source_node_id != prior.source_node_id
+                or intended.target_node_id != prior.target_node_id
+            ):
                 raise GraphOperationError("graph_fact_recovery_receipt_invalid")
     return proof_by_id
 
 
 def _validate_fact_request(
-    context: OperationAuthorization, receipts: tuple[GraphWriteReceipt, ...],
+    context: OperationAuthorization,
+    receipts: tuple[GraphWriteReceipt, ...],
     actions: tuple[ExactFactRecoveryAction, ...],
 ) -> str:
     """Return the single episode id after proving receipts and actions are journaled and in-partition.
@@ -497,33 +620,53 @@ def _validate_fact_request(
     snapshots outside the partition/dimensions or an over-bound physical id union.
     """
     episode_ids = {str(item.episode_id) for item in receipts}
-    if (len(episode_ids) != 1 or not episode_ids <= set(context.partition_episode_ids)
-            or any(item.group_id != context.group_id or item.operation_id != context.operation_id
-                   or item.lease_token != context.lease_token
-                   or item.mapping_revision != context.mapping_revision
-                   or item.phase not in _PHASE_ORDER
-                   for item in receipts)):
+    if (
+        len(episode_ids) != 1
+        or not episode_ids <= set(context.partition_episode_ids)
+        or any(
+            item.group_id != context.group_id
+            or item.operation_id != context.operation_id
+            or item.lease_token != context.lease_token
+            or item.mapping_revision != context.mapping_revision
+            or item.phase not in _PHASE_ORDER
+            for item in receipts
+        )
+    ):
         raise GraphOperationError("graph_fact_recovery_outside_authorized_partition")
     if [item.phase for item in receipts] != sorted(
-        (item.phase for item in receipts), key=lambda phase: _PHASE_ORDER[phase],
+        (item.phase for item in receipts),
+        key=lambda phase: _PHASE_ORDER[phase],
     ):
         raise GraphOperationError("graph_fact_recovery_receipt_invalid")
     episode_id = next(iter(episode_ids))
     proof_by_id = _fact_proofs(receipts)
-    if any(action.fact_id not in proof_by_id
-           or proof_by_id[action.fact_id][:2] != (action.source_node_id, action.target_node_id)
-           or (action.replacement is not None and (
-               action.replacement.group_id != context.group_id
-               or episode_id in action.replacement.episode_ids
-               or not set(action.replacement.episode_ids) <= set(context.partition_episode_ids)
-               or (context.embedding.dimensions is not None
-                   and len(action.replacement.fact_embedding) != context.embedding.dimensions)
-           )) for action in actions):
+    if any(
+        action.fact_id not in proof_by_id
+        or proof_by_id[action.fact_id][:2] != (action.source_node_id, action.target_node_id)
+        or (
+            action.replacement is not None
+            and (
+                action.replacement.group_id != context.group_id
+                or episode_id in action.replacement.episode_ids
+                or not set(action.replacement.episode_ids) <= set(context.partition_episode_ids)
+                or (
+                    context.embedding.dimensions is not None
+                    and len(action.replacement.fact_embedding) != context.embedding.dimensions
+                )
+            )
+        )
+        for action in actions
+    ):
         raise GraphOperationError("graph_fact_recovery_receipt_invalid")
     total_recovery_ids = {
-        value for item in receipts
-        for value in (*item.entity_ids, *item.mention_ids, *item.fact_ids,
-                      *(link.edge_id for link in item.incident_links))
+        value
+        for item in receipts
+        for value in (
+            *item.entity_ids,
+            *item.mention_ids,
+            *item.fact_ids,
+            *(link.edge_id for link in item.incident_links),
+        )
     } | {item.fact_id for item in actions}
     if len(total_recovery_ids) > MAX_SUPPORT:
         raise GraphOperationError("graph_fact_recovery_receipt_invalid")
@@ -531,35 +674,50 @@ def _validate_fact_request(
 
 
 async def _classify_absent_fact(
-    context: OperationAuthorization, receipts: tuple[GraphWriteReceipt, ...],
-    action: ExactFactRecoveryAction, episode_id: str, state: _FactReconcileState,
+    context: OperationAuthorization,
+    receipts: tuple[GraphWriteReceipt, ...],
+    action: ExactFactRecoveryAction,
+    episode_id: str,
+    state: _FactReconcileState,
 ) -> None:
     """Classify a missing fact: deleted when a deleting action has recorded or certified absence."""
     recorded_delete = any(
         receipt.phase == "cleanup_write_intent"
-        and any(item.fact_id == action.fact_id
-                and item.state_fingerprint == _ABSENT_FACT_FINGERPRINT
-                and not item.episode_ids
-                for item in receipt.intended_fact_support)
-        and any(item.fact_id == action.fact_id and item.existed
-                for item in receipt.existing_fact_states)
+        and any(
+            item.fact_id == action.fact_id
+            and item.state_fingerprint == _ABSENT_FACT_FINGERPRINT
+            and not item.episode_ids
+            for item in receipt.intended_fact_support
+        )
+        and any(
+            item.fact_id == action.fact_id and item.existed for item in receipt.existing_fact_states
+        )
         for receipt in receipts
     )
     recorded_initial_absence = any(
-        any(item.fact_id == action.fact_id and not item.existed
+        any(
+            item.fact_id == action.fact_id
+            and not item.existed
             and item.source_node_id == action.source_node_id
             and item.target_node_id == action.target_node_id
-            for item in receipt.existing_fact_states)
-        and any(item.fact_id == action.fact_id
-                and item.source_node_id == action.source_node_id
-                and item.target_node_id == action.target_node_id
-                for item in receipt.intended_fact_support)
+            for item in receipt.existing_fact_states
+        )
+        and any(
+            item.fact_id == action.fact_id
+            and item.source_node_id == action.source_node_id
+            and item.target_node_id == action.target_node_id
+            for item in receipt.intended_fact_support
+        )
         for receipt in receipts
     )
     if action.action in {"delete_unsupported", "delete_for_rebuild"} and (
-        recorded_delete or recorded_initial_absence
+        recorded_delete
+        or recorded_initial_absence
         or await _authorize_cross_rebuild_absence(
-            context, "fact", action.fact_id, episode_id=UUID(str(episode_id)),
+            context,
+            "fact",
+            action.fact_id,
+            episode_id=UUID(str(episode_id)),
             endpoints=(action.source_node_id, action.target_node_id),
         )
     ):
@@ -569,41 +727,58 @@ async def _classify_absent_fact(
 
 
 def _fact_cleanup_receipt(
-    context: OperationAuthorization, receipts: tuple[GraphWriteReceipt, ...], episode_id: str,
-    action: ExactFactRecoveryAction, current: Any, current_fingerprint: str, intended_fingerprint: str,
+    context: OperationAuthorization,
+    receipts: tuple[GraphWriteReceipt, ...],
+    episode_id: str,
+    action: ExactFactRecoveryAction,
+    current: Any,
+    current_fingerprint: str,
+    intended_fingerprint: str,
 ) -> GraphWriteReceipt:
     """Build the pre-mutation cleanup receipt for one fact action."""
     prior_state = ExactFactState(
-        fact_id=action.fact_id, source_node_id=action.source_node_id,
+        fact_id=action.fact_id,
+        source_node_id=action.source_node_id,
         target_node_id=action.target_node_id,
         episode_ids=tuple(sorted(str(value) for value in current.episodes)),
-        state_fingerprint=current_fingerprint, existed=True,
-        valid_at=current.valid_at, invalid_at=current.invalid_at,
+        state_fingerprint=current_fingerprint,
+        existed=True,
+        valid_at=current.valid_at,
+        invalid_at=current.invalid_at,
         expired_at=current.expired_at,
     )
     replacement = action.replacement
     intended_support = ExactFactSupport(
         fact_id=action.fact_id,
         episode_ids=(replacement.episode_ids if replacement else ()),
-        source_node_id=action.source_node_id, target_node_id=action.target_node_id,
+        source_node_id=action.source_node_id,
+        target_node_id=action.target_node_id,
         valid_at=(replacement.valid_at if replacement else None),
         invalid_at=(replacement.invalid_at if replacement else None),
         expired_at=(replacement.expired_at if replacement else None),
         state_fingerprint=intended_fingerprint,
     )
     return GraphWriteReceipt(
-        operation_id=context.operation_id, lease_token=context.lease_token,
-        episode_id=UUID(episode_id), group_id=context.group_id,
+        operation_id=context.operation_id,
+        lease_token=context.lease_token,
+        episode_id=UUID(episode_id),
+        group_id=context.group_id,
         mapping_revision=context.mapping_revision,
-        desired_support_digest=hashlib.sha256(json.dumps(
-            [action.fact_id, action.action, current_fingerprint, intended_fingerprint],
-            separators=(",", ":"),
-        ).encode()).hexdigest(),
+        desired_support_digest=hashlib.sha256(
+            json.dumps(
+                [action.fact_id, action.action, current_fingerprint, intended_fingerprint],
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest(),
         phase="cleanup_write_intent",
-        prior_episode_state_fingerprint=next((
-            item.episode_state_fingerprint for item in reversed(receipts)
-            if item.episode_state_fingerprint is not None
-        ), None),
+        prior_episode_state_fingerprint=next(
+            (
+                item.episode_state_fingerprint
+                for item in reversed(receipts)
+                if item.episode_state_fingerprint is not None
+            ),
+            None,
+        ),
         fact_ids=(action.fact_id,),
         existing_fact_states=(prior_state,),
         intended_fact_support=(intended_support,),
@@ -624,9 +799,16 @@ async def _fetch_fact(driver: Any, context: OperationAuthorization, fact_id: str
 
 
 async def _write_fact_action(
-    driver: Any, context: OperationAuthorization, actions: tuple[ExactFactRecoveryAction, ...],
-    action: ExactFactRecoveryAction, receipt: GraphWriteReceipt, current_fingerprint: str,
-    intended_fingerprint: str, replacement_edge: Any, endpoint_ids: list[str], state: _FactReconcileState,
+    driver: Any,
+    context: OperationAuthorization,
+    actions: tuple[ExactFactRecoveryAction, ...],
+    action: ExactFactRecoveryAction,
+    receipt: GraphWriteReceipt,
+    current_fingerprint: str,
+    intended_fingerprint: str,
+    replacement_edge: Any,
+    endpoint_ids: list[str],
+    state: _FactReconcileState,
 ) -> None:
     """Journal intent, reauthorize, recheck fact and endpoints, then replace or delete with read-back.
 
@@ -646,15 +828,20 @@ async def _write_fact_action(
         return
     # The endpoint read always precedes the fingerprint comparison, as in the original procedure.
     endpoints_ok = await _endpoints_present(driver, context, endpoint_ids)
-    if (_fact_recovery_fingerprint(fresh, context.embedding.dimensions) != current_fingerprint
-            or not endpoints_ok):
+    if (
+        _fact_recovery_fingerprint(fresh, context.embedding.dimensions) != current_fingerprint
+        or not endpoints_ok
+    ):
         state.unresolved.append(action.fact_id)
         return
     if replacement_edge is not None:
         await replacement_edge.save(driver)
         saved = await _fetch_fact(driver, context, action.fact_id)
-        if (saved is not None
-                and _fact_recovery_fingerprint(saved, context.embedding.dimensions) == intended_fingerprint):
+        if (
+            saved is not None
+            and _fact_recovery_fingerprint(saved, context.embedding.dimensions)
+            == intended_fingerprint
+        ):
             state.replaced.append(action.fact_id)
         else:
             state.unresolved.append(action.fact_id)
@@ -665,7 +852,10 @@ async def _write_fact_action(
 
 
 async def _current_fact_fingerprint(
-    driver: Any, context: OperationAuthorization, action: ExactFactRecoveryAction, state: _FactReconcileState,
+    driver: Any,
+    context: OperationAuthorization,
+    action: ExactFactRecoveryAction,
+    state: _FactReconcileState,
 ) -> tuple[bool, Any, str | None]:
     """Read the live fact; return (usable, edge, fingerprint).
 
@@ -686,18 +876,24 @@ async def _current_fact_fingerprint(
         return True, None, None
     await current.load_fact_embedding(driver)
     current_fingerprint = _fact_recovery_fingerprint(current, context.embedding.dimensions)
-    if (current.group_id != context.group_id
-            or str(current.source_node_uuid) != action.source_node_id
-            or str(current.target_node_uuid) != action.target_node_id
-            or not {str(value) for value in current.episodes} <= set(context.partition_episode_ids)):
+    if (
+        current.group_id != context.group_id
+        or str(current.source_node_uuid) != action.source_node_id
+        or str(current.target_node_uuid) != action.target_node_id
+        or not {str(value) for value in current.episodes} <= set(context.partition_episode_ids)
+    ):
         state.unresolved.append(action.fact_id)
         return False, None, None
     return True, current, current_fingerprint
 
 
 async def _reconcile_fact_action(
-    driver: Any, context: OperationAuthorization, receipts: tuple[GraphWriteReceipt, ...],
-    actions: tuple[ExactFactRecoveryAction, ...], action: ExactFactRecoveryAction, episode_id: str,
+    driver: Any,
+    context: OperationAuthorization,
+    receipts: tuple[GraphWriteReceipt, ...],
+    actions: tuple[ExactFactRecoveryAction, ...],
+    action: ExactFactRecoveryAction,
+    episode_id: str,
     state: _FactReconcileState,
 ) -> None:
     """Classify and, when required, apply one exact fact action, updating ``state`` in place.
@@ -705,7 +901,9 @@ async def _reconcile_fact_action(
     Exact absence is resolved before endpoint presence, so completed node rebuilds
     can still remove facts. A fact already at its intended state needs no write.
     """
-    usable, current, current_fingerprint = await _current_fact_fingerprint(driver, context, action, state)
+    usable, current, current_fingerprint = await _current_fact_fingerprint(
+        driver, context, action, state
+    )
     if not usable:
         return
     if current is None:
@@ -719,7 +917,9 @@ async def _reconcile_fact_action(
     intended_fingerprint = _ABSENT_FACT_FINGERPRINT
     if action.replacement is not None:
         replacement_edge = _replacement_edge(action.replacement)
-        intended_fingerprint = _fact_recovery_fingerprint(replacement_edge, context.embedding.dimensions)
+        intended_fingerprint = _fact_recovery_fingerprint(
+            replacement_edge, context.embedding.dimensions
+        )
     if current_fingerprint == intended_fingerprint:
         (state.replaced if replacement_edge is not None else state.deleted).append(action.fact_id)
         return
@@ -730,9 +930,23 @@ async def _reconcile_fact_action(
     if current_fingerprint is None:
         raise RuntimeError("invariant violated: current_fingerprint must not be None")
     receipt = _fact_cleanup_receipt(
-        context, receipts, episode_id, action, current, current_fingerprint, intended_fingerprint,
+        context,
+        receipts,
+        episode_id,
+        action,
+        current,
+        current_fingerprint,
+        intended_fingerprint,
     )
     await _write_fact_action(
-        driver, context, actions, action, receipt, current_fingerprint, intended_fingerprint,
-        replacement_edge, endpoint_ids, state,
+        driver,
+        context,
+        actions,
+        action,
+        receipt,
+        current_fingerprint,
+        intended_fingerprint,
+        replacement_edge,
+        endpoint_ids,
+        state,
     )

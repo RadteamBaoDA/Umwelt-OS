@@ -42,10 +42,15 @@ _DENIED = frozenset({401, 403, 404, 409})
 _PASS_LIMIT = 40
 
 
-_CURSOR_KEYS = frozenset({
-    "connectors_deleted_revoke", "connectors_workflows", "connectors_unknown_create", "connectors_activation",
-    "connectors_transitions",
-})
+_CURSOR_KEYS = frozenset(
+    {
+        "connectors_deleted_revoke",
+        "connectors_workflows",
+        "connectors_unknown_create",
+        "connectors_activation",
+        "connectors_transitions",
+    }
+)
 
 
 def _cursor_ctx(ctx: dict[str, object]) -> dict[str, object] | None:
@@ -83,7 +88,9 @@ def _read_slot_cursor(ctx: dict[str, object] | None, key: str) -> tuple[UUID, st
         return None
 
 
-def _write_slot_cursor(ctx: dict[str, object] | None, key: str, last: tuple[UUID, str] | None) -> None:
+def _write_slot_cursor(
+    ctx: dict[str, object] | None, key: str, last: tuple[UUID, str] | None
+) -> None:
     """Remember the last (Source id, slot) of a full page, or clear the key to wrap around."""
     state = _slot_state(ctx)
     if state is None:
@@ -95,8 +102,13 @@ def _write_slot_cursor(ctx: dict[str, object] | None, key: str, last: tuple[UUID
 
 
 def _page(
-    statement: Any, id_column: Any, after: UUID | None, *where: ColumnElement[bool], order: tuple[Any, ...] = (),
-    slot_column: Any = None, after_slot: str | None = None,
+    statement: Any,
+    id_column: Any,
+    after: UUID | None,
+    *where: ColumnElement[bool],
+    order: tuple[Any, ...] = (),
+    slot_column: Any = None,
+    after_slot: str | None = None,
 ) -> Any:
     """Order a Source-id discovery by id after the cursor; denied subjects cannot starve later ones.
 
@@ -106,7 +118,9 @@ def _page(
     statement = statement.where(*where)
     if after is not None:
         if slot_column is not None and after_slot is not None:
-            statement = statement.where(or_(id_column > after, and_(id_column == after, slot_column > after_slot)))
+            statement = statement.where(
+                or_(id_column > after, and_(id_column == after, slot_column > after_slot))
+            )
         else:
             statement = statement.where(id_column > after)
     return statement.order_by(id_column, *order).limit(_PASS_LIMIT)
@@ -123,12 +137,16 @@ def _lineage(source_id: UUID, envelope: object) -> tuple[InternalJobScope, Acces
         return None
     try:
         scope = InternalJobScope(
-            workspace_id=UUID(str(envelope["workspace_id"])), actor_user_id=envelope["actor_user_id"],
-            membership_revision=envelope["membership_revision"], source_id=source_id,
+            workspace_id=UUID(str(envelope["workspace_id"])),
+            actor_user_id=envelope["actor_user_id"],
+            membership_revision=envelope["membership_revision"],
+            source_id=source_id,
             source_generation=envelope["source_generation"],
         )
         return scope, AccessFence(
-            scope.workspace_id, scope.actor_user_id, scope.membership_revision,
+            scope.workspace_id,
+            scope.actor_user_id,
+            scope.membership_revision,
             envelope["workspace_configuration_revision"],
         )
     except (KeyError, TypeError, ValueError):
@@ -136,7 +154,11 @@ def _lineage(source_id: UUID, envelope: object) -> tuple[InternalJobScope, Acces
 
 
 async def _admit_lineage(
-    session: AsyncSession, source_id: UUID, envelope: object, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    envelope: object,
+    *,
+    multi_workspace_enabled: bool,
 ) -> tuple[InternalJobScope, AccessFence] | None:
     """Admit a durable operation's original principal; None releases the transaction and skips it.
 
@@ -150,7 +172,9 @@ async def _admit_lineage(
         return None
     scope, original = lineage
     try:
-        current = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        current = await read_access_fence(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
     except (DomainError, HTTPException) as exc:
         await session.rollback()
         if exc.status_code not in _DENIED:
@@ -163,7 +187,10 @@ async def _admit_lineage(
 
 
 async def _admit_source_job(
-    session: AsyncSession, source_id: UUID, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    multi_workspace_enabled: bool,
 ) -> tuple[InternalJobScope, AccessFence] | None:
     """Recipe S: resolve a bare Source's job scope, then read its fence; None means skip this Source.
 
@@ -174,12 +201,16 @@ async def _admit_source_job(
     """
     try:
         scope = await sources.resolve_source_job_scope(
-            session, source_id, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            source_id,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         if scope is None:
             await session.rollback()
             return None
-        fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        fence = await read_access_fence(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
     except (DomainError, HTTPException) as exc:
         await session.rollback()
         if exc.status_code not in _DENIED:
@@ -189,7 +220,10 @@ async def _admit_source_job(
 
 
 async def expire_github_webhook_details(
-    factory: async_sessionmaker[AsyncSession], *, now: datetime, limit: int = 50,
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    now: datetime,
+    limit: int = 50,
 ) -> int:
     """Scrub expired payload-derived metadata while retaining replay digests and delivery IDs.
 
@@ -201,18 +235,28 @@ async def expire_github_webhook_details(
     from modules.connectors.models import GithubWebhookDelivery, GithubWebhookOutbox
 
     async with factory() as session:
-        rows = list((await session.scalars(
-            select(GithubWebhookDelivery)
-            .outerjoin(GithubWebhookOutbox, GithubWebhookOutbox.delivery_id == GithubWebhookDelivery.id)
-            .where(
-                GithubWebhookDelivery.detail_expires_at <= now,
-                GithubWebhookDelivery.details_scrubbed_at.is_(None),
-                or_(GithubWebhookOutbox.id.is_(None), GithubWebhookOutbox.state == "complete"),
-            )
-            .order_by(GithubWebhookDelivery.detail_expires_at, GithubWebhookDelivery.id)
-            .limit(limit)
-            .with_for_update(skip_locked=True, of=GithubWebhookDelivery)
-        )).all())
+        rows = list(
+            (
+                await session.scalars(
+                    select(GithubWebhookDelivery)
+                    .outerjoin(
+                        GithubWebhookOutbox,
+                        GithubWebhookOutbox.delivery_id == GithubWebhookDelivery.id,
+                    )
+                    .where(
+                        GithubWebhookDelivery.detail_expires_at <= now,
+                        GithubWebhookDelivery.details_scrubbed_at.is_(None),
+                        or_(
+                            GithubWebhookOutbox.id.is_(None),
+                            GithubWebhookOutbox.state == "complete",
+                        ),
+                    )
+                    .order_by(GithubWebhookDelivery.detail_expires_at, GithubWebhookDelivery.id)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True, of=GithubWebhookDelivery)
+                )
+            ).all()
+        )
         for delivery in rows:
             delivery.event = "expired"
             delivery.action = None
@@ -235,7 +279,10 @@ DIGEST_RETENTION = timedelta(days=30)
 
 
 async def reclaim_github_webhook_digests(
-    factory: async_sessionmaker[AsyncSession], *, now: datetime, limit: int = 100,
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    now: datetime,
+    limit: int = 100,
 ) -> int:
     """Delete fully fanned-out, long-scrubbed digests and give their capacity back.
 
@@ -254,18 +301,28 @@ async def reclaim_github_webhook_digests(
         if capacity is None:
             await session.rollback()
             return 0
-        rows = list((await session.scalars(
-            select(GithubWebhookDelivery)
-            .outerjoin(GithubWebhookOutbox, GithubWebhookOutbox.delivery_id == GithubWebhookDelivery.id)
-            .where(
-                GithubWebhookDelivery.details_scrubbed_at.is_not(None),
-                GithubWebhookDelivery.details_scrubbed_at <= now - DIGEST_RETENTION,
-                or_(GithubWebhookOutbox.id.is_(None), GithubWebhookOutbox.state == "complete"),
-            )
-            .order_by(GithubWebhookDelivery.details_scrubbed_at, GithubWebhookDelivery.id)
-            .limit(limit)
-            .with_for_update(skip_locked=True, of=GithubWebhookDelivery)
-        )).all())
+        rows = list(
+            (
+                await session.scalars(
+                    select(GithubWebhookDelivery)
+                    .outerjoin(
+                        GithubWebhookOutbox,
+                        GithubWebhookOutbox.delivery_id == GithubWebhookDelivery.id,
+                    )
+                    .where(
+                        GithubWebhookDelivery.details_scrubbed_at.is_not(None),
+                        GithubWebhookDelivery.details_scrubbed_at <= now - DIGEST_RETENTION,
+                        or_(
+                            GithubWebhookOutbox.id.is_(None),
+                            GithubWebhookOutbox.state == "complete",
+                        ),
+                    )
+                    .order_by(GithubWebhookDelivery.details_scrubbed_at, GithubWebhookDelivery.id)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True, of=GithubWebhookDelivery)
+                )
+            ).all()
+        )
         for delivery in rows:
             await session.delete(delivery)
         capacity.digest_count = max(0, capacity.digest_count - len(rows))
@@ -311,8 +368,12 @@ def _open_grant_access_token(key: str, grant: Any) -> str | None:
 
     try:
         opened = oauth._open_token_cipher(
-            key, grant.encrypted_tokens, grant.source_id, grant.operation_id,
-            grant.source_generation, grant.configuration_revision,
+            key,
+            grant.encrypted_tokens,
+            grant.source_id,
+            grant.operation_id,
+            grant.source_generation,
+            grant.configuration_revision,
         )
         candidate = opened.get("access_token")
         return candidate if isinstance(candidate, str) else None
@@ -321,7 +382,11 @@ def _open_grant_access_token(key: str, grant: Any) -> str | None:
 
 
 async def _claim_deleted_grant_revoke(
-    session: AsyncSession, source_id: UUID, *, flag: bool, key: str,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    flag: bool,
+    key: str,
 ) -> _DeletedGrantRevoke | None:
     """Phase 1: admit the archived Source, lock it, claim the coordinator and open the token.
 
@@ -340,21 +405,31 @@ async def _claim_deleted_grant_revoke(
     scope, fence = admitted
     actor = scope.actor_user_id
     anchor, _row, _slots = await provisioning.lock_connector(
-        session, source_id, (), scope=scope, multi_workspace_enabled=flag,
+        session,
+        source_id,
+        (),
+        scope=scope,
+        multi_workspace_enabled=flag,
         expected_access_fence=fence,
     )
     grant = await session.scalar(
-        select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_id)
-        .with_for_update().execution_options(populate_existing=True)
+        select(GithubOAuthGrant)
+        .where(GithubOAuthGrant.source_id == source_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if (
-        anchor is None or grant is None or grant.encrypted_tokens is None
+        anchor is None
+        or grant is None
+        or grant.encrypted_tokens is None
         or grant.error_code != _DELETED_SOURCE_REVOKE
     ):
         await session.rollback()
         return None
     coordinator = await session.scalar(
-        select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == actor).with_for_update()
+        select(GithubOAuthCoordinator)
+        .where(GithubOAuthCoordinator.owner_id == actor)
+        .with_for_update()
     )
     if coordinator is None:
         coordinator = GithubOAuthCoordinator(owner_id=actor, state="idle")
@@ -362,23 +437,33 @@ async def _claim_deleted_grant_revoke(
         await session.flush()
     if coordinator.state != "idle":
         if (
-            coordinator.state == "revoking" and coordinator.error_code == _DELETED_SOURCE_REVOKE
+            coordinator.state == "revoking"
+            and coordinator.error_code == _DELETED_SOURCE_REVOKE
             and coordinator.updated_at <= datetime.now(UTC) - _COORDINATOR_STALE_AFTER
         ):
             # Our own claim from a crashed pass: release it, retry on the next pass.
             _idle_coordinator(coordinator)
             await commit_with_replay(
-                session, scope=scope, multi_workspace_enabled=flag, access_fence=fence,
+                session,
+                scope=scope,
+                multi_workspace_enabled=flag,
+                access_fence=fence,
             )
         else:
             await session.rollback()
         return None
     state = _DeletedGrantRevoke(
-        scope=scope, fence=fence, actor=actor,
-        grant_operation=grant.operation_id, token_revision=grant.token_revision,
+        scope=scope,
+        fence=fence,
+        actor=actor,
+        grant_operation=grant.operation_id,
+        token_revision=grant.token_revision,
     )
     if await provisioning.github_grant_has_active_peer(
-        session, grant, scope=scope, multi_workspace_enabled=flag,
+        session,
+        grant,
+        scope=scope,
+        multi_workspace_enabled=flag,
     ):
         state.outcome = "provider_revoke_skipped_source_deleted"
     else:
@@ -392,7 +477,11 @@ async def _claim_deleted_grant_revoke(
 
 
 async def _record_deleted_grant_revoke(
-    factory: async_sessionmaker[AsyncSession], source_id: UUID, state: _DeletedGrantRevoke, *, flag: bool,
+    factory: async_sessionmaker[AsyncSession],
+    source_id: UUID,
+    state: _DeletedGrantRevoke,
+    *,
+    flag: bool,
 ) -> bool:
     """Phase 3: re-lock under the original fence, record the outcome and release our claim.
 
@@ -407,22 +496,36 @@ async def _record_deleted_grant_revoke(
         try:
             # Lock order matches the routes: access, Source, provisioning, grant, coordinator last.
             await provisioning.lock_connector(
-                session, source_id, (), scope=state.scope, multi_workspace_enabled=flag,
+                session,
+                source_id,
+                (),
+                scope=state.scope,
+                multi_workspace_enabled=flag,
                 expected_access_fence=state.fence,
             )
             await provisioning.finish_deleted_source_grant_revoke(
-                session, source_id, state.outcome, scope=state.scope, multi_workspace_enabled=flag,
-                access_fence=state.fence, grant_operation_id=state.grant_operation,
+                session,
+                source_id,
+                state.outcome,
+                scope=state.scope,
+                multi_workspace_enabled=flag,
+                access_fence=state.fence,
+                grant_operation_id=state.grant_operation,
                 token_revision=state.token_revision,
             )
             if state.claim is not None:
                 coordinator = await session.scalar(
-                    select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == state.actor).with_for_update()
+                    select(GithubOAuthCoordinator)
+                    .where(GithubOAuthCoordinator.owner_id == state.actor)
+                    .with_for_update()
                 )
                 if coordinator is not None and coordinator.operation_id == state.claim:
                     _idle_coordinator(coordinator)
             await commit_with_replay(
-                session, scope=state.scope, multi_workspace_enabled=flag, access_fence=state.fence,
+                session,
+                scope=state.scope,
+                multi_workspace_enabled=flag,
+                access_fence=state.fence,
             )
         except (DomainError, HTTPException) as exc:
             await session.rollback()
@@ -432,20 +535,27 @@ async def _record_deleted_grant_revoke(
                 # Account-scoped row, no workspace data: undo only this job's own claim so the
                 # actor's OAuth routes in other workspaces are not wedged by lost access here.
                 coordinator = await session.scalar(
-                    select(GithubOAuthCoordinator).where(GithubOAuthCoordinator.owner_id == state.actor).with_for_update()
+                    select(GithubOAuthCoordinator)
+                    .where(GithubOAuthCoordinator.owner_id == state.actor)
+                    .with_for_update()
                 )
                 if coordinator is not None and coordinator.operation_id == state.claim:
                     _idle_coordinator(coordinator)
                     await session.commit()
                 else:
                     await session.rollback()
-            logger.warning("deleted-source grant revoke result not recorded: HTTP %s", exc.status_code)
+            logger.warning(
+                "deleted-source grant revoke result not recorded: HTTP %s", exc.status_code
+            )
             return False
     return True
 
 
 async def revoke_deleted_source_github_grants(
-    factory: async_sessionmaker[AsyncSession], settings: Settings, *, limit: int = 10,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    limit: int = 10,
     cursor_ctx: dict[str, object] | None = None,
 ) -> int:
     """Best-effort remote revoke for grants whose last GitHub source was archived or purged.
@@ -473,13 +583,25 @@ async def revoke_deleted_source_github_grants(
     key = settings.connector_credential_encryption_key.get_secret_value()
     after = await _read_cursor(cursor_ctx, "connectors_deleted_revoke")
     async with factory() as session:
-        pending: list[UUID] = list((await session.execute(_page(
-            select(GithubOAuthGrant.source_id), GithubOAuthGrant.source_id, after,
-            GithubOAuthGrant.error_code == _DELETED_SOURCE_REVOKE,
-            GithubOAuthGrant.encrypted_tokens.is_not(None),
-        ).limit(limit))).scalars().all())
+        pending: list[UUID] = list(
+            (
+                await session.execute(
+                    _page(
+                        select(GithubOAuthGrant.source_id),
+                        GithubOAuthGrant.source_id,
+                        after,
+                        GithubOAuthGrant.error_code == _DELETED_SOURCE_REVOKE,
+                        GithubOAuthGrant.encrypted_tokens.is_not(None),
+                    ).limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
         await session.rollback()
-    await _write_cursor(cursor_ctx, "connectors_deleted_revoke", pending[-1] if len(pending) >= limit else None)
+    await _write_cursor(
+        cursor_ctx, "connectors_deleted_revoke", pending[-1] if len(pending) >= limit else None
+    )
     handled = 0
     for source_id in pending:
         async with factory() as session:
@@ -504,9 +626,16 @@ async def revoke_deleted_source_github_grants(
 
 
 async def _settle_credential_delete(
-    session: AsyncSession, source_id: UUID, slot: str, *, original: dict[str, object],
-    scope: InternalJobScope, fence: AccessFence, multi_workspace_enabled: bool,
-    outcome: str, error_code: str | None,
+    session: AsyncSession,
+    source_id: UUID,
+    slot: str,
+    *,
+    original: dict[str, object],
+    scope: InternalJobScope,
+    fence: AccessFence,
+    multi_workspace_enabled: bool,
+    outcome: str,
+    error_code: str | None,
 ) -> bool:
     """Settle one dispatched credential delete under the ORIGINAL scope and access fence.
 
@@ -520,14 +649,24 @@ async def _settle_credential_delete(
     operation_id = UUID(str(original["id"]))
     try:
         before = await provisioning.lock_retained_connector_effect(
-            session, source_id, original_operation=original, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            session,
+            source_id,
+            original_operation=original,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
         )
     except provisioning.RetainedEffectAdmissionDenied:
         await session.rollback()
         disposition = await provisioning.record_retained_credential_result_in_uow(
-            session, source_id, slot, original_operation=original, scope=scope, access_fence=fence,
-            outcome=outcome, error_code=error_code,
+            session,
+            source_id,
+            slot,
+            original_operation=original,
+            scope=scope,
+            access_fence=fence,
+            outcome=outcome,
+            error_code=error_code,
         )
         if disposition in {"stored", "duplicate"}:
             await session.commit()
@@ -536,22 +675,40 @@ async def _settle_credential_delete(
         return False
     if outcome == "known_success":
         changed = await provisioning.acknowledge_credential_delete(
-            session, source_id, slot, operation_id, str(original["target_id"]),
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            original_operation=original, access_fence=fence,
+            session,
+            source_id,
+            slot,
+            operation_id,
+            str(original["target_id"]),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            original_operation=original,
+            access_fence=fence,
         )
     else:
         changed = await provisioning.fail_credential_operation(
-            session, source_id, slot, operation_id, error_code or "credential_delete_outcome_unknown",
-            unknown=outcome == "unknown", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            original_operation=original, access_fence=fence,
+            session,
+            source_id,
+            slot,
+            operation_id,
+            error_code or "credential_delete_outcome_unknown",
+            unknown=outcome == "unknown",
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            original_operation=original,
+            access_fence=fence,
         )
     if not changed:
         await session.rollback()
         return False
     await provisioning.commit_retained_connector_effect(
-        session, before, source_id=source_id, original_operation=original, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        session,
+        before,
+        source_id=source_id,
+        original_operation=original,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
     )
     return outcome == "known_success"
 
@@ -562,7 +719,8 @@ async def _delete_credential(
     source_id: UUID,
     slot: str,
     operation_id: UUID,
-    *, multi_workspace_enabled: bool,
+    *,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Claim and delete a prepared credential operation, preserving unknown outcomes for reconciliation.
 
@@ -576,12 +734,20 @@ async def _delete_credential(
     """
     from modules.settings.public import resolve_n8n
 
-    envelope = await session.scalar(select(ConnectorManagedCredential.operation_envelope).where(
-        ConnectorManagedCredential.source_id == source_id, ConnectorManagedCredential.slot == slot,
-        ConnectorManagedCredential.operation_id == operation_id,
-    ).execution_options(populate_existing=True))
+    envelope = await session.scalar(
+        select(ConnectorManagedCredential.operation_envelope)
+        .where(
+            ConnectorManagedCredential.source_id == source_id,
+            ConnectorManagedCredential.slot == slot,
+            ConnectorManagedCredential.operation_id == operation_id,
+        )
+        .execution_options(populate_existing=True)
+    )
     admitted = await _admit_lineage(
-        session, source_id, copy.deepcopy(envelope), multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        copy.deepcopy(envelope),
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if admitted is None:
         return False
@@ -592,19 +758,32 @@ async def _delete_credential(
         return False
     client = N8nCredentials(n8n.service_url, n8n.api_key)
     claimed = await provisioning.claim_credential_operation(
-        session, source_id, slot, operation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        slot,
+        operation_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         service_url=client.service_url,
     )
     if claimed is None:
         await session.rollback()
         return False
     settle = partial(
-        _settle_credential_delete, session, source_id, slot, original=claimed, scope=scope, fence=fence,
+        _settle_credential_delete,
+        session,
+        source_id,
+        slot,
+        original=claimed,
+        scope=scope,
+        fence=fence,
         multi_workspace_enabled=multi_workspace_enabled,
     )
     target = claimed.get("target_id")
     if not isinstance(target, str):
-        return await settle(outcome="known_rejection", error_code="credential_delete_target_missing")
+        return await settle(
+            outcome="known_rejection", error_code="credential_delete_target_missing"
+        )
     try:
         await client.delete(target)
     except asyncio.CancelledError:
@@ -618,7 +797,9 @@ async def _delete_credential(
         )
         return await settle(
             outcome="known_rejection" if rejected else "unknown",
-            error_code="credential_delete_rejected" if rejected else "credential_delete_outcome_unknown",
+            error_code="credential_delete_rejected"
+            if rejected
+            else "credential_delete_outcome_unknown",
         )
     return await settle(outcome="known_success", error_code=None)
 
@@ -640,14 +821,22 @@ async def _resume_activation(
     from modules.settings.public import module_is_enabled, resolve_n8n
 
     flag = settings.multi_workspace_enabled
-    intent = await session.scalar(select(ConnectorProvisioning.activation_intent).where(
-        ConnectorProvisioning.source_id == source_id,
-    ).execution_options(populate_existing=True))
-    admitted = await _admit_lineage(session, source_id, copy.deepcopy(intent), multi_workspace_enabled=flag)
+    intent = await session.scalar(
+        select(ConnectorProvisioning.activation_intent)
+        .where(
+            ConnectorProvisioning.source_id == source_id,
+        )
+        .execution_options(populate_existing=True)
+    )
+    admitted = await _admit_lineage(
+        session, source_id, copy.deepcopy(intent), multi_workspace_enabled=flag
+    )
     if admitted is None:
         return False
     scope, fence = admitted
-    if not await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=flag):
+    if not await module_is_enabled(
+        session, "connectors", scope=scope, multi_workspace_enabled=flag
+    ):
         await session.rollback()
         return False
     n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)
@@ -657,13 +846,20 @@ async def _resume_activation(
     api = N8nApi(n8n.service_url, n8n.api_key, settings)
     credentials = N8nCredentials(n8n.service_url, n8n.api_key)
     return await drive_activation(
-        session, source_id, api, credentials,
+        session,
+        source_id,
+        api,
+        credentials,
         settings.connector_credential_encryption_key.get_secret_value(),
-        scope=scope, multi_workspace_enabled=flag, access_fence=fence,
+        scope=scope,
+        multi_workspace_enabled=flag,
+        access_fence=fence,
     )
 
 
-async def _drive_workflow(session: AsyncSession, settings: Settings, source_id: UUID, *, flag: bool) -> int:
+async def _drive_workflow(
+    session: AsyncSession, settings: Settings, source_id: UUID, *, flag: bool
+) -> int:
     """Drive one prepared workflow step under the envelope's recorded principal and fence.
 
     Non-delete steps additionally require the connectors module to be enabled for that
@@ -673,9 +869,13 @@ async def _drive_workflow(session: AsyncSession, settings: Settings, source_id: 
     """
     from modules.settings.public import module_is_enabled, resolve_n8n
 
-    envelope = await session.scalar(select(ConnectorProvisioning.workflow_operation).where(
-        ConnectorProvisioning.source_id == source_id,
-    ).execution_options(populate_existing=True))
+    envelope = await session.scalar(
+        select(ConnectorProvisioning.workflow_operation)
+        .where(
+            ConnectorProvisioning.source_id == source_id,
+        )
+        .execution_options(populate_existing=True)
+    )
     original = copy.deepcopy(envelope) if isinstance(envelope, dict) else None
     step = original.get("step") if original is not None else None
     if original is None or not isinstance(step, dict) or step.get("state") != "prepared":
@@ -686,7 +886,10 @@ async def _drive_workflow(session: AsyncSession, settings: Settings, source_id: 
         return 0
     scope, fence = admitted
     if step.get("kind") != "delete" and not await module_is_enabled(
-        session, "connectors", scope=scope, multi_workspace_enabled=flag,
+        session,
+        "connectors",
+        scope=scope,
+        multi_workspace_enabled=flag,
     ):
         await session.rollback()
         return 0
@@ -695,14 +898,24 @@ async def _drive_workflow(session: AsyncSession, settings: Settings, source_id: 
     if not n8n.api_key or (not n8n.enabled and original.get("kind") != "deactivate"):
         return 0
     api = N8nApi(n8n.service_url, n8n.api_key, settings)
-    return int(await provisioning.drive_workflow_operation(
-        session, source_id, api, scope=scope, multi_workspace_enabled=flag,
-        original_operation=cast(dict[str, object], original), access_fence=fence,
-    ))
+    return int(
+        await provisioning.drive_workflow_operation(
+            session,
+            source_id,
+            api,
+            scope=scope,
+            multi_workspace_enabled=flag,
+            original_operation=cast(dict[str, object], original),
+            access_fence=fence,
+        )
+    )
 
 
 async def _discover_created_workflow(
-    api: N8nApi, original: dict[str, Any], step: dict[str, Any], source_id: UUID,
+    api: N8nApi,
+    original: dict[str, Any],
+    step: dict[str, Any],
+    source_id: UUID,
 ) -> tuple[UUID | None, str | None]:
     """Look up the remote workflow an uncertain create may have produced, by exact name and body.
 
@@ -717,11 +930,7 @@ async def _discover_created_workflow(
     try:
         created_operation_id = UUID(str(original.get("id")))
         matches = await find_workflows_by_name(api, str(name))
-        if (
-            len(matches) == 1
-            and isinstance(matches[0].get("id"), str)
-            and isinstance(body, dict)
-        ):
+        if len(matches) == 1 and isinstance(matches[0].get("id"), str) and isinstance(body, dict):
             candidate_id = str(matches[0]["id"])
             actual = await api.get_workflow(candidate_id)
             if workflow_matches(body, actual):
@@ -732,14 +941,20 @@ async def _discover_created_workflow(
         # create stays "unknown" and is retried by a later pass instead of aborting the whole
         # reconcile pass; it is never treated as a success.
         logger.debug(
-            "connector_unknown_create_lookup_failed source_id=%s error=%s", source_id, type(exc).__name__,
+            "connector_unknown_create_lookup_failed source_id=%s error=%s",
+            source_id,
+            type(exc).__name__,
             exc_info=True,
         )
     return created_operation_id, workflow_id
 
 
 async def _recover_unknown_create(
-    factory: async_sessionmaker[AsyncSession], settings: Settings, source_id: UUID, *, flag: bool,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    source_id: UUID,
+    *,
+    flag: bool,
 ) -> int:
     """Look up an uncertain workflow create and attach its single exact match, or defer it later.
 
@@ -754,14 +969,20 @@ async def _recover_unknown_create(
     from modules.settings.public import resolve_n8n
 
     async with factory() as session:
-        stored = await session.scalar(select(ConnectorProvisioning.workflow_operation).where(
-            ConnectorProvisioning.source_id == source_id,
-        ).execution_options(populate_existing=True))
+        stored = await session.scalar(
+            select(ConnectorProvisioning.workflow_operation)
+            .where(
+                ConnectorProvisioning.source_id == source_id,
+            )
+            .execution_options(populate_existing=True)
+        )
         original = copy.deepcopy(stored) if isinstance(stored, dict) else None
         step = original.get("step") if original is not None else None
         if (
-            original is None or not isinstance(step, dict)
-            or step.get("state") != "unknown" or step.get("kind") != "create"
+            original is None
+            or not isinstance(step, dict)
+            or step.get("state") != "unknown"
+            or step.get("kind") != "create"
         ):
             await session.rollback()
             return 0
@@ -775,28 +996,41 @@ async def _recover_unknown_create(
         api = N8nApi(n8n.service_url, n8n.api_key, settings)
         from modules.connectors.n8n import n8n_service_identity
 
-        endpoint = await session.scalar(select(ConnectorProvisioning.n8n_service_url).where(
-            ConnectorProvisioning.source_id == source_id,
-        ))
+        endpoint = await session.scalar(
+            select(ConnectorProvisioning.n8n_service_url).where(
+                ConnectorProvisioning.source_id == source_id,
+            )
+        )
         if not isinstance(endpoint, str) or n8n_service_identity(endpoint) != api.service_url:
             await session.rollback()
             return 0
         await session.rollback()
     scope, fence = admitted
     operation_value, step_value = original.get("id"), step.get("id")
-    created_operation_id, workflow_id = await _discover_created_workflow(api, original, step, source_id)
+    created_operation_id, workflow_id = await _discover_created_workflow(
+        api, original, step, source_id
+    )
     if workflow_id is not None and created_operation_id is not None:
         async with factory() as session:
             try:
                 before = await provisioning.lock_retained_connector_effect(
-                    session, source_id, original_operation=original, scope=scope,
-                    multi_workspace_enabled=flag, access_fence=fence,
+                    session,
+                    source_id,
+                    original_operation=original,
+                    scope=scope,
+                    multi_workspace_enabled=flag,
+                    access_fence=fence,
                 )
             except provisioning.RetainedEffectAdmissionDenied:
                 await session.rollback()
                 disposition = await provisioning.record_retained_workflow_result_in_uow(
-                    session, source_id, original_operation=original, scope=scope, access_fence=fence,
-                    outcome="known_success", remote_id=workflow_id,
+                    session,
+                    source_id,
+                    original_operation=original,
+                    scope=scope,
+                    access_fence=fence,
+                    outcome="known_success",
+                    remote_id=workflow_id,
                 )
                 if disposition in {"stored", "duplicate"}:
                     await session.commit()
@@ -804,21 +1038,39 @@ async def _recover_unknown_create(
                     await session.rollback()
                 return 0
             resolved = await provisioning.resolve_unknown_workflow_create(
-                session, source_id, created_operation_id, str(step_value), workflow_id,
-                scope=scope, multi_workspace_enabled=flag, original_operation=original, access_fence=fence,
+                session,
+                source_id,
+                created_operation_id,
+                str(step_value),
+                workflow_id,
+                scope=scope,
+                multi_workspace_enabled=flag,
+                original_operation=original,
+                access_fence=fence,
             )
             if resolved:
                 await provisioning.commit_retained_connector_effect(
-                    session, before, source_id=source_id, original_operation=original, scope=scope,
-                    multi_workspace_enabled=flag, access_fence=fence,
+                    session,
+                    before,
+                    source_id=source_id,
+                    original_operation=original,
+                    scope=scope,
+                    multi_workspace_enabled=flag,
+                    access_fence=fence,
                 )
                 return 1
             await session.rollback()
     async with factory() as session:
         try:
             deferred = await provisioning.defer_unknown_workflow_create(
-                session, source_id, str(operation_value), str(step_value), scope=scope,
-                multi_workspace_enabled=flag, original_operation=original, access_fence=fence,
+                session,
+                source_id,
+                str(operation_value),
+                str(step_value),
+                scope=scope,
+                multi_workspace_enabled=flag,
+                original_operation=original,
+                access_fence=fence,
             )
         except provisioning.RetainedEffectAdmissionDenied:
             deferred = False
@@ -831,7 +1083,9 @@ async def _recover_unknown_create(
 
 
 async def _advance_transitions(
-    factory: async_sessionmaker[AsyncSession], settings: Settings, state: dict[str, object] | None,
+    factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    state: dict[str, object] | None,
 ) -> int:
     """Resume persisted backend transitions (draining, stop-old, native activation) after a crash or retry.
 
@@ -846,34 +1100,63 @@ async def _advance_transitions(
 
     flag = settings.multi_workspace_enabled
     async with factory() as session:
-        ids = list((await session.scalars(_page(
-            select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
-            await _read_cursor(state, "connectors_transitions"),
-            or_(ConnectorProvisioning.transition_phase.in_(("draining", "deactivating_old")),
-                and_(ConnectorProvisioning.transition_phase == "activating_new",
-                     ConnectorProvisioning.target_backend == "native",
-                     ConnectorProvisioning.error_code == "backend_transition_pending")),  # a failed activation waits for the owner
-        ))).all())
+        ids = list(
+            (
+                await session.scalars(
+                    _page(
+                        select(ConnectorProvisioning.source_id),
+                        ConnectorProvisioning.source_id,
+                        await _read_cursor(state, "connectors_transitions"),
+                        or_(
+                            ConnectorProvisioning.transition_phase.in_(
+                                ("draining", "deactivating_old")
+                            ),
+                            and_(
+                                ConnectorProvisioning.transition_phase == "activating_new",
+                                ConnectorProvisioning.target_backend == "native",
+                                ConnectorProvisioning.error_code == "backend_transition_pending",
+                            ),
+                        ),  # a failed activation waits for the owner
+                    )
+                )
+            ).all()
+        )
         await session.rollback()
-    await _write_cursor(state, "connectors_transitions", ids[-1] if len(ids) >= _PASS_LIMIT else None)
+    await _write_cursor(
+        state, "connectors_transitions", ids[-1] if len(ids) >= _PASS_LIMIT else None
+    )
     advanced = 0
     for source_id in ids:
         async with factory() as session:
             try:
                 workspace_id = await session.scalar(
-                    text("SELECT workspace_id FROM sources WHERE id = :id"), {"id": source_id})
+                    text("SELECT workspace_id FROM sources WHERE id = :id"), {"id": source_id}
+                )
                 row = await session.get(ConnectorProvisioning, source_id)
-                owner = await session.scalar(select(WorkspaceMembership).where(
-                    WorkspaceMembership.workspace_id == workspace_id, WorkspaceMembership.role == "owner",
-                )) if workspace_id is not None else None
+                owner = (
+                    await session.scalar(
+                        select(WorkspaceMembership).where(
+                            WorkspaceMembership.workspace_id == workspace_id,
+                            WorkspaceMembership.role == "owner",
+                        )
+                    )
+                    if workspace_id is not None
+                    else None
+                )
                 if owner is None or row is None:
                     await session.rollback()
                     continue
                 scope = InternalJobScope(
-                    workspace_id=workspace_id, actor_user_id=owner.user_id, membership_revision=owner.revision,
-                    source_id=source_id, source_generation=row.source_generation)
+                    workspace_id=workspace_id,
+                    actor_user_id=owner.user_id,
+                    membership_revision=owner.revision,
+                    source_id=source_id,
+                    source_generation=row.source_generation,
+                )
                 await session.rollback()
-                if not await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=flag):
+                if not await module_is_enabled(
+                    session, "connectors", scope=scope, multi_workspace_enabled=flag
+                ):
                     await session.rollback()
                     continue
                 fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=flag)
@@ -881,7 +1164,13 @@ async def _advance_transitions(
                 await session.rollback()
                 api = N8nApi(n8n.service_url, n8n.api_key, settings) if n8n.api_key else None
                 await provisioning.advance_backend_transition(
-                    session, source_id, api, scope=scope, multi_workspace_enabled=flag, access_fence=fence)
+                    session,
+                    source_id,
+                    api,
+                    scope=scope,
+                    multi_workspace_enabled=flag,
+                    access_fence=fence,
+                )
                 advanced += 1
             except (DomainError, HTTPException) as exc:
                 await session.rollback()
@@ -911,42 +1200,83 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
     completed += await _advance_transitions(factory, settings, state)
     credential_after = _read_slot_cursor(state, "connectors_credentials")
     async with factory() as session:
-        credential_rows: list[Any] = list((await session.execute(_page(
-            select(ConnectorManagedCredential.source_id, ConnectorManagedCredential.slot,
-                   ConnectorManagedCredential.operation_id, ConnectorManagedCredential.operation_envelope["kind"].astext),
-            ConnectorManagedCredential.source_id, (credential_after or (None, None))[0],
-            ConnectorManagedCredential.operation_envelope["state"].astext == "prepared",
-            ConnectorManagedCredential.operation_envelope["kind"].astext == "delete",
-            ConnectorManagedCredential.operation_id.is_not(None),
-            order=(ConnectorManagedCredential.slot,),
-            slot_column=ConnectorManagedCredential.slot, after_slot=(credential_after or (None, None))[1],
-        ))).all())
-        workflow_ids = list((await session.scalars(_page(
-            select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
-            await _read_cursor(state, "connectors_workflows"),
-            ConnectorProvisioning.workflow_operation["step"]["state"].astext == "prepared",
-        ))).all())
-        unknown_create_ids = list((await session.scalars(_page(
-            select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
-            await _read_cursor(state, "connectors_unknown_create"),
-            ConnectorProvisioning.workflow_operation["step"]["state"].astext == "unknown",
-            ConnectorProvisioning.workflow_operation["step"]["kind"].astext == "create",
-        ))).all())
-        activation_ids = list((await session.scalars(_page(
-            select(ConnectorProvisioning.source_id), ConnectorProvisioning.source_id,
-            await _read_cursor(state, "connectors_activation"),
-            ConnectorProvisioning.desired_enabled.is_(True),
-            ConnectorProvisioning.state == "provisioning",
-            ConnectorProvisioning.workflow_operation.is_(None),
-            ConnectorProvisioning.activation_intent.is_not(None),
-        ))).all())
+        credential_rows: list[Any] = list(
+            (
+                await session.execute(
+                    _page(
+                        select(
+                            ConnectorManagedCredential.source_id,
+                            ConnectorManagedCredential.slot,
+                            ConnectorManagedCredential.operation_id,
+                            ConnectorManagedCredential.operation_envelope["kind"].astext,
+                        ),
+                        ConnectorManagedCredential.source_id,
+                        (credential_after or (None, None))[0],
+                        ConnectorManagedCredential.operation_envelope["state"].astext == "prepared",
+                        ConnectorManagedCredential.operation_envelope["kind"].astext == "delete",
+                        ConnectorManagedCredential.operation_id.is_not(None),
+                        order=(ConnectorManagedCredential.slot,),
+                        slot_column=ConnectorManagedCredential.slot,
+                        after_slot=(credential_after or (None, None))[1],
+                    )
+                )
+            ).all()
+        )
+        workflow_ids = list(
+            (
+                await session.scalars(
+                    _page(
+                        select(ConnectorProvisioning.source_id),
+                        ConnectorProvisioning.source_id,
+                        await _read_cursor(state, "connectors_workflows"),
+                        ConnectorProvisioning.workflow_operation["step"]["state"].astext
+                        == "prepared",
+                    )
+                )
+            ).all()
+        )
+        unknown_create_ids = list(
+            (
+                await session.scalars(
+                    _page(
+                        select(ConnectorProvisioning.source_id),
+                        ConnectorProvisioning.source_id,
+                        await _read_cursor(state, "connectors_unknown_create"),
+                        ConnectorProvisioning.workflow_operation["step"]["state"].astext
+                        == "unknown",
+                        ConnectorProvisioning.workflow_operation["step"]["kind"].astext == "create",
+                    )
+                )
+            ).all()
+        )
+        activation_ids = list(
+            (
+                await session.scalars(
+                    _page(
+                        select(ConnectorProvisioning.source_id),
+                        ConnectorProvisioning.source_id,
+                        await _read_cursor(state, "connectors_activation"),
+                        ConnectorProvisioning.desired_enabled.is_(True),
+                        ConnectorProvisioning.state == "provisioning",
+                        ConnectorProvisioning.workflow_operation.is_(None),
+                        ConnectorProvisioning.activation_intent.is_not(None),
+                    )
+                )
+            ).all()
+        )
         await session.rollback()
     _write_slot_cursor(
-        state, "connectors_credentials",
-        (credential_rows[-1][0], credential_rows[-1][1]) if len(credential_rows) >= _PASS_LIMIT else None,
+        state,
+        "connectors_credentials",
+        (credential_rows[-1][0], credential_rows[-1][1])
+        if len(credential_rows) >= _PASS_LIMIT
+        else None,
     )
-    for name, found in (("connectors_workflows", workflow_ids), ("connectors_unknown_create", unknown_create_ids),
-                        ("connectors_activation", activation_ids)):
+    for name, found in (
+        ("connectors_workflows", workflow_ids),
+        ("connectors_unknown_create", unknown_create_ids),
+        ("connectors_activation", activation_ids),
+    ):
         await _write_cursor(state, name, found[-1] if len(found) >= _PASS_LIMIT else None)
 
     for source_id, slot, operation_id, kind in credential_rows:
@@ -955,7 +1285,12 @@ async def reconcile_connectors(ctx: dict[str, object]) -> int:
         async with factory() as session:
             try:
                 completed += await _delete_credential(
-                    session, settings, source_id, slot, operation_id, multi_workspace_enabled=flag,
+                    session,
+                    settings,
+                    source_id,
+                    slot,
+                    operation_id,
+                    multi_workspace_enabled=flag,
                 )
             except (DomainError, HTTPException) as exc:
                 await session.rollback()
@@ -998,7 +1333,8 @@ _OUTBOX_OPEN_STATES = frozenset({"pending", "dispatched", "needs_attention"})
 
 
 async def _snapshot_outbox(
-    factory: async_sessionmaker[AsyncSession], outbox_id: UUID,
+    factory: async_sessionmaker[AsyncSession],
+    outbox_id: UUID,
 ) -> tuple[Any, Any, dict[str, Any]] | None:
     """Read an outbox and its delivery without holding locks and return a detached snapshot.
 
@@ -1013,7 +1349,8 @@ async def _snapshot_outbox(
             await session.rollback()
             return None
         snapshot: dict[str, Any] = {
-            "id": delivery.id, "app_id": delivery.app_id,
+            "id": delivery.id,
+            "app_id": delivery.app_id,
             "installation_id": delivery.installation_id,
             "repository_id": delivery.repository_id,
             "targets": delivery.targets,
@@ -1024,7 +1361,10 @@ async def _snapshot_outbox(
 
 
 async def _complete_outbox_without_installation(
-    factory: async_sessionmaker[AsyncSession], outbox_id: UUID, cursor: Any, stored_page: Any,
+    factory: async_sessionmaker[AsyncSession],
+    outbox_id: UUID,
+    cursor: Any,
+    stored_page: Any,
 ) -> bool:
     """Complete an outbox whose delivery has no installation and release its capacity slot.
 
@@ -1032,18 +1372,28 @@ async def _complete_outbox_without_installation(
     left alone. Returns True when the outbox was completed and committed, False when skipped.
     """
     async with factory() as session:
-        current = await session.scalar(select(GithubWebhookOutbox).where(
-            GithubWebhookOutbox.id == outbox_id,
-        ).with_for_update())
+        current = await session.scalar(
+            select(GithubWebhookOutbox)
+            .where(
+                GithubWebhookOutbox.id == outbox_id,
+            )
+            .with_for_update()
+        )
         if (
-            current is None or current.state not in _OUTBOX_OPEN_STATES
-            or current.binding_cursor != cursor or current.fanout_page != stored_page
+            current is None
+            or current.state not in _OUTBOX_OPEN_STATES
+            or current.binding_cursor != cursor
+            or current.fanout_page != stored_page
         ):
             await session.rollback()
             return False
-        capacity = await session.scalar(select(GithubWebhookCapacity).where(
-            GithubWebhookCapacity.id == 1,
-        ).with_for_update())
+        capacity = await session.scalar(
+            select(GithubWebhookCapacity)
+            .where(
+                GithubWebhookCapacity.id == 1,
+            )
+            .with_for_update()
+        )
         current.state = "complete"
         current.binding_cursor = None
         current.fanout_page = None
@@ -1056,8 +1406,13 @@ async def _complete_outbox_without_installation(
 
 
 async def _resolve_fanout_page(
-    factory: async_sessionmaker[AsyncSession], outbox_id: UUID, cursor: Any, stored_page: Any,
-    delivery: dict[str, Any], *, flag: bool,
+    factory: async_sessionmaker[AsyncSession],
+    outbox_id: UUID,
+    cursor: Any,
+    stored_page: Any,
+    delivery: dict[str, Any],
+    *,
+    flag: bool,
 ) -> tuple[Any, bool] | None:
     """Return the frozen fanout page for an outbox (reusing or freezing one) and a failure flag.
 
@@ -1089,11 +1444,14 @@ async def _resolve_fanout_page(
     try:
         async with factory() as session:
             detached_bindings = await connectors.list_github_event_bindings(
-                session, app_id=str(delivery["app_id"]),
+                session,
+                app_id=str(delivery["app_id"]),
                 installation_id=str(delivery["installation_id"]),
                 repository_id=str(delivery["repository_id"]) if delivery["repository_id"] else None,
-                limit=50, cursor=cursor,
-                multi_workspace_enabled=flag, instance_operator=True,
+                limit=50,
+                cursor=cursor,
+                multi_workspace_enabled=flag,
+                instance_operator=True,
             )
             await session.rollback()
     except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
@@ -1116,11 +1474,16 @@ async def _resolve_fanout_page(
     except (TypeError, ValueError):
         return fanout_page, True
     async with factory() as session:
-        current = await session.scalar(select(GithubWebhookOutbox).where(
-            GithubWebhookOutbox.id == outbox_id,
-        ).with_for_update())
+        current = await session.scalar(
+            select(GithubWebhookOutbox)
+            .where(
+                GithubWebhookOutbox.id == outbox_id,
+            )
+            .with_for_update()
+        )
         if (
-            current is None or current.state not in _OUTBOX_OPEN_STATES
+            current is None
+            or current.state not in _OUTBOX_OPEN_STATES
             or current.binding_cursor != cursor
         ):
             await session.rollback()
@@ -1153,14 +1516,21 @@ def _target_applies_to_binding(binding: Any, target: Any, delivery_repository_id
     if target.locator_kind == "repository" and target.locator != binding.repository_id:
         return False
     return not (
-        delivery_repository_id and target.locator_kind not in {"installation"}
-        and target.locator_kind != "repository" and binding.repository_id != delivery_repository_id
+        delivery_repository_id
+        and target.locator_kind not in {"installation"}
+        and target.locator_kind != "repository"
+        and binding.repository_id != delivery_repository_id
     )
 
 
 async def _admit_binding_target(
-    factory: async_sessionmaker[AsyncSession], fanout_page: Any, binding: Any, target: Any,
-    delivery_id: Any, *, flag: bool,
+    factory: async_sessionmaker[AsyncSession],
+    fanout_page: Any,
+    binding: Any,
+    target: Any,
+    delivery_id: Any,
+    *,
+    flag: bool,
 ) -> bool:
     """Admit one target for one frozen binding under that binding's original identity.
 
@@ -1173,22 +1543,29 @@ async def _admit_binding_target(
 
     try:
         binding_scope = InternalJobScope(
-            workspace_id=binding.workspace_id, actor_user_id=binding.actor_user_id,
-            membership_revision=binding.membership_revision, source_id=binding.source_id,
+            workspace_id=binding.workspace_id,
+            actor_user_id=binding.actor_user_id,
+            membership_revision=binding.membership_revision,
+            source_id=binding.source_id,
             source_generation=binding.source_generation,
         )
         async with factory() as session:
             if not await module_is_enabled(
-                session, "connectors", scope=binding_scope, multi_workspace_enabled=flag,
+                session,
+                "connectors",
+                scope=binding_scope,
+                multi_workspace_enabled=flag,
             ):
                 await session.rollback()
                 return False
             result = await connectors.enqueue_github_hint(
-                session, binding=binding,
+                session,
+                binding=binding,
                 delivery_receipt_id=delivery_id,
                 target=target,
                 expected_binding_cursor=fanout_page.cursor_before,
-                scope=binding_scope, multi_workspace_enabled=flag,
+                scope=binding_scope,
+                multi_workspace_enabled=flag,
             )
         return bool(result.disposition in {"capacity_exhausted", "stale_progress"})
     except (DomainError, HTTPException) as exc:
@@ -1198,7 +1575,11 @@ async def _admit_binding_target(
 
 
 async def _fan_out_page(
-    factory: async_sessionmaker[AsyncSession], fanout_page: Any, delivery: dict[str, Any], *, flag: bool,
+    factory: async_sessionmaker[AsyncSession],
+    fanout_page: Any,
+    delivery: dict[str, Any],
+    *,
+    flag: bool,
 ) -> bool:
     """Admit every applicable (binding, target) pair of a frozen page; return True on any failure.
 
@@ -1209,7 +1590,10 @@ async def _fan_out_page(
     from modules.connectors.github.webhooks import GitHubTargetHint
 
     for binding in fanout_page.bindings:
-        if binding.app_id != delivery["app_id"] or binding.installation_id != delivery["installation_id"]:
+        if (
+            binding.app_id != delivery["app_id"]
+            or binding.installation_id != delivery["installation_id"]
+        ):
             continue
         if delivery["repository_id"] and binding.repository_id != delivery["repository_id"]:
             continue
@@ -1220,14 +1604,21 @@ async def _fan_out_page(
                 return True
             if not _target_applies_to_binding(binding, target, delivery["repository_id"]):
                 continue
-            if await _admit_binding_target(factory, fanout_page, binding, target, delivery["id"], flag=flag):
+            if await _admit_binding_target(
+                factory, fanout_page, binding, target, delivery["id"], flag=flag
+            ):
                 return True
     return False
 
 
 async def _settle_outbox(
-    factory: async_sessionmaker[AsyncSession], outbox_id: UUID, cursor: Any, stored_page: Any,
-    fanout_page: Any, failed: bool, now: datetime,
+    factory: async_sessionmaker[AsyncSession],
+    outbox_id: UUID,
+    cursor: Any,
+    stored_page: Any,
+    fanout_page: Any,
+    failed: bool,
+    now: datetime,
 ) -> bool:
     """Persist the fanout outcome on the outbox if the same cursor/page still owns it.
 
@@ -1238,9 +1629,13 @@ async def _settle_outbox(
     from modules.connectors.public import _validated_github_fanout_page
 
     async with factory() as session:
-        current = await session.scalar(select(GithubWebhookOutbox).where(
-            GithubWebhookOutbox.id == outbox_id,
-        ).with_for_update())
+        current = await session.scalar(
+            select(GithubWebhookOutbox)
+            .where(
+                GithubWebhookOutbox.id == outbox_id,
+            )
+            .with_for_update()
+        )
         if current is None:
             await session.rollback()
             return False
@@ -1261,18 +1656,25 @@ async def _settle_outbox(
                 return False
         elif (
             current.state not in _OUTBOX_OPEN_STATES
-            or current.binding_cursor != cursor or current.fanout_page != stored_page
+            or current.binding_cursor != cursor
+            or current.fanout_page != stored_page
         ):
             await session.rollback()
             return False
-        capacity = await session.scalar(select(GithubWebhookCapacity).where(
-            GithubWebhookCapacity.id == 1,
-        ).with_for_update())
+        capacity = await session.scalar(
+            select(GithubWebhookCapacity)
+            .where(
+                GithubWebhookCapacity.id == 1,
+            )
+            .with_for_update()
+        )
         if failed:
             current.attempts = min(5, current.attempts + 1)
             current.state = "needs_attention" if current.attempts >= 5 else "pending"
             current.next_attempt_at = now + timedelta(
-                seconds=3600 if current.state == "needs_attention" else _webhook_retry_delay(current.attempts)
+                seconds=3600
+                if current.state == "needs_attention"
+                else _webhook_retry_delay(current.attempts)
             )
         elif fanout_page is not None and fanout_page.cursor_after is not None:
             current.binding_cursor = fanout_page.cursor_after
@@ -1303,11 +1705,16 @@ async def _recover_deferred_hints(session: AsyncSession, now: datetime, *, flag:
     from modules.connectors import public as connectors
     from modules.settings.public import module_is_enabled
 
-    deferred_source_id = await session.scalar(select(GithubSourceHint.source_id).where(
-        GithubSourceHint.state == "capacity_deferred",
-        GithubSourceHint.capacity_reserved.is_(False),
-        GithubSourceHint.next_attempt_at <= now,
-    ).order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.updated_at).limit(1))
+    deferred_source_id = await session.scalar(
+        select(GithubSourceHint.source_id)
+        .where(
+            GithubSourceHint.state == "capacity_deferred",
+            GithubSourceHint.capacity_reserved.is_(False),
+            GithubSourceHint.next_attempt_at <= now,
+        )
+        .order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.updated_at)
+        .limit(1)
+    )
     if deferred_source_id is None:
         return
     admitted = await _admit_source_job(session, deferred_source_id, multi_workspace_enabled=flag)
@@ -1315,19 +1722,39 @@ async def _recover_deferred_hints(session: AsyncSession, now: datetime, *, flag:
         deferred_scope, deferred_fence = admitted
         try:
             locked = await sources.lock_source(
-                session, deferred_source_id, scope=deferred_scope, multi_workspace_enabled=flag,
+                session,
+                deferred_source_id,
+                scope=deferred_scope,
+                multi_workspace_enabled=flag,
                 expected_access_fence=deferred_fence,
             )
-            source = await sources.get_connector_source(
-                session, deferred_source_id, scope=deferred_scope, multi_workspace_enabled=flag,
-            ) if locked is not None else None
-            if source is not None and source.status == "active" and await module_is_enabled(
-                session, "connectors", scope=deferred_scope, multi_workspace_enabled=flag,
+            source = (
+                await sources.get_connector_source(
+                    session,
+                    deferred_source_id,
+                    scope=deferred_scope,
+                    multi_workspace_enabled=flag,
+                )
+                if locked is not None
+                else None
+            )
+            if (
+                source is not None
+                and source.status == "active"
+                and await module_is_enabled(
+                    session,
+                    "connectors",
+                    scope=deferred_scope,
+                    multi_workspace_enabled=flag,
+                )
             ):
                 await connectors.reconcile_github_source_hints_lifecycle(
-                    session, source_id=deferred_source_id,
-                    source_generation=source.generation, active=True,
-                    scope=deferred_scope, multi_workspace_enabled=flag,
+                    session,
+                    source_id=deferred_source_id,
+                    source_generation=source.generation,
+                    active=True,
+                    scope=deferred_scope,
+                    multi_workspace_enabled=flag,
                 )
         except (DomainError, HTTPException) as exc:
             await session.rollback()
@@ -1336,12 +1763,22 @@ async def _recover_deferred_hints(session: AsyncSession, now: datetime, *, flag:
     # Pushing the Source's deferred hints later also rotates a denied/disabled Source out of the head.
     retry_base = datetime.now(UTC)
     retry_at = retry_base + timedelta(seconds=60)
-    remaining = list((await session.scalars(select(GithubSourceHint).where(
-        GithubSourceHint.source_id == deferred_source_id,
-        GithubSourceHint.state == "capacity_deferred",
-        GithubSourceHint.capacity_reserved.is_(False),
-        GithubSourceHint.next_attempt_at <= retry_base,
-    ).order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.id).limit(100).with_for_update(skip_locked=True))).all())
+    remaining = list(
+        (
+            await session.scalars(
+                select(GithubSourceHint)
+                .where(
+                    GithubSourceHint.source_id == deferred_source_id,
+                    GithubSourceHint.state == "capacity_deferred",
+                    GithubSourceHint.capacity_reserved.is_(False),
+                    GithubSourceHint.next_attempt_at <= retry_base,
+                )
+                .order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.id)
+                .limit(100)
+                .with_for_update(skip_locked=True)
+            )
+        ).all()
+    )
     for deferred_hint in remaining:
         deferred_hint.next_attempt_at = max(deferred_hint.next_attempt_at, retry_at)
     await session.commit()
@@ -1355,16 +1792,28 @@ async def _claim_due_hint(session: AsyncSession, now: datetime) -> tuple[Any, ..
     Returns ``(id, source_id, source_generation, connector_revision, dirty_revision)``, or
     ``None`` after a rollback when nothing is due.
     """
-    hint = await session.scalar(select(GithubSourceHint).where(
-        GithubSourceHint.state.in_(("pending", "dispatched", "needs_attention")),
-        GithubSourceHint.capacity_reserved.is_(True),
-        GithubSourceHint.reconcile_page <= 100,
-        GithubSourceHint.next_attempt_at <= now,
-    ).order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.updated_at).limit(1).with_for_update(skip_locked=True))
+    hint = await session.scalar(
+        select(GithubSourceHint)
+        .where(
+            GithubSourceHint.state.in_(("pending", "dispatched", "needs_attention")),
+            GithubSourceHint.capacity_reserved.is_(True),
+            GithubSourceHint.reconcile_page <= 100,
+            GithubSourceHint.next_attempt_at <= now,
+        )
+        .order_by(GithubSourceHint.next_attempt_at, GithubSourceHint.updated_at)
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    )
     if hint is None:
         await session.rollback()
         return None
-    snapshot = (hint.id, hint.source_id, hint.source_generation, hint.connector_revision, hint.dirty_revision)
+    snapshot = (
+        hint.id,
+        hint.source_id,
+        hint.source_generation,
+        hint.connector_revision,
+        hint.dirty_revision,
+    )
     needs_attention = hint.state == "needs_attention" or hint.attempts >= 4
     hint.attempts = min(5, hint.attempts + 1)
     attempt = hint.attempts
@@ -1378,7 +1827,11 @@ async def _claim_due_hint(session: AsyncSession, now: datetime) -> tuple[Any, ..
 
 
 async def _wake_hint_source(
-    factory: async_sessionmaker[AsyncSession], snapshot: tuple[Any, ...], settings: Settings, *, flag: bool,
+    factory: async_sessionmaker[AsyncSession],
+    snapshot: tuple[Any, ...],
+    settings: Settings,
+    *,
+    flag: bool,
 ) -> Any:
     """Wake the packaged collection for a claimed hint's Source under a fresh worker admission.
 
@@ -1395,11 +1848,18 @@ async def _wake_hint_source(
         if admitted is not None:
             wake_scope, _wake_fence = admitted
             try:
-                if await module_is_enabled(session, "connectors", scope=wake_scope, multi_workspace_enabled=flag):
+                if await module_is_enabled(
+                    session, "connectors", scope=wake_scope, multi_workspace_enabled=flag
+                ):
                     wake = await connectors.wake_packaged_collection(
-                        session, source_id=snapshot[1], source_generation=snapshot[2],
-                        connector_revision=snapshot[3], settings=settings, timeout_seconds=15,
-                        scope=wake_scope, multi_workspace_enabled=flag,
+                        session,
+                        source_id=snapshot[1],
+                        source_generation=snapshot[2],
+                        connector_revision=snapshot[3],
+                        settings=settings,
+                        timeout_seconds=15,
+                        scope=wake_scope,
+                        multi_workspace_enabled=flag,
                     )
             except (DomainError, HTTPException) as exc:
                 await session.rollback()
@@ -1409,7 +1869,10 @@ async def _wake_hint_source(
 
 
 async def _settle_hint_after_wake(
-    factory: async_sessionmaker[AsyncSession], snapshot: tuple[Any, ...], wake: Any, now: datetime,
+    factory: async_sessionmaker[AsyncSession],
+    snapshot: tuple[Any, ...],
+    wake: Any,
+    now: datetime,
 ) -> None:
     """Record the wake outcome on the claimed hint unless its dirty revision or state moved.
 
@@ -1419,20 +1882,32 @@ async def _settle_hint_after_wake(
     A hint changed since the claim is left untouched (rolled back).
     """
     async with factory() as session:
-        hint = await session.scalar(select(GithubSourceHint).where(
-            GithubSourceHint.id == snapshot[0],
-        ).with_for_update())
-        if hint is not None and hint.dirty_revision == snapshot[4] and hint.state in {"dispatched", "needs_attention"}:
+        hint = await session.scalar(
+            select(GithubSourceHint)
+            .where(
+                GithubSourceHint.id == snapshot[0],
+            )
+            .with_for_update()
+        )
+        if (
+            hint is not None
+            and hint.dirty_revision == snapshot[4]
+            and hint.state in {"dispatched", "needs_attention"}
+        ):
             if wake is None:
                 # No admissible subject (or module disabled): retry later, bounded by the attempts cap.
                 hint.state = "needs_attention" if hint.attempts >= 5 else "pending"
                 hint.next_attempt_at = now + timedelta(
-                    seconds=3600 if hint.state == "needs_attention" else _webhook_retry_delay(max(1, hint.attempts))
+                    seconds=3600
+                    if hint.state == "needs_attention"
+                    else _webhook_retry_delay(max(1, hint.attempts))
                 )
             elif wake.outcome == "acknowledged":
                 hint.state = "needs_attention" if hint.attempts >= 5 else "dispatched"
                 hint.next_attempt_at = now + timedelta(
-                    seconds=3600 if hint.state == "needs_attention" else _webhook_retry_delay(max(1, hint.attempts))
+                    seconds=3600
+                    if hint.state == "needs_attention"
+                    else _webhook_retry_delay(max(1, hint.attempts))
                 )
             elif wake.outcome == "deferred" and wake.next_eligible_at is not None:
                 hint.state = "needs_attention" if hint.attempts >= 5 else "pending"
@@ -1479,12 +1954,23 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
     now = datetime.now(UTC)
     progressed = await expire_github_webhook_details(factory, now=now)
     progressed += await reclaim_github_webhook_digests(factory, now=now)
-    progressed += await revoke_deleted_source_github_grants(factory, settings, cursor_ctx=_cursor_ctx(ctx))
+    progressed += await revoke_deleted_source_github_grants(
+        factory, settings, cursor_ctx=_cursor_ctx(ctx)
+    )
     async with factory() as session:
-        outbox_ids = list((await session.scalars(select(GithubWebhookOutbox.id).where(
-            GithubWebhookOutbox.state.in_(("pending", "dispatched", "needs_attention")),
-            GithubWebhookOutbox.next_attempt_at <= now,
-        ).order_by(GithubWebhookOutbox.next_attempt_at, GithubWebhookOutbox.id).limit(50))).all())
+        outbox_ids = list(
+            (
+                await session.scalars(
+                    select(GithubWebhookOutbox.id)
+                    .where(
+                        GithubWebhookOutbox.state.in_(("pending", "dispatched", "needs_attention")),
+                        GithubWebhookOutbox.next_attempt_at <= now,
+                    )
+                    .order_by(GithubWebhookOutbox.next_attempt_at, GithubWebhookOutbox.id)
+                    .limit(50)
+                )
+            ).all()
+        )
 
     for outbox_id in outbox_ids:
         snapshot_rows = await _snapshot_outbox(factory, outbox_id)
@@ -1495,7 +1981,9 @@ async def dispatch_github_webhooks(ctx: dict[str, object]) -> int:
             if await _complete_outbox_without_installation(factory, outbox_id, cursor, stored_page):
                 progressed += 1
             continue
-        resolved = await _resolve_fanout_page(factory, outbox_id, cursor, stored_page, delivery, flag=flag)
+        resolved = await _resolve_fanout_page(
+            factory, outbox_id, cursor, stored_page, delivery, flag=flag
+        )
         if resolved is None:
             continue
         fanout_page, failed = resolved
@@ -1530,7 +2018,8 @@ async def process_collection_request(ctx: dict[str, object], request_id: str) ->
     factory = worker_session_factory(ctx)
     async with factory() as session:
         admission = await scheduler.admit_collection_request(
-            session, UUID(request_id), multi_workspace_enabled=settings.multi_workspace_enabled)
+            session, UUID(request_id), multi_workspace_enabled=settings.multi_workspace_enabled
+        )
     if admission is None:
         return "deferred"
     try:
@@ -1539,7 +2028,12 @@ async def process_collection_request(ctx: dict[str, object], request_id: str) ->
         logger.exception("Collection executor raised; request_id=%s", admission.request_id)
         async with factory() as session:
             await scheduler.settle_admission(
-                session, admission.request_id, admission.admission_token,
-                outcome="failed", error_code="executor_error", retryable=True)
+                session,
+                admission.request_id,
+                admission.admission_token,
+                outcome="failed",
+                error_code="executor_error",
+                retryable=True,
+            )
         return "failed"
     return "admitted"

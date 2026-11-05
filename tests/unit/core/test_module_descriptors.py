@@ -21,15 +21,29 @@ ROOT = Path(__file__).resolve().parents[3]
 
 # The hard-coded ``_OWNERS`` order of core/auth/deletion_cleanup.py before the registry existed.
 LEGACY_ERASURE_ORDER = (
-    "modules.agents.erasure", "modules.automations.erasure", "modules.chat.erasure",
-    "modules.connectors.erasure", "modules.dashboard.erasure", "modules.goals.erasure",
-    "modules.ingestion.erasure", "modules.knowledge.documents.erasure",
-    "modules.knowledge.entities.erasure", "modules.knowledge.observations.erasure",
-    "modules.knowledge.relationships.erasure", "modules.knowledge.temporal.erasure",
-    "modules.memory.erasure", "modules.news.erasure", "modules.notifications.erasure",
-    "modules.observability.erasure", "modules.search.erasure", "modules.settings.erasure",
-    "modules.sources.erasure", "modules.tasks.erasure", "modules.timeline.erasure",
-    "modules.tools.erasure", "modules.translations.erasure",
+    "modules.agents.erasure",
+    "modules.automations.erasure",
+    "modules.chat.erasure",
+    "modules.connectors.erasure",
+    "modules.dashboard.erasure",
+    "modules.goals.erasure",
+    "modules.ingestion.erasure",
+    "modules.knowledge.documents.erasure",
+    "modules.knowledge.entities.erasure",
+    "modules.knowledge.observations.erasure",
+    "modules.knowledge.relationships.erasure",
+    "modules.knowledge.temporal.erasure",
+    "modules.memory.erasure",
+    "modules.news.erasure",
+    "modules.notifications.erasure",
+    "modules.observability.erasure",
+    "modules.search.erasure",
+    "modules.settings.erasure",
+    "modules.sources.erasure",
+    "modules.tasks.erasure",
+    "modules.timeline.erasure",
+    "modules.tools.erasure",
+    "modules.translations.erasure",
 )
 
 
@@ -57,7 +71,11 @@ def test_registry_is_typed_and_platform_descriptors_stay_out_of_lifecycle() -> N
     lifecycle = register_modules()
     assert len(lifecycle) == len(LIFECYCLE_DESCRIPTORS) == 22
     assert {item.id for item in PLATFORM_DESCRIPTORS} == {
-        "settings", "translations", "pick", "model_gateway", "mcp_widgets",
+        "settings",
+        "translations",
+        "pick",
+        "model_gateway",
+        "mcp_widgets",
     }
     assert not {item.id for item in PLATFORM_DESCRIPTORS} & lifecycle.keys()
 

@@ -20,8 +20,12 @@ logger = logging.getLogger(__name__)
 
 
 async def _gateway_generate(
-    context: OperationAuthorization, gateway: ModelGateway, messages: list[Any],
-    response_model: type[Any] | None, max_tokens: int, model_size: Any,
+    context: OperationAuthorization,
+    gateway: ModelGateway,
+    messages: list[Any],
+    response_model: type[Any] | None,
+    max_tokens: int,
+    model_size: Any,
 ) -> dict[str, Any]:
     """Run one Graphiti generation through the gateway and return the validated JSON object.
 
@@ -45,21 +49,31 @@ async def _gateway_generate(
     try:
         if response_model is not None:
             schema = {
-                "name": response_model.__name__, "strict": True,
+                "name": response_model.__name__,
+                "strict": True,
                 "schema": response_model.model_json_schema(),
             }
             raw = await gateway.structured(
-                model.role, model.mapping,
-                model.policy, payload, schema, max_tokens=token_limit,
-                temperature=0, before_send=before_send,
+                model.role,
+                model.mapping,
+                model.policy,
+                payload,
+                schema,
+                max_tokens=token_limit,
+                temperature=0,
+                before_send=before_send,
             )
             content = _completion_content(raw)
             parsed = json.loads(content)
         else:
             raw = await gateway.chat(
-                model.role, model.mapping,
-                model.policy, payload, max_tokens=token_limit,
-                temperature=0, before_send=before_send,
+                model.role,
+                model.mapping,
+                model.policy,
+                payload,
+                max_tokens=token_limit,
+                temperature=0,
+                before_send=before_send,
             )
             parsed = _completion_content(raw)
             parsed = json.loads(parsed)
@@ -91,7 +105,9 @@ def _validated_embeddings(raw: Any, input_count: int, dimensions: int) -> list[l
 
 
 async def _gateway_embed(
-    context: OperationAuthorization, gateway: ModelGateway, input_data_list: list[str],
+    context: OperationAuthorization,
+    gateway: ModelGateway,
+    input_data_list: list[str],
 ) -> list[list[float]]:
     """Embed a bounded batch through the gateway, requiring the configured dimensions and valid vectors."""
     model = context.embedding
@@ -99,7 +115,8 @@ async def _gateway_embed(
     if dimensions is None or not 1 <= dimensions <= 4096:
         raise GraphOperationError("graph_embedding_dimension_unconfigured")
     if not 1 <= len(input_data_list) <= MAX_CANDIDATES or any(
-        not isinstance(item, str) or len(item.encode()) > MAX_INPUT_BYTES for item in input_data_list
+        not isinstance(item, str) or len(item.encode()) > MAX_INPUT_BYTES
+        for item in input_data_list
     ):
         raise GraphOperationError("graph_embedding_input_invalid")
 
@@ -108,7 +125,11 @@ async def _gateway_embed(
         await _authorize(context, "embedding")
 
     raw = await gateway.embed(
-        model.role, model.mapping, model.policy, input_data_list, before_send=before_send,
+        model.role,
+        model.mapping,
+        model.policy,
+        input_data_list,
+        before_send=before_send,
     )
     return _validated_embeddings(raw, len(input_data_list), dimensions)
 
@@ -122,16 +143,27 @@ def _ranked_passages(rows: Any, passages: list[str]) -> list[tuple[str, float]]:
     for row in rows:
         index = row.get("index") if isinstance(row, dict) else None
         score = row.get("relevance_score", row.get("score")) if isinstance(row, dict) else None
-        if (not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(passages)
-                or index in seen or not isinstance(score, int | float) or not math.isfinite(score)):
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or not 0 <= index < len(passages)
+            or index in seen
+            or not isinstance(score, int | float)
+            or not math.isfinite(score)
+        ):
             raise GraphOperationError("graph_reranking_response_invalid")
         seen.add(index)
         ranked.append((index, passages[index], float(score)))
-    return [(text, score) for _, text, score in sorted(ranked, key=lambda item: (-item[2], item[0]))]
+    return [
+        (text, score) for _, text, score in sorted(ranked, key=lambda item: (-item[2], item[0]))
+    ]
 
 
 async def _gateway_rerank(
-    context: OperationAuthorization, gateway: ModelGateway, query: str, passages: list[str],
+    context: OperationAuthorization,
+    gateway: ModelGateway,
+    query: str,
+    passages: list[str],
 ) -> list[tuple[str, float]]:
     """Rerank bounded passages through the explicitly configured gateway reranking capability."""
     model = context.reranking
@@ -143,7 +175,12 @@ async def _gateway_rerank(
         await _authorize(context, "embedding")
 
     raw = await gateway.rerank(
-        model.role, model.mapping, model.policy, query, passages, before_send=before_send,
+        model.role,
+        model.mapping,
+        model.policy,
+        query,
+        passages,
+        before_send=before_send,
     )
     rows = raw.get("results") if isinstance(raw, dict) else None
     return _ranked_passages(rows, passages)
@@ -169,19 +206,30 @@ def _make_clients(context: OperationAuthorization, gateway: ModelGateway) -> tup
             super().__init__(config=LLMConfig(temperature=0, max_tokens=4096), cache=False)
 
         async def _generate_response(
-            self, messages: list[Any], response_model: type[Any] | None = None,
-            max_tokens: int = 4096, model_size: Any = None,
+            self,
+            messages: list[Any],
+            response_model: type[Any] | None = None,
+            max_tokens: int = 4096,
+            model_size: Any = None,
         ) -> dict[str, Any]:
             """Translate messages/schema while keeping raw model output out of errors and logs."""
-            return await _gateway_generate(context, gateway, messages, response_model, max_tokens, model_size)
+            return await _gateway_generate(
+                context, gateway, messages, response_model, max_tokens, model_size
+            )
 
         async def _generate_response_with_retry(
-            self, messages: list[Any], response_model: type[Any] | None = None,
-            max_tokens: int = 4096, model_size: Any = None,
+            self,
+            messages: list[Any],
+            response_model: type[Any] | None = None,
+            max_tokens: int = 4096,
+            model_size: Any = None,
         ) -> dict[str, Any]:
             """Keep Graphiti prompt normalization while leaving retry ownership to ModelGateway."""
             return await self._generate_response(
-                messages, response_model, max_tokens or self.max_tokens, model_size,
+                messages,
+                response_model,
+                max_tokens or self.max_tokens,
+                model_size,
             )
 
     class GatewayEmbedder(EmbedderClient):
@@ -207,7 +255,9 @@ def _make_clients(context: OperationAuthorization, gateway: ModelGateway) -> tup
     return GatewayLLM(), GatewayEmbedder(), GatewayCrossEncoder()
 
 
-async def _authorize(context: OperationAuthorization, capability: Literal["reasoning", "embedding"]) -> None:
+async def _authorize(
+    context: OperationAuthorization, capability: Literal["reasoning", "embedding"]
+) -> None:
     """Enforce owner freshness and aggregate outbound model-call limits."""
     if context.model_calls is None:
         raise RuntimeError("invariant violated: context.model_calls must not be None")
@@ -220,7 +270,11 @@ async def _authorize(context: OperationAuthorization, capability: Literal["reaso
 def _completion_content(value: Any) -> str:
     """Extract bounded OpenAI-compatible completion text without exposing invalid output."""
     choices = value.get("choices") if isinstance(value, dict) else None
-    message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+    message = (
+        choices[0].get("message")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+        else None
+    )
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, str) or len(content.encode()) > MAX_INPUT_BYTES:
         raise ValueError("invalid completion")

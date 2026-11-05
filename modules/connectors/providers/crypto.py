@@ -29,12 +29,8 @@ COINPAPRIKA_URL = "https://api.coinpaprika.com/v1/tickers/btc-bitcoin"
 COINGECKO_URL = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
 COINGECKO_KEY_HEADER = "x-cg-demo-api-key"
 
-DEFAULT_BINANCE_PAIRS: tuple[tuple[str, str, str], ...] = (
-    ("BTCUSDT", "BTC", "USDT"),
-)
-DEFAULT_COINGECKO_ASSETS: tuple[tuple[str, str, str], ...] = (
-    ("bitcoin", "BTC", "USD"),
-)
+DEFAULT_BINANCE_PAIRS: tuple[tuple[str, str, str], ...] = (("BTCUSDT", "BTC", "USDT"),)
+DEFAULT_COINGECKO_ASSETS: tuple[tuple[str, str, str], ...] = (("bitcoin", "BTC", "USD"),)
 _SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,20}$")
 _COIN_ID_RE = re.compile(r"^[a-z0-9-]{2,64}$")
 
@@ -93,9 +89,14 @@ def coingecko_request(
     coin_ids: list[str] = []
     quotes: list[str] = []
     for coin_id, symbol, quote in assets:
-        if (not _COIN_ID_RE.fullmatch(coin_id) or not isinstance(symbol, str)
-                or not 1 <= len(symbol) <= 32 or symbol != symbol.strip() or not symbol.isprintable()
-                or not _SYMBOL_RE.fullmatch(quote)):
+        if (
+            not _COIN_ID_RE.fullmatch(coin_id)
+            or not isinstance(symbol, str)
+            or not 1 <= len(symbol) <= 32
+            or symbol != symbol.strip()
+            or not symbol.isprintable()
+            or not _SYMBOL_RE.fullmatch(quote)
+        ):
             raise ProviderPayloadError("coingecko_scope_mismatch")
         if coin_id not in coin_ids:
             coin_ids.append(coin_id)
@@ -119,8 +120,7 @@ def map_binance(
     if not pairs:
         raise ProviderPayloadError("binance_scope_mismatch")
     allowed_pairs: dict[str, tuple[str, str]] = {
-        pair_symbol: (base_asset, quote_asset)
-        for pair_symbol, base_asset, quote_asset in pairs
+        pair_symbol: (base_asset, quote_asset) for pair_symbol, base_asset, quote_asset in pairs
     }
     items: list[object]
     if isinstance(payload, dict):
@@ -151,14 +151,24 @@ def map_binance(
         except ValueError as exc:
             raise ProviderPayloadError("binance_price_invalid") from exc
         text = decimal_text(price)
-        records.append(build_record(
-            provider="binance", identity=f"binance:{symbol}:price",
-            content=f"Binance {symbol} last price: {text} {quote_asset} (collected quote, no exchange timestamp)",
-            title=f"{symbol} price", observed_at=collected_at, collected_at=collected_at,
-            version=content_version("binance", symbol, text), metric="spot_price", value=price,
-            unit=quote_asset, currency=None, symbol=symbol, quality="provider_reported",
-            provider_fields={"symbol": symbol, "base": base_asset, "quote": quote_asset},
-        ))
+        records.append(
+            build_record(
+                provider="binance",
+                identity=f"binance:{symbol}:price",
+                content=f"Binance {symbol} last price: {text} {quote_asset} (collected quote, no exchange timestamp)",
+                title=f"{symbol} price",
+                observed_at=collected_at,
+                collected_at=collected_at,
+                version=content_version("binance", symbol, text),
+                metric="spot_price",
+                value=price,
+                unit=quote_asset,
+                currency=None,
+                symbol=symbol,
+                quality="provider_reported",
+                provider_fields={"symbol": symbol, "base": base_asset, "quote": quote_asset},
+            )
+        )
     if len(records) != len(allowed_pairs):
         raise ProviderPayloadError("binance_scope_mismatch")
     return records
@@ -182,7 +192,11 @@ def map_fear_greed(payload: object, collected_at: datetime) -> list[IngestionRec
         observed_at = provider_instant(item.get("timestamp"), collected_at, unit="s")
         stamp = int(observed_at.timestamp())
         label = item.get("value_classification")
-        if stamp in seen or not isinstance(label, str) or not re.fullmatch(r"[A-Za-z ]{1,40}", label):
+        if (
+            stamp in seen
+            or not isinstance(label, str)
+            or not re.fullmatch(r"[A-Za-z ]{1,40}", label)
+        ):
             raise ProviderPayloadError("fear_greed_data_invalid")
         seen.add(stamp)
         try:
@@ -192,14 +206,23 @@ def map_fear_greed(payload: object, collected_at: datetime) -> list[IngestionRec
         if value != value.to_integral_value() or not 0 <= value <= 100:
             raise ProviderPayloadError("fear_greed_value_invalid")
         text = decimal_text(value)
-        records.append(build_record(
-            provider="alternative_me", identity=f"alternative_me:fng:{stamp}",
-            content=f"Crypto Fear and Greed Index {observed_at.date().isoformat()}: {text}/100 ({label})",
-            title="Fear and Greed Index", observed_at=observed_at, collected_at=collected_at,
-            version=content_version("alternative_me", stamp, text, label), metric="fear_greed_index",
-            value=value, unit="index (0-100)", quality="provider_reported", timestamp_basis="provider_published",
-            provider_fields={"timestamp": stamp, "value_classification": label},
-        ))
+        records.append(
+            build_record(
+                provider="alternative_me",
+                identity=f"alternative_me:fng:{stamp}",
+                content=f"Crypto Fear and Greed Index {observed_at.date().isoformat()}: {text}/100 ({label})",
+                title="Fear and Greed Index",
+                observed_at=observed_at,
+                collected_at=collected_at,
+                version=content_version("alternative_me", stamp, text, label),
+                metric="fear_greed_index",
+                value=value,
+                unit="index (0-100)",
+                quality="provider_reported",
+                timestamp_basis="provider_published",
+                provider_fields={"timestamp": stamp, "value_classification": label},
+            )
+        )
     return records
 
 
@@ -214,7 +237,10 @@ def _error_kind(text: str) -> str:
 
 
 def map_coinpaprika(
-    payload: object, collected_at: datetime, *, coin_id: str = "btc-bitcoin",
+    payload: object,
+    collected_at: datetime,
+    *,
+    coin_id: str = "btc-bitcoin",
 ) -> list[IngestionRecord]:
     """Map one coin's USD ticker (default BTC; optional personal-use provider); an empty-string price is explicit missing.
 
@@ -246,15 +272,31 @@ def map_coinpaprika(
         raise ProviderPayloadError("coinpaprika_price_invalid") from exc
     text = "null" if price is None else decimal_text(price)
     stamp = updated.isoformat()
-    return [build_record(
-        provider="coinpaprika", identity=f"coinpaprika:{coin_id}:USD:{stamp}",
-        content=f"CoinPaprika {symbol}/USD at {stamp}: {'not reported' if price is None else text + ' USD'}",
-        title=f"{symbol} price (CoinPaprika)", observed_at=updated, collected_at=collected_at,
-        version=content_version("coinpaprika", coin_id, "USD", stamp, text), metric="spot_price",
-        value=price, unit="USD", currency="USD", symbol=symbol, quality="provider_reported",
-        timestamp_basis="provider_modified", modified_at=updated,
-        provider_fields={"id": coin_id, "symbol": symbol, "last_updated": stamp, "quote": "USD"},
-    )]
+    return [
+        build_record(
+            provider="coinpaprika",
+            identity=f"coinpaprika:{coin_id}:USD:{stamp}",
+            content=f"CoinPaprika {symbol}/USD at {stamp}: {'not reported' if price is None else text + ' USD'}",
+            title=f"{symbol} price (CoinPaprika)",
+            observed_at=updated,
+            collected_at=collected_at,
+            version=content_version("coinpaprika", coin_id, "USD", stamp, text),
+            metric="spot_price",
+            value=price,
+            unit="USD",
+            currency="USD",
+            symbol=symbol,
+            quality="provider_reported",
+            timestamp_basis="provider_modified",
+            modified_at=updated,
+            provider_fields={
+                "id": coin_id,
+                "symbol": symbol,
+                "last_updated": stamp,
+                "quote": "USD",
+            },
+        )
+    ]
 
 
 _COINGECKO_CREDENTIAL_CODES = {401, 10002, 10010, 10011}
@@ -274,7 +316,7 @@ def map_coingecko(
         raise ProviderPayloadError("coingecko_response_invalid")
     if "status" in payload or "error" in payload or "error_code" in payload:
         status = payload.get("status")
-        code = (status.get("error_code") if isinstance(status, dict) else payload.get("error_code"))
+        code = status.get("error_code") if isinstance(status, dict) else payload.get("error_code")
         if code == 429:
             raise ProviderPayloadError("coingecko_rate_limited", "rate_limited")
         if code in _COINGECKO_CREDENTIAL_CODES:
@@ -287,7 +329,9 @@ def map_coingecko(
         quote_key = quote_ccy.lower()
         coin = payload.get(coin_id)
         if not isinstance(coin, dict) or quote_key not in coin:
-            raise ProviderPayloadError("coingecko_price_missing" if symbol_by_id else "coingecko_scope_mismatch")
+            raise ProviderPayloadError(
+                "coingecko_price_missing" if symbol_by_id else "coingecko_scope_mismatch"
+            )
         try:
             price = None if coin[quote_key] is None else positive_decimal(coin[quote_key])
         except ValueError as exc:
@@ -296,22 +340,46 @@ def map_coingecko(
             raise ProviderPayloadError("coingecko_price_missing")
         text = "null" if price is None else decimal_text(price)
         fields: dict[str, str | float | int | None] = {"coin_id": coin_id, "quote": quote_ccy}
-        if "last_updated_at" in coin:  # only when the owner-approved include_last_updated_at is in use
+        if (
+            "last_updated_at" in coin
+        ):  # only when the owner-approved include_last_updated_at is in use
             observed_at = provider_instant(coin["last_updated_at"], collected_at, unit="s")
             stamp = int(observed_at.timestamp())
             fields["last_updated_at"] = stamp
-            identity, basis, modified = f"coingecko:{coin_id}:{quote_ccy}:{stamp}", "provider_modified", observed_at
+            identity, basis, modified = (
+                f"coingecko:{coin_id}:{quote_ccy}:{stamp}",
+                "provider_modified",
+                observed_at,
+            )
         else:
-            observed_at, identity, basis, modified = collected_at, f"coingecko:{coin_id}:{quote_ccy}", "collection", None
-        records.append(build_record(
-            provider="coingecko", identity=identity,
-            content=f"CoinGecko {symbol}/{quote_ccy}: {'not reported' if price is None else text + ' ' + quote_ccy}",
-            title=f"{symbol} price (CoinGecko)", observed_at=observed_at, collected_at=collected_at,
-            version=content_version("coingecko", coin_id, quote_ccy, fields.get("last_updated_at"), text),
-            metric="spot_price", value=price, unit=quote_ccy, currency=quote_ccy,
-            symbol=coingecko_series_symbol(coin_id) if symbol_by_id else symbol,
-            quality="provider_reported", timestamp_basis=basis, modified_at=modified, provider_fields=fields,  # type: ignore[arg-type]
-        ))
+            observed_at, identity, basis, modified = (
+                collected_at,
+                f"coingecko:{coin_id}:{quote_ccy}",
+                "collection",
+                None,
+            )
+        records.append(
+            build_record(
+                provider="coingecko",
+                identity=identity,
+                content=f"CoinGecko {symbol}/{quote_ccy}: {'not reported' if price is None else text + ' ' + quote_ccy}",
+                title=f"{symbol} price (CoinGecko)",
+                observed_at=observed_at,
+                collected_at=collected_at,
+                version=content_version(
+                    "coingecko", coin_id, quote_ccy, fields.get("last_updated_at"), text
+                ),
+                metric="spot_price",
+                value=price,
+                unit=quote_ccy,
+                currency=quote_ccy,
+                symbol=coingecko_series_symbol(coin_id) if symbol_by_id else symbol,
+                quality="provider_reported",
+                timestamp_basis=basis,  # type: ignore[arg-type]
+                modified_at=modified,
+                provider_fields=fields,
+            )
+        )
     return records
 
 

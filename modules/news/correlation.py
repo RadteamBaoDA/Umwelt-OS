@@ -35,7 +35,11 @@ class _Coverage:
 
 
 async def _collect_event_signals(
-    session: AsyncSession, query: CorrelationQuery, coverage: _Coverage, *, scope: Scope,
+    session: AsyncSession,
+    query: CorrelationQuery,
+    coverage: _Coverage,
+    *,
+    scope: Scope,
     multi_workspace_enabled: bool,
 ) -> list[dict[str, Any]]:
     """Read one bounded Timeline signal page per domain, in domain order.
@@ -48,29 +52,44 @@ async def _collect_event_signals(
         if not query.source_ids:
             continue
         page = await timeline.list_correlation_signals(
-            session, domain=domain, from_at=query.from_at, to_at=query.to_at,
-            regions=query.regions, source_ids=query.source_ids, limit=query.limit_per_domain,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            domain=domain,
+            from_at=query.from_at,
+            to_at=query.to_at,
+            regions=query.regions,
+            source_ids=query.source_ids,
+            limit=query.limit_per_domain,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         coverage.counts[domain] = len(page.items)
         coverage.truncated[domain] = page.truncated
         for item in page.items:
-            signals.append({
-                "identity": f"event:{item.signal_id}", "domain": domain,
-                "region": item.region, "observed_at": item.observed_at,
-                "event_id": item.event_id, "observation_id": None,
-                "document_ids": item.document_ids,
-                "document_version_ids": item.document_version_ids,
-                "event_evidence_ids": item.event_evidence_ids,
-                "omitted_event_evidence_ids": item.omitted_event_evidence_ids,
-                "omitted_document_ids": item.omitted_document_ids,
-                "omitted_document_version_ids": item.omitted_document_version_ids,
-            })
+            signals.append(
+                {
+                    "identity": f"event:{item.signal_id}",
+                    "domain": domain,
+                    "region": item.region,
+                    "observed_at": item.observed_at,
+                    "event_id": item.event_id,
+                    "observation_id": None,
+                    "document_ids": item.document_ids,
+                    "document_version_ids": item.document_version_ids,
+                    "event_evidence_ids": item.event_evidence_ids,
+                    "omitted_event_evidence_ids": item.omitted_event_evidence_ids,
+                    "omitted_document_ids": item.omitted_document_ids,
+                    "omitted_document_version_ids": item.omitted_document_version_ids,
+                }
+            )
     return signals
 
 
 async def _alpha_vantage_sources(
-    session: AsyncSession, query: CorrelationQuery, coverage: _Coverage, *, scope: Scope,
+    session: AsyncSession,
+    query: CorrelationQuery,
+    coverage: _Coverage,
+    *,
+    scope: Scope,
     multi_workspace_enabled: bool,
 ) -> list[UUID]:
     """Return selected sources whose current provider scope is Alpha Vantage.
@@ -79,12 +98,15 @@ async def _alpha_vantage_sources(
     """
     alpha_sources: list[UUID] = []
     for source_id in query.source_ids:
-        source = await sources.get_connector_source(session, source_id, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled)
+        source = await sources.get_connector_source(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
         snapshot = await connectors.get_current_provider_scope(
-            session, source_id,
+            session,
+            source_id,
             source.generation if source is not None and source.status == "active" else -1,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         if snapshot is not None and snapshot.provider_id == "alpha_vantage":
             alpha_sources.append(source_id)
@@ -94,8 +116,13 @@ async def _alpha_vantage_sources(
 
 
 async def _collect_observation_signals(
-    session: AsyncSession, query: CorrelationQuery, alpha_sources: list[UUID], coverage: _Coverage,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    query: CorrelationQuery,
+    alpha_sources: list[UUID],
+    coverage: _Coverage,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[dict[str, Any]]:
     """Add current Alpha Vantage observations within the economic budget left by event evidence.
 
@@ -106,13 +133,21 @@ async def _collect_observation_signals(
     remaining_economic = max(0, query.limit_per_domain - coverage.counts["economic"])
     if alpha_sources and remaining_economic:
         observation_query = ObservationQuery(
-            source_ids=alpha_sources, regions=query.regions, from_at=query.from_at,
-            to_at=query.to_at, limit=remaining_economic,
+            source_ids=alpha_sources,
+            regions=query.regions,
+            from_at=query.from_at,
+            to_at=query.to_at,
+            limit=remaining_economic,
         )
         points, next_cursor, scan_truncated, _ = await observations.list_observations(
-            session, observation_query, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            observation_query,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
-        coverage.truncated["economic"] = coverage.truncated["economic"] or bool(next_cursor) or scan_truncated
+        coverage.truncated["economic"] = (
+            coverage.truncated["economic"] or bool(next_cursor) or scan_truncated
+        )
         seen_observations: set[str] = set()
         for point in points:
             identity = f"observation:{point.id}"
@@ -123,17 +158,23 @@ async def _collect_observation_signals(
                 break
             seen_observations.add(identity)
             coverage.counts["economic"] += 1
-            signals.append({
-                "identity": identity, "domain": "economic", "region": point.region,
-                "observed_at": point.observed_at, "event_id": None,
-                "observation_id": point.id, "document_ids": [point.document_id],
-                "document_version_ids": [point.document_version_id],
-                "event_evidence_ids": [],
-                "omitted_event_evidence_ids": 0,
-                "omitted_document_ids": 0,
-                "omitted_document_version_ids": 0,
-                "evidence_identity": [f"{point.document_version_id}:{point.id}"],
-            })
+            signals.append(
+                {
+                    "identity": identity,
+                    "domain": "economic",
+                    "region": point.region,
+                    "observed_at": point.observed_at,
+                    "event_id": None,
+                    "observation_id": point.id,
+                    "document_ids": [point.document_id],
+                    "document_version_ids": [point.document_version_id],
+                    "event_evidence_ids": [],
+                    "omitted_event_evidence_ids": 0,
+                    "omitted_document_ids": 0,
+                    "omitted_document_version_ids": 0,
+                    "evidence_identity": [f"{point.document_version_id}:{point.id}"],
+                }
+            )
     elif alpha_sources:
         # Event evidence filled the shared economic admission budget, so selected observation
         # sources were not scanned; report the scope omission without implying a signal existed.
@@ -164,33 +205,61 @@ def _bucket_signals(signals: list[dict[str, Any]]) -> tuple[list[CorrelationBuck
         counts = dict.fromkeys(_DOMAINS, 0)
         for row in rows:
             counts[str(row["domain"])] += 1
-        evidence_ids = sorted({value for item in rows for value in item["event_evidence_ids"]}, key=str)
+        evidence_ids = sorted(
+            {value for item in rows for value in item["event_evidence_ids"]}, key=str
+        )
         document_ids = sorted({value for item in rows for value in item["document_ids"]}, key=str)
-        version_ids = sorted({value for item in rows for value in item["document_version_ids"]}, key=str)
-        omitted_event_evidence_ids = sum(int(item["omitted_event_evidence_ids"]) for item in rows) + max(0, len(evidence_ids) - 500)
-        omitted_document_ids = sum(int(item["omitted_document_ids"]) for item in rows) + max(0, len(document_ids) - 500)
-        omitted_document_version_ids = sum(int(item["omitted_document_version_ids"]) for item in rows) + max(0, len(version_ids) - 500)
-        omitted_support = omitted_support or any((
-            omitted_event_evidence_ids, omitted_document_ids, omitted_document_version_ids,
-        ))
-        buckets.append(CorrelationBucketRead(
-            region=region, window_start=bucket, window_end=bucket + timedelta(hours=1),
-            signal_count=len(rows), domain_counts={key: value for key, value in counts.items() if value},
-            domains_present=[domain for domain in _DOMAINS if counts[domain]],
-            signal_ids=sorted(str(item["identity"]) for item in rows),
-            event_ids=sorted({item["event_id"] for item in rows if item["event_id"] is not None}, key=str),
-            observation_ids=sorted({item["observation_id"] for item in rows if item["observation_id"] is not None}, key=str),
-            document_ids=document_ids[:500], document_version_ids=version_ids[:500],
-            event_evidence_ids=evidence_ids[:500],
-            omitted_document_ids=omitted_document_ids,
-            omitted_document_version_ids=omitted_document_version_ids,
-            omitted_event_evidence_ids=omitted_event_evidence_ids,
-        ))
+        version_ids = sorted(
+            {value for item in rows for value in item["document_version_ids"]}, key=str
+        )
+        omitted_event_evidence_ids = sum(
+            int(item["omitted_event_evidence_ids"]) for item in rows
+        ) + max(0, len(evidence_ids) - 500)
+        omitted_document_ids = sum(int(item["omitted_document_ids"]) for item in rows) + max(
+            0, len(document_ids) - 500
+        )
+        omitted_document_version_ids = sum(
+            int(item["omitted_document_version_ids"]) for item in rows
+        ) + max(0, len(version_ids) - 500)
+        omitted_support = omitted_support or any(
+            (
+                omitted_event_evidence_ids,
+                omitted_document_ids,
+                omitted_document_version_ids,
+            )
+        )
+        buckets.append(
+            CorrelationBucketRead(
+                region=region,
+                window_start=bucket,
+                window_end=bucket + timedelta(hours=1),
+                signal_count=len(rows),
+                domain_counts={key: value for key, value in counts.items() if value},
+                domains_present=[domain for domain in _DOMAINS if counts[domain]],
+                signal_ids=sorted(str(item["identity"]) for item in rows),
+                event_ids=sorted(
+                    {item["event_id"] for item in rows if item["event_id"] is not None}, key=str
+                ),
+                observation_ids=sorted(
+                    {item["observation_id"] for item in rows if item["observation_id"] is not None},
+                    key=str,
+                ),
+                document_ids=document_ids[:500],
+                document_version_ids=version_ids[:500],
+                event_evidence_ids=evidence_ids[:500],
+                omitted_document_ids=omitted_document_ids,
+                omitted_document_version_ids=omitted_document_version_ids,
+                omitted_event_evidence_ids=omitted_event_evidence_ids,
+            )
+        )
     return buckets, omitted_support
 
 
 def _assemble_result(
-    query: CorrelationQuery, buckets: list[CorrelationBucketRead], omitted_support: bool, counters: _Coverage,
+    query: CorrelationQuery,
+    buckets: list[CorrelationBucketRead],
+    omitted_support: bool,
+    counters: _Coverage,
 ) -> CorrelationResult:
     """Build the per-domain coverage report, uncertainty reasons and final bounded result. Pure."""
     coverage = {
@@ -199,7 +268,8 @@ def _assemble_result(
             available=counters.counts[domain] > 0,
             truncated=counters.truncated[domain],
             omitted_source_count=counters.omitted[domain],
-        ) for domain in _DOMAINS
+        )
+        for domain in _DOMAINS
     }
     included = [domain for domain in _DOMAINS if counters.counts[domain] > 0]
     missing = [domain for domain in _DOMAINS if counters.counts[domain] == 0]
@@ -211,14 +281,23 @@ def _assemble_result(
     if omitted_support:
         uncertainty.append("bounded_evidence_support")
     return CorrelationResult(
-        from_at=query.from_at, to_at=query.to_at, regions=query.regions,
-        groups=buckets[:500], coverage=coverage, included_domains=included,
-        missing_domains=missing, uncertainty_reasons=uncertainty,
+        from_at=query.from_at,
+        to_at=query.to_at,
+        regions=query.regions,
+        groups=buckets[:500],
+        coverage=coverage,
+        included_domains=included,
+        missing_domains=missing,
+        uncertainty_reasons=uncertainty,
     )
 
 
 async def build_correlations(
-    session: AsyncSession, query: CorrelationQuery, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    query: CorrelationQuery,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> CorrelationResult:
     """Group a fixed number of live event/measurement evidence signals by region and UTC hour.
 
@@ -232,13 +311,28 @@ async def build_correlations(
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     coverage = _Coverage()
     signals = await _collect_event_signals(
-        session, query, coverage, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        query,
+        coverage,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     alpha_sources = await _alpha_vantage_sources(
-        session, query, coverage, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        query,
+        coverage,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    signals.extend(await _collect_observation_signals(
-        session, query, alpha_sources, coverage, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    ))
+    signals.extend(
+        await _collect_observation_signals(
+            session,
+            query,
+            alpha_sources,
+            coverage,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    )
     buckets, omitted_support = _bucket_signals(signals)
     return _assemble_result(query, buckets, omitted_support, coverage)

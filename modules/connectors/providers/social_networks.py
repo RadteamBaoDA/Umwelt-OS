@@ -75,28 +75,50 @@ def _walk(raw: str | None, provider: str) -> social_walk.Walk:
 
 
 def _record(
-    *, provider: str, identity: str, version: str | None, content: str,
-    observed_at: datetime, collected_at: datetime, source_fields: dict[str, object],
-    timestamp_basis: Literal["provider_modified", "provider_published", "collection"] = "provider_published",
+    *,
+    provider: str,
+    identity: str,
+    version: str | None,
+    content: str,
+    observed_at: datetime,
+    collected_at: datetime,
+    source_fields: dict[str, object],
+    timestamp_basis: Literal[
+        "provider_modified", "provider_published", "collection"
+    ] = "provider_published",
 ) -> IngestionRecord:
     """Create a bounded social post with typed provenance matching its durable identity/version."""
-    if not identity or len(identity) > 512 or observed_at.tzinfo is None or collected_at.tzinfo is None:
+    if (
+        not identity
+        or len(identity) > 512
+        or observed_at.tzinfo is None
+        or collected_at.tzinfo is None
+    ):
         raise ValueError("social_record_invalid")
     envelope = ProviderRecordMetadata(
-        provider=provider, identity=identity, provider_version=version,
-        timestamp_basis=timestamp_basis, coverage="returned_snapshot",
-        content_truncated=len(content) > MAX_TEXT, source_fields=source_fields,
+        provider=provider,
+        identity=identity,
+        provider_version=version,
+        timestamp_basis=timestamp_basis,
+        coverage="returned_snapshot",
+        content_truncated=len(content) > MAX_TEXT,
+        source_fields=source_fields,
     )
     return IngestionRecord(
-        provider_id=identity, version=version[:255] if version else None,
-        content=content[:MAX_TEXT], observed_at=observed_at.astimezone(UTC),
+        provider_id=identity,
+        version=version[:255] if version else None,
+        content=content[:MAX_TEXT],
+        observed_at=observed_at.astimezone(UTC),
         collected_at=collected_at.astimezone(UTC),
         metadata={"provider_record": envelope.model_dump(mode="json", exclude_none=True)},
     )
 
 
 def _finish(
-    provider: str, records: list[IngestionRecord], page: str | None, prior: social_walk.Walk,
+    provider: str,
+    records: list[IngestionRecord],
+    page: str | None,
+    prior: social_walk.Walk,
 ) -> SocialCollectionResult:
     """Apply the catch-up walk to one page and align record coverage with the new cursor.
 
@@ -105,14 +127,23 @@ def _finish(
     walk records its high-water mark instead of leaving the last page token behind.
     """
     records, walk = social_walk.step(prior, records, page)
-    coverage: Literal["returned_snapshot", "truncated"] = "truncated" if walk.page else "returned_snapshot"
+    coverage: Literal["returned_snapshot", "truncated"] = (
+        "truncated" if walk.page else "returned_snapshot"
+    )
     if coverage == "truncated":
         for index, record in enumerate(records):
             raw = record.metadata["provider_record"]
-            envelope = ProviderRecordMetadata.model_validate(raw).model_copy(update={"coverage": coverage})
-            records[index] = record.model_copy(update={
-                "metadata": {**record.metadata, "provider_record": envelope.model_dump(mode="json", exclude_none=True)},
-            })
+            envelope = ProviderRecordMetadata.model_validate(raw).model_copy(
+                update={"coverage": coverage}
+            )
+            records[index] = record.model_copy(
+                update={
+                    "metadata": {
+                        **record.metadata,
+                        "provider_record": envelope.model_dump(mode="json", exclude_none=True),
+                    },
+                }
+            )
     try:
         cursor = social_walk.encode(walk, {"provider": provider}, MAX_CURSOR_BYTES)
     except ValueError:
@@ -121,7 +152,11 @@ def _finish(
 
 
 async def collect_reddit_subreddit(
-    subreddit: str, access_token: str, *, cursor: str | None, collected_at: datetime,
+    subreddit: str,
+    access_token: str,
+    *,
+    cursor: str | None,
+    collected_at: datetime,
     fetch_bytes: Callable[..., Awaitable[rest.Fetched]],
 ) -> SocialCollectionResult:
     """Collect one newest-page snapshot from an OAuth-authorized public subreddit.
@@ -159,9 +194,12 @@ async def collect_reddit_subreddit(
             raise ValueError("reddit_response_invalid")
         identifier, permalink, title = post.get("id"), post.get("permalink"), post.get("title")
         if (
-            not isinstance(identifier, str) or not identifier
-            or not isinstance(permalink, str) or not permalink
-            or not isinstance(title, str) or not title
+            not isinstance(identifier, str)
+            or not identifier
+            or not isinstance(permalink, str)
+            or not permalink
+            or not isinstance(title, str)
+            or not title
         ):
             raise ValueError("reddit_response_invalid")
         created = _timestamp(post.get("created_utc"))
@@ -172,17 +210,27 @@ async def collect_reddit_subreddit(
         if url is None:
             raise ValueError("reddit_link_invalid")
         content = str(title) + (f"\n\n{body}" if body else "")
-        records.append(_record(
-            provider="reddit", identity=f"t3_{identifier}", version=f"t3_{identifier}",
-            content=content, observed_at=created, collected_at=collected_at,
-            source_fields={
-                "title": str(title)[:500], "subreddit": subreddit,
-                "author": author[:255], "canonical_url": url,
-                "created_at": created.isoformat(),
-            },
-        ))
+        records.append(
+            _record(
+                provider="reddit",
+                identity=f"t3_{identifier}",
+                version=f"t3_{identifier}",
+                content=content,
+                observed_at=created,
+                collected_at=collected_at,
+                source_fields={
+                    "title": str(title)[:500],
+                    "subreddit": subreddit,
+                    "author": author[:255],
+                    "canonical_url": url,
+                    "created_at": created.isoformat(),
+                },
+            )
+        )
     next_after = listing.get("after")
-    if next_after is not None and (not isinstance(next_after, str) or len(next_after) > MAX_CURSOR_BYTES):
+    if next_after is not None and (
+        not isinstance(next_after, str) or len(next_after) > MAX_CURSOR_BYTES
+    ):
         raise ValueError("reddit_cursor_invalid")
     return _finish("reddit", records, next_after, prior)
 
@@ -220,9 +268,17 @@ def _mastodon_status_record(status: object, collected_at: datetime) -> Ingestion
     """
     if not isinstance(status, dict) or status.get("visibility") != "public":
         return None
-    identifier, url, created = status.get("id"), status.get("url"), _timestamp(status.get("created_at"))
+    identifier, url, created = (
+        status.get("id"),
+        status.get("url"),
+        _timestamp(status.get("created_at")),
+    )
     content_html = status.get("content")
-    if not isinstance(identifier, str) or not identifier.isdigit() or not isinstance(content_html, str):
+    if (
+        not isinstance(identifier, str)
+        or not identifier.isdigit()
+        or not isinstance(content_html, str)
+    ):
         raise ValueError("mastodon_response_invalid")
     parsed_url = _validated_public_link(url)
     raw_account = status.get("account")
@@ -231,17 +287,28 @@ def _mastodon_status_record(status: object, collected_at: datetime) -> Ingestion
     acct: str = raw_acct if isinstance(raw_acct, str) else ""
     text = _plain_text(content_html)
     return _record(
-        provider="mastodon", identity=identifier,
+        provider="mastodon",
+        identity=identifier,
         version=status.get("edited_at") if isinstance(status.get("edited_at"), str) else identifier,
-        content=text, observed_at=created, collected_at=collected_at,
-        source_fields={"author": acct[:255], "canonical_url": parsed_url,
-                       "created_at": created.isoformat()},
+        content=text,
+        observed_at=created,
+        collected_at=collected_at,
+        source_fields={
+            "author": acct[:255],
+            "canonical_url": parsed_url,
+            "created_at": created.isoformat(),
+        },
     )
 
 
 async def collect_mastodon_scope(
-    instance_url: str, *, account: str | None, hashtag: str | None, access_token: str | None,
-    cursor: str | None, collected_at: datetime,
+    instance_url: str,
+    *,
+    account: str | None,
+    hashtag: str | None,
+    access_token: str | None,
+    cursor: str | None,
+    collected_at: datetime,
     fetch_bytes: Callable[..., Awaitable[rest.Fetched]],
 ) -> SocialCollectionResult:
     """Collect one public Mastodon account or hashtag page from its explicitly selected instance.
@@ -267,18 +334,22 @@ async def collect_mastodon_scope(
             params["max_id"] = page
         response = await fetch_bytes(
             f"{origin}/api/v1/timelines/tag/{quote(hashtag, safe='')}?{urlencode(params)}",
-            headers=headers, max_bytes=rest.MAX_PAGE_BYTES,
+            headers=headers,
+            max_bytes=rest.MAX_PAGE_BYTES,
         )
         account_id = None
     else:
-        if not isinstance(account, str) or not re.fullmatch(r"@?[A-Za-z0-9_.-]{1,64}(?:@[A-Za-z0-9.-]{1,253})?", account):
+        if not isinstance(account, str) or not re.fullmatch(
+            r"@?[A-Za-z0-9_.-]{1,64}(?:@[A-Za-z0-9.-]{1,253})?", account
+        ):
             raise ValueError("mastodon_account_invalid")
         if page and page.startswith("account:"):
             account_id, page = page[8:].split("|", 1)
         else:
             lookup = await fetch_bytes(
                 f"{origin}/api/v1/accounts/lookup?{urlencode({'acct': account.lstrip('@')})}",
-                headers=headers, max_bytes=256 * 1024,
+                headers=headers,
+                max_bytes=256 * 1024,
             )
             account_payload = _json(lookup, "mastodon")
             account_id = account_payload.get("id") if isinstance(account_payload, dict) else None
@@ -289,7 +360,8 @@ async def collect_mastodon_scope(
             params["max_id"] = page
         response = await fetch_bytes(
             f"{origin}/api/v1/accounts/{quote(account_id, safe='')}/statuses?{urlencode(params)}",
-            headers=headers, max_bytes=rest.MAX_PAGE_BYTES,
+            headers=headers,
+            max_bytes=rest.MAX_PAGE_BYTES,
         )
     payload = _json(response, "mastodon")
     if not isinstance(payload, list):
@@ -301,12 +373,19 @@ async def collect_mastodon_scope(
             records.append(record)
     # Never trust provider pagination URLs; continue only with the validated status ID.
     next_id = payload[-1].get("id") if payload and isinstance(payload[-1], dict) else None
-    next_cursor = f"account:{account_id}|{next_id}" if account and isinstance(next_id, str) else next_id
-    return _finish("mastodon", records, next_cursor if len(payload) >= MASTODON_PAGE else None, prior)
+    next_cursor = (
+        f"account:{account_id}|{next_id}" if account and isinstance(next_id, str) else next_id
+    )
+    return _finish(
+        "mastodon", records, next_cursor if len(payload) >= MASTODON_PAGE else None, prior
+    )
 
 
 async def _x_fetch_page(
-    account: str | None, query: str | None, token: str | None, headers: dict[str, str],
+    account: str | None,
+    query: str | None,
+    token: str | None,
+    headers: dict[str, str],
     fetch_bytes: Callable[..., Awaitable[rest.Fetched]],
 ) -> tuple[rest.Fetched, str | None]:
     """Fetch one X timeline page (resolving the user ID first when needed) or one recent-search page.
@@ -316,7 +395,10 @@ async def _x_fetch_page(
     Raises:
         ValueError: ``x_account_invalid`` or ``x_query_invalid``.
     """
-    common = {"max_results": "100", "tweet.fields": "author_id,created_at,lang,edit_history_tweet_ids"}
+    common = {
+        "max_results": "100",
+        "tweet.fields": "author_id,created_at,lang,edit_history_tweet_ids",
+    }
     account_id: str | None = None
     if account:
         if not re.fullmatch(r"[A-Za-z0-9_]{1,15}", account):
@@ -326,7 +408,8 @@ async def _x_fetch_page(
         else:
             lookup = await fetch_bytes(
                 f"{_X_ORIGIN}/2/users/by/username/{quote(account, safe='')}",
-                headers=headers, max_bytes=256 * 1024,
+                headers=headers,
+                max_bytes=256 * 1024,
             )
             user_payload = _json(lookup, "x")
             user = user_payload.get("data") if isinstance(user_payload, dict) else None
@@ -338,7 +421,8 @@ async def _x_fetch_page(
             params["pagination_token"] = token
         response = await fetch_bytes(
             f"{_X_ORIGIN}/2/users/{quote(account_id, safe='')}/tweets?{urlencode(params)}",
-            headers=headers, max_bytes=rest.MAX_PAGE_BYTES,
+            headers=headers,
+            max_bytes=rest.MAX_PAGE_BYTES,
         )
     else:
         cleaned_query = " ".join((query or "").split())
@@ -349,18 +433,25 @@ async def _x_fetch_page(
             params["next_token"] = token
         response = await fetch_bytes(
             f"{_X_ORIGIN}/2/tweets/search/recent?{urlencode(params)}",
-            headers=headers, max_bytes=rest.MAX_PAGE_BYTES,
+            headers=headers,
+            max_bytes=rest.MAX_PAGE_BYTES,
         )
     return response, account_id
 
 
-def _x_tweet_record(tweet: object, account_id: str | None, collected_at: datetime) -> IngestionRecord:
+def _x_tweet_record(
+    tweet: object, account_id: str | None, collected_at: datetime
+) -> IngestionRecord:
     """Validate one X tweet object and map it to a record with bounded provenance fields.
 
     Raises:
         ValueError: ``x_response_invalid`` or a timestamp error.
     """
-    if not isinstance(tweet, dict) or not isinstance(tweet.get("id"), str) or not isinstance(tweet.get("text"), str):
+    if (
+        not isinstance(tweet, dict)
+        or not isinstance(tweet.get("id"), str)
+        or not isinstance(tweet.get("text"), str)
+    ):
         raise ValueError("x_response_invalid")
     identifier = tweet["id"]
     created = _timestamp(tweet.get("created_at"))
@@ -368,19 +459,31 @@ def _x_tweet_record(tweet: object, account_id: str | None, collected_at: datetim
     author_id = raw_author_id if isinstance(raw_author_id, str) else account_id or ""
     url = f"https://x.com/i/web/status/{quote(identifier, safe='')}"
     source_fields: dict[str, object] = {
-        "author_id": author_id[:255], "canonical_url": url, "created_at": created.isoformat(),
+        "author_id": author_id[:255],
+        "canonical_url": url,
+        "created_at": created.isoformat(),
     }
     if isinstance(tweet.get("lang"), str):
         source_fields["language"] = tweet["lang"][:64]
     return _record(
-        provider="x", identity=identifier, version=identifier, content=tweet["text"],
-        observed_at=created, collected_at=collected_at, source_fields=source_fields,
+        provider="x",
+        identity=identifier,
+        version=identifier,
+        content=tweet["text"],
+        observed_at=created,
+        collected_at=collected_at,
+        source_fields=source_fields,
     )
 
 
 async def collect_x_scope(
-    *, account: str | None, query: str | None, access_token: str, cursor: str | None,
-    collected_at: datetime, fetch_bytes: Callable[..., Awaitable[rest.Fetched]],
+    *,
+    account: str | None,
+    query: str | None,
+    access_token: str,
+    cursor: str | None,
+    collected_at: datetime,
+    fetch_bytes: Callable[..., Awaitable[rest.Fetched]],
 ) -> SocialCollectionResult:
     """Collect one read-only X account-timeline or recent-search page using app bearer access."""
     if bool(account) == bool(query) or not access_token:
@@ -402,9 +505,13 @@ async def collect_x_scope(
         records.append(_x_tweet_record(tweet, account_id, collected_at))
     meta = payload.get("meta", {})
     next_token = meta.get("next_token") if isinstance(meta, dict) else None
-    if next_token is not None and (not isinstance(next_token, str) or len(next_token) > MAX_CURSOR_BYTES):
+    if next_token is not None and (
+        not isinstance(next_token, str) or len(next_token) > MAX_CURSOR_BYTES
+    ):
         raise ValueError("x_cursor_invalid")
-    next_cursor = f"user:{account_id}|{next_token}" if account and isinstance(next_token, str) else next_token
+    next_cursor = (
+        f"user:{account_id}|{next_token}" if account and isinstance(next_token, str) else next_token
+    )
     return _finish("x", records, next_cursor, prior)
 
 
@@ -413,8 +520,16 @@ def _validated_instance(value: str) -> str:
     from urllib.parse import urlsplit
 
     parsed = urlsplit(value)
-    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
-            or parsed.path not in {"", "/"} or parsed.query or parsed.fragment or parsed.port not in (None, 443)):
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or parsed.port not in (None, 443)
+    ):
         raise ValueError("mastodon_instance_invalid")
     return f"https://{parsed.hostname.lower()}"
 
@@ -431,4 +546,9 @@ def _validated_public_link(value: object) -> str:
     return value
 
 
-__all__ = ["SocialCollectionResult", "collect_mastodon_scope", "collect_reddit_subreddit", "collect_x_scope"]
+__all__ = [
+    "SocialCollectionResult",
+    "collect_mastodon_scope",
+    "collect_reddit_subreddit",
+    "collect_x_scope",
+]

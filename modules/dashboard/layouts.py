@@ -62,16 +62,19 @@ def find_free_position(
     20 columns cap the candidate scan at 2,020 positions. Returns None when nothing fits.
     """
     y_candidates = sorted({0, *(y + h for _x, y, _w, h in occupied)})
-    return next((
-        (x, y)
-        for y in y_candidates
-        if y + height <= MAX_LAYOUT_ROWS
-        for x in range(columns - width + 1)
-        if not any(
-            x < ox + ow and ox < x + width and y < oy + oh and oy < y + height
-            for ox, oy, ow, oh in occupied
-        )
-    ), None)
+    return next(
+        (
+            (x, y)
+            for y in y_candidates
+            if y + height <= MAX_LAYOUT_ROWS
+            for x in range(columns - width + 1)
+            if not any(
+                x < ox + ow and ox < x + width and y < oy + oh and oy < y + height
+                for ox, oy, ow, oh in occupied
+            )
+        ),
+        None,
+    )
 
 
 def default_desktop_layout(
@@ -106,9 +109,7 @@ def default_desktop_layout(
             row_height = 0
         if y + height > MAX_LAYOUT_ROWS:
             raise ValueError("default layout exceeds the maximum configured row")
-        placements.append(
-            LayoutItem(instance_id=instance_id, x=x, y=y, w=width, h=height)
-        )
+        placements.append(LayoutItem(instance_id=instance_id, x=x, y=y, w=width, h=height))
         x += width
         row_height = max(row_height, height)
     # Stretch the last rectangle of each row to the column edge so rows have no ragged right gap.

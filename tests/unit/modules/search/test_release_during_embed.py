@@ -22,7 +22,11 @@ class _Session:
 
     async def scalar(self, *_a: Any, **_k: Any) -> Any:
         return SimpleNamespace(
-            dimensions=2, model_id="m", model_version="1", gateway_identity="g", response_model_id="m",
+            dimensions=2,
+            model_id="m",
+            model_version="1",
+            gateway_identity="g",
+            response_model_id="m",
         )
 
     async def commit(self) -> None:
@@ -32,10 +36,16 @@ class _Session:
         self.log.append("rollback")
 
 
-def _setup(monkeypatch: pytest.MonkeyPatch, log: list[str], *, revision_changes: bool = False) -> None:
+def _setup(
+    monkeypatch: pytest.MonkeyPatch, log: list[str], *, revision_changes: bool = False
+) -> None:
     config = SimpleNamespace(
-        endpoint_policy_denied=False, gateway_identity="g", model_identity="g", configuration_revision=1,
-        endpoint_destination_id=None, gateway_api_key="k",
+        endpoint_policy_denied=False,
+        gateway_identity="g",
+        model_identity="g",
+        configuration_revision=1,
+        endpoint_destination_id=None,
+        gateway_api_key="k",
     )
     mapping = SimpleNamespace(model="m", version="1")
     policy = SimpleNamespace(embeddings_allowed=True)
@@ -84,7 +94,13 @@ def _setup(monkeypatch: pytest.MonkeyPatch, log: list[str], *, revision_changes:
 async def _run(log: list[str], **kwargs: Any) -> Any:
     request = SearchRequest(query="q", mode="hybrid")
     return await public.search(
-        _Session(log), None, None, request, scope=_SCOPE, multi_workspace_enabled=False, **kwargs,  # type: ignore[arg-type]
+        _Session(log),
+        None,
+        None,
+        request,
+        scope=_SCOPE,
+        multi_workspace_enabled=False,
+        **kwargs,  # type: ignore[arg-type]
     )
 
 
@@ -95,7 +111,9 @@ async def test_flag_off_keeps_old_sequence(monkeypatch: pytest.MonkeyPatch) -> N
     assert log == ["config", "config", "embed", "vector"]
 
 
-async def test_flag_on_commits_before_embed_and_after_recheck(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_flag_on_commits_before_embed_and_after_recheck(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     log: list[str] = []
     _setup(monkeypatch, log)
     await _run(log, release_during_embed=True)
@@ -112,7 +130,9 @@ async def test_recheck_still_runs_after_commit_and_denies(monkeypatch: pytest.Mo
     assert log == ["config", "commit", "config"]
 
 
-async def test_before_embedding_send_runs_before_final_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_before_embedding_send_runs_before_final_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     log: list[str] = []
     _setup(monkeypatch, log)
 
@@ -123,12 +143,27 @@ async def test_before_embedding_send_runs_before_final_commit(monkeypatch: pytes
     assert log == ["config", "commit", "config", "before_send", "commit", "embed", "vector"]
 
 
-async def test_hydration_and_revalidation_still_filter_after_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_hydration_and_revalidation_still_filter_after_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A hit is dropped when post-commit revalidation no longer finds it, kept when it does."""
     chunk_id = uuid4()
     row = (
-        chunk_id, "content", uuid4(), 1, None, uuid4(), "t", None, None, "text/plain", None,
-        uuid4(), "s", "note", 1,
+        chunk_id,
+        "content",
+        uuid4(),
+        1,
+        None,
+        uuid4(),
+        "t",
+        None,
+        None,
+        "text/plain",
+        None,
+        uuid4(),
+        "s",
+        "note",
+        1,
     )
 
     class _Result:
@@ -153,8 +188,13 @@ async def test_hydration_and_revalidation_still_filter_after_commit(monkeypatch:
         monkeypatch.setattr(public, "_revalidate_tool_result_fences", revalidate)
         request = SearchRequest(query="q", mode="hybrid")
         result = await public.search(
-            _HydratingSession(log), None, None, request, release_during_embed=True,  # type: ignore[arg-type]
-            scope=_SCOPE, multi_workspace_enabled=False,
+            _HydratingSession(log),
+            None,
+            None,
+            request,
+            release_during_embed=True,  # type: ignore[arg-type]
+            scope=_SCOPE,
+            multi_workspace_enabled=False,
         )
         assert len(result.items) == expected
         assert "embed" in log
@@ -170,14 +210,21 @@ async def test_route_passes_flag(monkeypatch: pytest.MonkeyPatch) -> None:
         return "ok"
 
     monkeypatch.setattr(public, "search", recorder)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=None, settings=SimpleNamespace(multi_workspace_enabled=False))))
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                redis=None, settings=SimpleNamespace(multi_workspace_enabled=False)
+            )
+        )
+    )
     out: Any = await routes.search(SearchRequest(query="q"), request, object(), _SCOPE)  # type: ignore[arg-type]
     assert out == "ok" and seen["release_during_embed"] is True
 
 
 @pytest.mark.parametrize("own_session", [True, False])
 async def test_tool_handler_flag_follows_session_ownership(
-    monkeypatch: pytest.MonkeyPatch, own_session: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    own_session: bool,
 ) -> None:
     """Handler opts in only for a session it created itself."""
     from modules.sources import public as sources
@@ -206,9 +253,15 @@ async def test_tool_handler_flag_follows_session_ownership(
     monkeypatch.setattr(public, "search", recorder)
     context: dict[str, Any] = {
         "principal": ToolExecutionPrincipal(
-            actor_id="a", scope=_SCOPE, is_owner=True, source_ids=frozenset({str(source_id)}),
+            actor_id="a",
+            scope=_SCOPE,
+            is_owner=True,
+            source_ids=frozenset({str(source_id)}),
         ),
-        "destination_kind": "local", "session_factory": _Factory(), "redis": None, "settings": SimpleNamespace(multi_workspace_enabled=False),
+        "destination_kind": "local",
+        "session_factory": _Factory(),
+        "redis": None,
+        "settings": SimpleNamespace(multi_workspace_enabled=False),
     }
     if not own_session:
         context["session"] = object()

@@ -41,10 +41,15 @@ def _fact_state(edge: Any, dimensions: int | None) -> ExactFactState:
     episode_ids = tuple(sorted(str(value) for value in edge.episodes))
     fingerprint = _fact_recovery_fingerprint(edge, dimensions)
     return ExactFactState(
-        fact_id=str(edge.uuid), source_node_id=str(edge.source_node_uuid),
-        target_node_id=str(edge.target_node_uuid), episode_ids=episode_ids,
-        state_fingerprint=fingerprint, existed=True,
-        valid_at=edge.valid_at, invalid_at=edge.invalid_at, expired_at=edge.expired_at,
+        fact_id=str(edge.uuid),
+        source_node_id=str(edge.source_node_uuid),
+        target_node_id=str(edge.target_node_uuid),
+        episode_ids=episode_ids,
+        state_fingerprint=fingerprint,
+        existed=True,
+        valid_at=edge.valid_at,
+        invalid_at=edge.invalid_at,
+        expired_at=edge.expired_at,
     )
 
 
@@ -62,9 +67,14 @@ def _episode_state_fingerprint(episode: Any) -> str:
         "created_at": str(episode.created_at),
         "entity_edges": sorted(str(value) for value in episode.entity_edges),
     }
-    return hashlib.sha256(json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), default=str,
-    ).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
 
 
 def _float32_vector(vector: Any, dimensions: int | None, error: str) -> list[float]:
@@ -73,12 +83,15 @@ def _float32_vector(vector: Any, dimensions: int | None, error: str) -> list[flo
     Raises ``GraphOperationError(error)`` for unconfigured dimensions, a non-list vector, a
     length mismatch, a bool/non-number/non-finite entry, or a value that overflows float32.
     """
-    if (dimensions is None or not isinstance(vector, list | tuple)
-            or len(vector) != dimensions):
+    if dimensions is None or not isinstance(vector, list | tuple) or len(vector) != dimensions:
         raise GraphOperationError(error)
     normalized_vector: list[float] = []
     for value in vector:
-        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+        ):
             raise GraphOperationError(error)
         try:
             normalized = struct.unpack("!f", struct.pack("!f", float(value)))[0]
@@ -97,14 +110,26 @@ def _entity_fields(entity: Any) -> tuple[dict[str, Any], Any, Any, Any, Any]:
         reserved = {"uuid", "group_id", "name", "summary", "created_at", "name_embedding", "labels"}
         attributes = {key: value for key, value in properties.items() if key not in reserved}
         identity = {key: properties.get(key) for key in ("uuid", "group_id", "name", "summary")}
-        return (identity, attributes, properties.get("labels", ()), properties.get("created_at"),
-                properties.get("name_embedding"))
+        return (
+            identity,
+            attributes,
+            properties.get("labels", ()),
+            properties.get("created_at"),
+            properties.get("name_embedding"),
+        )
     identity = {
-        "uuid": str(entity.uuid), "group_id": str(entity.group_id),
-        "name": entity.name, "summary": entity.summary,
+        "uuid": str(entity.uuid),
+        "group_id": str(entity.group_id),
+        "name": entity.name,
+        "summary": entity.summary,
     }
-    return (identity, getattr(entity, "attributes", {}) or {}, getattr(entity, "labels", ()) or (),
-            getattr(entity, "created_at", None), getattr(entity, "name_embedding", None))
+    return (
+        identity,
+        getattr(entity, "attributes", {}) or {},
+        getattr(entity, "labels", ()) or (),
+        getattr(entity, "created_at", None),
+        getattr(entity, "name_embedding", None),
+    )
 
 
 def _entity_label_set(labels: Any, attributes: Any, writer_intended: bool) -> set[str]:
@@ -141,7 +166,10 @@ def _entity_created_at(created_at: Any) -> str | None:
 
 
 def _entity_state_fingerprint(
-    entity: Any, dimensions: int | None = None, *, writer_intended: bool = False,
+    entity: Any,
+    dimensions: int | None = None,
+    *,
+    writer_intended: bool = False,
 ) -> str:
     """Hash exact node state; only writer intents synthesize Entity, while malformed persisted labels fail closed."""
     identity, attributes, labels, created_at, embedding = _entity_fields(entity)
@@ -149,7 +177,8 @@ def _entity_state_fingerprint(
     created_at = _entity_created_at(created_at)
     normalized_embedding: list[float] | None = (
         _float32_vector(embedding, dimensions, "graph_entity_embedding_state_unsupported")
-        if embedding is not None else None
+        if embedding is not None
+        else None
     )
     payload = {
         **identity,
@@ -181,6 +210,7 @@ def _require_group(items: Sequence[Any], group_id: str) -> None:
 def _datetimes_to_strings(value: Any) -> Any:
     """Typed wrapper for graphiti's untyped UTC datetime-to-string converter (lazy import keeps graph optional)."""
     from graphiti_core.utils.datetime_utils import convert_datetimes_to_strings
+
     return convert_datetimes_to_strings(value)  # type: ignore[no-untyped-call]  # graphiti_core ships no type hints
 
 
@@ -235,8 +265,10 @@ def _normalized_fact_attributes(edge: Any) -> dict[str, Any]:
     source_id = str(edge.source_node_uuid)
     target_id = str(edge.target_node_uuid)
     aliases = {
-        "source_node_uuid": source_id, "source_uuid": source_id,
-        "target_node_uuid": target_id, "target_uuid": target_id,
+        "source_node_uuid": source_id,
+        "source_uuid": source_id,
+        "target_node_uuid": target_id,
+        "target_uuid": target_id,
     }
     for key, expected in aliases.items():
         if key in attributes:
@@ -274,12 +306,16 @@ def _normalized_graph_timestamp(value: datetime | str | None) -> str | None:
 def _fact_recovery_fingerprint(edge: Any, dimensions: int | None) -> str:
     """Hash full normalized persisted fact state, validating transport aliases and retaining domain attributes/vector."""
     normalized_vector = _float32_vector(
-        getattr(edge, "fact_embedding", None), dimensions, "graph_fact_embedding_state_unsupported")
+        getattr(edge, "fact_embedding", None), dimensions, "graph_fact_embedding_state_unsupported"
+    )
     payload = {
-        "uuid": str(edge.uuid), "group_id": str(edge.group_id),
+        "uuid": str(edge.uuid),
+        "group_id": str(edge.group_id),
         "source_node_uuid": str(edge.source_node_uuid),
-        "target_node_uuid": str(edge.target_node_uuid), "name": edge.name,
-        "fact": edge.fact, "episodes": sorted(str(value) for value in edge.episodes),
+        "target_node_uuid": str(edge.target_node_uuid),
+        "name": edge.name,
+        "fact": edge.fact,
+        "episodes": sorted(str(value) for value in edge.episodes),
         "created_at": _normalized_graph_timestamp(edge.created_at),
         "reference_time": _normalized_graph_timestamp(edge.reference_time),
         "valid_at": _normalized_graph_timestamp(edge.valid_at),
@@ -295,14 +331,23 @@ def _receipt_bindings(
     bindings: Sequence[CanonicalEntityBinding],
 ) -> tuple[CanonicalEntityBinding, ...]:
     """Keep bounded field hashes and support identities while dropping source seed text."""
-    return tuple(replace(
-        item, node_name=None, node_summary=None,
-    ) for item in bindings)
+    return tuple(
+        replace(
+            item,
+            node_name=None,
+            node_summary=None,
+        )
+        for item in bindings
+    )
 
 
 async def _authorize_cross_rebuild_absence(
-    context: OperationAuthorization, kind: Literal["node", "fact"], effect_id: str,
-    *, episode_id: UUID, endpoints: tuple[str, str] | None = None,
+    context: OperationAuthorization,
+    kind: Literal["node", "fact"],
+    effect_id: str,
+    *,
+    episode_id: UUID,
+    endpoints: tuple[str, str] | None = None,
 ) -> bool:
     """Authorize an already-read exact absence through another operation's rebuild ledger.
 
@@ -316,15 +361,21 @@ async def _authorize_cross_rebuild_absence(
     # Journal this operation's actual readback, never relabel the source deletion
     # receipt. Owner preserves the dependency/proof chain alongside this marker.
     receipt_kwargs: dict[str, Any] = {
-        "operation_id": context.operation_id, "lease_token": context.lease_token,
-        "episode_id": episode_id, "group_id": context.group_id,
-        "mapping_revision": context.mapping_revision, "phase": "cleanup_write_intent",
-        "desired_support_digest": hashlib.sha256(f"rebuild-absence:{kind}:{effect_id}".encode()).hexdigest(),
+        "operation_id": context.operation_id,
+        "lease_token": context.lease_token,
+        "episode_id": episode_id,
+        "group_id": context.group_id,
+        "mapping_revision": context.mapping_revision,
+        "phase": "cleanup_write_intent",
+        "desired_support_digest": hashlib.sha256(
+            f"rebuild-absence:{kind}:{effect_id}".encode()
+        ).hexdigest(),
         "rebuild_absence_observed": kind,
     }
     if kind == "node":
         receipt_kwargs.update(
-            entity_ids=(effect_id,), prior_entity_state_fingerprints=((effect_id, False, None),),
+            entity_ids=(effect_id,),
+            prior_entity_state_fingerprints=((effect_id, False, None),),
             intended_entity_state_fingerprints=((effect_id, None),),
         )
     else:
@@ -332,13 +383,25 @@ async def _authorize_cross_rebuild_absence(
             raise GraphOperationError("graph_rebuild_absence_endpoints")
         receipt_kwargs.update(
             fact_ids=(effect_id,),
-            existing_fact_states=(ExactFactState(
-                effect_id, endpoints[0], endpoints[1], (), _ABSENT_FACT_FINGERPRINT, False,
-            ),),
-            intended_fact_support=(ExactFactSupport(
-                fact_id=effect_id, episode_ids=(), source_node_id=endpoints[0], target_node_id=endpoints[1],
-                state_fingerprint=_ABSENT_FACT_FINGERPRINT,
-            ),),
+            existing_fact_states=(
+                ExactFactState(
+                    effect_id,
+                    endpoints[0],
+                    endpoints[1],
+                    (),
+                    _ABSENT_FACT_FINGERPRINT,
+                    False,
+                ),
+            ),
+            intended_fact_support=(
+                ExactFactSupport(
+                    fact_id=effect_id,
+                    episode_ids=(),
+                    source_node_id=endpoints[0],
+                    target_node_id=endpoints[1],
+                    state_fingerprint=_ABSENT_FACT_FINGERPRINT,
+                ),
+            ),
         )
     await context.record_write_intent(GraphWriteReceipt(**receipt_kwargs))
     return True
@@ -358,12 +421,16 @@ async def _incident_ids_absent(driver: Any, edge_ids: Sequence[str], group_id: s
     rows, _, _ = await driver.execute_query(
         "MATCH ()-[edge {group_id: $group_id}]->() WHERE edge.uuid IN $edge_ids "
         "RETURN edge.uuid AS edge_id LIMIT $limit",
-        edge_ids=list(edge_ids), group_id=group_id, limit=MAX_SUPPORT + 1,
+        edge_ids=list(edge_ids),
+        group_id=group_id,
+        limit=MAX_SUPPORT + 1,
     )
     return isinstance(rows, list) and not rows
 
 
-async def _delete_rebuild_node(driver: Any, action: CanonicalNodeRecoveryAction, group_id: str) -> bool:
+async def _delete_rebuild_node(
+    driver: Any, action: CanonicalNodeRecoveryAction, group_id: str
+) -> bool:
     """Delete an exact node and its complete owner-authorized incident inventory atomically.
 
     Prior fingerprint and scheduling are checked by the caller. The single graph
@@ -371,11 +438,16 @@ async def _delete_rebuild_node(driver: Any, action: CanonicalNodeRecoveryAction,
     a new or changed link makes it a no-op. No DETACH or unknown edge is deleted.
     Exact edge absence is read back independently before the caller checks node.
     """
-    expected = [{
-        "edge_id": link.edge_id, "relationship_type": link.relationship_type,
-        "source_node_id": link.source_node_id, "target_node_id": link.target_node_id,
-        "episode_ids": list(link.episode_ids),
-    } for link in action.expected_incident_links]
+    expected = [
+        {
+            "edge_id": link.edge_id,
+            "relationship_type": link.relationship_type,
+            "source_node_id": link.source_node_id,
+            "target_node_id": link.target_node_id,
+            "episode_ids": list(link.episode_ids),
+        }
+        for link in action.expected_incident_links
+    ]
     rows, _, _ = await driver.execute_query(
         "MATCH (entity:Entity {uuid: $entity_id, group_id: $group_id}) "
         "OPTIONAL MATCH (entity)-[edge]-() "
@@ -389,13 +461,21 @@ async def _delete_rebuild_node(driver: Any, action: CanonicalNodeRecoveryAction,
         "AND all(episode IN coalesce(edge.episodes, []) WHERE episode IN link.episode_ids))) "
         "WITH entity, edges, entity.uuid AS entity_id "
         "FOREACH (edge IN edges | DELETE edge) DELETE entity RETURN entity_id",
-        entity_id=action.graph_entity_uuid, group_id=group_id, expected=expected,
+        entity_id=action.graph_entity_uuid,
+        group_id=group_id,
+        expected=expected,
     )
-    if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
-            or rows[0].get("entity_id") != action.graph_entity_uuid):
+    if (
+        not isinstance(rows, list)
+        or len(rows) != 1
+        or not isinstance(rows[0], dict)
+        or rows[0].get("entity_id") != action.graph_entity_uuid
+    ):
         return False
     return await _incident_ids_absent(
-        driver, [link.edge_id for link in action.expected_incident_links], group_id,
+        driver,
+        [link.edge_id for link in action.expected_incident_links],
+        group_id,
     )
 
 
@@ -423,5 +503,3 @@ def _to_native(value: Any) -> Any:
     if isinstance(value, list | tuple):
         return [_to_native(item) for item in value]
     return value
-
-

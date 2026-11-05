@@ -1,4 +1,5 @@
 """YouTube Atom mapper accepts both ``UC``-prefixed and bare ``yt:channelId`` forms."""
+
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -29,12 +30,15 @@ def _records(channel_id: str) -> list:
     return page.records
 
 
-@pytest.mark.parametrize(("feed_id", "expected"), [
-    (CONFIGURED, 1),
-    (BARE, 1),
-    ("UC" + OTHER_BARE, 0),
-    (OTHER_BARE, 0),
-])
+@pytest.mark.parametrize(
+    ("feed_id", "expected"),
+    [
+        (CONFIGURED, 1),
+        (BARE, 1),
+        ("UC" + OTHER_BARE, 0),
+        (OTHER_BARE, 0),
+    ],
+)
 def test_channel_id_forms(feed_id: str, expected: int) -> None:
     """Prefixed and bare forms of the configured channel match; other channels are rejected."""
     records = _records(feed_id)

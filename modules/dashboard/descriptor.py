@@ -12,7 +12,15 @@ class DashboardDescriptor(ModuleDescriptor):
     version: str = "1.0.0"
     description: str = "Save owner-selected dashboard layouts and gadget configuration."
     enabled: bool = True
-    dependencies: tuple[str, ...] = ("sources", "tasks", "goals", "news", "knowledge.timeline", "notifications", "knowledge.documents")
+    dependencies: tuple[str, ...] = (
+        "sources",
+        "tasks",
+        "goals",
+        "news",
+        "knowledge.timeline",
+        "notifications",
+        "knowledge.documents",
+    )
     optional_dependencies: tuple[str, ...] = ("connectors",)
     scheduled_jobs: tuple[str, ...] = ("run_scheduled_brief", "run_scheduled_highlights")
     provides: tuple[str, ...] = ("dashboards", "gadget_definitions", "daily_context", "daily_brief")
@@ -53,8 +61,13 @@ class DashboardDescriptor(ModuleDescriptor):
         RouterSpec("modules.dashboard.live_config_routes:operator_router", 310),
     )
     capabilities: tuple[CapabilitySpec, ...] = (
-        CapabilitySpec("dashboard.check_brief_shareable", "modules.dashboard.public:check_brief_shareable"),
-        CapabilitySpec("dashboard.read_brief_access_projection", "modules.dashboard.public:read_brief_access_projection"),
+        CapabilitySpec(
+            "dashboard.check_brief_shareable", "modules.dashboard.public:check_brief_shareable"
+        ),
+        CapabilitySpec(
+            "dashboard.read_brief_access_projection",
+            "modules.dashboard.public:read_brief_access_projection",
+        ),
     )
     erasure_module: str | None = "modules.dashboard.erasure"
     erasure_order: int = 50

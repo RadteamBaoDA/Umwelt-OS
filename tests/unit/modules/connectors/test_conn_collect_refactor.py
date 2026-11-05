@@ -26,7 +26,10 @@ def _run(provider: str, rollback: AsyncMock) -> SimpleNamespace:
     source = SimpleNamespace(id=uuid4(), provider=provider, configuration={})
     return SimpleNamespace(
         attempt=SimpleNamespace(source=source, connector_revision=1),
-        gate=SimpleNamespace(captured_operation=None), extras={}, factory=factory, next_eligible_at=None,
+        gate=SimpleNamespace(captured_operation=None),
+        extras={},
+        factory=factory,
+        next_eligible_at=None,
     )
 
 
@@ -41,7 +44,9 @@ async def test_new_native_provider_plugs_in_without_editing_the_dispatcher(monke
 
     rollback = AsyncMock()
     accept = AsyncMock()
-    monkeypatch.setattr(collection, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None)))
+    monkeypatch.setattr(
+        collection, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None))
+    )
     monkeypatch.setattr(collection, "_accept_native", accept)
     monkeypatch.setattr(collection, "_NATIVE_HANDLERS", dict(collection._NATIVE_HANDLERS))
     collection.register_native_provider(("brand_new",), handler)
@@ -57,7 +62,9 @@ async def test_handler_returning_none_skips_generic_accept_and_rollback(monkeypa
     """Handlers that accept their own receipt return ``None``: the dispatcher stops immediately."""
     rollback = AsyncMock()
     accept = AsyncMock()
-    monkeypatch.setattr(collection, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None)))
+    monkeypatch.setattr(
+        collection, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None))
+    )
     monkeypatch.setattr(collection, "_accept_native", accept)
     monkeypatch.setattr(collection, "_NATIVE_HANDLERS", dict(collection._NATIVE_HANDLERS))
     collection.register_native_provider(("self_accepting",), AsyncMock(return_value=None))
@@ -73,7 +80,9 @@ async def test_provider_backoff_page_sets_next_eligible_and_rate_limits(monkeypa
     when = datetime.now(UTC) + timedelta(minutes=5)
     page = SimpleNamespace(records=(), coverage="returned_snapshot", next_eligible_at=when)
     accept = AsyncMock()
-    monkeypatch.setattr(collection, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None)))
+    monkeypatch.setattr(
+        collection, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None))
+    )
     monkeypatch.setattr(collection, "_accept_native", accept)
     monkeypatch.setattr(collection, "_NATIVE_HANDLERS", dict(collection._NATIVE_HANDLERS))
     collection.register_native_provider(("slow",), AsyncMock(return_value=page))
@@ -89,19 +98,35 @@ async def test_provider_backoff_page_sets_next_eligible_and_rate_limits(monkeypa
 def test_builtin_native_providers_are_registered():
     """Every historical dispatcher branch has a registry entry."""
     expected = {
-        "youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x", "google_mail",
-        "google_calendar", "google_drive", "notion", "slack", "health", "home_assistant", "github_releases",
+        "youtube",
+        "arxiv",
+        "huggingface",
+        "bluesky",
+        "reddit",
+        "mastodon",
+        "x",
+        "google_mail",
+        "google_calendar",
+        "google_drive",
+        "notion",
+        "slack",
+        "health",
+        "home_assistant",
+        "github_releases",
     }
     assert expected <= set(collection._NATIVE_HANDLERS)
 
 
-@pytest.mark.parametrize(("reason", "expected_type"), [
-    ("authorization_rejected", "ProviderHttpError"),
-    ("rate_limited", "ProviderRateLimited"),
-    ("request_failed", TimeoutError),
-    ("destination_not_local", UnsafeDestination),
-    ("http_503", "ProviderHttpError"),
-])
+@pytest.mark.parametrize(
+    ("reason", "expected_type"),
+    [
+        ("authorization_rejected", "ProviderHttpError"),
+        ("rate_limited", "ProviderRateLimited"),
+        ("request_failed", TimeoutError),
+        ("destination_not_local", UnsafeDestination),
+        ("http_503", "ProviderHttpError"),
+    ],
+)
 def test_local_service_failure_mapping(reason, expected_type):
     """LocalServiceError reasons keep their historical collection error mapping."""
     mapped = collection._local_service_failure(reason)
@@ -120,42 +145,92 @@ def test_local_service_failure_mapping_passes_unknown_reasons_through():
 
 def _delivery(event: str, body: dict) -> webhooks.VerifiedGitHubDelivery:
     return webhooks.parse_github_delivery(
-        raw_body=json.dumps(body).encode(), receiver_revision="r1", delivery_id="d1", event=event, app_id="7",
+        raw_body=json.dumps(body).encode(),
+        receiver_revision="r1",
+        delivery_id="d1",
+        event=event,
+        app_id="7",
     )
 
 
 _ENVELOPE = {"installation": {"id": 11, "app_id": 7}, "repository": {"id": 22}}
 
 
-@pytest.mark.parametrize(("event", "extra", "resource", "kind", "locator", "intent"), [
-    ("issues", {"action": "opened", "issue": {"number": 5}}, "issue", "number", "5", "refresh"),
-    ("pull_request", {"action": "closed", "pull_request": {"number": 6}}, "pull", "number", "6", "refresh"),
-    ("release", {"action": "published", "release": {"id": 9}}, "release", "release_id", "9", "refresh"),
-    ("release", {"action": "deleted", "release": {"id": 9}}, "release", "release_id", "9", "delete_candidate"),
-    ("push", {"ref": "refs/heads/main"}, "commit", "ref", "refs/heads/main", "reconcile"),
-    ("repository", {"action": "privatized"}, "issue", "repository", "22", "visibility_check"),
-    ("public", {}, "issue", "repository", "22", "visibility_check"),
-    ("installation", {"action": "suspend"}, "issue", "installation", "11", "visibility_lost"),
-    ("installation", {"action": "unsuspend"}, "issue", "installation", "11", "visibility_check"),
-    ("installation_repositories", {"action": "added"}, "issue", "installation", "11", "visibility_check"),
-])
+@pytest.mark.parametrize(
+    ("event", "extra", "resource", "kind", "locator", "intent"),
+    [
+        ("issues", {"action": "opened", "issue": {"number": 5}}, "issue", "number", "5", "refresh"),
+        (
+            "pull_request",
+            {"action": "closed", "pull_request": {"number": 6}},
+            "pull",
+            "number",
+            "6",
+            "refresh",
+        ),
+        (
+            "release",
+            {"action": "published", "release": {"id": 9}},
+            "release",
+            "release_id",
+            "9",
+            "refresh",
+        ),
+        (
+            "release",
+            {"action": "deleted", "release": {"id": 9}},
+            "release",
+            "release_id",
+            "9",
+            "delete_candidate",
+        ),
+        ("push", {"ref": "refs/heads/main"}, "commit", "ref", "refs/heads/main", "reconcile"),
+        ("repository", {"action": "privatized"}, "issue", "repository", "22", "visibility_check"),
+        ("public", {}, "issue", "repository", "22", "visibility_check"),
+        ("installation", {"action": "suspend"}, "issue", "installation", "11", "visibility_lost"),
+        (
+            "installation",
+            {"action": "unsuspend"},
+            "issue",
+            "installation",
+            "11",
+            "visibility_check",
+        ),
+        (
+            "installation_repositories",
+            {"action": "added"},
+            "issue",
+            "installation",
+            "11",
+            "visibility_check",
+        ),
+    ],
+)
 def test_webhook_event_table_maps_hints(event, extra, resource, kind, locator, intent):
     """Each supported event keeps its exact target hint."""
     delivery = _delivery(event, {**_ENVELOPE, **extra})
     assert delivery.disposition == "received"
     hint = delivery.targets[0]
-    assert (hint.resource, hint.locator_kind, hint.locator, hint.intent) == (resource, kind, locator, intent)
+    assert (hint.resource, hint.locator_kind, hint.locator, hint.intent) == (
+        resource,
+        kind,
+        locator,
+        intent,
+    )
 
 
-@pytest.mark.parametrize(("event", "extra"), [
-    ("issues", {"action": "nonsense", "issue": {"number": 5}}),
-    ("release", {"action": "weird", "release": {"id": 9}}),
-    ("push", {"ref": "refs/pull/1/head"}),
-    ("repository", {"action": "created"}),
-    ("installation", {"action": "created"}),
-    ("installation_repositories", {"action": "other"}),
-    ("star", {"action": "created"}),
-])
+@pytest.mark.parametrize(
+    ("event", "extra"),
+    [
+        ("issues", {"action": "nonsense", "issue": {"number": 5}}),
+        ("release", {"action": "weird", "release": {"id": 9}}),
+        ("push", {"ref": "refs/pull/1/head"}),
+        ("repository", {"action": "created"}),
+        ("installation", {"action": "created"}),
+        ("installation_repositories", {"action": "other"}),
+        ("star", {"action": "created"}),
+    ],
+)
 def test_webhook_unsupported_shapes_are_ignored(event, extra):
     """Unsupported actions, refs and events are ignored with no targets."""
     delivery = _delivery(event, {**_ENVELOPE, **extra})
@@ -164,10 +239,18 @@ def test_webhook_unsupported_shapes_are_ignored(event, extra):
 
 def test_webhook_removed_repositories_become_visibility_lost_hints_and_validate_identity():
     """Removed repositories map one hint each; a bad identity fails the whole delivery."""
-    ok = _delivery("installation_repositories", {
-        **_ENVELOPE, "action": "removed", "repositories_removed": [{"id": 31}, {"id": 32}],
-    })
-    assert [(h.locator, h.intent) for h in ok.targets] == [("31", "visibility_lost"), ("32", "visibility_lost")]
+    ok = _delivery(
+        "installation_repositories",
+        {
+            **_ENVELOPE,
+            "action": "removed",
+            "repositories_removed": [{"id": 31}, {"id": 32}],
+        },
+    )
+    assert [(h.locator, h.intent) for h in ok.targets] == [
+        ("31", "visibility_lost"),
+        ("32", "visibility_lost"),
+    ]
     with pytest.raises(ValueError, match="Removed repository identity is invalid"):
         _delivery("installation_repositories", {**_ENVELOPE, "repositories_removed": [{"id": "x"}]})
 
@@ -185,7 +268,12 @@ def test_retry_deadline_takes_the_latest_header_and_rejects_bad_evidence():
     headers = httpx.Headers({"retry-after": "30", "ratelimit-reset": "90"})
     assert feed_catalog._retry_deadline(headers, now) == now + timedelta(seconds=90)
     assert feed_catalog._retry_deadline(httpx.Headers({}), now) == now + timedelta(minutes=1)
-    for bad in ({"retry-after": "0"}, {"x-ratelimit-reset": "1"}, {"ratelimit-reset": "-1"}, {"ratelimit": "garbage"}):
+    for bad in (
+        {"retry-after": "0"},
+        {"x-ratelimit-reset": "1"},
+        {"ratelimit-reset": "-1"},
+        {"ratelimit": "garbage"},
+    ):
         with pytest.raises(ValueError, match="provider_rate_deadline_invalid"):
             feed_catalog._retry_deadline(httpx.Headers(bad), now)
 
@@ -193,9 +281,15 @@ def test_retry_deadline_takes_the_latest_header_and_rejects_bad_evidence():
 def test_telegram_rate_limit_deadline_defaults_and_rejects():
     """429 body parsing: missing parameters default to 60 s, invalid values fail closed."""
     before = datetime.now(UTC)
-    assert telegram._rate_limit_deadline(b'{"parameters": {"retry_after": 5}}') >= before + timedelta(seconds=5)
+    assert telegram._rate_limit_deadline(
+        b'{"parameters": {"retry_after": 5}}'
+    ) >= before + timedelta(seconds=5)
     assert telegram._rate_limit_deadline(b"{}") >= before + timedelta(seconds=59)
-    for body in (b'{"parameters": {"retry_after": 0}}', b'{"parameters": {"retry_after": true}}', b"not json"):
+    for body in (
+        b'{"parameters": {"retry_after": 0}}',
+        b'{"parameters": {"retry_after": true}}',
+        b"not json",
+    ):
         with pytest.raises(ValueError, match="telegram_rate_deadline_invalid"):
             telegram._rate_limit_deadline(body)
 

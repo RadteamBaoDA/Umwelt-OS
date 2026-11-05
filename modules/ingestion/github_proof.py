@@ -28,8 +28,6 @@ GITHUB_RESOURCES: tuple[GitHubResource, ...] = ("issue", "pull", "commit", "rele
 MAX_GITHUB_PAGE_BYTES = 2 * 1024 * 1024
 
 
-
-
 def _bounded_json_counts(value: Any) -> tuple[int, int]:
     """Count only plain JSON nodes and reject non-JSON values, excessive nesting, and non-finite numbers."""
     nodes = 0
@@ -47,7 +45,13 @@ def _bounded_json_counts(value: Any) -> tuple[int, int]:
             stack.extend((child, depth + 1) for child in current.values())
         elif isinstance(current, list):
             stack.extend((child, depth + 1) for child in current)
-        elif current is None or isinstance(current, (str, bool, int)) or isinstance(current, float) and current == current and abs(current) != float("inf"):
+        elif (
+            current is None
+            or isinstance(current, (str, bool, int))
+            or isinstance(current, float)
+            and current == current
+            and abs(current) != float("inf")
+        ):
             continue
         else:
             raise ValueError("GitHub response contains a non-JSON value")
@@ -82,7 +86,11 @@ class GitHubBindingFence(BaseModel):
     @model_validator(mode="after")
     def validate_resource_order(self) -> "GitHubBindingFence":
         """Require a distinct resource tuple in the fixed issue, pull, commit, release order."""
-        if not self.resource_scope or tuple(item for item in GITHUB_RESOURCES if item in self.resource_scope) != self.resource_scope:
+        if (
+            not self.resource_scope
+            or tuple(item for item in GITHUB_RESOURCES if item in self.resource_scope)
+            != self.resource_scope
+        ):
             raise ValueError("GitHub resource scope must use distinct fixed order")
         return self
 
@@ -102,7 +110,9 @@ class GitHubHintClaimProof(BaseModel):
     resource: GitHubResource
     locator_kind: Literal["number", "release_id", "sha", "ref", "repository", "installation"]
     locator: StrictStr = Field(min_length=1, max_length=256)
-    intent: Literal["refresh", "delete_candidate", "visibility_lost", "visibility_check", "reconcile"]
+    intent: Literal[
+        "refresh", "delete_candidate", "visibility_lost", "visibility_check", "reconcile"
+    ]
     reconcile_page: StrictInt = Field(default=1, ge=1, le=101)
     lease_token: UUID
     expires_at: datetime
@@ -147,7 +157,13 @@ class GitHubSegmentProof(BaseModel):
     def validate_raw_page(self) -> "GitHubSegmentProof":
         """Enforce the raw JSON tree, canonical digest, byte limit and exact next-page progression."""
         _bounded_json_counts(self.raw_items)
-        encoded = json.dumps(self.raw_items, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        encoded = json.dumps(
+            self.raw_items,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
         if len(encoded) > MAX_GITHUB_PAGE_BYTES or sha256(encoded).hexdigest() != self.raw_sha256:
             raise ValueError("GitHub raw page digest or size is invalid")
         if len(self.raw_items) > 100 or self.scan_floor > self.scan_upper:

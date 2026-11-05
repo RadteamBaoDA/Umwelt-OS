@@ -26,22 +26,52 @@ def _sql(stmt) -> str:
 
 
 def _claim(**kw) -> worker.Claim:
-    base = {"id": uuid4(), "workspace_id": WS, "actor_user_id": 7, "lease_token": uuid4(), "attempt": 1,
-            "resource_type": "daily_brief", "resource_id": RID, "resource_revision": "1", "content_hash": "c" * 64,
-            "visibility_hash": "v" * 64, "target_language": "vi", "config_hash": "h" * 64}
+    base = {
+        "id": uuid4(),
+        "workspace_id": WS,
+        "actor_user_id": 7,
+        "lease_token": uuid4(),
+        "attempt": 1,
+        "resource_type": "daily_brief",
+        "resource_id": RID,
+        "resource_revision": "1",
+        "content_hash": "c" * 64,
+        "visibility_hash": "v" * 64,
+        "target_language": "vi",
+        "config_hash": "h" * 64,
+    }
     return worker.Claim(**{**base, **kw})
 
 
 def _run(factory=None) -> worker._Run:
     member = WorkspaceContext(user_id=7, workspace_id=WS, role="member", membership_revision=1)
-    return worker._Run(factory or MagicMock(), MagicMock(multi_workspace_enabled=True), MagicMock(), _claim(), member,
-                       SimpleNamespace(), None)  # type: ignore[arg-type]
+    return worker._Run(
+        factory or MagicMock(),
+        MagicMock(multi_workspace_enabled=True),
+        MagicMock(),
+        _claim(),
+        member,
+        SimpleNamespace(),
+        None,
+    )  # type: ignore[arg-type]
 
 
 async def test_claim_takes_one_head_per_workspace_least_recently_served_with_skip_locked():
-    row = SimpleNamespace(id=uuid4(), workspace_id=WS, actor_user_id=7, attempt_count=0, lease_token=None,
-                          lease_expires_at=None, resource_type="news_story", resource_id=RID, resource_revision="r",
-                          content_hash="c", visibility_hash="v", target_language="vi", config_hash="h")
+    row = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=WS,
+        actor_user_id=7,
+        attempt_count=0,
+        lease_token=None,
+        lease_expires_at=None,
+        resource_type="news_story",
+        resource_id=RID,
+        resource_revision="r",
+        content_hash="c",
+        visibility_hash="v",
+        target_language="vi",
+        config_hash="h",
+    )
     statements = []
 
     async def scalar(stmt, *a, **k):
@@ -53,7 +83,11 @@ async def test_claim_takes_one_head_per_workspace_least_recently_served_with_ski
     sql = statements[0]
     assert "DISTINCT ON (content_translations.workspace_id)" in sql
     assert "FOR UPDATE SKIP LOCKED" in sql and "NULLS FIRST" in sql
-    assert row.attempt_count == 1 and row.lease_token == claim.lease_token and row.lease_expires_at is not None
+    assert (
+        row.attempt_count == 1
+        and row.lease_token == claim.lease_token
+        and row.lease_expires_at is not None
+    )
 
 
 async def test_claim_returns_none_when_nothing_ready():
@@ -93,15 +127,32 @@ async def test_stale_fencing_token_cannot_renew_or_release():
 def _config():
     privacy = SimpleNamespace(allow_remote_reasoning=True, reasoning_destinations=["dest"])
     return SimpleNamespace(
-        workspace_id=WS, actor_user_id=1, membership_revision=1, gateway_identity="a" * 64, model_identity="a" * 64, configuration_revision=1,
-        privacy=privacy, defaults=SimpleNamespace(resolve=lambda _role: ModelMapping(model="m")), endpoint_destination_id="dest",
-        endpoint_policy_denied=False, gateway_base_url="http://x", gateway_api_key="k", gateway_kind="custom", request_timeout_seconds=60,
-        endpoint_allowed_cidrs=(), system_prompts={}, providers={}, allow_public_providers=False)
+        workspace_id=WS,
+        actor_user_id=1,
+        membership_revision=1,
+        gateway_identity="a" * 64,
+        model_identity="a" * 64,
+        configuration_revision=1,
+        privacy=privacy,
+        defaults=SimpleNamespace(resolve=lambda _role: ModelMapping(model="m")),
+        endpoint_destination_id="dest",
+        endpoint_policy_denied=False,
+        gateway_base_url="http://x",
+        gateway_api_key="k",
+        gateway_kind="custom",
+        request_timeout_seconds=60,
+        endpoint_allowed_cidrs=(),
+        system_prompts={},
+        providers={},
+        allow_public_providers=False,
+    )
 
 
 def _brief(segments: int) -> TranslationInput:
     lines = ["Zorp " * 300 for _ in range(segments)]  # ~1500 chars each: one segment per line
-    return TranslationInput(WS, 7, "daily_brief", RID, "1", {"content": "\n".join(lines)}, "v" * 64, (), False)
+    return TranslationInput(
+        WS, 7, "daily_brief", RID, "1", {"content": "\n".join(lines)}, "v" * 64, (), False
+    )
 
 
 class _FakeGateway:
@@ -115,6 +166,7 @@ class _FakeGateway:
         await before_send()
         self.sent += 1
         import json
+
         payload = json.loads(messages[1]["content"])
         return {"choices": [{"message": {"content": json.dumps(payload)}}]}
 
@@ -139,15 +191,23 @@ async def test_deadline_aborts_without_partial_brief():
     cfg = _config()
     policy = SimpleNamespace(reasoning_allowed=True)
     with pytest.raises(TranslationBlocked) as exc:
-        await translate_input(Slow(), cfg, policy, _brief(2), "vi", AsyncMock(), deadline=time.monotonic() + 0.1)  # type: ignore[arg-type]
+        await translate_input(
+            Slow(), cfg, policy, _brief(2), "vi", AsyncMock(), deadline=time.monotonic() + 0.1
+        )  # type: ignore[arg-type]
     assert exc.value.code == "deadline_exceeded"
 
 
 async def test_revoke_between_send_and_publish_gives_blocked(monkeypatch):
     run = _run()
     session = MagicMock(rollback=AsyncMock(), execute=AsyncMock(), commit=AsyncMock())
-    run.factory = MagicMock(return_value=MagicMock(__aenter__=AsyncMock(return_value=session), __aexit__=AsyncMock(return_value=False)))
-    monkeypatch.setattr(worker, "_verify", AsyncMock(side_effect=TranslationBlocked("stale_request")))
+    run.factory = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=session), __aexit__=AsyncMock(return_value=False)
+        )
+    )
+    monkeypatch.setattr(
+        worker, "_verify", AsyncMock(side_effect=TranslationBlocked("stale_request"))
+    )
     block = AsyncMock()
     monkeypatch.setattr(worker, "_block", block)
     source = _brief(1)
@@ -161,11 +221,19 @@ async def test_purged_row_is_not_recreated(monkeypatch):
     result = MagicMock()
     result.first.return_value = None  # lease-guarded UPDATE matched nothing: the row was purged
     session = MagicMock(execute=AsyncMock(return_value=result), commit=AsyncMock(), add=MagicMock())
-    run.factory = MagicMock(return_value=MagicMock(__aenter__=AsyncMock(return_value=session), __aexit__=AsyncMock(return_value=False)))
+    run.factory = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=session), __aexit__=AsyncMock(return_value=False)
+        )
+    )
     monkeypatch.setattr(worker, "_verify", AsyncMock())
     await worker._publish(run, _brief(1), {"content": "đã dịch"})
     stmt = str(session.execute.await_args.args[0].compile(dialect=postgresql.dialect()))
-    assert stmt.startswith("UPDATE content_translations") and "lease_token" in stmt and "status" in stmt
+    assert (
+        stmt.startswith("UPDATE content_translations")
+        and "lease_token" in stmt
+        and "status" in stmt
+    )
     session.add.assert_not_called()
 
 
@@ -191,7 +259,9 @@ async def test_second_transport_failure_is_terminal(monkeypatch):
     finish = AsyncMock()
     monkeypatch.setattr(worker, "_finish", finish)
     await worker._retry_or_fail(MagicMock(), _claim(attempt=1), "transport_error")
-    assert "status" not in finish.await_args.kwargs and finish.await_args.kwargs["next_attempt_at"] > datetime.now(UTC)
+    assert "status" not in finish.await_args.kwargs and finish.await_args.kwargs[
+        "next_attempt_at"
+    ] > datetime.now(UTC)
     await worker._retry_or_fail(MagicMock(), _claim(attempt=2), "transport_error")
     assert finish.await_args.kwargs["status"] == "failed"
 
@@ -208,16 +278,43 @@ async def test_failed_row_with_same_fingerprint_is_not_retried_on_resubmit(monke
     settings = SimpleNamespace(enabled=True, target_language="vi", configuration_revision=1)
     item_id = uuid4()
     config = public.config_hash_for(
-        workspace_id=WS, actor_user_id=7, resource_revision="r1", content_hash="c" * 64, visibility_hash="v" * 64,
-        target_language="vi", settings_revision=1, policy_fingerprint="")
+        workspace_id=WS,
+        actor_user_id=7,
+        resource_revision="r1",
+        content_hash="c" * 64,
+        visibility_hash="v" * 64,
+        target_language="vi",
+        settings_revision=1,
+        policy_fingerprint="",
+    )
     failed = SimpleNamespace(
-        id=uuid4(), resource_type="news_story", resource_id=item_id, resource_revision="r1", content_hash="c" * 64,
-        visibility_hash="v" * 64, config_hash=config, status="failed", error_code="transport_error", result=None,
-        expires_at=datetime(2999, 1, 1, tzinfo=UTC))
-    session = MagicMock(scalar=AsyncMock(return_value=settings), execute=AsyncMock(), flush=AsyncMock())
+        id=uuid4(),
+        resource_type="news_story",
+        resource_id=item_id,
+        resource_revision="r1",
+        content_hash="c" * 64,
+        visibility_hash="v" * 64,
+        config_hash=config,
+        status="failed",
+        error_code="transport_error",
+        result=None,
+        expires_at=datetime(2999, 1, 1, tzinfo=UTC),
+    )
+    session = MagicMock(
+        scalar=AsyncMock(return_value=settings), execute=AsyncMock(), flush=AsyncMock()
+    )
     session.scalars = AsyncMock(return_value=MagicMock(all=lambda: [failed]))
-    request = TranslationBatchRequest.model_validate({"items": [
-        {"resource_type": "news_story", "resource_id": str(item_id), "resource_revision": "r1"}]})
+    request = TranslationBatchRequest.model_validate(
+        {
+            "items": [
+                {
+                    "resource_type": "news_story",
+                    "resource_id": str(item_id),
+                    "resource_revision": "r1",
+                }
+            ]
+        }
+    )
     out = await public.request_translations(session, scope, request, multi_workspace_enabled=True)
     assert failed.status == "failed" and out.enqueue_ids == [] and out.items[0].status == "failed"
     assert "enqueue_ids" not in out.model_dump()

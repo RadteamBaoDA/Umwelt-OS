@@ -90,25 +90,36 @@ class CanonicalEntityBinding:
 
     def __post_init__(self) -> None:
         """Validate bounded owner identity and require each optional seed value's exact field proof."""
-        if (self.canonical_revision < 1 or self.mapping_revision < 0 or not self.group_id
-                or len(self.group_id.encode()) > 200 or not self.membership_ids
-                or len(self.membership_ids) > MAX_SUPPORT
-                or len(set(self.membership_ids)) != len(self.membership_ids)
-                or any(not isinstance(item, UUID) for item in self.membership_ids)
-                or not self.evidence or len(self.evidence) > MAX_SUPPORT
-                or not _UUID.fullmatch(self.graph_entity_uuid)
-                or len(self.field_support) > 2):
+        if (
+            self.canonical_revision < 1
+            or self.mapping_revision < 0
+            or not self.group_id
+            or len(self.group_id.encode()) > 200
+            or not self.membership_ids
+            or len(self.membership_ids) > MAX_SUPPORT
+            or len(set(self.membership_ids)) != len(self.membership_ids)
+            or any(not isinstance(item, UUID) for item in self.membership_ids)
+            or not self.evidence
+            or len(self.evidence) > MAX_SUPPORT
+            or not _UUID.fullmatch(self.graph_entity_uuid)
+            or len(self.field_support) > 2
+        ):
             raise ValueError("Canonical entity binding exceeds its owner bounds")
         hashes: dict[str, str] = {}
         for field, digest, support_ids in self.field_support:
-            if (field not in {"name", "description"} or field in hashes
-                    or not re.fullmatch(r"[0-9a-f]{64}", digest)
-                    or not support_ids or len(set(support_ids)) != len(support_ids)
-                    or not set(support_ids) <= set(self.membership_ids)):
+            if (
+                field not in {"name", "description"}
+                or field in hashes
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or not support_ids
+                or len(set(support_ids)) != len(support_ids)
+                or not set(support_ids) <= set(self.membership_ids)
+            ):
                 raise ValueError("Canonical entity field support is invalid")
             hashes[field] = digest
         if self.node_name is not None and (
-            not self.node_name.strip() or len(self.node_name.encode()) > 4096
+            not self.node_name.strip()
+            or len(self.node_name.encode()) > 4096
             or hashes.get("name") != hashlib.sha256(self.node_name.encode()).hexdigest()
         ):
             raise ValueError("Canonical graph node name requires exact source field support")
@@ -117,8 +128,9 @@ class CanonicalEntityBinding:
             or hashes.get("description") != hashlib.sha256(self.node_summary.encode()).hexdigest()
         ):
             raise ValueError("Canonical graph node summary requires exact source field support")
-        if (self.prior_node_state_fingerprint is not None
-                and not re.fullmatch(r"[0-9a-f]{64}", self.prior_node_state_fingerprint)):
+        if self.prior_node_state_fingerprint is not None and not re.fullmatch(
+            r"[0-9a-f]{64}", self.prior_node_state_fingerprint
+        ):
             raise ValueError("Canonical graph node prior state must be a SHA256 fingerprint")
 
 
@@ -142,29 +154,49 @@ class CanonicalNodeRecoveryAction:
 
     def __post_init__(self) -> None:
         """Require exact IDs/state and a stable aware creation time only for absent-node replacement."""
-        if (not _UUID.fullmatch(self.graph_entity_uuid)
-                or self.action not in {"retain", "delete_orphan", "replace_from_current_support", "delete_for_rebuild"}
-                or (self.expected_current_state_fingerprint is not None
-                    and not re.fullmatch(r"[0-9a-f]{64}", self.expected_current_state_fingerprint))
-                or (int(self.replacement_binding is not None) + int(self.replacement_candidate is not None)
-                    != (1 if self.action == "replace_from_current_support" else 0))
-                or (self.replacement_binding is not None
-                    and (self.replacement_binding.graph_entity_uuid != self.graph_entity_uuid
-                         or self.replacement_binding.node_name is None))
-                or (self.replacement_candidate is not None
-                    and self.replacement_candidate.graph_entity_uuid != self.graph_entity_uuid)
-                or (self.replacement_created_at is not None and (
+        if (
+            not _UUID.fullmatch(self.graph_entity_uuid)
+            or self.action
+            not in {"retain", "delete_orphan", "replace_from_current_support", "delete_for_rebuild"}
+            or (
+                self.expected_current_state_fingerprint is not None
+                and not re.fullmatch(r"[0-9a-f]{64}", self.expected_current_state_fingerprint)
+            )
+            or (
+                int(self.replacement_binding is not None)
+                + int(self.replacement_candidate is not None)
+                != (1 if self.action == "replace_from_current_support" else 0)
+            )
+            or (
+                self.replacement_binding is not None
+                and (
+                    self.replacement_binding.graph_entity_uuid != self.graph_entity_uuid
+                    or self.replacement_binding.node_name is None
+                )
+            )
+            or (
+                self.replacement_candidate is not None
+                and self.replacement_candidate.graph_entity_uuid != self.graph_entity_uuid
+            )
+            or (
+                self.replacement_created_at is not None
+                and (
                     not isinstance(self.replacement_created_at, datetime)
                     or self.action != "replace_from_current_support"
                     or self.replacement_created_at.tzinfo is None
                     or self.replacement_created_at.utcoffset() is None
-                ))):
+                )
+            )
+        ):
             raise ValueError("Canonical node recovery action is invalid")
         _validate_rebuild_mapping_ids(self.action, self.rebuild_mapping_ids)
-        if (len(self.expected_incident_links) > MAX_SUPPORT
-                or len({item.edge_id for item in self.expected_incident_links}) != len(self.expected_incident_links)
-                or tuple(sorted(self.expected_incident_links, key=lambda item: item.edge_id))
-                != self.expected_incident_links):
+        if (
+            len(self.expected_incident_links) > MAX_SUPPORT
+            or len({item.edge_id for item in self.expected_incident_links})
+            != len(self.expected_incident_links)
+            or tuple(sorted(self.expected_incident_links, key=lambda item: item.edge_id))
+            != self.expected_incident_links
+        ):
             raise ValueError("Canonical node recovery link inventory exceeds its bounds")
 
 
@@ -182,27 +214,41 @@ class CandidateNodeReplacement:
     def __post_init__(self) -> None:
         """Bound fresh candidate fields and require hashes tied to surviving support IDs."""
         hashes = {field: (digest, support) for field, digest, support in self.field_support}
-        if (not _UUID.fullmatch(self.graph_entity_uuid) or not self.group_id
-                or len(self.group_id.encode()) > 200 or not self.node_name.strip()
-                or len(self.node_name.encode()) > MAX_INPUT_BYTES
-                or len(self.node_summary.encode()) > MAX_INPUT_BYTES
-                or not self.support_episode_ids or len(self.support_episode_ids) > MAX_SUPPORT
-                or tuple(sorted(set(self.support_episode_ids))) != self.support_episode_ids
-                or any(not _UUID.fullmatch(value) for value in self.support_episode_ids)
-                or not self.field_support or len(self.field_support) > MAX_SUPPORT
-                or len(hashes) != len(self.field_support)
-                or any(not field or len(field) > 64 or not re.fullmatch(r"[0-9a-f]{64}", digest)
-                       or not support or len(support) > MAX_SUPPORT
-                       or tuple(sorted(set(support))) != support
-                       or not set(support) <= set(self.support_episode_ids)
-                       for field, digest, support in self.field_support)
-                or set(self.support_episode_ids) != {
-                    value for _, _, support in self.field_support for value in support
-                }
-                or hashes.get("name", (None, ()))[0] != hashlib.sha256(self.node_name.encode()).hexdigest()
-                or hashes.get("name", (None, ()))[1] == ()
-                or (self.node_summary and hashes.get("description", (None, ()))[0]
-                    != hashlib.sha256(self.node_summary.encode()).hexdigest())):
+        if (
+            not _UUID.fullmatch(self.graph_entity_uuid)
+            or not self.group_id
+            or len(self.group_id.encode()) > 200
+            or not self.node_name.strip()
+            or len(self.node_name.encode()) > MAX_INPUT_BYTES
+            or len(self.node_summary.encode()) > MAX_INPUT_BYTES
+            or not self.support_episode_ids
+            or len(self.support_episode_ids) > MAX_SUPPORT
+            or tuple(sorted(set(self.support_episode_ids))) != self.support_episode_ids
+            or any(not _UUID.fullmatch(value) for value in self.support_episode_ids)
+            or not self.field_support
+            or len(self.field_support) > MAX_SUPPORT
+            or len(hashes) != len(self.field_support)
+            or any(
+                not field
+                or len(field) > 64
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or not support
+                or len(support) > MAX_SUPPORT
+                or tuple(sorted(set(support))) != support
+                or not set(support) <= set(self.support_episode_ids)
+                for field, digest, support in self.field_support
+            )
+            or set(self.support_episode_ids)
+            != {value for _, _, support in self.field_support for value in support}
+            or hashes.get("name", (None, ()))[0]
+            != hashlib.sha256(self.node_name.encode()).hexdigest()
+            or hashes.get("name", (None, ()))[1] == ()
+            or (
+                self.node_summary
+                and hashes.get("description", (None, ()))[0]
+                != hashlib.sha256(self.node_summary.encode()).hexdigest()
+            )
+        ):
             raise ValueError("Candidate node replacement lacks bounded surviving field support")
 
 
@@ -218,13 +264,17 @@ class ExactGraphLink:
 
     def __post_init__(self) -> None:
         """Require exact endpoints and bounded episode support for one incident edge."""
-        if (not _UUID.fullmatch(self.edge_id) or not self.relationship_type
-                or len(self.relationship_type) > 64
-                or not _UUID.fullmatch(self.source_node_id) or not _UUID.fullmatch(self.target_node_id)
-                or len(self.episode_ids) > MAX_SUPPORT
-                or len(set(self.episode_ids)) != len(self.episode_ids)
-                or tuple(sorted(self.episode_ids)) != self.episode_ids
-                or any(not _UUID.fullmatch(value) for value in self.episode_ids)):
+        if (
+            not _UUID.fullmatch(self.edge_id)
+            or not self.relationship_type
+            or len(self.relationship_type) > 64
+            or not _UUID.fullmatch(self.source_node_id)
+            or not _UUID.fullmatch(self.target_node_id)
+            or len(self.episode_ids) > MAX_SUPPORT
+            or len(set(self.episode_ids)) != len(self.episode_ids)
+            or tuple(sorted(self.episode_ids)) != self.episode_ids
+            or any(not _UUID.fullmatch(value) for value in self.episode_ids)
+        ):
             raise ValueError("Exact graph link inventory is invalid")
 
 
@@ -291,29 +341,60 @@ class ExactFactReplacement:
 
     def __post_init__(self) -> None:
         """Bound IDs, fresh support, temporal metadata, reserved attribute names and the stored vector payload."""
-        times = (self.created_at, self.reference_time, self.valid_at, self.invalid_at, self.expired_at)
+        times = (
+            self.created_at,
+            self.reference_time,
+            self.valid_at,
+            self.invalid_at,
+            self.expired_at,
+        )
         attrs_size = len(json.dumps(dict(self.attributes), sort_keys=True, default=str).encode())
         reserved_attributes = {
-            "source_uuid", "target_uuid", "source_node_uuid", "target_node_uuid", "uuid",
-            "name", "fact", "group_id", "episodes", "created_at", "reference_time",
-            "valid_at", "invalid_at", "expired_at", "fact_embedding",
+            "source_uuid",
+            "target_uuid",
+            "source_node_uuid",
+            "target_node_uuid",
+            "uuid",
+            "name",
+            "fact",
+            "group_id",
+            "episodes",
+            "created_at",
+            "reference_time",
+            "valid_at",
+            "invalid_at",
+            "expired_at",
+            "fact_embedding",
         }
-        if (not _UUID.fullmatch(self.fact_id) or not _UUID.fullmatch(self.source_node_id)
-                or not _UUID.fullmatch(self.target_node_id) or not self.group_id
-                or len(self.group_id.encode()) > 200 or not self.name.strip()
-                or len(self.name.encode()) > 256 or not self.fact.strip()
-                or len(self.fact.encode()) > MAX_INPUT_BYTES or not self.episode_ids
-                or len(self.episode_ids) > MAX_SUPPORT or len(set(self.episode_ids)) != len(self.episode_ids)
-                or tuple(sorted(self.episode_ids)) != self.episode_ids
-                or any(not _UUID.fullmatch(value) for value in self.episode_ids)
-                or any(value is not None and value.tzinfo is None for value in times)
-                or not self.fact_embedding or len(self.fact_embedding) > 4096
-                or any(isinstance(value, bool) or not isinstance(value, int | float)
-                       or not math.isfinite(value) for value in self.fact_embedding)
-                or len({key for key, _ in self.attributes}) != len(self.attributes)
-                or any(not key or len(key.encode()) > 128 for key, _ in self.attributes)
-                or any(key in reserved_attributes for key, _ in self.attributes)
-                or attrs_size > MAX_INPUT_BYTES):
+        if (
+            not _UUID.fullmatch(self.fact_id)
+            or not _UUID.fullmatch(self.source_node_id)
+            or not _UUID.fullmatch(self.target_node_id)
+            or not self.group_id
+            or len(self.group_id.encode()) > 200
+            or not self.name.strip()
+            or len(self.name.encode()) > 256
+            or not self.fact.strip()
+            or len(self.fact.encode()) > MAX_INPUT_BYTES
+            or not self.episode_ids
+            or len(self.episode_ids) > MAX_SUPPORT
+            or len(set(self.episode_ids)) != len(self.episode_ids)
+            or tuple(sorted(self.episode_ids)) != self.episode_ids
+            or any(not _UUID.fullmatch(value) for value in self.episode_ids)
+            or any(value is not None and value.tzinfo is None for value in times)
+            or not self.fact_embedding
+            or len(self.fact_embedding) > 4096
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not math.isfinite(value)
+                for value in self.fact_embedding
+            )
+            or len({key for key, _ in self.attributes}) != len(self.attributes)
+            or any(not key or len(key.encode()) > 128 for key, _ in self.attributes)
+            or any(key in reserved_attributes for key, _ in self.attributes)
+            or attrs_size > MAX_INPUT_BYTES
+        ):
             raise ValueError("Exact fact replacement exceeds its owner bounds")
 
 
@@ -336,16 +417,23 @@ class ExactFactRecoveryAction:
 
     def __post_init__(self) -> None:
         """Bind the action to exact endpoints and require a complete fresh snapshot only for replacement."""
-        if (not _UUID.fullmatch(self.fact_id) or not _UUID.fullmatch(self.source_node_id)
-                or not _UUID.fullmatch(self.target_node_id)
-                or not re.fullmatch(r"[0-9a-f]{64}", self.expected_current_state_fingerprint)
-                or self.action not in {"replace_from_current_support", "delete_unsupported", "delete_for_rebuild"}
-                or (self.action == "replace_from_current_support") != (self.replacement is not None)
-                or (self.replacement is not None and (
+        if (
+            not _UUID.fullmatch(self.fact_id)
+            or not _UUID.fullmatch(self.source_node_id)
+            or not _UUID.fullmatch(self.target_node_id)
+            or not re.fullmatch(r"[0-9a-f]{64}", self.expected_current_state_fingerprint)
+            or self.action
+            not in {"replace_from_current_support", "delete_unsupported", "delete_for_rebuild"}
+            or (self.action == "replace_from_current_support") != (self.replacement is not None)
+            or (
+                self.replacement is not None
+                and (
                     self.replacement.fact_id != self.fact_id
                     or self.replacement.source_node_id != self.source_node_id
                     or self.replacement.target_node_id != self.target_node_id
-                ))):
+                )
+            )
+        ):
             raise ValueError("Exact fact recovery action is invalid")
         _validate_rebuild_mapping_ids(self.action, self.rebuild_mapping_ids)
 
@@ -356,9 +444,12 @@ def _validate_rebuild_mapping_ids(action: str, mapping_ids: tuple[UUID, ...]) ->
     IDs are a typed obligation, not consent: owner recovery callbacks must prove
     complete incident/support closure and commit each dependent rebuild before send.
     """
-    if (len(mapping_ids) > MAX_SUPPORT or any(not isinstance(item, UUID) for item in mapping_ids)
-            or tuple(sorted(set(mapping_ids), key=str)) != mapping_ids
-            or (action == "delete_for_rebuild") != bool(mapping_ids)):
+    if (
+        len(mapping_ids) > MAX_SUPPORT
+        or any(not isinstance(item, UUID) for item in mapping_ids)
+        or tuple(sorted(set(mapping_ids), key=str)) != mapping_ids
+        or (action == "delete_for_rebuild") != bool(mapping_ids)
+    ):
         raise ValueError("Rebuild deletion requires bounded exact dependent mappings")
 
 
@@ -389,8 +480,11 @@ class GraphWriteReceipt:
     mapping_revision: int
     desired_support_digest: str
     phase: Literal[
-        "canonical_node_write_intent", "shell_write_intent", "bulk_ids_intent",
-        "bulk_write_intent", "cleanup_write_intent",
+        "canonical_node_write_intent",
+        "shell_write_intent",
+        "bulk_ids_intent",
+        "bulk_write_intent",
+        "cleanup_write_intent",
     ]
     intended_entity_state_fingerprints: tuple[tuple[str, str | None], ...] = ()
     prior_entity_state_fingerprints: tuple[tuple[str, bool, str | None], ...] = ()
@@ -417,72 +511,120 @@ class GraphWriteReceipt:
         self._check_candidate_support()
         self._check_phase_requirements()
         self._check_rebuild_absence()
-        if self.phase == "cleanup_write_intent" and not self.prior_episode_state_fingerprint and not (
-            self.entity_ids
-            and {item[0] for item in self.prior_entity_state_fingerprints} == set(self.entity_ids)
-            and {item[0] for item in self.intended_entity_state_fingerprints} == set(self.entity_ids)
-        ) and self.rebuild_absence_observed != "fact":
+        if (
+            self.phase == "cleanup_write_intent"
+            and not self.prior_episode_state_fingerprint
+            and not (
+                self.entity_ids
+                and {item[0] for item in self.prior_entity_state_fingerprints}
+                == set(self.entity_ids)
+                and {item[0] for item in self.intended_entity_state_fingerprints}
+                == set(self.entity_ids)
+            )
+            and self.rebuild_absence_observed != "fact"
+        ):
             raise ValueError("Cleanup receipt requires prior episode or complete node states")
-        if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in (
-            self.episode_state_fingerprint, self.prior_episode_state_fingerprint,
-        ) if value is not None):
+        if any(
+            not re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in (
+                self.episode_state_fingerprint,
+                self.prior_episode_state_fingerprint,
+            )
+            if value is not None
+        ):
             raise ValueError("Episode state fingerprints must be SHA256 digests")
 
     def _check_identifier_bounds(self) -> None:
         """Reject malformed, duplicated, unsorted or over-bound ids, fingerprints, facts and bindings."""
         error = "Graph receipt identifiers exceed their bounds"
-        if (not isinstance(self.operation_id, UUID) or not isinstance(self.lease_token, UUID)
-                or not _UUID.fullmatch(str(self.episode_id)) or not self.group_id
-                or len(self.group_id.encode()) > 200 or self.mapping_revision < 0
-                or len(self.entity_ids) > MAX_SUPPORT or len(self.mention_ids) > MAX_SUPPORT
-                or len(self.fact_ids) > MAX_SUPPORT
-                or len(self.intended_entity_state_fingerprints) > MAX_SUPPORT
-                or len(self.prior_entity_state_fingerprints) > MAX_SUPPORT
-                or len(self.canonical_bindings) > MAX_SUPPORT
-                or len(self.candidate_field_support) > MAX_SUPPORT
-                or len(self.incident_links) > MAX_SUPPORT
-                or len({item.edge_id for item in self.incident_links}) != len(self.incident_links)
-                or tuple(sorted(self.incident_links, key=lambda item: item.edge_id)) != self.incident_links
-                or len(set(self.entity_ids)) != len(self.entity_ids)
-                or len(set(self.mention_ids)) != len(self.mention_ids)
-                or len(set(self.fact_ids)) != len(self.fact_ids)
-                or len({*self.entity_ids, *self.mention_ids, *self.fact_ids,
-                        *(item.edge_id for item in self.incident_links)}) > MAX_SUPPORT):
+        if (
+            not isinstance(self.operation_id, UUID)
+            or not isinstance(self.lease_token, UUID)
+            or not _UUID.fullmatch(str(self.episode_id))
+            or not self.group_id
+            or len(self.group_id.encode()) > 200
+            or self.mapping_revision < 0
+            or len(self.entity_ids) > MAX_SUPPORT
+            or len(self.mention_ids) > MAX_SUPPORT
+            or len(self.fact_ids) > MAX_SUPPORT
+            or len(self.intended_entity_state_fingerprints) > MAX_SUPPORT
+            or len(self.prior_entity_state_fingerprints) > MAX_SUPPORT
+            or len(self.canonical_bindings) > MAX_SUPPORT
+            or len(self.candidate_field_support) > MAX_SUPPORT
+            or len(self.incident_links) > MAX_SUPPORT
+            or len({item.edge_id for item in self.incident_links}) != len(self.incident_links)
+            or tuple(sorted(self.incident_links, key=lambda item: item.edge_id))
+            != self.incident_links
+            or len(set(self.entity_ids)) != len(self.entity_ids)
+            or len(set(self.mention_ids)) != len(self.mention_ids)
+            or len(set(self.fact_ids)) != len(self.fact_ids)
+            or len(
+                {
+                    *self.entity_ids,
+                    *self.mention_ids,
+                    *self.fact_ids,
+                    *(item.edge_id for item in self.incident_links),
+                }
+            )
+            > MAX_SUPPORT
+        ):
             raise ValueError(error)
-        if (self._entity_fingerprints_invalid()
-                or len({item.fact_id for item in self.existing_fact_states}) != len(self.existing_fact_states)
-                or len({item.fact_id for item in self.intended_fact_support}) != len(self.intended_fact_support)
-                or not re.fullmatch(r"[0-9a-f]{64}", self.desired_support_digest)
-                or any(not _UUID.fullmatch(value) for value in (*self.entity_ids, *self.mention_ids, *self.fact_ids))
-                or any(_fact_record_invalid(item) for item in self.existing_fact_states)
-                or any(_fact_record_invalid(item) for item in self.intended_fact_support)
-                or any(_binding_outside_receipt(item, self.group_id, self.mapping_revision)
-                       for item in self.canonical_bindings)):
+        if (
+            self._entity_fingerprints_invalid()
+            or len({item.fact_id for item in self.existing_fact_states})
+            != len(self.existing_fact_states)
+            or len({item.fact_id for item in self.intended_fact_support})
+            != len(self.intended_fact_support)
+            or not re.fullmatch(r"[0-9a-f]{64}", self.desired_support_digest)
+            or any(
+                not _UUID.fullmatch(value)
+                for value in (*self.entity_ids, *self.mention_ids, *self.fact_ids)
+            )
+            or any(_fact_record_invalid(item) for item in self.existing_fact_states)
+            or any(_fact_record_invalid(item) for item in self.intended_fact_support)
+            or any(
+                _binding_outside_receipt(item, self.group_id, self.mapping_revision)
+                for item in self.canonical_bindings
+            )
+        ):
             raise ValueError(error)
 
     def _entity_fingerprints_invalid(self) -> bool:
         """Report duplicated or malformed intended/prior node fingerprint entries."""
-        intended, prior = self.intended_entity_state_fingerprints, self.prior_entity_state_fingerprints
+        intended, prior = (
+            self.intended_entity_state_fingerprints,
+            self.prior_entity_state_fingerprints,
+        )
         return bool(
             len({item[0] for item in intended}) != len(intended)
-            or any(not _UUID.fullmatch(item[0]) or (item[1] is not None
-                   and not re.fullmatch(r"[0-9a-f]{64}", item[1]))
-                   for item in intended)
+            or any(
+                not _UUID.fullmatch(item[0])
+                or (item[1] is not None and not re.fullmatch(r"[0-9a-f]{64}", item[1]))
+                for item in intended
+            )
             or len({item[0] for item in prior}) != len(prior)
-            or any(not _UUID.fullmatch(item[0]) or not isinstance(item[1], bool)
-                   or (item[1] != (item[2] is not None))
-                   or (item[2] is not None and not re.fullmatch(r"[0-9a-f]{64}", item[2]))
-                   for item in prior)
+            or any(
+                not _UUID.fullmatch(item[0])
+                or not isinstance(item[1], bool)
+                or (item[1] != (item[2] is not None))
+                or (item[2] is not None and not re.fullmatch(r"[0-9a-f]{64}", item[2]))
+                for item in prior
+            )
         )
 
     def _check_candidate_support(self) -> None:
         """Require well-formed candidate field support that names journaled nodes only."""
-        if any(not _UUID.fullmatch(node_id) or not field or len(field) > 64
-               or not re.fullmatch(r"[0-9a-f]{64}", digest)
-               or not support_ids or len(support_ids) > MAX_SUPPORT
-               or tuple(sorted(set(support_ids))) != support_ids
-               or any(not _UUID.fullmatch(value) for value in support_ids)
-               for node_id, field, digest, support_ids in self.candidate_field_support):
+        if any(
+            not _UUID.fullmatch(node_id)
+            or not field
+            or len(field) > 64
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or not support_ids
+            or len(support_ids) > MAX_SUPPORT
+            or tuple(sorted(set(support_ids))) != support_ids
+            or any(not _UUID.fullmatch(value) for value in support_ids)
+            for node_id, field, digest, support_ids in self.candidate_field_support
+        ):
             raise ValueError("Candidate receipt field support exceeds its bounds")
         if any(node_id not in self.entity_ids for node_id, _, _, _ in self.candidate_field_support):
             raise ValueError("Candidate receipt proof must identify a journaled node")
@@ -498,52 +640,88 @@ class GraphWriteReceipt:
             {item[0] for item in self.prior_entity_state_fingerprints} != set(self.entity_ids)
             or self.intended_entity_state_fingerprints
         ):
-            raise ValueError("Bulk ID receipt requires exact prior node states without asserting hydration")
+            raise ValueError(
+                "Bulk ID receipt requires exact prior node states without asserting hydration"
+            )
         if self.phase == "shell_write_intent" and not self.episode_state_fingerprint:
             raise ValueError("Shell receipt requires its exact intended episode fingerprint")
         if self.phase == "canonical_node_write_intent" and (
             not self.entity_ids
             or {item[0] for item in self.intended_entity_state_fingerprints} != set(self.entity_ids)
             or {item[0] for item in self.prior_entity_state_fingerprints} != set(self.entity_ids)
-            or any(item.graph_entity_uuid not in self.entity_ids for item in self.canonical_bindings)
-            or any(not _UUID.fullmatch(item[0]) or item[1] is None
-                   or not re.fullmatch(r"[0-9a-f]{64}", item[1])
-                   for item in self.intended_entity_state_fingerprints)
-            or any(not _UUID.fullmatch(item[0])
-                   or (item[1] != (item[2] is not None))
-                   or (item[2] is not None and not re.fullmatch(r"[0-9a-f]{64}", item[2]))
-                   for item in self.prior_entity_state_fingerprints)
+            or any(
+                item.graph_entity_uuid not in self.entity_ids for item in self.canonical_bindings
+            )
+            or any(
+                not _UUID.fullmatch(item[0])
+                or item[1] is None
+                or not re.fullmatch(r"[0-9a-f]{64}", item[1])
+                for item in self.intended_entity_state_fingerprints
+            )
+            or any(
+                not _UUID.fullmatch(item[0])
+                or (item[1] != (item[2] is not None))
+                or (item[2] is not None and not re.fullmatch(r"[0-9a-f]{64}", item[2]))
+                for item in self.prior_entity_state_fingerprints
+            )
         ):
             raise ValueError("Canonical node receipt requires seeded exact entity IDs")
         if self.phase == "bulk_write_intent" and (
-            not self.episode_state_fingerprint or not self.prior_episode_state_fingerprint
+            not self.episode_state_fingerprint
+            or not self.prior_episode_state_fingerprint
             or {item[0] for item in self.prior_entity_state_fingerprints} != set(self.entity_ids)
             or {item[0] for item in self.intended_entity_state_fingerprints} != set(self.entity_ids)
         ):
-            raise ValueError("Bulk receipt requires exact prior and intended node and episode states")
+            raise ValueError(
+                "Bulk receipt requires exact prior and intended node and episode states"
+            )
 
     def _check_rebuild_absence(self) -> None:
         """Require a rebuild-absence marker to describe a real single-object current absence."""
         if self.rebuild_absence_observed is None:
             return
-        if (self.rebuild_absence_observed not in {"node", "fact"}
+        if (
+            self.rebuild_absence_observed not in {"node", "fact"}
             or self.phase != "cleanup_write_intent"
-            or self.incident_links or self.mention_ids
-            or (self.rebuild_absence_observed == "node" and (
-                len(self.entity_ids) != 1 or self.fact_ids
-                or self.prior_entity_state_fingerprints != ((self.entity_ids[0], False, None),)
-                or self.intended_entity_state_fingerprints != ((self.entity_ids[0], None),)
-            ))
-            or (self.rebuild_absence_observed == "fact" and (
-                len(self.fact_ids) != 1 or self.entity_ids
-                or len(self.existing_fact_states) != 1 or len(self.intended_fact_support) != 1
-                or (self.existing_fact_states[0].source_node_id, self.existing_fact_states[0].target_node_id)
-                != (self.intended_fact_support[0].source_node_id, self.intended_fact_support[0].target_node_id)
-                or any(item.existed or item.episode_ids or item.state_fingerprint != _ABSENT_FACT_FINGERPRINT
-                       for item in self.existing_fact_states)
-                or any(item.episode_ids or item.state_fingerprint != _ABSENT_FACT_FINGERPRINT
-                       for item in self.intended_fact_support)
-            ))):
+            or self.incident_links
+            or self.mention_ids
+            or (
+                self.rebuild_absence_observed == "node"
+                and (
+                    len(self.entity_ids) != 1
+                    or self.fact_ids
+                    or self.prior_entity_state_fingerprints != ((self.entity_ids[0], False, None),)
+                    or self.intended_entity_state_fingerprints != ((self.entity_ids[0], None),)
+                )
+            )
+            or (
+                self.rebuild_absence_observed == "fact"
+                and (
+                    len(self.fact_ids) != 1
+                    or self.entity_ids
+                    or len(self.existing_fact_states) != 1
+                    or len(self.intended_fact_support) != 1
+                    or (
+                        self.existing_fact_states[0].source_node_id,
+                        self.existing_fact_states[0].target_node_id,
+                    )
+                    != (
+                        self.intended_fact_support[0].source_node_id,
+                        self.intended_fact_support[0].target_node_id,
+                    )
+                    or any(
+                        item.existed
+                        or item.episode_ids
+                        or item.state_fingerprint != _ABSENT_FACT_FINGERPRINT
+                        for item in self.existing_fact_states
+                    )
+                    or any(
+                        item.episode_ids or item.state_fingerprint != _ABSENT_FACT_FINGERPRINT
+                        for item in self.intended_fact_support
+                    )
+                )
+            )
+        ):
             raise ValueError("Rebuild absence receipt must describe actual current exact absence")
 
 
@@ -559,17 +737,29 @@ def _fact_record_invalid(item: ExactFactState | ExactFactSupport) -> bool:
     )
 
 
-def _binding_outside_receipt(item: CanonicalEntityBinding, group_id: str, mapping_revision: int) -> bool:
+def _binding_outside_receipt(
+    item: CanonicalEntityBinding, group_id: str, mapping_revision: int
+) -> bool:
     """Report a canonical binding foreign to the receipt's group/revision or with malformed seed fields."""
     return bool(
-        item.group_id != group_id or item.mapping_revision != mapping_revision
-        or item.canonical_revision < 1 or not item.membership_ids or not item.evidence
+        item.group_id != group_id
+        or item.mapping_revision != mapping_revision
+        or item.canonical_revision < 1
+        or not item.membership_ids
+        or not item.evidence
         or not _UUID.fullmatch(item.graph_entity_uuid)
-        or (item.node_name is not None and (not item.node_name.strip() or len(item.node_name.encode()) > 4096))
+        or (
+            item.node_name is not None
+            and (not item.node_name.strip() or len(item.node_name.encode()) > 4096)
+        )
         or (item.node_summary is not None and len(item.node_summary.encode()) > MAX_INPUT_BYTES)
-        or any(not field or not re.fullmatch(r"[0-9a-f]{64}", value_hash)
-               or not support_ids or not set(support_ids) <= set(item.membership_ids)
-               for field, value_hash, support_ids in item.field_support)
+        or any(
+            not field
+            or not re.fullmatch(r"[0-9a-f]{64}", value_hash)
+            or not support_ids
+            or not set(support_ids) <= set(item.membership_ids)
+            for field, value_hash, support_ids in item.field_support
+        )
     )
 
 
@@ -636,11 +826,15 @@ class DispatchOwnership:
 
     def __post_init__(self) -> None:
         """Reject unbounded graph identity and malformed nonce/client IDs."""
-        if (not isinstance(self.operation_id, UUID) or not self.group_id
-                or len(self.group_id.encode()) > 200
-                or not re.fullmatch(r"[0-9a-f]{40}", self.server_run_id)
-                or not isinstance(self.client_id, int) or isinstance(self.client_id, bool)
-                or not 0 < self.client_id < 2**63):
+        if (
+            not isinstance(self.operation_id, UUID)
+            or not self.group_id
+            or len(self.group_id.encode()) > 200
+            or not re.fullmatch(r"[0-9a-f]{40}", self.server_run_id)
+            or not isinstance(self.client_id, int)
+            or isinstance(self.client_id, bool)
+            or not 0 < self.client_id < 2**63
+        ):
             raise ValueError("Invalid graph dispatch ownership")
 
 
@@ -669,18 +863,31 @@ class RecoveryReceiptAggregate:
     def __post_init__(self) -> None:
         """Reject incomplete prefix identity, unordered witnesses and over-bound effects."""
         collections = (self.entity_ids, self.mention_ids, self.fact_ids, self.incident_link_ids)
-        if (not isinstance(self.operation_id, UUID) or not isinstance(self.lease_token, UUID)
-                or not self.group_id or len(self.group_id.encode()) > 200
-                or self.mapping_revision < 0 or not isinstance(self.ledger_count, int)
-                or isinstance(self.ledger_count, bool) or not 0 < self.ledger_count < 2**63
-                or not re.fullmatch(r"[0-9a-f]{64}", self.ledger_digest)
-                or not 1 <= len(self.witness_sequences) <= MAX_RECOVERY_WITNESSES
-                or tuple(sorted(set(self.witness_sequences))) != self.witness_sequences
-                or any(isinstance(item, bool) or not isinstance(item, int)
-                       or not 0 <= item < self.ledger_count for item in self.witness_sequences)
-                or any(tuple(sorted(set(items))) != items
-                       or any(not _UUID.fullmatch(item) for item in items) for items in collections)
-                or len(set().union(*collections)) > MAX_SUPPORT):
+        if (
+            not isinstance(self.operation_id, UUID)
+            or not isinstance(self.lease_token, UUID)
+            or not self.group_id
+            or len(self.group_id.encode()) > 200
+            or self.mapping_revision < 0
+            or not isinstance(self.ledger_count, int)
+            or isinstance(self.ledger_count, bool)
+            or not 0 < self.ledger_count < 2**63
+            or not re.fullmatch(r"[0-9a-f]{64}", self.ledger_digest)
+            or not 1 <= len(self.witness_sequences) <= MAX_RECOVERY_WITNESSES
+            or tuple(sorted(set(self.witness_sequences))) != self.witness_sequences
+            or any(
+                isinstance(item, bool)
+                or not isinstance(item, int)
+                or not 0 <= item < self.ledger_count
+                for item in self.witness_sequences
+            )
+            or any(
+                tuple(sorted(set(items))) != items
+                or any(not _UUID.fullmatch(item) for item in items)
+                for items in collections
+            )
+            or len(set().union(*collections)) > MAX_SUPPORT
+        ):
             raise ValueError("Invalid complete graph receipt aggregate")
 
 
@@ -732,17 +939,27 @@ class OperationAuthorization:
     fence: Callable[[], AbstractAsyncContextManager[None]]
     authorize: Callable[[Literal["reasoning", "embedding"]], Awaitable[None]]
     canonicalize: Callable[[Sequence[Any]], Awaitable[list[TemporalSearchResult]]]
-    validate_partition: Callable[[Literal["search", "upsert", "delete", "reconcile"], str | None], Awaitable[None]]
+    validate_partition: Callable[
+        [Literal["search", "upsert", "delete", "reconcile"], str | None], Awaitable[None]
+    ]
     record_write_intent: Callable[[GraphWriteReceipt], Awaitable[None]]
     reasoning: GraphModelPolicy
     small_reasoning: GraphModelPolicy
     embedding: GraphModelPolicy
-    authorize_node_recovery: Callable[
-        [tuple[GraphWriteReceipt, ...], tuple[CanonicalNodeRecoveryAction, ...]], Awaitable[None],
-    ] | None = None
-    authorize_fact_recovery: Callable[
-        [tuple[GraphWriteReceipt, ...], tuple[ExactFactRecoveryAction, ...]], Awaitable[None],
-    ] | None = None
+    authorize_node_recovery: (
+        Callable[
+            [tuple[GraphWriteReceipt, ...], tuple[CanonicalNodeRecoveryAction, ...]],
+            Awaitable[None],
+        ]
+        | None
+    ) = None
+    authorize_fact_recovery: (
+        Callable[
+            [tuple[GraphWriteReceipt, ...], tuple[ExactFactRecoveryAction, ...]],
+            Awaitable[None],
+        ]
+        | None
+    ) = None
     canonical_bindings: tuple[CanonicalEntityBinding, ...] = ()
     mapping_revision: int = 0
     episode_receipt: GraphWriteReceipt | None = None
@@ -757,25 +974,39 @@ class OperationAuthorization:
     record_dispatch_ownership: Callable[[DispatchOwnership], Awaitable[None]] | None = None
     authorize_dispatch_cessation: Callable[[DispatchOwnership], Awaitable[None]] | None = None
     record_dispatch_completion: Callable[[DispatchOwnership], Awaitable[None]] | None = None
-    authorize_rebuild_absence: Callable[[Literal["node", "fact"], str], Awaitable[None]] | None = None
+    authorize_rebuild_absence: Callable[[Literal["node", "fact"], str], Awaitable[None]] | None = (
+        None
+    )
     receipt_aggregate: RecoveryReceiptAggregate | None = None
-    authorize_receipt_aggregate: Callable[
-        [RecoveryReceiptAggregate, tuple[GraphWriteReceipt, ...], Literal["node", "fact", "delete"]],
-        Awaitable[None],
-    ] | None = None
+    authorize_receipt_aggregate: (
+        Callable[
+            [
+                RecoveryReceiptAggregate,
+                tuple[GraphWriteReceipt, ...],
+                Literal["node", "fact", "delete"],
+            ],
+            Awaitable[None],
+        ]
+        | None
+    ) = None
 
     def __post_init__(self) -> None:
         """Reject incomplete support, invalid receipts, and cross-source authorization closures."""
-        if (not self.group_id or len(self.group_id.encode()) > 200
-                or not isinstance(self.operation_id, UUID) or not isinstance(self.lease_token, UUID)
-                or self.source_generation < 1 or self.mapping_revision < 0
-                or len(self.evidence) > MAX_SUPPORT
-                or len(self.partition_episode_ids) > MAX_SUPPORT
-                or len(self.history_episode_ids) > MAX_HISTORY
-                or len(self.receipt_history) > MAX_RECOVERY_WITNESSES
-                or len(self.node_recovery_actions) > MAX_SUPPORT
-                or len(self.fact_recovery_actions) > MAX_SUPPORT
-                or not self.partition_inventory_complete):
+        if (
+            not self.group_id
+            or len(self.group_id.encode()) > 200
+            or not isinstance(self.operation_id, UUID)
+            or not isinstance(self.lease_token, UUID)
+            or self.source_generation < 1
+            or self.mapping_revision < 0
+            or len(self.evidence) > MAX_SUPPORT
+            or len(self.partition_episode_ids) > MAX_SUPPORT
+            or len(self.history_episode_ids) > MAX_HISTORY
+            or len(self.receipt_history) > MAX_RECOVERY_WITNESSES
+            or len(self.node_recovery_actions) > MAX_SUPPORT
+            or len(self.fact_recovery_actions) > MAX_SUPPORT
+            or not self.partition_inventory_complete
+        ):
             raise ValueError("Graph authorization closure exceeds its bounds")
         refs = {(item.document_version_id, item.chunk_id) for item in self.evidence}
         if len(refs) != len(self.evidence) or any(
@@ -783,49 +1014,73 @@ class OperationAuthorization:
             for item in self.evidence
         ):
             raise ValueError("Graph evidence must belong to one fenced source generation")
-        if (len(set(self.partition_episode_ids)) != len(self.partition_episode_ids)
-                or len(set(self.history_episode_ids)) != len(self.history_episode_ids)
-                or any(not _UUID.fullmatch(item) for item in self.partition_episode_ids)
-                or any(not _UUID.fullmatch(item) for item in self.history_episode_ids)
-                or not set(self.history_episode_ids) <= set(self.partition_episode_ids)):
+        if (
+            len(set(self.partition_episode_ids)) != len(self.partition_episode_ids)
+            or len(set(self.history_episode_ids)) != len(self.history_episode_ids)
+            or any(not _UUID.fullmatch(item) for item in self.partition_episode_ids)
+            or any(not _UUID.fullmatch(item) for item in self.history_episode_ids)
+            or not set(self.history_episode_ids) <= set(self.partition_episode_ids)
+        ):
             raise ValueError("Graph episode inventory or selected history is invalid")
-        if any(item.group_id != self.group_id or item.mapping_revision != self.mapping_revision
-               or item.canonical_revision < 1 or not item.membership_ids or not item.evidence
-               or len(set(item.membership_ids)) != len(item.membership_ids)
-               or not _UUID.fullmatch(item.graph_entity_uuid)
-               or (item.node_name is not None and (not item.node_name.strip() or len(item.node_name.encode()) > 4096))
-               or (item.node_summary is not None and len(item.node_summary.encode()) > MAX_INPUT_BYTES)
-               or any(not field or not re.fullmatch(r"[0-9a-f]{64}", value_hash)
-                      or not support_ids or not set(support_ids) <= set(item.membership_ids)
-                      for field, value_hash, support_ids in item.field_support)
-               or not set(item.evidence) <= set(self.evidence) for item in self.canonical_bindings):
+        if any(
+            item.group_id != self.group_id
+            or item.mapping_revision != self.mapping_revision
+            or item.canonical_revision < 1
+            or not item.membership_ids
+            or not item.evidence
+            or len(set(item.membership_ids)) != len(item.membership_ids)
+            or not _UUID.fullmatch(item.graph_entity_uuid)
+            or (
+                item.node_name is not None
+                and (not item.node_name.strip() or len(item.node_name.encode()) > 4096)
+            )
+            or (item.node_summary is not None and len(item.node_summary.encode()) > MAX_INPUT_BYTES)
+            or any(
+                not field
+                or not re.fullmatch(r"[0-9a-f]{64}", value_hash)
+                or not support_ids
+                or not set(support_ids) <= set(item.membership_ids)
+                for field, value_hash, support_ids in item.field_support
+            )
+            or not set(item.evidence) <= set(self.evidence)
+            for item in self.canonical_bindings
+        ):
             raise ValueError("Canonical graph bindings must belong to this authorization closure")
         if self.episode_receipt is not None and (
             self.episode_receipt.group_id != self.group_id
             or str(self.episode_receipt.episode_id) not in self.partition_episode_ids
         ):
             raise ValueError("Episode receipt must belong to the authorized graph partition")
-        if any(item.group_id != self.group_id or item.operation_id != self.operation_id
-               or item.lease_token != self.lease_token or item.mapping_revision != self.mapping_revision
-               or str(item.episode_id) not in self.partition_episode_ids
-               for item in self.receipt_history):
+        if any(
+            item.group_id != self.group_id
+            or item.operation_id != self.operation_id
+            or item.lease_token != self.lease_token
+            or item.mapping_revision != self.mapping_revision
+            or str(item.episode_id) not in self.partition_episode_ids
+            for item in self.receipt_history
+        ):
             raise ValueError("Graph receipt history must belong to this operation and partition")
-        if (tuple(sorted(self.node_recovery_actions, key=lambda item: item.graph_entity_uuid))
-                != self.node_recovery_actions
-                or len({item.graph_entity_uuid for item in self.node_recovery_actions})
-                != len(self.node_recovery_actions)
-                or tuple(sorted(self.fact_recovery_actions, key=lambda item: item.fact_id))
-                != self.fact_recovery_actions
-                or len({item.fact_id for item in self.fact_recovery_actions})
-                != len(self.fact_recovery_actions)
-                or (self.node_recovery_actions and self.authorize_node_recovery is None)
-                or (self.fact_recovery_actions and self.authorize_fact_recovery is None)):
-            raise ValueError("Current graph recovery actions require bounded ordered owner authorization")
+        if (
+            tuple(sorted(self.node_recovery_actions, key=lambda item: item.graph_entity_uuid))
+            != self.node_recovery_actions
+            or len({item.graph_entity_uuid for item in self.node_recovery_actions})
+            != len(self.node_recovery_actions)
+            or tuple(sorted(self.fact_recovery_actions, key=lambda item: item.fact_id))
+            != self.fact_recovery_actions
+            or len({item.fact_id for item in self.fact_recovery_actions})
+            != len(self.fact_recovery_actions)
+            or (self.node_recovery_actions and self.authorize_node_recovery is None)
+            or (self.fact_recovery_actions and self.authorize_fact_recovery is None)
+        ):
+            raise ValueError(
+                "Current graph recovery actions require bounded ordered owner authorization"
+            )
         object.__setattr__(self, "model_calls", [0])
 
 
 async def _authorize_receipt_witnesses(
-    context: OperationAuthorization, receipts: tuple[GraphWriteReceipt, ...],
+    context: OperationAuthorization,
+    receipts: tuple[GraphWriteReceipt, ...],
     purpose: Literal["node", "fact", "delete"],
 ) -> RecoveryReceiptAggregate | None:
     """Verify exact full effect inventory before using owner-selected journal witnesses.
@@ -838,17 +1093,22 @@ async def _authorize_receipt_witnesses(
     aggregate = context.receipt_aggregate
     if aggregate is None:
         return None
-    if (context.authorize_receipt_aggregate is None
-            or aggregate.operation_id != context.operation_id
-            or aggregate.group_id != context.group_id
-            or aggregate.lease_token != context.lease_token
-            or aggregate.mapping_revision != context.mapping_revision
-            or len(receipts) != len(aggregate.witness_sequences)
-            or tuple(sorted({value for item in receipts for value in item.entity_ids})) != aggregate.entity_ids
-            or tuple(sorted({value for item in receipts for value in item.mention_ids})) != aggregate.mention_ids
-            or tuple(sorted({value for item in receipts for value in item.fact_ids})) != aggregate.fact_ids
-            or tuple(sorted({link.edge_id for item in receipts for link in item.incident_links}))
-               != aggregate.incident_link_ids):
+    if (
+        context.authorize_receipt_aggregate is None
+        or aggregate.operation_id != context.operation_id
+        or aggregate.group_id != context.group_id
+        or aggregate.lease_token != context.lease_token
+        or aggregate.mapping_revision != context.mapping_revision
+        or len(receipts) != len(aggregate.witness_sequences)
+        or tuple(sorted({value for item in receipts for value in item.entity_ids}))
+        != aggregate.entity_ids
+        or tuple(sorted({value for item in receipts for value in item.mention_ids}))
+        != aggregate.mention_ids
+        or tuple(sorted({value for item in receipts for value in item.fact_ids}))
+        != aggregate.fact_ids
+        or tuple(sorted({link.edge_id for item in receipts for link in item.incident_links}))
+        != aggregate.incident_link_ids
+    ):
         raise GraphOperationError("graph_receipt_aggregate_incomplete")
     await context.authorize_receipt_aggregate(aggregate, receipts, purpose)
     return aggregate
@@ -870,22 +1130,34 @@ class EpisodeRequest:
 
     def __post_init__(self) -> None:
         """Reject invalid IDs, naive times, unbounded provenance, or unproven canonical mappings."""
-        if (not _UUID.fullmatch(str(self.episode_id)) or not self.group_id
-                or len(self.group_id.encode()) > 200 or not self.name.strip()
-                or len(self.content.encode("utf-8")) > MAX_INPUT_BYTES
-                or self.reference_time.tzinfo is None or self.mapping_revision < 1
-                or len(self.evidence) > MAX_SUPPORT
-                or len(set(self.canonical_entity_ids)) != len(self.canonical_entity_ids)):
+        if (
+            not _UUID.fullmatch(str(self.episode_id))
+            or not self.group_id
+            or len(self.group_id.encode()) > 200
+            or not self.name.strip()
+            or len(self.content.encode("utf-8")) > MAX_INPUT_BYTES
+            or self.reference_time.tzinfo is None
+            or self.mapping_revision < 1
+            or len(self.evidence) > MAX_SUPPORT
+            or len(set(self.canonical_entity_ids)) != len(self.canonical_entity_ids)
+        ):
             raise ValueError("Graph episode is invalid or exceeds its bounds")
         binding_ids = {item.canonical_entity_id for item in self.canonical_bindings}
-        if (len(binding_ids) != len(self.canonical_bindings)
-                or binding_ids != set(self.canonical_entity_ids)
-                or any(item.group_id != self.group_id or item.mapping_revision != self.mapping_revision
-                       or item.canonical_revision < 1 or not item.membership_ids or not item.evidence
-                       or len(set(item.membership_ids)) != len(item.membership_ids)
-                       or not _UUID.fullmatch(item.graph_entity_uuid)
-                       or not set(item.evidence) <= set(self.evidence)
-                       for item in self.canonical_bindings)):
+        if (
+            len(binding_ids) != len(self.canonical_bindings)
+            or binding_ids != set(self.canonical_entity_ids)
+            or any(
+                item.group_id != self.group_id
+                or item.mapping_revision != self.mapping_revision
+                or item.canonical_revision < 1
+                or not item.membership_ids
+                or not item.evidence
+                or len(set(item.membership_ids)) != len(item.membership_ids)
+                or not _UUID.fullmatch(item.graph_entity_uuid)
+                or not set(item.evidence) <= set(self.evidence)
+                for item in self.canonical_bindings
+            )
+        ):
             raise ValueError("Graph entity bindings must prove requested canonical endpoints")
 
 
@@ -924,4 +1196,3 @@ class GraphConfiguration:
             password=settings.graph_password.get_secret_value() or None,
             database=settings.graph_database,
         )
-

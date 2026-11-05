@@ -15,7 +15,8 @@ from modules.dashboard import context, public
 def test_dashboard_export_scope_binds_workspace_owner_and_cutoff() -> None:
     ws, snap = uuid4(), datetime(2026, 1, 1, tzinfo=UTC)
     sql = " AND ".join(
-        str(p.compile(dialect=postgresql.dialect())) for p in public._dashboard_export_scope(7, snap, ws)
+        str(p.compile(dialect=postgresql.dialect()))
+        for p in public._dashboard_export_scope(7, snap, ws)
     )
     assert "dashboards.workspace_id" in sql and "dashboards.owner_id" in sql
     assert "dashboards.created_at <=" in sql and "dashboards.updated_at <=" in sql
@@ -29,8 +30,14 @@ async def test_export_validation_dashboards_reaches_scope_without_name_error() -
     session.scalar.return_value = 3
     with patch.object(public, "_admit", AsyncMock(return_value=None)):
         result = await public.validate_export_fences(
-            session, owner_id=1, record_kind="dashboards", snapshot_at=datetime.now(UTC),
-            expected_snapshot_count=0, fences=[], scope=scope, multi_workspace_enabled=True,
+            session,
+            owner_id=1,
+            record_kind="dashboards",
+            snapshot_at=datetime.now(UTC),
+            expected_snapshot_count=0,
+            fences=[],
+            scope=scope,
+            multi_workspace_enabled=True,
         )
     assert result.valid is False and result.reason == "snapshot_count_changed"
 
@@ -48,6 +55,12 @@ async def test_member_denied_before_any_context_read() -> None:
     ):
         for builder in (context.build_daily_context, context.build_daily_widgets):
             with pytest.raises(DomainError) as exc:
-                await builder(AsyncMock(), datetime.now(UTC).date(), "UTC", scope=member, multi_workspace_enabled=True)
+                await builder(
+                    AsyncMock(),
+                    datetime.now(UTC).date(),
+                    "UTC",
+                    scope=member,
+                    multi_workspace_enabled=True,
+                )
             assert exc.value.status_code == 403
     reads.assert_not_awaited()

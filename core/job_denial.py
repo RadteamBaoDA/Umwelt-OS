@@ -42,8 +42,14 @@ async def admit_retry_stale[T](admit: Callable[[], Awaitable[T]]) -> T:
 
 
 async def terminalize(
-    factory: async_sessionmaker[AsyncSession], model: Any, row_id: UUID, workspace_id: UUID, code: str,
-    *, from_status: Iterable[str] = ("pending", "running", "blocked"), failed: str = "failed",
+    factory: async_sessionmaker[AsyncSession],
+    model: Any,
+    row_id: UUID,
+    workspace_id: UUID,
+    code: str,
+    *,
+    from_status: Iterable[str] = ("pending", "running", "blocked"),
+    failed: str = "failed",
     extra_where: tuple[Any, ...] = (),
 ) -> None:
     """Move one durable row to its owner's terminal ``failed`` state, workspace-predicated.
@@ -55,8 +61,14 @@ async def terminalize(
         if hasattr(model, column):
             values[column] = None
     async with factory() as session:
-        await session.execute(update(model).where(
-            model.id == row_id, model.workspace_id == workspace_id,
-            model.status.in_(tuple(from_status)), *extra_where,
-        ).values(**values))
+        await session.execute(
+            update(model)
+            .where(
+                model.id == row_id,
+                model.workspace_id == workspace_id,
+                model.status.in_(tuple(from_status)),
+                *extra_where,
+            )
+            .values(**values)
+        )
         await session.commit()

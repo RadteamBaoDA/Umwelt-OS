@@ -13,11 +13,12 @@ class TranslationsDescriptor(ModuleDescriptor):
     name: str = "Translations"
     description: str = "On-demand resource translation with protected-content handling."
     routes: tuple[str, ...] = ("/api/v1/translations",)
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.translations.routes", 240),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.translations.routes", 240),)
     capabilities: tuple[CapabilitySpec, ...] = (
-        CapabilitySpec("translations.purge_resource_translations", "modules.translations.public:purge_resource_translations"),
+        CapabilitySpec(
+            "translations.purge_resource_translations",
+            "modules.translations.public:purge_resource_translations",
+        ),
     )
     erasure_module: str | None = "modules.translations.erasure"
     erasure_order: int = 230

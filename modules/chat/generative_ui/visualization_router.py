@@ -213,6 +213,9 @@ def route_visualization(
 # router can never map a category to a renderer the internal router would not use.
 CATEGORY_ROUTES: dict[str, tuple[str, str | None]] = {
     "text": ("text", None),
-    **{name: (renderer, kind) for name, renderer, kind, _ in _LOCAL_RULES
-       if name not in {"meeting_time_picker", "plan"}},
+    **{
+        name: (renderer, kind)
+        for name, renderer, kind, _ in _LOCAL_RULES
+        if name not in {"meeting_time_picker", "plan"}
+    },
 }

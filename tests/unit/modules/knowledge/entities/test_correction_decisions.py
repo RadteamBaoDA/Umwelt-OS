@@ -24,11 +24,23 @@ def _member(chunk: UUID, fingerprint: str | None = FP) -> Any:
     return SimpleNamespace(id=uuid4(), chunk_id=chunk, match_fingerprint=fingerprint)
 
 
-def _decision(decision: str, entity: UUID | None, *, membership: Any = None, fingerprint: str | None = None, age: int = 0) -> Any:
+def _decision(
+    decision: str,
+    entity: UUID | None,
+    *,
+    membership: Any = None,
+    fingerprint: str | None = None,
+    age: int = 0,
+) -> Any:
     """Correction decision stand-in."""
     return SimpleNamespace(
-        id=uuid4(), decision=decision, entity_id=entity, membership_id=membership.id if membership else None,
-        match_fingerprint=fingerprint if fingerprint is not None else (membership.match_fingerprint if membership else None),
+        id=uuid4(),
+        decision=decision,
+        entity_id=entity,
+        membership_id=membership.id if membership else None,
+        match_fingerprint=fingerprint
+        if fingerprint is not None
+        else (membership.match_fingerprint if membership else None),
         created_at=NOW + timedelta(seconds=age),
     )
 
@@ -53,7 +65,14 @@ def _admit(monkeypatch: pytest.MonkeyPatch) -> None:
 async def _decide(session: Any, candidates: dict[str, tuple[str, set[UUID]]], **kw: Any) -> Any:
     """Call the function under test."""
     return await ent.get_document_correction_decisions(
-        session, DOC, VER, candidates, scope=SimpleNamespace(workspace_id=uuid4()), multi_workspace_enabled=False, **kw)
+        session,
+        DOC,
+        VER,
+        candidates,
+        scope=SimpleNamespace(workspace_id=uuid4()),
+        multi_workspace_enabled=False,
+        **kw,
+    )
 
 
 async def test_bounds_and_empty_input() -> None:
@@ -71,14 +90,19 @@ async def test_no_matches_is_none_and_for_update_is_forwarded() -> None:
     """A candidate with no decisions resolves to None; the for_update flag still reads all rows."""
     session = _session([], [], [])
     assert await _decide(session, {"a": (FP, {C1})}, for_update=True) == {"a": None}
-    assert session.scalars.await_count == 2  # memberships and document rows (evidence read is skipped)
+    assert (
+        session.scalars.await_count == 2
+    )  # memberships and document rows (evidence read is skipped)
 
 
 async def test_full_evidence_coverage_returns_latest_decision() -> None:
     """Exact decisions on every chunk resolve to the newest matching decision."""
     target = uuid4()
     m1, m2 = _member(C1), _member(C2)
-    older, newer = _decision("assign", target, membership=m1, age=1), _decision("assign", target, membership=m2, age=2)
+    older, newer = (
+        _decision("assign", target, membership=m1, age=1),
+        _decision("assign", target, membership=m2, age=2),
+    )
     out = await _decide(_session([m1, m2], [older, newer], []), {"a": (FP, {C1, C2})})
     assert out == {"a": (newer.id, "assign", target)}
 
@@ -95,7 +119,9 @@ async def test_document_decision_applies_and_disagreement_conflicts() -> None:
     """A document-wide decision resolves alone; evidence disagreeing with it is a conflict."""
     target = uuid4()
     doc_row = _decision("assign", target, fingerprint=FP, age=5)
-    assert await _decide(_session([], [], [doc_row]), {"a": (FP, {C1})}) == {"a": (doc_row.id, "assign", target)}
+    assert await _decide(_session([], [], [doc_row]), {"a": (FP, {C1})}) == {
+        "a": (doc_row.id, "assign", target)
+    }
     m1 = _member(C1)
     evidence_row = _decision("suppress", None, membership=m1, age=1)
     out = await _decide(_session([m1], [evidence_row], [doc_row]), {"a": (FP, {C1})})

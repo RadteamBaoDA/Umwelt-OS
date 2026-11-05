@@ -18,7 +18,9 @@ P = ParamSpec("P")
 R = TypeVar("R")
 MAX_OPERATION_SECONDS = 150
 HEAVY_RETRY_DEFER_SECONDS = 5  # backoff base for slot contention; see HEAVY_RETRY_CAP_SECONDS
-HEAVY_RETRY_CAP_SECONDS = 15  # contention backoff ceiling: 5, 10, 15, 15... s (equal jitter halves the floor)
+HEAVY_RETRY_CAP_SECONDS = (
+    15  # contention backoff ceiling: 5, 10, 15, 15... s (equal jitter halves the floor)
+)
 HEAVY_BLOCKED_BASE_SECONDS = 30  # remote-guard block backoff base; guards expire on their own
 HEAVY_BLOCKED_CAP_SECONDS = 120
 # arq counts every Retry as a try and, once tries run out, stores the failure for the worker-level
@@ -64,7 +66,9 @@ class HeavyLease:
 
 @asynccontextmanager
 async def heavy_job_slot(
-    factory: async_sessionmaker[AsyncSession], *, timeout_seconds: float = 120,
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    timeout_seconds: float = 120,
 ) -> AsyncIterator[HeavyLease]:
     """Serialize awaited heavy work with a dedicated PostgreSQL transaction.
 
@@ -94,9 +98,9 @@ async def heavy_job_slot(
     async with factory() as session:
         async with asyncio.timeout_at(deadline):
             async with asyncio.timeout(5):
-                acquired = await session.scalar(text(
-                    "SELECT pg_try_advisory_xact_lock(:key)"
-                ), {"key": HEAVY_LOCK_KEY})
+                acquired = await session.scalar(
+                    text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": HEAVY_LOCK_KEY}
+                )
             if not acquired:
                 raise HeavyWorkBusy("Another process owns heavy execution capacity")
             # The remote guard is durable across loss of this local connection;
@@ -152,6 +156,7 @@ def bounded_heavy_work(function: Callable[P, Awaitable[R]]) -> Callable[P, Await
     Contention retries before claims; cancellation remains visible to durable
     recovery and awaits consumer cleanup before releasing local capacity.
     """
+
     @wraps(function)
     async def bounded(*args: P.args, **kwargs: P.kwargs) -> R:
         """Acquire capacity before entering the worker and preserve its result."""
@@ -161,9 +166,13 @@ def bounded_heavy_work(function: Callable[P, Awaitable[R]]) -> Callable[P, Await
             async with heavy_job_slot(factory):
                 return await function(*args, **kwargs)
         except HeavyWorkBusy as exc:
-            raise retry_with_backoff(ctx, base=HEAVY_RETRY_DEFER_SECONDS, cap=HEAVY_RETRY_CAP_SECONDS) from exc
+            raise retry_with_backoff(
+                ctx, base=HEAVY_RETRY_DEFER_SECONDS, cap=HEAVY_RETRY_CAP_SECONDS
+            ) from exc
         except RemoteHeavyWorkBlocked as exc:
             # Guards expire on their own; defer instead of failing the job permanently.
             raise retry_with_backoff(
-                ctx, base=HEAVY_BLOCKED_BASE_SECONDS, cap=HEAVY_BLOCKED_CAP_SECONDS) from exc
+                ctx, base=HEAVY_BLOCKED_BASE_SECONDS, cap=HEAVY_BLOCKED_CAP_SECONDS
+            ) from exc
+
     return bounded

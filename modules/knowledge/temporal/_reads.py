@@ -35,7 +35,10 @@ def _node_absent(exc: Exception) -> bool:
 
 
 async def _read_exact_links(
-    driver: Any, context: OperationAuthorization, entity_id: str, error: str,
+    driver: Any,
+    context: OperationAuthorization,
+    entity_id: str,
+    error: str,
 ) -> tuple[ExactGraphLink, ...]:
     """Read and validate the complete bounded incident-link set of one entity node.
 
@@ -43,29 +46,40 @@ async def _read_exact_links(
     duplicated inventory, so callers keep their distinct error codes.
     """
     rows, _, _ = await driver.execute_query(
-        _LINKS_QUERY, entity_id=entity_id, group_id=context.group_id, limit=MAX_SUPPORT + 1,
+        _LINKS_QUERY,
+        entity_id=entity_id,
+        group_id=context.group_id,
+        limit=MAX_SUPPORT + 1,
     )
     if not isinstance(rows, list) or len(rows) > MAX_SUPPORT:
         raise GraphOperationError(error)
     links: list[ExactGraphLink] = []
     for row in rows:
         support = row.get("episode_ids") or () if isinstance(row, dict) else ()
-        if (not isinstance(row, dict) or not isinstance(support, list | tuple)
-                or not isinstance(row.get("relationship_type"), str)):
+        if (
+            not isinstance(row, dict)
+            or not isinstance(support, list | tuple)
+            or not isinstance(row.get("relationship_type"), str)
+        ):
             raise GraphOperationError(error)
-        links.append(ExactGraphLink(
-            edge_id=str(row.get("edge_id")), relationship_type=row["relationship_type"],
-            source_node_id=str(row.get("source_node_id")),
-            target_node_id=str(row.get("target_node_id")),
-            episode_ids=tuple(sorted(str(value) for value in support)),
-        ))
+        links.append(
+            ExactGraphLink(
+                edge_id=str(row.get("edge_id")),
+                relationship_type=row["relationship_type"],
+                source_node_id=str(row.get("source_node_id")),
+                target_node_id=str(row.get("target_node_id")),
+                episode_ids=tuple(sorted(str(value) for value in support)),
+            )
+        )
     if len({item.edge_id for item in links}) != len(links):
         raise GraphOperationError(error)
     return tuple(links)
 
 
 async def _load_action_entity(
-    driver: Any, context: OperationAuthorization, entity_id: str,
+    driver: Any,
+    context: OperationAuthorization,
+    entity_id: str,
 ) -> Any:
     """Load a recovery action's entity with its embedding; None only when Graphiti reports it absent.
 
@@ -87,14 +101,20 @@ async def _load_action_entity(
 
 
 async def _endpoints_present(
-    driver: Any, context: OperationAuthorization, endpoint_ids: list[str],
+    driver: Any,
+    context: OperationAuthorization,
+    endpoint_ids: list[str],
 ) -> bool:
     """Report whether every exact endpoint node exists once, inside the authorized group."""
     rows, _, _ = await driver.execute_query(
-        _ENDPOINTS_QUERY, node_ids=endpoint_ids, group_id=context.group_id, limit=len(endpoint_ids) + 1,
+        _ENDPOINTS_QUERY,
+        node_ids=endpoint_ids,
+        group_id=context.group_id,
+        limit=len(endpoint_ids) + 1,
     )
     return not (
-        not isinstance(rows, list) or len(rows) != len(endpoint_ids)
+        not isinstance(rows, list)
+        or len(rows) != len(endpoint_ids)
         or len({row.get("node_id") for row in rows if isinstance(row, dict)}) != len(endpoint_ids)
         or any(not isinstance(row, dict) or row.get("group_id") != context.group_id for row in rows)
     )
@@ -105,14 +125,18 @@ def _replacement_edge(snapshot: Any) -> Any:
     from graphiti_core.edges import EntityEdge
 
     return EntityEdge(
-        uuid=snapshot.fact_id, group_id=snapshot.group_id,
+        uuid=snapshot.fact_id,
+        group_id=snapshot.group_id,
         source_node_uuid=snapshot.source_node_id,
-        target_node_uuid=snapshot.target_node_id, name=snapshot.name,
-        fact=snapshot.fact, episodes=list(snapshot.episode_ids),
-        created_at=snapshot.created_at, reference_time=snapshot.reference_time,
-        valid_at=snapshot.valid_at, invalid_at=snapshot.invalid_at,
+        target_node_uuid=snapshot.target_node_id,
+        name=snapshot.name,
+        fact=snapshot.fact,
+        episodes=list(snapshot.episode_ids),
+        created_at=snapshot.created_at,
+        reference_time=snapshot.reference_time,
+        valid_at=snapshot.valid_at,
+        invalid_at=snapshot.invalid_at,
         expired_at=snapshot.expired_at,
         fact_embedding=list(snapshot.fact_embedding),
         attributes=dict(snapshot.attributes),
     )
-

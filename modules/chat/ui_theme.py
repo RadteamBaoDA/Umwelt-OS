@@ -38,5 +38,10 @@ async def publish_theme(session: AsyncSession, run_id: UUID, raw_args: str) -> s
     )
 
     await _append_event(session, run_id, EVENT_UI_THEME, {"mode": args.mode})
-    return json.dumps({"status": "requested", "mode": args.mode,
-                       "note": "Applied for this browser session; the user decides whether to keep it."})
+    return json.dumps(
+        {
+            "status": "requested",
+            "mode": args.mode,
+            "note": "Applied for this browser session; the user decides whether to keep it.",
+        }
+    )

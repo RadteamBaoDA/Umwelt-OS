@@ -1,4 +1,5 @@
 """Cron scheduling: hashed offsets, period preservation, lease single-flight, catch-up, wake."""
+
 from __future__ import annotations
 
 import asyncio
@@ -77,7 +78,9 @@ def test_cron_worker_registers_every_spec_by_arq_name() -> None:
     jobs = worker_main.CronWorkerSettings.cron_jobs
     assert [j.name for j in jobs] == [f"cron:{s.name}" for s in worker_main.CRON_SPECS]  # type: ignore[attr-defined]
     # run_cron_job is registered behind traced_job (strips the API's trace carrier) under its own name.
-    assert [f.coroutine.__wrapped__ for f in worker_main.CronWorkerSettings.functions] == [worker_main.run_cron_job]
+    assert [f.coroutine.__wrapped__ for f in worker_main.CronWorkerSettings.functions] == [
+        worker_main.run_cron_job
+    ]
     assert [f.name for f in worker_main.CronWorkerSettings.functions] == ["run_cron_job"]
     assert worker_main.CronWorkerSettings.keep_result == 0
     assert worker_main.CronWorkerSettings.queue_name == cron.CRON_QUEUE
@@ -145,13 +148,22 @@ async def test_single_flight_releases_and_records_failure() -> None:
 async def test_catch_up_runs_only_jobs_older_than_twice_period() -> None:
     now = 10_000.0
     periods = {"fresh": 60, "stale": 60, "never": 3600}
-    assert cron.overdue_jobs(periods, {"fresh": now - 100, "stale": now - 121}, now=now) == ["never", "stale"]
+    assert cron.overdue_jobs(periods, {"fresh": now - 100, "stale": now - 121}, now=now) == [
+        "never",
+        "stale",
+    ]
     redis = FakeRedis()
     redis.hash["purge_expired_sessions"] = "1.0:5"  # ancient success
     queued = await worker_main.catch_up_missed_runs({"redis": redis})
-    assert "purge_expired_sessions" in queued and "recover_graph_work" not in queued  # startup jobs excluded
+    assert (
+        "purge_expired_sessions" in queued and "recover_graph_work" not in queued
+    )  # startup jobs excluded
     args, kwargs = next(item for item in redis.enqueued if item[0][1] == "purge_expired_sessions")
-    assert args == (cron.RUN_CRON_FUNCTION, "purge_expired_sessions", False) and kwargs["_queue_name"] == cron.CRON_QUEUE and 0 <= kwargs["_defer_by"] < 30
+    assert (
+        args == (cron.RUN_CRON_FUNCTION, "purge_expired_sessions", False)
+        and kwargs["_queue_name"] == cron.CRON_QUEUE
+        and 0 <= kwargs["_defer_by"] < 30
+    )
 
 
 class ArqLikeRedis(FakeRedis):
@@ -182,24 +194,35 @@ async def test_wake_uses_unique_ids_and_is_debounced_by_flag() -> None:
     assert await cron.wake(redis, "dispatch_pending_work")
     args, kwargs = redis.enqueued[0]
     assert args == (cron.RUN_CRON_FUNCTION, "dispatch_pending_work", True)
-    assert kwargs["_job_id"].startswith("wake:dispatch_pending_work:") and kwargs["_queue_name"] == cron.CRON_QUEUE
-    assert not await cron.wake(redis, "dispatch_pending_work")  # burst coalesced while the wake is pending
+    assert (
+        kwargs["_job_id"].startswith("wake:dispatch_pending_work:")
+        and kwargs["_queue_name"] == cron.CRON_QUEUE
+    )
+    assert not await cron.wake(
+        redis, "dispatch_pending_work"
+    )  # burst coalesced while the wake is pending
 
     class Broken(FakeRedis):
         async def enqueue_job(self, *a: Any, **k: Any) -> object | None:
             raise OSError("down")
 
     broken = Broken()
-    assert not await cron.wake(broken, "x") and "cron:wake:x" not in broken.kv  # flag released on failure
+    assert (
+        not await cron.wake(broken, "x") and "cron:wake:x" not in broken.kv
+    )  # flag released on failure
 
 
 @pytest.mark.asyncio
 async def test_wake_soon_after_finished_or_failed_wake_still_runs() -> None:
     redis = ArqLikeRedis()
-    for _ in range(3):  # each previous wake finished AND kept a result (failed run under keep_result > 0)
+    for _ in range(
+        3
+    ):  # each previous wake finished AND kept a result (failed run under keep_result > 0)
         assert await cron.wake(redis, "dispatch_pending_work")
         job_id = next(iter(redis.queued))
-        await cron.clear_wake_flag(redis, "dispatch_pending_work")  # what run_cron_job does on start
+        await cron.clear_wake_flag(
+            redis, "dispatch_pending_work"
+        )  # what run_cron_job does on start
         redis.finish(job_id, keep_result=True)
     assert len(redis.enqueued) == 3 and len({k["_job_id"] for _, k in redis.enqueued}) == 3
 
@@ -263,7 +286,10 @@ def test_notify_on_commit_registers_one_listener_pair_and_survives_rollback() ->
 
     session = Session(create_engine("sqlite://"))
     # Class-level Session listeners (e.g. modules.chat.signals) also appear in dispatch; count only ours.
-    commit_base, rollback_base = len(session.dispatch.after_commit), len(session.dispatch.after_soft_rollback)
+    commit_base, rollback_base = (
+        len(session.dispatch.after_commit),
+        len(session.dispatch.after_soft_rollback),
+    )
     cron.set_wake_hook(hook)
     try:
         cron.notify_on_commit(session, "a")

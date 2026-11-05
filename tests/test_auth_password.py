@@ -26,7 +26,9 @@ class DeletingSession(MemorySession):
         if not str(statement).startswith("DELETE FROM auth_session"):
             return await super().execute(statement, _params)
         params = statement.compile().params
-        for key in [k for k, v in self.store.sessions.items() if v.owner_id == params["owner_id_1"]]:
+        for key in [
+            k for k, v in self.store.sessions.items() if v.owner_id == params["owner_id_1"]
+        ]:
             del self.store.sessions[key]
         return type("R", (), {"rowcount": 1})()
 
@@ -44,7 +46,9 @@ async def _login(store: MemoryAuthStore):
     client = AsyncClient(transport=ASGITransport(app=app), base_url=ORIGIN)
     csrf = (await client.get("/api/v1/auth/csrf")).json()["csrfToken"]
     login = await client.post(
-        "/api/v1/auth/login", headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}, json={"password": OLD}
+        "/api/v1/auth/login",
+        headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+        json={"password": OLD},
     )
     return client, login.json()["csrfToken"]
 
@@ -58,9 +62,15 @@ async def test_change_password_rejections_leave_password_unchanged() -> None:
     store = MemoryAuthStore()
     client, csrf = await _login(store)
     headers = {"Origin": ORIGIN, "X-CSRF-Token": csrf}
-    assert (await client.post("/api/v1/auth/password", headers={"Origin": ORIGIN}, json=_body())).status_code == 403
-    assert (await client.post("/api/v1/auth/password", headers={"X-CSRF-Token": csrf}, json=_body())).status_code == 403
-    wrong = await client.post("/api/v1/auth/password", headers=headers, json=_body(current="nope-nope-nope"))
+    assert (
+        await client.post("/api/v1/auth/password", headers={"Origin": ORIGIN}, json=_body())
+    ).status_code == 403
+    assert (
+        await client.post("/api/v1/auth/password", headers={"X-CSRF-Token": csrf}, json=_body())
+    ).status_code == 403
+    wrong = await client.post(
+        "/api/v1/auth/password", headers=headers, json=_body(current="nope-nope-nope")
+    )
     assert wrong.status_code == 403
     assert "nope-nope-nope" not in wrong.text
     weak = await client.post("/api/v1/auth/password", headers=headers, json=_body(new="short"))
@@ -74,7 +84,10 @@ async def test_change_password_rotates_session_and_swaps_credentials() -> None:
     client, csrf = await _login(store)
     old_cookie = client.cookies["bbd_session"]
     store.sessions["other"] = AuthSession(
-        token_hash="other", owner_id=1, csrf_hash="x", expires_at=datetime.now(UTC) + timedelta(hours=1)
+        token_hash="other",
+        owner_id=1,
+        csrf_hash="x",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
     )
     response = await client.post(
         "/api/v1/auth/password", headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}, json=_body()
@@ -89,12 +102,18 @@ async def test_change_password_rotates_session_and_swaps_credentials() -> None:
     assert not verify_password(store.owner.password_hash, OLD)
     assert verify_password(store.owner.password_hash, NEW)
     # Old cookie alone is dead; the new password logs in and the old one does not.
-    stale = AsyncClient(transport=client._transport, base_url=ORIGIN, cookies={"bbd_session": old_cookie})
+    stale = AsyncClient(
+        transport=client._transport, base_url=ORIGIN, cookies={"bbd_session": old_cookie}
+    )
     assert (await stale.get("/api/v1/auth/session")).status_code == 401
     csrf2 = (await client.get("/api/v1/auth/csrf")).json()["csrfToken"]
     h = {"Origin": ORIGIN, "X-CSRF-Token": csrf2}
-    assert (await client.post("/api/v1/auth/login", headers=h, json={"password": OLD})).status_code == 401
-    assert (await client.post("/api/v1/auth/login", headers=h, json={"password": NEW})).status_code == 200
+    assert (
+        await client.post("/api/v1/auth/login", headers=h, json={"password": OLD})
+    ).status_code == 401
+    assert (
+        await client.post("/api/v1/auth/login", headers=h, json={"password": NEW})
+    ).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -102,7 +121,9 @@ async def test_change_password_rejects_unchanged_password() -> None:
     store = MemoryAuthStore()
     client, csrf = await _login(store)
     response = await client.post(
-        "/api/v1/auth/password", headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}, json=_body(new=OLD)
+        "/api/v1/auth/password",
+        headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+        json=_body(new=OLD),
     )
     assert response.status_code == 422
     assert "New password must differ from the current password" in response.text
@@ -116,7 +137,11 @@ async def test_change_password_is_rate_limited(monkeypatch: pytest.MonkeyPatch) 
     client, csrf = await _login(MemoryAuthStore())
     headers = {"Origin": ORIGIN, "X-CSRF-Token": csrf}
     codes = [
-        (await client.post("/api/v1/auth/password", headers=headers, json=_body(current="nope-nope-nope"))).status_code
+        (
+            await client.post(
+                "/api/v1/auth/password", headers=headers, json=_body(current="nope-nope-nope")
+            )
+        ).status_code
         for _ in range(6)
     ]
     assert codes[:5] == [403] * 5
@@ -127,7 +152,9 @@ def test_password_route_uses_account_write_not_owner_write() -> None:
     """Any active account (not only user 1) may change its own password: account-write CSRF/Origin gate."""
     from core.auth.dependencies import require_account_write
 
-    route = next(r for r in auth_routes.router.routes if getattr(r, "path", "").endswith("/password"))
+    route = next(
+        r for r in auth_routes.router.routes if getattr(r, "path", "").endswith("/password")
+    )
     assert require_account_write in {d.call for d in route.dependant.dependencies}
 
 
@@ -141,7 +168,9 @@ async def test_password_change_for_disabled_account_is_401(monkeypatch: pytest.M
 
     monkeypatch.setattr(auth_routes, "get_active_account", inactive)
     resp = await client.post(
-        "/api/v1/auth/password", headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}, json=_body(),
+        "/api/v1/auth/password",
+        headers={"Origin": ORIGIN, "X-CSRF-Token": csrf},
+        json=_body(),
     )
     assert resp.status_code == 401
     assert verify_password(store.owner.password_hash, OLD)

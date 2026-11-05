@@ -57,6 +57,11 @@ class ToolPolicy:
         # The registry alone supplies this result after its async durable check; caller grants stay inert.
         if definition.risk == ToolRisk.READ_ONLY and not definition.confirmation_required:
             return PolicyDecision(True, False, "Read-only tool automatically permitted by policy.")
-        if definition.risk in {ToolRisk.EXTERNAL_WRITE, ToolRisk.INTERNAL_WRITE} and trusted_approval:
-            return PolicyDecision(True, False, "Exact action has a verified durable owner approval.")
+        if (
+            definition.risk in {ToolRisk.EXTERNAL_WRITE, ToolRisk.INTERNAL_WRITE}
+            and trusted_approval
+        ):
+            return PolicyDecision(
+                True, False, "Exact action has a verified durable owner approval."
+            )
         return PolicyDecision(False, True, "This effect has no matching verified durable approval.")

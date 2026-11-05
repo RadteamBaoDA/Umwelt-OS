@@ -93,7 +93,9 @@ class TestAgentRunSchemas:
             token_usage_unknown=False,
             activities=[
                 AgentActivity(kind="step", status="starting", created_at=now),
-                AgentActivity(kind="tool", status="succeeded", tool_name="search.find", created_at=now),
+                AgentActivity(
+                    kind="tool", status="succeeded", tool_name="search.find", created_at=now
+                ),
             ],
             created_at=now,
             updated_at=now,

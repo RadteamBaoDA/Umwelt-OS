@@ -17,7 +17,13 @@ def test_every_measurement_provider_has_catalog_entry() -> None:
 
 def test_pinned_entries() -> None:
     """Pinned ids and keying match the adapters."""
-    assert [m.id for m in provider_metrics("alpha_vantage").metrics] == ["open", "high", "low", "close", "volume"]
+    assert [m.id for m in provider_metrics("alpha_vantage").metrics] == [
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]
     assert provider_metrics("alpha_vantage").symbol_keyed
     assert not provider_metrics("noaa_kp").symbol_keyed
     assert [m.id for m in provider_metrics("noaa_kp").metrics] == ["kp_index"]
@@ -42,14 +48,22 @@ def test_fred_catalog_matches_adapter_emission() -> None:
 def test_oecd_cli_is_keyed_by_country() -> None:
     """OECD CLI emits five countries; the catalog keys them by ISO area symbol."""
     entry = provider_metrics("oecd_cli")
-    assert entry.symbol_keyed and set(entry.suggested_symbols) == {"USA", "CHN", "JPN", "DEU", "GBR"}
+    assert entry.symbol_keyed and set(entry.suggested_symbols) == {
+        "USA",
+        "CHN",
+        "JPN",
+        "DEU",
+        "GBR",
+    }
 
 
 def test_binance_suggestions_are_adapter_pairs() -> None:
     """Binance writes the trading pair (e.g. BTCUSDT) as symbol, not the base asset."""
     from modules.connectors.providers.crypto import DEFAULT_BINANCE_PAIRS
 
-    assert set(provider_metrics("binance").suggested_symbols) == {pair[0] for pair in DEFAULT_BINANCE_PAIRS}
+    assert set(provider_metrics("binance").suggested_symbols) == {
+        pair[0] for pair in DEFAULT_BINANCE_PAIRS
+    }
 
 
 def test_default_lookback_covers_two_observation_periods() -> None:
@@ -61,7 +75,9 @@ def test_default_lookback_covers_two_observation_periods() -> None:
             assert entry.cadence_days is None, provider
             continue
         assert entry.cadence_days is not None, provider
-        assert (entry.default_lookback_days or DEFAULT_LOOKBACK_DAYS) >= 2 * entry.cadence_days, provider
+        assert (entry.default_lookback_days or DEFAULT_LOOKBACK_DAYS) >= 2 * entry.cadence_days, (
+            provider
+        )
 
 
 def test_slow_series_declare_wide_defaults() -> None:

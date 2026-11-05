@@ -13,6 +13,7 @@ CollectionStatus = Literal["queued", "running", "succeeded", "no_changes", "fail
 
 class CollectionRequestRead(BaseModel):
     """Expose a request's durable state; ``succeeded`` means data was accepted, not yet indexed."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID
@@ -24,6 +25,7 @@ class CollectionRequestRead(BaseModel):
 
 class CollectionAdmissionRequest(BaseModel):
     """Bind a managed n8n admission call to one source, revision and backend revision."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     source_generation: int = Field(ge=1)
@@ -35,6 +37,7 @@ class CollectionAdmissionRequest(BaseModel):
 
 class CollectionAdmissionRead(BaseModel):
     """Return the request and fenced admission token that later managed calls must carry."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID
@@ -45,6 +48,7 @@ class CollectionAdmissionRead(BaseModel):
 
 class CollectionRequestRef(BaseModel):
     """Identify one admitted attempt; authority is proven by the locked request and slot rows, never by this value."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     request_id: UUID

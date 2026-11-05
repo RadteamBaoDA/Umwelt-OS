@@ -31,8 +31,12 @@ class _EpochRow(Protocol):
 
 
 async def admit(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
-    lock: bool = False, expected: AccessFence | None = None,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    lock: bool = False,
+    expected: AccessFence | None = None,
 ) -> AccessFence:
     """Require owner scope and capture or lock authorization before any Agents query or lock.
 
@@ -47,10 +51,15 @@ async def admit(
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:
         return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            scope=scope,
+            expected=expected,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
@@ -64,11 +73,13 @@ def run_epoch(row: _EpochRow) -> tuple[InternalJobScope, AccessFence] | None:
     if row.membership_revision is None or row.configuration_revision is None:
         return None
     scope = InternalJobScope(
-        workspace_id=row.workspace_id, actor_user_id=row.owner_id,
+        workspace_id=row.workspace_id,
+        actor_user_id=row.owner_id,
         membership_revision=row.membership_revision,
     )
     original = AccessFence(
-        workspace_id=row.workspace_id, user_id=row.owner_id,
+        workspace_id=row.workspace_id,
+        user_id=row.owner_id,
         membership_revision=row.membership_revision,
         configuration_revision=row.configuration_revision,
     )
@@ -76,7 +87,11 @@ def run_epoch(row: _EpochRow) -> tuple[InternalJobScope, AccessFence] | None:
 
 
 async def admit_run(
-    session: AsyncSession, row: _EpochRow, *, multi_workspace_enabled: bool, lock: bool = False,
+    session: AsyncSession,
+    row: _EpochRow,
+    *,
+    multi_workspace_enabled: bool,
+    lock: bool = False,
 ) -> tuple[InternalJobScope, AccessFence] | None:
     """Admit a run's captured scope and require the live fence to equal the original epoch.
 
@@ -89,8 +104,11 @@ async def admit_run(
         return None
     scope, original = epoch
     fence = await admit(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        lock=lock, expected=original if lock else None,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=lock,
+        expected=original if lock else None,
     )
     if fence != original:
         raise ConflictError("Workspace access fence changed")
@@ -101,15 +119,24 @@ def effective_workspace_modules(lifecycle: Any) -> Mapping[str, Any]:
     """Apply a workspace's explicit module disables to the build-time module map."""
     from core.modules import effective_modules, register_modules
 
-    return effective_modules({item.id for item in lifecycle.modules if item.explicitly_disabled}, register_modules())
+    return effective_modules(
+        {item.id for item in lifecycle.modules if item.explicitly_disabled}, register_modules()
+    )
 
 
 async def read_workspace_modules(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> Mapping[str, Any]:
     """Per-call module map for ``ToolRegistry.list_tools(modules=...)`` catalogs."""
     from modules.settings.public import read_module_availability
 
-    return effective_workspace_modules(await read_module_availability(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    ))
+    return effective_workspace_modules(
+        await read_module_availability(
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    )

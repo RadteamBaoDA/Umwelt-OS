@@ -51,6 +51,7 @@ NOTES = (
 @dataclass(frozen=True)
 class SeedReport:
     """Report fictional seed counts and whether this invocation initialized owner-scoped fixtures."""
+
     created: int
     existing: int
     p08_seeded: bool
@@ -58,7 +59,9 @@ class SeedReport:
     skipped: int
 
 
-async def _resolve_seed_scope(session: AsyncSession, settings: Settings) -> tuple[int, InternalJobScope]:
+async def _resolve_seed_scope(
+    session: AsyncSession, settings: Settings
+) -> tuple[int, InternalJobScope]:
     """Resolve the configured demo owner and their default workspace as an internal job scope.
 
     Reads only (inside the caller's transaction). Raises ``RuntimeError`` when the owner has no
@@ -67,12 +70,15 @@ async def _resolve_seed_scope(session: AsyncSession, settings: Settings) -> tupl
     """
     owner_id = await get_demo_owner_id(session)
     account = await get_active_account(
-        session, owner_id, multi_workspace_enabled=settings.multi_workspace_enabled,
+        session,
+        owner_id,
+        multi_workspace_enabled=settings.multi_workspace_enabled,
     )
     if account is None:
         raise RuntimeError("Demo seeding requires an active owner account")
     workspace_owner = await resolve_workspace_owner_context(
-        session, account.default_workspace_id,
+        session,
+        account.default_workspace_id,
         multi_workspace_enabled=settings.multi_workspace_enabled,
     )
     if workspace_owner is None or workspace_owner.user_id != owner_id:
@@ -85,7 +91,10 @@ async def _resolve_seed_scope(session: AsyncSession, settings: Settings) -> tupl
 
 
 async def _seed_p08(
-    session: AsyncSession, owner_id: int, scope: InternalJobScope, settings: Settings,
+    session: AsyncSession,
+    owner_id: int,
+    scope: InternalJobScope,
+    settings: Settings,
 ) -> tuple[bool, int, int]:
     """Seed P08 goals/tasks/topics once per workspace; return ``(seeded, created, existing)``.
 
@@ -93,48 +102,74 @@ async def _seed_p08(
     transaction, so deleted or edited fixtures are never resurrected.
     """
     seeded = await claim_demo_seed(
-        session, owner_id, P08_DEMO_NAMESPACE, workspace_id=scope.workspace_id,
+        session,
+        owner_id,
+        P08_DEMO_NAMESPACE,
+        workspace_id=scope.workspace_id,
     )
     created = 0
     existing = 0
     if seeded:
         flag = settings.multi_workspace_enabled
         goals_created, goals_existing = await ensure_demo_goals(
-            session, scope=scope, multi_workspace_enabled=flag,
+            session,
+            scope=scope,
+            multi_workspace_enabled=flag,
         )
         tasks_created, tasks_existing = await ensure_demo_tasks(
-            session, scope=scope, multi_workspace_enabled=flag,
+            session,
+            scope=scope,
+            multi_workspace_enabled=flag,
         )
         topics_created, topics_existing = await ensure_demo_topics(
-            session, scope=scope, multi_workspace_enabled=flag,
+            session,
+            scope=scope,
+            multi_workspace_enabled=flag,
         )
         created = goals_created + tasks_created + topics_created
         existing = goals_existing + tasks_existing + topics_existing
         await record_demo_seed_receipt(
-            session, owner_id, P08_DEMO_NAMESPACE, workspace_id=scope.workspace_id,
+            session,
+            owner_id,
+            P08_DEMO_NAMESPACE,
+            workspace_id=scope.workspace_id,
         )
     return seeded, created, existing
 
 
 async def _seed_p10(
-    session: AsyncSession, owner_id: int, scope: InternalJobScope, settings: Settings,
+    session: AsyncSession,
+    owner_id: int,
+    scope: InternalJobScope,
+    settings: Settings,
 ) -> int:
     """Seed the disabled P10 automation examples once per workspace; return the created count."""
     created = 0
-    if await claim_demo_seed(session, owner_id, P10_DEMO_NAMESPACE, workspace_id=scope.workspace_id):
+    if await claim_demo_seed(
+        session, owner_id, P10_DEMO_NAMESPACE, workspace_id=scope.workspace_id
+    ):
         # Disabled fictional automation examples; the receipt stops edited/deleted ones returning.
         created = await ensure_demo_automations(
-            session, register_modules(), settings,
-            scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+            session,
+            register_modules(),
+            settings,
+            scope=scope,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
         )
         await record_demo_seed_receipt(
-            session, owner_id, P10_DEMO_NAMESPACE, workspace_id=scope.workspace_id,
+            session,
+            owner_id,
+            P10_DEMO_NAMESPACE,
+            workspace_id=scope.workspace_id,
         )
     return created
 
 
 async def _seed_p12(
-    session: AsyncSession, owner_id: int, scope: InternalJobScope, settings: Settings,
+    session: AsyncSession,
+    owner_id: int,
+    scope: InternalJobScope,
+    settings: Settings,
 ) -> tuple[bool, int, int, int]:
     """Seed P12 entities/relationships/events/article/chat once; return ``(seeded, created, existing, skipped)``.
 
@@ -144,7 +179,10 @@ async def _seed_p12(
     """
     flag = settings.multi_workspace_enabled
     seeded = await claim_demo_seed(
-        session, owner_id, P12_DEMO_NAMESPACE, workspace_id=scope.workspace_id,
+        session,
+        owner_id,
+        P12_DEMO_NAMESPACE,
+        workspace_id=scope.workspace_id,
     )
     created = 0
     existing = 0
@@ -156,27 +194,42 @@ async def _seed_p12(
             ensure_demo_events,
         ):
             helper_created, helper_existing = await helper(
-                session, scope=scope, multi_workspace_enabled=flag,
+                session,
+                scope=scope,
+                multi_workspace_enabled=flag,
             )
             created += helper_created
             existing += helper_existing
         article_created, article_existing, article_skipped = await documents.ensure_demo_article(
-            session, scope=scope, multi_workspace_enabled=flag,
+            session,
+            scope=scope,
+            multi_workspace_enabled=flag,
         )
-        conversation_created, conversation_existing, conversation_skipped = await ensure_demo_conversation(
-            session, scope=scope, multi_workspace_enabled=flag,
+        (
+            conversation_created,
+            conversation_existing,
+            conversation_skipped,
+        ) = await ensure_demo_conversation(
+            session,
+            scope=scope,
+            multi_workspace_enabled=flag,
         )
         created += article_created + conversation_created
         existing += article_existing + conversation_existing
         skipped += article_skipped + conversation_skipped
         await record_demo_seed_receipt(
-            session, owner_id, P12_DEMO_NAMESPACE, workspace_id=scope.workspace_id,
+            session,
+            owner_id,
+            P12_DEMO_NAMESPACE,
+            workspace_id=scope.workspace_id,
         )
     return seeded, created, existing, skipped
 
 
 def _add_demo_notes(
-    session: AsyncSession, scope: InternalJobScope, document_ids: tuple[UUID, ...],
+    session: AsyncSession,
+    scope: InternalJobScope,
+    document_ids: tuple[UUID, ...],
 ) -> None:
     """Stage the fictional Phase 1 note documents and their first versions (no flush/commit)."""
     for (key, title, content), document_id in zip(NOTES, document_ids, strict=True):
@@ -221,10 +274,16 @@ async def seed_demo(session: AsyncSession) -> SeedReport:
         p08_seeded, p08_created, p08_existing = await _seed_p08(session, owner_id, scope, settings)
         p08_created += await _seed_p10(session, owner_id, scope, settings)
         p12_seeded, p12_created, p12_existing, p12_skipped = await _seed_p12(
-            session, owner_id, scope, settings,
+            session,
+            owner_id,
+            scope,
+            settings,
         )
         inserted = await sources.ensure_demo_source(
-            session, SOURCE_ID, DEMO_NAMESPACE, scope=scope,
+            session,
+            SOURCE_ID,
+            DEMO_NAMESPACE,
+            scope=scope,
             multi_workspace_enabled=settings.multi_workspace_enabled,
         )
         if not inserted:

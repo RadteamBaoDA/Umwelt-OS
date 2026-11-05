@@ -1,4 +1,5 @@
 """OpenRouter model browse: allowlisted filter schema, query-parameter mapping and bounded response projection."""
+
 import re
 from typing import Annotated, Any, Literal
 
@@ -13,13 +14,34 @@ _Param = Annotated[str, StringConstraints(pattern=r"^[a-z_]{1,40}$")]
 _Author = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")]
 _Provider = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")]
 _Endpoint = Literal[
-    "/api/v1/chat/completions", "/api/v1/completions", "/api/v1/messages", "/api/v1/responses", "/api/v1/embeddings",
-    "/api/v1/rerank", "/api/alpha/decisions", "/api/alpha/extractions", "/api/v1/videos", "/api/v1/audio/speech",
-    "/api/v1/audio/transcriptions", "/api/v1/images", "/api/v1/batches"]
+    "/api/v1/chat/completions",
+    "/api/v1/completions",
+    "/api/v1/messages",
+    "/api/v1/responses",
+    "/api/v1/embeddings",
+    "/api/v1/rerank",
+    "/api/alpha/decisions",
+    "/api/alpha/extractions",
+    "/api/v1/videos",
+    "/api/v1/audio/speech",
+    "/api/v1/audio/transcriptions",
+    "/api/v1/images",
+    "/api/v1/batches",
+]
 _Sort = Literal[
-    "most-popular", "newest", "top-weekly", "pricing-low-to-high", "pricing-high-to-low", "context-high-to-low",
-    "throughput-high-to-low", "latency-low-to-high", "intelligence-high-to-low", "coding-high-to-low",
-    "agentic-high-to-low", "design-arena-elo-high-to-low"]
+    "most-popular",
+    "newest",
+    "top-weekly",
+    "pricing-low-to-high",
+    "pricing-high-to-low",
+    "context-high-to-low",
+    "throughput-high-to-low",
+    "latency-low-to-high",
+    "intelligence-high-to-low",
+    "coding-high-to-low",
+    "agentic-high-to-low",
+    "design-arena-elo-high-to-low",
+]
 _Price = Annotated[float, Field(ge=0, le=10_000)]
 _Days = Annotated[int, Field(ge=0, le=36_500)]
 _Index = Annotated[float, Field(ge=0, le=1000)]
@@ -28,13 +50,41 @@ _Rate = Annotated[float, Field(ge=0, le=1)]
 
 class OpenRouterModelFilters(BaseModel):
     """Allowlisted OpenRouter ``/models`` filters; unknown keys, bad enums, oversized lists and inverted ranges are 422."""
+
     model_config = ConfigDict(extra="forbid")
 
-    output_modalities: Literal["all", "text", "image", "embeddings", "audio", "video", "rerank", "decisions",
-                               "speech", "transcription"] = "all"
-    input_modalities: list[Literal["text", "image", "audio", "file"]] = Field(default_factory=list, max_length=4)
-    category: Literal["programming", "roleplay", "marketing", "marketing/seo", "technology", "science", "translation",
-                      "legal", "finance", "health", "trivia", "academia"] | None = None
+    output_modalities: Literal[
+        "all",
+        "text",
+        "image",
+        "embeddings",
+        "audio",
+        "video",
+        "rerank",
+        "decisions",
+        "speech",
+        "transcription",
+    ] = "all"
+    input_modalities: list[Literal["text", "image", "audio", "file"]] = Field(
+        default_factory=list, max_length=4
+    )
+    category: (
+        Literal[
+            "programming",
+            "roleplay",
+            "marketing",
+            "marketing/seo",
+            "technology",
+            "science",
+            "translation",
+            "legal",
+            "finance",
+            "health",
+            "trivia",
+            "academia",
+        ]
+        | None
+    ) = None
     supported_parameters: list[_Param] = Field(default_factory=list, max_length=20)
     sort: _Sort = "newest"
     q: str = Field("", max_length=100)
@@ -110,7 +160,11 @@ def _price(value: Any) -> str | None:
 
 def _modalities(value: Any) -> list[str]:
     """Reduce a modality list to the known set, sorted and unique."""
-    return sorted({m for m in value if isinstance(m, str) and m in _MODALITIES}) if isinstance(value, list) else []
+    return (
+        sorted({m for m in value if isinstance(m, str) and m in _MODALITIES})
+        if isinstance(value, list)
+        else []
+    )
 
 
 def parse_openrouter_models(payload: Any, limit: int) -> tuple[list[dict[str, Any]], int, bool]:
@@ -145,21 +199,30 @@ def parse_openrouter_page(payload: Any, limit: int) -> tuple[list[dict[str, Any]
         pricing = item.get("pricing") if isinstance(item.get("pricing"), dict) else {}
         name = item.get("name")
         params = item.get("supported_parameters")
-        models.append({
-            "id": model_id,
-            "name": name if isinstance(name, str) and len(name) <= 200 else model_id,
-            "created": _opt_int(item.get("created")),
-            "context_length": _opt_int(item.get("context_length")),
-            "input_modalities": _modalities(arch.get("input_modalities")),
-            "output_modalities": _modalities(arch.get("output_modalities")),
-            "pricing_prompt": _price(pricing.get("prompt")),
-            "pricing_completion": _price(pricing.get("completion")),
-            "supported_parameters": [p for p in params if isinstance(p, str) and _PARAM.fullmatch(p)][:64]
-            if isinstance(params, list) else [],
-        })
+        models.append(
+            {
+                "id": model_id,
+                "name": name if isinstance(name, str) and len(name) <= 200 else model_id,
+                "created": _opt_int(item.get("created")),
+                "context_length": _opt_int(item.get("context_length")),
+                "input_modalities": _modalities(arch.get("input_modalities")),
+                "output_modalities": _modalities(arch.get("output_modalities")),
+                "pricing_prompt": _price(pricing.get("prompt")),
+                "pricing_completion": _price(pricing.get("completion")),
+                "supported_parameters": [
+                    p for p in params if isinstance(p, str) and _PARAM.fullmatch(p)
+                ][:64]
+                if isinstance(params, list)
+                else [],
+            }
+        )
         if len(models) >= limit:
             break
     total = body.get("total_count")
-    total_count = min(max(total, 0), _MAX_TOTAL) if isinstance(total, int) and not isinstance(total, bool) else len(models)
+    total_count = (
+        min(max(total, 0), _MAX_TOTAL)
+        if isinstance(total, int) and not isinstance(total, bool)
+        else len(models)
+    )
     links = body.get("links")
     return models, total_count, bool(isinstance(links, dict) and links.get("next")), consumed

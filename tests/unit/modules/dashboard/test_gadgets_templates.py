@@ -11,7 +11,9 @@ from modules.dashboard import gadgets, public
 def test_validator_rules() -> None:
     """Wrong shape, extra single sources and sources on sourceless renderers are rejected."""
     gadgets.validate_renderer_sources("provider_observation", [("usgs", "api")])
-    gadgets.validate_renderer_sources("news_feed", [("bbc_world", "rss"), (None, "rss"), ("hn_top", "api")])
+    gadgets.validate_renderer_sources(
+        "news_feed", [("bbc_world", "rss"), (None, "rss"), ("hn_top", "api")]
+    )
     gadgets.validate_renderer_sources("tasks", [])
     with pytest.raises(ValueError, match="provider_observation"):
         gadgets.validate_renderer_sources("provider_observation", [("github", "api")])
@@ -36,14 +38,18 @@ def test_catalog_read() -> None:
 @pytest.mark.asyncio
 async def test_selected_source_check_rejects_incompatible(monkeypatch: pytest.MonkeyPatch) -> None:
     """The create/patch guard maps fetched source providers through the renderer rule."""
+
     async def fake(*_a: object, **_k: object) -> tuple[SimpleNamespace, ...]:
         return (SimpleNamespace(provider="bbc_world", type="rss"),)
 
     monkeypatch.setattr(public.sources, "get_gadget_sources", fake)
-    await public._validate_selected_sources(None, "news_feed", [uuid4()], scope=None, multi_workspace_enabled=False)  # type: ignore[arg-type]
+    await public._validate_selected_sources(
+        None, "news_feed", [uuid4()], scope=None, multi_workspace_enabled=False
+    )  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="provider_observation"):
         await public._validate_selected_sources(
-            None, "provider_observation", [uuid4()], scope=None, multi_workspace_enabled=False)  # type: ignore[arg-type]
+            None, "provider_observation", [uuid4()], scope=None, multi_workspace_enabled=False
+        )  # type: ignore[arg-type]
 
 
 def test_watch_rules_accepts_any_sources() -> None:
@@ -97,5 +103,7 @@ async def test_preset_apply_validates_slot_sources(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(public, "_validate_selected_sources", fake_validate)
     payload = SimpleNamespace(slot_sources={slot.slot_id: [uuid4()]}, target_dashboard_id=None)
     with pytest.raises(ValueError, match="incompatible"):
-        await public.apply_preset(None, preset.id, payload, scope=None, multi_workspace_enabled=False)  # type: ignore[arg-type]
+        await public.apply_preset(
+            None, preset.id, payload, scope=None, multi_workspace_enabled=False
+        )  # type: ignore[arg-type]
     assert seen[0][0] == slot.renderer

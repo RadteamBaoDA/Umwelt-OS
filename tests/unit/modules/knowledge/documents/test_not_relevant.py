@@ -25,13 +25,18 @@ def _interaction_session(row: DocumentInteraction | None) -> AsyncMock:
 
 async def _patch(session: AsyncMock, version_id, **fields):  # type: ignore[no-untyped-def]
     projection = SimpleNamespace(version_number=1, document_version_id=version_id)
-    with patch_documents("get_news_document_projection", AsyncMock(return_value=projection)), \
-            patch_documents("_admit_document_scope", AsyncMock(return_value=FENCE)), \
-            patch_documents("commit_with_replay", AsyncMock()), \
-            patch.object(public.sources, "lock_source_for_document", AsyncMock()):
+    with (
+        patch_documents("get_news_document_projection", AsyncMock(return_value=projection)),
+        patch_documents("_admit_document_scope", AsyncMock(return_value=FENCE)),
+        patch_documents("commit_with_replay", AsyncMock()),
+        patch.object(public.sources, "lock_source_for_document", AsyncMock()),
+    ):
         return await public.set_gadget_document_interaction(
-            session, document_id=uuid4(), version_number=1,
-            payload=GadgetDocumentInteractionPatch(**fields), **SCOPE_KW,
+            session,
+            document_id=uuid4(),
+            version_number=1,
+            payload=GadgetDocumentInteractionPatch(**fields),
+            **SCOPE_KW,
         )
 
 
@@ -67,7 +72,9 @@ async def test_unhide_deletes_empty_row_but_keeps_other_state() -> None:
     # Unhide twice is a no-op, not an error.
     await _patch(_interaction_session(None), version_id, dismissed=False)
 
-    saved = DocumentInteraction(owner_id=1, document_version_id=version_id, bookmarked_at=now, dismissed_at=now)
+    saved = DocumentInteraction(
+        owner_id=1, document_version_id=version_id, bookmarked_at=now, dismissed_at=now
+    )
     kept = _interaction_session(saved)
     result = await _patch(kept, version_id, dismissed=False)
     assert result is not None and result.bookmarked_at == now and result.dismissed_at is None
@@ -81,18 +88,30 @@ def _projection(version_id):  # type: ignore[no-untyped-def]
 async def _feed(rows: list[DocumentInteraction], versions: list, **kwargs):  # type: ignore[no-untyped-def]
     session = AsyncMock()
     session.scalars = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=rows)))
-    with patch_documents("list_news_document_projections", AsyncMock(return_value=([_projection(v) for v in versions], None))), \
-         patch_documents("_as_gadget_document_projection", lambda item, interaction=None: item.document_version_id), \
-         patch_documents("_admit_document_scope", AsyncMock(return_value=FENCE)), \
-         patch_documents("GadgetDocumentProjectionList", lambda **kw: SimpleNamespace(**kw)):
-        page = await public.list_gadget_document_projections(session, source_ids=(uuid4(),), **SCOPE_KW, **kwargs)
+    with (
+        patch_documents(
+            "list_news_document_projections",
+            AsyncMock(return_value=([_projection(v) for v in versions], None)),
+        ),
+        patch_documents(
+            "_as_gadget_document_projection",
+            lambda item, interaction=None: item.document_version_id,
+        ),
+        patch_documents("_admit_document_scope", AsyncMock(return_value=FENCE)),
+        patch_documents("GadgetDocumentProjectionList", lambda **kw: SimpleNamespace(**kw)),
+    ):
+        page = await public.list_gadget_document_projections(
+            session, source_ids=(uuid4(),), **SCOPE_KW, **kwargs
+        )
     return page.items
 
 
 @pytest.mark.asyncio
 async def test_feed_excludes_hidden_unless_requested() -> None:
     hidden, shown = uuid4(), uuid4()
-    rows = [DocumentInteraction(owner_id=1, document_version_id=hidden, dismissed_at=datetime.now(UTC))]
+    rows = [
+        DocumentInteraction(owner_id=1, document_version_id=hidden, dismissed_at=datetime.now(UTC))
+    ]
     assert await _feed(rows, [hidden, shown]) == [shown]
     assert await _feed(rows, [hidden, shown], include_dismissed=True) == [hidden, shown]
 
@@ -103,18 +122,30 @@ async def test_version_export_maps_interaction_fields_and_scopes_join() -> None:
     captured: list[str] = []
     read_at, saved_at, hidden_at = (datetime(2026, 1, d, tzinfo=UTC) for d in (1, 2, 3))
     columns = {
-        "version_id": uuid4(), "document_id": uuid4(), "source_id": uuid4(), "source_status": "active",
-        "source_generation": 1, "version_number": 1, "document_current_version": 1,
-        "version_content": "x", "version_observed_at": read_at, "version_created_at": read_at,
-        "provider_id": None, "document_created_at": read_at, "document_updated_at": read_at,
-        "version_content_hash": "a" * 64, "interaction_read_at": read_at,
-        "interaction_bookmarked_at": saved_at, "interaction_dismissed_at": hidden_at,
+        "version_id": uuid4(),
+        "document_id": uuid4(),
+        "source_id": uuid4(),
+        "source_status": "active",
+        "source_generation": 1,
+        "version_number": 1,
+        "document_current_version": 1,
+        "version_content": "x",
+        "version_observed_at": read_at,
+        "version_created_at": read_at,
+        "provider_id": None,
+        "document_created_at": read_at,
+        "document_updated_at": read_at,
+        "version_content_hash": "a" * 64,
+        "interaction_read_at": read_at,
+        "interaction_bookmarked_at": saved_at,
+        "interaction_dismissed_at": hidden_at,
     }
 
     class _Result:
         def mappings(self):  # type: ignore[no-untyped-def]
             async def rows():  # type: ignore[no-untyped-def]
                 yield columns
+
             return rows()
 
         async def close(self) -> None:
@@ -125,9 +156,13 @@ async def test_version_export_maps_interaction_fields_and_scopes_join() -> None:
         return _Result()
 
     session.stream = stream
-    with patch_documents("_require_document_export_owner", AsyncMock(return_value=FENCE)), \
-         patch_documents("_document_export_count", AsyncMock(return_value=1)):
-        page = await public.export_page(session, owner_id=SCOPE.user_id, record_kind="versions", **SCOPE_KW)
+    with (
+        patch_documents("_require_document_export_owner", AsyncMock(return_value=FENCE)),
+        patch_documents("_document_export_count", AsyncMock(return_value=1)),
+    ):
+        page = await public.export_page(
+            session, owner_id=SCOPE.user_id, record_kind="versions", **SCOPE_KW
+        )
     item = page.items[0]
     assert (item.read_at, item.bookmarked_at, item.dismissed_at) == (read_at, saved_at, hidden_at)
     assert "document_interactions.owner_id =" in captured[0]
@@ -138,13 +173,27 @@ async def test_dashboard_projection_route_forwards_include_dismissed() -> None:
     from modules.knowledge.documents import routes
 
     forward = AsyncMock(return_value="page")
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        settings=SimpleNamespace(multi_workspace_enabled=False))))
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False))
+        )
+    )
     with patch.object(routes.public, "list_gadget_document_projections", forward):
         for flag in (False, True):
             await routes.list_dashboard_projections(
-                session=AsyncMock(), request=request, workspace=SCOPE, source_ids=[uuid4()],
-                channel_ids=None, limit=50, cursor=None, language="vi", since=None, include_dismissed=flag,
+                session=AsyncMock(),
+                request=request,
+                workspace=SCOPE,
+                source_ids=[uuid4()],
+                channel_ids=None,
+                limit=50,
+                cursor=None,
+                language="vi",
+                since=None,
+                include_dismissed=flag,
             )
             assert forward.await_args.kwargs["include_dismissed"] is flag
-            assert forward.await_args.kwargs["language"] == "vi" and forward.await_args.kwargs["scope"] == SCOPE
+            assert (
+                forward.await_args.kwargs["language"] == "vi"
+                and forward.await_args.kwargs["scope"] == SCOPE
+            )

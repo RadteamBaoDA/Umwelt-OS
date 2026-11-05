@@ -70,7 +70,9 @@ class QueryCollectedDataArgs(BaseModel):
     date_from: str | None = Field(default=None, max_length=64)
     date_to: str | None = Field(default=None, max_length=64)
     current_only: bool = True
-    aggregation: Literal["none", "latest", "avg", "min", "max", "sum", "count", "timeseries"] = "none"
+    aggregation: Literal["none", "latest", "avg", "min", "max", "sum", "count", "timeseries"] = (
+        "none"
+    )
     sql_query: str | None = Field(default=None, max_length=MAX_SQL_LENGTH)
     limit: int = Field(default=25, ge=1, le=MAX_DB_QUERY_ROWS)
 
@@ -146,7 +148,16 @@ def build_db_query_tool_spec() -> dict[str, Any]:
                     },
                     "aggregation": {
                         "type": "string",
-                        "enum": ["none", "latest", "avg", "min", "max", "sum", "count", "timeseries"],
+                        "enum": [
+                            "none",
+                            "latest",
+                            "avg",
+                            "min",
+                            "max",
+                            "sum",
+                            "count",
+                            "timeseries",
+                        ],
                         "description": "Optional SQL aggregation over observation values grouped by provider, metric, symbol, unit.",
                     },
                     "sql_query": {
@@ -169,7 +180,8 @@ def build_db_query_tool_spec() -> dict[str, Any]:
 
 
 def should_auto_enable_db_query(
-    prompt: str, retrieval_context: dict[str, Any] | None,
+    prompt: str,
+    retrieval_context: dict[str, Any] | None,
 ) -> bool:
     """Determine whether the database query tool should be enabled for this chat turn.
 
@@ -247,7 +259,9 @@ async def _allowed_sources(
 ) -> list[tuple[UUID, str | None, str]]:
     """Return ``(id, provider, name)`` for active workspace sources permitted in this chat turn."""
     stmt = select(
-        Source.id, Source.provider, Source.name,
+        Source.id,
+        Source.provider,
+        Source.name,
     ).where(
         Source.workspace_id == workspace_id,
         Source.status == "active",
@@ -283,9 +297,7 @@ async def _register_evidence_for_versions(
     by_version: dict[UUID, int] = {
         item.document_version_id: idx + 1 for idx, item in enumerate(existing_evidence)
     }
-    needed = [
-        ver_id for _doc_id, ver_id in version_pairs if ver_id not in by_version
-    ][:12]
+    needed = [ver_id for _doc_id, ver_id in version_pairs if ver_id not in by_version][:12]
     if not needed:
         return by_version
 
@@ -370,7 +382,9 @@ async def execute_db_query_tool(
         Compact JSON string summarizing the query results and their ``[n]`` citation indices.
     """
     current_fence = await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if current_fence != expected_access_fence:
         return json.dumps({"error": "workspace_access_changed", "rows": []})
@@ -443,11 +457,15 @@ def _reader_engine() -> AsyncEngine:
     Raises:
         ChatSqlReaderUnavailableError: the setting is empty.
     """
-    if _reader_engines:  # settings are read once per process: the URL is fixed after the first engine is built
+    if (
+        _reader_engines
+    ):  # settings are read once per process: the URL is fixed after the first engine is built
         return next(iter(_reader_engines.values()))
     url = Settings().chat_sql_reader_database_url
     if not url:  # not cached, so setting the URL later enables the mode; unset stays fail-closed
-        raise ChatSqlReaderUnavailableError("sql mode is disabled: CHAT_SQL_READER_DATABASE_URL is not configured")
+        raise ChatSqlReaderUnavailableError(
+            "sql mode is disabled: CHAT_SQL_READER_DATABASE_URL is not configured"
+        )
     engine = _reader_engines.get(url)
     if engine is None:
         engine = _reader_engines[url] = create_async_engine(
@@ -498,27 +516,40 @@ async def _run_sql_as_reader(
         TypeError: ``workspace_id``/source ids are not ``uuid.UUID`` (a plain ``str`` is refused so no free
             text ever becomes a fence value).
     """
-    if not isinstance(workspace_id, UUID) or not all(isinstance(sid, UUID) for sid in allowed_source_ids):
+    if not isinstance(workspace_id, UUID) or not all(
+        isinstance(sid, UUID) for sid in allowed_source_ids
+    ):
         raise TypeError("workspace_id and every allowed source id must be uuid.UUID instances")
     engine = _reader_engine()
     async with engine.connect() as conn:
         pid: int | None = None
         try:
             pid = (await conn.execute(text("SELECT pg_backend_pid()"))).scalar_one()
-            async with app_engine.begin() as app_conn:  # own transaction: the fence must be committed before the reader runs
+            async with (
+                app_engine.begin() as app_conn
+            ):  # own transaction: the fence must be committed before the reader runs
                 await app_conn.execute(
                     _UPSERT_FENCE,
-                    {"pid": pid, "ws": workspace_id, "src": list(allowed_source_ids), "ttl": _FENCE_TTL_SECONDS},
+                    {
+                        "pid": pid,
+                        "ws": workspace_id,
+                        "src": list(allowed_source_ids),
+                        "ttl": _FENCE_TTL_SECONDS,
+                    },
                 )
             await conn.execute(text("SET TRANSACTION READ ONLY"))
-            await conn.execute(text(f"SET LOCAL statement_timeout = {_READER_STATEMENT_TIMEOUT_MS}"))
+            await conn.execute(
+                text(f"SET LOCAL statement_timeout = {_READER_STATEMENT_TIMEOUT_MS}")
+            )
             res = await conn.execute(
                 text("SELECT * FROM (" + clean_sql + ") AS _bounded_query LIMIT :max_rows"),  # noqa: S608  # clean_sql passed the read-only single-statement guard and runs as the read-only login role
                 {"max_rows": max_rows},
             )
             return list(res.mappings().all())
         finally:
-            await conn.rollback()  # read-only work: discard the transaction so the pooled connection is clean
+            await (
+                conn.rollback()
+            )  # read-only work: discard the transaction so the pooled connection is clean
             if pid is not None:
                 async with app_engine.begin() as app_conn:
                     await app_conn.execute(_DELETE_FENCE, {"pid": pid})
@@ -541,7 +572,9 @@ async def _execute_sql_mode(
     clean_sql = validate_readonly_sql(sql_query)
     mappings = await _run_sql_as_reader(
         clean_sql,
-        app_engine=cast(AsyncEngine, session.bind),  # separate short app-role transaction; never the caller's
+        app_engine=cast(
+            AsyncEngine, session.bind
+        ),  # separate short app-role transaction; never the caller's
         workspace_id=workspace_id,
         allowed_source_ids=allowed_source_ids,
         max_rows=min(limit, MAX_DB_QUERY_ROWS),
@@ -597,19 +630,32 @@ def _observation_filters(
         Observation.workspace_id == workspace_id,
         Observation.source_id.in_(allowed_source_ids),
     ]
-    if args.current_only and args.aggregation not in ("timeseries", "avg", "min", "max", "sum", "count"):
+    if args.current_only and args.aggregation not in (
+        "timeseries",
+        "avg",
+        "min",
+        "max",
+        "sum",
+        "count",
+    ):
         obs_filters.append(Observation.is_current.is_(True))
     if args.providers:
         obs_filters.append(
-            func.lower(Observation.provider).in_([p.strip().lower() for p in args.providers if p.strip()])
+            func.lower(Observation.provider).in_(
+                [p.strip().lower() for p in args.providers if p.strip()]
+            )
         )
     if args.metrics:
         obs_filters.append(
-            func.lower(Observation.metric).in_([m.strip().lower() for m in args.metrics if m.strip()])
+            func.lower(Observation.metric).in_(
+                [m.strip().lower() for m in args.metrics if m.strip()]
+            )
         )
     if args.symbols:
         obs_filters.append(
-            func.upper(Observation.symbol).in_([s.strip().upper() for s in args.symbols if s.strip()])
+            func.upper(Observation.symbol).in_(
+                [s.strip().upper() for s in args.symbols if s.strip()]
+            )
         )
     if args.region:
         obs_filters.append(func.upper(Observation.region) == args.region.strip().upper())
@@ -666,7 +712,9 @@ async def _observation_aggregates(
             "min": float(r.min_value) if r.min_value is not None else None,
             "max": float(r.max_value) if r.max_value is not None else None,
             "sum": float(r.sum_value) if r.sum_value is not None else None,
-            "latest_observed_at": r.latest_observed_at.isoformat() if r.latest_observed_at else None,
+            "latest_observed_at": r.latest_observed_at.isoformat()
+            if r.latest_observed_at
+            else None,
         }
         for r in agg_rows
     ]
@@ -690,7 +738,9 @@ def _document_filters(
     ]
     if args.providers:
         doc_filters.append(
-            func.lower(Source.provider).in_([p.strip().lower() for p in args.providers if p.strip()])
+            func.lower(Source.provider).in_(
+                [p.strip().lower() for p in args.providers if p.strip()]
+            )
         )
     if date_from is not None:
         doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) >= date_from)
@@ -733,7 +783,13 @@ async def _select_structured_documents(
                     DocumentVersion.id.label("document_version_id"),
                     func.left(DocumentVersion.content, 500).label("excerpt"),
                 )
-                .join(Source, and_(Source.id == Document.source_id, Source.workspace_id == Document.workspace_id))
+                .join(
+                    Source,
+                    and_(
+                        Source.id == Document.source_id,
+                        Source.workspace_id == Document.workspace_id,
+                    ),
+                )
                 .join(
                     DocumentVersion,
                     and_(
@@ -742,7 +798,10 @@ async def _select_structured_documents(
                     ),
                 )
                 .where(*doc_filters)
-                .order_by(desc(func.coalesce(Document.observed_at, Document.created_at)), desc(Document.id))
+                .order_by(
+                    desc(func.coalesce(Document.observed_at, Document.created_at)),
+                    desc(Document.id),
+                )
                 .limit(limit)
             )
         ).all()
@@ -761,7 +820,9 @@ async def _hot_cache_snapshots(
         for sid in allowed_source_ids[:8]:
             raw_snap = await redis.get(f"connector:snapshot:{workspace_id}:{sid}")
             if raw_snap:
-                snap = json.loads(raw_snap.decode("utf-8") if isinstance(raw_snap, bytes) else str(raw_snap))
+                snap = json.loads(
+                    raw_snap.decode("utf-8") if isinstance(raw_snap, bytes) else str(raw_snap)
+                )
                 if isinstance(snap, dict):
                     hot_snapshots.append(
                         {
@@ -797,7 +858,9 @@ def _serialize_observations(obs_rows: Any, citation_map: dict[UUID, int]) -> lis
     ]
 
 
-def _serialize_documents(doc_rows: list[Any], citation_map: dict[UUID, int]) -> list[dict[str, Any]]:
+def _serialize_documents(
+    doc_rows: list[Any], citation_map: dict[UUID, int]
+) -> list[dict[str, Any]]:
     """Serialise structured document rows, attaching ``[n]`` citation markers from ``citation_map``."""
     return [
         {
@@ -843,11 +906,16 @@ async def _execute_structured_mode(
     obs_rows: list[Any] = []
     if want_obs:
         obs_filters = _observation_filters(
-            args, workspace_id=workspace_id, allowed_source_ids=allowed_source_ids,
-            date_from=date_from, date_to=date_to,
+            args,
+            workspace_id=workspace_id,
+            allowed_source_ids=allowed_source_ids,
+            date_from=date_from,
+            date_to=date_to,
         )
         if args.aggregation in ("avg", "min", "max", "sum", "count"):
-            out["observation_aggregates"] = await _observation_aggregates(session, obs_filters, args.limit)
+            out["observation_aggregates"] = await _observation_aggregates(
+                session, obs_filters, args.limit
+            )
         obs_rows = list(
             (
                 await session.execute(
@@ -856,15 +924,20 @@ async def _execute_structured_mode(
                     .order_by(desc(Observation.observed_at), desc(Observation.id))
                     .limit(args.limit)
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
         version_pairs.extend((obs.document_id, obs.document_version_id) for obs in obs_rows)
 
     doc_rows_raw: list[Any] = []
     if want_docs:
         doc_filters = _document_filters(
-            args, workspace_id=workspace_id, allowed_source_ids=allowed_source_ids,
-            date_from=date_from, date_to=date_to,
+            args,
+            workspace_id=workspace_id,
+            allowed_source_ids=allowed_source_ids,
+            date_from=date_from,
+            date_to=date_to,
         )
         doc_rows_raw = await _select_structured_documents(session, doc_filters, args.limit)
         version_pairs.extend((d.document_id, d.document_version_id) for d in doc_rows_raw)

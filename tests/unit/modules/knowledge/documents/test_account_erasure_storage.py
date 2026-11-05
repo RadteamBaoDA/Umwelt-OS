@@ -40,8 +40,14 @@ def storage_context(tmp_path, monkeypatch):
     monkeypatch.setattr(public, "lock_raw_uri_identity", uri_lock)
     monkeypatch.setattr(erasure, "workspace_storage_lease", lease)
     ctx = {"session_factory": factory, "settings": SimpleNamespace(data_dir=tmp_path)}
-    return SimpleNamespace(ctx=ctx, root=tmp_path, session=session,
-                           admission=admission, uri_lock=uri_lock, leases=leases)
+    return SimpleNamespace(
+        ctx=ctx,
+        root=tmp_path,
+        session=session,
+        admission=admission,
+        uri_lock=uri_lock,
+        leases=leases,
+    )
 
 
 def write_original(context, *, workspace=SCOPE.workspace_id, name="original.txt"):
@@ -103,7 +109,9 @@ async def test_unlink_failure_never_advances_or_reports_done(storage_context, mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["documents", "orphans"])
-async def test_unconfirmed_unlink_fails_instead_of_skipping_original(storage_context, monkeypatch, kind):
+async def test_unconfirmed_unlink_fails_instead_of_skipping_original(
+    storage_context, monkeypatch, kind
+):
     context = storage_context
     target = write_original(context)
     canonical_row(context, target)
@@ -114,8 +122,12 @@ async def test_unconfirmed_unlink_fails_instead_of_skipping_original(storage_con
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("shared_document,shared_receipt", [(UUID(int=8), None), (None, UUID(int=8))])
-async def test_shared_legacy_original_is_preserved(storage_context, shared_document, shared_receipt):
+@pytest.mark.parametrize(
+    "shared_document,shared_receipt", [(UUID(int=8), None), (None, UUID(int=8))]
+)
+async def test_shared_legacy_original_is_preserved(
+    storage_context, shared_document, shared_receipt
+):
     context = storage_context
     target = context.root / "documents" / str(DOCUMENT_ID) / "legacy.txt"
     target.parent.mkdir(parents=True)
@@ -127,7 +139,9 @@ async def test_shared_legacy_original_is_preserved(storage_context, shared_docum
 
 
 @pytest.mark.asyncio
-async def test_foreign_workspace_uri_is_rejected_even_without_peer_database_reference(storage_context):
+async def test_foreign_workspace_uri_is_rejected_even_without_peer_database_reference(
+    storage_context,
+):
     context = storage_context
     target = write_original(context, workspace=PEER_WORKSPACE)
     canonical_row(context, target)
@@ -151,7 +165,9 @@ async def test_traversal_absolute_and_non_document_uris_cannot_be_unlinked(stora
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("directory_exists", [False, True])
-async def test_orphan_empty_or_missing_directory_still_requires_durable_authority(storage_context, directory_exists):
+async def test_orphan_empty_or_missing_directory_still_requires_durable_authority(
+    storage_context, directory_exists
+):
     context = storage_context
     directory = context.root / "workspaces" / str(SCOPE.workspace_id) / "documents"
     if directory_exists:
@@ -171,7 +187,9 @@ async def test_orphan_sweep_removes_only_one_entry_per_page_then_confirms_empty(
     steps = 0
     while not done and steps < 10:
         before = sum(path.exists() for path in targets)
-        done, cursor = await erasure.erase_account_storage_page(context.ctx, SCOPE, {"kind": "orphans"})
+        done, cursor = await erasure.erase_account_storage_page(
+            context.ctx, SCOPE, {"kind": "orphans"}
+        )
         after = sum(path.exists() for path in targets)
         assert before - after in {0, 1}
         steps += 1
@@ -208,7 +226,9 @@ async def test_orphan_directory_depth_is_bounded_without_deleting_deep_file(stor
 async def test_symlink_never_unlinks_peer_target(storage_context, kind):
     context = storage_context
     peer = write_original(context, workspace=PEER_WORKSPACE)
-    directory = context.root / "workspaces" / str(SCOPE.workspace_id) / "documents" / str(DOCUMENT_ID)
+    directory = (
+        context.root / "workspaces" / str(SCOPE.workspace_id) / "documents" / str(DOCUMENT_ID)
+    )
     directory.mkdir(parents=True)
     link = directory / "redirect.txt"
     try:
@@ -224,7 +244,9 @@ async def test_symlink_never_unlinks_peer_target(storage_context, kind):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["documents", "orphans"])
 async def test_symlink_guard_stops_before_unlink_even_on_hosts_without_symlink_privilege(
-    storage_context, monkeypatch, kind,
+    storage_context,
+    monkeypatch,
+    kind,
 ):
     context = storage_context
     target = write_original(context)
@@ -239,7 +261,9 @@ async def test_symlink_guard_stops_before_unlink_even_on_hosts_without_symlink_p
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows filesystem junction")
 @pytest.mark.parametrize("kind", ["documents", "orphans"])
-async def test_real_windows_junction_cannot_redirect_erasure_into_peer_workspace(storage_context, kind):
+async def test_real_windows_junction_cannot_redirect_erasure_into_peer_workspace(
+    storage_context, kind
+):
     import _winapi
 
     context = storage_context
@@ -267,6 +291,8 @@ async def test_storage_failure_is_required_coordinator_failure(storage_context, 
     monkeypatch.setattr(deletion_cleanup, "authorize_account_erasure", AsyncMock())
     monkeypatch.setattr(Path, "unlink", MagicMock(side_effect=OSError("disk unavailable")))
     with pytest.raises(deletion_cleanup.AccountErasureStageError) as failure:
-        await deletion_cleanup.erase_account_data(context.ctx, SCOPE, "storage", {"kind": "orphans"})
+        await deletion_cleanup.erase_account_data(
+            context.ctx, SCOPE, "storage", {"kind": "orphans"}
+        )
     assert failure.value.safe_code == "storage_cleanup_failed"
     assert target.exists()

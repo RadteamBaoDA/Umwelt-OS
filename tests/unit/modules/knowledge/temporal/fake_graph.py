@@ -57,17 +57,31 @@ class FakeDriver:
             graph.edges[params["fact_id"]].episodes = list(params["episode_ids"])
             return [{"fact_id": params["fact_id"]}], None, None
         if "[mention:MENTIONS]" in query:
-            rows = [{"mention_id": key} for key, item in sorted(graph.mentions.items())
-                    if str(item.source_node_uuid) == params["episode_id"]
-                    and params["episode_id"] in graph.episodes]
+            rows = [
+                {"mention_id": key}
+                for key, item in sorted(graph.mentions.items())
+                if str(item.source_node_uuid) == params["episode_id"]
+                and params["episode_id"] in graph.episodes
+            ]
             return rows, None, None
         if "WHERE entity.uuid IN $entity_ids" in query:
-            return [row for ids in params["entity_ids"] for row in graph.node_links.get(ids, [])], None, None
+            return (
+                [row for ids in params["entity_ids"] for row in graph.node_links.get(ids, [])],
+                None,
+                None,
+            )
         if "WHERE edge.uuid IN $edge_ids" in query:
-            return [{"edge_id": item} for item in params["edge_ids"] if item in graph.edges], None, None
+            return (
+                [{"edge_id": item} for item in params["edge_ids"] if item in graph.edges],
+                None,
+                None,
+            )
         if "IN coalesce(edge.episodes" in query:
-            rows = [{"fact_id": key} for key, edge in sorted(graph.edges.items())
-                    if params["episode_id"] in edge.episodes]
+            rows = [
+                {"fact_id": key}
+                for key, edge in sorted(graph.edges.items())
+                if params["episode_id"] in edge.episodes
+            ]
             return rows, None, None
         if "MATCH (source)-[edge]-(entity:Entity" in query:
             return graph.node_links.get(params["entity_id"], []), None, None
@@ -76,8 +90,11 @@ class FakeDriver:
             graph.entities[params["entity_id"]].name_embedding = None
             return [{"entity_id": params["entity_id"]}], None, None
         if "WHERE node.uuid IN $node_ids" in query:
-            rows = [{"node_id": node_id, "group_id": GROUP}
-                    for node_id in params["node_ids"] if node_id in graph.entities]
+            rows = [
+                {"node_id": node_id, "group_id": GROUP}
+                for node_id in params["node_ids"]
+                if node_id in graph.entities
+            ]
             return rows, None, None
         raise AssertionError(f"unexpected query {query}")
 
@@ -90,25 +107,43 @@ class _Episode(SimpleNamespace):
         graph: FakeGraph = driver.graph
         graph.events.append(("delete_episode", str(self.uuid)))
         graph.episodes.pop(str(self.uuid))
-        for key in [k for k, v in graph.mentions.items() if str(v.source_node_uuid) == str(self.uuid)]:
+        for key in [
+            k for k, v in graph.mentions.items() if str(v.source_node_uuid) == str(self.uuid)
+        ]:
             del graph.mentions[key]
 
 
 def make_edge(fact_id: str, source: str, target: str, episodes: list[str], **extra: Any) -> Any:
     """Return a stored fake fact edge carrying an embedding so fingerprints resolve."""
     return SimpleNamespace(
-        uuid=fact_id, group_id=GROUP, source_node_uuid=source, target_node_uuid=target,
-        name="REL", fact="fact text", episodes=list(episodes), created_at=NOW, reference_time=NOW,
-        valid_at=extra.get("valid_at"), invalid_at=extra.get("invalid_at"),
-        expired_at=extra.get("expired_at"), fact_embedding=list(VECTOR), attributes={},
+        uuid=fact_id,
+        group_id=GROUP,
+        source_node_uuid=source,
+        target_node_uuid=target,
+        name="REL",
+        fact="fact text",
+        episodes=list(episodes),
+        created_at=NOW,
+        reference_time=NOW,
+        valid_at=extra.get("valid_at"),
+        invalid_at=extra.get("invalid_at"),
+        expired_at=extra.get("expired_at"),
+        fact_embedding=list(VECTOR),
+        attributes={},
     )
 
 
 def make_entity(entity_id: str, **extra: Any) -> Any:
     """Return a stored fake entity node."""
     return SimpleNamespace(
-        uuid=entity_id, group_id=GROUP, name=extra.get("name", "n"), summary=extra.get("summary", "s"),
-        attributes={}, labels=["Entity"], created_at=NOW, name_embedding=extra.get("embedding", list(VECTOR)),
+        uuid=entity_id,
+        group_id=GROUP,
+        name=extra.get("name", "n"),
+        summary=extra.get("summary", "s"),
+        attributes={},
+        labels=["Entity"],
+        created_at=NOW,
+        name_embedding=extra.get("embedding", list(VECTOR)),
     )
 
 
@@ -129,7 +164,9 @@ def _build_modules(graph: FakeGraph) -> dict[str, Any]:  # noqa: C901  # test ha
         @classmethod
         async def get_by_uuids(cls, driver: Any, ids: list[str]) -> list[Any]:
             graph.events.append(("read_edges", tuple(ids)))
-            return [cls(**vars(copy.deepcopy(graph.edges[item]))) for item in ids if item in graph.edges]
+            return [
+                cls(**vars(copy.deepcopy(graph.edges[item]))) for item in ids if item in graph.edges
+            ]
 
         @classmethod
         async def delete_by_uuids(cls, driver: Any, ids: list[str]) -> None:
@@ -145,7 +182,11 @@ def _build_modules(graph: FakeGraph) -> dict[str, Any]:  # noqa: C901  # test ha
     class EpisodicNode:
         @classmethod
         async def get_by_uuids(cls, driver: Any, ids: list[str]) -> list[Any]:
-            return [_Episode(**vars(copy.deepcopy(graph.episodes[item]))) for item in ids if item in graph.episodes]
+            return [
+                _Episode(**vars(copy.deepcopy(graph.episodes[item])))
+                for item in ids
+                if item in graph.episodes
+            ]
 
         @classmethod
         async def get_by_uuid(cls, driver: Any, uuid: str) -> Any:
@@ -165,8 +206,14 @@ def _build_modules(graph: FakeGraph) -> dict[str, Any]:  # noqa: C901  # test ha
             graph.entities[str(self.uuid)] = SimpleNamespace(**vars(self))
 
         @classmethod
-        async def get_by_uuids(cls, driver: Any, ids: list[str], group_id: str | None = None) -> list[Any]:
-            return [cls(**vars(copy.deepcopy(graph.entities[item]))) for item in ids if item in graph.entities]
+        async def get_by_uuids(
+            cls, driver: Any, ids: list[str], group_id: str | None = None
+        ) -> list[Any]:
+            return [
+                cls(**vars(copy.deepcopy(graph.entities[item])))
+                for item in ids
+                if item in graph.entities
+            ]
 
         @classmethod
         async def get_by_uuid(cls, driver: Any, uuid: str) -> Any:

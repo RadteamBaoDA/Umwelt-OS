@@ -22,6 +22,7 @@ def _redis_eval(redis: Redis, *args: Any) -> Awaitable[Any]:
     """Await-only view of Redis.eval; the asyncio client always returns an awaitable at runtime."""
     return cast("Awaitable[Any]", redis.eval(*args))
 
+
 _CLAIM_OPERATION = """
 if redis.call('exists', KEYS[3]) == 1 then return 0 end
 if redis.call('exists', KEYS[1]) == 1 and redis.call('exists', KEYS[2]) == 1 then return 0 end
@@ -62,7 +63,8 @@ return 1
 """
 
 _operation_lease: ContextVar[tuple[object, tuple[str, ...], str] | None] = ContextVar(
-    "mcp_operation_lease", default=None,
+    "mcp_operation_lease",
+    default=None,
 )
 
 
@@ -79,7 +81,11 @@ class McpAdmission:
         self._stopped = True
 
     async def _claim(
-        self, script: str, keys: tuple[str, ...], token: str, deadline: float,
+        self,
+        script: str,
+        keys: tuple[str, ...],
+        token: str,
+        deadline: float,
     ) -> int:
         """Run exactly one bounded atomic Redis admission script before the caller starts work."""
         remaining = deadline - asyncio.get_running_loop().time()
@@ -101,7 +107,8 @@ class McpAdmission:
             return
         try:
             await asyncio.wait_for(
-                _redis_eval(self.redis, _RELEASE, len(keys), *keys, token), timeout=remaining,
+                _redis_eval(self.redis, _RELEASE, len(keys), *keys, token),
+                timeout=remaining,
             )
         except (RedisError, TimeoutError):
             # The bounded TTL is the fallback when Redis cleanup is unavailable.
@@ -121,7 +128,8 @@ class McpAdmission:
             _, keys, token = lease
         try:
             result = await asyncio.wait_for(
-                _redis_eval(self.redis, _CURRENT, len(keys), *keys, token), timeout=_REDIS_PHASE_SECONDS,
+                _redis_eval(self.redis, _CURRENT, len(keys), *keys, token),
+                timeout=_REDIS_PHASE_SECONDS,
             )
         except (RedisError, TimeoutError):
             return False
@@ -129,7 +137,9 @@ class McpAdmission:
 
     @asynccontextmanager
     async def operation_slot(
-        self, connection_id: UUID, deadline: float,
+        self,
+        connection_id: UUID,
+        deadline: float,
     ) -> AsyncIterator[None]:
         """Claim one global and one connection lease atomically, enforcing the bounded operation deadline."""
         token = secrets.token_urlsafe(32)
@@ -141,7 +151,10 @@ class McpAdmission:
         connection_key = f"{_NAMESPACE}connection:{connection_id}"
         global_keys = (f"{_NAMESPACE}global:0", f"{_NAMESPACE}global:1")
         slot = await self._claim(
-            _CLAIM_OPERATION, (*global_keys, connection_key), token, bounded_deadline,
+            _CLAIM_OPERATION,
+            (*global_keys, connection_key),
+            token,
+            bounded_deadline,
         )
         if slot not in (1, 2):
             raise RuntimeError("MCP admission capacity is unavailable")
@@ -196,7 +209,10 @@ class McpAdmission:
                     )
                     with anyio.CancelScope(shield=True):
                         with anyio.move_on_after(cleanup_deadline - loop.time()):
-                            keys = (lease.global_key, *((lease.client_key,) if lease.client_key else ()))
+                            keys = (
+                                lease.global_key,
+                                *((lease.client_key,) if lease.client_key else ()),
+                            )
                             await self._release(keys, token, cleanup_deadline)
 
 
@@ -204,7 +220,11 @@ class McpInboundLease:
     """Explicit request-scoped holder that can bind one authenticated UUID to its global token."""
 
     def __init__(
-        self, admission: McpAdmission, global_key: str, token: str, deadline: float,
+        self,
+        admission: McpAdmission,
+        global_key: str,
+        token: str,
+        deadline: float,
     ) -> None:
         """Retain lease identity, deadline, optional client key and sticky cleanup uncertainty."""
         self.admission = admission
@@ -235,9 +255,15 @@ class McpInboundLease:
         client_key = f"{_NAMESPACE}client:{client_id}"
         try:
             result = await asyncio.wait_for(
-                _redis_eval(self.admission.redis,
-                    _BIND_CLIENT, 2, self.global_key, client_key, self.token,
-                ), timeout=min(_REDIS_PHASE_SECONDS, remaining),
+                _redis_eval(
+                    self.admission.redis,
+                    _BIND_CLIENT,
+                    2,
+                    self.global_key,
+                    client_key,
+                    self.token,
+                ),
+                timeout=min(_REDIS_PHASE_SECONDS, remaining),
             )
         except (RedisError, TimeoutError):
             return False

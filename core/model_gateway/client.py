@@ -170,9 +170,14 @@ _FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
 def _json_instruction(schema: dict[str, Any]) -> dict[str, str]:
     """System message asking for exactly one JSON value matching ``schema`` (the json_schema ``schema`` field if present)."""
     body = schema.get("schema", schema) if isinstance(schema, dict) else schema
-    return {"role": "system", "content": (
-        "Reply with exactly one JSON value that validates against this JSON Schema. "
-        "No prose, no markdown, no code fences. JSON Schema: " + json.dumps(body, separators=(",", ":")))}
+    return {
+        "role": "system",
+        "content": (
+            "Reply with exactly one JSON value that validates against this JSON Schema. "
+            "No prose, no markdown, no code fences. JSON Schema: "
+            + json.dumps(body, separators=(",", ":"))
+        ),
+    }
 
 
 def _extract_json(text: str) -> str:
@@ -184,7 +189,7 @@ def _extract_json(text: str) -> str:
     for opener, closer in (("{", "}"), ("[", "]")):
         start, end = cleaned.find(opener), cleaned.rfind(closer)
         if start != -1 and end > start:
-            candidate = cleaned[start:end + 1]
+            candidate = cleaned[start : end + 1]
             try:
                 json.loads(candidate)
             except ValueError:
@@ -196,7 +201,11 @@ def _extract_json(text: str) -> str:
 def _with_extracted_json(response: Any) -> Any:
     """Replace the first choice's text content with its extracted JSON; other shapes pass through for caller validation."""
     choices = response.get("choices") if isinstance(response, dict) else None
-    message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+    message = (
+        choices[0].get("message")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+        else None
+    )
     if isinstance(message, dict) and isinstance(message.get("content"), str):
         message["content"] = _extract_json(message["content"])
     return response
@@ -250,8 +259,13 @@ class CapabilityEvidenceStore(Protocol):
         """Return the current ``supported``/``unsupported``/``failed`` result for this model capability, or None."""
         ...
 
-    async def record(self, role: str, mapping: ModelMapping, capability: str,
-                     result: Literal["supported", "unsupported", "failed"]) -> None:
+    async def record(
+        self,
+        role: str,
+        mapping: ModelMapping,
+        capability: str,
+        result: Literal["supported", "unsupported", "failed"],
+    ) -> None:
         """Persist the outcome of a real call; may raise, the gateway swallows and logs only the error type."""
         ...
 
@@ -267,7 +281,10 @@ _TOOL_UNSUPPORTED_PHRASE = re.compile(
     re.IGNORECASE,
 )
 # Messages that are about one specific tool turn or tool definition, never about the model's capability.
-_TOOL_MESSAGE_ERROR = re.compile(r"tool_use_id|tool_use_ids|tool_result|tool_call_id|tool_choice|input_schema|tools\.\d+|invalid[^.]{0,40}schema", re.IGNORECASE)
+_TOOL_MESSAGE_ERROR = re.compile(
+    r"tool_use_id|tool_use_ids|tool_result|tool_call_id|tool_choice|input_schema|tools\.\d+|invalid[^.]{0,40}schema",
+    re.IGNORECASE,
+)
 _TOOL_UNSUPPORTED_STATUSES = frozenset({404, 405})
 # How long a recorded ``unsupported`` capability may short-circuit calls before the provider is asked again.
 UNSUPPORTED_EVIDENCE_TTL_SECONDS = 3600
@@ -309,7 +326,9 @@ def _is_transient_failure(exc: BaseException) -> bool:
     """
     cause: BaseException | None = exc
     for _ in range(4):
-        if isinstance(cause, (APITimeoutError, APIConnectionError, TimeoutError, RedisError, _GatewayTimeout)):
+        if isinstance(
+            cause, (APITimeoutError, APIConnectionError, TimeoutError, RedisError, _GatewayTimeout)
+        ):
             return True
         if isinstance(cause, APIStatusError):
             return cause.status_code >= 500 or cause.status_code == 429
@@ -358,7 +377,7 @@ class _ThinkSplitter:
         if self._state == "start":
             lead = self._held.lstrip()
             if lead.startswith(_THINK_OPEN):
-                self._state, self._held = "think", lead[len(_THINK_OPEN):]
+                self._state, self._held = "think", lead[len(_THINK_OPEN) :]
             elif _THINK_OPEN.startswith(lead):
                 return "", ""  # possibly a split opening tag (or only whitespace so far)
             else:
@@ -366,12 +385,22 @@ class _ThinkSplitter:
                 return "", answer
         end = self._held.find(_THINK_CLOSE)
         if end >= 0:
-            reasoning, answer = self._held[:end], self._held[end + len(_THINK_CLOSE):].lstrip("\n")
+            reasoning, answer = self._held[:end], self._held[end + len(_THINK_CLOSE) :].lstrip("\n")
             self._state, self._held = "answer", ""
             return reasoning, answer
         # Hold back a trailing fragment that could still grow into the closing tag.
-        keep = next((n for n in range(len(_THINK_CLOSE) - 1, 0, -1) if self._held.endswith(_THINK_CLOSE[:n])), 0)
-        reasoning, self._held = self._held[:len(self._held) - keep], self._held[len(self._held) - keep:]
+        keep = next(
+            (
+                n
+                for n in range(len(_THINK_CLOSE) - 1, 0, -1)
+                if self._held.endswith(_THINK_CLOSE[:n])
+            ),
+            0,
+        )
+        reasoning, self._held = (
+            self._held[: len(self._held) - keep],
+            self._held[len(self._held) - keep :],
+        )
         return reasoning, ""
 
     def flush(self) -> tuple[str, str]:
@@ -396,7 +425,9 @@ def _split_reasoning(payload: dict[str, Any], splitters: dict[int, _ThinkSplitte
         parts = [t for t in (native, reasoning) if isinstance(t, str) and t]
         content = delta.get("content")
         if isinstance(content, str):
-            think, answer = splitters.setdefault(choice.get("index", 0), _ThinkSplitter()).feed(content)
+            think, answer = splitters.setdefault(choice.get("index", 0), _ThinkSplitter()).feed(
+                content
+            )
             if think:
                 parts.append(think)
             if answer:
@@ -423,7 +454,9 @@ class _StreamState:
 
     extra: dict[str, Any]
     attempt: int = 0  # transient-retry budget used (0 or 1); a clamp, effort drop or transient retry each consume it
-    effort_dropped: bool = False  # reasoning_effort was dropped; the clamp may still use the retry after it
+    effort_dropped: bool = (
+        False  # reasoning_effort was dropped; the clamp may still use the retry after it
+    )
     emitted: bool = False  # a chunk reached the caller: nothing may be retried any more
     clamped: bool = False  # the max_tokens clamp retry was used
 
@@ -431,6 +464,7 @@ class _StreamState:
 @dataclass(frozen=True, slots=True)
 class ModelGateway:
     """OpenAI-compatible client enforcing privacy policy, capability verification, bounded concurrency, and approved endpoint networking."""
+
     redis: Redis = field(repr=False)
     base_url: str | None = field(repr=False)
     api_key: str = field(repr=False)
@@ -461,28 +495,41 @@ class ModelGateway:
         # The SDK DEBUG request log contains JSON request bodies. Keep prompts
         # and indexed source text out of logs even when OPENAI_LOG=debug is set.
         logging.getLogger("openai").setLevel(logging.WARNING)
-        if not isinstance(self.scope, (WorkspaceContext, InternalJobScope)) or not callable(self.before_send):
+        if not isinstance(self.scope, (WorkspaceContext, InternalJobScope)) or not callable(
+            self.before_send
+        ):
             raise ValueError("Explicit scope and fresh before_send callback are required")
         if isinstance(self.scope, WorkspaceContext) and self.scope.role != "owner":
             raise PrivacyPolicyDenied("Workspace owner required for model execution")
-        if len(self.gateway_identity) != 64 or any(char not in "0123456789abcdef" for char in self.gateway_identity):
+        if len(self.gateway_identity) != 64 or any(
+            char not in "0123456789abcdef" for char in self.gateway_identity
+        ):
             raise ValueError("Gateway identity must be a nonsecret SHA256 digest")
         if type(self.configuration_revision) is not int or self.configuration_revision < 0:
             raise ValueError("Explicit configuration revision is required")
         if not self.model_identity:
             object.__setattr__(self, "model_identity", self.gateway_identity)
-        elif len(self.model_identity) != 64 or any(char not in "0123456789abcdef" for char in self.model_identity):
+        elif len(self.model_identity) != 64 or any(
+            char not in "0123456789abcdef" for char in self.model_identity
+        ):
             raise ValueError("Model identity must be a nonsecret SHA256 digest")
         object.__setattr__(self, "base_url", self.base_url.rstrip("/") if self.base_url else None)
         object.__setattr__(self, "protocol", wire_protocol_for(self.kind))
 
     def _policy_matches(self, policy: RequestPolicy) -> bool:
         """Compare typed principal/config identity before capability/cache/transport access."""
-        actor = self.scope.actor_user_id if isinstance(self.scope, InternalJobScope) else self.scope.user_id
-        return (policy.workspace_id == self.scope.workspace_id and policy.actor_user_id == actor
-                and policy.membership_revision == self.scope.membership_revision
-                and policy.gateway_identity == self.gateway_identity
-                and policy.configuration_revision == self.configuration_revision)
+        actor = (
+            self.scope.actor_user_id
+            if isinstance(self.scope, InternalJobScope)
+            else self.scope.user_id
+        )
+        return (
+            policy.workspace_id == self.scope.workspace_id
+            and policy.actor_user_id == actor
+            and policy.membership_revision == self.scope.membership_revision
+            and policy.gateway_identity == self.gateway_identity
+            and policy.configuration_revision == self.configuration_revision
+        )
 
     async def _known_unsupported(self, role: str, mapping: ModelMapping, capability: str) -> bool:
         """True only when stored evidence says this optional capability is unsupported.
@@ -498,8 +545,13 @@ class ModelGateway:
             _LOG.warning("Capability evidence lookup failed (%s)", type(exc).__name__)
             return False
 
-    async def _record(self, role: str, mapping: ModelMapping | None, capability: str,
-                      result: Literal["supported", "unsupported", "failed"]) -> None:
+    async def _record(
+        self,
+        role: str,
+        mapping: ModelMapping | None,
+        capability: str,
+        result: Literal["supported", "unsupported", "failed"],
+    ) -> None:
         """Record a real call outcome; failures never reach the caller (log type only)."""
         if self.evidence is None or mapping is None:
             return
@@ -508,8 +560,15 @@ class ModelGateway:
         except Exception as exc:  # noqa: BLE001  # recording is best-effort and must never fail the user request
             _LOG.warning("Capability evidence record failed (%s)", type(exc).__name__)
 
-    async def _record_failure(self, role: str, mapping: ModelMapping | None, capability: str, exc: BaseException,
-                              *, rejected_tools: bool = False) -> None:
+    async def _record_failure(
+        self,
+        role: str,
+        mapping: ModelMapping | None,
+        capability: str,
+        exc: BaseException,
+        *,
+        rejected_tools: bool = False,
+    ) -> None:
         """Record a deterministic provider failure as ``failed``; ``unsupported`` only for a clear tool rejection.
 
         Privacy denials, breaker-open errors and local translation errors are not provider outcomes and record nothing. Transient errors
@@ -518,12 +577,17 @@ class ModelGateway:
         needs an explicit capability phrase or a 404/405 (see ``is_tool_capability_rejection``).
         """
         if not isinstance(exc, ModelGatewayError) or isinstance(
-                exc, (PrivacyPolicyDenied, ModelGatewayUnavailable, LocalCapabilityError)):
+            exc, (PrivacyPolicyDenied, ModelGatewayUnavailable, LocalCapabilityError)
+        ):
             return
         if _is_transient_failure(exc):
             return
         await self._record(role, mapping, capability, "failed")
-        if rejected_tools and isinstance(exc, CapabilityUnsupported) and is_tool_capability_rejection(exc):
+        if (
+            rejected_tools
+            and isinstance(exc, CapabilityUnsupported)
+            and is_tool_capability_rejection(exc)
+        ):
             await self._record(role, mapping, "tools", "unsupported")
 
     def _configured_max_tokens(self, mapping: ModelMapping | None) -> int | None:
@@ -574,8 +638,9 @@ class ModelGateway:
         """
         return self.protocol.requires_max_tokens and _mentions_max_tokens(exc)
 
-    async def _clamp_on_max_tokens_error(self, exc: APIStatusError, mapping: ModelMapping, current: int | None,
-                                         *, stream: bool) -> int | None:
+    async def _clamp_on_max_tokens_error(
+        self, exc: APIStatusError, mapping: ModelMapping, current: int | None, *, stream: bool
+    ) -> int | None:
         """Lower value to retry once with after an Anthropic ``max_tokens`` 400, else None (no retry).
 
         Applies only to protocols that require ``max_tokens`` (Anthropic) when the effective limit exceeds ``DEFAULT_MAX_TOKENS``; the clamp
@@ -583,10 +648,16 @@ class ModelGateway:
         """
         if not self._rejects_max_tokens(exc):
             return None
-        effective = current or (anthropic.DEFAULT_STREAM_MAX_TOKENS if stream else anthropic.DEFAULT_MAX_TOKENS)
+        effective = current or (
+            anthropic.DEFAULT_STREAM_MAX_TOKENS if stream else anthropic.DEFAULT_MAX_TOKENS
+        )
         if effective <= anthropic.DEFAULT_MAX_TOKENS:
             return None
-        _LOG.warning("Provider rejected max_tokens (%s); retrying with %d", _upstream_reason(exc), anthropic.DEFAULT_MAX_TOKENS)
+        _LOG.warning(
+            "Provider rejected max_tokens (%s); retrying with %d",
+            _upstream_reason(exc),
+            anthropic.DEFAULT_MAX_TOKENS,
+        )
         await self._remember_clamp(mapping)
         return anthropic.DEFAULT_MAX_TOKENS
 
@@ -600,7 +671,9 @@ class ModelGateway:
         """
         try:
             return pinned_client(
-                base_url, self.approved_endpoint_cidrs, allow_global=self.allow_public_endpoints,
+                base_url,
+                self.approved_endpoint_cidrs,
+                allow_global=self.allow_public_endpoints,
                 protocol=type(self.protocol).__name__,
             )
         except EndpointNetworkPolicyError as exc:
@@ -611,7 +684,10 @@ class ModelGateway:
         while True:
             await asyncio.sleep(_LEASE_REFRESH_SECONDS)
             try:
-                await cast("Awaitable[Any]", self.redis.eval(_REFRESH, 1, key, token, str(_LEASE_TTL_SECONDS * 1000)))
+                await cast(
+                    "Awaitable[Any]",
+                    self.redis.eval(_REFRESH, 1, key, token, str(_LEASE_TTL_SECONDS * 1000)),
+                )
             except RedisError:
                 pass
 
@@ -621,7 +697,9 @@ class ModelGateway:
 
     def _timeout(self) -> httpx.Timeout:
         """Overall timeout with a short connect bound so a silent-drop host fails fast."""
-        return httpx.Timeout(self.timeout_seconds, connect=min(_CONNECT_TIMEOUT_SECONDS, self.timeout_seconds))
+        return httpx.Timeout(
+            self.timeout_seconds, connect=min(_CONNECT_TIMEOUT_SECONDS, self.timeout_seconds)
+        )
 
     @asynccontextmanager
     async def _lease(self, wait_seconds: float) -> AsyncIterator[None]:
@@ -648,8 +726,18 @@ class ModelGateway:
                     while key is None:
                         attempted = True
                         try:
-                            slot = int(await cast("Awaitable[Any]", self.redis.eval(
-                                _ACQUIRE, len(keys), *keys, token, str(_LEASE_TTL_SECONDS * 1000))))
+                            slot = int(
+                                await cast(
+                                    "Awaitable[Any]",
+                                    self.redis.eval(
+                                        _ACQUIRE,
+                                        len(keys),
+                                        *keys,
+                                        token,
+                                        str(_LEASE_TTL_SECONDS * 1000),
+                                    ),
+                                )
+                            )
                         except (RedisConnectionError, RedisTimeoutError):
                             if time.monotonic() >= probe_deadline:
                                 degraded = True
@@ -679,7 +767,9 @@ class ModelGateway:
             held = [key] if key is not None else keys if attempted else []
             if held:
                 try:
-                    await asyncio.shield(cast("Awaitable[Any]", self.redis.eval(_RELEASE, len(held), *held, token)))
+                    await asyncio.shield(
+                        cast("Awaitable[Any]", self.redis.eval(_RELEASE, len(held), *held, token))
+                    )
                 except RedisError:
                     pass
 
@@ -729,7 +819,9 @@ class ModelGateway:
             _LOG.debug("model gateway breaker check failed; proceeding", exc_info=True)
             return
         remaining = pttl if isinstance(pttl, int) and pttl > 0 else _BREAKER_OPEN_MS
-        record_breaker_open(self.protocol.display_name, remaining / 1000)  # bounded label: protocol display name
+        record_breaker_open(
+            self.protocol.display_name, remaining / 1000
+        )  # bounded label: protocol display name
         raise ModelGatewayUnavailable(remaining / 1000)
 
     async def _breaker_fail(self, open_ms: int = 0) -> None:
@@ -739,9 +831,19 @@ class ModelGateway:
         """
         fail_key, open_key = self._breaker_keys()
         try:
-            await cast("Awaitable[Any]", self.redis.eval(
-                _BREAKER_RECORD, 2, fail_key, open_key,
-                str(_BREAKER_WINDOW_MS), str(_BREAKER_THRESHOLD), str(open_ms), str(_BREAKER_OPEN_MS)))
+            await cast(
+                "Awaitable[Any]",
+                self.redis.eval(
+                    _BREAKER_RECORD,
+                    2,
+                    fail_key,
+                    open_key,
+                    str(_BREAKER_WINDOW_MS),
+                    str(_BREAKER_THRESHOLD),
+                    str(open_ms),
+                    str(_BREAKER_OPEN_MS),
+                ),
+            )
         except RedisError:
             _LOG.warning("model gateway breaker record failed", exc_info=True)
             return
@@ -790,9 +892,17 @@ class ModelGateway:
         await self._breaker_fail()
         return False
 
-    def _wire_session(self, http: httpx.AsyncClient, client: AsyncOpenAI, base_url: str) -> WireSession:
+    def _wire_session(
+        self, http: httpx.AsyncClient, client: AsyncOpenAI, base_url: str
+    ) -> WireSession:
         """Bundle the per-call transport handles a ``WireProtocol`` needs (pinned http client, SDK client, credentials)."""
-        return WireSession(http=http, client=client, base_url=base_url, api_key=self.api_key, timeout=self._timeout())
+        return WireSession(
+            http=http,
+            client=client,
+            base_url=base_url,
+            api_key=self.api_key,
+            timeout=self._timeout(),
+        )
 
     def _raise_status_error(self, exc: APIStatusError, rejected: str) -> NoReturn:
         """Map a terminal provider HTTP error to the gateway's exception types; never returns.
@@ -804,11 +914,22 @@ class ModelGateway:
         if self._rejects_max_tokens(exc):
             raise ModelGatewayError(f"Model gateway error ({_upstream_reason(exc)})") from exc
         if exc.status_code in {400, 404, 405, 422}:
-            raise CapabilityUnsupported(f"Gateway rejected {rejected} ({_upstream_reason(exc)})") from exc
+            raise CapabilityUnsupported(
+                f"Gateway rejected {rejected} ({_upstream_reason(exc)})"
+            ) from exc
         raise ModelGatewayError(f"Model gateway error ({_upstream_reason(exc)})") from exc
 
-    async def _check_request(self, role: str, mapping: ModelMapping | None, policy: RequestPolicy, capability: str,
-                             path: str, *, probe: bool, before_send: Callable[[], Awaitable[None]] | None) -> ModelMapping:
+    async def _check_request(
+        self,
+        role: str,
+        mapping: ModelMapping | None,
+        policy: RequestPolicy,
+        capability: str,
+        path: str,
+        *,
+        probe: bool,
+        before_send: Callable[[], Awaitable[None]] | None,
+    ) -> ModelMapping:
         """Run the pre-I/O fences of one request and return the non-None mapping.
 
         Order matters: per-call fence presence, privacy decision, configuration, protocol path support,
@@ -816,23 +937,36 @@ class ModelGateway:
         re-verified). Raises ValueError/PrivacyPolicyDenied/ModelGatewayError/CapabilityUnsupported/Unavailable.
         """
         if not probe and before_send is None:
-            raise ValueError("before_send_required")  # fail closed: every non-probe call needs a per-call fence
-        if not self._policy_matches(policy) or not may_send(policy, role, mapping, self.destination_id, bool(self.api_key), capability):
+            raise ValueError(
+                "before_send_required"
+            )  # fail closed: every non-probe call needs a per-call fence
+        if not self._policy_matches(policy) or not may_send(
+            policy, role, mapping, self.destination_id, bool(self.api_key), capability
+        ):
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if self.base_url is None or mapping is None:
             raise ModelGatewayError("Model gateway is not configured")
         if not self.protocol.supports_path(path):
             # e.g. Anthropic has no embeddings, rerank or decisions API: report unsupported before any I/O.
             raise CapabilityUnsupported(f"{self.protocol.display_name} does not offer {capability}")
-        if not probe and capability == "tools" and await self._known_unsupported(role, mapping, "tools"):
+        if (
+            not probe
+            and capability == "tools"
+            and await self._known_unsupported(role, mapping, "tools")
+        ):
             raise CapabilityUnsupported("Tool calling is recorded as unsupported for this model")
         if not probe:
             # Probes must be able to reach a tripped upstream, otherwise it could never be re-verified.
             await self._breaker_check()
         return mapping
 
-    async def _attempt_once(self, session: WireSession, path: str, body: dict[str, Any],
-                            after_send: Callable[[], Awaitable[None]] | None) -> Any:
+    async def _attempt_once(
+        self,
+        session: WireSession,
+        path: str,
+        body: dict[str, Any],
+        after_send: Callable[[], Awaitable[None]] | None,
+    ) -> Any:
         """Execute one wire call, wiring the body-sent hook and always running the idempotent ``after_send`` fallback.
 
         Gated (P2-3): with no ``after_send`` the ContextVar is never touched, so the transport sends
@@ -860,9 +994,16 @@ class ModelGateway:
         raise ModelGatewayError("Model gateway returned an invalid response")
 
     async def _send_with_retries(
-        self, role: str, mapping: ModelMapping, policy: RequestPolicy, capability: str, path: str,
-        body: dict[str, Any], base_url: str,
-        before_send: Callable[[], Awaitable[None]] | None, after_send: Callable[[], Awaitable[None]] | None,
+        self,
+        role: str,
+        mapping: ModelMapping,
+        policy: RequestPolicy,
+        capability: str,
+        path: str,
+        body: dict[str, Any],
+        base_url: str,
+        before_send: Callable[[], Awaitable[None]] | None,
+        after_send: Callable[[], Awaitable[None]] | None,
     ) -> Any:
         """Execute a chat, embedding, or rerank call with at most two attempts and normalize its response.
 
@@ -886,22 +1027,35 @@ class ModelGateway:
                     await self.before_send()
                     if before_send is not None and before_send is not self.before_send:
                         await before_send()
-                    if not self._policy_matches(policy) or not may_send(policy, role, mapping, self.destination_id, bool(self.api_key), capability):
+                    if not self._policy_matches(policy) or not may_send(
+                        policy, role, mapping, self.destination_id, bool(self.api_key), capability
+                    ):
                         raise PrivacyPolicyDenied("Model request denied by privacy policy")
                     response = await self._attempt_once(session, path, body, after_send)
                 except (APITimeoutError, APIConnectionError) as exc:
-                    _raise_if_policy_denied(exc)  # a policy denial is not an upstream fault: no retry, no count
+                    _raise_if_policy_denied(
+                        exc
+                    )  # a policy denial is not an upstream fault: no retry, no count
                     if attempt == 0:
                         await asyncio.sleep(_retry_delay())
                         continue
                     await self._breaker_fail()
                     raise ModelGatewayError("Model gateway request failed") from exc
                 except APIStatusError as exc:
-                    if attempt == 0 and (lowered := await self._clamp_on_max_tokens_error(
-                            exc, mapping, body.get("max_tokens"), stream=False)) is not None:
+                    if (
+                        attempt == 0
+                        and (
+                            lowered := await self._clamp_on_max_tokens_error(
+                                exc, mapping, body.get("max_tokens"), stream=False
+                            )
+                        )
+                        is not None
+                    ):
                         body["max_tokens"] = lowered
                         continue
-                    if _retryable_status(exc.status_code) and await self._on_retryable_status(exc, attempt):
+                    if _retryable_status(exc.status_code) and await self._on_retryable_status(
+                        exc, attempt
+                    ):
                         continue
                     self._raise_status_error(exc, "this capability")
                 return self._normalize_response(response)
@@ -931,7 +1085,9 @@ class ModelGateway:
         A protocol without the requested path (Anthropic: only ``chat/completions``) raises CapabilityUnsupported
         before I/O. Protocol errors are mapped to the same ``openai`` exception types, so retry handling is shared.
         """
-        mapping = await self._check_request(role, mapping, policy, capability, path, probe=probe, before_send=before_send)
+        mapping = await self._check_request(
+            role, mapping, policy, capability, path, probe=probe, before_send=before_send
+        )
         body = {**payload, "model": mapping.model}
         if path == CHAT_PATH and body.get("max_tokens") is None:
             body.pop("max_tokens", None)
@@ -942,7 +1098,8 @@ class ModelGateway:
         async def send() -> Any:
             """Run the retried wire call for ``_with_slot`` (lease and total deadline are applied by the caller)."""
             return await self._send_with_retries(
-                role, mapping, policy, capability, path, body, base_url, before_send, after_send)
+                role, mapping, policy, capability, path, body, base_url, before_send, after_send
+            )
 
         # Telemetry only: labels are capability and configured role; model name is identity, never a label.
         started = time.perf_counter()
@@ -957,7 +1114,13 @@ class ModelGateway:
         except BaseException as exc:
             record_model_call(capability, role, started, False)
             if record_failure and not probe:
-                await self._record_failure(role, mapping, record_as or capability, exc, rejected_tools=capability == "tools")
+                await self._record_failure(
+                    role,
+                    mapping,
+                    record_as or capability,
+                    exc,
+                    rejected_tools=capability == "tools",
+                )
             raise
         await self._breaker_ok()
         if not probe and path != "decisions":
@@ -979,11 +1142,17 @@ class ModelGateway:
             """Call the configured model-list endpoint and return valid model IDs; map SDK and network failures to the gateway error."""
             await self.before_send()
             http = self._http_client(base_url)
-            async with AsyncOpenAI(base_url=base_url, api_key=self.api_key,
-                                   timeout=self._timeout(), max_retries=0,
-                                   http_client=http) as client:
+            async with AsyncOpenAI(
+                base_url=base_url,
+                api_key=self.api_key,
+                timeout=self._timeout(),
+                max_retries=0,
+                http_client=http,
+            ) as client:
                 try:
-                    return await self.protocol.list_models(self._wire_session(http, client, base_url))
+                    return await self.protocol.list_models(
+                        self._wire_session(http, client, base_url)
+                    )
                 except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
                     _raise_if_policy_denied(exc)
                     # Static reason only (no upstream body/URL): lets the owner tell auth, timeout and DNS/TLS apart.
@@ -992,7 +1161,9 @@ class ModelGateway:
                     elif isinstance(exc, APITimeoutError):
                         reason = "upstream timed out"
                     else:
-                        reason = f"could not connect to upstream ({type(exc.__cause__ or exc).__name__})"
+                        reason = (
+                            f"could not connect to upstream ({type(exc.__cause__ or exc).__name__})"
+                        )
                     raise ModelGatewayError(f"Model gateway discovery failed: {reason}") from exc
 
         models = await self._with_slot(send)
@@ -1013,11 +1184,17 @@ class ModelGateway:
         async def send() -> dict[str, Any]:
             """GET the filtered model list and map SDK/network failures to the gateway error."""
             await self.before_send()
-            async with AsyncOpenAI(base_url=base_url, api_key=self.api_key, timeout=self._timeout(), max_retries=0,
-                                   http_client=self._http_client(base_url)) as client:
+            async with AsyncOpenAI(
+                base_url=base_url,
+                api_key=self.api_key,
+                timeout=self._timeout(),
+                max_retries=0,
+                http_client=self._http_client(base_url),
+            ) as client:
                 try:
-                    page = await client.get("/models", cast_to=dict[str, Any],
-                                            options={"params": params})
+                    page = await client.get(
+                        "/models", cast_to=dict[str, Any], options={"params": params}
+                    )
                 except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
                     _raise_if_policy_denied(exc)
                     if isinstance(exc, APIStatusError):
@@ -1036,8 +1213,14 @@ class ModelGateway:
         return await self.list_openrouter_models({"output_modalities": "decisions"})
 
     async def decisions(
-        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
-        state: list[Any], questions: dict[str, Any], probe: bool = False, *,
+        self,
+        role: str,
+        mapping: ModelMapping | None,
+        policy: RequestPolicy,
+        state: list[Any],
+        questions: dict[str, Any],
+        probe: bool = False,
+        *,
         before_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
         """Ask an OpenRouter Decisions-API model (alpha) the given questions about ``state``.
@@ -1046,12 +1229,26 @@ class ModelGateway:
         retry and endpoint fences as chat calls.
         """
         return await self._request(
-            role, mapping, policy, "structured", "decisions", {"state": state, "questions": questions}, probe, before_send)
+            role,
+            mapping,
+            policy,
+            "structured",
+            "decisions",
+            {"state": state, "questions": questions},
+            probe,
+            before_send,
+        )
 
     async def chat(
-        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
-        messages: list[dict[str, Any]], probe: bool = False, *,
-        max_tokens: int | None = None, temperature: float | None = None,
+        self,
+        role: str,
+        mapping: ModelMapping | None,
+        policy: RequestPolicy,
+        messages: list[dict[str, Any]],
+        probe: bool = False,
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
         after_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
@@ -1070,12 +1267,25 @@ class ModelGateway:
         if temperature is not None:
             payload["temperature"] = temperature
         return await self._request(
-            role, mapping, policy, "chat", "chat/completions", payload, probe, before_send, after_send
+            role,
+            mapping,
+            policy,
+            "chat",
+            "chat/completions",
+            payload,
+            probe,
+            before_send,
+            after_send,
         )
 
     async def stream(
-        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
-        messages: list[dict[str, Any]], probe: bool = False, *,
+        self,
+        role: str,
+        mapping: ModelMapping | None,
+        policy: RequestPolicy,
+        messages: list[dict[str, Any]],
+        probe: bool = False,
+        *,
         after_send: Callable[[], Awaitable[None]] | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
         tools: list[dict[str, Any]] | None = None,
@@ -1100,10 +1310,20 @@ class ModelGateway:
         usage: Any = None
         ok = False
         try:
-            async with aclosing(self._stream_inner(
-                role, mapping, policy, messages, probe, after_send=after_send, before_send=before_send,
-                tools=tools, tool_choice=tool_choice, max_tokens=max_tokens,
-            )) as inner:
+            async with aclosing(
+                self._stream_inner(
+                    role,
+                    mapping,
+                    policy,
+                    messages,
+                    probe,
+                    after_send=after_send,
+                    before_send=before_send,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    max_tokens=max_tokens,
+                )
+            ) as inner:
                 async for line in inner:
                     if first_ms is None:
                         first_ms = (time.perf_counter() - started) * 1000
@@ -1120,21 +1340,44 @@ class ModelGateway:
             ok = True
         except ModelGatewayError as exc:
             if not probe:
-                await self._record_failure(role, mapping, "streaming", exc, rejected_tools=bool(tools))
+                await self._record_failure(
+                    role, mapping, "streaming", exc, rejected_tools=bool(tools)
+                )
             raise
         finally:
-            record_model_call("streaming", role, started, ok, {"usage": usage} if usage else None,
-                              mapping.model if mapping else None, first_ms)
+            record_model_call(
+                "streaming",
+                role,
+                started,
+                ok,
+                {"usage": usage} if usage else None,
+                mapping.model if mapping else None,
+                first_ms,
+            )
 
-    def _stream_allowed(self, policy: RequestPolicy, role: str, mapping: ModelMapping | None,
-                        capabilities: tuple[str, ...]) -> bool:
+    def _stream_allowed(
+        self,
+        policy: RequestPolicy,
+        role: str,
+        mapping: ModelMapping | None,
+        capabilities: tuple[str, ...],
+    ) -> bool:
         """True when the principal/config identity matches and privacy policy allows every streamed capability."""
         return self._policy_matches(policy) and all(
-            may_send(policy, role, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities)
+            may_send(policy, role, mapping, self.destination_id, bool(self.api_key), c)
+            for c in capabilities
+        )
 
     async def _stream_preflight(
-        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy, probe: bool,
-        tools: list[dict[str, Any]] | None, tool_choice: Any, max_tokens: int | None, capabilities: tuple[str, ...],
+        self,
+        role: str,
+        mapping: ModelMapping | None,
+        policy: RequestPolicy,
+        probe: bool,
+        tools: list[dict[str, Any]] | None,
+        tool_choice: Any,
+        max_tokens: int | None,
+        capabilities: tuple[str, ...],
     ) -> tuple[ModelMapping, dict[str, Any]]:
         """Run the pre-lease fences of a stream and build the protocol-neutral request extras.
 
@@ -1142,7 +1385,11 @@ class ModelGateway:
         ``max_tokens``, owner-chosen ``reasoning_effort`` for the chat role), then the breaker (skipped for probes).
         Raises PrivacyPolicyDenied/CapabilityUnsupported/ModelGatewayUnavailable before any provider I/O.
         """
-        if not self._stream_allowed(policy, role, mapping, capabilities) or self.base_url is None or mapping is None:
+        if (
+            not self._stream_allowed(policy, role, mapping, capabilities)
+            or self.base_url is None
+            or mapping is None
+        ):
             raise PrivacyPolicyDenied("Model request denied by privacy policy")
         if tools and not probe and await self._known_unsupported(role, mapping, "tools"):
             raise CapabilityUnsupported("Tool calling is recorded as unsupported for this model")
@@ -1160,8 +1407,14 @@ class ModelGateway:
             await self._breaker_check()
         return mapping, extra
 
-    async def _open_stream(self, session: WireSession, mapping: ModelMapping, messages: list[dict[str, Any]],
-                           extra: dict[str, Any], after_send: Callable[[], Awaitable[None]] | None) -> Any:
+    async def _open_stream(
+        self,
+        session: WireSession,
+        mapping: ModelMapping,
+        messages: list[dict[str, Any]],
+        extra: dict[str, Any],
+        after_send: Callable[[], Awaitable[None]] | None,
+    ) -> Any:
         """Open one provider stream bounded by the header/first-byte timeout.
 
         I6/T7: the transport releases the send fence once the body is handed to ``transport.write``;
@@ -1181,7 +1434,9 @@ class ModelGateway:
     @staticmethod
     def _chunk_line(chunk: Any, splitters: dict[int, _ThinkSplitter]) -> str:
         """Encode one provider chunk (dict or SDK model) as an SSE ``data:`` line with reasoning split out."""
-        payload = chunk if isinstance(chunk, dict) else chunk.model_dump(mode="json", exclude_none=True)
+        payload = (
+            chunk if isinstance(chunk, dict) else chunk.model_dump(mode="json", exclude_none=True)
+        )
         _split_reasoning(payload, splitters)
         return f"data: {json.dumps(payload)}"
 
@@ -1210,7 +1465,9 @@ class ModelGateway:
         await asyncio.sleep(_retry_delay())
         state.attempt += 1
 
-    async def _on_stream_status_error(self, exc: APIStatusError, mapping: ModelMapping, state: _StreamState) -> None:
+    async def _on_stream_status_error(
+        self, exc: APIStatusError, mapping: ModelMapping, state: _StreamState
+    ) -> None:
         """Handle a provider HTTP error: return to retry the open, or raise the mapped gateway error.
 
         Retries happen only before the first chunk. Dropping a rejected ``reasoning_effort`` shares the single
@@ -1219,30 +1476,59 @@ class ModelGateway:
         A status error after chunks were emitted is never retried or counted.
         """
         extra = state.extra
-        if (not state.emitted and state.attempt == 0 and "reasoning_effort" in extra and exc.status_code in {400, 422}
-                and any(w in str(exc.message or "").lower() for w in ("reasoning", "thinking", "effort"))):
+        if (
+            not state.emitted
+            and state.attempt == 0
+            and "reasoning_effort" in extra
+            and exc.status_code in {400, 422}
+            and any(
+                w in str(exc.message or "").lower() for w in ("reasoning", "thinking", "effort")
+            )
+        ):
             # A wrong effort setting must never break chat: retry once without the parameter.
-            _LOG.warning("Provider rejected reasoning_effort (%s); retrying without it", _upstream_reason(exc))
+            _LOG.warning(
+                "Provider rejected reasoning_effort (%s); retrying without it",
+                _upstream_reason(exc),
+            )
             del extra["reasoning_effort"]
             state.attempt += 1  # consumes the single retry, as before the refactor
             state.effort_dropped = True
             return
         # The clamp shares the single transient budget (attempt 0), except right after an effort drop (attempt 1).
-        if (not state.emitted and not state.clamped and (state.attempt == 0 or (state.effort_dropped and state.attempt == 1))
-                and (lowered := await self._clamp_on_max_tokens_error(
-                exc, mapping, extra.get("max_tokens"), stream=True)) is not None):
+        if (
+            not state.emitted
+            and not state.clamped
+            and (state.attempt == 0 or (state.effort_dropped and state.attempt == 1))
+            and (
+                lowered := await self._clamp_on_max_tokens_error(
+                    exc, mapping, extra.get("max_tokens"), stream=True
+                )
+            )
+            is not None
+        ):
             extra["max_tokens"] = lowered
             state.clamped = True
-            state.attempt = 1  # the clamp consumes the transient retry, so clamp -> 503 fails after two opens
+            state.attempt = (
+                1  # the clamp consumes the transient retry, so clamp -> 503 fails after two opens
+            )
             return
-        if not state.emitted and _retryable_status(exc.status_code) and await self._on_retryable_status(exc, state.attempt):
+        if (
+            not state.emitted
+            and _retryable_status(exc.status_code)
+            and await self._on_retryable_status(exc, state.attempt)
+        ):
             state.attempt += 1
             return
         self._raise_status_error(exc, "streaming")
 
     async def _stream_inner(
-        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
-        messages: list[dict[str, Any]], probe: bool = False, *,
+        self,
+        role: str,
+        mapping: ModelMapping | None,
+        policy: RequestPolicy,
+        messages: list[dict[str, Any]],
+        probe: bool = False,
+        *,
         after_send: Callable[[], Awaitable[None]] | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
         tools: list[dict[str, Any]] | None = None,
@@ -1263,10 +1549,13 @@ class ModelGateway:
         """
         capabilities = ("streaming", "tools") if tools else ("streaming",)
         mapping, extra = await self._stream_preflight(
-            role, mapping, policy, probe, tools, tool_choice, max_tokens, capabilities)
+            role, mapping, policy, probe, tools, tool_choice, max_tokens, capabilities
+        )
         state = _StreamState(extra)
         async with self._lease(_STREAM_LEASE_WAIT_SECONDS):
-            base_url = _api_base(cast("str", self.base_url))  # non-None: guaranteed by _stream_preflight
+            base_url = _api_base(
+                cast("str", self.base_url)
+            )  # non-None: guaranteed by _stream_preflight
             http = self._http_client(base_url)
             async with AsyncOpenAI(
                 base_url=base_url,
@@ -1284,7 +1573,9 @@ class ModelGateway:
                             await before_send()
                         if not self._stream_allowed(policy, role, mapping, capabilities):
                             raise PrivacyPolicyDenied("Model request denied by privacy policy")
-                        stream = await self._open_stream(session, mapping, messages, state.extra, after_send)
+                        stream = await self._open_stream(
+                            session, mapping, messages, state.extra, after_send
+                        )
                         async for chunk in stream:
                             state.emitted = True
                             yield self._chunk_line(chunk, splitters)
@@ -1301,8 +1592,13 @@ class ModelGateway:
                         await self._on_stream_status_error(exc, mapping, state)
 
     async def embed(
-        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
-        inputs: list[str], probe: bool = False, *,
+        self,
+        role: str,
+        mapping: ModelMapping | None,
+        policy: RequestPolicy,
+        inputs: list[str],
+        probe: bool = False,
+        *,
         before_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
         """Request embeddings through gateway policy with a fresh per-attempt authorization check.
@@ -1313,23 +1609,46 @@ class ModelGateway:
         """
         if mapping is None or "cohere" not in mapping.model.lower():
             return await self._request(
-                role, mapping, policy, "embeddings", "embeddings", {"input": inputs}, probe, before_send
+                role,
+                mapping,
+                policy,
+                "embeddings",
+                "embeddings",
+                {"input": inputs},
+                probe,
+                before_send,
             )
         response = await self._request(
-            role, mapping, policy, "embeddings", "embeddings-native",
-            {"texts": inputs, "input_type": "search_document", "embedding_types": ["float"]}, probe, before_send,
+            role,
+            mapping,
+            policy,
+            "embeddings",
+            "embeddings-native",
+            {"texts": inputs, "input_type": "search_document", "embedding_types": ["float"]},
+            probe,
+            before_send,
         )
         vectors = response.get("embeddings") if isinstance(response, dict) else None
         if isinstance(vectors, dict):
             vectors = vectors.get("float")
         if isinstance(vectors, list):
-            return {**response, "data": [{"index": i, "embedding": v} for i, v in enumerate(vectors)]}
+            return {
+                **response,
+                "data": [{"index": i, "embedding": v} for i, v in enumerate(vectors)],
+            }
         return response
 
     async def structured(
-        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
-        messages: list[dict[str, Any]], schema: dict[str, Any], probe: bool = False, *,
-        max_tokens: int | None = None, temperature: float | None = None,
+        self,
+        role: str,
+        mapping: ModelMapping | None,
+        policy: RequestPolicy,
+        messages: list[dict[str, Any]],
+        schema: dict[str, Any],
+        probe: bool = False,
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
         before_send: Callable[[], Awaitable[None]] | None = None,
         extra_body: dict[str, Any] | None = None,
     ) -> Any:
@@ -1352,23 +1671,44 @@ class ModelGateway:
         if extra_body:
             payload["extra_body"] = extra_body
         if probe or mapping is None:
-            return await self._request(role, mapping, policy, "structured", "chat/completions", payload, probe, before_send)
+            return await self._request(
+                role, mapping, policy, "structured", "chat/completions", payload, probe, before_send
+            )
         if await self._known_unsupported(role, mapping, "structured"):
-            return await self._structured_prompted(role, mapping, policy, payload, messages, schema, before_send)
+            return await self._structured_prompted(
+                role, mapping, policy, payload, messages, schema, before_send
+            )
         try:
             return await self._request(
-                role, mapping, policy, "structured", "chat/completions", payload, probe, before_send, record_failure=False)
+                role,
+                mapping,
+                policy,
+                "structured",
+                "chat/completions",
+                payload,
+                probe,
+                before_send,
+                record_failure=False,
+            )
         except CapabilityUnsupported:
             # Native json_schema was rejected: ask for JSON in the prompt over a plain chat completion and extract it
             # app-side. A failure here propagates with its own real message; success proves the model is chat-capable
             # and only native structured output is unsupported.
-            response = await self._structured_prompted(role, mapping, policy, payload, messages, schema, before_send)
+            response = await self._structured_prompted(
+                role, mapping, policy, payload, messages, schema, before_send
+            )
             await self._record(role, mapping, "structured", "unsupported")
             return response
 
     async def _structured_prompted(
-        self, role: str, mapping: ModelMapping, policy: RequestPolicy, payload: dict[str, Any],
-        messages: list[dict[str, Any]], schema: dict[str, Any], before_send: Callable[[], Awaitable[None]] | None,
+        self,
+        role: str,
+        mapping: ModelMapping,
+        policy: RequestPolicy,
+        payload: dict[str, Any],
+        messages: list[dict[str, Any]],
+        schema: dict[str, Any],
+        before_send: Callable[[], Awaitable[None]] | None,
     ) -> Any:
         """Send the prompted-JSON variant of a structured request (no ``response_format``) and extract the JSON.
 
@@ -1378,7 +1718,16 @@ class ModelGateway:
         fallback = {key: value for key, value in payload.items() if key != "response_format"}
         fallback["messages"] = [_json_instruction(schema), *messages]
         response = await self._request(
-            role, mapping, policy, "structured", "chat/completions", fallback, False, before_send, record_as="chat")
+            role,
+            mapping,
+            policy,
+            "structured",
+            "chat/completions",
+            fallback,
+            False,
+            before_send,
+            record_as="chat",
+        )
         return _with_extracted_json(response)
 
     async def tools(
@@ -1417,13 +1766,26 @@ class ModelGateway:
         )
 
     async def rerank(
-        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
-        query: str, documents: list[str], probe: bool = False, *,
+        self,
+        role: str,
+        mapping: ModelMapping | None,
+        policy: RequestPolicy,
+        query: str,
+        documents: list[str],
+        probe: bool = False,
+        *,
         before_send: Callable[[], Awaitable[None]] | None = None,
         after_send: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
         """Request bounded reranking with fresh authorization and optional attempt cleanup."""
         return await self._request(
-            role, mapping, policy, "reranking", "rerank",
-            {"query": query, "documents": documents}, probe, before_send, after_send,
+            role,
+            mapping,
+            policy,
+            "reranking",
+            "rerank",
+            {"query": query, "documents": documents},
+            probe,
+            before_send,
+            after_send,
         )

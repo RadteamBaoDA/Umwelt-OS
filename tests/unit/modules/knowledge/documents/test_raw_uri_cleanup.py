@@ -12,7 +12,9 @@ from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.knowledge.documents import public
 
 WS, SRC, OP = uuid4(), uuid4(), uuid4()
-SCOPE = InternalJobScope(workspace_id=WS, actor_user_id=7, membership_revision=3, source_id=SRC, source_generation=5)
+SCOPE = InternalJobScope(
+    workspace_id=WS, actor_user_id=7, membership_revision=3, source_id=SRC, source_generation=5
+)
 FENCE = AccessFence(WS, 7, 3, 2)
 
 
@@ -30,7 +32,11 @@ def _session(row, referenced=None):
 async def _call(session, current=FENCE):
     with patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=current)):
         return await public.raw_uri_is_referenced_for_cleanup(
-            session, OP, scope=SCOPE, multi_workspace_enabled=True, access_fence=FENCE,
+            session,
+            OP,
+            scope=SCOPE,
+            multi_workspace_enabled=True,
+            access_fence=FENCE,
         )
 
 
@@ -41,7 +47,9 @@ async def test_reference_check_is_global_but_receipt_read_is_scoped() -> None:
     for column in ("workspace_id", "actor_user_id", "membership_revision"):
         assert column in receipt_sql
     reference_sql = _sql(session.scalar.await_args.args[0])
-    assert "raw_uri" in reference_sql and "workspace_id" not in reference_sql  # shared storage: global EXISTS
+    assert (
+        "raw_uri" in reference_sql and "workspace_id" not in reference_sql
+    )  # shared storage: global EXISTS
 
 
 async def test_no_uri_means_no_reference_query() -> None:
@@ -56,24 +64,34 @@ async def test_unfound_stale_or_fence_mismatched_receipt_raises() -> None:
     with pytest.raises(ConflictError):
         await _call(_session(SimpleNamespace(raw_uri="u", configuration_revision=9)))
     with pytest.raises(ConflictError):
-        await _call(_session(SimpleNamespace(raw_uri="u", configuration_revision=2)), current=AccessFence(WS, 7, 3, 3))
+        await _call(
+            _session(SimpleNamespace(raw_uri="u", configuration_revision=2)),
+            current=AccessFence(WS, 7, 3, 3),
+        )
 
 
-@pytest.mark.parametrize("kwargs", [
-    {"instance_operator": False, "multi_workspace_enabled": False},
-    {"instance_operator": True, "multi_workspace_enabled": True},
-    {"instance_operator": 1, "multi_workspace_enabled": False},
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"instance_operator": False, "multi_workspace_enabled": False},
+        {"instance_operator": True, "multi_workspace_enabled": True},
+        {"instance_operator": 1, "multi_workspace_enabled": False},
+    ],
+)
 async def test_raw_uris_denial_raises_never_empty_set(kwargs) -> None:
-    with patch("core.auth.public.get_active_account", AsyncMock(return_value=object())), \
-            pytest.raises(ForbiddenError) as caught:
+    with (
+        patch("core.auth.public.get_active_account", AsyncMock(return_value=object())),
+        pytest.raises(ForbiddenError) as caught,
+    ):
         await public.raw_uris(MagicMock(), **kwargs)
     assert caught.value.status_code == 403
 
 
 async def test_raw_uris_requires_active_bootstrap_account() -> None:
-    with patch("core.auth.public.get_active_account", AsyncMock(return_value=None)), \
-            pytest.raises(ForbiddenError):
+    with (
+        patch("core.auth.public.get_active_account", AsyncMock(return_value=None)),
+        pytest.raises(ForbiddenError),
+    ):
         await public.raw_uris(MagicMock(), instance_operator=True, multi_workspace_enabled=False)
 
 
@@ -81,7 +99,9 @@ async def test_raw_uris_returns_global_nonempty_set_for_instance_operator() -> N
     session = MagicMock()
     session.scalars = AsyncMock(return_value=SimpleNamespace(all=lambda: ["a", "", "b", "a"]))
     with patch("core.auth.public.get_active_account", AsyncMock(return_value=object())):
-        assert await public.raw_uris(session, instance_operator=True, multi_workspace_enabled=False) == {"a", "b"}
+        assert await public.raw_uris(
+            session, instance_operator=True, multi_workspace_enabled=False
+        ) == {"a", "b"}
     assert "workspace_id" not in _sql(session.scalars.await_args.args[0])
 
 

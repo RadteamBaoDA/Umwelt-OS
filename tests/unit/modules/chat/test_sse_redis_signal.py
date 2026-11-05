@@ -37,7 +37,11 @@ class FakePubSub:
         self.channels.append(channel)
         self.redis.subscribed.append(channel)
 
-    async def get_message(self, ignore_subscribe_messages: bool = False, timeout: float = 0.0) -> dict[str, Any] | None:  # noqa: ASYNC109  # mirrors redis PubSub API
+    async def get_message(
+        self,
+        ignore_subscribe_messages: bool = False,
+        timeout: float = 0.0,  # noqa: ASYNC109  # mirrors redis PubSub API
+    ) -> dict[str, Any] | None:
         assert ignore_subscribe_messages is True
         if not self.queue and timeout:
             self.redis.waits.append(timeout)
@@ -79,7 +83,9 @@ def _signalled(store: _Store, redis: FakeRedis) -> Any:
     return request
 
 
-async def _stream(store: _Store, redis: FakeRedis, monkeypatch: pytest.MonkeyPatch) -> tuple[list[str], list[float]]:
+async def _stream(
+    store: _Store, redis: FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> tuple[list[str], list[float]]:
     sleeps: list[float] = []
     real_sleep = asyncio.sleep
 
@@ -89,13 +95,19 @@ async def _stream(store: _Store, redis: FakeRedis, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(routes.asyncio, "sleep", spy)
     response = await routes.get_response_events(
-        RID, _signalled(store, redis), _DependencySession(store), last_event_id=None, cursor=None,  # type: ignore[arg-type]
+        RID,
+        _signalled(store, redis),
+        _DependencySession(store),
+        last_event_id=None,
+        cursor=None,  # type: ignore[arg-type]
     )
     chunks = [str(chunk) async for chunk in response.body_iterator]  # type: ignore[attr-defined]
     return chunks, sleeps
 
 
-async def test_idle_stream_waits_on_the_signal_not_a_fast_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_idle_stream_waits_on_the_signal_not_a_fast_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([], status="streaming")
     _install(monkeypatch, store)
     step = {"n": 0}
@@ -111,9 +123,14 @@ async def test_idle_stream_waits_on_the_signal_not_a_fast_poll(monkeypatch: pyte
     redis = FakeRedis(on_idle)
     chunks, sleeps = await _stream(store, redis, monkeypatch)
     text = "".join(chunks)
-    assert [line for line in text.splitlines() if line.startswith("id:")] == [f"id: {RID}:1", f"id: {RID}:2"]
+    assert [line for line in text.splitlines() if line.startswith("id:")] == [
+        f"id: {RID}:1",
+        f"id: {RID}:2",
+    ]
     assert redis.subscribed == [f"chat:response:{RID}"]
-    assert redis.waits == [signals.STREAM_SIGNAL_FALLBACK_INTERVAL] * 2  # slow fallback timeout, not 0.1-0.5 s
+    assert (
+        redis.waits == [signals.STREAM_SIGNAL_FALLBACK_INTERVAL] * 2
+    )  # slow fallback timeout, not 0.1-0.5 s
     assert sleeps == []  # no legacy backoff sleeps while subscribed
     assert redis.unsubscribed == [f"chat:response:{RID}"] and redis.pubsubs[0].closed
 
@@ -136,7 +153,9 @@ async def test_lost_signal_is_recovered_by_the_slow_poll(monkeypatch: pytest.Mon
     assert redis.waits == [signals.STREAM_SIGNAL_FALLBACK_INTERVAL] * 2
 
 
-async def test_terminal_batch_ends_the_stream_without_a_fallback_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_terminal_batch_ends_the_stream_without_a_fallback_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([_event(1)], status="completed")
     _install(monkeypatch, store)
     redis = FakeRedis()
@@ -147,7 +166,9 @@ async def test_terminal_batch_ends_the_stream_without_a_fallback_wait(monkeypatc
     assert redis.unsubscribed == [f"chat:response:{RID}"]
 
 
-async def test_full_terminal_batch_keeps_polling_for_the_backlog(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_full_terminal_batch_keeps_polling_for_the_backlog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     total = routes.STREAM_BATCH_SIZE + 1
     store = _Store([_event(n) for n in range(1, total + 1)], status="completed")
     _install(monkeypatch, store)
@@ -155,24 +176,38 @@ async def test_full_terminal_batch_keeps_polling_for_the_backlog(monkeypatch: py
     chunks, _sleeps = await _stream(store, redis, monkeypatch)
     ids = [line for line in "".join(chunks).splitlines() if line.startswith("id:")]
     assert ids == [f"id: {RID}:{n}" for n in range(1, total + 1)]
-    assert store.seq_floors == [0, routes.STREAM_BATCH_SIZE]  # size-capped batch did not end the stream
+    assert store.seq_floors == [
+        0,
+        routes.STREAM_BATCH_SIZE,
+    ]  # size-capped batch did not end the stream
     assert redis.waits == []
 
 
-async def test_resume_cursor_and_dedup_are_unchanged_with_a_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_resume_cursor_and_dedup_are_unchanged_with_a_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([_event(n) for n in range(1, 6)], status="completed")
     _install(monkeypatch, store)
     redis = FakeRedis()
     request = _signalled(store, redis)
     response = await routes.get_response_events(
-        RID, request, _DependencySession(store), last_event_id=f"{RID}:3", cursor=None,  # type: ignore[arg-type]
+        RID,
+        request,
+        _DependencySession(store),
+        last_event_id=f"{RID}:3",
+        cursor=None,  # type: ignore[arg-type]
     )
     text = "".join([str(c) async for c in response.body_iterator])  # type: ignore[attr-defined]
-    assert [line for line in text.splitlines() if line.startswith("id:")] == [f"id: {RID}:4", f"id: {RID}:5"]
+    assert [line for line in text.splitlines() if line.startswith("id:")] == [
+        f"id: {RID}:4",
+        f"id: {RID}:5",
+    ]
     assert store.seq_floors[0] == 3  # the DB read still uses the seq cursor, not the signal payload
 
 
-async def test_subscription_failure_falls_back_to_the_legacy_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_subscription_failure_falls_back_to_the_legacy_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([], status="streaming")
     _install(monkeypatch, store)
     redis = FakeRedis()
@@ -188,18 +223,28 @@ async def test_subscription_failure_falls_back_to_the_legacy_backoff(monkeypatch
 
     monkeypatch.setattr(routes.asyncio, "sleep", spy)
     response = await routes.get_response_events(
-        RID, _signalled(store, redis), _DependencySession(store), last_event_id=None, cursor=None,  # type: ignore[arg-type]
+        RID,
+        _signalled(store, redis),
+        _DependencySession(store),
+        last_event_id=None,
+        cursor=None,  # type: ignore[arg-type]
     )
     [c async for c in response.body_iterator]  # type: ignore[attr-defined]
     assert seen["n"] == 3 and redis.waits == []
 
 
-async def test_subscription_is_released_when_the_client_disconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_subscription_is_released_when_the_client_disconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _Store([], status="streaming")
     _install(monkeypatch, store)
     redis = FakeRedis()
     response = await routes.get_response_events(
-        RID, _signalled(store, redis), _DependencySession(store), last_event_id=None, cursor=None,  # type: ignore[arg-type]
+        RID,
+        _signalled(store, redis),
+        _DependencySession(store),
+        last_event_id=None,
+        cursor=None,  # type: ignore[arg-type]
     )
     await anext(response.body_iterator)  # type: ignore[attr-defined,call-overload]
     await response.body_iterator.aclose()  # type: ignore[attr-defined]
@@ -219,7 +264,9 @@ async def test_publish_is_best_effort() -> None:
 
 
 def _pending_event(session: Session, response_id: UUID) -> StreamEvent:
-    event = StreamEvent(response_id=response_id, seq=1, event_type="status", event_id=f"{response_id}:1", data={})
+    event = StreamEvent(
+        response_id=response_id, seq=1, event_type="status", event_id=f"{response_id}:1", data={}
+    )
     session.add(event)  # attaches the instance to the session (no flush needed for object_session)
     return event
 
@@ -229,7 +276,11 @@ async def test_commit_hook_publishes_once_per_registered_run_after_commit() -> N
     redis = FakeRedis()
     session = Session()
     with signals.signal_run_commits(run_id, redis):
-        for target in (run_id, run_id, other):  # two inserts for the run, one for an unregistered run
+        for target in (
+            run_id,
+            run_id,
+            other,
+        ):  # two inserts for the run, one for an unregistered run
             signals._note_inserted(None, None, _pending_event(session, target))  # type: ignore[arg-type]
         assert session.info[signals._PENDING_KEY] == {run_id}
         signals._signal_after_commit(session)

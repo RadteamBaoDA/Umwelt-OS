@@ -15,15 +15,22 @@ class FormFieldSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=FIELD_ID_PATTERN, description="Unique field id: letter first, then letters/digits/_/-.")
+    id: str = Field(
+        pattern=FIELD_ID_PATTERN,
+        description="Unique field id: letter first, then letters/digits/_/-.",
+    )
     label: str = Field(min_length=1, max_length=120)
     type: Literal["text", "textarea", "number", "select", "checkbox", "date"] = "text"
     required: bool = False
     placeholder: str = Field(default="", max_length=120)
-    options: list[str] = Field(default_factory=list, max_length=MAX_SELECT_OPTIONS, description="Select choices.")
+    options: list[str] = Field(
+        default_factory=list, max_length=MAX_SELECT_OPTIONS, description="Select choices."
+    )
     min: float | None = Field(default=None, description="Lower bound (number fields).")
     max: float | None = Field(default=None, description="Upper bound (number fields).")
-    maxlength: int | None = Field(default=None, ge=1, le=4000, description="Character limit (text/textarea).")
+    maxlength: int | None = Field(
+        default=None, ge=1, le=4000, description="Character limit (text/textarea)."
+    )
 
     @model_validator(mode="after")
     def _check_type_rules(self) -> "FormFieldSpec":
@@ -31,8 +38,12 @@ class FormFieldSpec(BaseModel):
         if self.type == "select":
             if not self.options:
                 raise ValueError("select fields need options")
-            if len(set(self.options)) != len(self.options) or any(not o.strip() or len(o) > 80 for o in self.options):
-                raise ValueError("select options must be unique, non-empty and at most 80 characters")
+            if len(set(self.options)) != len(self.options) or any(
+                not o.strip() or len(o) > 80 for o in self.options
+            ):
+                raise ValueError(
+                    "select options must be unique, non-empty and at most 80 characters"
+                )
         elif self.options:
             raise ValueError("options are only allowed on select fields")
         if self.min is not None and self.max is not None and self.min > self.max:
@@ -48,7 +59,9 @@ class FormPayload(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: str = Field(default="", max_length=500)
     fields: list[FormFieldSpec] = Field(min_length=1, max_length=MAX_FORM_FIELDS)
-    submit_label: str = Field(default="", max_length=40, description="Submit button text; empty uses the default.")
+    submit_label: str = Field(
+        default="", max_length=40, description="Submit button text; empty uses the default."
+    )
 
     @model_validator(mode="after")
     def _unique_ids(self) -> "FormPayload":
@@ -93,7 +106,9 @@ class MeetingTimePickerPayload(BaseModel):
 
     surface_id: str = "meeting-time-picker"
     title: str = Field(min_length=1, max_length=255)
-    subtitle: str = Field(default="Select an available slot to draft a follow-up confirmation", max_length=255)
+    subtitle: str = Field(
+        default="Select an available slot to draft a follow-up confirmation", max_length=255
+    )
     duration_minutes: int = Field(default=30, ge=5, le=480)
     timezone: str = Field(default="UTC", max_length=64)
     slots: list[TimeSlot] = Field(min_length=1, max_length=24)
@@ -105,21 +120,41 @@ def _default_slots(timezone: str) -> list[TimeSlot]:
     """The three fixed fallback slots (morning recommended) in ``timezone``."""
     return [
         TimeSlot(
-            id="slot-1", label="Morning Slot (Recommended)", date="2026-10-20",
-            start_time="09:30", end_time="10:00", timezone=timezone, available=True, recommended=True,
+            id="slot-1",
+            label="Morning Slot (Recommended)",
+            date="2026-10-20",
+            start_time="09:30",
+            end_time="10:00",
+            timezone=timezone,
+            available=True,
+            recommended=True,
         ),
         TimeSlot(
-            id="slot-2", label="Midday Slot", date="2026-10-20",
-            start_time="13:00", end_time="13:30", timezone=timezone, available=True, recommended=False,
+            id="slot-2",
+            label="Midday Slot",
+            date="2026-10-20",
+            start_time="13:00",
+            end_time="13:30",
+            timezone=timezone,
+            available=True,
+            recommended=False,
         ),
         TimeSlot(
-            id="slot-3", label="Afternoon Slot", date="2026-10-20",
-            start_time="15:30", end_time="16:00", timezone=timezone, available=True, recommended=False,
+            id="slot-3",
+            label="Afternoon Slot",
+            date="2026-10-20",
+            start_time="15:30",
+            end_time="16:00",
+            timezone=timezone,
+            available=True,
+            recommended=False,
         ),
     ]
 
 
-def _resolve_slots(slots: Sequence[dict[str, Any] | TimeSlot] | None, timezone: str) -> list[TimeSlot]:
+def _resolve_slots(
+    slots: Sequence[dict[str, Any] | TimeSlot] | None, timezone: str
+) -> list[TimeSlot]:
     """Normalize caller slots into ``TimeSlot`` models, filling defaults per field; no slots yields the defaults.
 
     The first supplied slot is recommended unless the caller says otherwise.
@@ -168,7 +203,9 @@ def build_meeting_time_picker_payload(
     """
     resolved_slots = _resolve_slots(slots, timezone)
 
-    selected_id = next((s.id for s in resolved_slots if s.recommended and s.available), resolved_slots[0].id)
+    selected_id = next(
+        (s.id for s in resolved_slots if s.recommended and s.available), resolved_slots[0].id
+    )
     a2ui_surface = [
         {
             "surfaceUpdate": {

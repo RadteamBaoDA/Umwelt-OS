@@ -46,7 +46,9 @@ REPLAY_SQL_BUDGET_SECONDS = 3
 REPLAY_CLEANUP_BUDGET_SECONDS = 2
 _EPOCH_NAMESPACE = UUID("50954cbb-d568-4f35-8df4-fca2e2a38dd7")
 MAX_CURSOR_LENGTH = 60
-_CURSOR_RE = re.compile(r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(0|[1-9][0-9]{0,18})$")
+_CURSOR_RE = re.compile(
+    r"^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(0|[1-9][0-9]{0,18})$"
+)
 
 
 class _Payload(BaseModel):
@@ -55,6 +57,7 @@ class _Payload(BaseModel):
     Construction captures a subject, never authorization. Commit compares it with actual
     caller-held admission and the original fence before serializing the public payload.
     """
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     schema_version: Literal[1] = 1
     principal_workspace_id: UUID = Field(exclude=True)
@@ -64,6 +67,7 @@ class _Payload(BaseModel):
 
 class SourceChanged(_Payload):
     """Realtime payload describing a source status or connector-generation change."""
+
     type: Literal["source.changed"] = "source.changed"
     source_id: UUID
     generation: int = Field(ge=1)
@@ -74,16 +78,23 @@ class SourceChanged(_Payload):
 
 class IngestionChanged(_Payload):
     """Realtime payload describing ingestion run or stage progress."""
+
     type: Literal["ingestion.changed"] = "ingestion.changed"
     source_id: UUID
     run_id: UUID
-    status: Literal["queued", "running", "retrying", "succeeded", "failed", "cancelled", "needs_ocr"]
+    status: Literal[
+        "queued", "running", "retrying", "succeeded", "failed", "cancelled", "needs_ocr"
+    ]
     stage_key: str | None = Field(default=None, max_length=48)
-    stage_status: Literal["pending", "queued", "running", "retrying", "succeeded", "failed", "cancelled"] | None = None
+    stage_status: (
+        Literal["pending", "queued", "running", "retrying", "succeeded", "failed", "cancelled"]
+        | None
+    ) = None
 
 
 class KnowledgeChanged(_Payload):
     """Realtime payload for source, index, graph, or timeline changes with scoped identities."""
+
     type: Literal["knowledge.changed"] = "knowledge.changed"
     scope: Literal["source", "index", "graph", "timeline", "timeline_collection"] = "source"
     source_id: UUID | None = None
@@ -103,53 +114,84 @@ class KnowledgeChanged(_Payload):
     def validate_scope(self) -> KnowledgeChanged:
         """Enforce mutually exclusive identity fields for source, index, graph, event, and collection invalidations."""
         if self.scope == "source":
-            if self.source_id is None or any((
-                self.entity_id is not None,
-                self.relationship_id is not None,
-                self.index_generation_id is not None,
-                self.index_status is not None,
-                self.indexed_items is not None,
-                self.failed_items is not None,
-                self.event_id is not None,
-                self.event_revision is not None,
-            )):
+            if self.source_id is None or any(
+                (
+                    self.entity_id is not None,
+                    self.relationship_id is not None,
+                    self.index_generation_id is not None,
+                    self.index_status is not None,
+                    self.indexed_items is not None,
+                    self.failed_items is not None,
+                    self.event_id is not None,
+                    self.event_revision is not None,
+                )
+            ):
                 raise ValueError("Source knowledge events require a source identity only")
             return self
-        if (
-            self.scope == "index" and (
-                self.source_id is not None or self.document_id is not None or self.version is not None
-                or self.deleted or self.entity_id is not None or self.relationship_id is not None
-                or self.index_generation_id is None or self.index_status is None
-                or self.indexed_items is None or self.failed_items is None
-                or self.event_id is not None or self.event_revision is not None
-            )
+        if self.scope == "index" and (
+            self.source_id is not None
+            or self.document_id is not None
+            or self.version is not None
+            or self.deleted
+            or self.entity_id is not None
+            or self.relationship_id is not None
+            or self.index_generation_id is None
+            or self.index_status is None
+            or self.indexed_items is None
+            or self.failed_items is None
+            or self.event_id is not None
+            or self.event_revision is not None
         ):
-            raise ValueError("Index knowledge events require only a generation identity and progress")
+            raise ValueError(
+                "Index knowledge events require only a generation identity and progress"
+            )
         if self.scope == "graph" and (
             (self.entity_id is None) == (self.relationship_id is None)
-            or self.source_id is not None or self.document_id is not None or self.version is not None
-            or self.index_generation_id is not None or self.index_status is not None
-            or self.indexed_items is not None or self.failed_items is not None
-            or self.event_id is not None or self.event_revision is not None
+            or self.source_id is not None
+            or self.document_id is not None
+            or self.version is not None
+            or self.index_generation_id is not None
+            or self.index_status is not None
+            or self.indexed_items is not None
+            or self.failed_items is not None
+            or self.event_id is not None
+            or self.event_revision is not None
         ):
-            raise ValueError("Graph knowledge events require exactly one entity or relationship identity")
+            raise ValueError(
+                "Graph knowledge events require exactly one entity or relationship identity"
+            )
         if self.scope == "timeline" and (
-            self.event_id is None or self.event_revision is None
-            or self.source_id is not None or self.document_id is not None or self.version is not None
-            or self.entity_id is not None or self.relationship_id is not None
-            or self.index_generation_id is not None or self.index_status is not None
-            or self.indexed_items is not None or self.failed_items is not None
+            self.event_id is None
+            or self.event_revision is None
+            or self.source_id is not None
+            or self.document_id is not None
+            or self.version is not None
+            or self.entity_id is not None
+            or self.relationship_id is not None
+            or self.index_generation_id is not None
+            or self.index_status is not None
+            or self.indexed_items is not None
+            or self.failed_items is not None
         ):
-            raise ValueError("Timeline knowledge events require an event identity and revision only")
+            raise ValueError(
+                "Timeline knowledge events require an event identity and revision only"
+            )
         if self.scope == "timeline_collection" and (
             (self.source_id is None) == (self.entity_id is None)
-            or self.document_id is not None or self.version is not None or self.deleted
+            or self.document_id is not None
+            or self.version is not None
+            or self.deleted
             or self.relationship_id is not None
-            or self.event_id is not None or self.event_revision is not None
-            or self.index_generation_id is not None or self.index_status is not None
-            or self.indexed_items is not None or self.failed_items is not None
+            or self.event_id is not None
+            or self.event_revision is not None
+            or self.index_generation_id is not None
+            or self.index_status is not None
+            or self.indexed_items is not None
+            or self.failed_items is not None
         ):
-            raise ValueError("Timeline collection invalidations require exactly one source or entity identity")
+            raise ValueError(
+                "Timeline collection invalidations require exactly one source or entity identity"
+            )
         return self
 
 
@@ -160,6 +202,7 @@ class DashboardChanged(_Payload):
     and the strict boolean ``deleted`` marks its terminal revision. Revisions are strict positive safe
     integers so JavaScript clients can compare them without precision loss.
     """
+
     type: Literal["dashboard.changed"] = "dashboard.changed"
     scope: Literal["dashboard", "definition", "brief"]
     id: UUID
@@ -178,24 +221,35 @@ class ReplayHead(Base):
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "realtime_replay_head"
     __table_args__ = (
         CheckConstraint("sequence >= 0", name="ck_realtime_replay_head_sequence_nonnegative"),
         CheckConstraint("floor_sequence >= 1", name="ck_realtime_replay_head_floor_positive"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_realtime_replay_head_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "user_id"], ['workspace_memberships.workspace_id', 'workspace_memberships.user_id'], name="fk_w2_realtime_replay_head_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_realtime_replay_head_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "user_id"],
+            ["workspace_memberships.workspace_id", "workspace_memberships.user_id"],
+            name="fk_w2_realtime_replay_head_principal",
+            ondelete="RESTRICT",
+        ),
         Index("ix_w2_realtime_replay_head_work", "workspace_id", "user_id", "updated_at"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-
     epoch: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     floor_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="1")
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class ReplayRecord(Base):
@@ -203,29 +257,49 @@ class ReplayRecord(Base):
 
     Workspace identity is mandatory and survives nullable or detached canonical references.
     """
+
     __tablename__ = "realtime_replay_events"
     __table_args__ = (
         CheckConstraint("sequence > 0", name="ck_realtime_replay_sequence_positive"),
-        CheckConstraint("event_type IN ('source.changed', 'ingestion.changed', 'knowledge.changed', 'dashboard.changed')", name="ck_realtime_replay_event_type"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_realtime_replay_events_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "user_id"], ['workspace_memberships.workspace_id', 'workspace_memberships.user_id'], name="fk_w2_realtime_replay_events_principal", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "user_id"], ["realtime_replay_head.workspace_id", "realtime_replay_head.user_id"], name="fk_w2_realtime_replay_events_head", ondelete="CASCADE"),
+        CheckConstraint(
+            "event_type IN ('source.changed', 'ingestion.changed', 'knowledge.changed', 'dashboard.changed')",
+            name="ck_realtime_replay_event_type",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id"],
+            ["workspaces.id"],
+            name="fk_w2_realtime_replay_events_workspace",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "user_id"],
+            ["workspace_memberships.workspace_id", "workspace_memberships.user_id"],
+            name="fk_w2_realtime_replay_events_principal",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "user_id"],
+            ["realtime_replay_head.workspace_id", "realtime_replay_head.user_id"],
+            name="fk_w2_realtime_replay_events_head",
+            ondelete="CASCADE",
+        ),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-
     sequence: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     epoch: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class ReplayCursor(BaseModel):
     """Immutable epoch/sequence position used to resume replay delivery."""
+
     model_config = ConfigDict(frozen=True)
 
     epoch: UUID
@@ -265,8 +339,11 @@ def _scope_principal(scope: Scope) -> dict[str, Any]:
         actor = scope.user_id
     else:
         raise ValueError("Private replay requires a typed owner scope")
-    return {"principal_workspace_id": scope.workspace_id, "principal_user_id": actor,
-            "principal_membership_revision": scope.membership_revision}
+    return {
+        "principal_workspace_id": scope.workspace_id,
+        "principal_user_id": actor,
+        "principal_membership_revision": scope.membership_revision,
+    }
 
 
 def make_source_change(
@@ -275,13 +352,17 @@ def make_source_change(
     status: str,
     connector_state: str | None = None,
     operation_id: UUID | None = None,
-    *, scope: Scope,
+    *,
+    scope: Scope,
 ) -> SourceChanged:
     """Capture an actual owner principal and validated source state; caller must authorize publication."""
     return SourceChanged(
         **_scope_principal(scope),
-        source_id=source_id, generation=generation, status=status,
-        connector_state=connector_state, operation_id=operation_id,
+        source_id=source_id,
+        generation=generation,
+        status=status,
+        connector_state=connector_state,
+        operation_id=operation_id,
     )
 
 
@@ -291,13 +372,17 @@ def make_ingestion_change(
     status: str,
     stage_key: str | None = None,
     stage_status: str | None = None,
-    *, scope: Scope,
+    *,
+    scope: Scope,
 ) -> IngestionChanged:
     """Capture an actual owner principal and validated run/stage state without authorizing delivery."""
     return IngestionChanged(
         **_scope_principal(scope),
-        source_id=source_id, run_id=run_id, status=status,
-        stage_key=stage_key, stage_status=stage_status,
+        source_id=source_id,
+        run_id=run_id,
+        status=status,
+        stage_key=stage_key,
+        stage_status=stage_status,
     )
 
 
@@ -312,7 +397,9 @@ def make_knowledge_change(
     """Construct owner-bound source knowledge state; preserve payload domain scope and document identity."""
     return KnowledgeChanged(
         **_scope_principal(scope),
-        source_id=source_id, document_id=document_id, version=version,
+        source_id=source_id,
+        document_id=document_id,
+        version=version,
         deleted=deleted,
     )
 
@@ -322,7 +409,8 @@ def make_index_change(
     status: str,
     indexed_items: int,
     failed_items: int,
-    *, scope: Scope,
+    *,
+    scope: Scope,
 ) -> KnowledgeChanged:
     """Capture owner-bound index generation/counts; these private counts never reach members."""
     return KnowledgeChanged(
@@ -336,29 +424,57 @@ def make_index_change(
 
 
 def make_graph_change(
-    *, scope: Scope, entity_id: UUID | None = None, relationship_id: UUID | None = None, deleted: bool = False
+    *,
+    scope: Scope,
+    entity_id: UUID | None = None,
+    relationship_id: UUID | None = None,
+    deleted: bool = False,
 ) -> KnowledgeChanged:
     """Capture owner-bound graph state for exactly one identity; grant no member graph visibility."""
     return KnowledgeChanged(
         **_scope_principal(scope),
-        scope="graph", entity_id=entity_id, relationship_id=relationship_id, deleted=deleted
+        scope="graph",
+        entity_id=entity_id,
+        relationship_id=relationship_id,
+        deleted=deleted,
     )
 
 
-def make_timeline_change(event_id: UUID, revision: int, *, scope: Scope, deleted: bool = False) -> KnowledgeChanged:
+def make_timeline_change(
+    event_id: UUID, revision: int, *, scope: Scope, deleted: bool = False
+) -> KnowledgeChanged:
     """Capture an owner-bound timeline revision, preserving its separate payload discriminator."""
-    return KnowledgeChanged(**_scope_principal(scope), scope="timeline", event_id=event_id, event_revision=revision, deleted=deleted)
+    return KnowledgeChanged(
+        **_scope_principal(scope),
+        scope="timeline",
+        event_id=event_id,
+        event_revision=revision,
+        deleted=deleted,
+    )
 
 
 def make_timeline_collection_change(
-    *, scope: Scope, source_id: UUID | None = None, entity_id: UUID | None = None,
+    *,
+    scope: Scope,
+    source_id: UUID | None = None,
+    entity_id: UUID | None = None,
 ) -> KnowledgeChanged:
     """Capture owner-bound collection invalidation for exactly one source/entity; members cannot use it."""
     if (source_id is None) == (entity_id is None):
-        raise ValueError("Timeline collection invalidations require exactly one source or entity identity")
-    return KnowledgeChanged(**_scope_principal(scope), scope="timeline_collection", source_id=source_id, entity_id=entity_id)
+        raise ValueError(
+            "Timeline collection invalidations require exactly one source or entity identity"
+        )
+    return KnowledgeChanged(
+        **_scope_principal(scope),
+        scope="timeline_collection",
+        source_id=source_id,
+        entity_id=entity_id,
+    )
 
-def make_dashboard_change(category: str, resource_id: UUID, revision: int, *, scope: Scope, deleted: bool = False) -> DashboardChanged:
+
+def make_dashboard_change(
+    category: str, resource_id: UUID, revision: int, *, scope: Scope, deleted: bool = False
+) -> DashboardChanged:
     """Create a validated identifier-only event for one committed dashboard revision.
 
     ``category`` selects the payload's domain scope; the required ``scope`` keyword
@@ -366,8 +482,13 @@ def make_dashboard_change(category: str, resource_id: UUID, revision: int, *, sc
     ``revision`` identify the owner counter. ``deleted`` marks final deletion.
     Pydantic raises ``ValidationError`` for unsupported scopes or invalid values.
     """
-    return DashboardChanged(**_scope_principal(scope), scope=category, id=resource_id, revision=revision, deleted=deleted)
-
+    return DashboardChanged(
+        **_scope_principal(scope),
+        scope=category,
+        id=resource_id,
+        revision=revision,
+        deleted=deleted,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,7 +505,11 @@ class _ReplayStorageError(RuntimeError):
 
 
 async def _validate_replay_fence(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
     allow_member: bool = False,
 ) -> None:
     """Compare the supplied original owner fence with fresh nonlocking admission.
@@ -401,11 +526,16 @@ async def _validate_replay_fence(
     if type(multi_workspace_enabled) is not bool or not isinstance(access_fence, AccessFence):
         raise ValueError("Actual configured flag and original access fence are required")
     actor = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
-    if (access_fence.workspace_id != scope.workspace_id or access_fence.user_id != actor
-            or access_fence.membership_revision != scope.membership_revision):
+    if (
+        access_fence.workspace_id != scope.workspace_id
+        or access_fence.user_id != actor
+        or access_fence.membership_revision != scope.membership_revision
+    ):
         raise HTTPException(status_code=409, detail="Workspace access fence changed")
     actual = await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if actual != access_fence:
         raise HTTPException(status_code=409, detail="Workspace access fence changed")
@@ -413,8 +543,11 @@ async def _validate_replay_fence(
 
 def _replay_epoch(fence: AccessFence) -> UUID:
     """Fingerprint matched principal and monotonic revisions; this public UUID is never authority."""
-    return uuid5(_EPOCH_NAMESPACE, f"{fence.workspace_id}:{fence.user_id}:"
-                 f"{fence.membership_revision}:{fence.configuration_revision}")
+    return uuid5(
+        _EPOCH_NAMESPACE,
+        f"{fence.workspace_id}:{fence.user_id}:"
+        f"{fence.membership_revision}:{fence.configuration_revision}",
+    )
 
 
 async def _bounded_replay_count(session: AsyncSession) -> int:
@@ -427,8 +560,9 @@ async def _bounded_replay_count(session: AsyncSession) -> int:
     Must be called inside the gate lock after head updates are flushed.
     """
     window = ReplayHead.sequence - ReplayHead.floor_sequence + 1
-    total, smallest = (await session.execute(select(
-        func.coalesce(func.sum(window), 0), func.min(window)))).one()
+    total, smallest = (
+        await session.execute(select(func.coalesce(func.sum(window), 0), func.min(window)))
+    ).one()
     if (smallest is not None and smallest < 0) or int(total) > MAX_INSTANCE_REPLAY_EVENTS:
         raise _ReplayStorageError()
     return int(total)
@@ -441,15 +575,29 @@ async def _retained_window(session: AsyncSession, head: ReplayHead) -> int:
     Empty streams require floor=sequence+1. Holes, mixed epochs or oversized windows fail
     storage consistency rather than widening eviction or inventing resumable continuity.
     """
-    row = (await session.execute(select(
-        func.count(), func.min(ReplayRecord.sequence), func.max(ReplayRecord.sequence),
-        func.count().filter(ReplayRecord.epoch != head.epoch),
-    ).where(ReplayRecord.workspace_id == head.workspace_id, ReplayRecord.user_id == head.user_id))).one()
+    row = (
+        await session.execute(
+            select(
+                func.count(),
+                func.min(ReplayRecord.sequence),
+                func.max(ReplayRecord.sequence),
+                func.count().filter(ReplayRecord.epoch != head.epoch),
+            ).where(
+                ReplayRecord.workspace_id == head.workspace_id, ReplayRecord.user_id == head.user_id
+            )
+        )
+    ).one()
     count, first, last, wrong_epoch = row
-    if (head.sequence < 0 or head.sequence > MAX_REPLAY_SEQUENCE or head.floor_sequence < 1
-            or head.floor_sequence > head.sequence + 1 or count > MAX_REPLAY_EVENTS or wrong_epoch
-            or count != head.sequence - head.floor_sequence + 1
-            or (count and (first != head.floor_sequence or last != head.sequence))):
+    if (
+        head.sequence < 0
+        or head.sequence > MAX_REPLAY_SEQUENCE
+        or head.floor_sequence < 1
+        or head.floor_sequence > head.sequence + 1
+        or count > MAX_REPLAY_EVENTS
+        or wrong_epoch
+        or count != head.sequence - head.floor_sequence + 1
+        or (count and (first != head.floor_sequence or last != head.sequence))
+    ):
         raise _ReplayStorageError()
     return int(count)
 
@@ -474,7 +622,10 @@ class _RetentionPlan:
 
 
 async def _plan_retention(
-    session: AsyncSession, batch_size: int, *, fence: AccessFence,
+    session: AsyncSession,
+    batch_size: int,
+    *,
+    fence: AccessFence,
 ) -> _RetentionPlan:
     """Take the replay advisory gate, read the writer head/total and compute floors and excess.
 
@@ -482,14 +633,23 @@ async def _plan_retention(
     before the split), then two scalar reads; raises ``_ReplayStorageError`` for sequence overflow
     or an impossible eviction plan. Mutates nothing; caller owns the transaction.
     """
-    await session.execute(select(func.set_config("statement_timeout", "3000", True),
-                                 func.set_config("lock_timeout", "3000", True)))
+    await session.execute(
+        select(
+            func.set_config("statement_timeout", "3000", True),
+            func.set_config("lock_timeout", "3000", True),
+        )
+    )
     await session.execute(select(func.pg_advisory_xact_lock(1380994137, 1)))
     writer_key = (fence.workspace_id, fence.user_id)
     epoch = _replay_epoch(fence)
-    planned_head = await session.scalar(select(ReplayHead).where(
-        ReplayHead.workspace_id == writer_key[0], ReplayHead.user_id == writer_key[1],
-    ).execution_options(populate_existing=True))
+    planned_head = await session.scalar(
+        select(ReplayHead)
+        .where(
+            ReplayHead.workspace_id == writer_key[0],
+            ReplayHead.user_id == writer_key[1],
+        )
+        .execution_options(populate_existing=True)
+    )
     total = await _bounded_replay_count(session)
     old_count = await _retained_window(session, planned_head) if planned_head is not None else 0
     reset = planned_head is None or planned_head.epoch != epoch
@@ -507,13 +667,26 @@ async def _plan_retention(
     if excess > MAX_REPLAY_BATCH or remaining < 0:
         raise _ReplayStorageError()
     return _RetentionPlan(
-        writer_key, epoch, planned_head, total, reset, persisted_sequence, persisted_floor,
-        old_sequence, final_sequence, floor, local_deleted, remaining, excess,
+        writer_key,
+        epoch,
+        planned_head,
+        total,
+        reset,
+        persisted_sequence,
+        persisted_floor,
+        old_sequence,
+        final_sequence,
+        floor,
+        local_deleted,
+        remaining,
+        excess,
     )
 
 
 async def _allocate_victims(
-    session: AsyncSession, plan: _RetentionPlan, batch_size: int,
+    session: AsyncSession,
+    plan: _RetentionPlan,
+    batch_size: int,
 ) -> dict[tuple[UUID, int], int]:
     """Choose which other streams give up their oldest replay rows to cover ``plan.excess``.
 
@@ -527,12 +700,26 @@ async def _allocate_victims(
         return allocations
     # The bounded top100 are sufficient for <=100 virtual removals.
     size = func.count().label("retained")
-    candidates = list((await session.execute(select(
-        ReplayRecord.workspace_id, ReplayRecord.user_id, size,
-    ).where(~and_(ReplayRecord.workspace_id == writer_key[0], ReplayRecord.user_id == writer_key[1]))
-        .group_by(ReplayRecord.workspace_id, ReplayRecord.user_id)
-        .order_by(size.desc(), ReplayRecord.workspace_id, ReplayRecord.user_id)
-        .limit(MAX_REPLAY_BATCH))).all())
+    candidates = list(
+        (
+            await session.execute(
+                select(
+                    ReplayRecord.workspace_id,
+                    ReplayRecord.user_id,
+                    size,
+                )
+                .where(
+                    ~and_(
+                        ReplayRecord.workspace_id == writer_key[0],
+                        ReplayRecord.user_id == writer_key[1],
+                    )
+                )
+                .group_by(ReplayRecord.workspace_id, ReplayRecord.user_id)
+                .order_by(size.desc(), ReplayRecord.workspace_id, ReplayRecord.user_id)
+                .limit(MAX_REPLAY_BATCH)
+            )
+        ).all()
+    )
     projected = {(workspace_id, user_id): int(count) for workspace_id, user_id, count in candidates}
     eligible = dict(projected)
     projected[writer_key] = plan.remaining + batch_size
@@ -548,7 +735,10 @@ async def _allocate_victims(
 
 
 async def _lock_retention_heads(
-    session: AsyncSession, plan: _RetentionPlan, allocations: dict[tuple[UUID, int], int], now: datetime,
+    session: AsyncSession,
+    plan: _RetentionPlan,
+    allocations: dict[tuple[UUID, int], int],
+    now: datetime,
 ) -> dict[tuple[UUID, int], ReplayHead]:
     """Lock the writer and victim heads (``FOR UPDATE``) in canonical principal order.
 
@@ -559,21 +749,35 @@ async def _lock_retention_heads(
     keys = sorted({writer_key, *allocations}, key=lambda key: (key[0].int, key[1]))
     heads: dict[tuple[UUID, int], ReplayHead] = {}
     for key in keys:
-        head = await session.scalar(select(ReplayHead).where(
-            ReplayHead.workspace_id == key[0], ReplayHead.user_id == key[1],
-        ).with_for_update().execution_options(populate_existing=True))
+        head = await session.scalar(
+            select(ReplayHead)
+            .where(
+                ReplayHead.workspace_id == key[0],
+                ReplayHead.user_id == key[1],
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if head is None:
             if key != writer_key or plan.planned_head is not None:
                 raise _ReplayStorageError()
-            head = ReplayHead(workspace_id=key[0], user_id=key[1], epoch=plan.epoch,
-                              sequence=0, floor_sequence=1, updated_at=now)
+            head = ReplayHead(
+                workspace_id=key[0],
+                user_id=key[1],
+                epoch=plan.epoch,
+                sequence=0,
+                floor_sequence=1,
+                updated_at=now,
+            )
             session.add(head)
             # New writer creation occurs at its canonical position. Only admitted
             # writer parent keys are referenced; victim updates are non-key fields.
             await session.flush([head])
         elif key == writer_key:
             if plan.planned_head is None or (
-                head.epoch, head.sequence, head.floor_sequence,
+                head.epoch,
+                head.sequence,
+                head.floor_sequence,
             ) != (plan.planned_head.epoch, plan.persisted_sequence, plan.persisted_floor):
                 raise _ReplayStorageError()
         else:
@@ -585,8 +789,11 @@ async def _lock_retention_heads(
 
 
 async def _delete_expired_replay(
-    session: AsyncSession, plan: _RetentionPlan, allocations: dict[tuple[UUID, int], int],
-    heads: dict[tuple[UUID, int], ReplayHead], now: datetime,
+    session: AsyncSession,
+    plan: _RetentionPlan,
+    allocations: dict[tuple[UUID, int], int],
+    heads: dict[tuple[UUID, int], ReplayHead],
+    now: datetime,
 ) -> None:
     """Delete the writer's own expired rows, then each victim's oldest rows, advancing floors.
 
@@ -596,12 +803,21 @@ async def _delete_expired_replay(
     writer_key = plan.writer_key
     writer = heads[writer_key]
     if plan.local_deleted:
-        local_predicate = [ReplayRecord.workspace_id == writer_key[0], ReplayRecord.user_id == writer_key[1],
-                           ReplayRecord.epoch == writer.epoch]
+        local_predicate = [
+            ReplayRecord.workspace_id == writer_key[0],
+            ReplayRecord.user_id == writer_key[1],
+            ReplayRecord.epoch == writer.epoch,
+        ]
         if not plan.reset:
             local_predicate.append(ReplayRecord.sequence < plan.floor)
-        deleted = cast(CursorResult[Any], await session.execute(
-            delete(ReplayRecord).where(*local_predicate).execution_options(synchronize_session=False)))
+        deleted = cast(
+            CursorResult[Any],
+            await session.execute(
+                delete(ReplayRecord)
+                .where(*local_predicate)
+                .execution_options(synchronize_session=False)
+            ),
+        )
         if deleted.rowcount != plan.local_deleted:
             raise _ReplayStorageError()
     if plan.reset:
@@ -611,11 +827,20 @@ async def _delete_expired_replay(
     for key in sorted(allocations, key=lambda item: (item[0].int, item[1])):
         head = heads[key]
         amount = allocations[key]
-        deleted = cast(CursorResult[Any], await session.execute(delete(ReplayRecord).where(
-            ReplayRecord.workspace_id == key[0], ReplayRecord.user_id == key[1],
-            ReplayRecord.epoch == head.epoch, ReplayRecord.sequence >= head.floor_sequence,
-            ReplayRecord.sequence < head.floor_sequence + amount,
-        ).execution_options(synchronize_session=False)))
+        deleted = cast(
+            CursorResult[Any],
+            await session.execute(
+                delete(ReplayRecord)
+                .where(
+                    ReplayRecord.workspace_id == key[0],
+                    ReplayRecord.user_id == key[1],
+                    ReplayRecord.epoch == head.epoch,
+                    ReplayRecord.sequence >= head.floor_sequence,
+                    ReplayRecord.sequence < head.floor_sequence + amount,
+                )
+                .execution_options(synchronize_session=False)
+            ),
+        )
         if deleted.rowcount != amount:
             raise _ReplayStorageError()
         head.floor_sequence = head.floor_sequence + amount
@@ -623,7 +848,10 @@ async def _delete_expired_replay(
 
 
 async def _retain_and_append(
-    session: AsyncSession, encoded: list[tuple[str, dict[str, Any]]], *, fence: AccessFence,
+    session: AsyncSession,
+    encoded: list[tuple[str, dict[str, Any]]],
+    *,
+    fence: AccessFence,
 ) -> None:
     """Expire replay-only prefixes fairly and append atomically under the final advisory gate.
 
@@ -642,9 +870,16 @@ async def _retain_and_append(
     writer_key = plan.writer_key
     writer = heads[writer_key]
     for index, (event_type, payload) in enumerate(encoded, start=1):
-        session.add(ReplayRecord(workspace_id=writer_key[0], user_id=writer_key[1],
-                                 sequence=plan.old_sequence + index, epoch=plan.epoch,
-                                 event_type=event_type, payload=payload))
+        session.add(
+            ReplayRecord(
+                workspace_id=writer_key[0],
+                user_id=writer_key[1],
+                sequence=plan.old_sequence + index,
+                epoch=plan.epoch,
+                event_type=event_type,
+                payload=payload,
+            )
+        )
     writer.sequence, writer.updated_at = plan.final_sequence, now
     await session.flush()
     # Recheck scalar cap in-memory after planned mutations under the advisory gate; no second table/head scan needed.
@@ -671,8 +906,12 @@ async def _rollback_replay(session: AsyncSession) -> None:
 
 
 async def commit_with_replay(
-    session: AsyncSession, drafts: Sequence[ReplayDraft] = (), *, scope: Scope,
-    multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    drafts: Sequence[ReplayDraft] = (),
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> None:
     """Commit owner domain/outbox and bounded principal replay as one ordered unit.
 
@@ -683,20 +922,28 @@ async def commit_with_replay(
     bounded storage failure/exhaustion is generic503. Every failure/cancellation rolls back.
     """
     try:
-        await _validate_replay_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                                     access_fence=access_fence)
+        await _validate_replay_fence(
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
         if len(drafts) > MAX_REPLAY_BATCH:
             raise ValueError("Replay batch exceeds its event limit")
         encoded: list[tuple[str, dict[str, Any]]] = []
         principal = _scope_principal(scope)
         for draft in drafts:
-            if not isinstance(draft, (SourceChanged, IngestionChanged, KnowledgeChanged, DashboardChanged)):
+            if not isinstance(
+                draft, (SourceChanged, IngestionChanged, KnowledgeChanged, DashboardChanged)
+            ):
                 raise ValueError("A typed replay draft is required")
             if any(getattr(draft, key) != value for key, value in principal.items()):
                 raise ValueError("Replay draft principal does not match admission")
             # Round trip the exact Unicode serialization checked here. SSE uses these
             # same compact/ensure_ascii=False settings; excluded principal never leaks.
-            serialized = json.dumps(draft.model_dump(mode="json"), separators=(",", ":"), ensure_ascii=False)
+            serialized = json.dumps(
+                draft.model_dump(mode="json"), separators=(",", ":"), ensure_ascii=False
+            )
             if len(serialized.encode("utf-8")) > MAX_REPLAY_EVENT_BYTES:
                 raise ValueError("Replay event exceeds its byte limit")
             encoded.append((draft.type, json.loads(serialized)))
@@ -717,7 +964,11 @@ async def commit_with_replay(
 
 
 async def current_head(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> ReplayState:
     """Read only the admitted principal's detached head with its original revision-bound epoch.
 
@@ -725,20 +976,31 @@ async def current_head(
     head returns virtual empty state; no insert/reset/lock/commit or old-epoch row exposure.
     Caller owns short transaction release and actual later publication admission.
     """
-    await _validate_replay_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                                 access_fence=access_fence, allow_member=True)
+    await _validate_replay_fence(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        allow_member=True,
+    )
     epoch = _replay_epoch(access_fence)
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         # Members have no replay rows (no member content push): virtual empty head, never a read.
         return ReplayState(epoch=epoch, sequence=0, floor_sequence=1)
     head = await session.scalar(
-        select(ReplayHead).where(ReplayHead.workspace_id == access_fence.workspace_id,
-                                 ReplayHead.user_id == access_fence.user_id)
+        select(ReplayHead)
+        .where(
+            ReplayHead.workspace_id == access_fence.workspace_id,
+            ReplayHead.user_id == access_fence.user_id,
+        )
         .execution_options(populate_existing=True)
     )
     if head is None or head.epoch != epoch:
         return ReplayState(epoch=epoch, sequence=0, floor_sequence=1)
-    if head.sequence < 0 or head.sequence >= MAX_REPLAY_SEQUENCE or not 1 <= head.floor_sequence <= head.sequence + 1:
+    if (
+        head.sequence < 0
+        or head.sequence >= MAX_REPLAY_SEQUENCE
+        or not 1 <= head.floor_sequence <= head.sequence + 1
+    ):
         raise HTTPException(status_code=503, detail="Realtime replay storage unavailable")
     return ReplayState(epoch=head.epoch, sequence=head.sequence, floor_sequence=head.floor_sequence)
-

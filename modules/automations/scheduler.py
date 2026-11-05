@@ -26,7 +26,9 @@ from core.workspaces.schemas import Scope
 from modules.automations.models import Automation, AutomationRevision, AutomationSchedule
 from modules.automations.scope import _actor, _admit
 
-MIN_INTERVAL_SECONDS = 120  # 3600 / execution.MAX_RUNS_PER_HOUR (30): the cron floor never exceeds the cap
+MIN_INTERVAL_SECONDS = (
+    120  # 3600 / execution.MAX_RUNS_PER_HOUR (30): the cron floor never exceeds the cap
+)
 MIN_INTERVAL_AGENT_SECONDS = 300  # run_agent spends model tokens: no faster than every five minutes
 SEARCH_DAYS = 366 * 5
 _RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
@@ -83,11 +85,16 @@ def parse_cron(expression: str) -> CronSpec:
     if len(tokens) != 5:
         raise ValueError("cron must have five fields")
     minute, hour, day, month, weekday = (
-        _parse_field(t, lo, hi) for t, (lo, hi) in zip(tokens, _RANGES, strict=True))
+        _parse_field(t, lo, hi) for t, (lo, hi) in zip(tokens, _RANGES, strict=True)
+    )
     return CronSpec(
-        minutes=tuple(sorted(minute)), hours=tuple(sorted(hour)), days=day, months=month,
+        minutes=tuple(sorted(minute)),
+        hours=tuple(sorted(hour)),
+        days=day,
+        months=month,
         weekdays=frozenset(w % 7 for w in weekday),  # 7 -> 0 (Sunday)
-        days_star=tokens[2].startswith("*"), weekdays_star=tokens[4].startswith("*"),
+        days_star=tokens[2].startswith("*"),
+        weekdays_star=tokens[4].startswith("*"),
     )
 
 
@@ -98,13 +105,19 @@ def next_slot(spec: CronSpec, tz: ZoneInfo, after: datetime) -> datetime | None:
     times that do not exist (DST gap) are skipped; an ambiguous wall time fires once (first
     occurrence). Returns None when no slot exists within the search window.
     """
-    local = after.astimezone(tz).replace(second=0, microsecond=0, tzinfo=None) + timedelta(minutes=1)
+    local = after.astimezone(tz).replace(second=0, microsecond=0, tzinfo=None) + timedelta(
+        minutes=1
+    )
     for offset in range(SEARCH_DAYS):
         day = local.date() + timedelta(days=offset)
         if day.month not in spec.months:
             continue
         day_ok, weekday_ok = day.day in spec.days, day.isoweekday() % 7 in spec.weekdays
-        if not ((day_ok or weekday_ok) if not spec.days_star and not spec.weekdays_star else (day_ok and weekday_ok)):
+        if not (
+            (day_ok or weekday_ok)
+            if not spec.days_star and not spec.weekdays_star
+            else (day_ok and weekday_ok)
+        ):
             continue
         for hour in spec.hours:
             for minute in spec.minutes:
@@ -134,7 +147,11 @@ def min_interval_seconds(spec: CronSpec) -> int:
     if not slots:
         raise ValueError("cron never fires")
     # A single slot in the window (for example yearly) is far slower than any floor.
-    return int(min(((b - a).total_seconds() for a, b in zip(slots, slots[1:], strict=False)), default=10**9))
+    return int(
+        min(
+            ((b - a).total_seconds() for a, b in zip(slots, slots[1:], strict=False)), default=10**9
+        )
+    )
 
 
 def validate_schedule(cron: str, timezone: str, *, spends_model: bool) -> None:
@@ -152,8 +169,11 @@ def validate_schedule(cron: str, timezone: str, *, spends_model: bool) -> None:
 
 
 async def tick(
-    factory: async_sessionmaker[AsyncSession], now: datetime | None = None,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    factory: async_sessionmaker[AsyncSession],
+    now: datetime | None = None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> int:
     """Sync schedule rows with live rules, then fire every due slot once (coalescing misfires).
 
@@ -169,21 +189,38 @@ async def tick(
     now = now or datetime.now(UTC)
     created = 0
     async with factory() as session:
-        fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+        fence = await _admit(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+        )
         mine = (Automation.workspace_id == scope.workspace_id, Automation.owner_id == _actor(scope))
-        rules = (await session.execute(
-            select(Automation, AutomationRevision).join(
-                AutomationRevision,
-                (AutomationRevision.automation_id == Automation.id) & (AutomationRevision.revision == Automation.revision),
-            ).where(
-                *mine, Automation.deleted_at.is_(None), Automation.enabled.is_(True),
-                AutomationRevision.trigger["type"].astext == "schedule",
-            ).limit(100)
-        )).all()
+        rules = (
+            await session.execute(
+                select(Automation, AutomationRevision)
+                .join(
+                    AutomationRevision,
+                    (AutomationRevision.automation_id == Automation.id)
+                    & (AutomationRevision.revision == Automation.revision),
+                )
+                .where(
+                    *mine,
+                    Automation.deleted_at.is_(None),
+                    Automation.enabled.is_(True),
+                    AutomationRevision.trigger["type"].astext == "schedule",
+                )
+                .limit(100)
+            )
+        ).all()
         live = {head.id: (head, rev) for head, rev in rules}
-        existing = {row.automation_id: row for row in (await session.scalars(
-            select(AutomationSchedule).join(Automation, Automation.id == AutomationSchedule.automation_id).where(*mine)
-        )).all()}
+        existing = {
+            row.automation_id: row
+            for row in (
+                await session.scalars(
+                    select(AutomationSchedule)
+                    .join(Automation, Automation.id == AutomationSchedule.automation_id)
+                    .where(*mine)
+                )
+            ).all()
+        }
         for automation_id, row in existing.items():
             if automation_id not in live:
                 await session.delete(row)  # paused, deleted or no longer a schedule rule
@@ -196,33 +233,58 @@ async def tick(
             if first is None:
                 continue
             stmt = insert(AutomationSchedule).values(
-                automation_id=automation_id, revision=head.revision, cron=trigger["cron"],
-                timezone=trigger["timezone"], next_slot=first, misfire_policy="coalesce")
-            await session.execute(stmt.on_conflict_do_update(
-                index_elements=[AutomationSchedule.automation_id],
-                set_={"revision": head.revision, "cron": trigger["cron"], "timezone": trigger["timezone"],
-                      "next_slot": first, "last_slot": None}))
+                automation_id=automation_id,
+                revision=head.revision,
+                cron=trigger["cron"],
+                timezone=trigger["timezone"],
+                next_slot=first,
+                misfire_policy="coalesce",
+            )
+            await session.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=[AutomationSchedule.automation_id],
+                    set_={
+                        "revision": head.revision,
+                        "cron": trigger["cron"],
+                        "timezone": trigger["timezone"],
+                        "next_slot": first,
+                        "last_slot": None,
+                    },
+                )
+            )
         await session.flush()
-        due = (await session.execute(
-            select(AutomationSchedule, AutomationRevision).join(
-                AutomationRevision,
-                (AutomationRevision.automation_id == AutomationSchedule.automation_id)
-                & (AutomationRevision.revision == AutomationSchedule.revision),
-            ).join(Automation, Automation.id == AutomationSchedule.automation_id)
-            .where(*mine, AutomationSchedule.next_slot <= now)
-            .order_by(AutomationSchedule.next_slot).limit(50)
-            .with_for_update(of=AutomationSchedule, skip_locked=True)
-        )).all()
+        due = (
+            await session.execute(
+                select(AutomationSchedule, AutomationRevision)
+                .join(
+                    AutomationRevision,
+                    (AutomationRevision.automation_id == AutomationSchedule.automation_id)
+                    & (AutomationRevision.revision == AutomationSchedule.revision),
+                )
+                .join(Automation, Automation.id == AutomationSchedule.automation_id)
+                .where(*mine, AutomationSchedule.next_slot <= now)
+                .order_by(AutomationSchedule.next_slot)
+                .limit(50)
+                .with_for_update(of=AutomationSchedule, skip_locked=True)
+            )
+        ).all()
         for schedule, rev in due:
             slot = schedule.next_slot
             spec, tz = parse_cron(schedule.cron), ZoneInfo(schedule.timezone)
             local = slot.astimezone(tz)
             run_id = await execution.plan_run(
-                session, rev=rev, trigger_type="schedule", trigger_key=f"slot:{slot.isoformat()}",
-                trigger_event_id=None, slot=slot,
+                session,
+                rev=rev,
+                trigger_type="schedule",
+                trigger_key=f"slot:{slot.isoformat()}",
+                trigger_event_id=None,
+                slot=slot,
                 payload={"weekday": local.isoweekday() % 7, "hour": local.hour},
-                depth=1, origin_automation_id=None, origin_run_id=None,
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                depth=1,
+                origin_automation_id=None,
+                origin_run_id=None,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
             created += run_id is not None
             nxt = next_slot(spec, tz, now)
@@ -232,5 +294,10 @@ async def tick(
             else:
                 schedule.next_slot = nxt
         await commit_with_replay(
-            session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+            session,
+            [],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
     return created

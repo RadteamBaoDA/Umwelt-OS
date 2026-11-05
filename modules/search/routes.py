@@ -35,28 +35,44 @@ from modules.search.schemas import (
 from modules.settings.public import module_dependency
 from modules.tasks.public import TaskFilter
 
-router = APIRouter(prefix="/api/v1/search", tags=["search"], dependencies=[Depends(module_dependency("search"))])
+router = APIRouter(
+    prefix="/api/v1/search", tags=["search"], dependencies=[Depends(module_dependency("search"))]
+)
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
+WorkspaceRead = Annotated[
+    WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)
+]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
 async def _gate_member_hits(
-    request: Request, session: AsyncSession, workspace: WorkspaceContext, fence: AccessFence,
+    request: Request,
+    session: AsyncSession,
+    workspace: WorkspaceContext,
+    fence: AccessFence,
     hits: list[SearchHit],
 ) -> None:
     """Bind a member's response to the exact document grants it was built from (409 if any moved)."""
     ids = tuple(dict.fromkeys(hit.document_id for hit in hits))
-    grants = await workspaces.read_resource_grants(session, scope=workspace, kind="document", resource_ids=ids)
+    grants = await workspaces.read_resource_grants(
+        session, scope=workspace, kind="document", resource_ids=ids
+    )
     if {grant.resource_id for grant in grants} != set(ids):
         raise HTTPException(status_code=409, detail="Search results changed; retry")
-    require_publication_gate(request, PublicationFence(
-        scope=workspace, access_fence=fence, auth_session=authenticated_session_ref(request), grants=grants,
-    ))
+    require_publication_gate(
+        request,
+        PublicationFence(
+            scope=workspace,
+            access_fence=fence,
+            auth_session=authenticated_session_ref(request),
+            grants=grants,
+        ),
+    )
 
 
 async def _member_fence(
-    request: Request, session: AsyncSession,
+    request: Request,
+    session: AsyncSession,
     workspace: WorkspaceContext | AdminWorkspaceReadContext,
 ) -> AccessFence | None:
     """Admission fence for member reads (None for owners, who need no publication gate)."""
@@ -65,7 +81,9 @@ async def _member_fence(
     if not isinstance(workspace, WorkspaceContext):
         raise TypeError("invariant violated: unexpected type for workspace")
     return await workspaces.read_access_fence(
-        session, scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        session,
+        scope=workspace,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
 
 
@@ -93,7 +111,9 @@ async def global_search(
     """
     if not q.strip():
         # Empty owner queries mean an unfiltered collection, so reject before any search path.
-        raise HTTPException(status_code=422, detail="Search query must contain non-whitespace characters")
+        raise HTTPException(
+            status_code=422, detail="Search query must contain non-whitespace characters"
+        )
 
     doc_request = SearchRequest(
         query=q,
@@ -104,8 +124,12 @@ async def global_search(
     )
     member_fence = await _member_fence(request, session, workspace)
     doc_response = await public.search(
-        session, request.app.state.redis, request.app.state.settings, doc_request,
-        scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        session,
+        request.app.state.redis,
+        request.app.state.settings,
+        doc_request,
+        scope=workspace,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if member_fence is not None:
         # Members get documents only: no task/goal rows and no cross-type counts.
@@ -113,17 +137,23 @@ async def global_search(
             raise TypeError("invariant violated: unexpected type for workspace")
         await _gate_member_hits(request, session, workspace, member_fence, doc_response.items)
         return GlobalSearchResponse(
-            documents=doc_response.items, document_next_cursor=doc_response.next_cursor,
+            documents=doc_response.items,
+            document_next_cursor=doc_response.next_cursor,
             total=len(doc_response.items),
         )
     try:
         task_filter = TaskFilter(q=q, limit=limit, cursor=task_cursor)
         goal_filter = GoalFilter(q=q, limit=limit, cursor=goal_cursor)
     except ValidationError as exc:
-        raise HTTPException(status_code=422, detail="Invalid internal search filter or cursor") from exc
+        raise HTTPException(
+            status_code=422, detail="Invalid internal search filter or cursor"
+        ) from exc
 
     task_page, goal_page = await public.search_tasks_and_goals(
-        session, task_filter, goal_filter, scope=workspace,
+        session,
+        task_filter,
+        goal_filter,
+        scope=workspace,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     total = len(doc_response.items) + len(task_page.items) + len(goal_page.items)
@@ -138,15 +168,24 @@ async def global_search(
     )
 
 
-@router.post("", response_model=SearchResponse, dependencies=[Depends(require_budget("search", 60, 60))])
+@router.post(
+    "", response_model=SearchResponse, dependencies=[Depends(require_budget("search", 60, 60))]
+)
 async def search(
-    payload: SearchRequest, request: Request, session: Session, workspace: WorkspaceRead,
+    payload: SearchRequest,
+    request: Request,
+    session: Session,
+    workspace: WorkspaceRead,
 ) -> SearchResponse:
     """Search the selected workspace: owners see everything, members only explicitly shared documents."""
     member_fence = await _member_fence(request, session, workspace)
     response = await public.search(
-        session, request.app.state.redis, request.app.state.settings, payload,
-        scope=workspace, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        session,
+        request.app.state.redis,
+        request.app.state.settings,
+        payload,
+        scope=workspace,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         release_during_embed=member_fence is None,
     )
     if member_fence is not None:
@@ -158,19 +197,25 @@ async def search(
 
 @router.get("/index", response_model=SearchIndexStatus)
 async def index_status(
-    request: Request, session: Session, workspace: WorkspaceRead,
+    request: Request,
+    session: Session,
+    workspace: WorkspaceRead,
 ) -> SearchIndexStatus:
     """Return this admitted workspace's generation and truthful automatic-index readiness state."""
     return await public.index_status(
-        session, scope=workspace,
+        session,
+        scope=workspace,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-        settings=request.app.state.settings, redis=request.app.state.redis,
+        settings=request.app.state.settings,
+        redis=request.app.state.redis,
     )
 
 
 @router.post("/reindex", response_model=ReindexResponse, status_code=202)
 async def reindex(
-    request: Request, session: Session, workspace: WorkspaceWrite,
+    request: Request,
+    session: Session,
+    workspace: WorkspaceWrite,
 ) -> ReindexResponse:
     """Queue reindexing only when a permitted remote embedding mapping is configured."""
     redis: Redis = request.app.state.redis
@@ -179,13 +224,21 @@ async def reindex(
     # under the workspace generation mutex, so a change in between aborts with 409.
     authority = await indexing.capture_authority(session, settings, redis, scope=workspace)
     if not authority.permitted():
-        raise HTTPException(status_code=409, detail="Configure and permit a remote embedding model first")
+        raise HTTPException(
+            status_code=409, detail="Configure and permit a remote embedding model first"
+        )
     try:
         generation = await indexing.create_generation_for_authority(
-            session, authority, settings, redis, scope=workspace,
+            session,
+            authority,
+            settings,
+            redis,
+            scope=workspace,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail="An index generation for another gateway is still running") from exc
+        raise HTTPException(
+            status_code=409, detail="An index generation for another gateway is still running"
+        ) from exc
     if generation is None:
         raise HTTPException(status_code=409, detail="Index generation is not available")
     return ReindexResponse(run_id=generation.id)

@@ -62,7 +62,9 @@ class PublicationGateMiddleware:
             fence: PublicationFence | None = (scope.get("state") or {}).get("publication_fence")
             kind = message["type"]
             protected = fence is not None and (
-                kind == "http.response.start" or (kind == "http.response.body" and bool(message.get("body", b""))))
+                kind == "http.response.start"
+                or (kind == "http.response.body" and bool(message.get("body", b"")))
+            )
             if not protected:
                 if kind == "http.response.start":
                     started = True
@@ -83,10 +85,16 @@ class PublicationGateMiddleware:
                 try:
                     async with asyncio.timeout(DB_TIMEOUT_SECONDS):
                         await workspaces.lock_access_fence(
-                            session, scope=fence.scope, expected=fence.access_fence,
+                            session,
+                            scope=fence.scope,
+                            expected=fence.access_fence,
                             multi_workspace_enabled=app.state.settings.multi_workspace_enabled,
-                            auth_sessions=(fence.auth_session,), read=True)
-                        await workspaces.lock_resource_grants(session, scope=fence.scope, grants=fence.grants)
+                            auth_sessions=(fence.auth_session,),
+                            read=True,
+                        )
+                        await workspaces.lock_resource_grants(
+                            session, scope=fence.scope, grants=fence.grants
+                        )
                 except (HTTPException, DomainError) as exc:
                     denied = exc
                     if kind == "http.response.start":
@@ -104,4 +112,5 @@ class PublicationGateMiddleware:
             status = 409 if denied.status_code == 409 else 404
             detail = "Workspace access fence changed" if status == 409 else "Not found"
             await JSONResponse({"detail": detail}, status_code=status, headers=_PRIVATE_HEADERS)(
-                scope, receive, send)
+                scope, receive, send
+            )

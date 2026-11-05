@@ -67,10 +67,15 @@ AccountWrite = Annotated[object, Depends(require_account_write)]
 
 
 @router.get("/preferences", response_model=OwnerPreferencesRead)
-async def read_owner_preferences(request: Request, session: Session, _owner: AccountRead) -> OwnerPreferencesRead:
+async def read_owner_preferences(
+    request: Request, session: Session, _owner: AccountRead
+) -> OwnerPreferencesRead:
     """Read active account preferences; selected workspace and member role are irrelevant."""
-    return await public.read_owner_preferences(session, actor_user_id=request.state.account.id,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    return await public.read_owner_preferences(
+        session,
+        actor_user_id=request.state.account.id,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
 
 
 @router.put("/preferences", response_model=OwnerPreferencesRead)
@@ -81,62 +86,115 @@ async def save_owner_preferences(
     request: Request,
 ) -> OwnerPreferencesRead:
     """Commit active account preferences under exact-session auth/CSRF admission and CAS."""
-    saved = await public.save_owner_preferences(session, value, actor_user_id=request.state.account.id,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled, auth_sessions=(authenticated_session_ref(request),))
+    saved = await public.save_owner_preferences(
+        session,
+        value,
+        actor_user_id=request.state.account.id,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
     return saved
 
 
 @router.get("/retention", response_model=RetentionSettingsRead)
-async def read_retention(request: Request, session: Session, _owner: OwnerRead) -> RetentionSettingsRead:
+async def read_retention(
+    request: Request, session: Session, _owner: OwnerRead
+) -> RetentionSettingsRead:
     """Read the owner's trace-retention policy after owner authorization."""
-    return await lifecycle.read_retention_settings(session, scope=_owner, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    return await lifecycle.read_retention_settings(
+        session,
+        scope=_owner,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
 
 
 @router.patch("/retention", response_model=RetentionSettingsRead)
-async def patch_retention(value: RetentionSettingsUpdate, request: Request, session: Session, _owner: OwnerWrite) -> RetentionSettingsRead:
+async def patch_retention(
+    value: RetentionSettingsUpdate, request: Request, session: Session, _owner: OwnerWrite
+) -> RetentionSettingsRead:
     """Save a revision-fenced trace-retention policy; source and document history stay retained."""
-    result = await lifecycle.save_retention_settings(session, value, scope=_owner, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled, auth_sessions=(authenticated_session_ref(request),))
+    result = await lifecycle.save_retention_settings(
+        session,
+        value,
+        scope=_owner,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
     return result
 
 
 @router.get("/translation", response_model=TranslationSettingsRead)
-async def read_translation(request: Request, session: Session, member: OwnerRead) -> TranslationSettingsRead:
+async def read_translation(
+    request: Request, session: Session, member: OwnerRead
+) -> TranslationSettingsRead:
     """Read-only workspace translation projection; any member may read it, none can write it."""
     return await translations.read_translation_settings(
-        session, scope=member, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+        session,
+        scope=member,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
 
 
 @router.patch("/translation", response_model=TranslationSettingsRead)
-async def patch_translation(value: TranslationSettingsUpdate, request: Request, session: Session, _owner: OwnerWrite) -> TranslationSettingsRead:
+async def patch_translation(
+    value: TranslationSettingsUpdate, request: Request, session: Session, _owner: OwnerWrite
+) -> TranslationSettingsRead:
     """Owner-only CAS update; 409 on stale revision, 403 for members."""
     result = await translations.save_translation_settings(
-        session, value, scope=_owner, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-        auth_sessions=(authenticated_session_ref(request),))
+        session,
+        value,
+        scope=_owner,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
     return result
 
 
 @router.get("/modules", response_model=ModuleLifecycleRead)
-async def read_modules(request: Request, session: Session, _owner: OwnerRead) -> ModuleLifecycleRead:
+async def read_modules(
+    request: Request, session: Session, _owner: OwnerRead
+) -> ModuleLifecycleRead:
     """Read descriptor-derived module availability for owner controls."""
-    return await lifecycle.read_module_lifecycle(session, scope=_owner, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    return await lifecycle.read_module_lifecycle(
+        session,
+        scope=_owner,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
 
 
 @router.patch("/modules", response_model=ModuleLifecycleRead)
-async def patch_module(value: ModuleLifecycleUpdate, session: Session, request: Request, _owner: OwnerWrite) -> ModuleLifecycleRead:
+async def patch_module(
+    value: ModuleLifecycleUpdate, session: Session, request: Request, _owner: OwnerWrite
+) -> ModuleLifecycleRead:
     """Commit workspace-only dependency-aware toggle; process capability registry is immutable."""
-    result = await lifecycle.save_module_lifecycle(session, value, scope=_owner, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled, auth_sessions=(authenticated_session_ref(request),))
+    result = await lifecycle.save_module_lifecycle(
+        session,
+        value,
+        scope=_owner,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
     return result
 
 
-async def _read(session: AsyncSession, request: Request, *, scope: WorkspaceContext) -> AISettingsRead:
+async def _read(
+    session: AsyncSession, request: Request, *, scope: WorkspaceContext
+) -> AISettingsRead:
     """Build the AI settings response and attach gateway-matched capabilities."""
-    config = await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=scope)
+    config = await public.get_ai_execution_config(
+        session, request.app.state.settings, request.app.state.redis, scope=scope
+    )
     value = public._read(config)
-    value.capabilities = await models.list_capabilities(session, config=config, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    value.capabilities = await models.list_capabilities(
+        session,
+        config=config,
+        scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     return value
 
 
@@ -147,46 +205,89 @@ async def read_ai(session: Session, request: Request, _owner: OwnerRead) -> AISe
 
 
 @router.put("/ai", response_model=AISettingsRead)
-async def save_ai(value: AISettingsUpdate, session: Session, request: Request, _owner: OwnerWrite) -> AISettingsRead:
+async def save_ai(
+    value: AISettingsUpdate, session: Session, request: Request, _owner: OwnerWrite
+) -> AISettingsRead:
     """Save AI settings, commit, then report capabilities for the saved gateway."""
-    saved = await public.save_ai_settings(session, value, request.app.state.settings, scope=_owner, auth_sessions=(authenticated_session_ref(request),))
+    saved = await public.save_ai_settings(
+        session,
+        value,
+        request.app.state.settings,
+        scope=_owner,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
-    saved.capabilities = await models.list_capabilities(session, config=
-        await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=_owner),
-        scope=_owner, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    saved.capabilities = await models.list_capabilities(
+        session,
+        config=await public.get_ai_execution_config(
+            session, request.app.state.settings, request.app.state.redis, scope=_owner
+        ),
+        scope=_owner,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     return saved
 
 
 @router.post("/ai/discover")
-async def discover_models(body: ConnectionDraft, request: Request, session: Session, _owner: OwnerWrite) -> dict[str, list[str]]:
+async def discover_models(
+    body: ConnectionDraft, request: Request, session: Session, _owner: OwnerWrite
+) -> dict[str, list[str]]:
     """Discover models using a validated draft endpoint and explicit credential.
 
     The gateway rechecks endpoint policy before sending; upstream gateway errors
     become HTTP 502 and missing draft credentials produce HTTP 409.
     """
-    config = await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=_owner)
+    config = await public.get_ai_execution_config(
+        session, request.app.state.settings, request.app.state.redis, scope=_owner
+    )
     endpoint, kind = public.resolve_draft_endpoint(
-        config, str(body.base_url) if body.base_url else None, body.kind, body.provider_id, request.app.state.settings)
-    credential, local, destination = public.resolve_draft_provider(config, endpoint, body.api_key, body.provider_id, kind)
+        config,
+        str(body.base_url) if body.base_url else None,
+        body.kind,
+        body.provider_id,
+        request.app.state.settings,
+    )
+    credential, local, destination = public.resolve_draft_provider(
+        config, endpoint, body.api_key, body.provider_id, kind
+    )
     if not credential and not local:
         raise HTTPException(status_code=409, detail="Configure a gateway credential first")
     session_ref = authenticated_session_ref(request)
     await session.rollback()
+
     async def recheck_send() -> None:
         """Fresh exact-session/access/config check; always release SQL before discovery HTTP."""
         try:
-            await public.check_ai_execution_config(session, request.app.state.settings, request.app.state.redis,
-                                                   scope=_owner, expected=config, auth_sessions=(session_ref,))
+            await public.check_ai_execution_config(
+                session,
+                request.app.state.settings,
+                request.app.state.redis,
+                scope=_owner,
+                expected=config,
+                auth_sessions=(session_ref,),
+            )
             public.validate_endpoint(endpoint, request.app.state.settings)
         finally:
             await session.rollback()
 
-    gateway = ModelGateway(request.app.state.redis, endpoint, credential,
-        destination, 20,
-        scope=_owner, configuration_revision=0,
-        gateway_identity=hashlib.sha256((config.gateway_identity + endpoint + hashlib.sha256(credential.encode()).hexdigest()).encode()).hexdigest(), before_send=recheck_send,
+    gateway = ModelGateway(
+        request.app.state.redis,
+        endpoint,
+        credential,
+        destination,
+        20,
+        scope=_owner,
+        configuration_revision=0,
+        gateway_identity=hashlib.sha256(
+            (
+                config.gateway_identity + endpoint + hashlib.sha256(credential.encode()).hexdigest()
+            ).encode()
+        ).hexdigest(),
+        before_send=recheck_send,
         approved_endpoint_cidrs=tuple(request.app.state.settings.ai_allowed_endpoint_cidrs),
-        allow_public_endpoints=request.app.state.settings.ai_allow_public_providers, kind=kind)
+        allow_public_endpoints=request.app.state.settings.ai_allow_public_providers,
+        kind=kind,
+    )
     try:
         model_ids = await gateway.discover_models()
         await recheck_send()
@@ -200,24 +301,45 @@ async def discover_models(body: ConnectionDraft, request: Request, session: Sess
 async def read_models(session: Session, request: Request, _owner: OwnerRead) -> ModelSettingsRead:
     """Return role defaults and capability status without exposing credentials."""
     value = await _read(session, request, scope=_owner)
-    return ModelSettingsRead(defaults=value.defaults, capabilities=value.capabilities,
-        credential_configured=any(p.credential_configured for p in value.providers))
+    return ModelSettingsRead(
+        defaults=value.defaults,
+        capabilities=value.capabilities,
+        credential_configured=any(p.credential_configured for p in value.providers),
+    )
 
 
 @router.patch("/models", response_model=ModelSettingsRead)
-async def patch_models(values: dict[str, ModelMapping | None], session: Session, request: Request, _owner: OwnerWrite) -> ModelSettingsRead:
+async def patch_models(
+    values: dict[str, ModelMapping | None], session: Session, request: Request, _owner: OwnerWrite
+) -> ModelSettingsRead:
     """Merge role default changes (a null value clears the role) into current settings using revision checking."""
     current = await _read(session, request, scope=_owner)
     if not values or any(role not in MODEL_ROLES for role in values):
         raise HTTPException(status_code=422, detail="Unknown or empty model role mapping")
-    config = await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=_owner)
-    update = AISettingsUpdate(expected_revision=current.configuration_revision,
-        web_search_provider=config.web_search_provider, web_search_endpoint=config.web_search_endpoint,
+    config = await public.get_ai_execution_config(
+        session, request.app.state.settings, request.app.state.redis, scope=_owner
+    )
+    update = AISettingsUpdate(
+        expected_revision=current.configuration_revision,
+        web_search_provider=config.web_search_provider,
+        web_search_endpoint=config.web_search_endpoint,
         defaults=config.defaults.model_copy(update=values),
-        privacy=config.privacy, request_timeout_seconds=config.request_timeout_seconds)
-    saved = await public.save_ai_settings(session, update, request.app.state.settings, scope=_owner, auth_sessions=(authenticated_session_ref(request),))
+        privacy=config.privacy,
+        request_timeout_seconds=config.request_timeout_seconds,
+    )
+    saved = await public.save_ai_settings(
+        session,
+        update,
+        request.app.state.settings,
+        scope=_owner,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
-    return ModelSettingsRead(defaults=saved.defaults, capabilities=[], credential_configured=any(p.credential_configured for p in saved.providers))
+    return ModelSettingsRead(
+        defaults=saved.defaults,
+        capabilities=[],
+        credential_configured=any(p.credential_configured for p in saved.providers),
+    )
 
 
 @router.get("/privacy", response_model=PrivacySettings)
@@ -227,15 +349,29 @@ async def read_privacy(session: Session, request: Request, _owner: OwnerRead) ->
 
 
 @router.patch("/privacy", response_model=PrivacySettings)
-async def patch_privacy(value: PrivacySettings, session: Session, request: Request, _owner: OwnerWrite) -> PrivacySettings:
+async def patch_privacy(
+    value: PrivacySettings, session: Session, request: Request, _owner: OwnerWrite
+) -> PrivacySettings:
     """Update destination-bound privacy grants through the shared CAS save path."""
     current = await _read(session, request, scope=_owner)
-    config = await public.get_ai_execution_config(session, request.app.state.settings, request.app.state.redis, scope=_owner)
-    update = AISettingsUpdate(expected_revision=current.configuration_revision,
+    config = await public.get_ai_execution_config(
+        session, request.app.state.settings, request.app.state.redis, scope=_owner
+    )
+    update = AISettingsUpdate(
+        expected_revision=current.configuration_revision,
         web_search_provider=config.web_search_provider,
         web_search_endpoint=config.web_search_endpoint,
-        defaults=config.defaults, privacy=value, request_timeout_seconds=config.request_timeout_seconds)
-    saved = await public.save_ai_settings(session, update, request.app.state.settings, scope=_owner, auth_sessions=(authenticated_session_ref(request),))
+        defaults=config.defaults,
+        privacy=value,
+        request_timeout_seconds=config.request_timeout_seconds,
+    )
+    saved = await public.save_ai_settings(
+        session,
+        update,
+        request.app.state.settings,
+        scope=_owner,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
     return saved.privacy
 
@@ -243,14 +379,23 @@ async def patch_privacy(value: PrivacySettings, session: Session, request: Reque
 @router.get("/prompts", response_model=SystemPromptsRead)
 async def read_prompts(session: Session, request: Request, _owner: OwnerRead) -> SystemPromptsRead:
     """Return editable system prompts with their built-in defaults."""
-    return await public.read_system_prompts(session, request.app.state.settings, request.app.state.redis, scope=_owner)
+    return await public.read_system_prompts(
+        session, request.app.state.settings, request.app.state.redis, scope=_owner
+    )
 
 
 @router.put("/prompts", response_model=SystemPromptsRead)
-async def save_prompts(value: SystemPromptsUpdate, session: Session, request: Request, _owner: OwnerWrite) -> SystemPromptsRead:
+async def save_prompts(
+    value: SystemPromptsUpdate, session: Session, request: Request, _owner: OwnerWrite
+) -> SystemPromptsRead:
     """Save prompt overrides under the shared revision check; null/blank resets to default."""
-    saved = await public.save_system_prompts(session, value, request.app.state.settings, scope=_owner,
-                                             auth_sessions=(authenticated_session_ref(request),))
+    saved = await public.save_system_prompts(
+        session,
+        value,
+        request.app.state.settings,
+        scope=_owner,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
     return saved
 
@@ -258,33 +403,59 @@ async def save_prompts(value: SystemPromptsUpdate, session: Session, request: Re
 @router.get("/web-search", response_model=WebSearchRead)
 async def read_web_search(session: Session, request: Request, _owner: OwnerRead) -> WebSearchRead:
     """Return web-search provider, endpoint, key presence and remote-search consent; never the key."""
-    return await public.read_web_search(session, request.app.state.settings, request.app.state.redis, scope=_owner)
+    return await public.read_web_search(
+        session, request.app.state.settings, request.app.state.redis, scope=_owner
+    )
 
 
 @router.put("/web-search", response_model=WebSearchRead)
-async def save_web_search(value: WebSearchUpdate, session: Session, request: Request, _owner: OwnerWrite) -> WebSearchRead:
+async def save_web_search(
+    value: WebSearchUpdate, session: Session, request: Request, _owner: OwnerWrite
+) -> WebSearchRead:
     """Save web-search settings under the shared revision check (409 when stale)."""
-    saved = await public.save_web_search(session, value, request.app.state.settings, scope=_owner,
-                                         auth_sessions=(authenticated_session_ref(request),))
+    saved = await public.save_web_search(
+        session,
+        value,
+        request.app.state.settings,
+        scope=_owner,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
     return saved
 
 
 @router.post("/web-search/test", response_model=ConnectionTestResult)
-async def test_web_search(body: WebSearchTest, session: Session, request: Request, _owner: OwnerWrite) -> ConnectionTestResult:
+async def test_web_search(
+    body: WebSearchTest, session: Session, request: Request, _owner: OwnerWrite
+) -> ConnectionTestResult:
     """Run one fixed query against a draft provider; a blank key reuses the stored one only for the stored endpoint."""
     settings = request.app.state.settings
     endpoint = public.validate_endpoint(str(body.endpoint), settings)
-    config = await public.get_ai_execution_config(session, settings, request.app.state.redis, scope=_owner)
-    key = body.api_key or (config.web_search_api_key if config.web_search_endpoint == endpoint else "")
+    config = await public.get_ai_execution_config(
+        session, settings, request.app.state.redis, scope=_owner
+    )
+    key = body.api_key or (
+        config.web_search_api_key if config.web_search_endpoint == endpoint else ""
+    )
     if not key:
-        key = next((target.api_key for target in config.web_search_fallbacks if target.endpoint == endpoint), "")
+        key = next(
+            (
+                target.api_key
+                for target in config.web_search_fallbacks
+                if target.endpoint == endpoint
+            ),
+            "",
+        )
     await session.rollback()  # no SQL held across egress
     if endpoint is None or (body.provider != "searxng" and not key):
         return ConnectionTestResult(ok=False, error="credential_required")
     try:
-        transport = approved_web_search_transport(endpoint, settings.ai_allowed_endpoint_hosts,
-                                                  settings.web_search_allowed_cidrs, allow_http=body.provider == "searxng")
+        transport = approved_web_search_transport(
+            endpoint,
+            settings.ai_allowed_endpoint_hosts,
+            settings.web_search_allowed_cidrs,
+            allow_http=body.provider == "searxng",
+        )
         results = await run_web_search(body.provider, endpoint, key, "test", transport=transport)
     except WebSearchError as exc:
         return ConnectionTestResult(ok=False, error=exc.code, reason=exc.reason)
@@ -300,16 +471,25 @@ async def read_n8n(session: Session, request: Request, _owner: OwnerRead) -> N8n
 
 
 @router.put("/n8n", response_model=N8nRead)
-async def save_n8n(value: N8nUpdate, session: Session, request: Request, _owner: OwnerWrite) -> N8nRead:
+async def save_n8n(
+    value: N8nUpdate, session: Session, request: Request, _owner: OwnerWrite
+) -> N8nRead:
     """Save n8n URL and encrypted secrets under the shared revision check. A new webhook token needs workflows re-provisioned."""
-    saved = await public.save_n8n(session, value, request.app.state.settings, scope=_owner,
-                                  auth_sessions=(authenticated_session_ref(request),))
+    saved = await public.save_n8n(
+        session,
+        value,
+        request.app.state.settings,
+        scope=_owner,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
     return saved
 
 
 @router.post("/n8n/test", response_model=ConnectionTestResult)
-async def test_n8n(body: N8nTest, session: Session, request: Request, _owner: OwnerWrite) -> ConnectionTestResult:
+async def test_n8n(
+    body: N8nTest, session: Session, request: Request, _owner: OwnerWrite
+) -> ConnectionTestResult:
     """Call n8n ``GET /api/v1/workflows?limit=1``; blanks use the effective value, a stored key only for its own URL."""
     settings = request.app.state.settings
     resolved = await public.resolve_n8n(session, settings, workspace_id=_owner.workspace_id)
@@ -320,13 +500,18 @@ async def test_n8n(body: N8nTest, session: Session, request: Request, _owner: Ow
         return ConnectionTestResult(ok=False, error="credential_required")
     try:
         async with public.n8n_http_client(url, settings, timeout=10) as client:
-            response = await client.get(f"{url}/api/v1/workflows", params={"limit": 1}, headers={"X-N8N-API-KEY": key})
+            response = await client.get(
+                f"{url}/api/v1/workflows", params={"limit": 1}, headers={"X-N8N-API-KEY": key}
+            )
     except (httpx.HTTPError, EndpointNetworkPolicyError):
         return ConnectionTestResult(ok=False, error="unreachable")
     if response.is_success:
         return ConnectionTestResult(ok=True, detail=response.status_code)
-    return ConnectionTestResult(ok=False, error="unauthorized" if response.status_code in (401, 403) else "http_error",
-                                detail=response.status_code)
+    return ConnectionTestResult(
+        ok=False,
+        error="unauthorized" if response.status_code in (401, 403) else "http_error",
+        detail=response.status_code,
+    )
 
 
 @router.get("/viz-router", response_model=VizRouterRead)
@@ -336,16 +521,26 @@ async def read_viz_router(session: Session, request: Request, _owner: OwnerRead)
 
 
 @router.put("/viz-router", response_model=VizRouterRead)
-async def save_viz_router(value: VizRouterUpdate, session: Session, request: Request, _owner: OwnerWrite) -> VizRouterRead:
+async def save_viz_router(
+    value: VizRouterUpdate, session: Session, request: Request, _owner: OwnerWrite
+) -> VizRouterRead:
     """Save the router kind, provider/model/mode or encrypted TypeSafe key under its own revision check."""
-    saved = await public.save_viz_router(session, value, request.app.state.settings, scope=_owner,
-                                         auth_sessions=(authenticated_session_ref(request),))
+    saved = await public.save_viz_router(
+        session,
+        value,
+        request.app.state.settings,
+        scope=_owner,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
     return saved
 
 
 async def _test_typesafe_router(
-    session: AsyncSession, settings: Any, resolved: Any, window: list[dict[str, str]],
+    session: AsyncSession,
+    settings: Any,
+    resolved: Any,
+    window: list[dict[str, str]],
 ) -> VizRouterTestResult:
     """Run the synthetic TypeSafe classification and map failures to short error codes.
 
@@ -357,7 +552,8 @@ async def _test_typesafe_router(
         return VizRouterTestResult(ok=False, error="credential_required")
     try:
         transport = approved_web_search_transport(
-            viz.TYPESAFE_URL, settings.ai_allowed_endpoint_hosts, settings.web_search_allowed_cidrs)
+            viz.TYPESAFE_URL, settings.ai_allowed_endpoint_hosts, settings.web_search_allowed_cidrs
+        )
         category, _ = await viz.classify_typesafe(resolved.typesafe_key, window, transport)
     except EndpointNetworkPolicyError:
         return VizRouterTestResult(ok=False, error="network_denied")
@@ -366,9 +562,14 @@ async def _test_typesafe_router(
     return VizRouterTestResult(ok=True, category=category)
 
 
-@router.post("/viz-router/test", response_model=VizRouterTestResult,
-             dependencies=[Depends(require_budget("model_probe", 10, 60))])
-async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite) -> VizRouterTestResult:
+@router.post(
+    "/viz-router/test",
+    response_model=VizRouterTestResult,
+    dependencies=[Depends(require_budget("model_probe", 10, 60))],
+)
+async def test_viz_router(
+    session: Session, request: Request, _owner: OwnerWrite
+) -> VizRouterTestResult:
     """Send one fixed synthetic prompt through the saved external router and validate the enum answer.
 
     Requires saved consent (or a local provider). For the LLM, OpenRouter and Cloudflare classifiers the configured mode is tried first, then
@@ -384,29 +585,41 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
         return VizRouterTestResult(ok=False, error="internal_router")
     if not resolved.allow_remote:
         return VizRouterTestResult(ok=False, error="consent_required")
-    window = [{"role": "user", "content": "Plot our monthly revenue for 2024 as a trend over time."}]
+    window = [
+        {"role": "user", "content": "Plot our monthly revenue for 2024 as a trend over time."}
+    ]
     if resolved.kind == "typesafe":
         return await _test_typesafe_router(session, settings, resolved, window)
 
     base = await public.get_ai_execution_config(session, settings, redis, scope=_owner)
     config, mapping = public.viz_router_gateway_config(base, resolved)
     if resolved.kind in public.VIZ_KEYED_KINDS and not (resolved.api_key and resolved.base_url):
-        return VizRouterTestResult(ok=False, error="credential_required" if not resolved.api_key else "network_denied")
+        return VizRouterTestResult(
+            ok=False, error="credential_required" if not resolved.api_key else "network_denied"
+        )
     destination = config.endpoint_destination_id or "remote"
     policy = RequestPolicy(
-        workspace_id=config.workspace_id, actor_user_id=config.actor_user_id, membership_revision=config.membership_revision,
-        gateway_identity=config.gateway_identity, reasoning_allowed=True,  # consent verified by resolve_viz_router
-        permitted_destinations=frozenset({destination}), reasoning_destinations=frozenset({destination}),
-        configuration_revision=config.configuration_revision)
+        workspace_id=config.workspace_id,
+        actor_user_id=config.actor_user_id,
+        membership_revision=config.membership_revision,
+        gateway_identity=config.gateway_identity,
+        reasoning_allowed=True,  # consent verified by resolve_viz_router
+        permitted_destinations=frozenset({destination}),
+        reasoning_destinations=frozenset({destination}),
+        configuration_revision=config.configuration_revision,
+    )
     session_ref = authenticated_session_ref(request)
 
     async def recheck_config() -> None:
         """Hold the authenticated settings fence and reject a changed router before send/publication."""
-        await public.check_ai_execution_config(session, settings, redis, scope=_owner, expected=base,
-                                               auth_sessions=(session_ref,))
+        await public.check_ai_execution_config(
+            session, settings, redis, scope=_owner, expected=base, auth_sessions=(session_ref,)
+        )
         current = await public.resolve_viz_router(session, settings, scope=_owner)
         if current.revision != resolved.revision:
-            raise HTTPException(status_code=409, detail="Visualization router settings changed; test again")
+            raise HTTPException(
+                status_code=409, detail="Visualization router settings changed; test again"
+            )
 
     async def recheck_send() -> None:
         """Recheck session, workspace, settings and router identity each attempt; release SQL before egress."""
@@ -416,22 +629,45 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
             await session.rollback()
 
     await session.rollback()
-    gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key, destination, timeout_seconds=15,
-                           scope=_owner, configuration_revision=config.configuration_revision,
-                           gateway_identity=config.gateway_identity, model_identity=config.model_identity, before_send=recheck_send,
-                           approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
-                           allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind)
+    gateway = ModelGateway(
+        redis,
+        config.gateway_base_url,
+        config.gateway_api_key,
+        destination,
+        timeout_seconds=15,
+        scope=_owner,
+        configuration_revision=config.configuration_revision,
+        gateway_identity=config.gateway_identity,
+        model_identity=config.model_identity,
+        before_send=recheck_send,
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+        allow_public_endpoints=config.allow_public_providers,
+        kind=config.gateway_kind,
+    )
     # Decisions API: one adapter, no constraint modes (None); otherwise the configured mode then the other one.
-    modes: list[str | None] = ([None] if resolved.api == "decisions"
-                               else [resolved.mode, "forced_tool" if resolved.mode == "json_schema" else "json_schema"])
+    modes: list[str | None] = (
+        [None]
+        if resolved.api == "decisions"
+        else [resolved.mode, "forced_tool" if resolved.mode == "json_schema" else "json_schema"]
+    )
     error = "provider_error"
     for mode in modes:
         try:
             if mode is None:
-                category = await viz.classify_decisions(gateway, mapping, policy, window, probe=True, before_send=recheck_send)
+                category = await viz.classify_decisions(
+                    gateway, mapping, policy, window, probe=True, before_send=recheck_send
+                )
             else:
-                category = await viz.classify_llm(gateway, mapping, policy, window, mode=mode, base_url=config.gateway_base_url,
-                                                  probe=True, before_send=recheck_send)
+                category = await viz.classify_llm(
+                    gateway,
+                    mapping,
+                    policy,
+                    window,
+                    mode=mode,
+                    base_url=config.gateway_base_url,
+                    probe=True,
+                    before_send=recheck_send,
+                )
         except viz.VisualizationRouterError as exc:
             error = exc.code
             if exc.code in {"mode_unsupported", "invalid_category"}:
@@ -439,27 +675,47 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
             return VizRouterTestResult(ok=False, error=exc.code)
         capability = "tools" if mode == "forced_tool" else "structured"
         result = public.new_capability_result(
-            public.VIZ_ROUTER_ROLE, mapping, capability, "supported", config=config, scope=_owner,
-            multi_workspace_enabled=settings.multi_workspace_enabled)
+            public.VIZ_ROUTER_ROLE,
+            mapping,
+            capability,
+            "supported",
+            config=config,
+            scope=_owner,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
+        )
         try:
             await recheck_config()
-            await public.save_capability(session, result, config=config, configured_mapping=mapping, scope=_owner,
-                                         multi_workspace_enabled=settings.multi_workspace_enabled)
+            await public.save_capability(
+                session,
+                result,
+                config=config,
+                configured_mapping=mapping,
+                scope=_owner,
+                multi_workspace_enabled=settings.multi_workspace_enabled,
+            )
             await session.commit()
         except ValueError:
             # Evidence did not match the configured mapping (settings changed mid-test): report, never 500.
             await session.rollback()
-            raise HTTPException(status_code=409, detail="Visualization router settings changed; test again") from None
+            raise HTTPException(
+                status_code=409, detail="Visualization router settings changed; test again"
+            ) from None
         finally:
             await session.rollback()
         return VizRouterTestResult(ok=True, category=category, mode=mode)
     return VizRouterTestResult(ok=False, error=error)
 
 
-@router.post("/viz-router/decision-models", response_model=VizDecisionModelsResult,
-             dependencies=[Depends(require_budget("model_probe", 10, 60))])
+@router.post(
+    "/viz-router/decision-models",
+    response_model=VizDecisionModelsResult,
+    dependencies=[Depends(require_budget("model_probe", 10, 60))],
+)
 async def discover_viz_decision_models(
-    body: VizDecisionModelsRequest, session: Session, request: Request, _owner: OwnerWrite,
+    body: VizDecisionModelsRequest,
+    session: Session,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> VizDecisionModelsResult:
     """List OpenRouter Decisions-API models (``output_modalities=decisions``) with a transient or the saved key.
 
@@ -485,30 +741,48 @@ async def discover_viz_decision_models(
     async def recheck_send() -> None:
         """Recheck session, workspace and settings identity before egress; roll back before provider network."""
         try:
-            await public.check_ai_execution_config(session, settings, redis, scope=_owner, expected=base,
-                                                   auth_sessions=(session_ref,))
+            await public.check_ai_execution_config(
+                session, settings, redis, scope=_owner, expected=base, auth_sessions=(session_ref,)
+            )
         finally:
             await session.rollback()
 
     await session.rollback()
-    gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key, config.endpoint_destination_id or "remote",
-                           timeout_seconds=15, scope=_owner, configuration_revision=config.configuration_revision,
-                           gateway_identity=config.gateway_identity, model_identity=config.model_identity, before_send=recheck_send,
-                           approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
-                           allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind)
+    gateway = ModelGateway(
+        redis,
+        config.gateway_base_url,
+        config.gateway_api_key,
+        config.endpoint_destination_id or "remote",
+        timeout_seconds=15,
+        scope=_owner,
+        configuration_revision=config.configuration_revision,
+        gateway_identity=config.gateway_identity,
+        model_identity=config.model_identity,
+        before_send=recheck_send,
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+        allow_public_endpoints=config.allow_public_providers,
+        kind=config.gateway_kind,
+    )
     try:
         payload = await gateway.discover_decision_models()
     except ModelGatewayError as exc:
         error = viz.error_from_gateway(exc).code
         return VizDecisionModelsResult(ok=False, error=error)
     return VizDecisionModelsResult(
-        ok=True, models=[VizDecisionModel(**item) for item in viz.parse_decision_models(payload)])
+        ok=True, models=[VizDecisionModel(**item) for item in viz.parse_decision_models(payload)]
+    )
 
 
-@router.post("/ai/openrouter/models", response_model=OpenRouterBrowseResult,
-             dependencies=[Depends(require_budget("openrouter_browse", 30, 60))])
+@router.post(
+    "/ai/openrouter/models",
+    response_model=OpenRouterBrowseResult,
+    dependencies=[Depends(require_budget("openrouter_browse", 30, 60))],
+)
 async def browse_openrouter_models(
-    body: OpenRouterBrowseRequest, session: Session, request: Request, _owner: OwnerWrite,
+    body: OpenRouterBrowseRequest,
+    session: Session,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> OpenRouterBrowseResult:
     """Browse the OpenRouter model catalog with allowlisted filters, a transient or the saved key.
 
@@ -523,7 +797,11 @@ async def browse_openrouter_models(
     if not key and body.provider_id:
         saved = base.providers.get(body.provider_id)
         # A stored key may only be sent to its own provider's endpoint, never reused for another kind.
-        if saved is not None and saved.kind == "openrouter" and hosted_endpoint_equivalent("openrouter", saved.base_url):
+        if (
+            saved is not None
+            and saved.kind == "openrouter"
+            and hosted_endpoint_equivalent("openrouter", saved.base_url)
+        ):
             key = saved.api_key
     if not key:
         return OpenRouterBrowseResult(ok=False, error="credential_required")
@@ -535,22 +813,38 @@ async def browse_openrouter_models(
     async def recheck_send() -> None:
         """Recheck session, workspace and settings identity before egress; roll back before provider network."""
         try:
-            await public.check_ai_execution_config(session, settings, redis, scope=_owner, expected=base,
-                                                   auth_sessions=(session_ref,))
+            await public.check_ai_execution_config(
+                session, settings, redis, scope=_owner, expected=base, auth_sessions=(session_ref,)
+            )
         finally:
             await session.rollback()
 
     await session.rollback()
-    gateway = ModelGateway(redis, config.gateway_base_url, config.gateway_api_key, config.endpoint_destination_id or "remote",
-                           timeout_seconds=15, scope=_owner, configuration_revision=config.configuration_revision,
-                           gateway_identity=config.gateway_identity, model_identity=config.model_identity, before_send=recheck_send,
-                           approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
-                           allow_public_endpoints=config.allow_public_providers, kind="openrouter")
+    gateway = ModelGateway(
+        redis,
+        config.gateway_base_url,
+        config.gateway_api_key,
+        config.endpoint_destination_id or "remote",
+        timeout_seconds=15,
+        scope=_owner,
+        configuration_revision=config.configuration_revision,
+        gateway_identity=config.gateway_identity,
+        model_identity=config.model_identity,
+        before_send=recheck_send,
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+        allow_public_endpoints=config.allow_public_providers,
+        kind="openrouter",
+    )
     try:
-        payload = await gateway.list_openrouter_models(to_query_params(body.filters, body.offset, body.limit))
+        payload = await gateway.list_openrouter_models(
+            to_query_params(body.filters, body.offset, body.limit)
+        )
     except ModelGatewayError as exc:
         return OpenRouterBrowseResult(ok=False, error=viz.error_from_gateway(exc).code)
     models, total, has_next, consumed = parse_openrouter_page(payload, body.limit)
     return OpenRouterBrowseResult(
-        ok=True, models=[OpenRouterModelRead(**m) for m in models], total_count=total,
-        next_offset=body.offset + consumed if has_next else None)
+        ok=True,
+        models=[OpenRouterModelRead(**m) for m in models],
+        total_count=total,
+        next_offset=body.offset + consumed if has_next else None,
+    )

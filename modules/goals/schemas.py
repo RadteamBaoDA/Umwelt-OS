@@ -89,8 +89,10 @@ class GoalUpdate(BaseModel):
             raise ValueError("manual_progress cannot be cleared")
         if self.entity_ids is not None and len(set(self.entity_ids)) != len(self.entity_ids):
             raise ValueError("entity_ids must contain unique IDs")
-        if self.milestones is not None and self.entity_ids is not None and (
-            len(self.milestones) + len(self.entity_ids) > 100
+        if (
+            self.milestones is not None
+            and self.entity_ids is not None
+            and (len(self.milestones) + len(self.entity_ids) > 100)
         ):
             raise ValueError("A goal may contain at most 100 milestone and entity references")
         return self
@@ -130,7 +132,9 @@ class GoalRead(BaseModel):
         """Enforce the persisted aggregate bound on public goal read projections."""
         linked_task_ids = {item.task_id for item in self.milestones if item.task_id is not None}
         if len(self.milestones) + len(linked_task_ids) + len(self.entity_ids) > 100:
-            raise ValueError("A goal may contain at most 100 milestone, task, and entity references")
+            raise ValueError(
+                "A goal may contain at most 100 milestone, task, and entity references"
+            )
         return self
 
 

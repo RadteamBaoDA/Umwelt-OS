@@ -10,6 +10,7 @@ lock-step. The delay for try ``n`` (1-based, from ``ctx["job_try"]``) is the "eq
 so it is never below half the ceiling (no hot loops), never above ``cap`` and grows until the cap. Caps
 are per call site and documented in ``docs/operations.md``.
 """
+
 from __future__ import annotations
 
 import random
@@ -28,7 +29,11 @@ def current_try(ctx: Mapping[str, Any] | None) -> int:
 
 
 def backoff_delay(
-    job_try: int, *, base: float, cap: float, rand: Callable[[], float] = random.random,
+    job_try: int,
+    *,
+    base: float,
+    cap: float,
+    rand: Callable[[], float] = random.random,
 ) -> float:
     """Return the jittered exponential delay in seconds for attempt ``job_try`` (see module docstring).
 
@@ -38,7 +43,7 @@ def backoff_delay(
     if base <= 0 or cap < base:
         raise ValueError("require 0 < base <= cap")
     exponent = min(max(job_try, 1) - 1, MAX_EXPONENT)
-    ceiling = min(cap, base * (2 ** exponent))
+    ceiling = min(cap, base * (2**exponent))
     return float(ceiling / 2 + rand() * (ceiling / 2))
 
 

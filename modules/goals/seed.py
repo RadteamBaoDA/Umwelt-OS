@@ -15,7 +15,9 @@ from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
 from modules.goals.models import Goal
 
 
-async def _admit_seed(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> None:
+async def _admit_seed(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool
+) -> None:
     """Admit the owner workspace before inspecting or creating demo rows."""
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
         raise TypeError("An explicit seed workspace scope is required")
@@ -24,7 +26,9 @@ async def _admit_seed(session: AsyncSession, *, scope: Scope, multi_workspace_en
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
@@ -98,7 +102,10 @@ GOAL_SEEDS = (
 
 
 async def ensure_demo_goals(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[int, int]:
     """Add missing owner goals with stable milestone/task references and return created/existing counts.
 
@@ -112,23 +119,40 @@ async def ensure_demo_goals(
     existing = 0
     for seed in GOAL_SEEDS:
         goal_id = _ws_id(scope, seed["id"])
-        found = await session.scalar(select(Goal.id).where(
-            Goal.id == goal_id, Goal.workspace_id == scope.workspace_id,
-        ))
+        found = await session.scalar(
+            select(Goal.id).where(
+                Goal.id == goal_id,
+                Goal.workspace_id == scope.workspace_id,
+            )
+        )
         if found is not None:
             existing += 1
             continue
-        session.add(Goal(
-            id=goal_id, workspace_id=scope.workspace_id, owner_id=_actor(scope), title=seed["title"],
-            description=seed["description"], desired_outcome=seed["desired_outcome"],
-            deadline=seed["deadline"], progress=seed["progress"],
-            manual_progress=False, status="active", milestones=[
-                {**item, "id": str(_ws_id(scope, item["id"])),
-                 "task_id": str(_ws_id(scope, item["task_id"])) if item["task_id"] else None}
-                for item in cast(list[dict[str, Any]], seed["milestones"])
-            ],
-            entity_ids=[], accepted_proposals=[], revision=1,
-        ))
+        session.add(
+            Goal(
+                id=goal_id,
+                workspace_id=scope.workspace_id,
+                owner_id=_actor(scope),
+                title=seed["title"],
+                description=seed["description"],
+                desired_outcome=seed["desired_outcome"],
+                deadline=seed["deadline"],
+                progress=seed["progress"],
+                manual_progress=False,
+                status="active",
+                milestones=[
+                    {
+                        **item,
+                        "id": str(_ws_id(scope, item["id"])),
+                        "task_id": str(_ws_id(scope, item["task_id"])) if item["task_id"] else None,
+                    }
+                    for item in cast(list[dict[str, Any]], seed["milestones"])
+                ],
+                entity_ids=[],
+                accepted_proposals=[],
+                revision=1,
+            )
+        )
         created += 1
     await session.flush()
     return created, existing

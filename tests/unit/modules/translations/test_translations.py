@@ -26,7 +26,12 @@ def _scope(role: str = "member", user_id: int = 7) -> WorkspaceContext:
 
 
 def _item(**kw):
-    return {"resource_type": "news_story", "resource_id": str(uuid4()), "resource_revision": "r1", **kw}
+    return {
+        "resource_type": "news_story",
+        "resource_id": str(uuid4()),
+        "resource_revision": "r1",
+        **kw,
+    }
 
 
 def _sql(stmt) -> str:
@@ -36,8 +41,12 @@ def _sql(stmt) -> str:
 @pytest.fixture(autouse=True)
 def fences(monkeypatch):
     calls: list[str] = []
-    monkeypatch.setattr(public, "lock_access_fence", AsyncMock(side_effect=lambda *a, **k: calls.append("lock")))
-    monkeypatch.setattr(public, "read_access_fence", AsyncMock(side_effect=lambda *a, **k: calls.append("read")))
+    monkeypatch.setattr(
+        public, "lock_access_fence", AsyncMock(side_effect=lambda *a, **k: calls.append("lock"))
+    )
+    monkeypatch.setattr(
+        public, "read_access_fence", AsyncMock(side_effect=lambda *a, **k: calls.append("read"))
+    )
     monkeypatch.setattr(public, "_AUTHORIZERS", {})
     return calls
 
@@ -63,7 +72,9 @@ def test_translation_is_disabled_and_vietnamese_by_default():
 
 def test_update_dto_is_exact():
     with pytest.raises(ValidationError):
-        TranslationSettingsUpdate(enabled=True, target_language="vi", expected_revision=1, configuration_revision=5)  # type: ignore[call-arg]
+        TranslationSettingsUpdate(
+            enabled=True, target_language="vi", expected_revision=1, configuration_revision=5
+        )  # type: ignore[call-arg]
     with pytest.raises(ValidationError):
         TranslationSettingsUpdate(enabled=True, target_language="fr", expected_revision=1)  # type: ignore[arg-type]
 
@@ -78,14 +89,20 @@ def test_batch_dto_rejects_unknown_duplicate_empty_and_oversize():
         TranslationBatchRequest.model_validate({"items": [_item() for _ in range(26)]})
     with pytest.raises(ValidationError):
         TranslationItemRequest.model_validate(_item(text="client supplied"))
-    assert len(TranslationBatchRequest.model_validate({"items": [_item() for _ in range(25)]}).items) == 25
+    assert (
+        len(TranslationBatchRequest.model_validate({"items": [_item() for _ in range(25)]}).items)
+        == 25
+    )
 
 
 async def test_member_cannot_save_settings(fences):
     with pytest.raises(DomainError) as exc:
         await public.save_translation_settings(
-            _session(), TranslationSettingsUpdate(enabled=True, target_language="vi", expected_revision=1),
-            scope=_scope("member"), multi_workspace_enabled=True)
+            _session(),
+            TranslationSettingsUpdate(enabled=True, target_language="vi", expected_revision=1),
+            scope=_scope("member"),
+            multi_workspace_enabled=True,
+        )
     assert exc.value.status_code == 403 and fences == []
 
 
@@ -93,27 +110,43 @@ async def test_stale_revision_is_409():
     row = SimpleNamespace(enabled=False, target_language="vi", configuration_revision=3)
     with pytest.raises(DomainError) as exc:
         await public.save_translation_settings(
-            _session(scalar=row), TranslationSettingsUpdate(enabled=True, target_language="vi", expected_revision=1),
-            scope=_scope("owner"), multi_workspace_enabled=True)
+            _session(scalar=row),
+            TranslationSettingsUpdate(enabled=True, target_language="vi", expected_revision=1),
+            scope=_scope("owner"),
+            multi_workspace_enabled=True,
+        )
     assert exc.value.status_code == 409
 
 
 async def test_disable_bumps_revision_and_blocks_pending():
-    row = SimpleNamespace(enabled=True, target_language="vi", configuration_revision=2, updated_by_user_id=None)
+    row = SimpleNamespace(
+        enabled=True, target_language="vi", configuration_revision=2, updated_by_user_id=None
+    )
     session = _session(scalar=row)
     out = await public.save_translation_settings(
-        session, TranslationSettingsUpdate(enabled=False, target_language="vi", expected_revision=2),
-        scope=_scope("owner"), multi_workspace_enabled=True)
+        session,
+        TranslationSettingsUpdate(enabled=False, target_language="vi", expected_revision=2),
+        scope=_scope("owner"),
+        multi_workspace_enabled=True,
+    )
     assert (out.enabled, out.configuration_revision) == (False, 3)
     sql = _sql(session.execute.await_args_list[-1].args[0])
-    assert "UPDATE content_translations" in sql and "'blocked'" in sql and str(WS) in sql and "'pending'" in sql
+    assert (
+        "UPDATE content_translations" in sql
+        and "'blocked'" in sql
+        and str(WS) in sql
+        and "'pending'" in sql
+    )
 
 
 async def test_unchanged_save_keeps_revision():
     row = SimpleNamespace(enabled=True, target_language="vi", configuration_revision=2)
     out = await public.save_translation_settings(
-        _session(scalar=row), TranslationSettingsUpdate(enabled=True, target_language="vi", expected_revision=2),
-        scope=_scope("owner"), multi_workspace_enabled=True)
+        _session(scalar=row),
+        TranslationSettingsUpdate(enabled=True, target_language="vi", expected_revision=2),
+        scope=_scope("owner"),
+        multi_workspace_enabled=True,
+    )
     assert out.configuration_revision == 2
 
 
@@ -131,7 +164,9 @@ async def test_no_registered_authorizer_is_uniform_404():
     row = SimpleNamespace(enabled=True, target_language="vi", configuration_revision=1)
     request = TranslationBatchRequest.model_validate({"items": [_item()]})
     with pytest.raises(DomainError) as exc:
-        await public.submit_batch(_session(scalar=row), request, scope=_scope(), multi_workspace_enabled=True)
+        await public.submit_batch(
+            _session(scalar=row), request, scope=_scope(), multi_workspace_enabled=True
+        )
     assert exc.value.status_code == 404
 
 
@@ -144,14 +179,18 @@ async def test_stale_visible_revision_is_409_after_all_authorized():
     public.register_resource_authorizer("news_story", ok)
     request = TranslationBatchRequest.model_validate({"items": [_item()]})
     with pytest.raises(DomainError) as exc:
-        await public.submit_batch(_session(scalar=row), request, scope=_scope(), multi_workspace_enabled=True)
+        await public.submit_batch(
+            _session(scalar=row), request, scope=_scope(), multi_workspace_enabled=True
+        )
     assert exc.value.status_code == 409
 
 
 async def test_batch_read_is_actor_and_workspace_bound(fences):
     session = _session(scalar=None)
     with pytest.raises(DomainError) as exc:
-        await public.read_batch(session, uuid4(), scope=_scope(user_id=7), multi_workspace_enabled=True)
+        await public.read_batch(
+            session, uuid4(), scope=_scope(user_id=7), multi_workspace_enabled=True
+        )
     assert exc.value.status_code == 404 and fences == ["read"]
     sql = _sql(session.executed[0])
     assert f"workspace_id = '{WS}'" in sql and "actor_user_id = 7" in sql
@@ -171,7 +210,26 @@ def test_get_is_workspace_bound_dependency():
 
 def test_schema_reserves_t3_columns_and_full_fingerprint():
     cols = set(ContentTranslation.__table__.c.keys())
-    assert {"lease_token", "lease_expires_at", "slot_token", "slot_expires_at", "attempt_count",
-            "next_attempt_at", "expires_at", "result", "error_code"} <= cols
-    unique = next(c for c in ContentTranslation.__table__.constraints if c.name == "uq_content_translations_fingerprint")
-    assert {"actor_user_id", "content_hash", "visibility_hash", "config_hash", "prompt_version"} <= {c.name for c in unique.columns}
+    assert {
+        "lease_token",
+        "lease_expires_at",
+        "slot_token",
+        "slot_expires_at",
+        "attempt_count",
+        "next_attempt_at",
+        "expires_at",
+        "result",
+        "error_code",
+    } <= cols
+    unique = next(
+        c
+        for c in ContentTranslation.__table__.constraints
+        if c.name == "uq_content_translations_fingerprint"
+    )
+    assert {
+        "actor_user_id",
+        "content_hash",
+        "visibility_hash",
+        "config_hash",
+        "prompt_version",
+    } <= {c.name for c in unique.columns}

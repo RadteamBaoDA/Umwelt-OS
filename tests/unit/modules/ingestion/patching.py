@@ -19,7 +19,8 @@ import modules.ingestion as ingestion_package
 def ingestion_modules() -> list[ModuleType]:
     """Return the facade plus every private ``_*`` implementation module of the ingestion package."""
     names = ["modules.ingestion.public"] + sorted(
-        f"modules.ingestion.{info.name}" for info in pkgutil.iter_modules(ingestion_package.__path__)
+        f"modules.ingestion.{info.name}"
+        for info in pkgutil.iter_modules(ingestion_package.__path__)
         if info.name.startswith("_")
     )
     return [importlib.import_module(name) for name in names]
@@ -38,7 +39,9 @@ def patch_ingestion(name: str, new: Any = DEFAULT, **kwargs: Any) -> Iterator[An
         for module in ingestion_modules():
             if not hasattr(module, name):
                 continue
-            created = stack.enter_context(patch.object(module, name, shared, **kwargs if shared is DEFAULT else {}))
+            created = stack.enter_context(
+                patch.object(module, name, shared, **kwargs if shared is DEFAULT else {})
+            )
             if shared is DEFAULT:
                 shared = created
         if shared is DEFAULT:

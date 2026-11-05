@@ -12,7 +12,12 @@ ENV = {**os.environ, "ENVIRONMENT": "test", "TEST_PUBLIC_ORIGIN": "http://localh
 def _run(code: str) -> subprocess.CompletedProcess[str]:
     """Run ``code`` in a fresh interpreter rooted at the repository so import state is never shared."""
     return subprocess.run(  # noqa: S603 - fixed interpreter, test-owned code string
-        [sys.executable, "-c", code], cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=120,
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=ENV,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
 
 

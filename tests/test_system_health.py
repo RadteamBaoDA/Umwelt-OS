@@ -88,7 +88,9 @@ async def test_missing_chat_worker_heartbeat_degrades_health() -> None:
         async def execute(self, _statement):
             return SimpleNamespace(first=lambda: None)
 
-    result = await system_health(cast(AsyncSession, OkSession()), cast(Redis, FakeRedis()), Settings())
+    result = await system_health(
+        cast(AsyncSession, OkSession()), cast(Redis, FakeRedis()), Settings()
+    )
     assert result["components"]["worker"]["status"] == "healthy"
     assert result["components"]["chat_worker"]["status"] == "unavailable"
     assert result["overall"] == "degraded"
@@ -110,7 +112,9 @@ async def test_present_chat_worker_heartbeat_is_healthy() -> None:
         async def execute(self, _statement):
             return SimpleNamespace(first=lambda: None)
 
-    result = await system_health(cast(AsyncSession, OkSession()), cast(Redis, FakeRedis()), Settings())
+    result = await system_health(
+        cast(AsyncSession, OkSession()), cast(Redis, FakeRedis()), Settings()
+    )
     assert result["components"]["chat_worker"]["status"] == "healthy"
     assert result["overall"] == "healthy"
 
@@ -120,10 +124,13 @@ def test_ready_timeout_exceeds_health_probe_and_fits_compose_healthcheck() -> No
 
 
 @pytest.mark.asyncio
-async def test_absent_optional_n8n_and_browser_do_not_degrade_overall(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_absent_optional_n8n_and_browser_do_not_degrade_overall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     for name in ("N8N_API_KEY", "N8N_WEBHOOK_TOKEN", "N8N_SERVICE_URL", "BROWSER_SHARED_TOKEN"):
         monkeypatch.delenv(name, raising=False)
     hermetic = Settings(_env_file=None)  # type: ignore[call-arg]  # ignore the developer's local .env
+
     class OkSession:
         async def execute(self, _statement):
             return SimpleNamespace(first=lambda: None)

@@ -25,9 +25,13 @@ DEFAULT_MAX_TOKENS = 4096
 DEFAULT_STREAM_MAX_TOKENS = 32000
 _THINKING_TYPES = frozenset({"thinking", "redacted_thinking"})
 _STOP_REASONS = {
-    "end_turn": "stop", "stop_sequence": "stop", "pause_turn": "stop",
-    "max_tokens": "length", "model_context_window_exceeded": "length",
-    "tool_use": "tool_calls", "refusal": "content_filter",
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "pause_turn": "stop",
+    "max_tokens": "length",
+    "model_context_window_exceeded": "length",
+    "tool_use": "tool_calls",
+    "refusal": "content_filter",
 }
 _BAD_ID_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 _DATA_URL = re.compile(r"^data:([^;,]+);base64,(.*)$", re.DOTALL)
@@ -57,9 +61,17 @@ def _usage(raw: Any) -> dict[str, int]:
         value = raw.get(key)
         return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
 
-    prompt = count("input_tokens") + count("cache_read_input_tokens") + count("cache_creation_input_tokens")
+    prompt = (
+        count("input_tokens")
+        + count("cache_read_input_tokens")
+        + count("cache_creation_input_tokens")
+    )
     completion = count("output_tokens")
-    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+    }
 
 
 def _text_of(content: Any) -> str:
@@ -67,8 +79,11 @@ def _text_of(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
-                       and isinstance(p.get("text"), str))
+        return "".join(
+            p.get("text", "")
+            for p in content
+            if isinstance(p, dict) and p.get("type") == "text" and isinstance(p.get("text"), str)
+        )
     return ""
 
 
@@ -89,7 +104,12 @@ def _user_blocks(content: Any) -> str | list[dict[str, Any]]:
                 continue
             match = _DATA_URL.match(url)
             if match:
-                blocks.append({"type": "image", "source": {"type": "base64", "media_type": match[1], "data": match[2]}})
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": match[1], "data": match[2]},
+                    }
+                )
             elif url.startswith(("http://", "https://")):
                 blocks.append({"type": "image", "source": {"type": "url", "url": url}})
     return blocks
@@ -99,7 +119,9 @@ def _tool_result_content(content: Any) -> str:
     """Text of a tool message: strings verbatim, OpenAI text-part lists flattened, anything else JSON-encoded."""
     if isinstance(content, str):
         return content
-    if isinstance(content, list) and all(isinstance(p, dict) and p.get("type") == "text" for p in content):
+    if isinstance(content, list) and all(
+        isinstance(p, dict) and p.get("type") == "text" for p in content
+    ):
         return _text_of(content)
     return json.dumps(content)
 
@@ -131,7 +153,9 @@ def _tool_choice(body: dict[str, Any], *, thinking: bool) -> dict[str, Any] | No
     if not body.get("tools"):
         raise LocalCapabilityError("Forced tool_choice needs tools")
     if thinking:
-        raise LocalCapabilityError("Forced tool_choice is not supported together with extended thinking")
+        raise LocalCapabilityError(
+            "Forced tool_choice is not supported together with extended thinking"
+        )
     return forced
 
 
@@ -143,7 +167,11 @@ def _assistant_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     details = message.get("reasoning_details")
     if isinstance(details, list):
-        blocks.extend(d for d in details[:_MAX_REASONING_DETAILS] if isinstance(d, dict) and d.get("type") in _THINKING_TYPES)
+        blocks.extend(
+            d
+            for d in details[:_MAX_REASONING_DETAILS]
+            if isinstance(d, dict) and d.get("type") in _THINKING_TYPES
+        )
     text = _text_of(message.get("content"))
     if text:
         blocks.append({"type": "text", "text": text})
@@ -155,8 +183,14 @@ def _assistant_blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
             arguments = json.loads(function.get("arguments") or "{}")
         except ValueError:
             arguments = {}
-        blocks.append({"type": "tool_use", "id": _tool_id(call.get("id")), "name": function.get("name"),
-                       "input": arguments if isinstance(arguments, dict) else {}})
+        blocks.append(
+            {
+                "type": "tool_use",
+                "id": _tool_id(call.get("id")),
+                "name": function.get("name"),
+                "input": arguments if isinstance(arguments, dict) else {},
+            }
+        )
     return blocks
 
 
@@ -182,18 +216,36 @@ def _split_messages(raw_messages: list[dict[str, Any]]) -> tuple[list[str], list
                 messages.append({"role": "assistant", "content": blocks})
         elif role == "tool":
             content = message.get("content")
-            messages.append({"role": "user", "content": [{
-                "type": "tool_result", "tool_use_id": _tool_id(message.get("tool_call_id")),
-                "content": _tool_result_content(content)}]})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": _tool_id(message.get("tool_call_id")),
+                            "content": _tool_result_content(content),
+                        }
+                    ],
+                }
+            )
     return system, messages
 
 
 def _translate_tools(tools: list[Any]) -> list[dict[str, Any]]:
     """Translate OpenAI function tool definitions into Anthropic tool definitions. Pure; skips malformed entries."""
     return [
-        {"name": t["function"]["name"], **({"description": t["function"]["description"]} if t["function"].get("description") else {}),
-         "input_schema": t["function"].get("parameters") or {"type": "object", "properties": {}}}
-        for t in tools if isinstance(t, dict) and isinstance(t.get("function"), dict)]
+        {
+            "name": t["function"]["name"],
+            **(
+                {"description": t["function"]["description"]}
+                if t["function"].get("description")
+                else {}
+            ),
+            "input_schema": t["function"].get("parameters") or {"type": "object", "properties": {}},
+        }
+        for t in tools
+        if isinstance(t, dict) and isinstance(t.get("function"), dict)
+    ]
 
 
 def _json_schema_output_config(response_format: Any) -> dict[str, Any]:
@@ -216,8 +268,10 @@ def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]
     """
     system, messages = _split_messages(body.get("messages") or [])
     out: dict[str, Any] = {
-        "model": body.get("model"), "messages": messages,
-        "max_tokens": body.get("max_tokens") or body.get("max_completion_tokens")
+        "model": body.get("model"),
+        "messages": messages,
+        "max_tokens": body.get("max_tokens")
+        or body.get("max_completion_tokens")
         or (DEFAULT_STREAM_MAX_TOKENS if stream else DEFAULT_MAX_TOKENS),
     }
     if system:
@@ -227,7 +281,9 @@ def to_messages_request(body: dict[str, Any], *, stream: bool) -> dict[str, Any]
         out["tools"] = _translate_tools(tools)
     output_config = _json_schema_output_config(body.get("response_format"))
     effort = body.get("reasoning_effort")
-    if (tool_choice := _tool_choice(body, thinking=effort in {"low", "medium", "high"})) is not None:
+    if (
+        tool_choice := _tool_choice(body, thinking=effort in {"low", "medium", "high"})
+    ) is not None:
         out["tool_choice"] = tool_choice
     if effort in {"low", "medium", "high"}:
         output_config["effort"] = effort
@@ -255,8 +311,16 @@ def from_messages_response(data: dict[str, Any]) -> dict[str, Any]:
         if kind == "text":
             texts.append(block.get("text") or "")
         elif kind == "tool_use":
-            calls.append({"id": block.get("id"), "type": "function", "function": {
-                "name": block.get("name"), "arguments": json.dumps(block.get("input") or {})}})
+            calls.append(
+                {
+                    "id": block.get("id"),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name"),
+                        "arguments": json.dumps(block.get("input") or {}),
+                    },
+                }
+            )
         elif kind in _THINKING_TYPES:
             details.append(block)
             if kind == "thinking" and block.get("thinking"):
@@ -269,8 +333,16 @@ def from_messages_response(data: dict[str, Any]) -> dict[str, Any]:
     if details:
         message["reasoning_details"] = details[:_MAX_REASONING_DETAILS]
     return {
-        "id": data.get("id"), "object": "chat.completion", "model": data.get("model"),
-        "choices": [{"index": 0, "message": message, "finish_reason": _finish_reason(data.get("stop_reason"))}],
+        "id": data.get("id"),
+        "object": "chat.completion",
+        "model": data.get("model"),
+        "choices": [
+            {
+                "index": 0,
+                "message": message,
+                "finish_reason": _finish_reason(data.get("stop_reason")),
+            }
+        ],
         "usage": _usage(data.get("usage")),
     }
 
@@ -293,15 +365,32 @@ class StreamTranslator:
         choice: dict[str, Any] = {"index": 0, "delta": delta}
         if finish_reason is not None:
             choice["finish_reason"] = finish_reason
-        return {"id": self._id, "object": "chat.completion.chunk", "model": self._model, "choices": [choice]}
+        return {
+            "id": self._id,
+            "object": "chat.completion.chunk",
+            "model": self._model,
+            "choices": [choice],
+        }
 
     def _on_block_start(self, block: dict[str, Any], index: int) -> list[dict[str, Any]]:
         """Handle ``content_block_start``: open a tool call (emits a chunk) or start tracking a thinking block."""
         if block.get("type") == "tool_use":
             ordinal = len(self._tool_ordinals)
             self._tool_ordinals[index] = ordinal
-            return [self._chunk({"tool_calls": [{"index": ordinal, "id": block.get("id"), "type": "function",
-                                                 "function": {"name": block.get("name"), "arguments": ""}}]})]
+            return [
+                self._chunk(
+                    {
+                        "tool_calls": [
+                            {
+                                "index": ordinal,
+                                "id": block.get("id"),
+                                "type": "function",
+                                "function": {"name": block.get("name"), "arguments": ""},
+                            }
+                        ]
+                    }
+                )
+            ]
         if block.get("type") == "thinking":
             self._thinking[index] = {"type": "thinking", "thinking": "", "signature": ""}
         elif block.get("type") == "redacted_thinking":
@@ -314,8 +403,18 @@ class StreamTranslator:
         if dtype == "text_delta":
             return [self._chunk({"content": delta.get("text") or ""})]
         if dtype == "input_json_delta" and index in self._tool_ordinals:
-            return [self._chunk({"tool_calls": [{"index": self._tool_ordinals[index],
-                                                 "function": {"arguments": delta.get("partial_json") or ""}}]})]
+            return [
+                self._chunk(
+                    {
+                        "tool_calls": [
+                            {
+                                "index": self._tool_ordinals[index],
+                                "function": {"arguments": delta.get("partial_json") or ""},
+                            }
+                        ]
+                    }
+                )
+            ]
         if dtype == "thinking_delta":
             text = delta.get("thinking") or ""
             if index in self._thinking:
@@ -332,7 +431,9 @@ class StreamTranslator:
         if isinstance(usage.get("input_tokens"), int):
             self._input = {**self._input, **usage}
         delta = event.get("delta") or {}
-        payload: dict[str, Any] = {"reasoning_details": self._details[:_MAX_REASONING_DETAILS]} if self._details else {}
+        payload: dict[str, Any] = (
+            {"reasoning_details": self._details[:_MAX_REASONING_DETAILS]} if self._details else {}
+        )
         return [self._chunk(payload, _finish_reason(delta.get("stop_reason")))]
 
     def feed(self, event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -361,7 +462,15 @@ class StreamTranslator:
             return self._on_message_delta(event)
         if kind == "message_stop":
             usage = _usage({**self._input, "output_tokens": self._output})
-            return [{"id": self._id, "object": "chat.completion.chunk", "model": self._model, "choices": [], "usage": usage}]
+            return [
+                {
+                    "id": self._id,
+                    "object": "chat.completion.chunk",
+                    "model": self._model,
+                    "choices": [],
+                    "usage": usage,
+                }
+            ]
         if kind == "error":
             from core.model_gateway.client import (
                 ModelGatewayError,  # client imports this module
@@ -386,7 +495,11 @@ def _json_body(response: httpx.Response) -> Any:
 
 def headers(api_key: str) -> dict[str, str]:
     """Request headers: ``x-api-key`` auth (never ``Authorization``) plus the pinned API version."""
-    return {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json"}
+    return {
+        "x-api-key": api_key,
+        "anthropic-version": ANTHROPIC_VERSION,
+        "content-type": "application/json",
+    }
 
 
 def _status_error(response: httpx.Response) -> APIStatusError:
@@ -423,28 +536,48 @@ async def _send(http: httpx.AsyncClient, request: httpx.Request, *, stream: bool
 
 
 async def create_message(
-    http: httpx.AsyncClient, base_url: str, api_key: str, body: dict[str, Any], *, timeout: httpx.Timeout | None = None,  # noqa: ASYNC109  # httpx.Timeout is forwarded to the client; not an asyncio timeout
+    http: httpx.AsyncClient,
+    base_url: str,
+    api_key: str,
+    body: dict[str, Any],
+    *,
+    timeout: httpx.Timeout | None = None,  # noqa: ASYNC109  # httpx.Timeout is forwarded to the client; not an asyncio timeout
 ) -> dict[str, Any]:
     """POST ``{base_url}/messages`` for an OpenAI-shaped ``body`` and return an OpenAI ``chat.completion`` dict.
 
     Raises ``openai`` APIStatusError/APITimeoutError/APIConnectionError for upstream failures.
     """
-    request = http.build_request("POST", f"{base_url}/messages", headers=headers(api_key),
-                                 json=to_messages_request(body, stream=False), timeout=timeout)
+    request = http.build_request(
+        "POST",
+        f"{base_url}/messages",
+        headers=headers(api_key),
+        json=to_messages_request(body, stream=False),
+        timeout=timeout,
+    )
     response = await _send(http, request, stream=False)
     data = _json_body(response)
     return from_messages_response(data if isinstance(data, dict) else {})
 
 
 async def open_message_stream(
-    http: httpx.AsyncClient, base_url: str, api_key: str, body: dict[str, Any], *, timeout: httpx.Timeout | None = None,  # noqa: ASYNC109  # httpx.Timeout is forwarded to the client; not an asyncio timeout
+    http: httpx.AsyncClient,
+    base_url: str,
+    api_key: str,
+    body: dict[str, Any],
+    *,
+    timeout: httpx.Timeout | None = None,  # noqa: ASYNC109  # httpx.Timeout is forwarded to the client; not an asyncio timeout
 ) -> AsyncIterator[dict[str, Any]]:
     """Open a streaming Messages call; a non-2xx status raises before this returns (body already read).
 
     The returned async generator yields OpenAI ``chat.completion.chunk`` dicts and always closes the response.
     """
-    request = http.build_request("POST", f"{base_url}/messages", headers=headers(api_key),
-                                 json=to_messages_request(body, stream=True), timeout=timeout)
+    request = http.build_request(
+        "POST",
+        f"{base_url}/messages",
+        headers=headers(api_key),
+        json=to_messages_request(body, stream=True),
+        timeout=timeout,
+    )
     response = await _send(http, request, stream=True)
 
     async def chunks() -> AsyncIterator[dict[str, Any]]:
@@ -472,12 +605,25 @@ async def open_message_stream(
 
 
 async def list_models(
-    http: httpx.AsyncClient, base_url: str, api_key: str, *, timeout: httpx.Timeout | None = None,  # noqa: ASYNC109  # httpx.Timeout is forwarded to the client; not an asyncio timeout
+    http: httpx.AsyncClient,
+    base_url: str,
+    api_key: str,
+    *,
+    timeout: httpx.Timeout | None = None,  # noqa: ASYNC109  # httpx.Timeout is forwarded to the client; not an asyncio timeout
 ) -> list[str]:
     """GET ``{base_url}/models?limit=1000`` and return the non-empty string model ids."""
-    request = http.build_request("GET", f"{base_url}/models", params={"limit": 1000}, headers=headers(api_key),
-                                 timeout=timeout)
+    request = http.build_request(
+        "GET",
+        f"{base_url}/models",
+        params={"limit": 1000},
+        headers=headers(api_key),
+        timeout=timeout,
+    )
     response = await _send(http, request, stream=False)
     payload = _json_body(response)
     data = payload.get("data") if isinstance(payload, dict) else None
-    return [item["id"] for item in data or [] if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]]
+    return [
+        item["id"]
+        for item in data or []
+        if isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]
+    ]

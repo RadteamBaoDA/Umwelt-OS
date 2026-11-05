@@ -36,7 +36,9 @@ ERASURE_OWNER = AccountErasureOwner(ERASURE_TABLES)
 
 
 async def erase_account_storage_page(
-    ctx: dict[str, Any], scope: AccountErasureScope, cursor: dict[str, Any],
+    ctx: dict[str, Any],
+    scope: AccountErasureScope,
+    cursor: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     """Unlink one owned original by durable UUID position, preserving peer references.
 
@@ -76,13 +78,22 @@ async def erase_account_storage_page(
                 async with factory() as session:
                     await authorize_account_erasure(session, scope)
                     await lock_raw_uri_identity(session, uri)
-                    peer = await session.scalar(select(Document.id).where(
-                        Document.raw_uri == uri, Document.workspace_id != scope.workspace_id,
-                    ).limit(1))
-                    peer_receipt = await session.scalar(select(DocumentCleanupOperation.id).where(
-                        DocumentCleanupOperation.raw_uri == uri,
-                        DocumentCleanupOperation.workspace_id != scope.workspace_id,
-                    ).limit(1))
+                    peer = await session.scalar(
+                        select(Document.id)
+                        .where(
+                            Document.raw_uri == uri,
+                            Document.workspace_id != scope.workspace_id,
+                        )
+                        .limit(1)
+                    )
+                    peer_receipt = await session.scalar(
+                        select(DocumentCleanupOperation.id)
+                        .where(
+                            DocumentCleanupOperation.raw_uri == uri,
+                            DocumentCleanupOperation.workspace_id != scope.workspace_id,
+                        )
+                        .limit(1)
+                    )
                     if peer is not None or peer_receipt is not None:
                         raise RuntimeError("Scoped original is referenced by another workspace")
                     # delete(missing_ok=False) confirms absence itself (Path.exists semantics).
@@ -92,7 +103,9 @@ async def erase_account_storage_page(
             model = Document if kind == "documents" else DocumentCleanupOperation
             async with factory() as session:
                 await authorize_account_erasure(session, scope)
-                query = select(model.id, model.raw_uri).where(model.workspace_id == scope.workspace_id)
+                query = select(model.id, model.raw_uri).where(
+                    model.workspace_id == scope.workspace_id
+                )
                 if after is not None:
                     query = query.where(model.id > after)
                 row = (await session.execute(query.order_by(model.id).limit(1))).first()
@@ -102,13 +115,22 @@ async def erase_account_storage_page(
                 if raw_uri:
                     storage.check_erasable(raw_uri, scope.workspace_id)
                     await lock_raw_uri_identity(session, raw_uri)
-                    shared = await session.scalar(select(Document.id).where(
-                        Document.raw_uri == raw_uri, Document.workspace_id != scope.workspace_id,
-                    ).limit(1))
-                    shared_receipt = await session.scalar(select(DocumentCleanupOperation.id).where(
-                        DocumentCleanupOperation.raw_uri == raw_uri,
-                        DocumentCleanupOperation.workspace_id != scope.workspace_id,
-                    ).limit(1))
+                    shared = await session.scalar(
+                        select(Document.id)
+                        .where(
+                            Document.raw_uri == raw_uri,
+                            Document.workspace_id != scope.workspace_id,
+                        )
+                        .limit(1)
+                    )
+                    shared_receipt = await session.scalar(
+                        select(DocumentCleanupOperation.id)
+                        .where(
+                            DocumentCleanupOperation.raw_uri == raw_uri,
+                            DocumentCleanupOperation.workspace_id != scope.workspace_id,
+                        )
+                        .limit(1)
+                    )
                     if shared is None and shared_receipt is None:
                         await storage.delete(raw_uri)
                         if await storage.exists(raw_uri):

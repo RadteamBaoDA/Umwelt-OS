@@ -9,7 +9,21 @@ from modules.connectors import live_map
 
 
 def test_usgs_projection_bounds_and_https_links():
-    body = json.dumps({"features": [{"id": "e1", "properties": {"title": "Earthquake", "time": 1700000000000, "url": "http://invalid.example"}, "geometry": {"coordinates": [120, 15]}}]}).encode()
+    body = json.dumps(
+        {
+            "features": [
+                {
+                    "id": "e1",
+                    "properties": {
+                        "title": "Earthquake",
+                        "time": 1700000000000,
+                        "url": "http://invalid.example",
+                    },
+                    "geometry": {"coordinates": [120, 15]},
+                }
+            ]
+        }
+    ).encode()
     items, truncated = live_map._parse("usgs", body)
     assert not truncated
     assert items[0]["latitude"] == 15 and items[0]["longitude"] == 120
@@ -17,14 +31,21 @@ def test_usgs_projection_bounds_and_https_links():
     assert items[0]["observed_at"].startswith("2023-")
 
 
-
 def test_cisa_caps_latest_additions_and_usgs_covers_the_month():
-    rows = [{"cveID": f"CVE-2026-{i:04d}", "vulnerabilityName": "Issue", "dateAdded": f"2026-01-{1 + i // 24:02d}"} for i in range(120)]
+    rows = [
+        {
+            "cveID": f"CVE-2026-{i:04d}",
+            "vulnerabilityName": "Issue",
+            "dateAdded": f"2026-01-{1 + i // 24:02d}",
+        }
+        for i in range(120)
+    ]
     items, truncated = live_map._parse("cisa_kev", json.dumps({"vulnerabilities": rows}).encode())
     assert truncated and len(items) == 100
     assert items[0]["observed_at"].startswith("2026-01-05")
     assert items[-1]["observed_at"].startswith("2026-01-01")
     assert live_map._endpoint("usgs", None, None, None, None, None).endswith("/4.5_month.geojson")
+
 
 def test_feed_refuses_dtd_and_normalizes_rss_time():
     with pytest.raises(ValueError):
@@ -35,10 +56,28 @@ def test_feed_refuses_dtd_and_normalizes_rss_time():
 
 
 def test_eonet_uses_newest_timestamp_and_does_not_guess_polygon_location():
-    body = json.dumps({"events": [{"id": "x", "title": "Event", "geometry": [
-        {"date": "2026-11-04T03:00:00Z", "type": "Polygon", "coordinates": [[[1, 2]]]},
-        {"date": "2026-11-03T03:00:00Z", "type": "Point", "coordinates": [1, 2]},
-    ], "sources": [{"id": "agency", "url": "https://example.com/event"}, {"url": "http://unsafe.example"}]}]}).encode()
+    body = json.dumps(
+        {
+            "events": [
+                {
+                    "id": "x",
+                    "title": "Event",
+                    "geometry": [
+                        {
+                            "date": "2026-11-04T03:00:00Z",
+                            "type": "Polygon",
+                            "coordinates": [[[1, 2]]],
+                        },
+                        {"date": "2026-11-03T03:00:00Z", "type": "Point", "coordinates": [1, 2]},
+                    ],
+                    "sources": [
+                        {"id": "agency", "url": "https://example.com/event"},
+                        {"url": "http://unsafe.example"},
+                    ],
+                }
+            ]
+        }
+    ).encode()
     items, _ = live_map._parse("eonet", body)
     assert items[0]["latitude"] is None
     assert items[0]["observed_at"] == "2026-11-04T03:00:00+00:00"
@@ -57,11 +96,14 @@ def test_catalog_uses_distinct_reviewed_tile_and_release_identities():
     assert get_quota_policies(CATALOG_IDS["github_releases"])
 
 
-@pytest.mark.parametrize("provider,kwargs", [
-    ("github_releases", {"owner": "../evil", "repo": "test"}),
-    ("sec", {"cik": "1/../"}),
-    ("firms", {"country": "../../evil", "secret": "key"}),
-])
+@pytest.mark.parametrize(
+    "provider,kwargs",
+    [
+        ("github_releases", {"owner": "../evil", "repo": "test"}),
+        ("sec", {"cik": "1/../"}),
+        ("firms", {"country": "../../evil", "secret": "key"}),
+    ],
+)
 def test_provider_scope_never_selects_arbitrary_host(provider, kwargs):
     values = {"country": None, "owner": None, "repo": None, "cik": None, "secret": None}
     values.update(kwargs)
@@ -89,7 +131,9 @@ async def test_keyed_transport_pins_and_does_not_log_key(monkeypatch, caplog):
         return httpx.Response(200, content=b"\x89PNG\r\n\x1a\nfixture", request=request)
 
     monkeypatch.setattr(live_map.rest, "resolve_public", resolve)
-    monkeypatch.setattr(live_map.httpx, "AsyncHTTPTransport", lambda **kwargs: httpx.MockTransport(handle))
+    monkeypatch.setattr(
+        live_map.httpx, "AsyncHTTPTransport", lambda **kwargs: httpx.MockTransport(handle)
+    )
     with caplog.at_level(logging.DEBUG):
         body = await live_map.fetch_weather("temperature", 2, 1, 1, secret, before_send=before_send)
     assert body.startswith(b"\x89PNG") and sent == ["admitted"]
@@ -147,15 +191,63 @@ async def test_transient_quota_updates_only_shared_window_rows():
     session = Session()
     await quota.debit_transient_send(session, provider_id="nasa_firms")
     assert session.statements
-    assert all(statement.table.name == "connector_quota_windows" for statement in session.statements)
+    assert all(
+        statement.table.name == "connector_quota_windows" for statement in session.statements
+    )
 
 
-@pytest.mark.parametrize(("provider", "payload", "title"), [
-    ("github_releases", [{"id": 8, "tag_name": "v1", "published_at": "2026-11-04T00:00:00Z", "html_url": "https://github.com/a/b/releases/tag/v1"}], "v1"),
-    ("nvd", {"totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2026-1234", "published": "2026-11-04T00:00:00Z", "descriptions": [{"lang": "en", "value": "Issue"}]}}]}, "CVE-2026-1234"),
-    ("sec", {"cik": "1", "name": "Company", "filings": {"recent": {"accessionNumber": ["0000000001-26-000001"], "form": ["10-Q"], "filingDate": ["2026-11-04"], "primaryDocument": ["report.htm"]}}}, "Company: 10-Q"),
-])
-def test_technology_and_finance_projection_has_real_source_and_no_guessed_coordinates(provider, payload, title):
+@pytest.mark.parametrize(
+    ("provider", "payload", "title"),
+    [
+        (
+            "github_releases",
+            [
+                {
+                    "id": 8,
+                    "tag_name": "v1",
+                    "published_at": "2026-11-04T00:00:00Z",
+                    "html_url": "https://github.com/a/b/releases/tag/v1",
+                }
+            ],
+            "v1",
+        ),
+        (
+            "nvd",
+            {
+                "totalResults": 1,
+                "vulnerabilities": [
+                    {
+                        "cve": {
+                            "id": "CVE-2026-1234",
+                            "published": "2026-11-04T00:00:00Z",
+                            "descriptions": [{"lang": "en", "value": "Issue"}],
+                        }
+                    }
+                ],
+            },
+            "CVE-2026-1234",
+        ),
+        (
+            "sec",
+            {
+                "cik": "1",
+                "name": "Company",
+                "filings": {
+                    "recent": {
+                        "accessionNumber": ["0000000001-26-000001"],
+                        "form": ["10-Q"],
+                        "filingDate": ["2026-11-04"],
+                        "primaryDocument": ["report.htm"],
+                    }
+                },
+            },
+            "Company: 10-Q",
+        ),
+    ],
+)
+def test_technology_and_finance_projection_has_real_source_and_no_guessed_coordinates(
+    provider, payload, title
+):
     items, truncated = live_map._parse(provider, json.dumps(payload).encode())
     assert not truncated and items[0]["title"] == title
     assert items[0]["source"] and items[0]["url"].startswith("https://")

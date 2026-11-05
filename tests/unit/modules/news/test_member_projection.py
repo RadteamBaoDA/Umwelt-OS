@@ -27,9 +27,18 @@ def _grant_select(*_a: object, **_k: object):  # type: ignore[no-untyped-def]
 
 def _evidence(title: str = "T", excerpt: str = "E") -> StoryEvidence:
     return StoryEvidence(
-        document_id=uuid4(), document_version_id=uuid4(), chunk_id=uuid4(), source_id=uuid4(),
-        source_name="s", source_type="rss", provider=None, url=None, title=title, excerpt=excerpt,
-        observed_at=NOW, published_at=None,
+        document_id=uuid4(),
+        document_version_id=uuid4(),
+        chunk_id=uuid4(),
+        source_id=uuid4(),
+        source_name="s",
+        source_type="rss",
+        provider=None,
+        url=None,
+        title=title,
+        excerpt=excerpt,
+        observed_at=NOW,
+        published_at=None,
     )
 
 
@@ -54,8 +63,11 @@ def _rows(rows: list[object]) -> MagicMock:
 
 def test_grant_subquery_precedes_limit_in_compiled_sql() -> None:
     with patch.object(stories.workspaces, "granted_resource_ids", _grant_select):
-        sql = str(stories._member_obs(MEMBER, NOW, (), NewsObservation.story_id).limit(5).compile(
-            dialect=postgresql.dialect()))
+        sql = str(
+            stories._member_obs(MEMBER, NOW, (), NewsObservation.story_id)
+            .limit(5)
+            .compile(dialect=postgresql.dialect())
+        )
     assert "news_observations.document_id IN (SELECT" in sql
     assert sql.index("document_id IN (SELECT") < sql.index("LIMIT")
 
@@ -64,16 +76,27 @@ def test_grant_subquery_precedes_limit_in_compiled_sql() -> None:
 async def test_zero_grant_story_is_none() -> None:
     session = FakeSession(_rows([SimpleNamespace(n=0, s=0, latest=None)]))
     with patch.object(stories.workspaces, "granted_resource_ids", _grant_select):
-        assert await stories._member_get_story(session, uuid4(), (), MEMBER, FENCE, 100, None) is None  # type: ignore[arg-type]
+        assert (
+            await stories._member_get_story(session, uuid4(), (), MEMBER, FENCE, 100, None) is None
+        )  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
 async def test_member_list_uses_authorized_title_and_counts_only() -> None:
     story_id = uuid4()
     obs = SimpleNamespace(
-        story_id=story_id, document_id=uuid4(), document_version_id=uuid4(), chunk_id=uuid4(), source_id=uuid4(),
-        provider=None, canonical_url=None, title="Visible title", excerpt="visible", observed_at=NOW,
-        published_at=None, match_evidence={},
+        story_id=story_id,
+        document_id=uuid4(),
+        document_version_id=uuid4(),
+        chunk_id=uuid4(),
+        source_id=uuid4(),
+        provider=None,
+        canonical_url=None,
+        title="Visible title",
+        excerpt="visible",
+        observed_at=NOW,
+        published_at=None,
+        match_evidence={},
     )
     session = FakeSession(
         _rows([SimpleNamespace(story_id=story_id, latest=NOW)]),
@@ -81,10 +104,14 @@ async def test_member_list_uses_authorized_title_and_counts_only() -> None:
         _rows([SimpleNamespace(story_id=story_id, evidence_count=1, source_count=1)]),
     )
     with patch.object(stories.workspaces, "granted_resource_ids", _grant_select):
-        page = await stories._member_list_stories(
-            session, StoryFilter(), MEMBER, FENCE, None, NOW)  # type: ignore[arg-type]
+        page = await stories._member_list_stories(session, StoryFilter(), MEMBER, FENCE, None, NOW)  # type: ignore[arg-type]
     item = page.items[0]
-    assert (item.title, item.evidence_count, item.relevance, item.why_relevant) == ("Visible title", 1, None, [])
+    assert (item.title, item.evidence_count, item.relevance, item.why_relevant) == (
+        "Visible title",
+        1,
+        None,
+        [],
+    )
     assert item.translation_revision == stories._translation_revision(story_id, item.evidence[0])
 
 
@@ -92,7 +119,8 @@ async def test_member_list_uses_authorized_title_and_counts_only() -> None:
 async def test_member_topic_filter_forbidden() -> None:
     with pytest.raises(DomainError) as exc:
         await stories._member_list_stories(
-            FakeSession(), StoryFilter(topic_id=uuid4()), MEMBER, FENCE, None, NOW)  # type: ignore[arg-type]
+            FakeSession(), StoryFilter(topic_id=uuid4()), MEMBER, FENCE, None, NOW
+        )  # type: ignore[arg-type]
     assert exc.value.status_code == 403
 
 
@@ -102,42 +130,79 @@ def test_translation_revision_tracks_version_and_text() -> None:
     revision = stories._translation_revision(story, base)
     assert len(revision) == 32
     assert revision == stories._translation_revision(story, base)
-    assert revision != stories._translation_revision(story, base.model_copy(update={"document_version_id": uuid4()}))
-    assert revision != stories._translation_revision(story, base.model_copy(update={"title": "other"}))
+    assert revision != stories._translation_revision(
+        story, base.model_copy(update={"document_version_id": uuid4()})
+    )
+    assert revision != stories._translation_revision(
+        story, base.model_copy(update={"title": "other"})
+    )
 
 
 @pytest.mark.asyncio
 async def test_visibility_hash_changes_with_grant_and_membership_revision() -> None:
     ev = _evidence()
-    story = StoryRead(id=uuid4(), title="T", excerpt="E", observed_at=NOW, source_count=1, evidence_count=1,
-                      evidence=[ev], translation_revision="r" * 32)
-    row = SimpleNamespace(document_id=ev.document_id, document_version_id=ev.document_version_id,
-                          source_id=ev.source_id, source_generation=1, local_only=False)
+    story = StoryRead(
+        id=uuid4(),
+        title="T",
+        excerpt="E",
+        observed_at=NOW,
+        source_count=1,
+        evidence_count=1,
+        evidence=[ev],
+        translation_revision="r" * 32,
+    )
+    row = SimpleNamespace(
+        document_id=ev.document_id,
+        document_version_id=ev.document_version_id,
+        source_id=ev.source_id,
+        source_generation=1,
+        local_only=False,
+    )
 
     async def run(grant_revision: int, scope: WorkspaceContext) -> str:
-        grant = GrantRef(resource_type="document", resource_id=ev.document_id,
-                         share_revision=grant_revision, resource_revision=1)
+        grant = GrantRef(
+            resource_type="document",
+            resource_id=ev.document_id,
+            share_revision=grant_revision,
+            resource_revision=1,
+        )
         detail = SimpleNamespace(story=story, evidence_cursor=None)
-        with patch.object(stories, "get_story", AsyncMock(return_value=detail)), \
-                patch.object(stories.workspaces, "read_resource_grants", AsyncMock(return_value=(grant,))):
+        with (
+            patch.object(stories, "get_story", AsyncMock(return_value=detail)),
+            patch.object(
+                stories.workspaces, "read_resource_grants", AsyncMock(return_value=(grant,))
+            ),
+        ):
             value = await stories.read_story_translation_input(
-                FakeSession(_rows([row])), scope=scope, story_id=story.id,  # type: ignore[arg-type]
-                multi_workspace_enabled=False)
+                FakeSession(_rows([row])),
+                scope=scope,
+                story_id=story.id,  # type: ignore[arg-type]
+                multi_workspace_enabled=False,
+            )
         assert value is not None and value.fields == {"title": "T", "excerpt": "E"}
         return value.visibility_hash
 
     base = await run(1, MEMBER)
     assert base == await run(1, MEMBER)
     assert base != await run(2, MEMBER)
-    assert base != await run(1, WorkspaceContext(user_id=7, workspace_id=WS, role="member", membership_revision=4))
+    assert base != await run(
+        1, WorkspaceContext(user_id=7, workspace_id=WS, role="member", membership_revision=4)
+    )
 
 
 def test_member_detail_without_source_ids_has_no_source_filter() -> None:
     """The /news page asks for a member story with no source_ids: authorized projection, not a source predicate."""
     with patch.object(stories.workspaces, "granted_resource_ids", _grant_select):
-        empty = str(stories._member_obs(MEMBER, NOW, (), NewsObservation.story_id).compile(dialect=postgresql.dialect()))
-        scoped = str(stories._member_obs(MEMBER, NOW, (uuid4(),), NewsObservation.story_id).compile(
-            dialect=postgresql.dialect()))
+        empty = str(
+            stories._member_obs(MEMBER, NOW, (), NewsObservation.story_id).compile(
+                dialect=postgresql.dialect()
+            )
+        )
+        scoped = str(
+            stories._member_obs(MEMBER, NOW, (uuid4(),), NewsObservation.story_id).compile(
+                dialect=postgresql.dialect()
+            )
+        )
     assert "news_observations.source_id IN" not in empty
     assert "news_observations.source_id IN" in scoped
 
@@ -152,12 +217,23 @@ def test_attribution_comes_only_from_provider_metadata() -> None:
 def test_member_evidence_exposes_stored_attribution_only() -> None:
     def obs(evidence: dict[str, object]) -> NewsObservation:
         return NewsObservation(
-            document_id=uuid4(), document_version_id=uuid4(), chunk_id=uuid4(), source_id=uuid4(), provider=None,
-            canonical_url=None, title="t", excerpt="e", observed_at=NOW, published_at=None, match_evidence=evidence,
+            document_id=uuid4(),
+            document_version_id=uuid4(),
+            chunk_id=uuid4(),
+            source_id=uuid4(),
+            provider=None,
+            canonical_url=None,
+            title="t",
+            excerpt="e",
+            observed_at=NOW,
+            published_at=None,
+            match_evidence=evidence,
         )
 
     source = SimpleNamespace(name="s", type="rss")
-    shown = stories._member_evidence(obs({"attribution": {"publisher": "BBC", "license_label": "L"}}), source)  # type: ignore[arg-type]
+    shown = stories._member_evidence(
+        obs({"attribution": {"publisher": "BBC", "license_label": "L"}}), source
+    )  # type: ignore[arg-type]
     assert (shown.publisher, shown.license_label) == ("BBC", "L")
     bare = stories._member_evidence(obs({}), source)  # type: ignore[arg-type]
     assert (bare.publisher, bare.license_label) == (None, None)

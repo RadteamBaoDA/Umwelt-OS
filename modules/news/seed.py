@@ -26,7 +26,10 @@ TOPIC_SEEDS = (
 
 
 async def ensure_demo_topics(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[int, int]:
     """Add missing owner topics and return created/existing counts without committing.
 
@@ -40,18 +43,28 @@ async def ensure_demo_topics(
         # Keep an existing pre-workspace fixture in place, but give each newly seeded
         # workspace its own deterministic primary key.
         workspace_seed_id = uuid5(NAMESPACE_URL, f"{seed['id']}/{scope.workspace_id}")
-        found = await session.scalar(select(Topic.id).where(
-            Topic.id.in_((seed["id"], workspace_seed_id)), Topic.workspace_id == scope.workspace_id,
-        ))
+        found = await session.scalar(
+            select(Topic.id).where(
+                Topic.id.in_((seed["id"], workspace_seed_id)),
+                Topic.workspace_id == scope.workspace_id,
+            )
+        )
         if found is not None:
             existing += 1
             continue
-        session.add(Topic(
-            id=workspace_seed_id, workspace_id=scope.workspace_id,
-            owner_id=scope.user_id if hasattr(scope, "user_id") else scope.actor_user_id, name=seed["name"],
-            keywords=seed["keywords"], entity_ids=[], is_active=True,
-            weight=seed["weight"], revision=1,
-        ))
+        session.add(
+            Topic(
+                id=workspace_seed_id,
+                workspace_id=scope.workspace_id,
+                owner_id=scope.user_id if hasattr(scope, "user_id") else scope.actor_user_id,
+                name=seed["name"],
+                keywords=seed["keywords"],
+                entity_ids=[],
+                is_active=True,
+                weight=seed["weight"],
+                revision=1,
+            )
+        )
         created += 1
     await session.flush()
     return created, existing

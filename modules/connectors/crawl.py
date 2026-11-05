@@ -30,7 +30,9 @@ from modules.connectors.registry import normalize
 logger = logging.getLogger(__name__)
 MAX_BYTES = 25 * 1024 * 1024
 _job_lock = asyncio.Lock()
-app = FastAPI(title="Umwelt-OS bounded browser collector", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(
+    title="Umwelt-OS bounded browser collector", docs_url=None, redoc_url=None, openapi_url=None
+)
 _SERVICE_INSTANCE_ID = str(uuid7())
 _agent_read_tasks: dict[UUID, tuple[AgentReadRequest, asyncio.Task[list[dict[str, object]]]]] = {}
 _BROWSER_CONTROL_URL = "http://172.29.250.10:8000/api/v1/browser-control"
@@ -92,7 +94,9 @@ _MAX_REDIRECTS = 6
 _Append = Callable[[str, str, int], Awaitable[None]]
 
 
-async def _pinned_send_parts(current_url: str, req_headers: dict[str, str]) -> tuple[str, dict[str, str], dict[str, object]]:
+async def _pinned_send_parts(
+    current_url: str, req_headers: dict[str, str]
+) -> tuple[str, dict[str, str], dict[str, object]]:
     """Resolve ``current_url`` to one public address and return the pinned (url, headers, extensions).
 
     Fails closed: a missing host or empty/non-public resolution raises ``ValueError`` instead of
@@ -111,7 +115,9 @@ async def _pinned_send_parts(current_url: str, req_headers: dict[str, str]) -> t
 
 
 async def _send_following_redirects(
-    client: httpx.AsyncClient, request_url: str, visited: set[str],
+    client: httpx.AsyncClient,
+    request_url: str,
+    visited: set[str],
 ) -> tuple[httpx.Response, str]:
     """Send a streamed GET, following at most six redirects with per-hop DNS validation and pinning.
 
@@ -131,7 +137,9 @@ async def _send_following_redirects(
         req_headers = {"Accept": "text/html,application/xhtml+xml"}
         req_extensions: dict[str, object] = {}
         if _dns_safe is _DEFAULT_DNS_SAFE:
-            send_url, req_headers, req_extensions = await _pinned_send_parts(current_url, req_headers)
+            send_url, req_headers, req_extensions = await _pinned_send_parts(
+                current_url, req_headers
+            )
         req = client.build_request("GET", send_url, headers=req_headers, extensions=req_extensions)
         response = await client.send(req, stream=True)
         if response.status_code not in _REDIRECT_STATUSES:
@@ -170,7 +178,10 @@ async def _read_bounded_body(response: httpx.Response, state: dict[str, Any]) ->
 
 
 async def _crawl_http(
-    payload: CrawlRequest, timeout_seconds: float, state: dict[str, Any], records: list[dict[str, Any]],
+    payload: CrawlRequest,
+    timeout_seconds: float,
+    state: dict[str, Any],
+    records: list[dict[str, Any]],
     append: _Append,
 ) -> None:
     """Breadth-first HTTP crawl bounded by ``max_pages``, ``max_depth`` and the shared byte budget.
@@ -179,7 +190,9 @@ async def _crawl_http(
     """
     queue = [(str(payload.url), 0)]
     visited: set[str] = set()
-    async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=False, trust_env=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout_seconds, follow_redirects=False, trust_env=False
+    ) as client:
         while queue and len(records) < payload.max_pages:
             request_url, depth = queue.pop(0)
             if request_url in visited:
@@ -192,12 +205,19 @@ async def _crawl_http(
             if depth < payload.max_depth:
                 for anchor in soup.find_all("a", href=True):
                     candidate = urljoin(final_url, str(anchor["href"]))
-                    if urlsplit(candidate).scheme in {"http", "https"} and candidate not in visited and len(queue) < 100:
+                    if (
+                        urlsplit(candidate).scheme in {"http", "https"}
+                        and candidate not in visited
+                        and len(queue) < 100
+                    ):
                         queue.append((candidate, depth + 1))
 
 
 async def _intercept_browser_response(
-    cdp: Any, paused: dict[str, Any], state: dict[str, Any], budget_lock: asyncio.Lock,
+    cdp: Any,
+    paused: dict[str, Any],
+    state: dict[str, Any],
+    budget_lock: asyncio.Lock,
 ) -> None:
     """Enforce the shared response byte budget for one paused browser response.
 
@@ -230,7 +250,9 @@ async def _intercept_browser_response(
                 if len(body) + len(data) > remaining:
                     state["exceeded"] = True
                     await cdp.send("IO.close", {"handle": handle})
-                    await cdp.send("Fetch.failRequest", {"requestId": request_id, "errorReason": "Aborted"})
+                    await cdp.send(
+                        "Fetch.failRequest", {"requestId": request_id, "errorReason": "Aborted"}
+                    )
                     return
                 body.extend(data)
                 if chunk.get("eof"):
@@ -255,13 +277,17 @@ async def _intercept_browser_response(
         except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
             state["interception_error"] = True
             try:
-                await cdp.send("Fetch.failRequest", {"requestId": request_id, "errorReason": "Aborted"})
+                await cdp.send(
+                    "Fetch.failRequest", {"requestId": request_id, "errorReason": "Aborted"}
+                )
             except Exception:  # best-effort cleanup/optional step; failure intentionally ignored
                 logger.debug("Browser failRequest cleanup failed", exc_info=True)
 
 
 def _make_browser_guard(
-    state: dict[str, Any], response_tasks: list[asyncio.Task[None]], cdp_sessions: list[Any],
+    state: dict[str, Any],
+    response_tasks: list[asyncio.Task[None]],
+    cdp_sessions: list[Any],
     response_budget_lock: asyncio.Lock,
 ) -> Callable[[Any], Awaitable[None]]:
     """Build the pre-navigation hook installing DNS route checks and the CDP response budget.
@@ -288,11 +314,15 @@ def _make_browser_guard(
         await context.page.route("**/*", check_request)
         cdp = await context.page.context.new_cdp_session(context.page)
         cdp_sessions.append(cdp)
-        await cdp.send("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Response"}]})
+        await cdp.send(
+            "Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Response"}]}
+        )
         cdp.on(
             "Fetch.requestPaused",
             lambda paused: response_tasks.append(
-                asyncio.create_task(_intercept_browser_response(cdp, paused, state, response_budget_lock))
+                asyncio.create_task(
+                    _intercept_browser_response(cdp, paused, state, response_budget_lock)
+                )
             ),
         )
 
@@ -300,7 +330,10 @@ def _make_browser_guard(
 
 
 async def _crawl_browser(
-    payload: CrawlRequest, deadline: timedelta, state: dict[str, Any], append: _Append,
+    payload: CrawlRequest,
+    deadline: timedelta,
+    state: dict[str, Any],
+    append: _Append,
 ) -> None:
     """Playwright crawl with DNS route guards and a CDP-enforced aggregate response budget.
 
@@ -402,12 +435,18 @@ def _agent_target_allowed(url: str, origin: str, path_prefix: str) -> bool:
     path = unquote(parsed.path or "/")
     prefix = unquote(path_prefix or "/")
     return bool(
-        parsed.scheme == "https" and parsed.username is None and parsed.password is None
-        and parsed.fragment == "" and parsed.query == "" and "?" not in url and "#" not in url
+        parsed.scheme == "https"
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.fragment == ""
+        and parsed.query == ""
+        and "?" not in url
+        and "#" not in url
         and f"https://{host}" == origin
         and (port is None or port == 443)
         and not any(segment in {".", ".."} for segment in path.split("/"))
-        and "%2f" not in parsed.path.lower() and "%5c" not in parsed.path.lower()
+        and "%2f" not in parsed.path.lower()
+        and "%5c" not in parsed.path.lower()
         and "%25" not in parsed.path.lower()
         and "\\" not in path
         and (path == prefix or prefix == "/" or path.startswith(prefix.rstrip("/") + "/"))
@@ -443,7 +482,9 @@ async def _browser_control_callback(
         return False
     try:
         async with httpx.AsyncClient(
-            timeout=2, trust_env=False, follow_redirects=False,
+            timeout=2,
+            trust_env=False,
+            follow_redirects=False,
         ) as client:
             response = await client.post(
                 f"{_BROWSER_CONTROL_URL}/jobs/{payload.job_id}/event",
@@ -474,7 +515,11 @@ class _StaticReadState:
 
 
 async def _fetch_static_target(
-    payload: AgentReadRequest, settings: Settings, budget: Any, state: _StaticReadState, requested: str,
+    payload: AgentReadRequest,
+    settings: Settings,
+    budget: Any,
+    state: _StaticReadState,
+    requested: str,
 ) -> tuple[str, bytes, Any]:
     """Fetch ``requested`` through the pinned transport, following at most two in-scope redirects.
 
@@ -503,19 +548,27 @@ async def _fetch_static_target(
         async def permit() -> bool:
             """Obtain an authoritative permit for this pinned target immediately before socket send."""
             return await _browser_control_callback(
-                settings, payload, "authorize",
-                request_ordinal=state.request_ordinal, target_url=current,  # noqa: B023  # closure is awaited within the same loop iteration
+                settings,
+                payload,
+                "authorize",
+                request_ordinal=state.request_ordinal,
+                target_url=current,  # noqa: B023  # closure is awaited within the same loop iteration
             )
 
         budget.before_request = permit
         transport = McpPinnedHttpTransport(current, budget)
         async with AsyncClient(
-            transport=transport, follow_redirects=False,
-            timeout=max(0.1, budget.remaining_seconds()), trust_env=False,
+            transport=transport,
+            follow_redirects=False,
+            timeout=max(0.1, budget.remaining_seconds()),
+            trust_env=False,
         ) as client:
             response = await client.get(
                 current,
-                headers={"Accept": "text/html,application/xhtml+xml", "Accept-Encoding": "identity"},
+                headers={
+                    "Accept": "text/html,application/xhtml+xml",
+                    "Accept-Encoding": "identity",
+                },
             )
             body = await response.aread()
             status = response.status_code
@@ -537,15 +590,20 @@ async def _fetch_static_target(
         if status >= 400:
             raise ValueError("Browser source returned an unsuccessful status")
         if headers.get("content-type", "").split(";", 1)[0].strip().lower() not in {
-            "text/html", "application/xhtml+xml",
+            "text/html",
+            "application/xhtml+xml",
         }:
             raise ValueError("Browser source did not return a static HTML page")
         return final_url, body, headers
 
 
 async def _record_static_page(
-    payload: AgentReadRequest, state: _StaticReadState, requested: str, depth: int,
-    final_url: str, body: bytes,
+    payload: AgentReadRequest,
+    state: _StaticReadState,
+    requested: str,
+    depth: int,
+    final_url: str,
+    body: bytes,
 ) -> None:
     """Digest one fetched page into ``state.pages`` and queue in-scope depth-1 links (first page only)."""
     soup, page_text = await asyncio.to_thread(_parse_html, body)
@@ -581,44 +639,57 @@ async def _execute_static_agent_read(
 
     from modules.tools.public import McpOperationNetworkBudget
 
-    if (
-        payload.service_instance_id != _SERVICE_INSTANCE_ID
-        or not _agent_target_allowed(payload.target_url, payload.origin, payload.path_prefix)
+    if payload.service_instance_id != _SERVICE_INSTANCE_ID or not _agent_target_allowed(
+        payload.target_url, payload.origin, payload.path_prefix
     ):
         raise ValueError("Browser target is outside the service instance or source scope")
     if not await _browser_control_callback(settings, payload, "register"):
         raise PermissionError("Browser network capability or authority is unavailable")
     deadline = time.monotonic() + payload.timeout_seconds
     budget = McpOperationNetworkBudget(
-        deadline=deadline, max_requests=6, max_request_bytes=8192,
-        max_response_bytes=5 * 1024 * 1024, max_inflight_requests=1,
-        max_teardown_requests=1, max_teardown_bytes=8192, before_request=None,
+        deadline=deadline,
+        max_requests=6,
+        max_request_bytes=8192,
+        max_response_bytes=5 * 1024 * 1024,
+        max_inflight_requests=1,
+        max_teardown_requests=1,
+        max_teardown_bytes=8192,
+        before_request=None,
     )
     state = _StaticReadState(queue=[(payload.target_url, 0)])
     while state.queue and len(state.pages) < payload.max_pages:
         requested, depth = state.queue.pop(0)
-        if requested in state.visited or not _agent_target_allowed(requested, payload.origin, payload.path_prefix):
+        if requested in state.visited or not _agent_target_allowed(
+            requested, payload.origin, payload.path_prefix
+        ):
             continue
-        final_url, body, _headers = await _fetch_static_target(payload, settings, budget, state, requested)
+        final_url, body, _headers = await _fetch_static_target(
+            payload, settings, budget, state, requested
+        )
         await _record_static_page(payload, state, requested, depth, final_url, body)
 
     if not state.pages:
         raise ValueError("Browser source returned no pages within the granted scope")
     result_digest = await to_thread_joined(compute_result_digest, state.pages)
     if not await _browser_control_callback(
-        settings, payload, "complete", request_ordinal=state.request_ordinal,
-        actual_pages=len(state.pages), actual_bytes=state.page_bytes, result_hash=result_digest,
+        settings,
+        payload,
+        "complete",
+        request_ordinal=state.request_ordinal,
+        actual_pages=len(state.pages),
+        actual_bytes=state.page_bytes,
+        result_hash=result_digest,
     ):
         raise PermissionError("Browser completion could not be acknowledged")
     return state.pages
 
 
-def _job_tokens_match(payload: AgentReadRequest | AgentReadCancel, header_token: str | None) -> bool:
+def _job_tokens_match(
+    payload: AgentReadRequest | AgentReadCancel, header_token: str | None
+) -> bool:
     """Require the per-operation secret both in the validated body and control header."""
 
-    return bool(
-        header_token and hmac.compare_digest(payload.job_token, header_token)
-    )
+    return bool(header_token and hmac.compare_digest(payload.job_token, header_token))
 
 
 @app.get("/agent-reads/instance")
@@ -627,7 +698,11 @@ async def agent_read_instance(authorization: str | None = Header(default=None)) 
     settings = Settings()
     scheme, _, token = (authorization or "").partition(" ")
     expected = settings.browser_shared_token.get_secret_value()
-    if not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode()):
+    if (
+        not expected
+        or scheme.lower() != "bearer"
+        or not hmac.compare_digest(token.encode(), expected.encode())
+    ):
         raise HTTPException(status_code=401, detail="Browser service authentication required")
     return {"service_instance_id": _SERVICE_INSTANCE_ID}
 
@@ -643,7 +718,9 @@ async def agent_read(
     scheme, _, token = (authorization or "").partition(" ")
     expected = settings.browser_shared_token.get_secret_value()
     if (
-        not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode())
+        not expected
+        or scheme.lower() != "bearer"
+        or not hmac.compare_digest(token.encode(), expected.encode())
         or not _job_tokens_match(payload, job_token)
     ):
         raise HTTPException(status_code=401, detail="Browser operation authentication required")
@@ -658,7 +735,9 @@ async def agent_read(
             async with asyncio.timeout(payload.timeout_seconds + 2):
                 pages = await task
             if await to_thread_joined(wire_size, pages) > 8 * 1024 * 1024:
-                raise HTTPException(status_code=413, detail="Browser result envelope exceeded its limit")
+                raise HTTPException(
+                    status_code=413, detail="Browser result envelope exceeded its limit"
+                )
             return {
                 "job_id": str(payload.job_id),
                 "operation_id": str(payload.operation_id),
@@ -685,7 +764,9 @@ async def agent_read(
             raise HTTPException(status_code=422, detail="Browser page could not be read") from exc
         except Exception as exc:
             await asyncio.shield(_browser_control_callback(settings, payload, "cancelled"))
-            raise HTTPException(status_code=502, detail="Browser operation did not complete") from exc
+            raise HTTPException(
+                status_code=502, detail="Browser operation did not complete"
+            ) from exc
         finally:
             _agent_read_tasks.pop(payload.job_id, None)
 
@@ -702,12 +783,16 @@ async def agent_read_status(
     expected = settings.browser_shared_token.get_secret_value()
     task_item = _agent_read_tasks.get(job_id)
     if (
-        not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode())
-        or task_item is None or not _job_tokens_match(task_item[0], job_token)
+        not expected
+        or scheme.lower() != "bearer"
+        or not hmac.compare_digest(token.encode(), expected.encode())
+        or task_item is None
+        or not _job_tokens_match(task_item[0], job_token)
     ):
         raise HTTPException(status_code=404, detail="Browser job status unavailable")
     return {
-        "job_id": str(job_id), "service_instance_id": _SERVICE_INSTANCE_ID,
+        "job_id": str(job_id),
+        "service_instance_id": _SERVICE_INSTANCE_ID,
         "status": "running",
     }
 
@@ -725,11 +810,15 @@ async def cancel_agent_read(
     expected = settings.browser_shared_token.get_secret_value()
     item = _agent_read_tasks.get(job_id)
     if (
-        not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode())
-        or payload.job_id != job_id or payload.operation_id != (item[0].operation_id if item else None)
+        not expected
+        or scheme.lower() != "bearer"
+        or not hmac.compare_digest(token.encode(), expected.encode())
+        or payload.job_id != job_id
+        or payload.operation_id != (item[0].operation_id if item else None)
         or payload.claim_generation != (item[0].claim_generation if item else None)
         or payload.service_instance_id != _SERVICE_INSTANCE_ID
-        or item is None or not _job_tokens_match(payload, job_token)
+        or item is None
+        or not _job_tokens_match(payload, job_token)
         or not _job_tokens_match(item[0], job_token)
     ):
         raise HTTPException(status_code=404, detail="Browser job is not active")
@@ -756,7 +845,11 @@ async def collect(
     settings = Settings()
     scheme, _, token = (authorization or "").partition(" ")
     expected = settings.browser_shared_token.get_secret_value()
-    if not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode()):
+    if (
+        not expected
+        or scheme.lower() != "bearer"
+        or not hmac.compare_digest(token.encode(), expected.encode())
+    ):
         raise HTTPException(status_code=401, detail="Browser service authentication required")
     try:
         return await crawl(payload)
@@ -774,7 +867,11 @@ async def collect_rss(
     settings = Settings()
     scheme, _, token = (authorization or "").partition(" ")
     expected = settings.browser_shared_token.get_secret_value()
-    if not expected or scheme.lower() != "bearer" or not hmac.compare_digest(token.encode(), expected.encode()):
+    if (
+        not expected
+        or scheme.lower() != "bearer"
+        or not hmac.compare_digest(token.encode(), expected.encode())
+    ):
         raise HTTPException(status_code=401, detail="Browser service authentication required")
     try:
         return await preview_rss(payload)

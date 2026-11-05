@@ -23,24 +23,48 @@ STAGE_ID = uuid4()
 class Env:
     """Fakes for the worker's collaborators plus a call log."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, stage_status: str = "pending", attempts: int = 0,
-                 native: bool = True, lease: Any = "future", observed: int = 1) -> None:
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        stage_status: str = "pending",
+        attempts: int = 0,
+        native: bool = True,
+        lease: Any = "future",
+        observed: int = 1,
+    ) -> None:
         self.log: list[Any] = []
         self.observed = observed
         self.stage = SimpleNamespace(
-            id=STAGE_ID, status=stage_status, attempts=attempts, lease_expires_at=None, error_code=None,
+            id=STAGE_ID,
+            status=stage_status,
+            attempts=attempts,
+            lease_expires_at=None,
+            error_code=None,
             next_attempt_at=None,
         )
         self.run = SimpleNamespace(id=RUN_ID, status="queued")
         self.event = SimpleNamespace(status="pending", next_attempt_at=None)
-        expires = datetime.now(UTC) + timedelta(minutes=5) if lease == "future" else datetime.now(UTC) - timedelta(seconds=1)
+        expires = (
+            datetime.now(UTC) + timedelta(minutes=5)
+            if lease == "future"
+            else datetime.now(UTC) - timedelta(seconds=1)
+        )
         self.state = SimpleNamespace(lease_run_id=RUN_ID, lease_expires_at=expires)
         self.work = SimpleNamespace(
-            scope=InternalJobScope(workspace_id=uuid4(), actor_user_id=7, membership_revision=3), access_fence="fence", source=SimpleNamespace(id=uuid4(), generation=1, status="active"),
-            projection=SimpleNamespace(provider="rss"), state=self.state, run=self.run, batch=SimpleNamespace(id=uuid4()),
-            stage=self.stage, event=self.event,
+            scope=InternalJobScope(workspace_id=uuid4(), actor_user_id=7, membership_revision=3),
+            access_fence="fence",
+            source=SimpleNamespace(id=uuid4(), generation=1, status="active"),
+            projection=SimpleNamespace(provider="rss"),
+            state=self.state,
+            run=self.run,
+            batch=SimpleNamespace(id=uuid4()),
+            stage=self.stage,
+            event=self.event,
         )
-        self.claim = SimpleNamespace(run_id=RUN_ID, stage_id=STAGE_ID, event_type="connector.crawl.requested")
+        self.claim = SimpleNamespace(
+            run_id=RUN_ID, stage_id=STAGE_ID, event_type="connector.crawl.requested"
+        )
         env = self
 
         async def lock(session, identifier, **kw):
@@ -100,7 +124,10 @@ class Env:
         async def factory():
             yield Session()
 
-        ctx = {"session_factory": factory, "settings": SimpleNamespace(multi_workspace_enabled=False)}
+        ctx = {
+            "session_factory": factory,
+            "settings": SimpleNamespace(multi_workspace_enabled=False),
+        }
         await worker.process_ingestion_event(ctx, str(uuid4()))
 
 
@@ -108,6 +135,7 @@ class Env:
 async def test_crawl_event_claims_runs_and_completes(monkeypatch):
     """Claim commit (running, attempt 1, lease renewed) -> collect -> completion commit and delivery."""
     env = Env(monkeypatch)
+
     # The completion phase re-locks the same rows: a running, unexpired stage with observations.
     async def lock(session, identifier, **kw):
         env.log.append(("lock", kw.get("expected") is not None))
@@ -118,10 +146,18 @@ async def test_crawl_event_claims_runs_and_completes(monkeypatch):
     monkeypatch.setattr(worker, "_lock_worker_event", lock)
     await env.run_event()
     assert env.log == [
-        ("lock", False), ("commit", "running", "running", 0), "collect", ("lock", True),
-        "delivered", ("commit", "succeeded", "succeeded", 1),
+        ("lock", False),
+        ("commit", "running", "running", 0),
+        "collect",
+        ("lock", True),
+        "delivered",
+        ("commit", "succeeded", "succeeded", 1),
     ]
-    assert env.stage.attempts == 1 and env.stage.error_code is None and env.stage.lease_expires_at is None
+    assert (
+        env.stage.attempts == 1
+        and env.stage.error_code is None
+        and env.stage.lease_expires_at is None
+    )
     assert env.state.lease_run_id is None  # terminal native run releases the source lease
 
 
@@ -162,8 +198,13 @@ async def test_claim_phase_early_exits(monkeypatch):
     await env.run_event()
     assert env.log == [("lock", False), "rollback", ("fail", "retry_exhausted")]
 
-    for state in (None, SimpleNamespace(lease_run_id=uuid4(), lease_expires_at=datetime.now(UTC) + timedelta(minutes=1)),
-                  SimpleNamespace(lease_run_id=RUN_ID, lease_expires_at=None)):
+    for state in (
+        None,
+        SimpleNamespace(
+            lease_run_id=uuid4(), lease_expires_at=datetime.now(UTC) + timedelta(minutes=1)
+        ),
+        SimpleNamespace(lease_run_id=RUN_ID, lease_expires_at=None),
+    ):
         env = Env(monkeypatch)
         env.work.state = state
         await env.run_event()
@@ -181,7 +222,11 @@ async def test_transient_failure_schedules_a_retry_and_defers_the_job(monkeypatc
     with pytest.raises(Retry) as exc:
         await env.run_event()
     assert env.stage.status == "retrying" and env.stage.error_code == "transient_failure"
-    assert env.run.status == "queued" and env.event.status == "pending" and env.stage.lease_expires_at is None
+    assert (
+        env.run.status == "queued"
+        and env.event.status == "pending"
+        and env.stage.lease_expires_at is None
+    )
     assert env.event.next_attempt_at == env.stage.next_attempt_at
     assert 0.5 * 1000 <= exc.value.defer_score <= 60 * 1000
     assert env.log[-1][0] == "commit" and env.log[-1][1:] == ("queued", "retrying", 0)

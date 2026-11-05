@@ -34,17 +34,27 @@ def _scope(armed: bool) -> tuple[dict[str, Any], list[_Session]]:
         sessions.append(_Session())
         return sessions[-1]
 
-    app = SimpleNamespace(state=SimpleNamespace(
-        session_factory=factory, settings=SimpleNamespace(multi_workspace_enabled=False)))
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            session_factory=factory, settings=SimpleNamespace(multi_workspace_enabled=False)
+        )
+    )
     fence = SimpleNamespace(scope=1, access_fence=2, auth_session=3, grants=())
-    return {"type": "http", "app": app, "state": {"publication_fence": fence} if armed else {}}, sessions
+    return {
+        "type": "http",
+        "app": app,
+        "state": {"publication_fence": fence} if armed else {},
+    }, sessions
 
 
 def _downstream(*bodies: bytes):
     async def app(scope, receive, send) -> None:
         await send({"type": "http.response.start", "status": 200, "headers": []})
         for i, body in enumerate(bodies):
-            await send({"type": "http.response.body", "body": body, "more_body": i < len(bodies) - 1})
+            await send(
+                {"type": "http.response.body", "body": body, "more_body": i < len(bodies) - 1}
+            )
+
     return app
 
 
@@ -97,8 +107,11 @@ def test_gated_sends_lock_and_roll_back(locks) -> None:
     _run(_downstream(b"a", b""), scope, sent)
     # start, drain chunk + body "a", final empty body (ungated, no drain)
     assert [(m["type"], m.get("body")) for m in sent] == [
-        ("http.response.start", None), ("http.response.body", b""), ("http.response.body", b"a"),
-        ("http.response.body", b"")]
+        ("http.response.start", None),
+        ("http.response.body", b""),
+        ("http.response.body", b"a"),
+        ("http.response.body", b""),
+    ]
     assert locks.calls == ["fence", "grants"] * 2  # start + one non-empty body; empty body ungated
     assert len(sessions) == 2 and all(s.rolled_back == 1 and s.closed == 1 for s in sessions)
 
@@ -128,8 +141,13 @@ def test_body_drain_happens_before_lock(locks, monkeypatch) -> None:
         order.append(f"{m['type']}:{m.get('body', b'')!r}")
 
     asyncio.run(PublicationGateMiddleware(_downstream(b"a"))(scope, _receive, send))
-    assert order == ["lock", "http.response.start:b''", "http.response.body:b''", "lock",
-                     "http.response.body:b'a'"]
+    assert order == [
+        "lock",
+        "http.response.start:b''",
+        "http.response.body:b''",
+        "lock",
+        "http.response.body:b'a'",
+    ]
 
 
 def test_revoke_between_start_and_body_aborts(locks) -> None:
@@ -140,7 +158,9 @@ def test_revoke_between_start_and_body_aborts(locks) -> None:
         _run(_downstream(b"a"), scope, sent)
     # the drain chunk precedes the denied lock, but no real body leaks
     assert [(m["type"], m.get("body")) for m in sent] == [
-        ("http.response.start", None), ("http.response.body", b"")]
+        ("http.response.start", None),
+        ("http.response.body", b""),
+    ]
     assert all(s.rolled_back == 1 for s in sessions)
 
 

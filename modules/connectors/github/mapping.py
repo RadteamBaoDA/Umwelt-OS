@@ -51,7 +51,11 @@ def _display_title(record_type: str, title: str, excerpt: str) -> str:
 
 
 async def map_github_version(
-    session: AsyncSession, ready: ReadyVersionRef, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    ready: ReadyVersionRef,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Map one current GitHub version to its repository/item entities, relationship and event.
 
@@ -69,30 +73,46 @@ async def map_github_version(
     This function takes no locks of its own and never calls an earlier-lock helper.
     """
     source = await sources.get_connector_source(
-        session, ready.source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        ready.source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    if source is None or source.provider != "github" or source.generation != ready.source_generation:
+    if (
+        source is None
+        or source.provider != "github"
+        or source.generation != ready.source_generation
+    ):
         return False
     try:
         # The savepoint rolls back every partial flush (entities, memberships, derived names)
         # if a later step fails, so a failed record never leaves an eventless orphan behind.
         async with session.begin_nested():
             return await _map_version(
-                session, ready, source.configuration, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                ready,
+                source.configuration,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
     except (ValueError, LookupError) as exc:
         # Visible but content-free: only exception class and opaque IDs. The ready-version
         # recovery pass re-runs the idempotent mapper, so this is retried, not permanent.
         logger.warning(
             "github mapping failed for version %s (%s); recovery will retry",
-            ready.document_version_id, type(exc).__name__,
+            ready.document_version_id,
+            type(exc).__name__,
         )
         return False
 
 
 async def _map_version(
-    session: AsyncSession, ready: ReadyVersionRef, configuration: dict[str, object],
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    ready: ReadyVersionRef,
+    configuration: dict[str, object],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Do the mapping work for one version inside the caller's savepoint; False means not mappable.
 
@@ -102,21 +122,36 @@ async def _map_version(
     The first chunk is read under the same scope; ``read_extraction_evidence_refs`` then re-proves
     Source, generation and current version before any membership, relationship or event is written.
     """
-    snapshot = (await documents.read_provider_snapshots(
-        session, [ready.document_version_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    ))[0]
-    record_type = (snapshot.provider_metadata.source_fields if snapshot.provider_metadata else {}).get("record_type")
+    snapshot = (
+        await documents.read_provider_snapshots(
+            session,
+            [ready.document_version_id],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    )[0]
+    record_type = (
+        snapshot.provider_metadata.source_fields if snapshot.provider_metadata else {}
+    ).get("record_type")
     if record_type not in _RECORD_TYPES:
         return False
     chunk_id = await documents.get_first_chunk_id(
-        session, ready.document_version_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        ready.document_version_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if chunk_id is None:
         return False
     refs = await documents.read_extraction_evidence_refs(
-        session, document_id=ready.document_id, document_version_id=ready.document_version_id,
-        source_id=ready.source_id, source_generation=ready.source_generation, chunk_ids=[chunk_id],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        document_id=ready.document_id,
+        document_version_id=ready.document_version_id,
+        source_id=ready.source_id,
+        source_generation=ready.source_generation,
+        chunk_ids=[chunk_id],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if refs is None:
         return False
@@ -126,53 +161,88 @@ async def _map_version(
     async def ensure(candidate_key: str, entity_type: str, name: str | None) -> tuple[UUID, UUID]:
         """Find or create a keyed entity, bind this chunk as support and publish its derived name."""
         entity_id = await entities.find_extraction_entity(
-            session, extraction_identity=identity, candidate_key=candidate_key,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            extraction_identity=identity,
+            candidate_key=candidate_key,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         ) or await entities.create_extracted_entity(
-            session, entity_type, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            entity_type,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         membership_id = await entities.record_extraction_membership(
-            session, entity_id=entity_id, evidence_ref=evidence_ref,
-            source_generation=ready.source_generation, extraction_identity=identity,
+            session,
+            entity_id=entity_id,
+            evidence_ref=evidence_ref,
+            source_generation=ready.source_generation,
+            extraction_identity=identity,
             candidate_key=candidate_key,
             match_fingerprint=sha256(f"{identity}:{candidate_key}".encode()).hexdigest(),
-            observed_at=snapshot.observed_at, confidence=1.0,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            observed_at=snapshot.observed_at,
+            confidence=1.0,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         if name:
             await entities.publish_derived_field(
-                session, entity_id=entity_id, membership_id=membership_id,
-                field_name="name", value=name,
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                entity_id=entity_id,
+                membership_id=membership_id,
+                field_name="name",
+                value=name,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
         return entity_id, membership_id
 
     # Repository identity is the source (one source = one numeric repository id).
     repository_id, repository_membership = await ensure(
-        "repository", "repository", _repository_name(configuration, snapshot.canonical_url),
+        "repository",
+        "repository",
+        _repository_name(configuration, snapshot.canonical_url),
     )
     title = _display_title(record_type, snapshot.title, snapshot.excerpt)
     item_id, item_membership = await ensure(
-        "item:" + sha256(snapshot.provider_id.encode()).hexdigest(), "event_subject", title,
+        "item:" + sha256(snapshot.provider_id.encode()).hexdigest(),
+        "event_subject",
+        title,
     )
     await relationships.publish_extracted_relationship(
-        session, source_entity_id=item_id, target_entity_id=repository_id,
-        relationship_type="part_of", document_version_id=ready.document_version_id,
-        chunk_id=chunk_id, source_membership_id=item_membership,
-        target_membership_id=repository_membership, confidence=1.0,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_entity_id=item_id,
+        target_entity_id=repository_id,
+        relationship_type="part_of",
+        document_version_id=ready.document_version_id,
+        chunk_id=chunk_id,
+        source_membership_id=item_membership,
+        target_membership_id=repository_membership,
+        confidence=1.0,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     await timeline.publish_provider_event(
-        session, source_id=ready.source_id, source_generation=ready.source_generation,
-        document_id=ready.document_id, document_version_id=ready.document_version_id,
-        chunk_ids=[chunk_id], extraction_identity=identity, record_key=snapshot.provider_id,
-        event_type=f"github_{record_type}", title=title, summary=snapshot.excerpt[:1000] or None,
-        started_at=snapshot.observed_at, observed_at=snapshot.observed_at,
+        session,
+        source_id=ready.source_id,
+        source_generation=ready.source_generation,
+        document_id=ready.document_id,
+        document_version_id=ready.document_version_id,
+        chunk_ids=[chunk_id],
+        extraction_identity=identity,
+        record_key=snapshot.provider_id,
+        event_type=f"github_{record_type}",
+        title=title,
+        summary=snapshot.excerpt[:1000] or None,
+        started_at=snapshot.observed_at,
+        observed_at=snapshot.observed_at,
         metadata={
-            "external_id": snapshot.provider_id, "canonical_url": snapshot.canonical_url,
+            "external_id": snapshot.provider_id,
+            "canonical_url": snapshot.canonical_url,
             "repository_entity_id": str(repository_id),
         },
         participants=[(repository_id, "repository"), (item_id, "subject")],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     return True

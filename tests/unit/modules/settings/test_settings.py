@@ -114,7 +114,9 @@ class TestReadOwnerPreferences:
         session = AsyncMock()
         session.scalar.return_value = None  # No database row exists
 
-        prefs = await read_owner_preferences(session, actor_user_id=1, multi_workspace_enabled=False)
+        prefs = await read_owner_preferences(
+            session, actor_user_id=1, multi_workspace_enabled=False
+        )
         assert isinstance(prefs, OwnerPreferencesRead)
         assert prefs.configuration_revision == 1
         assert prefs.persisted is False
@@ -134,9 +136,13 @@ class TestReadOwnerPreferences:
             timezone="Asia/Tokyo",
         )
         # Preferences row query returns the record; the owner-email lookup returns an address.
-        session.scalar.side_effect = lambda stmt, *a, **k: record if "owner_preferences" in str(stmt) else "vpacs.demo@x.com"
+        session.scalar.side_effect = lambda stmt, *a, **k: (
+            record if "owner_preferences" in str(stmt) else "vpacs.demo@x.com"
+        )
 
-        prefs = await read_owner_preferences(session, actor_user_id=1, multi_workspace_enabled=False)
+        prefs = await read_owner_preferences(
+            session, actor_user_id=1, multi_workspace_enabled=False
+        )
         assert isinstance(prefs, OwnerPreferencesRead)
         assert prefs.configuration_revision == 4
         assert prefs.persisted is True
@@ -173,7 +179,9 @@ class TestSaveOwnerPreferences:
         )
 
         with pytest.raises(DomainError) as exc_info:
-            await save_owner_preferences(session, update, actor_user_id=1, multi_workspace_enabled=False)
+            await save_owner_preferences(
+                session, update, actor_user_id=1, multi_workspace_enabled=False
+            )
         assert exc_info.value.status_code == 409
         assert "Preferences changed; reload before saving" in exc_info.value.detail
 
@@ -191,7 +199,9 @@ class TestSaveOwnerPreferences:
             timezone="UTC",
         )
         # Preferences row query returns the record; the owner-email lookup returns an address.
-        session.scalar.side_effect = lambda stmt, *a, **k: record if "owner_preferences" in str(stmt) else "vpacs.demo@x.com"
+        session.scalar.side_effect = lambda stmt, *a, **k: (
+            record if "owner_preferences" in str(stmt) else "vpacs.demo@x.com"
+        )
 
         update = OwnerPreferencesUpdate(
             expected_revision=1,
@@ -200,7 +210,9 @@ class TestSaveOwnerPreferences:
             timezone="Asia/Ho_Chi_Minh",
         )
 
-        result = await save_owner_preferences(session, update, actor_user_id=1, multi_workspace_enabled=False)
+        result = await save_owner_preferences(
+            session, update, actor_user_id=1, multi_workspace_enabled=False
+        )
         assert result.configuration_revision == 2
         assert result.persisted is True
         assert result.theme == "dark"
@@ -213,7 +225,9 @@ class TestSaveOwnerPreferences:
 class TestEndpointAndPrivacyValidation:
     """Tests for validate_endpoint and _privacy destination binding."""
 
-    def _sample_settings(self, allowed_hosts: tuple[str, ...] = ("api.openai.com", "gateway.local:8080")) -> Settings:
+    def _sample_settings(
+        self, allowed_hosts: tuple[str, ...] = ("api.openai.com", "gateway.local:8080")
+    ) -> Settings:
         """Create a mock settings instance with allowed hosts."""
         settings = MagicMock(spec=Settings)
         settings.ai_allowed_endpoint_hosts = set(allowed_hosts)
@@ -311,10 +325,14 @@ class TestDisplayNameAndAccent:
         """save_owner_preferences stores both fields and echoes them."""
         session = AsyncMock()
         session.execute.return_value = None
-        record = OwnerPreferencesRecord(owner_id=1, configuration_revision=1, theme="light", locale="en-us", timezone="UTC")
+        record = OwnerPreferencesRecord(
+            owner_id=1, configuration_revision=1, theme="light", locale="en-us", timezone="UTC"
+        )
         session.scalar.return_value = record
         update = OwnerPreferencesUpdate(**_BASE, display_name="Bao", accent="moss")
         with patch("modules.settings.public.require_preferences_account", AsyncMock()):
-            result = await save_owner_preferences(session, update, actor_user_id=1, multi_workspace_enabled=False)
+            result = await save_owner_preferences(
+                session, update, actor_user_id=1, multi_workspace_enabled=False
+            )
         assert (record.display_name, record.accent) == ("Bao", "moss")
         assert (result.display_name, result.accent) == ("Bao", "moss")

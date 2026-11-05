@@ -112,7 +112,10 @@ def test_routes_404_when_flag_off_and_phone_routes_carry_budget() -> None:
     status = client.get("/api/v1/pick/status")
     assert (status.status_code, status.json()) == (200, {"enabled": False})
     phone = [r for r in router.routes if "/phone/" in r.path]
-    assert phone and all(any(d.dependency.__qualname__.startswith("require_budget") for d in r.dependencies) for r in phone)
+    assert phone and all(
+        any(d.dependency.__qualname__.startswith("require_budget") for d in r.dependencies)
+        for r in phone
+    )
 
 
 def test_phone_body_rejects_free_text() -> None:

@@ -22,17 +22,20 @@ ACTIVE_RUN_STATUSES = ("pending", "streaming", "awaiting_input")
 
 async def _load_ordered_messages(session: AsyncSession, conversation_id: UUID) -> list[Message]:
     """Read every message of the conversation in creation order (one SELECT)."""
-    return list((
-        await session.scalars(
-            select(Message)
-            .where(Message.conversation_id == conversation_id)
-            .order_by(Message.created_at.asc())
-        )
-    ).all())
+    return list(
+        (
+            await session.scalars(
+                select(Message)
+                .where(Message.conversation_id == conversation_id)
+                .order_by(Message.created_at.asc())
+            )
+        ).all()
+    )
 
 
 async def load_transcript(
-    session: AsyncSession, conversation_id: UUID,
+    session: AsyncSession,
+    conversation_id: UUID,
 ) -> tuple[list[Message], UUID | None]:
     """Load the ordered transcript and the id of a still-active response, if any.
 
@@ -74,7 +77,9 @@ async def load_transcript(
 
 
 async def load_run_links(
-    session: AsyncSession, conversation_id: UUID, messages_rows: list[Message],
+    session: AsyncSession,
+    conversation_id: UUID,
+    messages_rows: list[Message],
 ) -> tuple[dict[UUID, UUID], dict[UUID, WebSearchOutcomeRead]]:
     """Map user messages to their response ids and answers to their web-search outcomes.
 
@@ -93,12 +98,11 @@ async def load_run_links(
         select(ResponseRun.user_message_id, ResponseRun.id).where(
             # conversation_id lets the planner use ix_chat_response_runs_conversation_id.
             ResponseRun.conversation_id == conversation_id,
-            ResponseRun.user_message_id.in_([message.id for message in messages_rows])
+            ResponseRun.user_message_id.in_([message.id for message in messages_rows]),
         )
     )
     response_ids_by_user_message = {
-        user_message_id: response_id
-        for user_message_id, response_id in response_rows.all()
+        user_message_id: response_id for user_message_id, response_id in response_rows.all()
     }
     outcome_rows = await session.execute(
         select(
@@ -106,20 +110,26 @@ async def load_run_links(
             ResponseRun.retrieval_context[WEB_SEARCH_OUTCOME_KEY].as_json(),
         ).where(
             ResponseRun.conversation_id == conversation_id,
-            ResponseRun.assistant_message_id.in_([m.id for m in messages_rows if m.role == "assistant"]),
+            ResponseRun.assistant_message_id.in_(
+                [m.id for m in messages_rows if m.role == "assistant"]
+            ),
         )
     )
     for assistant_id, raw_outcome in outcome_rows.all():
         if assistant_id is not None and isinstance(raw_outcome, dict):
             try:
-                web_search_by_assistant[UUID(str(assistant_id))] = WebSearchOutcomeRead.model_validate(raw_outcome)
+                web_search_by_assistant[UUID(str(assistant_id))] = (
+                    WebSearchOutcomeRead.model_validate(raw_outcome)
+                )
             except ValueError:
                 pass  # malformed outcome: report nothing rather than guess
     return response_ids_by_user_message, web_search_by_assistant
 
 
 async def find_run_by_client_request(
-    session: AsyncSession, conversation_id: UUID, client_request_id: str | None,
+    session: AsyncSession,
+    conversation_id: UUID,
+    client_request_id: str | None,
 ) -> ResponseRun | None:
     """Return the conversation's run created for ``client_request_id`` (idempotent replay lookup)."""
     return await session.scalar(
@@ -131,7 +141,9 @@ async def find_run_by_client_request(
 
 
 async def find_mutation_receipt(
-    session: AsyncSession, conversation_id: UUID, client_request_id: str,
+    session: AsyncSession,
+    conversation_id: UUID,
+    client_request_id: str,
 ) -> MessageMutationReceipt | None:
     """Return the mutation receipt stored under ``client_request_id`` for the conversation."""
     return await session.scalar(
@@ -148,20 +160,26 @@ async def find_run_by_id(session: AsyncSession, run_id: UUID) -> ResponseRun | N
 
 
 async def request_id_in_use_by_run(
-    session: AsyncSession, conversation_id: UUID, client_request_id: str,
+    session: AsyncSession,
+    conversation_id: UUID,
+    client_request_id: str,
 ) -> bool:
     """Whether a normal send already used ``client_request_id`` (mutation and send keys are disjoint)."""
     collision = await session.scalar(
-        select(ResponseRun.id).where(
+        select(ResponseRun.id)
+        .where(
             ResponseRun.conversation_id == conversation_id,
             ResponseRun.client_request_id == client_request_id,
-        ).limit(1)
+        )
+        .limit(1)
     )
     return collision is not None
 
 
 async def lock_mutation_target(
-    session: AsyncSession, conversation_id: UUID, message_id: UUID,
+    session: AsyncSession,
+    conversation_id: UUID,
+    message_id: UUID,
 ) -> Message | None:
     """Row-lock (``FOR UPDATE``, refreshing identity-map state) the message a mutation targets."""
     return await session.scalar(
@@ -173,7 +191,10 @@ async def lock_mutation_target(
 
 
 async def find_original_run(
-    session: AsyncSession, conversation_id: UUID, target: Message, action: str,
+    session: AsyncSession,
+    conversation_id: UUID,
+    target: Message,
+    action: str,
 ) -> ResponseRun | None:
     """Return the newest run an edit/regenerate derives from.
 
@@ -192,7 +213,9 @@ async def find_original_run(
 
 
 async def find_original_prompt(
-    session: AsyncSession, conversation_id: UUID, original_run: ResponseRun,
+    session: AsyncSession,
+    conversation_id: UUID,
+    original_run: ResponseRun,
 ) -> Message | None:
     """Return the user prompt message the original run answered, scoped to the conversation."""
     return await session.scalar(
@@ -202,4 +225,3 @@ async def find_original_prompt(
             Message.role == "user",
         )
     )
-

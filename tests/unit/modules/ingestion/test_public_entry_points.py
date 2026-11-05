@@ -32,6 +32,12 @@ def test_publish_event_signature_is_stable() -> None:
 def test_retry_run_signature_is_stable() -> None:
     """``retry_run(session, run_id, requested_stage_key=None, *, scope, multi_workspace_enabled)``."""
     params = inspect.signature(ingestion.retry_run).parameters
-    assert list(params) == ["session", "run_id", "requested_stage_key", "scope", "multi_workspace_enabled"]
+    assert list(params) == [
+        "session",
+        "run_id",
+        "requested_stage_key",
+        "scope",
+        "multi_workspace_enabled",
+    ]
     assert params["requested_stage_key"].default is None
     assert params["scope"].kind is inspect.Parameter.KEYWORD_ONLY

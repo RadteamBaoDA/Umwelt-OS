@@ -12,10 +12,17 @@ WS = uuid4()
 
 
 def _record(**fields):
-    return {"provider_record": {
-        "provider": "bbc_world", "identity": "x", "timestamp_basis": "collection", "coverage": "returned_snapshot",
-        "content_truncated": False, "license_label": fields.pop("license_label", None), "source_fields": fields,
-    }}
+    return {
+        "provider_record": {
+            "provider": "bbc_world",
+            "identity": "x",
+            "timestamp_basis": "collection",
+            "coverage": "returned_snapshot",
+            "content_truncated": False,
+            "license_label": fields.pop("license_label", None),
+            "source_fields": fields,
+        }
+    }
 
 
 def _session(pages):
@@ -52,13 +59,19 @@ async def test_dry_run_is_default_and_writes_nothing():
 @pytest.mark.asyncio
 async def test_apply_writes_guarded_update_with_workspace_and_never_invents():
     a, b = sorted([uuid4(), uuid4()])
-    session = _session([[(a, _record(publisher="  BBC  ", license_label="CC")), (b, _record(publisher="   "))]])
+    session = _session(
+        [[(a, _record(publisher="  BBC  ", license_label="CC")), (b, _record(publisher="   "))]]
+    )
     result = await bf.backfill_workspace(session, WS, apply=True)
     assert result == {"examined": 2, "filled": 1}
     updates = [s for s in session.seen if not s.is_select]
     assert len(updates) == 1
     sql = _sql(updates[0])
-    assert "workspace_id" in sql and "jsonb_set" in sql and "NOT (news_observations.match_evidence ?" in sql
+    assert (
+        "workspace_id" in sql
+        and "jsonb_set" in sql
+        and "NOT (news_observations.match_evidence ?" in sql
+    )
     assert updates[0].compile(dialect=postgresql.dialect()).params["id_1"] == a
     session.commit.assert_awaited()
 

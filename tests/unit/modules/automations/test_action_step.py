@@ -34,19 +34,32 @@ class FakeSession:
 
 
 def _setup(
-    monkeypatch: pytest.MonkeyPatch, *, kind: str = "create_task", state: str = "pending", **over: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    kind: str = "create_task",
+    state: str = "pending",
+    **over: Any,
 ) -> tuple[Any, list[str], dict[str, Any], Any]:
     """Patch every collaborator with an event-recording spy and return the call context."""
     events: list[str] = []
     row = SimpleNamespace(
-        status=state, error_code=None, attempts=0, destination_revision=None, approved_session_hash="sess",
-        approval_hash=None, approval_expires_at=None,
+        status=state,
+        error_code=None,
+        attempts=0,
+        destination_revision=None,
+        approved_session_hash="sess",
+        approval_hash=None,
+        approval_expires_at=None,
     )
     spec = {"type": kind, "alias": "hook"}
     rev = SimpleNamespace(actions=[spec], name="Rule")
     run = SimpleNamespace(id=RUN_ID, automation_id=uuid4(), revision=1)
     flags: dict[str, Any] = {
-        "evidence": True, "fence": True, "modules": True, "dest_stale": False, "destination": "rev-1",
+        "evidence": True,
+        "fence": True,
+        "modules": True,
+        "dest_stale": False,
+        "destination": "rev-1",
     }
     flags.update(over)
 
@@ -84,16 +97,25 @@ def _setup(
     monkeypatch.setattr(execution, "_destination_stale", lambda *_a: flags["dest_stale"])
     monkeypatch.setattr(execution, "webhook_profile_revision", lambda *_a: flags["destination"])
     monkeypatch.setattr(execution, "_approval_hash", lambda *_a: "approval-hash")
-    monkeypatch.setattr(execution, "_finish", lambda r, status, reason: events.append(f"finish:{status}:{reason}"))
+    monkeypatch.setattr(
+        execution, "_finish", lambda r, status, reason: events.append(f"finish:{status}:{reason}")
+    )
     monkeypatch.setattr(execution, "_skip_pending", lambda *_a: spy("skip_pending"))
     monkeypatch.setattr(execution, "_commit", lambda *_a, **_k: spy("commit"))
     monkeypatch.setattr(execution, "emit", lambda *_a, **_k: spy("emit"))
-    monkeypatch.setattr(execution, "_in_database_action", lambda *_a, **_k: spy("in_database", "in-db"))
+    monkeypatch.setattr(
+        execution, "_in_database_action", lambda *_a, **_k: spy("in_database", "in-db")
+    )
     monkeypatch.setattr(execution, "_generate_brief", lambda *_a, **_k: spy("brief", "brief-done"))
-    monkeypatch.setattr(execution, "_start_agent", lambda *a, **_k: spy("start_agent:" + str(a[4]), "agent-done"))
-    monkeypatch.setattr(execution, "_send_webhook", lambda *a, **_k: spy("send_webhook:" + str(a[5]), "hook-done"))
+    monkeypatch.setattr(
+        execution, "_start_agent", lambda *a, **_k: spy("start_agent:" + str(a[4]), "agent-done")
+    )
+    monkeypatch.setattr(
+        execution, "_send_webhook", lambda *a, **_k: spy("send_webhook:" + str(a[5]), "hook-done")
+    )
     ctx = {
-        "session_factory": lambda: FakeSession(row, rev), "settings": SimpleNamespace(approval_expiry_hours=24),
+        "session_factory": lambda: FakeSession(row, rev),
+        "settings": SimpleNamespace(approval_expiry_hours=24),
     }
     return row, events, flags, ctx
 
@@ -104,11 +126,19 @@ async def _step(ctx: Any) -> str:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("state", "expected"), [
-    ("succeeded", "succeeded"), ("failed", "failed"), ("denied", "failed"), ("skipped", "failed"),
-    ("awaiting_approval", "awaiting_approval"),
-])
-async def test_terminal_and_waiting_states(monkeypatch: pytest.MonkeyPatch, state: str, expected: str) -> None:
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ("succeeded", "succeeded"),
+        ("failed", "failed"),
+        ("denied", "failed"),
+        ("skipped", "failed"),
+        ("awaiting_approval", "awaiting_approval"),
+    ],
+)
+async def test_terminal_and_waiting_states(
+    monkeypatch: pytest.MonkeyPatch, state: str, expected: str
+) -> None:
     """Settled rows report their outcome without committing; awaiting approval stays parked."""
     row, events, _flags, ctx = _setup(monkeypatch, state=state)
     assert await _step(ctx) == expected
@@ -116,12 +146,19 @@ async def test_terminal_and_waiting_states(monkeypatch: pytest.MonkeyPatch, stat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("state", "result", "row_state", "code"), [
-    ("in_flight", "requires_review", "requires_review", "document_evidence_unavailable"),
-    ("pending", "dropped", "skipped", "document_evidence_unavailable"),
-])
+@pytest.mark.parametrize(
+    ("state", "result", "row_state", "code"),
+    [
+        ("in_flight", "requires_review", "requires_review", "document_evidence_unavailable"),
+        ("pending", "dropped", "skipped", "document_evidence_unavailable"),
+    ],
+)
 async def test_missing_evidence_settles_run(
-    monkeypatch: pytest.MonkeyPatch, state: str, result: str, row_state: str, code: str,
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    result: str,
+    row_state: str,
+    code: str,
 ) -> None:
     """Revoked evidence keeps uncertainty for dispatched rows and drops untouched ones."""
     row, events, _flags, ctx = _setup(monkeypatch, state=state, evidence=False)
@@ -140,13 +177,20 @@ async def test_ambiguous_restart_requires_review(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_stale_revision_destination_and_paused_modules(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stale_revision_destination_and_paused_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Fence, module and destination drift drop or pause the action without dispatching."""
     row, events, _f, ctx = _setup(monkeypatch, fence=False)
-    assert await _step(ctx) == "dropped" and (row.status, row.error_code) == ("skipped", "stale_revision")
+    assert await _step(ctx) == "dropped" and (row.status, row.error_code) == (
+        "skipped",
+        "stale_revision",
+    )
     row, events, _f, ctx = _setup(monkeypatch, modules=False)
     assert await _step(ctx) == "paused" and row.status == "pending" and "commit" not in events
-    row, events, _f, ctx = _setup(monkeypatch, kind="call_webhook", state="approved", dest_stale=True)
+    row, events, _f, ctx = _setup(
+        monkeypatch, kind="call_webhook", state="approved", dest_stale=True
+    )
     assert await _step(ctx) == "dropped" and row.error_code == "stale_destination"
 
 
@@ -155,7 +199,11 @@ async def test_webhook_needs_approval_then_notifies(monkeypatch: pytest.MonkeyPa
     """A pending webhook binds its destination revision, hashes the request and notifies the owner."""
     row, events, _f, ctx = _setup(monkeypatch, kind="call_webhook")
     assert await _step(ctx) == "awaiting_approval"
-    assert (row.status, row.destination_revision, row.approval_hash) == ("awaiting_approval", "rev-1", "approval-hash")
+    assert (row.status, row.destination_revision, row.approval_hash) == (
+        "awaiting_approval",
+        "rev-1",
+        "approval-hash",
+    )
     assert row.approval_expires_at is not None and events[-2:] == ["emit", "commit"]
 
 
@@ -163,7 +211,11 @@ async def test_webhook_needs_approval_then_notifies(monkeypatch: pytest.MonkeyPa
 async def test_webhook_without_profile_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     """A missing deployment profile fails the action instead of asking for approval."""
     row, events, _f, ctx = _setup(monkeypatch, kind="call_webhook", destination=None)
-    assert await _step(ctx) == "failed" and row.error_code == "webhook_unavailable" and "emit" not in events
+    assert (
+        await _step(ctx) == "failed"
+        and row.error_code == "webhook_unavailable"
+        and "emit" not in events
+    )
 
 
 @pytest.mark.asyncio
@@ -177,11 +229,17 @@ async def test_in_database_actions_run_inside_the_session(monkeypatch: pytest.Mo
 async def test_generate_brief_commits_before_running(monkeypatch: pytest.MonkeyPatch) -> None:
     """Brief generation releases the locks first because it commits internally."""
     row, events, _f, ctx = _setup(monkeypatch, kind="generate_brief")
-    assert await _step(ctx) == "brief-done" and row.attempts == 1 and events == ["admit", "commit", "brief"]
+    assert (
+        await _step(ctx) == "brief-done"
+        and row.attempts == 1
+        and events == ["admit", "commit", "brief"]
+    )
 
 
 @pytest.mark.asyncio
-async def test_run_agent_marks_in_flight_then_starts_after_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_agent_marks_in_flight_then_starts_after_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The point of no return is committed before the idempotent agent start, keeping the digest."""
     row, events, _f, ctx = _setup(monkeypatch, kind="run_agent", state="in_flight")
     assert await _step(ctx) == "agent-done"

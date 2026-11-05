@@ -121,7 +121,8 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
       Invoke-Checked 'python' @('scripts/dev_workspace.py', 'reset', '--name', $Workspace, '--confirm', $ConfirmFingerprint)
     }
     'lint' {
-      Invoke-Checked 'uv' @('run', 'ruff', 'check', 'core', 'apps', 'modules', 'tests', 'infrastructure/postgres/migrations', 'scripts/check_function_length.py', 'scripts/check_file_size.py')
+      Invoke-Checked 'uv' @('run', 'ruff', 'format', '--check', 'core', 'apps', 'modules', 'tests', 'scripts')
+      Invoke-Checked 'uv' @('run', 'ruff', 'check', 'core', 'apps', 'modules', 'tests', 'scripts', 'infrastructure/postgres/migrations')
       Invoke-Checked 'uv' @('run', 'python', 'scripts/check_genui_parity.py')
       Invoke-Checked 'uv' @('run', 'python', 'scripts/check_function_length.py')
       Invoke-Checked 'uv' @('run', 'python', 'scripts/check_file_size.py')

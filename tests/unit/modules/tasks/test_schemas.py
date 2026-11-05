@@ -95,7 +95,9 @@ class TestTaskUpdateSchemas:
 
     def test_task_update_empty_mutation_rejected(self) -> None:
         """TaskUpdate containing only expected_revision with no mutations must be rejected."""
-        with pytest.raises(ValidationError, match="task patch must contain at least one mutation field"):
+        with pytest.raises(
+            ValidationError, match="task patch must contain at least one mutation field"
+        ):
             TaskUpdate(expected_revision=1)
 
     def test_task_update_clearing_title_rejected(self) -> None:
@@ -118,7 +120,9 @@ class TestTaskUpdateSchemas:
     def test_task_update_completed_at_aware(self) -> None:
         """completed_at must be timezone-aware."""
         naive = datetime(2026, 10, 5, 12, 0)
-        with pytest.raises(ValidationError, match="instant timestamps must include a timezone offset"):
+        with pytest.raises(
+            ValidationError, match="instant timestamps must include a timezone offset"
+        ):
             TaskUpdate(completed_at=naive, expected_revision=1)
 
 

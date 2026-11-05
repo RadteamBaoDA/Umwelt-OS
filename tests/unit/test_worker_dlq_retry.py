@@ -1,4 +1,5 @@
 """Retry backoff with jitter and the dead-letter recorder/replay."""
+
 from __future__ import annotations
 
 import asyncio
@@ -25,7 +26,11 @@ def test_backoff_grows_is_capped_and_jittered() -> None:
 
 
 def test_retry_with_backoff_reads_job_try() -> None:
-    assert current_try({"job_try": 3}) == 3 and current_try({}) == 1 and current_try({"job_try": "x"}) == 1
+    assert (
+        current_try({"job_try": 3}) == 3
+        and current_try({}) == 1
+        and current_try({"job_try": "x"}) == 1
+    )
     retry = retry_with_backoff({"job_try": 1}, base=30, cap=120)
     assert isinstance(retry, Retry) and 15_000 <= retry.defer_score <= 30_000  # type: ignore[operator]
 
@@ -41,7 +46,9 @@ def test_args_are_digested_and_only_ids_are_replayable() -> None:
 
 
 def test_error_messages_are_scrubbed_and_truncated() -> None:
-    message = worker_dlq.scrub_message("fail for jo@example.com at https://x.example/?token=abc " + "A" * 40 + " " + "z" * 900)
+    message = worker_dlq.scrub_message(
+        "fail for jo@example.com at https://x.example/?token=abc " + "A" * 40 + " " + "z" * 900
+    )
     assert "@" not in message and "https" not in message and "A" * 32 not in message
     assert len(message) <= worker_dlq.ERROR_MESSAGE_LIMIT
 
@@ -81,7 +88,9 @@ async def test_final_failed_attempt_records_a_row_and_reraises() -> None:
     ctx = {"session_factory": factory, "job_try": 2, "job_id": "j1"}
     with pytest.raises(RuntimeError):
         await guarded(ctx, ident)
-    assert len(factory.statements) == 1  # plain exceptions are never retried by arq: recorded on try 2
+    assert (
+        len(factory.statements) == 1
+    )  # plain exceptions are never retried by arq: recorded on try 2
     factory.statements.clear()
     factory.commits = 0
     ctx["job_try"] = 3
@@ -91,7 +100,11 @@ async def test_final_failed_attempt_records_a_row_and_reraises() -> None:
     sql = str(factory.statements[0].compile(compile_kwargs={"literal_binds": False}))
     assert "worker_dead_letters" in sql and "ON CONFLICT" in sql
     params = factory.statements[0].compile().params
-    assert params["job_name"] == "failing" and params["attempts"] == 3 and params["args_ref"] == [ident]
+    assert (
+        params["job_name"] == "failing"
+        and params["attempts"] == 3
+        and params["args_ref"] == [ident]
+    )
     assert "@" not in params["error_message"]
 
 
@@ -103,7 +116,9 @@ async def test_plain_exception_on_first_try_is_recorded() -> None:
         raise KeyError("boom")
 
     with pytest.raises(KeyError):
-        await worker_dlq.dead_letter(failing, max_tries=5, queue="q")({"session_factory": factory, "job_try": 1})
+        await worker_dlq.dead_letter(failing, max_tries=5, queue="q")(
+            {"session_factory": factory, "job_try": 1}
+        )
     assert len(factory.statements) == 1 and factory.statements[0].compile().params["attempts"] == 1
 
 
@@ -156,7 +171,9 @@ async def test_success_and_recording_failure_do_not_change_outcome() -> None:
         raise ValueError("original")
 
     with pytest.raises(ValueError, match="original"):
-        await worker_dlq.dead_letter(failing, max_tries=1, queue="q")({"job_try": 1, "session_factory": Broken()})
+        await worker_dlq.dead_letter(failing, max_tries=1, queue="q")(
+            {"job_try": 1, "session_factory": Broken()}
+        )
 
 
 class _ReplaySession(_Recorder):
@@ -170,10 +187,24 @@ class _ReplaySession(_Recorder):
 
 @pytest.mark.asyncio
 async def test_replay_is_dry_run_by_default_and_enqueues_only_replayable_rows() -> None:
-    good = SimpleNamespace(id=uuid4(), job_name="process_uploaded_file", queue="arq:queue", args_ref=["a1"],
-                           replayable=True, replay_count=0, replayed_at=None)
-    bad = SimpleNamespace(id=uuid4(), job_name="x", queue="arq:queue", args_ref=None, replayable=False,
-                          replay_count=0, replayed_at=None)
+    good = SimpleNamespace(
+        id=uuid4(),
+        job_name="process_uploaded_file",
+        queue="arq:queue",
+        args_ref=["a1"],
+        replayable=True,
+        replay_count=0,
+        replayed_at=None,
+    )
+    bad = SimpleNamespace(
+        id=uuid4(),
+        job_name="x",
+        queue="arq:queue",
+        args_ref=None,
+        replayable=False,
+        replay_count=0,
+        replayed_at=None,
+    )
     session = _ReplaySession([good, bad])
     enqueued: list[tuple[Any, ...]] = []
 
@@ -182,17 +213,36 @@ async def test_replay_is_dry_run_by_default_and_enqueues_only_replayable_rows() 
             enqueued.append((args, kwargs))
 
     dry = await worker_dlq.replay_dead_letters(session, Redis())  # type: ignore[arg-type]
-    assert dry.replayable == [good] and dry.skipped == [bad] and not enqueued and good.replayed_at is None
+    assert (
+        dry.replayable == [good]
+        and dry.skipped == [bad]
+        and not enqueued
+        and good.replayed_at is None
+    )
     done = await worker_dlq.replay_dead_letters(session, Redis(), execute=True)  # type: ignore[arg-type]
     assert done.executed and enqueued[0][0] == ("process_uploaded_file", "a1")
-    assert enqueued[0][1]["_job_id"] == f"dlq:{good.id}:1" and good.replay_count == 1 and good.replayed_at
+    assert (
+        enqueued[0][1]["_job_id"] == f"dlq:{good.id}:1"
+        and good.replay_count == 1
+        and good.replayed_at
+    )
 
 
 def test_worker_functions_are_dead_lettered_and_drain_waits_for_jobs() -> None:
     names = [getattr(f, "name", "") for f in worker_main.WorkerSettings.functions]
     assert "process_uploaded_file" in names
-    heavy = next(f for f in worker_main.WorkerSettings.functions if getattr(f, "name", "") == "process_uploaded_file")
+    heavy = next(
+        f
+        for f in worker_main.WorkerSettings.functions
+        if getattr(f, "name", "") == "process_uploaded_file"
+    )
     assert heavy.max_tries == worker_main.HEAVY_JOB_MAX_TRIES  # type: ignore[attr-defined]
-    for settings in (worker_main.WorkerSettings, worker_main.ModelWorkerSettings,
-                     worker_main.ChatWorkerSettings, worker_main.CronWorkerSettings):
-        assert settings.job_completion_wait > settings.job_timeout  # SIGTERM: finish running jobs first
+    for settings in (
+        worker_main.WorkerSettings,
+        worker_main.ModelWorkerSettings,
+        worker_main.ChatWorkerSettings,
+        worker_main.CronWorkerSettings,
+    ):
+        assert (
+            settings.job_completion_wait > settings.job_timeout
+        )  # SIGTERM: finish running jobs first

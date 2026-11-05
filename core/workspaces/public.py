@@ -54,7 +54,10 @@ from core.workspaces.schemas import (
 
 
 async def bump_configuration_revision(
-    session: AsyncSession, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
     auth_sessions: tuple[AccountSessionRef, ...],
 ) -> int:
     """Advance the owner's workspace fence under an exclusive exact-session lock; caller commits.
@@ -65,12 +68,20 @@ async def bump_configuration_revision(
     if scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
     fence = await lock_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        auth_sessions=auth_sessions, read=False,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        auth_sessions=auth_sessions,
+        read=False,
     )
-    workspace = await session.scalar(select(Workspace).where(
-        Workspace.id == scope.workspace_id, Workspace.owner_user_id == scope.user_id,
-    ).execution_options(populate_existing=True))
+    workspace = await session.scalar(
+        select(Workspace)
+        .where(
+            Workspace.id == scope.workspace_id,
+            Workspace.owner_user_id == scope.user_id,
+        )
+        .execution_options(populate_existing=True)
+    )
     if workspace is None or workspace.configuration_revision != fence.configuration_revision:
         raise HTTPException(status_code=409, detail="Workspace access fence changed")
     workspace.configuration_revision += 1
@@ -79,7 +90,10 @@ async def bump_configuration_revision(
 
 
 async def bump_operator_review_revision(
-    session: AsyncSession, *, workspace_id: UUID, auth_session: AccountSessionRef,
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    auth_session: AccountSessionRef,
 ) -> None:
     """Lock the exact operator session and workspace before a narrowly scoped terms review.
 
@@ -90,15 +104,27 @@ async def bump_operator_review_revision(
 
     if auth_session.account_id != 1:
         raise HTTPException(status_code=403, detail="Instance operator required")
-    owner_id = await session.scalar(select(Workspace.owner_user_id).where(Workspace.id == workspace_id))
+    owner_id = await session.scalar(
+        select(Workspace.owner_user_id).where(Workspace.id == workspace_id)
+    )
     if owner_id is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    accounts = await lock_account_admission(session, (1, owner_id), actor_user_id=1,
-                                            multi_workspace_enabled=True, auth_sessions=(auth_session,))
+    accounts = await lock_account_admission(
+        session,
+        (1, owner_id),
+        actor_user_id=1,
+        multi_workspace_enabled=True,
+        auth_sessions=(auth_session,),
+    )
     workspace, memberships = await lock_workspace_memberships(session, workspace_id, (owner_id,))
     owner = memberships.get(owner_id)
-    if (accounts.get(owner_id) is None or workspace.owner_user_id != owner_id or owner is None
-            or owner.role != "owner" or owner.owner_user_id != owner_id):
+    if (
+        accounts.get(owner_id) is None
+        or workspace.owner_user_id != owner_id
+        or owner is None
+        or owner.role != "owner"
+        or owner.owner_user_id != owner_id
+    ):
         raise HTTPException(status_code=404, detail="Workspace not found")
     workspace.configuration_revision += 1
     await session.flush()
@@ -120,27 +146,39 @@ async def provision_default_workspace_in_uow(session: AsyncSession, user_id: int
     workspace_id = uuid7()
     session.add(Workspace(id=workspace_id, name="Private workspace", owner_user_id=user_id))
     await session.flush()
-    session.add(WorkspaceMembership(
-        workspace_id=workspace_id, user_id=user_id, role="owner", owner_user_id=user_id,
-    ))
+    session.add(
+        WorkspaceMembership(
+            workspace_id=workspace_id,
+            user_id=user_id,
+            role="owner",
+            owner_user_id=user_id,
+        )
+    )
     await session.flush()
     return workspace_id
 
 
 async def resolve_workspace_context(
-    session: AsyncSession, actor_user_id: int, workspace_id: UUID,
+    session: AsyncSession,
+    actor_user_id: int,
+    workspace_id: UUID,
 ) -> WorkspaceContext | None:
     """Resolve an actor's actual membership without leaking a nonmember workspace.
 
     Reads no domain data, takes no locks and grants no resource access. Callers performing
     mutations or deferred publication must recheck the relevant identity/revision fence.
     """
-    row = (await session.execute(
-        select(Workspace, WorkspaceMembership).join(
-            WorkspaceMembership, WorkspaceMembership.workspace_id == Workspace.id,
-        ).where(Workspace.id == workspace_id, WorkspaceMembership.user_id == actor_user_id)
-        .execution_options(populate_existing=True)
-    )).one_or_none()
+    row = (
+        await session.execute(
+            select(Workspace, WorkspaceMembership)
+            .join(
+                WorkspaceMembership,
+                WorkspaceMembership.workspace_id == Workspace.id,
+            )
+            .where(Workspace.id == workspace_id, WorkspaceMembership.user_id == actor_user_id)
+            .execution_options(populate_existing=True)
+        )
+    ).one_or_none()
     if row is None:
         return None
     workspace, membership = row
@@ -151,13 +189,18 @@ async def resolve_workspace_context(
     ):
         return None
     return WorkspaceContext(
-        user_id=actor_user_id, workspace_id=workspace.id,
-        role=cast(Literal["owner", "member"], membership.role), membership_revision=membership.revision,
+        user_id=actor_user_id,
+        workspace_id=workspace.id,
+        role=cast(Literal["owner", "member"], membership.role),
+        membership_revision=membership.revision,
     )
 
 
 async def resolve_workspace_owner_context(
-    session: AsyncSession, workspace_id: UUID, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    workspace_id: UUID,
+    *,
+    multi_workspace_enabled: bool,
 ) -> WorkspaceContext | None:
     """Resolve identity-only owned-default scope for a durably bound internal scheduler subject.
 
@@ -181,7 +224,9 @@ async def resolve_workspace_owner_context(
     if owner_user_id is None:
         return None
     account = await get_active_account(
-        session, owner_user_id, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        owner_user_id,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if account is None or account.default_workspace_id != workspace_id:
         return None
@@ -189,7 +234,9 @@ async def resolve_workspace_owner_context(
     if context is None or context.role != "owner":
         return None
     try:
-        await read_access_fence(session, scope=context, multi_workspace_enabled=multi_workspace_enabled)
+        await read_access_fence(
+            session, scope=context, multi_workspace_enabled=multi_workspace_enabled
+        )
     except (HTTPException, DomainError) as exc:
         if exc.status_code in {401, 404}:
             return None
@@ -200,7 +247,9 @@ async def resolve_workspace_owner_context(
 def _workspace_read(workspace: Workspace, membership: WorkspaceMembership) -> WorkspaceRead:
     """Detach metadata; actor default is true only for the matching owner membership."""
     return WorkspaceRead(
-        id=workspace.id, name=workspace.name, owner_user_id=workspace.owner_user_id,
+        id=workspace.id,
+        name=workspace.name,
+        owner_user_id=workspace.owner_user_id,
         is_default=workspace.is_default and membership.user_id == workspace.owner_user_id,
         role=cast(Literal["owner", "member"], membership.role),
         configuration_revision=workspace.configuration_revision,
@@ -210,9 +259,13 @@ def _workspace_read(workspace: Workspace, membership: WorkspaceMembership) -> Wo
 async def list_workspaces(session: AsyncSession, user_id: int) -> list[WorkspaceRead]:
     """List only actual actor memberships; exposes metadata without granting domain content."""
     rows = await session.execute(
-        select(Workspace, WorkspaceMembership).join(
-            WorkspaceMembership, WorkspaceMembership.workspace_id == Workspace.id,
-        ).where(WorkspaceMembership.user_id == user_id).order_by(Workspace.created_at, Workspace.id)
+        select(Workspace, WorkspaceMembership)
+        .join(
+            WorkspaceMembership,
+            WorkspaceMembership.workspace_id == Workspace.id,
+        )
+        .where(WorkspaceMembership.user_id == user_id)
+        .order_by(Workspace.created_at, Workspace.id)
     )
     return [_workspace_read(workspace, membership) for workspace, membership in rows]
 
@@ -220,16 +273,20 @@ async def list_workspaces(session: AsyncSession, user_id: int) -> list[Workspace
 async def list_instance_workspaces(session: AsyncSession) -> list[WorkspaceRead]:
     """List workspace metadata for an admitted instance operator without creating memberships."""
     rows = await session.execute(
-        select(Workspace, WorkspaceMembership).join(
+        select(Workspace, WorkspaceMembership)
+        .join(
             WorkspaceMembership,
             (WorkspaceMembership.workspace_id == Workspace.id)
             & (WorkspaceMembership.user_id == Workspace.owner_user_id)
             & (WorkspaceMembership.role == "owner"),
-        ).order_by(Workspace.created_at, Workspace.id)
+        )
+        .order_by(Workspace.created_at, Workspace.id)
     )
     return [
         WorkspaceRead(
-            id=workspace.id, name=workspace.name, owner_user_id=workspace.owner_user_id,
+            id=workspace.id,
+            name=workspace.name,
+            owner_user_id=workspace.owner_user_id,
             is_default=workspace.is_default,
             role="owner" if workspace.owner_user_id == 1 else "admin_viewer",
             configuration_revision=workspace.configuration_revision,
@@ -239,30 +296,42 @@ async def list_instance_workspaces(session: AsyncSession) -> list[WorkspaceRead]
 
 
 async def resolve_admin_workspace_context(
-    session: AsyncSession, *, actor_user_id: int, workspace_id: UUID, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    actor_user_id: int,
+    workspace_id: UUID,
+    multi_workspace_enabled: bool,
 ) -> AdminWorkspaceReadContext | None:
     """Resolve an operator-only viewer context while keeping the actual actor separate from the data owner."""
     from core.auth.public import get_active_account
 
     if type(actor_user_id) is not int or actor_user_id != 1 or not isinstance(workspace_id, UUID):
         return None
-    workspace, owner_membership = (await session.execute(
-        select(Workspace, WorkspaceMembership).join(
-            WorkspaceMembership,
-            (WorkspaceMembership.workspace_id == Workspace.id)
-            & (WorkspaceMembership.user_id == Workspace.owner_user_id)
-            & (WorkspaceMembership.role == "owner"),
-        ).where(Workspace.id == workspace_id).execution_options(populate_existing=True)
-    )).one_or_none() or (None, None)
+    workspace, owner_membership = (
+        await session.execute(
+            select(Workspace, WorkspaceMembership)
+            .join(
+                WorkspaceMembership,
+                (WorkspaceMembership.workspace_id == Workspace.id)
+                & (WorkspaceMembership.user_id == Workspace.owner_user_id)
+                & (WorkspaceMembership.role == "owner"),
+            )
+            .where(Workspace.id == workspace_id)
+            .execution_options(populate_existing=True)
+        )
+    ).one_or_none() or (None, None)
     if workspace is None or owner_membership is None:
         return None
     owner_account = await get_active_account(
-        session, workspace.owner_user_id, multi_workspace_enabled=True,
+        session,
+        workspace.owner_user_id,
+        multi_workspace_enabled=True,
     )
     if owner_account is None:
         return None
     return AdminWorkspaceReadContext(
-        actor_user_id=actor_user_id, workspace_id=workspace.id,
+        actor_user_id=actor_user_id,
+        workspace_id=workspace.id,
         workspace_owner_user_id=workspace.owner_user_id,
         membership_revision=owner_membership.revision,
         configuration_revision=workspace.configuration_revision,
@@ -270,7 +339,10 @@ async def resolve_admin_workspace_context(
 
 
 async def list_workspace_job_candidate_ids(
-    session: AsyncSession, *, after: UUID | None = None, limit: int = 100,
+    session: AsyncSession,
+    *,
+    after: UUID | None = None,
+    limit: int = 100,
 ) -> tuple[UUID, ...]:
     """Return one ordered identity page, with positive limits capped at 100 and UUID keyset cursor.
 
@@ -300,7 +372,12 @@ async def _owner_management_read(session: AsyncSession, workspace_id: UUID, user
 
 
 async def list_invitations(
-    session: AsyncSession, workspace_id: UUID, user_id: int, *, cursor: UUID | None = None, limit: int = 100,
+    session: AsyncSession,
+    workspace_id: UUID,
+    user_id: int,
+    *,
+    cursor: UUID | None = None,
+    limit: int = 100,
 ) -> InvitationList:
     """Return an owner-only keyset page with no token hashes/secrets; limit bounded to 100."""
     await _owner_management_read(session, workspace_id, user_id)
@@ -309,14 +386,30 @@ async def list_invitations(
         query = query.where(WorkspaceInvitation.id > cursor)
     size = min(max(limit, 1), 100)
     rows = list(await session.scalars(query.order_by(WorkspaceInvitation.id).limit(size + 1)))
-    return InvitationList(items=[InvitationRead(
-        id=row.id, email=row.email, created_at=row.created_at, expires_at=row.expires_at,
-        accepted_at=row.accepted_at, accepted_by_user_id=row.accepted_by_user_id, revoked_at=row.revoked_at,
-    ) for row in rows[:size]], next_cursor=rows[size - 1].id if len(rows) > size else None)
+    return InvitationList(
+        items=[
+            InvitationRead(
+                id=row.id,
+                email=row.email,
+                created_at=row.created_at,
+                expires_at=row.expires_at,
+                accepted_at=row.accepted_at,
+                accepted_by_user_id=row.accepted_by_user_id,
+                revoked_at=row.revoked_at,
+            )
+            for row in rows[:size]
+        ],
+        next_cursor=rows[size - 1].id if len(rows) > size else None,
+    )
 
 
 async def list_members(
-    session: AsyncSession, workspace_id: UUID, user_id: int, *, cursor: int | None = None, limit: int = 100,
+    session: AsyncSession,
+    workspace_id: UUID,
+    user_id: int,
+    *,
+    cursor: int | None = None,
+    limit: int = 100,
 ) -> MemberList:
     """Return an owner-only keyset identity page via auth-owned detached email lookup."""
     from core.auth.public import account_emails
@@ -328,18 +421,33 @@ async def list_members(
     size = min(max(limit, 1), 100)
     rows = list(await session.scalars(query.order_by(WorkspaceMembership.user_id).limit(size + 1)))
     emails = await account_emails(session, (row.user_id for row in rows[:size]))
-    return MemberList(items=[MemberRead(
-        user_id=row.user_id, email=emails.get(row.user_id),
-        role=cast(Literal["owner", "member"], row.role), membership_revision=row.revision,
-    ) for row in rows[:size]], next_cursor=rows[size - 1].user_id if len(rows) > size else None)
+    return MemberList(
+        items=[
+            MemberRead(
+                user_id=row.user_id,
+                email=emails.get(row.user_id),
+                role=cast(Literal["owner", "member"], row.role),
+                membership_revision=row.revision,
+            )
+            for row in rows[:size]
+        ],
+        next_cursor=rows[size - 1].user_id if len(rows) > size else None,
+    )
 
 
 async def edit_workspace_in_uow(
-    session: AsyncSession, workspace_id: UUID, user_id: int, name: str, expected_revision: int | None,
+    session: AsyncSession,
+    workspace_id: UUID,
+    user_id: int,
+    name: str,
+    expected_revision: int | None,
 ) -> WorkspaceRead:
     """Owner rename under auth->workspace->membership locks and CAS; commit owned by route."""
     workspace, memberships = await lock_owner_management(
-        session, workspace_id, user_id, expected_revision=expected_revision,
+        session,
+        workspace_id,
+        user_id,
+        expected_revision=expected_revision,
     )
     cleaned = name.strip()
     if not cleaned or len(cleaned) > 160:
@@ -352,7 +460,11 @@ async def edit_workspace_in_uow(
 
 
 async def create_invitation_in_uow(
-    session: AsyncSession, workspace_id: UUID, user_id: int, email: str, expected_revision: int | None,
+    session: AsyncSession,
+    workspace_id: UUID,
+    user_id: int,
+    email: str,
+    expected_revision: int | None,
 ) -> tuple[UUID, str, datetime]:
     """Owner CAS creates a 7-day email-bound invitation; only SHA256 is persisted.
 
@@ -362,7 +474,10 @@ async def create_invitation_in_uow(
     from core.auth.public import normalize_account_email
 
     workspace, memberships = await lock_owner_management(
-        session, workspace_id, user_id, expected_revision=expected_revision,
+        session,
+        workspace_id,
+        user_id,
+        expected_revision=expected_revision,
     )
     try:
         normalized = normalize_account_email(email)
@@ -371,10 +486,17 @@ async def create_invitation_in_uow(
     secret, digest = new_invitation_secret()
     invitation_id, now = uuid7(), datetime.now(UTC)
     expiry = now + timedelta(days=7)
-    session.add(WorkspaceInvitation(
-        id=invitation_id, workspace_id=workspace_id, invited_by_user_id=user_id,
-        email=normalized, token_hash=digest, created_at=now, expires_at=expiry,
-    ))
+    session.add(
+        WorkspaceInvitation(
+            id=invitation_id,
+            workspace_id=workspace_id,
+            invited_by_user_id=user_id,
+            email=normalized,
+            token_hash=digest,
+            created_at=now,
+            expires_at=expiry,
+        )
+    )
     workspace.configuration_revision += 1
     memberships[user_id].revision += 1
     await session.flush()
@@ -383,9 +505,13 @@ async def create_invitation_in_uow(
 
 def _invitation_live(invitation: WorkspaceInvitation | None, digest: str) -> bool:
     """Check exact hash, expiry and single-use terminal state without exposing bearer data."""
-    return bool(invitation is not None and compare_digest(invitation.token_hash, digest)
-                and invitation.expires_at > datetime.now(UTC)
-                and invitation.accepted_at is None and invitation.revoked_at is None)
+    return bool(
+        invitation is not None
+        and compare_digest(invitation.token_hash, digest)
+        and invitation.expires_at > datetime.now(UTC)
+        and invitation.accepted_at is None
+        and invitation.revoked_at is None
+    )
 
 
 async def invitation_target(session: AsyncSession, digest: str) -> InvitationTarget:
@@ -394,8 +520,11 @@ async def invitation_target(session: AsyncSession, digest: str) -> InvitationTar
     Caller must repeat the exact hash/email/state checks after auth/workspace/membership/token
     locks before consumption. Invalid, expired, revoked and replayed tokens uniformly return 410.
     """
-    row = await session.scalar(select(WorkspaceInvitation).where(WorkspaceInvitation.token_hash == digest)
-                               .execution_options(populate_existing=True))
+    row = await session.scalar(
+        select(WorkspaceInvitation)
+        .where(WorkspaceInvitation.token_hash == digest)
+        .execution_options(populate_existing=True)
+    )
     if not _invitation_live(row, digest):
         raise HTTPException(status_code=410, detail="Invitation is no longer available")
     if row is None:
@@ -404,15 +533,28 @@ async def invitation_target(session: AsyncSession, digest: str) -> InvitationTar
 
 
 async def revoke_invitation_in_uow(
-    session: AsyncSession, workspace_id: UUID, user_id: int, invitation_id: UUID, expected_revision: int | None,
+    session: AsyncSession,
+    workspace_id: UUID,
+    user_id: int,
+    invitation_id: UUID,
+    expected_revision: int | None,
 ) -> None:
     """Owner CAS revoke locks token after workspace/member; terminal tokens return 410."""
     workspace, memberships = await lock_owner_management(
-        session, workspace_id, user_id, expected_revision=expected_revision,
+        session,
+        workspace_id,
+        user_id,
+        expected_revision=expected_revision,
     )
-    row = await session.scalar(select(WorkspaceInvitation).where(
-        WorkspaceInvitation.id == invitation_id, WorkspaceInvitation.workspace_id == workspace_id,
-    ).with_for_update().execution_options(populate_existing=True))
+    row = await session.scalar(
+        select(WorkspaceInvitation)
+        .where(
+            WorkspaceInvitation.id == invitation_id,
+            WorkspaceInvitation.workspace_id == workspace_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="Invitation not found")
     if not _invitation_live(row, row.token_hash):
@@ -423,7 +565,11 @@ async def revoke_invitation_in_uow(
 
 
 async def remove_member_in_uow(
-    session: AsyncSession, workspace_id: UUID, user_id: int, target_user_id: int, expected_revision: int | None,
+    session: AsyncSession,
+    workspace_id: UUID,
+    user_id: int,
+    target_user_id: int,
+    expected_revision: int | None,
 ) -> None:
     """Owner CAS removal excludes owner; revision increments serialize later content revocation.
 
@@ -432,7 +578,11 @@ async def remove_member_in_uow(
     W3 grants must bind membership revision and cannot authorize missing/replaced membership.
     """
     workspace, memberships = await lock_owner_management(
-        session, workspace_id, user_id, expected_revision=expected_revision, target_user_id=target_user_id,
+        session,
+        workspace_id,
+        user_id,
+        expected_revision=expected_revision,
+        target_user_id=target_user_id,
     )
     target = memberships.get(target_user_id)
     if target is None:
@@ -446,8 +596,13 @@ async def remove_member_in_uow(
 
 
 async def accept_invitation_in_uow(
-    session: AsyncSession, target: InvitationTarget, digest: str, user_id: int, email: str,
-    *, new_account: bool,
+    session: AsyncSession,
+    target: InvitationTarget,
+    digest: str,
+    user_id: int,
+    email: str,
+    *,
+    new_account: bool,
 ) -> InvitationAccepted:
     """Consume exact live email-bound token after caller auth locks/provisioning, atomically.
 
@@ -457,15 +612,27 @@ async def accept_invitation_in_uow(
     Existing membership consumes token without granting extra authority or minting a session.
     """
     workspace, memberships = await lock_workspace_memberships(
-        session, target.workspace_id, (target.owner_user_id, user_id),
+        session,
+        target.workspace_id,
+        (target.owner_user_id, user_id),
     )
-    invitation = await session.scalar(select(WorkspaceInvitation).where(
-        WorkspaceInvitation.id == target.invitation_id,
-        WorkspaceInvitation.workspace_id == target.workspace_id,
-    ).with_for_update().execution_options(populate_existing=True))
+    invitation = await session.scalar(
+        select(WorkspaceInvitation)
+        .where(
+            WorkspaceInvitation.id == target.invitation_id,
+            WorkspaceInvitation.workspace_id == target.workspace_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     issuer = memberships.get(target.owner_user_id)
-    if (not _invitation_live(invitation, digest) or issuer is None or issuer.role != "owner"
-            or issuer.owner_user_id != target.owner_user_id or workspace.owner_user_id != target.owner_user_id):
+    if (
+        not _invitation_live(invitation, digest)
+        or issuer is None
+        or issuer.role != "owner"
+        or issuer.owner_user_id != target.owner_user_id
+        or workspace.owner_user_id != target.owner_user_id
+    ):
         raise HTTPException(status_code=410, detail="Invitation is no longer available")
     if invitation is None:
         raise RuntimeError("invariant violated: invitation must not be None")
@@ -478,7 +645,9 @@ async def accept_invitation_in_uow(
     membership = memberships.get(user_id)
     if membership is None:
         membership = WorkspaceMembership(
-            workspace_id=workspace.id, user_id=user_id, role="member",
+            workspace_id=workspace.id,
+            user_id=user_id,
+            role="member",
             revision=workspace.configuration_revision,
         )
         session.add(membership)
@@ -489,10 +658,15 @@ async def accept_invitation_in_uow(
     if new_account:
         defaults = await list_workspaces(session, user_id)
         default = next(row for row in defaults if row.is_default)
-    return InvitationAccepted(membership=MemberRead(
-        user_id=user_id, email=email, role=cast(Literal["owner", "member"], membership.role),
-        membership_revision=membership.revision,
-    ), default_workspace=default)
+    return InvitationAccepted(
+        membership=MemberRead(
+            user_id=user_id,
+            email=email,
+            role=cast(Literal["owner", "member"], membership.role),
+            membership_revision=membership.revision,
+        ),
+        default_workspace=default,
+    )
 
 
 # --- Post-Port-B frozen share signatures (M0 stubs; W3-core implements) ---
@@ -505,8 +679,10 @@ def granted_resource_ids(*, scope: WorkspaceContext, kind: ShareKind) -> Select[
     if scope.role == "owner":
         raise ValueError("Owner scope has no share grants")
     return select(WorkspaceShare.resource_id).where(  # type: ignore[return-value]
-        WorkspaceShare.workspace_id == scope.workspace_id, WorkspaceShare.member_user_id == scope.user_id,
-        WorkspaceShare.resource_type == kind, WorkspaceShare.revoked_at.is_(None),
+        WorkspaceShare.workspace_id == scope.workspace_id,
+        WorkspaceShare.member_user_id == scope.user_id,
+        WorkspaceShare.resource_type == kind,
+        WorkspaceShare.revoked_at.is_(None),
         WorkspaceShare.membership_revision == scope.membership_revision,
     )
 
@@ -518,25 +694,37 @@ def _bounded_ids(resource_ids: tuple[UUID, ...]) -> tuple[UUID, ...]:
 
 
 async def read_resource_grants(
-    session: AsyncSession, *, scope: WorkspaceContext, kind: ShareKind, resource_ids: tuple[UUID, ...],
+    session: AsyncSession,
+    *,
+    scope: WorkspaceContext,
+    kind: ShareKind,
+    resource_ids: tuple[UUID, ...],
 ) -> tuple[GrantRef, ...]:
     """Fresh grant snapshots (id order) for the member's active grants among resource_ids."""
     ids = _bounded_ids(resource_ids)
     if not ids or scope.role == "owner":
         return ()
     rows = await session.scalars(
-        select(WorkspaceShare).where(
+        select(WorkspaceShare)
+        .where(
             WorkspaceShare.resource_id.in_(ids),
             WorkspaceShare.resource_id.in_(granted_resource_ids(scope=scope, kind=kind)),
-            WorkspaceShare.workspace_id == scope.workspace_id, WorkspaceShare.member_user_id == scope.user_id,
+            WorkspaceShare.workspace_id == scope.workspace_id,
+            WorkspaceShare.member_user_id == scope.user_id,
             WorkspaceShare.resource_type == kind,
-        ).order_by(WorkspaceShare.resource_id).execution_options(populate_existing=True)
+        )
+        .order_by(WorkspaceShare.resource_id)
+        .execution_options(populate_existing=True)
     )
     return tuple(GrantRef(kind, r.resource_id, r.revision, r.resource_revision) for r in rows)
 
 
 async def active_grant_ids(
-    session: AsyncSession, *, workspace_id: UUID, member_user_id: int, kind: ShareKind,
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    member_user_id: int,
+    kind: ShareKind,
     resource_ids: tuple[UUID, ...],
 ) -> frozenset[UUID]:
     """Owner-side check: which of resource_ids are actively shared with a current member."""
@@ -544,13 +732,18 @@ async def active_grant_ids(
     if not ids:
         return frozenset()
     rows = await session.scalars(
-        select(WorkspaceShare.resource_id).join(
-            WorkspaceMembership, (WorkspaceMembership.workspace_id == WorkspaceShare.workspace_id)
+        select(WorkspaceShare.resource_id)
+        .join(
+            WorkspaceMembership,
+            (WorkspaceMembership.workspace_id == WorkspaceShare.workspace_id)
             & (WorkspaceMembership.user_id == WorkspaceShare.member_user_id)
             & (WorkspaceMembership.revision == WorkspaceShare.membership_revision),
-        ).where(
-            WorkspaceShare.workspace_id == workspace_id, WorkspaceShare.member_user_id == member_user_id,
-            WorkspaceShare.resource_type == kind, WorkspaceShare.revoked_at.is_(None),
+        )
+        .where(
+            WorkspaceShare.workspace_id == workspace_id,
+            WorkspaceShare.member_user_id == member_user_id,
+            WorkspaceShare.resource_type == kind,
+            WorkspaceShare.revoked_at.is_(None),
             WorkspaceShare.resource_id.in_(ids),
         )
     )
@@ -558,7 +751,10 @@ async def active_grant_ids(
 
 
 async def lock_resource_grants(
-    session: AsyncSession, *, scope: WorkspaceContext | AdminWorkspaceReadContext, grants: tuple[GrantRef, ...],
+    session: AsyncSession,
+    *,
+    scope: WorkspaceContext | AdminWorkspaceReadContext,
+    grants: tuple[GrantRef, ...],
 ) -> None:
     """FOR SHARE the grants sorted; 404 if any is missing, revoked or changed. Fence already held."""
     if not grants:
@@ -567,41 +763,64 @@ async def lock_resource_grants(
         raise ValueError("Owner scope has no share grants")
     wanted = {(g.resource_type, g.resource_id): g for g in grants}
     rows = await session.scalars(
-        select(WorkspaceShare).where(
-            WorkspaceShare.workspace_id == scope.workspace_id, WorkspaceShare.member_user_id == scope.user_id,
+        select(WorkspaceShare)
+        .where(
+            WorkspaceShare.workspace_id == scope.workspace_id,
+            WorkspaceShare.member_user_id == scope.user_id,
             WorkspaceShare.resource_type.in_({k[0] for k in wanted}),
             WorkspaceShare.resource_id.in_({k[1] for k in wanted}),
-        ).order_by(WorkspaceShare.resource_type, WorkspaceShare.resource_id)
-        .with_for_update(read=True).execution_options(populate_existing=True)
+        )
+        .order_by(WorkspaceShare.resource_type, WorkspaceShare.resource_id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
     )
     found = {(r.resource_type, r.resource_id): r for r in rows}
     for key, grant in wanted.items():
         row = found.get(key)
-        if (row is None or row.revoked_at is not None or row.revision != grant.share_revision
-                or row.resource_revision != grant.resource_revision
-                or row.membership_revision != scope.membership_revision):
+        if (
+            row is None
+            or row.revoked_at is not None
+            or row.revision != grant.share_revision
+            or row.resource_revision != grant.resource_revision
+            or row.membership_revision != scope.membership_revision
+        ):
             raise HTTPException(status_code=404, detail="Resource not found")
 
 
 def _share_read(row: WorkspaceShare) -> ShareRead:
     return ShareRead(
-        workspace_id=row.workspace_id, resource_type=cast(ShareKind, row.resource_type), resource_id=row.resource_id,
-        member_user_id=row.member_user_id, revision=row.revision, resource_revision=row.resource_revision,
-        membership_revision=row.membership_revision, granted_by_user_id=row.granted_by_user_id,
-        created_at=row.created_at, updated_at=row.updated_at, revoked_at=row.revoked_at,
+        workspace_id=row.workspace_id,
+        resource_type=cast(ShareKind, row.resource_type),
+        resource_id=row.resource_id,
+        member_user_id=row.member_user_id,
+        revision=row.revision,
+        resource_revision=row.resource_revision,
+        membership_revision=row.membership_revision,
+        granted_by_user_id=row.granted_by_user_id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        revoked_at=row.revoked_at,
     )
 
 
 async def _owner_visible_projection(
-    session: AsyncSession, *, scope: WorkspaceContext, kind: ShareKind, resource_id: UUID,
-    multi_workspace_enabled: bool, member_user_id: int,
+    session: AsyncSession,
+    *,
+    scope: WorkspaceContext,
+    kind: ShareKind,
+    resource_id: UUID,
+    multi_workspace_enabled: bool,
+    member_user_id: int,
 ) -> ResourceAccessProjection:
     """Run the owning module's hooks (lock, shareability, projection); invisible -> 404."""
     if kind == "document":
         from core.capabilities import lock_document_ids, read_document_access_projection
 
         if not await lock_document_ids(
-            session, [resource_id], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            [resource_id],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         ):
             raise HTTPException(status_code=404, detail="Resource not found")
         projection = await read_document_access_projection(session, resource_id, scope=scope)
@@ -609,20 +828,37 @@ async def _owner_visible_projection(
         from core.capabilities import check_brief_shareable, read_brief_access_projection
 
         await check_brief_shareable(
-            session, resource_id, scope=scope, member_user_id=member_user_id,
+            session,
+            resource_id,
+            scope=scope,
+            member_user_id=member_user_id,
             multi_workspace_enabled=multi_workspace_enabled,
         )
         projection = await read_brief_access_projection(
-            session, resource_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            resource_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
-    if projection is None or not projection.available or projection.workspace_id != scope.workspace_id:
+    if (
+        projection is None
+        or not projection.available
+        or projection.workspace_id != scope.workspace_id
+    ):
         raise HTTPException(status_code=404, detail="Resource not found")
     return projection
 
 
 async def list_resource_shares(
-    session: AsyncSession, workspace_id: UUID, actor_user_id: int, *, resource_type: ShareKind,
-    resource_id: UUID, after: int | None = None, limit: int = 100, multi_workspace_enabled: bool = False,
+    session: AsyncSession,
+    workspace_id: UUID,
+    actor_user_id: int,
+    *,
+    resource_type: ShareKind,
+    resource_id: UUID,
+    after: int | None = None,
+    limit: int = 100,
+    multi_workspace_enabled: bool = False,
 ) -> ShareList:
     """Owner-only keyset page (member_user_id) of share rows for one visible resource."""
     scope = await resolve_workspace_context(session, actor_user_id, workspace_id)
@@ -639,36 +875,64 @@ async def list_resource_shares(
         from core.capabilities import read_brief_access_projection
 
         projection = await read_brief_access_projection(
-            session, resource_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            resource_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     if projection is None or not projection.available:
         raise HTTPException(status_code=404, detail="Resource not found")
     query = select(WorkspaceShare).where(
-        WorkspaceShare.workspace_id == workspace_id, WorkspaceShare.resource_type == resource_type,
+        WorkspaceShare.workspace_id == workspace_id,
+        WorkspaceShare.resource_type == resource_type,
         WorkspaceShare.resource_id == resource_id,
     )
     if after is not None:
         query = query.where(WorkspaceShare.member_user_id > after)
     size = min(max(limit, 1), 100)
-    rows = list(await session.scalars(
-        query.order_by(WorkspaceShare.member_user_id).limit(size + 1).execution_options(populate_existing=True)
-    ))
-    return ShareList(items=[_share_read(r) for r in rows[:size]],
-                     next_cursor=rows[size - 1].member_user_id if len(rows) > size else None)
+    rows = list(
+        await session.scalars(
+            query.order_by(WorkspaceShare.member_user_id)
+            .limit(size + 1)
+            .execution_options(populate_existing=True)
+        )
+    )
+    return ShareList(
+        items=[_share_read(r) for r in rows[:size]],
+        next_cursor=rows[size - 1].member_user_id if len(rows) > size else None,
+    )
 
 
 async def _lock_share_row(
-    session: AsyncSession, workspace_id: UUID, resource_type: ShareKind, resource_id: UUID, member_user_id: int,
+    session: AsyncSession,
+    workspace_id: UUID,
+    resource_type: ShareKind,
+    resource_id: UUID,
+    member_user_id: int,
 ) -> WorkspaceShare | None:
-    return await session.scalar(select(WorkspaceShare).where(
-        WorkspaceShare.workspace_id == workspace_id, WorkspaceShare.resource_type == resource_type,
-        WorkspaceShare.resource_id == resource_id, WorkspaceShare.member_user_id == member_user_id,
-    ).with_for_update().execution_options(populate_existing=True))
+    return await session.scalar(
+        select(WorkspaceShare)
+        .where(
+            WorkspaceShare.workspace_id == workspace_id,
+            WorkspaceShare.resource_type == resource_type,
+            WorkspaceShare.resource_id == resource_id,
+            WorkspaceShare.member_user_id == member_user_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
 
 
 async def grant_share_in_uow(
-    session: AsyncSession, workspace_id: UUID, actor_user_id: int, resource_type: ShareKind,
-    resource_id: UUID, member_user_id: int, payload: ShareUpsert, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    workspace_id: UUID,
+    actor_user_id: int,
+    resource_type: ShareKind,
+    resource_id: UUID,
+    member_user_id: int,
+    payload: ShareUpsert,
+    *,
+    multi_workspace_enabled: bool,
 ) -> ShareRead:
     """Owner grants/regrants one member read access.
 
@@ -676,31 +940,50 @@ async def grant_share_in_uow(
     Bumps only share.revision; workspace.configuration_revision and membership.revision are untouched.
     """
     _, memberships = await lock_share_management(
-        session, workspace_id, actor_user_id, member_user_id, payload.expected_revision,
+        session,
+        workspace_id,
+        actor_user_id,
+        member_user_id,
+        payload.expected_revision,
     )
     target = memberships[member_user_id]
     row = await _lock_share_row(session, workspace_id, resource_type, resource_id, member_user_id)
     scope = WorkspaceContext(
-        user_id=actor_user_id, workspace_id=workspace_id, role="owner",
+        user_id=actor_user_id,
+        workspace_id=workspace_id,
+        role="owner",
         membership_revision=memberships[actor_user_id].revision,
     )
     projection = await _owner_visible_projection(
-        session, scope=scope, kind=resource_type, resource_id=resource_id,
-        multi_workspace_enabled=multi_workspace_enabled, member_user_id=member_user_id,
+        session,
+        scope=scope,
+        kind=resource_type,
+        resource_id=resource_id,
+        multi_workspace_enabled=multi_workspace_enabled,
+        member_user_id=member_user_id,
     )
     if projection.resource_revision != payload.resource_revision:
         raise HTTPException(status_code=409, detail="resource_revision_changed")
     now = datetime.now(UTC)
     if row is None:
         row = WorkspaceShare(
-            workspace_id=workspace_id, resource_type=resource_type, resource_id=resource_id,
-            member_user_id=member_user_id, granted_by_user_id=actor_user_id, revision=1,
-            resource_revision=payload.resource_revision, membership_revision=target.revision,
-            created_at=now, updated_at=now,
+            workspace_id=workspace_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            member_user_id=member_user_id,
+            granted_by_user_id=actor_user_id,
+            revision=1,
+            resource_revision=payload.resource_revision,
+            membership_revision=target.revision,
+            created_at=now,
+            updated_at=now,
         )
         session.add(row)
-    elif (row.revoked_at is None and row.resource_revision == payload.resource_revision
-          and row.membership_revision == target.revision):
+    elif (
+        row.revoked_at is None
+        and row.resource_revision == payload.resource_revision
+        and row.membership_revision == target.revision
+    ):
         return _share_read(row)  # already in effect
     else:
         row.revoked_at = None
@@ -714,14 +997,21 @@ async def grant_share_in_uow(
 
 
 async def revoke_share_in_uow(
-    session: AsyncSession, workspace_id: UUID, actor_user_id: int, resource_type: ShareKind,
-    resource_id: UUID, member_user_id: int, expected_revision: int | None,
+    session: AsyncSession,
+    workspace_id: UUID,
+    actor_user_id: int,
+    resource_type: ShareKind,
+    resource_id: UUID,
+    member_user_id: int,
+    expected_revision: int | None,
 ) -> None:
     """Owner revoke under the same lock order; idempotent on an already revoked row.
 
     No resource hook: the resource may already be deleted, and revoking needs no content access.
     """
-    await lock_share_management(session, workspace_id, actor_user_id, member_user_id, expected_revision)
+    await lock_share_management(
+        session, workspace_id, actor_user_id, member_user_id, expected_revision
+    )
     row = await _lock_share_row(session, workspace_id, resource_type, resource_id, member_user_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Share not found")
@@ -733,7 +1023,10 @@ async def revoke_share_in_uow(
 
 
 async def _purge_translations(
-    session: AsyncSession, workspace_id: UUID, resource_type: ShareKind, resource_ids: tuple[UUID, ...],
+    session: AsyncSession,
+    workspace_id: UUID,
+    resource_type: ShareKind,
+    resource_ids: tuple[UUID, ...],
 ) -> None:
     """Drop every actor's derived translations of a brief whose share ended (documents have none)."""
     if resource_type != "brief":
@@ -745,17 +1038,25 @@ async def _purge_translations(
 
 
 async def revoke_resource_shares_in_uow(
-    session: AsyncSession, *, workspace_id: UUID, resource_type: ShareKind, resource_ids: tuple[UUID, ...],
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    resource_type: ShareKind,
+    resource_ids: tuple[UUID, ...],
 ) -> int:
     """Deletion hook: revoke every active share of the given resources; flush only, no commit."""
     if not resource_ids:
         return 0
     now = datetime.now(UTC)
     result = await session.execute(
-        update(WorkspaceShare).where(
-            WorkspaceShare.workspace_id == workspace_id, WorkspaceShare.resource_type == resource_type,
-            WorkspaceShare.resource_id.in_(resource_ids), WorkspaceShare.revoked_at.is_(None),
-        ).values(revoked_at=now, updated_at=now, revision=WorkspaceShare.revision + 1)
+        update(WorkspaceShare)
+        .where(
+            WorkspaceShare.workspace_id == workspace_id,
+            WorkspaceShare.resource_type == resource_type,
+            WorkspaceShare.resource_id.in_(resource_ids),
+            WorkspaceShare.revoked_at.is_(None),
+        )
+        .values(revoked_at=now, updated_at=now, revision=WorkspaceShare.revision + 1)
         .execution_options(synchronize_session=False)
     )
     await _purge_translations(session, workspace_id, resource_type, resource_ids)
@@ -763,7 +1064,10 @@ async def revoke_resource_shares_in_uow(
 
 
 async def account_deletion_blockers(
-    session: AsyncSession, account_id: int, *, lock: bool = False,
+    session: AsyncSession,
+    account_id: int,
+    *,
+    lock: bool = False,
 ) -> tuple[UUID, list[Literal["workspace_has_members", "workspace_has_live_invitations"]]]:
     """Inspect owned workspace lifecycle after Auth admission/account lock; optionally fence writes.
 
@@ -777,14 +1081,30 @@ async def account_deletion_blockers(
     if workspace is None:
         raise HTTPException(status_code=409, detail={"code": "workspace_unavailable"})
     blockers: list[Literal["workspace_has_members", "workspace_has_live_invitations"]] = []
-    if await session.scalar(select(WorkspaceMembership.user_id).where(
-        WorkspaceMembership.workspace_id == workspace.id, WorkspaceMembership.user_id != account_id,
-    ).limit(1)) is not None:
+    if (
+        await session.scalar(
+            select(WorkspaceMembership.user_id)
+            .where(
+                WorkspaceMembership.workspace_id == workspace.id,
+                WorkspaceMembership.user_id != account_id,
+            )
+            .limit(1)
+        )
+        is not None
+    ):
         blockers.append("workspace_has_members")
-    if await session.scalar(select(WorkspaceInvitation.id).where(
-        WorkspaceInvitation.workspace_id == workspace.id,
-        WorkspaceInvitation.accepted_at.is_(None), WorkspaceInvitation.revoked_at.is_(None),
-        WorkspaceInvitation.expires_at > datetime.now(UTC),
-    ).limit(1)) is not None:
+    if (
+        await session.scalar(
+            select(WorkspaceInvitation.id)
+            .where(
+                WorkspaceInvitation.workspace_id == workspace.id,
+                WorkspaceInvitation.accepted_at.is_(None),
+                WorkspaceInvitation.revoked_at.is_(None),
+                WorkspaceInvitation.expires_at > datetime.now(UTC),
+            )
+            .limit(1)
+        )
+        is not None
+    ):
         blockers.append("workspace_has_live_invitations")
     return workspace.id, blockers

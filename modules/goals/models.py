@@ -62,19 +62,28 @@ class Goal(Base):
             "jsonb_typeof(accepted_proposals) = 'array'",
             name="ck_goals_accepted_proposals_array",
         ),
-        CheckConstraint("jsonb_array_length(accepted_proposals) <= 1000", name="ck_goals_accepted_proposals_bound"),
+        CheckConstraint(
+            "jsonb_array_length(accepted_proposals) <= 1000",
+            name="ck_goals_accepted_proposals_bound",
+        ),
         Index("ix_goals_owner_status", "owner_id", "status"),
         Index("ix_goals_deadline", "deadline"),
         Index("ix_goals_created_at", "created_at"),
-        ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_goals_workspace", ondelete="RESTRICT"),
-        ForeignKeyConstraint(["workspace_id", "owner_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_goals_principal", ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id"], ["workspaces.id"], name="fk_w2_goals_workspace", ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "owner_id"],
+            ["workspaces.id", "workspaces.owner_user_id"],
+            name="fk_w2_goals_principal",
+            ondelete="RESTRICT",
+        ),
         UniqueConstraint("workspace_id", "id", name="uq_w2_goals_id"),
-        Index("ix_w2_goals_scope", 'workspace_id', 'id'),
-        Index("ix_w2_goals_work", 'workspace_id', 'created_at', 'id'),
+        Index("ix_w2_goals_scope", "workspace_id", "id"),
+        Index("ix_w2_goals_work", "workspace_id", "created_at", "id"),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
     owner_id: Mapped[int] = mapped_column(
@@ -85,9 +94,7 @@ class Goal(Base):
     desired_outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
     deadline: Mapped[date | None] = mapped_column(Date, nullable=True)
     progress: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.0")
-    manual_progress: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default="false"
-    )
+    manual_progress: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="active")
     milestones: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default="[]"
@@ -103,4 +110,3 @@ class Goal(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
-

@@ -30,10 +30,29 @@ def test_patch_flags_are_optional_and_strict() -> None:
 def test_source_read_and_connector_projection_carry_flags() -> None:
     now = datetime.now(UTC)
     row = SimpleNamespace(
-        id=uuid4(), workspace_id=uuid4(), type="rss", name="n", provider=None, status="active", generation=1,
-        local_only=False, graph_enabled=False, rag_index_enabled=True, configuration={}, created_at=now,
-        updated_at=now, last_sync_at=None, last_success_at=None, last_error_at=None, last_error_code=None,
-        collected_at=None, indexed_at=None, collection_error_code=None, processing_error_code=None, retired_at=None)
+        id=uuid4(),
+        workspace_id=uuid4(),
+        type="rss",
+        name="n",
+        provider=None,
+        status="active",
+        generation=1,
+        local_only=False,
+        graph_enabled=False,
+        rag_index_enabled=True,
+        configuration={},
+        created_at=now,
+        updated_at=now,
+        last_sync_at=None,
+        last_success_at=None,
+        last_error_at=None,
+        last_error_code=None,
+        collected_at=None,
+        indexed_at=None,
+        collection_error_code=None,
+        processing_error_code=None,
+        retired_at=None,
+    )
     read = SourceRead.model_validate(row, from_attributes=True)
     assert (read.graph_enabled, read.rag_index_enabled) == (False, True)
     projected = sources._connector_source(row)  # type: ignore[arg-type]

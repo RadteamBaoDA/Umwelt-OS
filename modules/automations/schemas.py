@@ -105,7 +105,14 @@ class ConnectorSyncResultTrigger(_Trigger):
 
 
 Trigger = Annotated[
-    ScheduleTrigger | NewEventTrigger | NewDocumentTrigger | EntityChangedTrigger | TaskDueTrigger | GoalDeadlineTrigger | WebhookTrigger | ConnectorSyncResultTrigger,
+    ScheduleTrigger
+    | NewEventTrigger
+    | NewDocumentTrigger
+    | EntityChangedTrigger
+    | TaskDueTrigger
+    | GoalDeadlineTrigger
+    | WebhookTrigger
+    | ConnectorSyncResultTrigger,
     Field(discriminator="type"),
 ]
 
@@ -130,7 +137,9 @@ class RunAgentAction(_Action):
     """Start a P07 agent run for a fixed-roster profile (approval rules stay with the run)."""
 
     type: Literal["run_agent"]
-    profile_id: Literal["knowledge", "research", "personal", "project", "news", "planning", "automation"]
+    profile_id: Literal[
+        "knowledge", "research", "personal", "project", "news", "planning", "automation"
+    ]
     instruction: str = Field(min_length=1, max_length=2000)
 
 
@@ -175,7 +184,11 @@ class CallWebhookAction(_Action):
 
 
 Action = Annotated[
-    RunAgentAction | CreateTaskAction | CreateNotificationAction | GenerateBriefAction | CallWebhookAction,
+    RunAgentAction
+    | CreateTaskAction
+    | CreateNotificationAction
+    | GenerateBriefAction
+    | CallWebhookAction,
     Field(discriminator="type"),
 ]
 
@@ -200,8 +213,10 @@ class AutomationDefinition(BaseModel):
             check_condition(self.trigger.type, cond.field, cond.operator, cond.value)
         if self.trigger.type == "schedule":
             validate_schedule(
-                self.trigger.cron, self.trigger.timezone,
-                spends_model=any(a.type == "run_agent" for a in self.actions))
+                self.trigger.cron,
+                self.trigger.timezone,
+                spends_model=any(a.type == "run_agent" for a in self.actions),
+            )
         return self
 
 
@@ -278,7 +293,6 @@ class PreviewResult(BaseModel):
     matched: bool
     reasons: list[dict[str, Any]]
     planned_actions: list[PlannedAction]
-
 
 
 class ManualRunRequest(BaseModel):

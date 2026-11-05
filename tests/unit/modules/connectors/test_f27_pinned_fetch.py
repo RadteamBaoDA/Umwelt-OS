@@ -37,14 +37,19 @@ async def test_read_rss_connects_to_pinned_ip_and_ignores_environment_proxies() 
     kwargs_log: list[dict[str, Any]] = []
     with (
         patch.object(n8n, "validate_public_url", AsyncMock()),
-        patch("modules.connectors.providers.rest.resolve_public", AsyncMock(return_value=["93.184.216.34"])),
+        patch(
+            "modules.connectors.providers.rest.resolve_public",
+            AsyncMock(return_value=["93.184.216.34"]),
+        ),
         patch.object(n8n.httpx, "AsyncClient", _client_factory(seen, kwargs_log)),
     ):
         out = await n8n.read_rss("https://feeds.example.com/rss", None)
     assert out["records"]
     assert kwargs_log[0]["trust_env"] is False
     request = seen[0]
-    assert request.url.host == "93.184.216.34"  # not the hostname: DNS cannot be re-resolved to a private address
+    assert (
+        request.url.host == "93.184.216.34"
+    )  # not the hostname: DNS cannot be re-resolved to a private address
     assert request.headers["host"] == "feeds.example.com"
     assert request.extensions["sni_hostname"] == "feeds.example.com"
 
@@ -67,7 +72,9 @@ async def test_read_rss_fails_closed_when_host_resolves_to_private_address() -> 
 
 def test_crawl_has_no_unpinned_fallback() -> None:
     # Read the file: importing crawl needs the optional bs4/crawlee extras.
-    source = (Path(__file__).resolve().parents[4] / "modules" / "connectors" / "crawl.py").read_text(encoding="utf-8")
+    source = (
+        Path(__file__).resolve().parents[4] / "modules" / "connectors" / "crawl.py"
+    ).read_text(encoding="utf-8")
     assert "fall back to validated URL" not in source
     assert "except Exception:  # noqa: BLE001 - fall back" not in source
     assert "resolve_public(parts.hostname, port)" in source
@@ -97,7 +104,11 @@ async def test_crawl_fails_closed_when_pinning_cannot_resolve(failure: str) -> N
     from modules.connectors.public import CrawlRequest
 
     crawl_module = _import_crawl()
-    resolver = AsyncMock(side_effect=UnsafeDestination("non_public_destination")) if failure == "unsafe" else AsyncMock(return_value=[])
+    resolver = (
+        AsyncMock(side_effect=UnsafeDestination("non_public_destination"))
+        if failure == "unsafe"
+        else AsyncMock(return_value=[])
+    )
     sent: list[Any] = []
 
     async def _send(self: Any, request: httpx.Request, **_: Any) -> httpx.Response:
@@ -105,8 +116,14 @@ async def test_crawl_fails_closed_when_pinning_cannot_resolve(failure: str) -> N
         return httpx.Response(200, content=b"<html></html>")
 
     req = CrawlRequest(
-        source_id=uuid4(), source_generation=1, connector_revision=1, url="https://rebind.example.com/",
-        mode="http", max_pages=1, max_depth=0, timeout_seconds=10,
+        source_id=uuid4(),
+        source_generation=1,
+        connector_revision=1,
+        url="https://rebind.example.com/",
+        mode="http",
+        max_pages=1,
+        max_depth=0,
+        timeout_seconds=10,
     )
     expected = UnsafeDestination if failure == "unsafe" else ValueError
     with (

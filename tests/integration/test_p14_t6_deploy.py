@@ -11,7 +11,9 @@ from httpx import AsyncClient
 
 from tests.integration.test_p14_chat_worker import _docker, _service_container
 
-requires_docker = pytest.mark.skipif(shutil.which("docker") is None, reason="requires the docker CLI")
+requires_docker = pytest.mark.skipif(
+    shutil.which("docker") is None, reason="requires the docker CLI"
+)
 pytestmark = pytest.mark.skipif(
     os.getenv("INTEGRATION") != "1", reason="requires disposable Compose test services"
 )
@@ -25,17 +27,25 @@ ORIGIN = os.getenv("TEST_PUBLIC_ORIGIN", "http://localhost:3300")
 async def test_api_runs_two_uvicorn_workers() -> None:
     container = _service_container("api")
     # `docker top` lists the uvicorn supervisor plus one multiprocessing child per worker.
-    children = [line for line in _docker("top", container, "-o", "pid,args").splitlines() if "multiprocessing.spawn" in line]
+    children = [
+        line
+        for line in _docker("top", container, "-o", "pid,args").splitlines()
+        if "multiprocessing.spawn" in line
+    ]
     assert len(children) == 2, children
 
 
 @pytest.mark.asyncio
-async def test_login_then_20_fresh_connection_requests_succeed(ready_owner_client: AsyncClient) -> None:
+async def test_login_then_20_fresh_connection_requests_succeed(
+    ready_owner_client: AsyncClient,
+) -> None:
     cookies = dict(ready_owner_client.cookies)
     csrf = ready_owner_client.headers["X-CSRF-Token"]
     for _ in range(20):
         # A new client per request opens a new connection, so the kernel spreads them across both workers.
-        async with AsyncClient(base_url=BASE_URL, cookies=cookies, headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}) as fresh:
+        async with AsyncClient(
+            base_url=BASE_URL, cookies=cookies, headers={"Origin": ORIGIN, "X-CSRF-Token": csrf}
+        ) as fresh:
             response = await fresh.get("/api/v1/auth/session")
             assert response.status_code == 200, response.text
             assert response.json()["authenticated"] is True

@@ -14,6 +14,7 @@ SourceStatus = Literal["active", "paused", "archived"]
 
 class SourceCreate(BaseModel):
     """Validate a source type and keep registered provider identity immutable at creation."""
+
     model_config = ConfigDict(extra="forbid")
 
     type: SourceType
@@ -38,6 +39,7 @@ class SourceCreate(BaseModel):
 
 class SourcePatch(BaseModel):
     """Validate supported source name and lifecycle status updates."""
+
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
@@ -48,6 +50,7 @@ class SourcePatch(BaseModel):
 
 class SourceRead(BaseModel):
     """Serialize source lifecycle, collection, processing, and generation state."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
@@ -154,6 +157,7 @@ class SourceMetadataExportValidation(BaseModel):
     reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
     observed_snapshot_count: int = Field(ge=0)
 
+
 class GadgetSourceSelection(BaseModel):
     """Expose source identity and lifecycle for an already-authorized dashboard caller.
 
@@ -201,12 +205,14 @@ class ConnectorSource(BaseModel):
 
 class SourceList(BaseModel):
     """Return a source page and its optional continuation cursor."""
+
     items: list[SourceRead]
     next_cursor: str | None
 
 
 class OperationRead(BaseModel):
     """Expose scope-bound purge progress after admission, even without a canonical Source."""
+
     operation_id: UUID
     workspace_id: UUID
     source_id: UUID

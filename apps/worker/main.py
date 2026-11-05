@@ -121,7 +121,9 @@ from modules.translations.worker import (
 )
 
 _JOB_OWNERS = scheduled_job_owners(register_modules())
-_BUILD_AVAILABLE = frozenset(module_id for module_id, item in effective_modules(()).items() if item.enabled)
+_BUILD_AVAILABLE = frozenset(
+    module_id for module_id, item in effective_modules(()).items() if item.enabled
+)
 
 
 def _gate_module_job(function: Callable[..., Any]) -> Callable[..., Any]:
@@ -152,7 +154,9 @@ def _arq_options(name: str) -> dict[str, Any]:
     """Per-function arq options: outbox consumers drop their result, heavy-slot jobs get a long retry budget."""
     options: dict[str, Any] = {}
     if name == "translate_content":
-        options["keep_result"] = 0  # fixed `translation:{id}` job ids must be re-enqueueable by recovery
+        options["keep_result"] = (
+            0  # fixed `translation:{id}` job ids must be re-enqueueable by recovery
+        )
     if name in set(get_event_registry().job_names.values()):
         options["keep_result"] = 0
     if name in HEAVY_SLOT_JOBS:
@@ -171,7 +175,9 @@ def _silence_cron_logs() -> None:
 METRICS_PORT_OFFSETS = {"worker": 0, "chat-worker": 1, "model-worker": 2, "cron-worker": 3}
 
 
-def _install_observability(ctx: dict[str, object], settings: Settings, engine: AsyncEngine, role: str) -> None:
+def _install_observability(
+    ctx: dict[str, object], settings: Settings, engine: AsyncEngine, role: str
+) -> None:
     """Start optional worker metrics and tracing; both are off unless configured and never block startup.
 
     The metrics HTTP server binds ``METRICS_WORKER_PORT + METRICS_PORT_OFFSETS[role]`` (worker 0, chat
@@ -180,18 +186,25 @@ def _install_observability(ctx: dict[str, object], settings: Settings, engine: A
     instruments this process's engine.
     """
     if settings.metrics_worker_port and start_worker_metrics_server(
-        settings.metrics_worker_port + METRICS_PORT_OFFSETS[role], settings.metrics_worker_bind,
+        settings.metrics_worker_port + METRICS_PORT_OFFSETS[role],
+        settings.metrics_worker_bind,
     ):
         ctx["metrics_tasks"] = [spawn_background(monitor_event_loop_lag(), f"{role}-loop-lag")]
     if configure_tracing(
-        settings.otel_exporter_otlp_endpoint, service_name=f"umwelt-{role}",
+        settings.otel_exporter_otlp_endpoint,
+        service_name=f"umwelt-{role}",
         sample_ratio=settings.otel_traces_sample_ratio,
     ):
         instrument_engine(engine)
 
 
 async def _boot_runtime(
-    ctx: dict[str, object], *, role: str, pool_size: int, max_overflow: int, direct_pool_size: int,
+    ctx: dict[str, object],
+    *,
+    role: str,
+    pool_size: int,
+    max_overflow: int,
+    direct_pool_size: int,
 ) -> None:
     """Shared startup for the processes that run the full job ctx (main worker and cron worker).
 
@@ -212,7 +225,9 @@ async def _boot_runtime(
     # scan cursor. It is not a cross-replica mutex: every claim is fenced in SQL (FOR UPDATE SKIP LOCKED, leases,
     # dispatched_at), so replicas scanning from their own cursors never double-claim an outbox event.
     ctx["ingestion_dispatch_scan_state"] = {"cursor": None, "lock": asyncio.Lock()}
-    ctx["w2_cursor_state"] = {}  # dict[str,str] shared across ARQ ctx copies; see core/worker_cursors.py for key namespaces (_gen:/_unsynced:)
+    ctx[
+        "w2_cursor_state"
+    ] = {}  # dict[str,str] shared across ARQ ctx copies; see core/worker_cursors.py for key namespaces (_gen:/_unsynced:)
     install_log_redaction()
     set_process_role(role)
     engine, factory = make_session_factory_for_role(
@@ -228,7 +243,8 @@ async def _boot_runtime(
     _install_observability(ctx, settings, engine, role)
     try:
         registry, admission, runtime = await compose_agent_registry(
-            settings, cast(async_sessionmaker[AsyncSession], ctx["session_factory"]),
+            settings,
+            cast(async_sessionmaker[AsyncSession], ctx["session_factory"]),
             cast(Redis, ctx["redis"]),
         )
         ctx["agent_tool_registry"] = registry
@@ -255,13 +271,19 @@ async def startup(ctx: dict[str, object]) -> None:
     worker generation for health once composition succeeded.
     """
     await _boot_runtime(
-        ctx, role="worker", pool_size=WorkerSettings.max_jobs + 1, max_overflow=10,
+        ctx,
+        role="worker",
+        pool_size=WorkerSettings.max_jobs + 1,
+        max_overflow=10,
         direct_pool_size=WorkerSettings.max_jobs,
     )
     await cast(Redis, ctx["redis"]).set(ARQ_WORKER_GENERATION_KEY, uuid7().hex)
 
 
-CRON_DB_POOL = (8 + 1, 5)  # (pool_size = CronWorkerSettings.max_jobs + 1, max_overflow); counted as 14 in docs/deployment.md
+CRON_DB_POOL = (
+    8 + 1,
+    5,
+)  # (pool_size = CronWorkerSettings.max_jobs + 1, max_overflow); counted as 14 in docs/deployment.md
 
 
 async def catch_up_missed_runs(ctx: dict[str, object]) -> list[str]:
@@ -275,15 +297,23 @@ async def catch_up_missed_runs(ctx: dict[str, object]) -> list[str]:
     redis = cast(Redis, ctx["redis"])
     periods = {spec.name: spec.period_seconds for spec in CRON_SPECS if not spec.run_at_startup}
     queued: list[str] = []
-    bucket = int(time.time() // 60)  # replicas restarting together coalesce; the lease guards the rest
+    bucket = int(
+        time.time() // 60
+    )  # replicas restarting together coalesce; the lease guards the rest
     for name in overdue_jobs(periods, await read_last_success(redis)):
         try:
             job = await cast(Any, redis).enqueue_job(
-                RUN_CRON_FUNCTION, name, False, _job_id=f"catchup:{name}:{bucket}", _queue_name=CRON_QUEUE,
+                RUN_CRON_FUNCTION,
+                name,
+                False,
+                _job_id=f"catchup:{name}:{bucket}",
+                _queue_name=CRON_QUEUE,
                 _defer_by=stable_offset(name, 30, "catch-up"),
             )
         except Exception:
-            logging.getLogger(__name__).warning("cron catch-up enqueue failed job=%s", name, exc_info=True)
+            logging.getLogger(__name__).warning(
+                "cron catch-up enqueue failed job=%s", name, exc_info=True
+            )
             continue
         if job is not None:
             queued.append(name)
@@ -293,13 +323,19 @@ async def catch_up_missed_runs(ctx: dict[str, object]) -> list[str]:
 async def cron_startup(ctx: dict[str, object]) -> None:
     """Cron-worker startup: full job ctx on its own bounded pool, then missed-run catch-up."""
     await _boot_runtime(
-        ctx, role="cron-worker", pool_size=CRON_DB_POOL[0], max_overflow=CRON_DB_POOL[1],
+        ctx,
+        role="cron-worker",
+        pool_size=CRON_DB_POOL[0],
+        max_overflow=CRON_DB_POOL[1],
         direct_pool_size=CronWorkerSettings.max_jobs,
     )
     await catch_up_missed_runs(ctx)
 
 
-CHAT_DB_POOL = (10, 10)  # fixed (pool_size, max_overflow); counted as 20 in docs/deployment.md and .env.example
+CHAT_DB_POOL = (
+    10,
+    10,
+)  # fixed (pool_size, max_overflow); counted as 20 in docs/deployment.md and .env.example
 
 
 async def chat_startup(ctx: dict[str, object]) -> None:
@@ -322,7 +358,10 @@ async def chat_startup(ctx: dict[str, object]) -> None:
     _install_observability(ctx, settings, engine, "chat-worker")
 
 
-MODEL_DB_POOL = (4 + 1, 5)  # (pool_size = ModelWorkerSettings.max_jobs + 1, max_overflow); counted as 10 in docs/deployment.md
+MODEL_DB_POOL = (
+    4 + 1,
+    5,
+)  # (pool_size = ModelWorkerSettings.max_jobs + 1, max_overflow); counted as 10 in docs/deployment.md
 
 
 async def model_startup(ctx: dict[str, object]) -> None:
@@ -376,10 +415,12 @@ async def purge_expired_sessions(ctx: dict[str, object]) -> int:
     async with factory() as session:
         expired = (
             select(AuthSession.token_hash)
-            .where(or_(
-                AuthSession.expires_at <= func.now(),
-                func.coalesce(AuthSession.last_seen_at, AuthSession.created_at) <= idle_cutoff,
-            ))
+            .where(
+                or_(
+                    AuthSession.expires_at <= func.now(),
+                    func.coalesce(AuthSession.last_seen_at, AuthSession.created_at) <= idle_cutoff,
+                )
+            )
             .order_by(AuthSession.expires_at)
             .limit(1000)
         )
@@ -392,7 +433,11 @@ async def purge_expired_sessions(ctx: dict[str, object]) -> int:
 
 
 def _register(
-    function: Callable[..., Any], *, max_tries: int, timeout: float, queue: str = default_queue_name,
+    function: Callable[..., Any],
+    *,
+    max_tries: int,
+    timeout: float,
+    queue: str = default_queue_name,
 ) -> Any:
     """Wrap a job with its dead-letter recorder and trace span, then apply per-function arq options.
 
@@ -404,9 +449,14 @@ def _register(
     ``core.worker_dlq``). Returns the arq ``Function`` when options apply, else the wrapped coroutine.
     """
     options = _arq_options(function.__name__)
-    wrapped = traced_job(dead_letter(
-        function, max_tries=int(options.get("max_tries", max_tries)), queue=queue, timeout_seconds=timeout,
-    ))
+    wrapped = traced_job(
+        dead_letter(
+            function,
+            max_tries=int(options.get("max_tries", max_tries)),
+            queue=queue,
+            timeout_seconds=timeout,
+        )
+    )
     return _arq_func(wrapped, **options) if options else wrapped
 
 
@@ -455,20 +505,31 @@ MODEL_JOB_TIMEOUT = Settings().model_worker_job_timeout_seconds
 
 class WorkerSettings:
     """ARQ worker registration, recurring schedules, retry/concurrency bounds, and lifecycle hooks."""
+
     # Queue delay / duration / outcome telemetry wraps only event-driven jobs (labelled by function
     # name); cron polls stay unwrapped so no-op polls record and log nothing.
     functions: ClassVar[list[Any]] = [
-        purge_expired_sessions, instrument_job(process_ingestion_event, success_return_outcome="returned"),
+        purge_expired_sessions,
+        instrument_job(process_ingestion_event, success_return_outcome="returned"),
         instrument_job(process_normalize_event, success_return_outcome="returned"),
-        instrument_job(process_uploaded_file, success_return_outcome="returned"), process_source_purge,
-        process_source_memory_coverage, process_document_cleanup,
-        reconcile_connectors, dispatch_due_collections, process_collection_request,
+        instrument_job(process_uploaded_file, success_return_outcome="returned"),
+        process_source_purge,
+        process_source_memory_coverage,
+        process_document_cleanup,
+        reconcile_connectors,
+        dispatch_due_collections,
+        process_collection_request,
         instrument_job(process_document_ready, success_return_outcome="returned"),
         instrument_job(process_graph_operation),
-        instrument_job(process_news_document_ready), purge_expired_chat_runs,
-        instrument_job(process_agent_run, run_id_kind="agent_run_id"), instrument_job(process_automation_run),
+        instrument_job(process_news_document_ready),
+        purge_expired_chat_runs,
+        instrument_job(process_agent_run, run_id_kind="agent_run_id"),
+        instrument_job(process_automation_run),
     ]
-    functions = [_register(_gate_module_job(function), max_tries=5, timeout=WORKER_JOB_TIMEOUT) for function in functions]
+    functions = [
+        _register(_gate_module_job(function), max_tries=5, timeout=WORKER_JOB_TIMEOUT)
+        for function in functions
+    ]
     # Outbox consumers are re-enqueued under the fixed id `ingestion:{event.id}` per continuation; a
     # kept arq result (default 3600 s) would turn those enqueues into no-ops. Nothing reads arq
     # results, and the in-progress job key still dedupes concurrently queued jobs.
@@ -531,6 +592,7 @@ class CronWorkerSettings:
     enqueued on ``CRON_QUEUE`` under the ``cron:<function name>`` job name this worker registers. Heavy
     work inside a cron still serializes through ``core.heavy_work.heavy_job_slot`` across processes.
     """
+
     # traced_job strips the ``_trace_carrier`` that a tracing API adds to wake-up enqueues.
     functions: ClassVar[list[Any]] = [_arq_func(traced_job(run_cron_job), max_tries=CRON_MAX_TRIES)]
     cron_jobs: ClassVar[list[object]] = [build_cron(spec, _gate_module_job) for spec in CRON_SPECS]
@@ -558,11 +620,21 @@ class ModelWorkerSettings:
     cross-process heavy slot that chunk embedding needs. Recovery crons run on CronWorkerSettings and
     only enqueue onto this queue.
     """
+
     functions: ClassVar[list[Any]] = [
-        process_entity_extraction_work, process_timeline_extraction_work, translate_content,
+        process_entity_extraction_work,
+        process_timeline_extraction_work,
+        translate_content,
     ]
-    functions = [_register(_gate_module_job(instrument_job(function)), max_tries=5, timeout=MODEL_JOB_TIMEOUT, queue=MODEL_QUEUE)
-                 for function in functions]
+    functions = [
+        _register(
+            _gate_module_job(instrument_job(function)),
+            max_tries=5,
+            timeout=MODEL_JOB_TIMEOUT,
+            queue=MODEL_QUEUE,
+        )
+        for function in functions
+    ]
     redis_settings = build_redis_settings(Settings())
     # Sentinel mode supplies a pool so the sentinel password/timeouts match the API; None keeps arq's direct path.
     redis_pool = build_worker_redis_pool(Settings())
@@ -572,29 +644,40 @@ class ModelWorkerSettings:
     max_tries = 5
     health_check_key = "arq:model:health-check"
     health_check_interval = 15
-    job_completion_wait = job_timeout + 5  # compose stop_grace_period must exceed this; see docs/deployment.md
+    job_completion_wait = (
+        job_timeout + 5
+    )  # compose stop_grace_period must exceed this; see docs/deployment.md
     on_startup = model_startup
     on_shutdown = shutdown
 
 
 class ChatWorkerSettings:
     """Dedicated arq worker for chat generation, isolated from the main worker's cron and heavy jobs."""
+
     # keep_result=0 (worker-level too: arq finish_failed_job ignores the per-function value): neither a
     # gated return nor an interrupted/failed job may block the fixed job id, or recovery could not re-enqueue.
     keep_result = 0
     functions: ClassVar[list[Any]] = [
-        _arq_func(traced_job(_gate_module_job(instrument_job(process_chat_response))), keep_result=0),
+        _arq_func(
+            traced_job(_gate_module_job(instrument_job(process_chat_response))), keep_result=0
+        ),
     ]
-    cron_jobs: ClassVar[list[object]] = [build_cron(spec, _gate_module_job) for spec in CHAT_CRON_SPECS]
+    cron_jobs: ClassVar[list[object]] = [
+        build_cron(spec, _gate_module_job) for spec in CHAT_CRON_SPECS
+    ]
     redis_settings = build_redis_settings(Settings())
     # Sentinel mode supplies a pool so the sentinel password/timeouts match the API; None keeps arq's direct path.
     redis_pool = build_worker_redis_pool(Settings())
     queue_name = CHAT_QUEUE
-    max_jobs = 15  # keeps 5 of the shared 10+10 DB pool free for cron/rerank sessions (pool_timeout 5 s)
+    max_jobs = (
+        15  # keeps 5 of the shared 10+10 DB pool free for cron/rerank sessions (pool_timeout 5 s)
+    )
     job_timeout = CHAT_JOB_TIMEOUT
     max_tries = 1
     health_check_key = "arq:chat:health-check"
     health_check_interval = 15
-    job_completion_wait = job_timeout + 5  # compose stop_grace_period must exceed this; see docs/deployment.md
+    job_completion_wait = (
+        job_timeout + 5
+    )  # compose stop_grace_period must exceed this; see docs/deployment.md
     on_startup = chat_startup
     on_shutdown = shutdown

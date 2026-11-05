@@ -20,7 +20,9 @@ from tests.unit.modules.search.test_indexing_fences import (
 pytestmark = pytest.mark.asyncio
 
 
-def _setup(monkeypatch: pytest.MonkeyPatch, n: int, status: str = "active") -> tuple[_Factory, Any, list[Any]]:
+def _setup(
+    monkeypatch: pytest.MonkeyPatch, n: int, status: str = "active"
+) -> tuple[_Factory, Any, list[Any]]:
     generation = _generation()
     generation.status = status
     item = SimpleNamespace(id=uuid4(), generation_id=uuid4(), status="pending", error_code=None)
@@ -64,7 +66,9 @@ async def test_queued_first_claim_publishes(monkeypatch: pytest.MonkeyPatch) -> 
     assert publishes[0] is True
 
 
-async def test_keyset_probe_never_finalizes_running_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_keyset_probe_never_finalizes_running_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     factory, generation, publishes = _setup(monkeypatch, 1, status="running")
     done = await indexing._index_generation(factory, None, SETTINGS, uuid4(), WORKSPACE)  # type: ignore[arg-type]
     assert done == 1 and generation.status == "running" and len(publishes) == 2

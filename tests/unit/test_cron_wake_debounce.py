@@ -6,6 +6,7 @@ Covered continuation paths (all funnel through ``ingestion_worker._wake_dispatch
 in ``test_ingestion_dispatch_wake``). Page-full continuation, stale-scan recovery and catch-up are not separate wake
 call sites: they run inside ``dispatch_pending_work`` itself and re-enter via the same debounced ``wake``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -83,7 +84,9 @@ async def test_continuation_commits_coalesce_through_the_real_commit_hook() -> N
         for delay in (1.0, 60.0, 0.1):
             await commit_continuation(delay)
         assert len(redis.enqueued) == 1
-        assert redis.enqueued[0]["_defer_by"] == 1.0  # first wake's delay; later ones were coalesced
+        assert (
+            redis.enqueued[0]["_defer_by"] == 1.0
+        )  # first wake's delay; later ones were coalesced
         redis.now_ms = cron.WAKE_FLAG_TTL_MS + 1
         await commit_continuation(60.0)
         assert len(redis.enqueued) == 2
@@ -93,7 +96,9 @@ async def test_continuation_commits_coalesce_through_the_real_commit_hook() -> N
 
 
 @pytest.mark.asyncio
-async def test_started_wake_job_clears_flag_so_next_commit_enqueues_inside_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_started_wake_job_clears_flag_so_next_commit_enqueues_inside_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """run_cron_job drops the flag on start, so a commit during the run queues the next wake before TTL expiry."""
     redis = TtlRedis()
 

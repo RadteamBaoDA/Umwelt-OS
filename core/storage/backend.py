@@ -61,9 +61,13 @@ def require_document_key(workspace_id: UUID, key: str) -> None:
     parts = key.split("/")
     try:
         valid = (
-            len(parts) == 5 and parts[0] == "workspaces" and parts[1] == str(workspace_id)
-            and parts[2] == "documents" and str(UUID(parts[3])) == parts[3]
-            and parts[4].startswith(parts[3]) and build_document_key(workspace_id, UUID(parts[3]), parts[4][len(parts[3]):]) == key
+            len(parts) == 5
+            and parts[0] == "workspaces"
+            and parts[1] == str(workspace_id)
+            and parts[2] == "documents"
+            and str(UUID(parts[3])) == parts[3]
+            and parts[4].startswith(parts[3])
+            and build_document_key(workspace_id, UUID(parts[3]), parts[4][len(parts[3]) :]) == key
         )
     except ValueError:
         valid = False
@@ -81,10 +85,18 @@ def build_document_key(workspace_id: UUID, document_id: UUID, suffix: str) -> st
         raise ValueError("Valid workspace and document UUIDs are required")
     if not suffix.startswith(".") or any(char in suffix for char in ("/", "\\", ":", "\x00")):
         raise ValueError("Invalid upload suffix or byte limit")
-    return (Path("workspaces") / str(workspace_id) / "documents" / str(document_id) / f"{document_id}{suffix}").as_posix()
+    return (
+        Path("workspaces")
+        / str(workspace_id)
+        / "documents"
+        / str(document_id)
+        / f"{document_id}{suffix}"
+    ).as_posix()
 
 
-async def iter_upload(upload: UploadSource, block_bytes: int = UPLOAD_READ_BLOCK_BYTES) -> AsyncIterator[bytes]:
+async def iter_upload(
+    upload: UploadSource, block_bytes: int = UPLOAD_READ_BLOCK_BYTES
+) -> AsyncIterator[bytes]:
     """Yield an upload's bytes in ``block_bytes`` blocks until it reports end of stream.
 
     Reads lazily, one block per iteration, so the consumer controls memory and cancellation points.
@@ -109,7 +121,9 @@ class StorageFence(Protocol):
         """
         ...
 
-    def ahold(self, workspace_id: UUID, *, erase: bool = False) -> AbstractAsyncContextManager[None]:
+    def ahold(
+        self, workspace_id: UUID, *, erase: bool = False
+    ) -> AbstractAsyncContextManager[None]:
         """Async twin of ``hold`` with identical semantics, usable by fences that need network I/O.
 
         Remote fences (``PostgresStorageFence``) implement only this form; ``hold`` then raises
@@ -128,7 +142,12 @@ class StorageBackend(Protocol):
         ...
 
     async def put_stream(
-        self, key: str, chunks: AsyncIterator[bytes], max_bytes: int, *, workspace_id: UUID,
+        self,
+        key: str,
+        chunks: AsyncIterator[bytes],
+        max_bytes: int,
+        *,
+        workspace_id: UUID,
     ) -> StoredObject:
         """Atomically publish ``chunks`` at ``key`` under the workspace's upload fence.
 

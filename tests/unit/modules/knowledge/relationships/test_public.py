@@ -53,7 +53,9 @@ KW = {"scope": SCOPE, "multi_workspace_enabled": False}
 @pytest.fixture(autouse=True)
 def _admitted() -> object:
     """Admission is covered in test_scope; these tests exercise the domain logic past it."""
-    with patch("modules.knowledge.relationships.public._admit", AsyncMock(return_value=MagicMock())):
+    with patch(
+        "modules.knowledge.relationships.public._admit", AsyncMock(return_value=MagicMock())
+    ):
         yield
 
 
@@ -74,7 +76,9 @@ class TestListRelationships:
     async def test_naive_datetime_rejected(self) -> None:
         """Verify naive valid_at or knowledge_as_of raises ValueError."""
         session = AsyncMock()
-        naive_dt = datetime(2026, 10, 5, 12, 0, 0)  # No tzinfo  # intentionally naive: wall-clock/DST math or naive-rejection test
+        naive_dt = datetime(
+            2026, 10, 5, 12, 0, 0
+        )  # No tzinfo  # intentionally naive: wall-clock/DST math or naive-rejection test
 
         with pytest.raises(ValueError, match="Relationship time controls require aware instants"):
             await list_relationships(session, limit=10, cursor=None, valid_at=naive_dt, **KW)
@@ -97,7 +101,9 @@ class TestListRelationships:
             await list_relationships(session, limit=10, cursor="!!!not-base64!!!", **KW)
 
         # Scope fingerprint mismatch
-        wrong_scope_cursor = base64.urlsafe_b64encode(json.dumps(["wrong_scope", "2026-10-05"]).encode()).decode()
+        wrong_scope_cursor = base64.urlsafe_b64encode(
+            json.dumps(["wrong_scope", "2026-10-05"]).encode()
+        ).decode()
         with pytest.raises(ValueError, match="Invalid relationship filter cursor"):
             await list_relationships(session, limit=10, cursor=wrong_scope_cursor, **KW)
 
@@ -109,8 +115,13 @@ class TestListRelationships:
         requested_id = uuid4()
         canonical_id = uuid4()
 
-        with patch("modules.knowledge.entities.public.resolve_canonical_entity_id", AsyncMock(return_value=canonical_id)) as mock_resolve:
-            page = await list_relationships(session, limit=10, cursor=None, entity_id=requested_id, **KW)
+        with patch(
+            "modules.knowledge.entities.public.resolve_canonical_entity_id",
+            AsyncMock(return_value=canonical_id),
+        ) as mock_resolve:
+            page = await list_relationships(
+                session, limit=10, cursor=None, entity_id=requested_id, **KW
+            )
 
         mock_resolve.assert_awaited_once_with(session, requested_id, **KW)
         assert isinstance(page, RelationshipPage)
@@ -124,12 +135,20 @@ class TestListRelationships:
         as_of = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
 
         expected_page = RelationshipPage(
-            items=[], next_cursor=None, canonical_history_available=False,
-            knowledge_as_of=as_of, observation_history_only=True,
+            items=[],
+            next_cursor=None,
+            canonical_history_available=False,
+            knowledge_as_of=as_of,
+            observation_history_only=True,
         )
 
-        with patch("modules.knowledge.relationships.public._list_relationships_as_of", AsyncMock(return_value=expected_page)) as mock_as_of:
-            page = await list_relationships(session, limit=10, cursor=None, knowledge_as_of=as_of, **KW)
+        with patch(
+            "modules.knowledge.relationships.public._list_relationships_as_of",
+            AsyncMock(return_value=expected_page),
+        ) as mock_as_of:
+            page = await list_relationships(
+                session, limit=10, cursor=None, knowledge_as_of=as_of, **KW
+            )
 
         assert page == expected_page
         mock_as_of.assert_awaited_once()
@@ -159,7 +178,10 @@ class TestListRelationships:
             digest="abcde",
         )
 
-        with patch("modules.knowledge.relationships.public.get_relationship_snapshot", AsyncMock(return_value=mock_snapshot)):
+        with patch(
+            "modules.knowledge.relationships.public.get_relationship_snapshot",
+            AsyncMock(return_value=mock_snapshot),
+        ):
             page = await list_relationships(session, limit=2, cursor=None, **KW)
 
         assert len(page.items) == 2
@@ -173,10 +195,14 @@ class TestGetNeighbors:
     async def test_limit_bounds_validation(self) -> None:
         """Verify get_neighbors rejects limit < 2 or limit > 100."""
         session = AsyncMock()
-        with pytest.raises(ValueError, match="Neighbor page limit must be between 2 and 100 total nodes"):
+        with pytest.raises(
+            ValueError, match="Neighbor page limit must be between 2 and 100 total nodes"
+        ):
             await get_neighbors(session, entity_id=uuid4(), limit=1, **KW)
 
-        with pytest.raises(ValueError, match="Neighbor page limit must be between 2 and 100 total nodes"):
+        with pytest.raises(
+            ValueError, match="Neighbor page limit must be between 2 and 100 total nodes"
+        ):
             await get_neighbors(session, entity_id=uuid4(), limit=101, **KW)
 
     def test_neighbor_cursor_roundtrip_and_validation(self) -> None:
@@ -206,7 +232,9 @@ class TestGetNeighbors:
     async def test_focus_lookup_failure_returns_none(self) -> None:
         """Verify get_neighbors returns None when focus entity is not found."""
         session = AsyncMock()
-        with patch("modules.knowledge.entities.public.get_entity_refs", AsyncMock(side_effect=LookupError)):
+        with patch(
+            "modules.knowledge.entities.public.get_entity_refs", AsyncMock(side_effect=LookupError)
+        ):
             result = await get_neighbors(session, entity_id=uuid4(), limit=10, **KW)
         assert result is None
 
@@ -218,11 +246,19 @@ class TestListRelationshipEvidence:
     async def test_limit_bounds_validation(self) -> None:
         """Verify limit must be between 1 and 100."""
         session = AsyncMock()
-        with pytest.raises(ValueError, match="Relationship evidence limit must be between 1 and 100"):
-            await list_relationship_evidence(session, relationship_id=uuid4(), limit=0, cursor=None, **KW)
+        with pytest.raises(
+            ValueError, match="Relationship evidence limit must be between 1 and 100"
+        ):
+            await list_relationship_evidence(
+                session, relationship_id=uuid4(), limit=0, cursor=None, **KW
+            )
 
-        with pytest.raises(ValueError, match="Relationship evidence limit must be between 1 and 100"):
-            await list_relationship_evidence(session, relationship_id=uuid4(), limit=101, cursor=None, **KW)
+        with pytest.raises(
+            ValueError, match="Relationship evidence limit must be between 1 and 100"
+        ):
+            await list_relationship_evidence(
+                session, relationship_id=uuid4(), limit=101, cursor=None, **KW
+            )
 
     @pytest.mark.asyncio
     async def test_naive_cutoff_rejected(self) -> None:
@@ -230,7 +266,14 @@ class TestListRelationshipEvidence:
         session = AsyncMock()
         naive_dt = datetime(2026, 10, 5, 12, 0, 0)
         with pytest.raises(ValueError, match="Evidence cutoff requires an aware instant"):
-            await list_relationship_evidence(session, relationship_id=uuid4(), limit=10, cursor=None, knowledge_as_of=naive_dt, **KW)
+            await list_relationship_evidence(
+                session,
+                relationship_id=uuid4(),
+                limit=10,
+                cursor=None,
+                knowledge_as_of=naive_dt,
+                **KW,
+            )
 
     @pytest.mark.asyncio
     async def test_missing_relationship_returns_none(self) -> None:
@@ -238,7 +281,9 @@ class TestListRelationshipEvidence:
         session = AsyncMock()
         session.scalar = AsyncMock(return_value=None)
 
-        evidence, next_cursor = await list_relationship_evidence(session, relationship_id=uuid4(), limit=10, cursor=None, **KW)
+        evidence, next_cursor = await list_relationship_evidence(
+            session, relationship_id=uuid4(), limit=10, cursor=None, **KW
+        )
         assert evidence is None
         assert next_cursor is None
 
@@ -273,7 +318,9 @@ class TestCreateRelationship:
             evidence=[],
             reason="Test",
         )
-        with pytest.raises(ValueError, match="Derived relationships require at least one evidence reference"):
+        with pytest.raises(
+            ValueError, match="Derived relationships require at least one evidence reference"
+        ):
             await create_relationship(session, payload, **KW)
 
     @pytest.mark.asyncio
@@ -285,8 +332,20 @@ class TestCreateRelationship:
         sm_id = uuid4()
         tm_id = uuid4()
 
-        ev1 = EvidenceRef(document_version_id=v_id, chunk_id=c_id, confidence=0.8, source_membership_id=sm_id, target_membership_id=tm_id)
-        ev2 = EvidenceRef(document_version_id=v_id, chunk_id=c_id, confidence=0.9, source_membership_id=sm_id, target_membership_id=tm_id)
+        ev1 = EvidenceRef(
+            document_version_id=v_id,
+            chunk_id=c_id,
+            confidence=0.8,
+            source_membership_id=sm_id,
+            target_membership_id=tm_id,
+        )
+        ev2 = EvidenceRef(
+            document_version_id=v_id,
+            chunk_id=c_id,
+            confidence=0.9,
+            source_membership_id=sm_id,
+            target_membership_id=tm_id,
+        )
 
         payload = RelationshipCreate(
             source_entity_id=uuid4(),
@@ -296,7 +355,9 @@ class TestCreateRelationship:
             evidence=[ev1, ev2],
             reason="Test",
         )
-        with pytest.raises(ValueError, match="Relationship evidence membership pairs must be unique"):
+        with pytest.raises(
+            ValueError, match="Relationship evidence membership pairs must be unique"
+        ):
             await create_relationship(session, payload, **KW)
 
     @pytest.mark.asyncio
@@ -312,8 +373,13 @@ class TestCreateRelationship:
         )
 
         with (
-            patch("modules.knowledge.documents.public.read_evidence_refs", AsyncMock(return_value=[])),
-            patch("modules.knowledge.entities.public.get_entity_refs", AsyncMock(side_effect=LookupError("Entity missing"))),
+            patch(
+                "modules.knowledge.documents.public.read_evidence_refs", AsyncMock(return_value=[])
+            ),
+            patch(
+                "modules.knowledge.entities.public.get_entity_refs",
+                AsyncMock(side_effect=LookupError("Entity missing")),
+            ),
         ):
             with pytest.raises(LookupError, match="Relationship entity not found"):
                 await create_relationship(session, payload, **KW)
@@ -329,14 +395,26 @@ class TestPlanValidations:
         other_id = uuid4()
 
         ref1 = CorrectionRelationshipRef(
-            id=uuid4(), source_entity_id=src_id, target_entity_id=other_id,
-            type="KNOWS", origin="owner", valid_from=None, valid_to=None,
-            metadata={"weight": 1}, supports=[],
+            id=uuid4(),
+            source_entity_id=src_id,
+            target_entity_id=other_id,
+            type="KNOWS",
+            origin="owner",
+            valid_from=None,
+            valid_to=None,
+            metadata={"weight": 1},
+            supports=[],
         )
         ref2 = CorrectionRelationshipRef(
-            id=uuid4(), source_entity_id=tgt_id, target_entity_id=other_id,
-            type="KNOWS", origin="owner", valid_from=None, valid_to=None,
-            metadata={"weight": 2}, supports=[],  # Conflicting metadata
+            id=uuid4(),
+            source_entity_id=tgt_id,
+            target_entity_id=other_id,
+            type="KNOWS",
+            origin="owner",
+            valid_from=None,
+            valid_to=None,
+            metadata={"weight": 2},
+            supports=[],  # Conflicting metadata
         )
 
         with pytest.raises(ValueError, match="Merge has conflicting relationship metadata"):
@@ -356,12 +434,20 @@ class TestPlanValidations:
             confidence=0.9,
         )
         ref = CorrectionRelationshipRef(
-            id=uuid4(), source_entity_id=ent_id, target_entity_id=uuid4(),
-            type="KNOWS", origin="owner", valid_from=None, valid_to=None,
-            metadata={}, supports=[sup],
+            id=uuid4(),
+            source_entity_id=ent_id,
+            target_entity_id=uuid4(),
+            type="KNOWS",
+            origin="owner",
+            valid_from=None,
+            valid_to=None,
+            metadata={},
+            supports=[sup],
         )
 
-        with pytest.raises(ValueError, match="unexpected evidence attached to an owner-authored relationship"):
+        with pytest.raises(
+            ValueError, match="unexpected evidence attached to an owner-authored relationship"
+        ):
             validate_entity_split_plan(ent_id, {uuid4()}, [ref])
 
     def test_validate_split_plan_self_relationship_prevention(self) -> None:
@@ -379,9 +465,15 @@ class TestPlanValidations:
             confidence=0.9,
         )
         ref = CorrectionRelationshipRef(
-            id=uuid4(), source_entity_id=ent_id, target_entity_id=ent_id,
-            type="KNOWS", origin="derived", valid_from=None, valid_to=None,
-            metadata={}, supports=[sup],
+            id=uuid4(),
+            source_entity_id=ent_id,
+            target_entity_id=ent_id,
+            type="KNOWS",
+            origin="derived",
+            valid_from=None,
+            valid_to=None,
+            metadata={},
+            supports=[sup],
         )
 
         with pytest.raises(ValueError, match="Split would create a self relationship"):
@@ -401,8 +493,14 @@ class TestPurgeAndCleanupBounds:
         ws, src = uuid4(), uuid4()
         scope = WorkspaceContext(user_id=1, workspace_id=ws, role="owner", membership_revision=1)
         fence = AccessFence(ws, 1, 1, 1)
-        source_fence = SourceFence(id=src, workspace_id=ws, status="purging", generation=1, local_only=False)
-        rows = MagicMock(all=MagicMock(return_value=[(uuid4(), uuid4()) for _ in range(MAX_CLEANUP_SUPPORTS + 1)]))
+        source_fence = SourceFence(
+            id=src, workspace_id=ws, status="purging", generation=1, local_only=False
+        )
+        rows = MagicMock(
+            all=MagicMock(
+                return_value=[(uuid4(), uuid4()) for _ in range(MAX_CLEANUP_SUPPORTS + 1)]
+            )
+        )
         session = AsyncMock()
         session.execute.return_value = rows
         session.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
@@ -412,8 +510,14 @@ class TestPurgeAndCleanupBounds:
             pytest.raises(RuntimeError, match="cleanup closure changed"),
         ):
             await purge_history_support(
-                session, closure, [(uuid4(), uuid4())], scope=scope, multi_workspace_enabled=False,
-                access_fence=fence, source_fence=source_fence)
+                session,
+                closure,
+                [(uuid4(), uuid4())],
+                scope=scope,
+                multi_workspace_enabled=False,
+                access_fence=fence,
+                source_fence=source_fence,
+            )
 
     @pytest.mark.asyncio
     async def test_purge_history_support_empty_returns_early(self) -> None:
@@ -425,12 +529,20 @@ class TestPurgeAndCleanupBounds:
         ws, src = uuid4(), uuid4()
         scope = WorkspaceContext(user_id=1, workspace_id=ws, role="owner", membership_revision=1)
         fence = AccessFence(ws, 1, 1, 1)
-        source_fence = SourceFence(id=src, workspace_id=ws, status="purging", generation=1, local_only=False)
+        source_fence = SourceFence(
+            id=src, workspace_id=ws, status="purging", generation=1, local_only=False
+        )
         session = AsyncMock()
         session.execute.return_value = MagicMock(all=MagicMock(return_value=[]))
         closure = RelationshipSupportClosure(src, None, (), (), (), (), (), False)
         with patch("modules.knowledge.relationships.public._admit", AsyncMock(return_value=fence)):
             await purge_history_support(
-                session, closure, [], scope=scope, multi_workspace_enabled=False,
-                access_fence=fence, source_fence=source_fence)
+                session,
+                closure,
+                [],
+                scope=scope,
+                multi_workspace_enabled=False,
+                access_fence=fence,
+                source_fence=source_fence,
+            )
         session.scalars.assert_not_called()

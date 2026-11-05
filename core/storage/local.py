@@ -38,7 +38,9 @@ def storage_path(root: Path, relative_path: str) -> Path:
     Raises:
         ValueError: ``"Invalid storage path"`` for any rejected or escaping path.
     """
-    if "\\" in relative_path or (len(relative_path) > 1 and relative_path[:1].isalpha() and relative_path[1] == ":"):
+    if "\\" in relative_path or (
+        len(relative_path) > 1 and relative_path[:1].isalpha() and relative_path[1] == ":"
+    ):
         raise ValueError("Invalid storage path")
     candidate = Path(relative_path)
     if candidate.is_absolute() or any(part in ("", ".", "..") for part in candidate.parts):
@@ -63,7 +65,13 @@ def _sync(temporary: BinaryIO) -> None:
 
 
 async def save_upload(
-    root: Path, upload: UploadFile, document_id: UUID, suffix: str, max_bytes: int, *, workspace_id: UUID,
+    root: Path,
+    upload: UploadFile,
+    document_id: UUID,
+    suffix: str,
+    max_bytes: int,
+    *,
+    workspace_id: UUID,
 ) -> tuple[str, int, str]:
     """Publish bounded upload bytes atomically under the caller's admitted workspace.
 
@@ -73,7 +81,10 @@ async def save_upload(
     """
     key = build_document_key(workspace_id, document_id, suffix)
     stored = await LocalFilesystemBackend(root).put_stream(
-        key, iter_upload(upload), max_bytes, workspace_id=workspace_id,
+        key,
+        iter_upload(upload),
+        max_bytes,
+        workspace_id=workspace_id,
     )
     return stored.key, stored.size, stored.sha256
 
@@ -93,11 +104,21 @@ def cleanup_orphaned_files(root: Path, referenced: set[str], grace_seconds: int)
     cutoff = datetime.now(UTC).timestamp() - grace_seconds
     removed = 0
     base = root.resolve()
-    candidates = (path for pattern in ("documents/*/*", "workspaces/*/documents/*/*") for path in root.glob(pattern))
+    candidates = (
+        path
+        for pattern in ("documents/*/*", "workspaces/*/documents/*/*")
+        for path in root.glob(pattern)
+    )
     for path in candidates:
-        if path.is_symlink() or any(parent.is_symlink() for parent in path.parents if parent != root.parent):
+        if path.is_symlink() or any(
+            parent.is_symlink() for parent in path.parents if parent != root.parent
+        ):
             continue
-        if not path.is_file() or not path.resolve().is_relative_to(base) or path.stat().st_mtime > cutoff:
+        if (
+            not path.is_file()
+            or not path.resolve().is_relative_to(base)
+            or path.stat().st_mtime > cutoff
+        ):
             continue
         relative = path.relative_to(root).as_posix()
         parts = path.relative_to(root).parts
@@ -113,7 +134,10 @@ def cleanup_orphaned_files(root: Path, referenced: set[str], grace_seconds: int)
         # scan of workspaces must never consume unrelated files with a similar directory.
         if not (path.name.startswith(document_text + ".") or path.name.startswith(".upload-")):
             continue
-        if relative not in referenced and path.resolve().relative_to(base).as_posix() not in referenced:
+        if (
+            relative not in referenced
+            and path.resolve().relative_to(base).as_posix() not in referenced
+        ):
             path.unlink(missing_ok=True)
             removed += 1
     return removed
@@ -126,7 +150,8 @@ def _has_symlink_component(root: Path, lexical: Path) -> bool:
     """
     return any(
         (parent.is_symlink() or parent.is_junction())
-        for parent in (lexical, *lexical.parents) if parent.is_relative_to(root)
+        for parent in (lexical, *lexical.parents)
+        if parent.is_relative_to(root)
     )
 
 
@@ -164,7 +189,12 @@ class LocalFilesystemBackend:
         self.fence = LocalFilesystemFence(self._root)
 
     async def put_stream(
-        self, key: str, chunks: AsyncIterator[bytes], max_bytes: int, *, workspace_id: UUID,
+        self,
+        key: str,
+        chunks: AsyncIterator[bytes],
+        max_bytes: int,
+        *,
+        workspace_id: UUID,
     ) -> StoredObject:
         """Publish bounded bytes atomically under the caller's admitted workspace.
 
@@ -205,7 +235,9 @@ class LocalFilesystemBackend:
                     await to_thread_joined(_sync, temporary)
                 if size == 0:
                     raise ValueError("Uploaded file is empty")
-                if storage_path(root, relative.as_posix()) != destination or _has_symlink_component(root.resolve(), lexical):
+                if storage_path(root, relative.as_posix()) != destination or _has_symlink_component(
+                    root.resolve(), lexical
+                ):
                     raise ValueError("Upload path changed during publication")
                 os.replace(temporary_name, destination)
                 return StoredObject(relative.as_posix(), size, digest.hexdigest())
@@ -266,7 +298,8 @@ class LocalFilesystemBackend:
                 names[:] = [name for name in names if not (Path(directory) / name).is_symlink()]
                 found.extend(
                     (Path(directory) / name).relative_to(root).as_posix()
-                    for name in files if not (Path(directory) / name).is_symlink()
+                    for name in files
+                    if not (Path(directory) / name).is_symlink()
                 )
             return sorted(found)
 
@@ -282,7 +315,9 @@ class LocalFilesystemBackend:
 
     async def cleanup_orphans(self, referenced: set[str], grace_seconds: int) -> int:
         """Run ``cleanup_orphaned_files`` in a thread (the worker's previous ``asyncio.to_thread``)."""
-        return await asyncio.to_thread(cleanup_orphaned_files, self._root, referenced, grace_seconds)
+        return await asyncio.to_thread(
+            cleanup_orphaned_files, self._root, referenced, grace_seconds
+        )
 
     def check_erasable(self, key: str, workspace_id: UUID) -> None:
         """Validate that ``key`` is a non-symlink original in the legacy or this workspace's layout.
@@ -293,10 +328,15 @@ class LocalFilesystemBackend:
         target = storage_path(root, key)
         if _has_symlink_component(root, root / key):
             raise ValueError("Original storage path contains a symlink")
-        if not (target.is_relative_to(root / "documents") or target.is_relative_to(
-            root / "workspaces" / str(workspace_id) / "documents",
-        )):
-            raise ValueError("Original storage path is outside the account workspace/document layouts")
+        if not (
+            target.is_relative_to(root / "documents")
+            or target.is_relative_to(
+                root / "workspaces" / str(workspace_id) / "documents",
+            )
+        ):
+            raise ValueError(
+                "Original storage path is outside the account workspace/document layouts"
+            )
 
     def probe_workspace_orphan(self, workspace_id: UUID) -> OrphanProbe:
         """Advance the orphan walk by one entry: read one child per level, at most one mutation.

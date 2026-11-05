@@ -20,14 +20,21 @@ OWNER = SimpleNamespace(owner_id=1, token_hash="h")
 
 def _conv(**kw):
     return SimpleNamespace(
-        id=uuid4(), workspace_id=WS, actor_user_id=1, ephemeral=False, expires_at=None,
-        updated_at=None, **kw,
+        id=uuid4(),
+        workspace_id=WS,
+        actor_user_id=1,
+        ephemeral=False,
+        expires_at=None,
+        updated_at=None,
+        **kw,
     )
 
 
 def _session(scalar=None):
     s = MagicMock()
-    s.add = MagicMock(side_effect=lambda o: setattr(o, "id", o.id or uuid4()) if hasattr(o, "id") else None)
+    s.add = MagicMock(
+        side_effect=lambda o: setattr(o, "id", o.id or uuid4()) if hasattr(o, "id") else None
+    )
     s.flush = AsyncMock()
     s.commit = AsyncMock()
     s.refresh = AsyncMock()
@@ -42,8 +49,11 @@ def _added(session, cls):
 def _patch_routes(monkeypatch, conv):
     monkeypatch.setattr(routes, "lock_export_privacy", AsyncMock())
     monkeypatch.setattr(routes, "owner_default_scope", AsyncMock(return_value=CTX))
-    monkeypatch.setattr(routes, "read_export_privacy", AsyncMock(
-        return_value=SimpleNamespace(store_conversation_history=True)))
+    monkeypatch.setattr(
+        routes,
+        "read_export_privacy",
+        AsyncMock(return_value=SimpleNamespace(store_conversation_history=True)),
+    )
     monkeypatch.setattr(routes, "_lock_conversation", AsyncMock(return_value=conv))
     monkeypatch.setattr(routes, "_reject_active_response", AsyncMock())
     monkeypatch.setattr(routes, "_privacy_fence", lambda _p: {})
@@ -56,6 +66,7 @@ async def test_create_conversation_stamps_scope(monkeypatch):
     _patch_routes(monkeypatch, _conv())
     session = _session()
     from modules.chat.schemas import ConversationCreate
+
     with pytest.raises(Exception):  # noqa: B017 - response building on a bare ORM object is out of scope
         await routes.create_conversation(ConversationCreate(), session, OWNER)
     (conv,) = _added(session, Conversation)
@@ -68,7 +79,11 @@ async def test_send_message_run_stamps_workspace(monkeypatch):
     _patch_routes(monkeypatch, conv)
     session = _session()
     await routes.send_message(
-        conv.id, SendMessageRequest(content="hi"), MagicMock(), session, OWNER,
+        conv.id,
+        SendMessageRequest(content="hi"),
+        MagicMock(),
+        session,
+        OWNER,
     )
     (run,) = _added(session, ResponseRun)
     assert run.workspace_id == WS and run.actor_user_id == 1
@@ -84,8 +99,10 @@ async def test_mutate_message_run_stamps_workspace(monkeypatch):
     queue = [None, None, target, run, prompt]  # receipt, collision, target, original run, prompt
     session = _session(AsyncMock(side_effect=lambda *_a, **_k: queue.pop(0)))
     payload = MessageMutationRequest(
-        action="edit", base_content_hash=hashlib.sha256(b"old").hexdigest(),
-        client_request_id="r1", content="new",
+        action="edit",
+        base_content_hash=hashlib.sha256(b"old").hexdigest(),
+        client_request_id="r1",
+        content="new",
     )
     await routes.mutate_message(conv.id, target.id, payload, MagicMock(), session, OWNER)
     (new_run,) = _added(session, ResponseRun)
@@ -106,9 +123,12 @@ async def test_link_agent_run_stamps_workspace(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_demo_conversation_stamps_scope(monkeypatch):
-    monkeypatch.setattr("modules.chat.worker.is_history_storage_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        "modules.chat.worker.is_history_storage_enabled", AsyncMock(return_value=True)
+    )
     session = _session()
     assert await seed.ensure_demo_conversation(
-        session, scope=CTX, multi_workspace_enabled=False) == (1, 0, 0)
+        session, scope=CTX, multi_workspace_enabled=False
+    ) == (1, 0, 0)
     (conv,) = _added(session, Conversation)
     assert conv.workspace_id == WS and conv.actor_user_id == 1

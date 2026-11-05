@@ -33,8 +33,13 @@ def _context(**over: Any) -> dict[str, Any]:
     scope = SimpleNamespace(actor_user_id=7, user_id=7)
     principal = SimpleNamespace(is_owner=True, actor_id="owner:7", scope=scope)
     ctx: dict[str, Any] = {
-        "principal": principal, "session_factory": lambda: _Session(), "run_id": str(RUN_ID), "tool_ordinal": 2,
-        "claim_generation": 3, "remaining_active_seconds": 100, "settings": Settings(),
+        "principal": principal,
+        "session_factory": lambda: _Session(),
+        "run_id": str(RUN_ID),
+        "tool_ordinal": 2,
+        "claim_generation": 3,
+        "remaining_active_seconds": 100,
+        "settings": Settings(),
         "workflow_version": "specialist-approved-v1",
     }
     ctx.update(over)
@@ -55,8 +60,12 @@ class _Session:
 def _page() -> SimpleNamespace:
     """Build one persisted page read."""
     return SimpleNamespace(
-        id=uuid4(), requested_url="https://e/a", final_url="https://e/a", observed_at=datetime(2026, 1, 1, tzinfo=UTC),
-        content_digest="d", extracted_text="hello",
+        id=uuid4(),
+        requested_url="https://e/a",
+        final_url="https://e/a",
+        observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        content_digest="d",
+        extracted_text="hello",
     )
 
 
@@ -64,9 +73,18 @@ def _page() -> SimpleNamespace:
 def seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Patch every collaborator and expose mutable behaviour knobs."""
     state: dict[str, Any] = {
-        "verified": True, "source": SimpleNamespace(status="active"), "grant": SimpleNamespace(enabled=True),
-        "sources": frozenset({SOURCE_ID}), "bytes": 1000, "job_status": "queued", "job_error": None,
-        "result_status": "succeeded", "pages": [_page()], "read_result": "unset", "slot_error": None, "events": [],
+        "verified": True,
+        "source": SimpleNamespace(status="active"),
+        "grant": SimpleNamespace(enabled=True),
+        "sources": frozenset({SOURCE_ID}),
+        "bytes": 1000,
+        "job_status": "queued",
+        "job_error": None,
+        "result_status": "succeeded",
+        "pages": [_page()],
+        "read_result": "unset",
+        "slot_error": None,
+        "events": [],
     }
 
     @asynccontextmanager
@@ -81,7 +99,9 @@ def seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         """Return an authorization carrying the configured budget."""
         state["events"].append("reserve")
         return SimpleNamespace(
-            source_ids=state["sources"], remaining_bytes=state["bytes"], remaining_active_seconds=30,
+            source_ids=state["sources"],
+            remaining_bytes=state["bytes"],
+            remaining_active_seconds=30,
             auth_session_hash="hash",
         )
 
@@ -94,31 +114,50 @@ def seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         """Return the executed job and pages."""
         state["events"].append("execute")
         state["deadline"] = kwargs["deadline"]
-        return SimpleNamespace(job=SimpleNamespace(id=JOB_ID, status=state["result_status"], error_code="boom"), pages=state["pages"])
+        return SimpleNamespace(
+            job=SimpleNamespace(id=JOB_ID, status=state["result_status"], error_code="boom"),
+            pages=state["pages"],
+        )
 
     async def read_result(*_a: Any, **_k: Any) -> Any:
         """Return the replayed result or None."""
         state["events"].append("read_result")
         if state["read_result"] == "unset":
-            return SimpleNamespace(job=SimpleNamespace(id=JOB_ID, status="succeeded", error_code=None), pages=state["pages"])
+            return SimpleNamespace(
+                job=SimpleNamespace(id=JOB_ID, status="succeeded", error_code=None),
+                pages=state["pages"],
+            )
         return state["read_result"]
 
-    monkeypatch.setattr("modules.tools.browser_public.browser_capability_verified", lambda: state["verified"])
+    monkeypatch.setattr(
+        "modules.tools.browser_public.browser_capability_verified", lambda: state["verified"]
+    )
     monkeypatch.setattr("modules.tools.browser_public.execute_browser_read", execute)
     monkeypatch.setattr("modules.tools.browser_public.read_browser_result", read_result)
     monkeypatch.setattr("modules.tools.browser_public.submit_browser_read_in_uow", submit)
     monkeypatch.setattr("core.heavy_work.heavy_job_slot", slot)
     monkeypatch.setattr("modules.agents.public.reserve_browser_run_budget_in_uow", reserve)
-    monkeypatch.setattr("modules.connectors.public.resolve_agent_browser_scope", AsyncMock(side_effect=lambda *a, **k: state["grant"]))
-    monkeypatch.setattr("modules.sources.public.lock_source", AsyncMock(side_effect=lambda *a, **k: state["source"]))
+    monkeypatch.setattr(
+        "modules.connectors.public.resolve_agent_browser_scope",
+        AsyncMock(side_effect=lambda *a, **k: state["grant"]),
+    )
+    monkeypatch.setattr(
+        "modules.sources.public.lock_source", AsyncMock(side_effect=lambda *a, **k: state["source"])
+    )
     monkeypatch.setattr(browser.workspaces, "lock_access_fence", AsyncMock(return_value="fence"))
-    monkeypatch.setattr(browser, "commit_with_replay", AsyncMock(side_effect=lambda *a, **k: state["events"].append("commit")))
+    monkeypatch.setattr(
+        browser,
+        "commit_with_replay",
+        AsyncMock(side_effect=lambda *a, **k: state["events"].append("commit")),
+    )
     return state
 
 
 async def _call(args: dict[str, Any] | None = None, **ctx: Any) -> Any:
     """Invoke the handler with default valid arguments."""
-    return await browser._handle_browser_read(args or {"source_id": str(SOURCE_ID), "max_pages": 2}, _context(**ctx))
+    return await browser._handle_browser_read(
+        args or {"source_id": str(SOURCE_ID), "max_pages": 2}, _context(**ctx)
+    )
 
 
 @pytest.mark.asyncio
@@ -127,21 +166,41 @@ async def test_capability_gate_and_argument_validation(seams: dict[str, Any]) ->
     seams["verified"] = False
     assert (await _call()).error_code == "tool_unavailable"
     seams["verified"] = True
-    for bad in ({"source_id": 1, "max_pages": 1}, {"source_id": str(SOURCE_ID), "max_pages": 4},
-                {"source_id": str(SOURCE_ID), "max_pages": True}, {"source_id": "nope", "max_pages": 1}):
+    for bad in (
+        {"source_id": 1, "max_pages": 1},
+        {"source_id": str(SOURCE_ID), "max_pages": 4},
+        {"source_id": str(SOURCE_ID), "max_pages": True},
+        {"source_id": "nope", "max_pages": 1},
+    ):
         assert (await _call(bad, principal=None)).error_code == "invalid_arguments"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("override", [
-    {"principal": None}, {"session_factory": None}, {"tool_ordinal": "2"}, {"claim_generation": None},
-    {"remaining_active_seconds": "9"}, {"workflow_version": "x"}, {"run_id": 5},
-    {"principal": SimpleNamespace(is_owner=True, actor_id="owner:9", scope=SimpleNamespace(actor_user_id=7, user_id=7))},
-])
-async def test_authority_gaps_are_forbidden(seams: dict[str, Any], override: dict[str, Any]) -> None:
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"principal": None},
+        {"session_factory": None},
+        {"tool_ordinal": "2"},
+        {"claim_generation": None},
+        {"remaining_active_seconds": "9"},
+        {"workflow_version": "x"},
+        {"run_id": 5},
+        {
+            "principal": SimpleNamespace(
+                is_owner=True, actor_id="owner:9", scope=SimpleNamespace(actor_user_id=7, user_id=7)
+            )
+        },
+    ],
+)
+async def test_authority_gaps_are_forbidden(
+    seams: dict[str, Any], override: dict[str, Any]
+) -> None:
     """Missing or mismatched run authority is a uniform forbidden denial with no reservation."""
     result = await _call(**override)
-    assert (result.success, result.error_code) == (False, "forbidden") and "reserve" not in seams["events"]
+    assert (result.success, result.error_code) == (False, "forbidden") and "reserve" not in seams[
+        "events"
+    ]
 
 
 @pytest.mark.asyncio
@@ -156,21 +215,32 @@ async def test_success_reserves_commits_then_executes(seams: dict[str, Any]) -> 
     """The reservation commits before execution; the slot timeout is capped at 45 seconds."""
     result = await _call()
     assert result.success is True and result.data["job_id"] == str(JOB_ID)
-    assert result.data["pages"][0]["text"] == "hello" and result.evidence_refs == (result.data["pages"][0]["evidence_id"],)
+    assert result.data["pages"][0]["text"] == "hello" and result.evidence_refs == (
+        result.data["pages"][0]["evidence_id"],
+    )
     assert seams["events"] == ["slot:45.0", "reserve", "submit", "commit", "execute"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("knob", "value", "message"), [
-    ("source", None, "Browser source is not enabled"), ("source", SimpleNamespace(status="disabled"), "Browser source is not enabled"),
-    ("grant", None, "Browser source is not enabled"), ("grant", SimpleNamespace(enabled=False), "Browser source is not enabled"),
-    ("sources", frozenset(), "Browser source is outside the saved profile scope"),
-])
-async def test_reservation_denials(seams: dict[str, Any], knob: str, value: Any, message: str) -> None:
+@pytest.mark.parametrize(
+    ("knob", "value", "message"),
+    [
+        ("source", None, "Browser source is not enabled"),
+        ("source", SimpleNamespace(status="disabled"), "Browser source is not enabled"),
+        ("grant", None, "Browser source is not enabled"),
+        ("grant", SimpleNamespace(enabled=False), "Browser source is not enabled"),
+        ("sources", frozenset(), "Browser source is outside the saved profile scope"),
+    ],
+)
+async def test_reservation_denials(
+    seams: dict[str, Any], knob: str, value: Any, message: str
+) -> None:
     """Disabled sources/grants and sources outside the profile scope are forbidden without a job."""
     seams[knob] = value
     result = await _call()
-    assert (result.error, result.error_code) == (message, "forbidden") and "submit" not in seams["events"]
+    assert (result.error, result.error_code) == (message, "forbidden") and "submit" not in seams[
+        "events"
+    ]
 
 
 @pytest.mark.asyncio
@@ -209,7 +279,11 @@ async def test_error_mapping(seams: dict[str, Any]) -> None:
     """Capacity, authority and unexpected errors map to their sanitized codes."""
     seams["slot_error"] = HeavyWorkBusy()
     assert (await _call()).error_code == "tool_unavailable"
-    for error, code in ((PermissionError("x"), "forbidden"), (LookupError("x"), "forbidden"), (RuntimeError("x"), "tool_unavailable")):
+    for error, code in (
+        (PermissionError("x"), "forbidden"),
+        (LookupError("x"), "forbidden"),
+        (RuntimeError("x"), "tool_unavailable"),
+    ):
         seams["slot_error"] = error
         assert (await _call()).error_code == code
     assert MagicMock  # keep the shared import used

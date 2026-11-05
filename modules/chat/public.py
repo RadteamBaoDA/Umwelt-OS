@@ -131,10 +131,28 @@ class CopiedEvidenceCleanupProgress:
 
 _REMOVE_EVIDENCE = object()
 _EVIDENCE_FIELDS = {
-    "sourcetype", "source_type", "sourceid", "source_id", "documentid", "document_id",
-    "documentversionid", "document_version_id", "chunkid", "chunk_id", "title", "url",
-    "canonical_url", "observedat", "observed_at", "quote", "content", "excerpt",
-    "content_hash", "chunk_index", "version_number", "score",
+    "sourcetype",
+    "source_type",
+    "sourceid",
+    "source_id",
+    "documentid",
+    "document_id",
+    "documentversionid",
+    "document_version_id",
+    "chunkid",
+    "chunk_id",
+    "title",
+    "url",
+    "canonical_url",
+    "observedat",
+    "observed_at",
+    "quote",
+    "content",
+    "excerpt",
+    "content_hash",
+    "chunk_index",
+    "version_number",
+    "score",
 }
 
 __all__ = [
@@ -216,7 +234,11 @@ __all__ = [
 
 
 async def delete_conversation(
-    session: AsyncSession, conversation_id: UUID, owner_id: int, *, skip_pinned: bool = False,
+    session: AsyncSession,
+    conversation_id: UUID,
+    owner_id: int,
+    *,
+    skip_pinned: bool = False,
 ) -> bool:
     """Delete one conversation inside the caller's transaction.
 
@@ -245,11 +267,19 @@ async def delete_conversation(
         return False
 
     await purge_conversation_actions(
-        session, conversation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
+        session,
+        conversation_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled(),
     )
     # Todos cascade with the conversation; templates are owner-scoped, so delete the ones the model saved in it.
-    await session.execute(_delete(ChatTemplate).where(ChatTemplate.source_response_id.in_(
-        _select(ResponseRun.id).where(ResponseRun.conversation_id == conversation_id))))
+    await session.execute(
+        _delete(ChatTemplate).where(
+            ChatTemplate.source_response_id.in_(
+                _select(ResponseRun.id).where(ResponseRun.conversation_id == conversation_id)
+            )
+        )
+    )
     await session.delete(conversation)
     return True
 
@@ -262,14 +292,17 @@ async def purge_unpinned_conversations(session: AsyncSession, owner_id: int) -> 
         stmt = _select(Conversation.id).where(Conversation.pinned.is_(False))
         if cursor is not None:
             stmt = stmt.where(Conversation.id > cursor)
-        conversation_ids = list((await session.scalars(
-            stmt.order_by(Conversation.id).limit(100)
-        )).all())
+        conversation_ids = list(
+            (await session.scalars(stmt.order_by(Conversation.id).limit(100))).all()
+        )
         if not conversation_ids:
             return deleted
         for conversation_id in conversation_ids:
             if await delete_conversation(
-                session, conversation_id, owner_id, skip_pinned=True,
+                session,
+                conversation_id,
+                owner_id,
+                skip_pinned=True,
             ):
                 deleted += 1
         cursor = conversation_ids[-1]
@@ -302,10 +335,7 @@ async def _resolve_gadget_instance_context(
     from modules.sources import public as sources_public
 
     raw_sources = (
-        context.get("sourceIds")
-        or context.get("source_ids")
-        or context.get("source_scope")
-        or []
+        context.get("sourceIds") or context.get("source_ids") or context.get("source_scope") or []
     )
     valid_sources: list[str] = []
     if isinstance(raw_sources, list):
@@ -319,7 +349,10 @@ async def _resolve_gadget_instance_context(
                 continue
             seen.add(sid)
             src = await sources_public.get_source(
-                session, sid, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                sid,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
             if src is not None and src.status == "active" and not src.local_only:
                 valid_sources.append(str(sid))
@@ -351,14 +384,22 @@ def _parse_selection_items(raw_items: _Any) -> list[SelectedDocumentVersion]:
             malformed references, or duplicate documents.
     """
     if not isinstance(raw_items, list) or not 1 <= len(raw_items) <= 32:
-        raise ValidationFailedError(_selection_detail("selection_invalid", "Selection must contain 1 to 32 document versions"))
+        raise ValidationFailedError(
+            _selection_detail(
+                "selection_invalid", "Selection must contain 1 to 32 document versions"
+            )
+        )
     selections: list[SelectedDocumentVersion] = []
     try:
         selections = [SelectedDocumentVersion.model_validate(item) for item in raw_items]
     except Exception as exc:
-        raise ValidationFailedError(_selection_detail("selection_invalid", "Selection references are invalid")) from exc
+        raise ValidationFailedError(
+            _selection_detail("selection_invalid", "Selection references are invalid")
+        ) from exc
     if len({item.document_id for item in selections}) != len(selections):
-        raise ValidationFailedError(_selection_detail("selection_invalid", "Selection contains duplicate documents"))
+        raise ValidationFailedError(
+            _selection_detail("selection_invalid", "Selection contains duplicate documents")
+        )
     return selections
 
 
@@ -382,11 +423,22 @@ async def _resolve_selected_chunk_ids(
 
     if item.chunk_id is not None:
         chunks = await documents_public.read_chat_evidence_chunks(
-            session, [(item.document_version_id, item.chunk_id)],
-            require_current_version=True, selection_fences=(fence,), **scope_kw,
+            session,
+            [(item.document_version_id, item.chunk_id)],
+            require_current_version=True,
+            selection_fences=(fence,),
+            **scope_kw,
         )
-        if not chunks or chunks[0].document_id != item.document_id or chunks[0].source_id != item.source_id:
-            raise ConflictError(_selection_detail("selection_unavailable", "A selected evidence chunk is unavailable"))
+        if (
+            not chunks
+            or chunks[0].document_id != item.document_id
+            or chunks[0].source_id != item.source_id
+        ):
+            raise ConflictError(
+                _selection_detail(
+                    "selection_unavailable", "A selected evidence chunk is unavailable"
+                )
+            )
         # The exact chunk may be beyond the bounded projection slice; preserve its validated ID.
         chunk_ids = [item.chunk_id]
     else:
@@ -399,12 +451,20 @@ async def _resolve_selected_chunk_ids(
             )
         chunk_ids = [chunk.id for chunk in projection.chunks]
     if not chunk_ids:
-        raise ConflictError(_selection_detail("selection_unavailable", "A selected document has no available evidence chunks"))
+        raise ConflictError(
+            _selection_detail(
+                "selection_unavailable", "A selected document has no available evidence chunks"
+            )
+        )
     return chunk_ids
 
 
 async def resolve_gadget_context(
-    session: AsyncSession, context: dict[str, _Any] | None, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    context: dict[str, _Any] | None,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
 ) -> dict[str, _Any]:
     """Normalize exact gadget selections to JSON-safe refs and owner-derived source fences.
 
@@ -417,12 +477,19 @@ async def resolve_gadget_context(
         return {}
     if context.get("kind") == "gadget":
         return await _resolve_gadget_instance_context(
-            session, context, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            context,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     if context.get("kind") != "selection":
         # This server-derived flag is reserved for validated exact gadget selections.
         # Strip server-reserved keys: "selected_only" and every "_"-prefixed private key.
-        return {key: value for key, value in context.items() if key != "selected_only" and not key.startswith("_")}
+        return {
+            key: value
+            for key, value in context.items()
+            if key != "selected_only" and not key.startswith("_")
+        }
     from modules.knowledge.documents import public as documents_public
     from modules.knowledge.documents.public import GadgetDocumentSelectionFence
 
@@ -434,13 +501,20 @@ async def resolve_gadget_context(
     selection_fences: list[GadgetDocumentSelectionFence] = []
     for item in selections:
         projection = await documents_public.get_news_document_projection(
-            session, item.document_id, **scope_kw,
+            session,
+            item.document_id,
+            **scope_kw,
         )
         if (
-            projection is None or projection.source_id != item.source_id
+            projection is None
+            or projection.source_id != item.source_id
             or projection.document_version_id != item.document_version_id
         ):
-            raise ConflictError(_selection_detail("selection_unavailable", "A selected document version is stale or unavailable"))
+            raise ConflictError(
+                _selection_detail(
+                    "selection_unavailable", "A selected document version is stale or unavailable"
+                )
+            )
         fence = GadgetDocumentSelectionFence(
             document_id=projection.document_id,
             document_version_id=projection.document_version_id,
@@ -452,22 +526,28 @@ async def resolve_gadget_context(
             scope_discriminator=projection.scope_discriminator,
         )
         if not await documents_public.validate_gadget_document_selection_fences(
-            session, (fence,), **scope_kw,
+            session,
+            (fence,),
+            **scope_kw,
         ):
             raise ConflictError("A selected document source scope is stale")
         selection_fences.append(fence)
         chunk_ids = await _resolve_selected_chunk_ids(session, item, projection, fence, scope_kw)
         for chunk_id in chunk_ids:
-            refs.append({
-                "document_version_id": str(projection.document_version_id),
-                "chunk_id": str(chunk_id),
-                "document_id": str(projection.document_id),
-                "source_id": str(projection.source_id),
-            })
+            refs.append(
+                {
+                    "document_version_id": str(projection.document_version_id),
+                    "chunk_id": str(chunk_id),
+                    "document_id": str(projection.document_id),
+                    "source_id": str(projection.source_id),
+                }
+            )
         if item.source_id not in sources:
             sources.append(item.source_id)
         if len(refs) > 100:
-            raise ValidationFailedError(_selection_detail("selection_too_large", "Selection exceeds the evidence limit"))
+            raise ValidationFailedError(
+                _selection_detail("selection_too_large", "Selection exceeds the evidence limit")
+            )
 
     return {
         "source_scope": [str(source_id) for source_id in sources],
@@ -484,7 +564,11 @@ CHAT_SELECTION_LOCAL_ONLY = "selection_local_only"
 
 
 async def reject_unsendable_selection(
-    session: AsyncSession, resolved: dict[str, _Any] | None, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    resolved: dict[str, _Any] | None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Refuse, before any run exists, a selection that chat could never answer from.
 
@@ -503,19 +587,35 @@ async def reject_unsendable_selection(
     local_only = False
     for fence in fences:
         source = await sources_public.get_source(
-            session, UUID(str(fence["source_id"])), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            UUID(str(fence["source_id"])),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
-        if source is not None and (source.configuration or {}).get(sources_public.CHAT_ATTACHMENTS_MARKER) is True:
+        if (
+            source is not None
+            and (source.configuration or {}).get(sources_public.CHAT_ATTACHMENTS_MARKER) is True
+        ):
             attachments += 1
-        local_only = local_only or bool(fence.get("local_only")) or (source is not None and source.local_only)
+        local_only = (
+            local_only
+            or bool(fence.get("local_only"))
+            or (source is not None and source.local_only)
+        )
     if attachments > MAX_CHAT_ATTACHMENTS_PER_MESSAGE:
-        raise ValidationFailedError(_selection_detail("selection_too_large", "Selection exceeds the per-message attachment limit"))
+        raise ValidationFailedError(
+            _selection_detail(
+                "selection_too_large", "Selection exceeds the per-message attachment limit"
+            )
+        )
     if local_only:
-        raise ConflictError({
-            "code": CHAT_SELECTION_LOCAL_ONLY,
-            "message": "Selection includes local-only documents, which are never sent to the cloud chat model",
-            "details": {},
-        })
+        raise ConflictError(
+            {
+                "code": CHAT_SELECTION_LOCAL_ONLY,
+                "message": "Selection includes local-only documents, which are never sent to the cloud chat model",
+                "details": {},
+            }
+        )
 
 
 async def link_agent_run(
@@ -536,22 +636,36 @@ async def link_agent_run(
 
     from modules.chat.scope import revalidate_chat_session
 
-    conversation = await session.scalar(select(Conversation).where(Conversation.id == conversation_id))
-    if (conversation is None or conversation.actor_user_id != owner_id
-            or not await revalidate_chat_session(session, auth_session_hash, owner_id)):
+    conversation = await session.scalar(
+        select(Conversation).where(Conversation.id == conversation_id)
+    )
+    if (
+        conversation is None
+        or conversation.actor_user_id != owner_id
+        or not await revalidate_chat_session(session, auth_session_hash, owner_id)
+    ):
         raise NotFoundError("Conversation not found")
     now = datetime.now(UTC)
     if conversation.expires_at is not None and conversation.expires_at <= now:
         raise NotFoundError("Conversation not found")
-    ephemeral = conversation.ephemeral or not await is_history_storage_enabled(session, owner_id=owner_id)
+    ephemeral = conversation.ephemeral or not await is_history_storage_enabled(
+        session, owner_id=owner_id
+    )
     expires_at = conversation.expires_at or (now + timedelta(hours=24) if ephemeral else None)
-    session.add(AgentActivityLink(
-        workspace_id=conversation.workspace_id, conversation_id=conversation_id,
-        agent_run_id=agent_run_id, owner_id=owner_id,
-        auth_session_hash=auth_session_hash, ephemeral=ephemeral,
-        expires_at=expires_at,
-        activities=[{"kind": "status", "status": "queued", "created_at": datetime.now(UTC).isoformat()}],
-    ))
+    session.add(
+        AgentActivityLink(
+            workspace_id=conversation.workspace_id,
+            conversation_id=conversation_id,
+            agent_run_id=agent_run_id,
+            owner_id=owner_id,
+            auth_session_hash=auth_session_hash,
+            ephemeral=ephemeral,
+            expires_at=expires_at,
+            activities=[
+                {"kind": "status", "status": "queued", "created_at": datetime.now(UTC).isoformat()}
+            ],
+        )
+    )
 
 
 async def publish_agent_activity(
@@ -576,35 +690,63 @@ async def publish_agent_activity(
 
     from modules.chat.scope import revalidate_chat_session
 
-    if status not in {"queued", "running", "waiting_approval", "succeeded", "failed", "cancelled", "started", "denied"}:
+    if status not in {
+        "queued",
+        "running",
+        "waiting_approval",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "started",
+        "denied",
+    }:
         return
     async with session_factory() as session:
         candidate_conversation_id = await session.scalar(
-            select(AgentActivityLink.conversation_id).where(AgentActivityLink.agent_run_id == run_id)
+            select(AgentActivityLink.conversation_id).where(
+                AgentActivityLink.agent_run_id == run_id
+            )
         )
         if candidate_conversation_id is None:
             return
         # Match conversation deletion's parent-before-child lock order to avoid cascade deadlocks.
         conversation = await session.scalar(
-            select(Conversation).where(Conversation.id == candidate_conversation_id).with_for_update()
+            select(Conversation)
+            .where(Conversation.id == candidate_conversation_id)
+            .with_for_update()
         )
         link = await session.scalar(
-            select(AgentActivityLink).where(AgentActivityLink.agent_run_id == run_id).with_for_update()
+            select(AgentActivityLink)
+            .where(AgentActivityLink.agent_run_id == run_id)
+            .with_for_update()
             .execution_options(populate_existing=True)
         )
-        if (link is None or link.owner_id != owner_id or link.auth_session_hash != auth_session_hash
-                or conversation is None or link.conversation_id != conversation.id
-                or not await revalidate_chat_session(session, auth_session_hash, owner_id)):
+        if (
+            link is None
+            or link.owner_id != owner_id
+            or link.auth_session_hash != auth_session_hash
+            or conversation is None
+            or link.conversation_id != conversation.id
+            or not await revalidate_chat_session(session, auth_session_hash, owner_id)
+        ):
             return
         # Take fresh time after waiting on lifecycle locks and revalidating the owner session.
         now = datetime.now(UTC)
-        if (link.expires_at is not None and link.expires_at <= now
-                or conversation.expires_at is not None and conversation.expires_at <= now):
+        if (
+            link.expires_at is not None
+            and link.expires_at <= now
+            or conversation.expires_at is not None
+            and conversation.expires_at <= now
+        ):
             return
-        latest_status = next((
-            item.get("status") for item in reversed(link.activities)
-            if isinstance(item, dict) and item.get("kind") == "status"
-        ), None)
+        latest_status = next(
+            (
+                item.get("status")
+                for item in reversed(link.activities)
+                if isinstance(item, dict) and item.get("kind") == "status"
+            ),
+            None,
+        )
         if tool_name is None and latest_status == status:
             return
         event: dict[str, object] = {"kind": "tool" if tool_name else "status", "status": status}
@@ -625,40 +767,61 @@ def _require_activity_owner(scope: _Any, owner_id: int) -> None:
 
 
 async def get_agent_activity(
-    session: AsyncSession, conversation_id: UUID, run_id: UUID, owner_id: int,
-    auth_session_hash: str, *, scope: _Any,
+    session: AsyncSession,
+    conversation_id: UUID,
+    run_id: UUID,
+    owner_id: int,
+    auth_session_hash: str,
+    *,
+    scope: _Any,
 ) -> AgentActivityRead:
     """Read safe activity only through the requested live conversation and original owner session."""
     from sqlalchemy import select
 
     _require_activity_owner(scope, owner_id)
-    link = await session.scalar(select(AgentActivityLink).where(
-        AgentActivityLink.conversation_id == conversation_id,
-        AgentActivityLink.agent_run_id == run_id,
-        AgentActivityLink.owner_id == owner_id,
-        AgentActivityLink.workspace_id == scope.workspace_id,
-    ))
+    link = await session.scalar(
+        select(AgentActivityLink).where(
+            AgentActivityLink.conversation_id == conversation_id,
+            AgentActivityLink.agent_run_id == run_id,
+            AgentActivityLink.owner_id == owner_id,
+            AgentActivityLink.workspace_id == scope.workspace_id,
+        )
+    )
     from datetime import UTC, datetime
 
     from modules.chat.scope import revalidate_chat_session
 
-    conversation = await session.scalar(select(Conversation).where(
-        Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id))
-    if (link is None or link.auth_session_hash != auth_session_hash
-            or link.expires_at is not None and link.expires_at <= datetime.now(UTC)
-            or conversation is None
-            or conversation.expires_at is not None and conversation.expires_at <= datetime.now(UTC)
-            or not await revalidate_chat_session(session, auth_session_hash, owner_id)):
+    conversation = await session.scalar(
+        select(Conversation).where(
+            Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id
+        )
+    )
+    if (
+        link is None
+        or link.auth_session_hash != auth_session_hash
+        or link.expires_at is not None
+        and link.expires_at <= datetime.now(UTC)
+        or conversation is None
+        or conversation.expires_at is not None
+        and conversation.expires_at <= datetime.now(UTC)
+        or not await revalidate_chat_session(session, auth_session_hash, owner_id)
+    ):
         raise NotFoundError("Agent activity not found")
     return AgentActivityRead(
-        conversation_id=link.conversation_id, agent_run_id=link.agent_run_id,
-        activities=link.activities, updated_at=link.updated_at,
+        conversation_id=link.conversation_id,
+        agent_run_id=link.agent_run_id,
+        activities=link.activities,
+        updated_at=link.updated_at,
     )
 
 
 async def list_agent_run_ids_for_owner(
-    session: AsyncSession, conversation_id: UUID, owner_id: int, auth_session_hash: str,
-    *, scope: _Any,
+    session: AsyncSession,
+    conversation_id: UUID,
+    owner_id: int,
+    auth_session_hash: str,
+    *,
+    scope: _Any,
 ) -> list[UUID]:
     """Return at most 50 live run links from the authenticated conversation without exposing chat storage."""
     from datetime import UTC, datetime
@@ -668,19 +831,33 @@ async def list_agent_run_ids_for_owner(
     from modules.chat.scope import revalidate_chat_session
 
     _require_activity_owner(scope, owner_id)
-    conversation = await session.scalar(select(Conversation).where(
-        Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id))
-    if (conversation is None
-            or conversation.expires_at is not None and conversation.expires_at <= datetime.now(UTC)
-            or not await revalidate_chat_session(session, auth_session_hash, owner_id)):
+    conversation = await session.scalar(
+        select(Conversation).where(
+            Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id
+        )
+    )
+    if (
+        conversation is None
+        or conversation.expires_at is not None
+        and conversation.expires_at <= datetime.now(UTC)
+        or not await revalidate_chat_session(session, auth_session_hash, owner_id)
+    ):
         raise NotFoundError("Conversation not found")
-    statement = select(AgentActivityLink.agent_run_id).where(
-        AgentActivityLink.workspace_id == scope.workspace_id,
-        AgentActivityLink.conversation_id == conversation_id,
-        AgentActivityLink.owner_id == owner_id,
-        AgentActivityLink.auth_session_hash == auth_session_hash,
-        (AgentActivityLink.expires_at.is_(None) | (AgentActivityLink.expires_at > datetime.now(UTC))),
-    ).order_by(AgentActivityLink.updated_at.desc(), AgentActivityLink.agent_run_id).limit(50)
+    statement = (
+        select(AgentActivityLink.agent_run_id)
+        .where(
+            AgentActivityLink.workspace_id == scope.workspace_id,
+            AgentActivityLink.conversation_id == conversation_id,
+            AgentActivityLink.owner_id == owner_id,
+            AgentActivityLink.auth_session_hash == auth_session_hash,
+            (
+                AgentActivityLink.expires_at.is_(None)
+                | (AgentActivityLink.expires_at > datetime.now(UTC))
+            ),
+        )
+        .order_by(AgentActivityLink.updated_at.desc(), AgentActivityLink.agent_run_id)
+        .limit(50)
+    )
     return list((await session.scalars(statement)).all())
 
 
@@ -710,14 +887,22 @@ async def filter_live_agent_run_ids(
     if not await revalidate_chat_session(session, auth_session_hash, owner_id):
         return frozenset()
     now = datetime.now(UTC)
-    statement = select(AgentActivityLink.agent_run_id).join(
-        Conversation, Conversation.id == AgentActivityLink.conversation_id,
-    ).where(
-        AgentActivityLink.agent_run_id.in_(run_ids),
-        AgentActivityLink.owner_id == owner_id,
-        (~AgentActivityLink.ephemeral | (AgentActivityLink.auth_session_hash == auth_session_hash)),
-        (AgentActivityLink.expires_at.is_(None) | (AgentActivityLink.expires_at > now)),
-        (Conversation.expires_at.is_(None) | (Conversation.expires_at > now)),
+    statement = (
+        select(AgentActivityLink.agent_run_id)
+        .join(
+            Conversation,
+            Conversation.id == AgentActivityLink.conversation_id,
+        )
+        .where(
+            AgentActivityLink.agent_run_id.in_(run_ids),
+            AgentActivityLink.owner_id == owner_id,
+            (
+                ~AgentActivityLink.ephemeral
+                | (AgentActivityLink.auth_session_hash == auth_session_hash)
+            ),
+            (AgentActivityLink.expires_at.is_(None) | (AgentActivityLink.expires_at > now)),
+            (Conversation.expires_at.is_(None) | (Conversation.expires_at > now)),
+        )
     )
     if conversation_id is not None:
         statement = statement.where(AgentActivityLink.conversation_id == conversation_id)
@@ -748,39 +933,57 @@ async def authorize_agent_run_access(
 
     if not await revalidate_chat_session(session, auth_session_hash, owner_id):
         return False
-    conversation_id = await session.scalar(select(AgentActivityLink.conversation_id).where(
-        AgentActivityLink.agent_run_id == run_id,
-        AgentActivityLink.owner_id == owner_id,
-    ))
+    conversation_id = await session.scalar(
+        select(AgentActivityLink.conversation_id).where(
+            AgentActivityLink.agent_run_id == run_id,
+            AgentActivityLink.owner_id == owner_id,
+        )
+    )
     if conversation_id is None:
         return False
 
     conversation = None
     if lock_conversation:
         # Chat deletion locks the parent conversation before linked agent state; keep that order.
-        conversation = await session.scalar(select(Conversation).where(
-            Conversation.id == conversation_id,
-        ).with_for_update().execution_options(populate_existing=True))
+        conversation = await session.scalar(
+            select(Conversation)
+            .where(
+                Conversation.id == conversation_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if conversation is None:
             return False
 
-    link = await session.scalar(select(AgentActivityLink).where(
-        AgentActivityLink.agent_run_id == run_id,
-        AgentActivityLink.conversation_id == conversation_id,
-        AgentActivityLink.owner_id == owner_id,
-    ).execution_options(populate_existing=True))
+    link = await session.scalar(
+        select(AgentActivityLink)
+        .where(
+            AgentActivityLink.agent_run_id == run_id,
+            AgentActivityLink.conversation_id == conversation_id,
+            AgentActivityLink.owner_id == owner_id,
+        )
+        .execution_options(populate_existing=True)
+    )
     if link is None:
         return False
 
     if conversation is None:
-        conversation = await session.scalar(select(Conversation).where(
-            Conversation.id == conversation_id,
-        ).execution_options(populate_existing=True))
-    if conversation is None or not await revalidate_chat_session(session, auth_session_hash, owner_id):
+        conversation = await session.scalar(
+            select(Conversation)
+            .where(
+                Conversation.id == conversation_id,
+            )
+            .execution_options(populate_existing=True)
+        )
+    if conversation is None or not await revalidate_chat_session(
+        session, auth_session_hash, owner_id
+    ):
         return False
     now = datetime.now(UTC)
-    if ((link.expires_at is not None and link.expires_at <= now)
-            or (conversation.expires_at is not None and conversation.expires_at <= now)):
+    if (link.expires_at is not None and link.expires_at <= now) or (
+        conversation.expires_at is not None and conversation.expires_at <= now
+    ):
         return False
     if (require_original_session or link.ephemeral) and link.auth_session_hash != auth_session_hash:
         return False
@@ -788,14 +991,22 @@ async def authorize_agent_run_access(
 
 
 async def has_live_agent_run_link(
-    session: AsyncSession, run_id: UUID, owner_id: int, auth_session_hash: str,
+    session: AsyncSession,
+    run_id: UUID,
+    owner_id: int,
+    auth_session_hash: str,
 ) -> bool:
     """Authorize one action through a live link bound to the original owner session digest."""
-    return await live_agent_conversation_id(session, run_id, owner_id, auth_session_hash) is not None
+    return (
+        await live_agent_conversation_id(session, run_id, owner_id, auth_session_hash) is not None
+    )
 
 
 async def live_agent_conversation_id(
-    session: AsyncSession, run_id: UUID, owner_id: int, auth_session_hash: str,
+    session: AsyncSession,
+    run_id: UUID,
+    owner_id: int,
+    auth_session_hash: str,
 ) -> UUID | None:
     """Return the linked conversation only while its owner and retention fences remain live."""
     from datetime import UTC, datetime
@@ -803,20 +1014,28 @@ async def live_agent_conversation_id(
     from sqlalchemy import select
 
     now = datetime.now(UTC)
-    statement = select(AgentActivityLink.conversation_id).join(
-        Conversation, Conversation.id == AgentActivityLink.conversation_id,
-    ).where(
-        AgentActivityLink.agent_run_id == run_id,
-        AgentActivityLink.owner_id == owner_id,
-        AgentActivityLink.auth_session_hash == auth_session_hash,
-        (AgentActivityLink.expires_at.is_(None) | (AgentActivityLink.expires_at > now)),
-        (Conversation.expires_at.is_(None) | (Conversation.expires_at > now)),
+    statement = (
+        select(AgentActivityLink.conversation_id)
+        .join(
+            Conversation,
+            Conversation.id == AgentActivityLink.conversation_id,
+        )
+        .where(
+            AgentActivityLink.agent_run_id == run_id,
+            AgentActivityLink.owner_id == owner_id,
+            AgentActivityLink.auth_session_hash == auth_session_hash,
+            (AgentActivityLink.expires_at.is_(None) | (AgentActivityLink.expires_at > now)),
+            (Conversation.expires_at.is_(None) | (Conversation.expires_at > now)),
+        )
     )
     return await session.scalar(statement)
 
 
 async def list_agent_run_ids_for_delete(
-    session: AsyncSession, conversation_id: UUID, owner_id: int, after: UUID | None = None,
+    session: AsyncSession,
+    conversation_id: UUID,
+    owner_id: int,
+    after: UUID | None = None,
 ) -> list[UUID]:
     """Return one bounded ordered page of linked runs for Chat's deletion-time privacy cleanup contract."""
     from sqlalchemy import select
@@ -827,16 +1046,30 @@ async def list_agent_run_ids_for_delete(
     )
     if after is not None:
         statement = statement.where(AgentActivityLink.agent_run_id > after)
-    return list((await session.scalars(statement.order_by(AgentActivityLink.agent_run_id).limit(50))).all())
+    return list(
+        (await session.scalars(statement.order_by(AgentActivityLink.agent_run_id).limit(50))).all()
+    )
 
 
 async def list_run_meta(session: AsyncSession, limit: int) -> list[_RunMeta]:
     """Return at most ``limit`` (<=100) newest chat response runs as metadata only: no messages, errors text or context."""
-    rows = await session.scalars(_select(ResponseRun).order_by(ResponseRun.created_at.desc()).limit(min(limit, 100)))
-    return [_RunMeta(kind="chat", id=str(r.id), status=r.status, error_code=r.error_code,
-                     created_at=r.created_at, updated_at=r.updated_at, finished_at=r.completed_at,
-                     model_identity=r.model_name, token_usage=r.token_usage or None)
-            for r in rows]
+    rows = await session.scalars(
+        _select(ResponseRun).order_by(ResponseRun.created_at.desc()).limit(min(limit, 100))
+    )
+    return [
+        _RunMeta(
+            kind="chat",
+            id=str(r.id),
+            status=r.status,
+            error_code=r.error_code,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+            finished_at=r.completed_at,
+            model_identity=r.model_name,
+            token_usage=r.token_usage or None,
+        )
+        for r in rows
+    ]
 
 
 async def get_run_meta_by_id(session: AsyncSession, run_id: UUID) -> _RunMeta | None:
@@ -844,9 +1077,17 @@ async def get_run_meta_by_id(session: AsyncSession, run_id: UUID) -> _RunMeta | 
     row = await session.get(ResponseRun, run_id)
     if row is None:
         return None
-    return _RunMeta(kind="chat", id=str(row.id), status=row.status, error_code=row.error_code,
-                    created_at=row.created_at, updated_at=row.updated_at, finished_at=row.completed_at,
-                    model_identity=row.model_name, token_usage=row.token_usage or None)
+    return _RunMeta(
+        kind="chat",
+        id=str(row.id),
+        status=row.status,
+        error_code=row.error_code,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        finished_at=row.completed_at,
+        model_identity=row.model_name,
+        token_usage=row.token_usage or None,
+    )
 
 
 CHAT_EXPORT_PAGE_MAX_BYTES = 16_777_216
@@ -854,20 +1095,29 @@ CHAT_EXPORT_MAX_CITATIONS_PER_PAGE = 100
 
 
 def _encode_chat_export_cursor(
-    owner_id: int, record_kind: str, snapshot_at: _datetime, position_at: _datetime, position_id: UUID,
+    owner_id: int,
+    record_kind: str,
+    snapshot_at: _datetime,
+    position_at: _datetime,
+    position_id: UUID,
 ) -> str:
     """Encode a canonical owner/kind/cutoff-bound chat keyset cursor."""
     payload = {
-        "v": 1, "owner": owner_id, "kind": record_kind,
+        "v": 1,
+        "owner": owner_id,
+        "kind": record_kind,
         "snapshot": snapshot_at.astimezone(_UTC).isoformat(),
-        "at": position_at.astimezone(_UTC).isoformat(), "id": str(position_id),
+        "at": position_at.astimezone(_UTC).isoformat(),
+        "id": str(position_id),
     }
     raw = _json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return b64url_encode(raw)
 
 
 def _decode_chat_export_cursor(
-    cursor: str, owner_id: int, record_kind: str,
+    cursor: str,
+    owner_id: int,
+    record_kind: str,
 ) -> tuple[_datetime, _datetime, UUID]:
     """Decode a strict canonical cursor and reject owner or record-kind substitution."""
     try:
@@ -875,36 +1125,63 @@ def _decode_chat_export_cursor(
             raise ValueError("Invalid chat export cursor")
         raw = b64url_decode(cursor)
         payload = _json.loads(raw)
-        if not isinstance(payload, dict) or set(payload) != {"v", "owner", "kind", "snapshot", "at", "id"}:
+        if not isinstance(payload, dict) or set(payload) != {
+            "v",
+            "owner",
+            "kind",
+            "snapshot",
+            "at",
+            "id",
+        }:
             raise ValueError("Invalid chat export cursor")
         if payload["v"] != 1 or payload["owner"] != owner_id or payload["kind"] != record_kind:
             raise ValueError("Chat export cursor belongs to another owner or record kind")
         snapshot_at = _datetime.fromisoformat(payload["snapshot"])
         position_at = _datetime.fromisoformat(payload["at"])
-        if any(value.tzinfo is None or value.utcoffset() is None for value in (snapshot_at, position_at)):
+        if any(
+            value.tzinfo is None or value.utcoffset() is None
+            for value in (snapshot_at, position_at)
+        ):
             raise ValueError("Chat export cursor timestamps must be timezone-aware")
         snapshot_at, position_at = snapshot_at.astimezone(_UTC), position_at.astimezone(_UTC)
         if snapshot_at > _datetime.now(_UTC):
             raise ValueError("Chat export cursor cutoff cannot be in the future")
         position_id = UUID(payload["id"])
-        if _encode_chat_export_cursor(owner_id, record_kind, snapshot_at, position_at, position_id) != cursor:
+        if (
+            _encode_chat_export_cursor(owner_id, record_kind, snapshot_at, position_at, position_id)
+            != cursor
+        ):
             raise ValueError("Chat export cursor is not canonical")
         return snapshot_at, position_at, position_id
-    except (ValueError, TypeError, KeyError, UnicodeDecodeError, _binascii.Error, _json.JSONDecodeError) as exc:
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        UnicodeDecodeError,
+        _binascii.Error,
+        _json.JSONDecodeError,
+    ) as exc:
         raise ValueError("Invalid chat export cursor") from exc
 
 
 def _chat_export_payload_bytes(items: Sequence[BaseModel]) -> int:
     """Measure serialized item-array bytes for the aggregate export-page budget."""
-    return len(_json.dumps(
-        [item.model_dump(mode="json") for item in items],
-        ensure_ascii=False, separators=(",", ":"),
-    ).encode("utf-8"))
+    return len(
+        _json.dumps(
+            [item.model_dump(mode="json") for item in items],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
 
 
 def _chat_export_item_bytes(item: BaseModel) -> int:
     """Measure one serialized chat record so page admission avoids repeated full-array encoding."""
-    return len(_json.dumps(item.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    return len(
+        _json.dumps(item.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
 
 
 def _safe_chat_export_url(value: str | None) -> str | None:
@@ -913,7 +1190,12 @@ def _safe_chat_export_url(value: str | None) -> str | None:
         return None
     try:
         parsed = _urlsplit(value)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
             return None
         host = parsed.hostname
         if ":" in host and not host.startswith("["):
@@ -927,20 +1209,32 @@ def _safe_chat_export_url(value: str | None) -> str | None:
 
 def _export_owner_allowed(owner_id: int, scope: _Any, multi_workspace_enabled: bool) -> bool:
     """Bootstrap owner always; any other account only when the rollout is on and the scope is theirs."""
-    return (owner_id == 1 or multi_workspace_enabled) and (scope is None or (scope.user_id == owner_id and scope.role == "owner"))
+    return (owner_id == 1 or multi_workspace_enabled) and (
+        scope is None or (scope.user_id == owner_id and scope.role == "owner")
+    )
 
 
 async def _require_chat_export_owner(
-    session: AsyncSession, owner_id: int, *, scope: _Any = None, multi_workspace_enabled: bool = False,
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    scope: _Any = None,
+    multi_workspace_enabled: bool = False,
 ) -> None:
     """Require the live workspace owner before reading owner-scoped chat history."""
-    if (not _export_owner_allowed(owner_id, scope, multi_workspace_enabled)
-            or await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id)) is None):
+    if (
+        not _export_owner_allowed(owner_id, scope, multi_workspace_enabled)
+        or await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id)) is None
+    ):
         raise PermissionError("Chat export requires the current owner")
 
 
 async def read_memory_export_origin(
-    session: AsyncSession, *, owner_id: int, conversation_id: UUID, message_id: UUID,
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    conversation_id: UUID,
+    message_id: UUID,
 ) -> ChatMemoryExportOrigin | None:
     """Fence an exact retained transcript message for Memory without exposing its text.
 
@@ -959,61 +1253,82 @@ async def read_memory_export_origin(
     # Reader: only needs a consistent consent read; the workspace is known before the lock.
     await lock_export_privacy(session, scope.workspace_id, shared=True)
     try:
-        await _require_chat_export_owner(session, owner_id, scope=scope, multi_workspace_enabled=flag)
+        await _require_chat_export_owner(
+            session, owner_id, scope=scope, multi_workspace_enabled=flag
+        )
     except (PermissionError, HTTPException, DomainError):
         return None
     history_enabled, persisted, privacy_updated_at = await _chat_export_privacy(
-        session, scope=scope, multi_workspace_enabled=flag)
+        session, scope=scope, multi_workspace_enabled=flag
+    )
     if not history_enabled:
         return None
     now = _datetime.now(_UTC)
     conversation_scope = _chat_export_scope(now, now, scope.workspace_id)
-    row = (await session.execute(
-        _select(
-            Conversation.id.label("conversation_id"),
-            Conversation.created_at.label("conversation_created_at"),
-            Conversation.updated_at.label("conversation_updated_at"),
-            Message.id.label("message_id"),
-            Message.created_at.label("message_created_at"),
-            Message.updated_at.label("message_updated_at"),
-            Message.content.label("content"),
-            Message.citations.label("citations"),
+    row = (
+        await session.execute(
+            _select(
+                Conversation.id.label("conversation_id"),
+                Conversation.created_at.label("conversation_created_at"),
+                Conversation.updated_at.label("conversation_updated_at"),
+                Message.id.label("message_id"),
+                Message.created_at.label("message_created_at"),
+                Message.updated_at.label("message_updated_at"),
+                Message.content.label("content"),
+                Message.citations.label("citations"),
+            )
+            .join(Message, Message.conversation_id == Conversation.id)
+            .where(
+                Conversation.id == conversation_id,
+                Message.id == message_id,
+                Message.conversation_id == conversation_id,
+                *conversation_scope,
+                Message.created_at <= now,
+                Message.updated_at <= now,
+            )
         )
-        .join(Message, Message.conversation_id == Conversation.id)
-        .where(
-            Conversation.id == conversation_id, Message.id == message_id,
-            Message.conversation_id == conversation_id, *conversation_scope,
-            Message.created_at <= now, Message.updated_at <= now,
-        )
-    )).one_or_none()
+    ).one_or_none()
     if row is None:
         return None
     digest_input = _json.dumps(
         {"content": row.content, "citations": row.citations},
-        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
     ).encode("utf-8")
     return ChatMemoryExportOrigin(
-        conversation_id=row.conversation_id, message_id=row.message_id,
+        conversation_id=row.conversation_id,
+        message_id=row.message_id,
         conversation_created_at=row.conversation_created_at,
         conversation_updated_at=row.conversation_updated_at,
-        message_created_at=row.message_created_at, message_updated_at=row.message_updated_at,
+        message_created_at=row.message_created_at,
+        message_updated_at=row.message_updated_at,
         content_citation_digest=_hashlib.sha256(digest_input).hexdigest(),
-        privacy_persisted=persisted, privacy_updated_at=privacy_updated_at,
+        privacy_persisted=persisted,
+        privacy_updated_at=privacy_updated_at,
     )
 
 
-def _chat_export_privacy_marker(persisted: bool, updated_at: _datetime | None) -> tuple[bool, _datetime | None]:
+def _chat_export_privacy_marker(
+    persisted: bool, updated_at: _datetime | None
+) -> tuple[bool, _datetime | None]:
     """Validate the compact Memory-owned history-privacy persistence and timestamp fence."""
     if type(persisted) is not bool or persisted != (updated_at is not None):
         raise ValueError("Chat export privacy marker is inconsistent")
-    if (updated_at is not None
-            and (not isinstance(updated_at, _datetime) or updated_at.tzinfo is None or updated_at.utcoffset() is None)):
+    if updated_at is not None and (
+        not isinstance(updated_at, _datetime)
+        or updated_at.tzinfo is None
+        or updated_at.utcoffset() is None
+    ):
         raise ValueError("Chat export privacy timestamp must be timezone-aware")
     return persisted, updated_at
 
 
 async def _chat_export_privacy(
-    session: AsyncSession, *, scope: _Any = None, multi_workspace_enabled: bool | None = None,
+    session: AsyncSession,
+    *,
+    scope: _Any = None,
+    multi_workspace_enabled: bool | None = None,
 ) -> tuple[bool, bool, _datetime | None]:
     """Read Memory's current history-storage grant and its minimal persisted-row fence."""
     from modules.chat.scope import read_owner_export_privacy
@@ -1021,16 +1336,26 @@ async def _chat_export_privacy(
     if scope is not None and multi_workspace_enabled is not None:
         from modules.memory.public import read_export_privacy
 
-        privacy = await read_export_privacy(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        privacy = await read_export_privacy(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
     else:
-        privacy = await read_owner_export_privacy(session)  # default owner scope; callers should pass scope
+        privacy = await read_owner_export_privacy(
+            session
+        )  # default owner scope; callers should pass scope
     persisted, updated_at = _chat_export_privacy_marker(privacy.persisted, privacy.updated_at)
     return privacy.store_conversation_history, persisted, updated_at
 
 
 async def search_conversations(
-    session: AsyncSession, q: str, *, scope: WorkspaceContext, multi_workspace_enabled: bool,
-    limit: int, offset: int, archived: bool,
+    session: AsyncSession,
+    q: str,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
+    limit: int,
+    offset: int,
+    archived: bool,
 ) -> list[Conversation]:
     """Search retained conversation titles by literal substring, newest first.
 
@@ -1039,7 +1364,11 @@ async def search_conversations(
     """
     # Lock-free consent read (the export path's); is_history_storage_enabled would hold Memory's advisory lock.
     try:
-        if not (await _chat_export_privacy(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled))[0]:
+        if not (
+            await _chat_export_privacy(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            )
+        )[0]:
             return []
     except ValueError:  # inconsistent privacy marker: fail closed rather than 500
         return []
@@ -1048,12 +1377,17 @@ async def search_conversations(
     statement = (
         _select(Conversation)
         .where(
-            Conversation.workspace_id == scope.workspace_id, Conversation.actor_user_id == scope.user_id,
-            Conversation.archived == archived, Conversation.title.ilike(f"%{escaped}%", escape="\\"),
+            Conversation.workspace_id == scope.workspace_id,
+            Conversation.actor_user_id == scope.user_id,
+            Conversation.archived == archived,
+            Conversation.title.ilike(f"%{escaped}%", escape="\\"),
         )
         .where(*_chat_export_scope_retained(_datetime.now(_UTC)))
-        .order_by(Conversation.pinned.desc(), Conversation.updated_at.desc(), Conversation.id.desc())
-        .offset(offset).limit(limit)
+        .order_by(
+            Conversation.pinned.desc(), Conversation.updated_at.desc(), Conversation.id.desc()
+        )
+        .offset(offset)
+        .limit(limit)
     )
     return list((await session.scalars(statement)).all())
 
@@ -1068,7 +1402,9 @@ def _chat_export_scope_retained(now: _datetime) -> tuple[ColumnElement[bool], ..
 
 
 def _chat_export_scope(
-    snapshot_at: _datetime, now: _datetime, workspace_id: UUID,
+    snapshot_at: _datetime,
+    now: _datetime,
+    workspace_id: UUID,
 ) -> tuple[ColumnElement[bool], ...]:
     """Filter to the workspace's retained, non-automation conversation history unchanged at the cutoff."""
     return (
@@ -1080,7 +1416,10 @@ def _chat_export_scope(
 
 
 async def _chat_export_count(
-    session: AsyncSession, record_kind: str, snapshot_at: _datetime, workspace_id: UUID,
+    session: AsyncSession,
+    record_kind: str,
+    snapshot_at: _datetime,
+    workspace_id: UUID,
 ) -> int:
     """Count current owner-visible rows of one workspace at a fixed export cutoff."""
     now = _datetime.now(_UTC)
@@ -1089,7 +1428,8 @@ async def _chat_export_count(
         statement = _select(_func.count()).select_from(Conversation).where(*scope)
     else:
         statement = (
-            _select(_func.count()).select_from(Message)
+            _select(_func.count())
+            .select_from(Message)
             .join(Conversation, Conversation.id == Message.conversation_id)
             .where(*scope, Message.created_at <= snapshot_at, Message.updated_at <= snapshot_at)
         )
@@ -1097,7 +1437,11 @@ async def _chat_export_count(
 
 
 async def _chat_export_evidence_fences(
-    session: AsyncSession, refs: Sequence[tuple[UUID, UUID]], *, scope: _Any, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    refs: Sequence[tuple[UUID, UUID]],
+    *,
+    scope: _Any,
+    multi_workspace_enabled: bool,
 ) -> dict[tuple[UUID, UUID], tuple[EvidenceReferenceRead, int]]:
     """Resolve exact retained chunks and live source generations for at most one bounded batch."""
     from modules.knowledge.documents import public as documents_public
@@ -1109,42 +1453,65 @@ async def _chat_export_evidence_fences(
         return {}
     try:
         evidence_rows = await documents_public.read_evidence_refs(
-            session, unique_refs, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            session, unique_refs, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
     except ValueError:
         # A deletion can race a page; retry individually to omit only copied citation fields
         # whose exact document/version/chunk fence is no longer owner-visible.
         evidence_rows = []
         for ref in unique_refs:
             try:
-                evidence_rows.extend(await documents_public.read_evidence_refs(
-                    session, [ref], scope=scope, multi_workspace_enabled=multi_workspace_enabled))
+                evidence_rows.extend(
+                    await documents_public.read_evidence_refs(
+                        session, [ref], scope=scope, multi_workspace_enabled=multi_workspace_enabled
+                    )
+                )
             except ValueError:
                 continue
     versions = list(dict.fromkeys(item.document_version_id for item in evidence_rows))
     source_fences = await documents_public.review_version_fences(
-        session, versions, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        session, versions, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     from modules.sources import public as sources_public
     from modules.sources.public import SourceExportFence
 
     source_generations: dict[UUID, int] = {}
     conflicting_sources: set[UUID] = set()
     for source_fence in source_fences.values():
-        previous = source_generations.setdefault(source_fence.source_id, source_fence.current_source_generation)
+        previous = source_generations.setdefault(
+            source_fence.source_id, source_fence.current_source_generation
+        )
         if previous != source_fence.current_source_generation:
             conflicting_sources.add(source_fence.source_id)
     source_export_fences = [
-        SourceExportFence(source_id=source_id, workspace_id=scope.workspace_id, generation=generation)
+        SourceExportFence(
+            source_id=source_id, workspace_id=scope.workspace_id, generation=generation
+        )
         for source_id, generation in source_generations.items()
         if source_id not in conflicting_sources
     ]
-    eligible_sources = set(await sources_public.filter_export_eligible_sources(
-        session, source_export_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled))
+    eligible_sources = set(
+        await sources_public.filter_export_eligible_sources(
+            session,
+            source_export_fences,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    )
     resolved: dict[tuple[UUID, UUID], tuple[EvidenceReferenceRead, int]] = {}
     for item in evidence_rows:
         fence = source_fences.get(item.document_version_id)
-        if (fence is not None and fence.document_id == item.document_id and fence.source_id == item.source_id
-                and fence.source_id in eligible_sources and fence.source_id not in conflicting_sources):
-            resolved[(item.document_version_id, item.chunk_id)] = (item, fence.current_source_generation)
+        if (
+            fence is not None
+            and fence.document_id == item.document_id
+            and fence.source_id == item.source_id
+            and fence.source_id in eligible_sources
+            and fence.source_id not in conflicting_sources
+        ):
+            resolved[(item.document_version_id, item.chunk_id)] = (
+                item,
+                fence.current_source_generation,
+            )
     return resolved
 
 
@@ -1169,17 +1536,21 @@ async def _export_conversation_records(
     has_more = False
     payload_bytes = 2
     statement = _select(
-        Conversation.id.label("conversation_id"), Conversation.title.label("title"),
+        Conversation.id.label("conversation_id"),
+        Conversation.title.label("title"),
         Conversation.context_kind.label("context_kind"),
         Conversation.context_resource_id.label("context_resource_id"),
-        Conversation.pinned.label("pinned"), Conversation.archived.label("archived"),
-        Conversation.created_at.label("created_at"), Conversation.updated_at.label("updated_at"),
+        Conversation.pinned.label("pinned"),
+        Conversation.archived.label("archived"),
+        Conversation.created_at.label("created_at"),
+        Conversation.updated_at.label("updated_at"),
     ).where(*row_scope)
     if position is not None:
         statement = statement.where(_tuple(Conversation.created_at, Conversation.id) > position)
     result = await session.stream(
         statement.order_by(Conversation.created_at, Conversation.id)
-        .limit(limit + 1).execution_options(yield_per=10)
+        .limit(limit + 1)
+        .execution_options(yield_per=10)
     )
     try:
         async for row in result.mappings():
@@ -1187,9 +1558,14 @@ async def _export_conversation_records(
                 has_more = True
                 break
             item = ChatExportConversationRead(
-                id=row["conversation_id"], title=row["title"], context_kind=row["context_kind"],
-                context_resource_id=row["context_resource_id"], pinned=row["pinned"],
-                archived=row["archived"], created_at=row["created_at"], updated_at=row["updated_at"],
+                id=row["conversation_id"],
+                title=row["title"],
+                context_kind=row["context_kind"],
+                context_resource_id=row["context_resource_id"],
+                pinned=row["pinned"],
+                archived=row["archived"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
             )
             item_bytes = _chat_export_item_bytes(item)
             proposed_bytes = payload_bytes + item_bytes + (1 if items else 0)
@@ -1200,16 +1576,21 @@ async def _export_conversation_records(
                 break
             items.append(item)
             payload_bytes = proposed_bytes
-            fences.append(ChatExportFence(
-                conversation_id=row["conversation_id"], conversation_created_at=row["created_at"],
-                conversation_updated_at=row["updated_at"],
-            ))
+            fences.append(
+                ChatExportFence(
+                    conversation_id=row["conversation_id"],
+                    conversation_created_at=row["created_at"],
+                    conversation_updated_at=row["updated_at"],
+                )
+            )
     finally:
         await result.close()
     return items, fences, has_more
 
 
-def _parse_export_citations(message_row: dict[str, _Any]) -> tuple[list[Citation | WebCitation], int]:
+def _parse_export_citations(
+    message_row: dict[str, _Any],
+) -> tuple[list[Citation | WebCitation], int]:
     """Parse a retained message's stored citations, counting malformed or non-list entries.
 
     Returns ``(parsed, omitted)``. A non-list ``citations`` column counts as one omission.
@@ -1228,7 +1609,9 @@ def _parse_export_citations(message_row: dict[str, _Any]) -> tuple[list[Citation
     for raw in raw_citations:
         try:
             is_web = isinstance(raw, dict) and raw.get("sourceType") == "web"
-            parsed.append(WebCitation.model_validate(raw) if is_web else Citation.model_validate(raw))
+            parsed.append(
+                WebCitation.model_validate(raw) if is_web else Citation.model_validate(raw)
+            )
         except ValueError:
             omitted += 1
     return parsed, omitted
@@ -1241,7 +1624,9 @@ async def _stream_export_message_candidates(
     row_scope: tuple[ColumnElement[bool], ...],
     snapshot_at: _datetime,
     position: tuple[_datetime, UUID] | None,
-) -> tuple[list[tuple[dict[str, _Any], list[Citation | WebCitation], int]], set[tuple[UUID, UUID]], bool]:
+) -> tuple[
+    list[tuple[dict[str, _Any], list[Citation | WebCitation], int]], set[tuple[UUID, UUID]], bool
+]:
     """Stream message rows into candidates while predicting citation and byte budgets.
 
     Stops (``has_more``) when the limit, the per-page distinct-evidence/citation count or the
@@ -1250,11 +1635,15 @@ async def _stream_export_message_candidates(
     """
     message_statement = (
         _select(
-            Message.id.label("message_id"), Message.conversation_id.label("conversation_id"),
-            Message.role.label("role"), Message.content.label("content"),
-            Message.citations.label("citations"), Message.response_id.label("response_id"),
+            Message.id.label("message_id"),
+            Message.conversation_id.label("conversation_id"),
+            Message.role.label("role"),
+            Message.content.label("content"),
+            Message.citations.label("citations"),
+            Message.response_id.label("response_id"),
             Message.revision_of_message_id.label("revision_of_message_id"),
-            Message.created_at.label("message_created_at"), Message.updated_at.label("message_updated_at"),
+            Message.created_at.label("message_created_at"),
+            Message.updated_at.label("message_updated_at"),
             Conversation.created_at.label("conversation_created_at"),
             Conversation.updated_at.label("conversation_updated_at"),
         )
@@ -1262,10 +1651,13 @@ async def _stream_export_message_candidates(
         .where(*row_scope, Message.created_at <= snapshot_at, Message.updated_at <= snapshot_at)
     )
     if position is not None:
-        message_statement = message_statement.where(_tuple(Message.created_at, Message.id) > position)
+        message_statement = message_statement.where(
+            _tuple(Message.created_at, Message.id) > position
+        )
     result = await session.stream(
         message_statement.order_by(Message.created_at, Message.id)
-        .limit(limit + 1).execution_options(yield_per=10)
+        .limit(limit + 1)
+        .execution_options(yield_per=10)
     )
     candidates: list[tuple[dict[str, _Any], list[Citation | WebCitation], int]] = []
     page_ref_set: set[tuple[UUID, UUID]] = set()
@@ -1281,15 +1673,19 @@ async def _stream_export_message_candidates(
             parsed, omitted = _parse_export_citations(message_row)
             refs_for_message = {
                 (message_item.documentVersionId, message_item.chunkId)
-                for message_item in parsed if isinstance(message_item, Citation)
+                for message_item in parsed
+                if isinstance(message_item, Citation)
             }
             predicted_record_bytes = (
                 len(_json.dumps(message_row["content"], ensure_ascii=False).encode("utf-8"))
-                + len(parsed) * 32_768 + 1024
+                + len(parsed) * 32_768
+                + 1024
             )
-            if (len(page_ref_set | refs_for_message) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE
-                    or page_citation_count + len(parsed) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE
-                    or predicted_candidate_bytes + predicted_record_bytes > CHAT_EXPORT_PAGE_MAX_BYTES):
+            if (
+                len(page_ref_set | refs_for_message) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE
+                or page_citation_count + len(parsed) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE
+                or predicted_candidate_bytes + predicted_record_bytes > CHAT_EXPORT_PAGE_MAX_BYTES
+            ):
                 has_more = True
                 break
             candidates.append((message_row, parsed, omitted))
@@ -1321,31 +1717,46 @@ def _rebuild_export_citations(
             if safe_url is None:
                 omitted += 1
                 continue
-            citations.append(ChatExportWebCitation(
-                url=safe_url, title=citation.title, quote=citation.quote,
-                provider=citation.provider, retrieved_at=citation.retrievedAt,
-            ))
+            citations.append(
+                ChatExportWebCitation(
+                    url=safe_url,
+                    title=citation.title,
+                    quote=citation.quote,
+                    provider=citation.provider,
+                    retrieved_at=citation.retrievedAt,
+                )
+            )
             continue
         resolved = evidence.get((citation.documentVersionId, citation.chunkId))
         if resolved is None:
             omitted += 1
             continue
         reference, current_generation = resolved
-        if (reference.document_id != citation.documentId or reference.source_id != citation.sourceId):
+        if reference.document_id != citation.documentId or reference.source_id != citation.sourceId:
             omitted += 1
             continue
-        citations.append(ChatExportCitation(
-            source_id=reference.source_id, document_id=reference.document_id,
-            document_version_id=reference.document_version_id, chunk_id=reference.chunk_id,
-            title=reference.title, url=_safe_chat_export_url(reference.canonical_url),
-            observed_at=reference.observed_at, quote=citation.quote,
-            current_source_generation=current_generation,
-        ))
-        citation_fences.append(ChatExportCitationFence(
-            source_id=reference.source_id, document_id=reference.document_id,
-            document_version_id=reference.document_version_id, chunk_id=reference.chunk_id,
-            current_source_generation=current_generation,
-        ))
+        citations.append(
+            ChatExportCitation(
+                source_id=reference.source_id,
+                document_id=reference.document_id,
+                document_version_id=reference.document_version_id,
+                chunk_id=reference.chunk_id,
+                title=reference.title,
+                url=_safe_chat_export_url(reference.canonical_url),
+                observed_at=reference.observed_at,
+                quote=citation.quote,
+                current_source_generation=current_generation,
+            )
+        )
+        citation_fences.append(
+            ChatExportCitationFence(
+                source_id=reference.source_id,
+                document_id=reference.document_id,
+                document_version_id=reference.document_version_id,
+                chunk_id=reference.chunk_id,
+                current_source_generation=current_generation,
+            )
+        )
     return citations, citation_fences, omitted
 
 
@@ -1372,18 +1783,30 @@ async def _export_message_records(
     fences: list[ChatExportFence] = []
     payload_bytes = 2
     candidates, page_ref_set, has_more = await _stream_export_message_candidates(
-        session, limit=limit, row_scope=row_scope, snapshot_at=snapshot_at, position=position,
+        session,
+        limit=limit,
+        row_scope=row_scope,
+        snapshot_at=snapshot_at,
+        position=position,
     )
     evidence = await _chat_export_evidence_fences(
-        session, list(page_ref_set), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        session, list(page_ref_set), scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     for message_row, parsed, initially_omitted in candidates:
-        citations, citation_fences, omitted = _rebuild_export_citations(parsed, evidence, initially_omitted)
+        citations, citation_fences, omitted = _rebuild_export_citations(
+            parsed, evidence, initially_omitted
+        )
         message_item = ChatExportMessageRead(
-            id=message_row["message_id"], conversation_id=message_row["conversation_id"], role=message_row["role"],
-            content=message_row["content"], response_id=message_row["response_id"],
+            id=message_row["message_id"],
+            conversation_id=message_row["conversation_id"],
+            role=message_row["role"],
+            content=message_row["content"],
+            response_id=message_row["response_id"],
             revision_of_message_id=message_row["revision_of_message_id"],
-            citations=citations, omitted_citation_count=omitted,
-            created_at=message_row["message_created_at"], updated_at=message_row["message_updated_at"],
+            citations=citations,
+            omitted_citation_count=omitted,
+            created_at=message_row["message_created_at"],
+            updated_at=message_row["message_updated_at"],
         )
         item_bytes = _chat_export_item_bytes(message_item)
         proposed_bytes = payload_bytes + item_bytes + (1 if items else 0)
@@ -1394,13 +1817,17 @@ async def _export_message_records(
             break
         items.append(message_item)
         payload_bytes = proposed_bytes
-        fences.append(ChatExportFence(
-            conversation_id=message_row["conversation_id"],
-            conversation_created_at=message_row["conversation_created_at"],
-            conversation_updated_at=message_row["conversation_updated_at"], message_id=message_row["message_id"],
-            message_created_at=message_row["message_created_at"], message_updated_at=message_row["message_updated_at"],
-            citations=citation_fences,
-        ))
+        fences.append(
+            ChatExportFence(
+                conversation_id=message_row["conversation_id"],
+                conversation_created_at=message_row["conversation_created_at"],
+                conversation_updated_at=message_row["conversation_updated_at"],
+                message_id=message_row["message_id"],
+                message_created_at=message_row["message_created_at"],
+                message_updated_at=message_row["message_updated_at"],
+                citations=citation_fences,
+            )
+        )
     if len(candidates) > len(items):
         has_more = True
     return items, fences, has_more
@@ -1426,21 +1853,36 @@ async def export_page(
     """
     if record_kind not in {"conversations", "messages"} or not 1 <= limit <= 100:
         raise ValueError("Chat export kind or page limit is invalid")
-    await _require_chat_export_owner(session, owner_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _require_chat_export_owner(
+        session, owner_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if cursor is None:
         snapshot_at = _datetime.now(_UTC)
         position = None
     else:
-        snapshot_at, position_at, position_id = _decode_chat_export_cursor(cursor, owner_id, record_kind)
+        snapshot_at, position_at, position_id = _decode_chat_export_cursor(
+            cursor, owner_id, record_kind
+        )
         position = (position_at, position_id)
     history_enabled, privacy_persisted, privacy_updated_at = await _chat_export_privacy(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if not history_enabled:
         return ChatExportPage(
-            owner_id=owner_id, record_kind=record_kind, snapshot_at=snapshot_at,
-            snapshot_count=0, items=[], fences=[], payload_bytes=2, max_payload_bytes=CHAT_EXPORT_PAGE_MAX_BYTES,
-            next_cursor=None, available=False, omission_reason="conversation_history_disabled",
-            privacy_persisted=privacy_persisted, privacy_updated_at=privacy_updated_at, history_enabled=False,
+            owner_id=owner_id,
+            record_kind=record_kind,
+            snapshot_at=snapshot_at,
+            snapshot_count=0,
+            items=[],
+            fences=[],
+            payload_bytes=2,
+            max_payload_bytes=CHAT_EXPORT_PAGE_MAX_BYTES,
+            next_cursor=None,
+            available=False,
+            omission_reason="conversation_history_disabled",
+            privacy_persisted=privacy_persisted,
+            privacy_updated_at=privacy_updated_at,
+            history_enabled=False,
         )
     snapshot_count = await _chat_export_count(session, record_kind, snapshot_at, scope.workspace_id)
     now = _datetime.now(_UTC)
@@ -1448,14 +1890,24 @@ async def export_page(
 
     if record_kind == "conversations":
         items, fences, has_more = await _export_conversation_records(
-            session, limit=limit, row_scope=row_scope, position=position)
+            session, limit=limit, row_scope=row_scope, position=position
+        )
     else:
         items, fences, has_more = await _export_message_records(
-            session, limit=limit, row_scope=row_scope, snapshot_at=snapshot_at, position=position,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            session,
+            limit=limit,
+            row_scope=row_scope,
+            snapshot_at=snapshot_at,
+            position=position,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     next_cursor = (
-        _encode_chat_export_cursor(owner_id, record_kind, snapshot_at, items[-1].created_at, items[-1].id)
-        if has_more and items else None
+        _encode_chat_export_cursor(
+            owner_id, record_kind, snapshot_at, items[-1].created_at, items[-1].id
+        )
+        if has_more and items
+        else None
     )
 
     if len(items) != len(fences):
@@ -1463,11 +1915,20 @@ async def export_page(
     if sum(len(fence.citations) for fence in fences) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE:
         raise RuntimeError("Chat export page exceeded its citation fence budget")
     return ChatExportPage(
-        owner_id=owner_id, record_kind=record_kind, snapshot_at=snapshot_at,
-        snapshot_count=snapshot_count, items=items, fences=fences,
-        payload_bytes=_chat_export_payload_bytes(items), max_payload_bytes=CHAT_EXPORT_PAGE_MAX_BYTES,
-        next_cursor=next_cursor, available=True, omission_reason=None,
-        privacy_persisted=privacy_persisted, privacy_updated_at=privacy_updated_at, history_enabled=True,
+        owner_id=owner_id,
+        record_kind=record_kind,
+        snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count,
+        items=items,
+        fences=fences,
+        payload_bytes=_chat_export_payload_bytes(items),
+        max_payload_bytes=CHAT_EXPORT_PAGE_MAX_BYTES,
+        next_cursor=next_cursor,
+        available=True,
+        omission_reason=None,
+        privacy_persisted=privacy_persisted,
+        privacy_updated_at=privacy_updated_at,
+        history_enabled=True,
     )
 
 
@@ -1491,16 +1952,26 @@ async def _revalidate_export_rows(
     citation_fences: list[ChatExportCitationFence] = []
     for fence in fences:
         now = _datetime.now(_UTC)
-        conversation = (await session.execute(
-            _select(Conversation.created_at, Conversation.updated_at, Conversation.ephemeral,
-                    Conversation.expires_at, Conversation.context_kind)
-            .where(Conversation.id == fence.conversation_id, Conversation.workspace_id == scope.workspace_id)
-        )).one_or_none()
+        conversation = (
+            await session.execute(
+                _select(
+                    Conversation.created_at,
+                    Conversation.updated_at,
+                    Conversation.ephemeral,
+                    Conversation.expires_at,
+                    Conversation.context_kind,
+                ).where(
+                    Conversation.id == fence.conversation_id,
+                    Conversation.workspace_id == scope.workspace_id,
+                )
+            )
+        ).one_or_none()
         if conversation is None or (
             conversation.created_at != fence.conversation_created_at
             or conversation.updated_at != fence.conversation_updated_at
             or conversation.ephemeral
-            or conversation.expires_at is not None and conversation.expires_at <= now
+            or conversation.expires_at is not None
+            and conversation.expires_at <= now
             or conversation.context_kind == "automation"
         ):
             return "record_changed", []
@@ -1508,14 +1979,23 @@ async def _revalidate_export_rows(
             if fence.message_id is not None:
                 raise ValueError("Conversation export fence cannot contain a message identity")
         else:
-            if fence.message_id is None or fence.message_created_at is None or fence.message_updated_at is None:
+            if (
+                fence.message_id is None
+                or fence.message_created_at is None
+                or fence.message_updated_at is None
+            ):
                 raise ValueError("Message export fence is missing its transcript revision identity")
-            message = (await session.execute(
-                _select(Message.created_at, Message.updated_at)
-                .where(Message.id == fence.message_id, Message.conversation_id == fence.conversation_id)
-            )).one_or_none()
+            message = (
+                await session.execute(
+                    _select(Message.created_at, Message.updated_at).where(
+                        Message.id == fence.message_id,
+                        Message.conversation_id == fence.conversation_id,
+                    )
+                )
+            ).one_or_none()
             if message is None or (
-                message.created_at != fence.message_created_at or message.updated_at != fence.message_updated_at
+                message.created_at != fence.message_created_at
+                or message.updated_at != fence.message_updated_at
             ):
                 return "record_changed", []
             citation_fences.extend(fence.citations)
@@ -1539,21 +2019,29 @@ async def _revalidate_export_citations(
     """
     from modules.knowledge.documents import public as documents_public
 
-    refs = list(dict.fromkeys((item.document_version_id, item.chunk_id) for item in citation_fences))
+    refs = list(
+        dict.fromkeys((item.document_version_id, item.chunk_id) for item in citation_fences)
+    )
     if len(refs) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE:
         raise ValueError("Chat citation fences exceed the revalidation reference budget")
     evidence: dict[tuple[UUID, UUID], EvidenceReferenceRead] = {}
     for start in range(0, len(refs), CHAT_EXPORT_MAX_CITATIONS_PER_PAGE):
-        batch = refs[start:start + CHAT_EXPORT_MAX_CITATIONS_PER_PAGE]
+        batch = refs[start : start + CHAT_EXPORT_MAX_CITATIONS_PER_PAGE]
         try:
-            evidence.update({(row.document_version_id, row.chunk_id): row
-                             for row in await documents_public.read_evidence_refs(
-                                 session, batch, scope=scope, multi_workspace_enabled=multi_workspace_enabled)})
+            evidence.update(
+                {
+                    (row.document_version_id, row.chunk_id): row
+                    for row in await documents_public.read_evidence_refs(
+                        session, batch, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+                    )
+                }
+            )
         except ValueError:
             return "citation_unavailable"
     version_ids = list(dict.fromkeys(version_id for version_id, _chunk_id in refs))
     current_sources = await documents_public.review_version_fences(
-        session, version_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        session, version_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     from modules.sources import public as sources_public
     from modules.sources.public import SourceExportFence
 
@@ -1563,23 +2051,39 @@ async def _revalidate_export_citations(
     for current in current_sources.values():
         if current.source_id not in cited_source_ids:
             continue
-        previous = current_generations.setdefault(current.source_id, current.current_source_generation)
+        previous = current_generations.setdefault(
+            current.source_id, current.current_source_generation
+        )
         if previous != current.current_source_generation:
             conflicting_sources.add(current.source_id)
     eligible_source_fences = [
-        SourceExportFence(source_id=source_id, workspace_id=scope.workspace_id, generation=generation)
+        SourceExportFence(
+            source_id=source_id, workspace_id=scope.workspace_id, generation=generation
+        )
         for source_id, generation in current_generations.items()
         if source_id not in conflicting_sources
     ]
-    eligible_sources = set(await sources_public.filter_export_eligible_sources(
-        session, eligible_source_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled))
+    eligible_sources = set(
+        await sources_public.filter_export_eligible_sources(
+            session,
+            eligible_source_fences,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    )
     for citation in citation_fences:
         ref = evidence.get((citation.document_version_id, citation.chunk_id))
         current_fence = current_sources.get(citation.document_version_id)
-        if (ref is None or current_fence is None or ref.document_id != citation.document_id
-                or ref.source_id != citation.source_id or current_fence.document_id != citation.document_id
-                or current_fence.source_id != citation.source_id or citation.source_id not in eligible_sources
-                or citation.source_id in conflicting_sources):
+        if (
+            ref is None
+            or current_fence is None
+            or ref.document_id != citation.document_id
+            or ref.source_id != citation.source_id
+            or current_fence.document_id != citation.document_id
+            or current_fence.source_id != citation.source_id
+            or citation.source_id not in eligible_sources
+            or citation.source_id in conflicting_sources
+        ):
             return "citation_unavailable"
         if current_fence.current_source_generation != citation.current_source_generation:
             return "source_generation_changed"
@@ -1604,47 +2108,79 @@ async def validate_export_fences(
     Check order (first failure wins): owner, history setting, privacy marker, snapshot count,
     per-row fences, then citation evidence. Read-only; invalid input raises ``ValueError``.
     """
-    if record_kind not in {"conversations", "messages"} or not 0 <= expected_snapshot_count <= 2**63 - 1:
+    if (
+        record_kind not in {"conversations", "messages"}
+        or not 0 <= expected_snapshot_count <= 2**63 - 1
+    ):
         raise ValueError("Chat export revalidation input is invalid")
-    privacy_persisted, privacy_updated_at = _chat_export_privacy_marker(privacy_persisted, privacy_updated_at)
-    if len(fences) > 100 or sum(len(fence.citations) for fence in fences) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE:
+    privacy_persisted, privacy_updated_at = _chat_export_privacy_marker(
+        privacy_persisted, privacy_updated_at
+    )
+    if (
+        len(fences) > 100
+        or sum(len(fence.citations) for fence in fences) > CHAT_EXPORT_MAX_CITATIONS_PER_PAGE
+    ):
         raise ValueError("Chat export revalidation exceeds its bounded page contract")
-    if (not _export_owner_allowed(owner_id, scope, multi_workspace_enabled)
-            or await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id)) is None):
+    if (
+        not _export_owner_allowed(owner_id, scope, multi_workspace_enabled)
+        or await session.scalar(_select(_Owner.id).where(_Owner.id == owner_id)) is None
+    ):
         return ChatExportFenceValidation(
-            valid=False, reason="owner_unavailable", observed_snapshot_count=0,
-            privacy_persisted=privacy_persisted, privacy_updated_at=privacy_updated_at,
+            valid=False,
+            reason="owner_unavailable",
+            observed_snapshot_count=0,
+            privacy_persisted=privacy_persisted,
+            privacy_updated_at=privacy_updated_at,
         )
-    history_enabled, current_privacy_persisted, current_privacy_updated_at = await _chat_export_privacy(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    (
+        history_enabled,
+        current_privacy_persisted,
+        current_privacy_updated_at,
+    ) = await _chat_export_privacy(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if not history_enabled:
         return ChatExportFenceValidation(
-            valid=False, reason="conversation_history_disabled", observed_snapshot_count=0,
-            privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+            valid=False,
+            reason="conversation_history_disabled",
+            observed_snapshot_count=0,
+            privacy_persisted=current_privacy_persisted,
+            privacy_updated_at=current_privacy_updated_at,
         )
-    if (current_privacy_persisted, current_privacy_updated_at) != (privacy_persisted, privacy_updated_at):
+    if (current_privacy_persisted, current_privacy_updated_at) != (
+        privacy_persisted,
+        privacy_updated_at,
+    ):
         return ChatExportFenceValidation(
-            valid=False, reason="privacy_changed", observed_snapshot_count=0,
-            privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+            valid=False,
+            reason="privacy_changed",
+            observed_snapshot_count=0,
+            privacy_persisted=current_privacy_persisted,
+            privacy_updated_at=current_privacy_updated_at,
         )
     observed_count = await _chat_export_count(session, record_kind, snapshot_at, scope.workspace_id)
 
     def verdict(valid: bool, reason: str) -> ChatExportFenceValidation:
         """Build the result sharing the observed count and current privacy marker."""
         return ChatExportFenceValidation(
-            valid=valid, reason=reason, observed_snapshot_count=observed_count,
-            privacy_persisted=current_privacy_persisted, privacy_updated_at=current_privacy_updated_at,
+            valid=valid,
+            reason=reason,
+            observed_snapshot_count=observed_count,
+            privacy_persisted=current_privacy_persisted,
+            privacy_updated_at=current_privacy_updated_at,
         )
 
     if observed_count != expected_snapshot_count:
         return verdict(False, "snapshot_count_changed")
     row_failure, citation_fences = await _revalidate_export_rows(
-        session, record_kind=record_kind, fences=fences, scope=scope)
+        session, record_kind=record_kind, fences=fences, scope=scope
+    )
     if row_failure is not None:
         return verdict(False, row_failure)
     if record_kind == "messages" and citation_fences:
         citation_failure = await _revalidate_export_citations(
-            session, citation_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            session, citation_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
         if citation_failure is not None:
             return verdict(False, citation_failure)
     return verdict(True, "valid")
@@ -1666,10 +2202,13 @@ def _cleanup_scope_parts(
     scope: DocumentCleanupEvidenceScope,
 ) -> tuple[set[UUID], set[tuple[UUID, UUID]], set[UUID]]:
     """Separate exact version-only references from exact version/chunk identities."""
-    version_ids = {item.document_version_id for item in scope.references if item.reference_kind == "version"}
+    version_ids = {
+        item.document_version_id for item in scope.references if item.reference_kind == "version"
+    }
     chunk_refs = {
         (item.document_version_id, item.chunk_id)
-        for item in scope.references if item.reference_kind == "chunk" and item.chunk_id is not None
+        for item in scope.references
+        if item.reference_kind == "chunk" and item.chunk_id is not None
     }
     return version_ids, chunk_refs, {scope.document_id}
 
@@ -1727,7 +2266,8 @@ def _scrub_cleanup_payload(value: _Any, scope: DocumentCleanupEvidenceScope) -> 
 
 
 def _filter_citation_values(
-    citations: object, scope: DocumentCleanupEvidenceScope,
+    citations: object,
+    scope: DocumentCleanupEvidenceScope,
 ) -> tuple[list[dict[str, object]], bool]:
     """Drop exact citations for a deleted document and preserve unrelated citation dictionaries."""
     if not isinstance(citations, list):
@@ -1750,25 +2290,39 @@ def _cleanup_scope_fingerprint(scope: DocumentCleanupEvidenceScope) -> str:
         "operation_id": str(scope.operation_id),
         "document_id": str(scope.document_id),
         "references": [
-            [item.reference_kind, str(item.document_version_id), str(item.chunk_id) if item.chunk_id else None]
+            [
+                item.reference_kind,
+                str(item.document_version_id),
+                str(item.chunk_id) if item.chunk_id else None,
+            ]
             for item in scope.references
         ],
     }
-    return _hashlib.sha256(_json.dumps(material, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
+    return _hashlib.sha256(
+        _json.dumps(material, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
 
 
 def _encode_cleanup_cursor(
-    scope: DocumentCleanupEvidenceScope, kind: str, after: UUID | None,
+    scope: DocumentCleanupEvidenceScope,
+    kind: str,
+    after: UUID | None,
 ) -> str:
     """Encode a deterministic Chat-table keyset cursor bound to this evidence page."""
-    payload = {"v": 1, "operation": str(scope.operation_id), "fingerprint": _cleanup_scope_fingerprint(scope),
-               "kind": kind, "after": str(after) if after else None}
+    payload = {
+        "v": 1,
+        "operation": str(scope.operation_id),
+        "fingerprint": _cleanup_scope_fingerprint(scope),
+        "kind": kind,
+        "after": str(after) if after else None,
+    }
     raw = _json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return b64url_encode(raw)
 
 
 def _decode_cleanup_cursor(
-    cursor: str, scope: DocumentCleanupEvidenceScope,
+    cursor: str,
+    scope: DocumentCleanupEvidenceScope,
 ) -> tuple[str, UUID | None]:
     """Reject malformed, non-canonical, cross-operation, and cross-page cleanup cursors."""
     try:
@@ -1776,17 +2330,27 @@ def _decode_cleanup_cursor(
             raise ValueError("Invalid Chat copied-evidence cursor")
         raw = b64url_decode(cursor)
         payload = _json.loads(raw)
-        if (not isinstance(payload, dict)
-                or set(payload) != {"v", "operation", "fingerprint", "kind", "after"}
-                or payload["v"] != 1 or payload["operation"] != str(scope.operation_id)
-                or payload["fingerprint"] != _cleanup_scope_fingerprint(scope)
-                or payload["kind"] not in {"messages", "runs", "events"}):
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"v", "operation", "fingerprint", "kind", "after"}
+            or payload["v"] != 1
+            or payload["operation"] != str(scope.operation_id)
+            or payload["fingerprint"] != _cleanup_scope_fingerprint(scope)
+            or payload["kind"] not in {"messages", "runs", "events"}
+        ):
             raise ValueError("Chat copied-evidence cursor does not match this operation page")
         after = UUID(payload["after"]) if payload["after"] is not None else None
         if _encode_cleanup_cursor(scope, payload["kind"], after) != cursor:
             raise ValueError("Chat copied-evidence cursor is not canonical")
         return payload["kind"], after
-    except (ValueError, TypeError, KeyError, UnicodeDecodeError, _binascii.Error, _json.JSONDecodeError) as exc:
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        UnicodeDecodeError,
+        _binascii.Error,
+        _json.JSONDecodeError,
+    ) as exc:
         raise ValueError("Invalid Chat copied-evidence cursor") from exc
 
 
@@ -1831,11 +2395,17 @@ async def filter_current_citations(
     if unique_refs:
         from modules.knowledge.documents import public as documents_public
 
-        scope_kw: dict[str, _Any] = {"scope": scope, "multi_workspace_enabled": multi_workspace_enabled}
+        scope_kw: dict[str, _Any] = {
+            "scope": scope,
+            "multi_workspace_enabled": multi_workspace_enabled,
+        }
 
         for start in range(0, len(unique_refs), 100):
             evidence = await documents_public.lock_chat_evidence_chunks(
-                session, unique_refs[start:start + 100], require_active_source=False, **scope_kw,
+                session,
+                unique_refs[start : start + 100],
+                require_active_source=False,
+                **scope_kw,
             )
             current.update({(item.document_version_id, item.chunk_id): item for item in evidence})
     kept: list[dict[str, object]] = []
@@ -1844,8 +2414,11 @@ async def filter_current_citations(
             kept.append(entry)
             continue
         raw, source_id, document_id, version_id, chunk_id = entry
-        if ((item := current.get((version_id, chunk_id))) is not None
-                and item.source_id == source_id and item.document_id == document_id):
+        if (
+            (item := current.get((version_id, chunk_id))) is not None
+            and item.source_id == source_id
+            and item.document_id == document_id
+        ):
             kept.append(raw)
     return kept
 
@@ -1878,13 +2451,18 @@ async def _admit_cleanup_page(
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     await _workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     workspace_id = scope.workspace_id
     actor_id = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
     if evidence.workspace_id != workspace_id or evidence.actor_user_id != actor_id:
         raise ConflictError("Document cleanup evidence belongs to another workspace")
-    own_conversation = (Conversation.workspace_id == workspace_id, Conversation.actor_user_id == actor_id)
+    own_conversation = (
+        Conversation.workspace_id == workspace_id,
+        Conversation.actor_user_id == actor_id,
+    )
     own_run = (ResponseRun.workspace_id == workspace_id, ResponseRun.actor_user_id == actor_id)
     return own_conversation, own_run
 
@@ -1903,30 +2481,49 @@ async def _select_cleanup_candidates(
     caller's workspace and actor; ``kind`` is ``messages``, ``runs`` or ``events``.
     """
     if kind == "messages":
-        return list((await session.execute(
-            _select(Message.id, Message.conversation_id)
-            .join(Conversation, Conversation.id == Message.conversation_id)
-            .where(*own_conversation, *([Message.id > after] if after else []))
-            .order_by(Message.id).limit(remaining + 1)
-        )).all())
-    if kind == "runs":
-        return list((await session.execute(
-            _select(ResponseRun.id, ResponseRun.conversation_id)
-            .where(*own_run, *([ResponseRun.id > after] if after else []))
-            .order_by(ResponseRun.id).limit(remaining + 1)
-        )).all())
-    return list((await session.execute(
-        _select(StreamEvent.id, StreamEvent.response_id, ResponseRun.conversation_id)
-        .join(ResponseRun, ResponseRun.id == StreamEvent.response_id)
-        .where(
-            *own_run, *([StreamEvent.id > after] if after else []),
-            # Deltas of terminal runs are purged on a schedule and the final message/citations
-            # events are still scrubbed; scanning ~1M delta rows made a document delete take hours.
-            # Active runs keep the scan so an in-flight delta can still trigger privacy cancel.
-            _or(StreamEvent.event_type.not_in(("message.delta", "message.reasoning.delta")), ResponseRun.status.in_(("pending", "streaming", "awaiting_input"))),
+        return list(
+            (
+                await session.execute(
+                    _select(Message.id, Message.conversation_id)
+                    .join(Conversation, Conversation.id == Message.conversation_id)
+                    .where(*own_conversation, *([Message.id > after] if after else []))
+                    .order_by(Message.id)
+                    .limit(remaining + 1)
+                )
+            ).all()
         )
-        .order_by(StreamEvent.id).limit(remaining + 1)
-    )).all())
+    if kind == "runs":
+        return list(
+            (
+                await session.execute(
+                    _select(ResponseRun.id, ResponseRun.conversation_id)
+                    .where(*own_run, *([ResponseRun.id > after] if after else []))
+                    .order_by(ResponseRun.id)
+                    .limit(remaining + 1)
+                )
+            ).all()
+        )
+    return list(
+        (
+            await session.execute(
+                _select(StreamEvent.id, StreamEvent.response_id, ResponseRun.conversation_id)
+                .join(ResponseRun, ResponseRun.id == StreamEvent.response_id)
+                .where(
+                    *own_run,
+                    *([StreamEvent.id > after] if after else []),
+                    # Deltas of terminal runs are purged on a schedule and the final message/citations
+                    # events are still scrubbed; scanning ~1M delta rows made a document delete take hours.
+                    # Active runs keep the scan so an in-flight delta can still trigger privacy cancel.
+                    _or(
+                        StreamEvent.event_type.not_in(("message.delta", "message.reasoning.delta")),
+                        ResponseRun.status.in_(("pending", "streaming", "awaiting_input")),
+                    ),
+                )
+                .order_by(StreamEvent.id)
+                .limit(remaining + 1)
+            )
+        ).all()
+    )
 
 
 async def _scrub_cleanup_message(
@@ -1941,14 +2538,26 @@ async def _scrub_cleanup_message(
     copies dropped, run copies purged), else 0. Row-locks the conversation then the message.
     """
     row_id, conversation_id = candidate
-    parent = await session.scalar(_select(Conversation).where(
-        Conversation.id == conversation_id, *own_conversation,
-    ).with_for_update().execution_options(populate_existing=True))
+    parent = await session.scalar(
+        _select(Conversation)
+        .where(
+            Conversation.id == conversation_id,
+            *own_conversation,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if parent is None:
         return 0
-    message = await session.scalar(_select(Message).where(
-        Message.id == row_id, Message.conversation_id == conversation_id,
-    ).with_for_update().execution_options(populate_existing=True))
+    message = await session.scalar(
+        _select(Message)
+        .where(
+            Message.id == row_id,
+            Message.conversation_id == conversation_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if message is None:
         return 0
     citations, citations_changed = _filter_citation_values(message.citations, evidence)
@@ -1960,15 +2569,23 @@ async def _scrub_cleanup_message(
     # The widget copies evidence-derived rows/data that scrubbing cannot attribute: drop it whole.
     # Every part (and the first-part compatibility copy) is dropped together.
     # Both keys are popped unconditionally (any() would stop at the first hit).
-    popped = [message.metadata_json.pop(key, None) for key in ("generative_ui", "generative_ui_parts")]
+    popped = [
+        message.metadata_json.pop(key, None) for key in ("generative_ui", "generative_ui_parts")
+    ]
     had_widget = any(value is not None for value in popped)
     # Free-text model reasoning may quote the withdrawn evidence and cannot be attributed: drop it too.
-    dropped_reasoning = [message.metadata_json.pop(key, None) for key in ("reasoning", "reasoning_truncated")]
+    dropped_reasoning = [
+        message.metadata_json.pop(key, None) for key in ("reasoning", "reasoning_truncated")
+    ]
     if any(value is not None for value in dropped_reasoning) and message.response_id is not None:
-        await session.execute(_update(StreamEvent).where(
-            StreamEvent.response_id == message.response_id,
-            StreamEvent.event_type == "message.reasoning.delta",
-        ).values(data={"text": ""}))
+        await session.execute(
+            _update(StreamEvent)
+            .where(
+                StreamEvent.response_id == message.response_id,
+                StreamEvent.event_type == "message.reasoning.delta",
+            )
+            .values(data={"text": ""})
+        )
     # Streaming deltas carry no document ids, so blank all widget events of the answer's run.
     if had_widget and message.response_id is not None:
         await neutralize_ui_events(session, message.response_id)
@@ -1990,14 +2607,27 @@ async def _scrub_cleanup_run(
     Returns 1 when changed; active runs are privacy-cancelled under the held run lock.
     """
     row_id, conversation_id = candidate
-    parent = await session.scalar(_select(Conversation).where(
-        Conversation.id == conversation_id, *own_conversation,
-    ).with_for_update().execution_options(populate_existing=True))
+    parent = await session.scalar(
+        _select(Conversation)
+        .where(
+            Conversation.id == conversation_id,
+            *own_conversation,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if parent is None:
         return 0
-    run = await session.scalar(_select(ResponseRun).where(
-        ResponseRun.id == row_id, ResponseRun.conversation_id == conversation_id, *own_run,
-    ).with_for_update().execution_options(populate_existing=True))
+    run = await session.scalar(
+        _select(ResponseRun)
+        .where(
+            ResponseRun.id == row_id,
+            ResponseRun.conversation_id == conversation_id,
+            *own_run,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if run is None:
         return 0
     citations, citations_changed = _filter_citation_values(run.citations, evidence)
@@ -2006,7 +2636,9 @@ async def _scrub_cleanup_run(
         return 0
     run.citations = citations
     run.retrieval_context = context if isinstance(context, dict) else {}
-    await purge_run_model_copies(session, run.id)  # completed runs too: input request, todos, templates
+    await purge_run_model_copies(
+        session, run.id
+    )  # completed runs too: input request, todos, templates
     if run.status in {"pending", "streaming", "awaiting_input"}:
         await _privacy_cancel_locked(session, run)
     return 1
@@ -2025,19 +2657,38 @@ async def _scrub_cleanup_event(
     privacy-cancelled at the event's sequence.
     """
     row_id, response_id, conversation_id = candidate
-    parent = await session.scalar(_select(Conversation).where(
-        Conversation.id == conversation_id, *own_conversation,
-    ).with_for_update().execution_options(populate_existing=True))
+    parent = await session.scalar(
+        _select(Conversation)
+        .where(
+            Conversation.id == conversation_id,
+            *own_conversation,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if parent is None:
         return 0
-    run = await session.scalar(_select(ResponseRun).where(
-        ResponseRun.id == response_id, ResponseRun.conversation_id == conversation_id, *own_run,
-    ).with_for_update().execution_options(populate_existing=True))
+    run = await session.scalar(
+        _select(ResponseRun)
+        .where(
+            ResponseRun.id == response_id,
+            ResponseRun.conversation_id == conversation_id,
+            *own_run,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if run is None:
         return 0
-    event = await session.scalar(_select(StreamEvent).where(
-        StreamEvent.id == row_id, StreamEvent.response_id == response_id,
-    ).with_for_update().execution_options(populate_existing=True))
+    event = await session.scalar(
+        _select(StreamEvent)
+        .where(
+            StreamEvent.id == row_id,
+            StreamEvent.response_id == response_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if event is None:
         return 0
     payload, payload_changed = _scrub_cleanup_payload(event.data or {}, evidence)
@@ -2080,7 +2731,11 @@ async def purge_document_copied_evidence_page(
     statement is bound to that workspace and actor. Never commits.
     """
     own_conversation, own_run = await _admit_cleanup_page(
-        session, evidence, limit=limit, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        evidence,
+        limit=limit,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if cursor is None:
         kind, after = "messages", None
@@ -2097,36 +2752,53 @@ async def purge_document_copied_evidence_page(
     while index < len(kinds) and examined < limit:
         kind = kinds[index]
         remaining = limit - examined
-        found = await _select_cleanup_candidates(session, kind, after, remaining, own_conversation, own_run)
+        found = await _select_cleanup_candidates(
+            session, kind, after, remaining, own_conversation, own_run
+        )
         has_more = len(found) > remaining
         rows = found[:remaining]
         examined += len(rows)
         for candidate in rows:
             if kind == "messages":
-                changed += await _scrub_cleanup_message(session, candidate, evidence, own_conversation)
+                changed += await _scrub_cleanup_message(
+                    session, candidate, evidence, own_conversation
+                )
             elif kind == "runs":
-                changed += await _scrub_cleanup_run(session, candidate, evidence, own_conversation, own_run)
+                changed += await _scrub_cleanup_run(
+                    session, candidate, evidence, own_conversation, own_run
+                )
             else:
-                changed += await _scrub_cleanup_event(session, candidate, evidence, own_conversation, own_run)
+                changed += await _scrub_cleanup_event(
+                    session, candidate, evidence, own_conversation, own_run
+                )
         if has_more:
             last_id = rows[-1][0]
             return CopiedEvidenceCleanupProgress(
                 next_cursor=_encode_cleanup_cursor(evidence, kind, last_id),
-                complete=False, rows_examined=examined, rows_changed=changed,
+                complete=False,
+                rows_examined=examined,
+                rows_changed=changed,
             )
         after = None
         index += 1
         if examined >= limit and index < len(kinds):
             return CopiedEvidenceCleanupProgress(
                 next_cursor=_encode_cleanup_cursor(evidence, kinds[index], None),
-                complete=False, rows_examined=examined, rows_changed=changed,
+                complete=False,
+                rows_examined=examined,
+                rows_changed=changed,
             )
     return CopiedEvidenceCleanupProgress(
-        next_cursor=None, complete=True, rows_examined=examined, rows_changed=changed,
+        next_cursor=None,
+        complete=True,
+        rows_examined=examined,
+        rows_changed=changed,
     )
 
 
-async def count_source_conversations(session: AsyncSession, source_id: UUID, *, scope: Scope, cap: int = 1000) -> int:
+async def count_source_conversations(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, cap: int = 1000
+) -> int:
     """Return an owner-UI-only count of conversations citing a source, saturating at ``cap``."""
     key = str(source_id)
     # ponytail: seq scan over chat_messages; add GIN(citations jsonb_path_ops) if dialog open gets slow
@@ -2139,7 +2811,8 @@ async def count_source_conversations(session: AsyncSession, source_id: UUID, *, 
         .join(Conversation, Conversation.id == Message.conversation_id)
         .where(Conversation.workspace_id == scope.workspace_id, cites),
         _select(ResponseRun.conversation_id).where(
-            ResponseRun.workspace_id == scope.workspace_id, ResponseRun.retrieval_context["source_scope"].contains([key]),
+            ResponseRun.workspace_id == scope.workspace_id,
+            ResponseRun.retrieval_context["source_scope"].contains([key]),
         ),
     ).subquery()
     capped = _select(ids.c.conversation_id).limit(cap).subquery()
@@ -2163,4 +2836,6 @@ async def build_answer_context(
     """
     from modules.chat import retrieval
 
-    return await retrieval.build_context(session, session_factory, redis, settings, request, scope=scope)
+    return await retrieval.build_context(
+        session, session_factory, redis, settings, request, scope=scope
+    )

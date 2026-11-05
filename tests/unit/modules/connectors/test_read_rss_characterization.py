@@ -22,19 +22,26 @@ def _rss(items: list[tuple[str, datetime | None]], *, next_url: str | None = Non
         + "<description>d</description></item>"
         for guid, when in items
     )
-    link = f'<atom:link xmlns:atom="http://www.w3.org/2005/Atom" rel="next" href="{next_url}"/>' if next_url else ""
+    link = (
+        f'<atom:link xmlns:atom="http://www.w3.org/2005/Atom" rel="next" href="{next_url}"/>'
+        if next_url
+        else ""
+    )
     return f'<?xml version="1.0"?><rss version="2.0"><channel>{link}{body}</channel></rss>'.encode()
 
 
 def _fetch(pages: dict[str, bytes]) -> AsyncMock:
     async def fetch(url: str) -> bytes:
         return pages[url]
+
     return AsyncMock(side_effect=fetch)
 
 
 @pytest.mark.asyncio
 async def test_single_page_records_and_cursor_after_is_newest_published_time() -> None:
-    pages = {"https://f.example/rss": _rss([("a", BASE), ("b", BASE + timedelta(hours=1)), ("c", None)])}
+    pages = {
+        "https://f.example/rss": _rss([("a", BASE), ("b", BASE + timedelta(hours=1)), ("c", None)])
+    }
     result = await n8n.read_rss("https://f.example/rss", None, fetch=_fetch(pages))
     records = result["records"]
     assert [r["provider_id"] for r in records] == ["a", "b", "c"]  # type: ignore[index]
@@ -42,7 +49,9 @@ async def test_single_page_records_and_cursor_after_is_newest_published_time() -
     assert records[0]["metadata"]["published_at"] == BASE.isoformat()  # type: ignore[index]
     assert records[2]["metadata"]["published_at"] is None  # type: ignore[index]
     assert result["cursor_before"] is None
-    assert result["cursor_after"] == (BASE + timedelta(hours=1)).isoformat()  # undated item never moves it
+    assert (
+        result["cursor_after"] == (BASE + timedelta(hours=1)).isoformat()
+    )  # undated item never moves it
 
 
 @pytest.mark.asyncio
@@ -64,7 +73,10 @@ async def test_next_links_are_followed_once_and_loops_stop() -> None:
     stats: dict[str, object] = {}
     result = await n8n.read_rss("https://f.example/rss", None, fetch=fetch, stats=stats)
     assert [r["provider_id"] for r in result["records"]] == ["a", "b"]  # type: ignore[index]
-    assert [c.args[0] for c in fetch.await_args_list] == ["https://f.example/rss", "https://f.example/rss?page=2"]
+    assert [c.args[0] for c in fetch.await_args_list] == [
+        "https://f.example/rss",
+        "https://f.example/rss?page=2",
+    ]
     assert stats == {}
 
 
@@ -91,7 +103,9 @@ async def test_record_cap_at_page_boundary_sets_resume_url() -> None:
 @pytest.mark.asyncio
 async def test_ten_page_cap_sets_resume_url_for_the_unread_link() -> None:
     pages = {
-        f"https://f.example/rss?p={n}" if n else "https://f.example/rss": _rss([(f"g{n}", BASE)], next_url=f"/rss?p={n + 1}")
+        f"https://f.example/rss?p={n}" if n else "https://f.example/rss": _rss(
+            [(f"g{n}", BASE)], next_url=f"/rss?p={n + 1}"
+        )
         for n in range(10)
     }
     stats: dict[str, object] = {}
@@ -105,6 +119,12 @@ async def test_total_byte_cap_and_non_public_url_are_rejected() -> None:
     big = AsyncMock(return_value=b"x" * (25 * 1024 * 1024 + 1))
     with pytest.raises(ValueError, match="RSS pagination exceeded the 25 MiB limit"):
         await n8n.read_rss("https://f.example/rss", None, fetch=big)
-    with patch.object(n8n, "validate_public_url", AsyncMock(side_effect=ValueError("URL resolves to a non-public address"))), \
-            pytest.raises(ValueError, match="non-public"):
+    with (
+        patch.object(
+            n8n,
+            "validate_public_url",
+            AsyncMock(side_effect=ValueError("URL resolves to a non-public address")),
+        ),
+        pytest.raises(ValueError, match="non-public"),
+    ):
         await n8n.read_rss("https://localhost/rss", None)

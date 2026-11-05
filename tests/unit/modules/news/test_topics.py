@@ -43,11 +43,15 @@ class TestTopicNormalizationAndSchemas:
         assert _normalize_name("  Machine   Learning  ") == "Machine Learning"
 
         # Empty or whitespace-only rejected
-        with pytest.raises(ValueError, match="Topic name must contain 1 to 200 normalized characters"):
+        with pytest.raises(
+            ValueError, match="Topic name must contain 1 to 200 normalized characters"
+        ):
             _normalize_name("   ")
 
         # Over 200 chars rejected
-        with pytest.raises(ValueError, match="Topic name must contain 1 to 200 normalized characters"):
+        with pytest.raises(
+            ValueError, match="Topic name must contain 1 to 200 normalized characters"
+        ):
             _normalize_name("a" * 201)
 
     def test_normalize_keywords_deduplication_and_bounds(self) -> None:
@@ -106,8 +110,12 @@ class TestCanonicalURLNormalization:
 
     def test_canonical_url_http_and_https(self) -> None:
         """Verify standard http and https URLs normalize scheme and host to lowercase."""
-        assert _canonical_url("HTTPS://EXAMPLE.COM/news/article") == "https://example.com/news/article"
-        assert _canonical_url("http://example.com/path?query=1") == "http://example.com/path?query=1"
+        assert (
+            _canonical_url("HTTPS://EXAMPLE.COM/news/article") == "https://example.com/news/article"
+        )
+        assert (
+            _canonical_url("http://example.com/path?query=1") == "http://example.com/path?query=1"
+        )
 
     def test_canonical_url_default_ports_stripped(self) -> None:
         """Default port 80 for http and 443 for https are stripped."""
@@ -119,7 +127,10 @@ class TestCanonicalURLNormalization:
 
     def test_canonical_url_fragments_dropped(self) -> None:
         """URL fragments (#section) are dropped while preserving query parameters."""
-        assert _canonical_url("https://example.com/page?ref=home#top") == "https://example.com/page?ref=home"
+        assert (
+            _canonical_url("https://example.com/page?ref=home#top")
+            == "https://example.com/page?ref=home"
+        )
 
     def test_canonical_url_empty_path_becomes_slash(self) -> None:
         """Empty path is normalized to root slash '/'."""

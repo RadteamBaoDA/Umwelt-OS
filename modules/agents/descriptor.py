@@ -32,11 +32,12 @@ class AgentDescriptor(ModuleDescriptor):
     tools: tuple[str, ...] = ("agents.handoff",)
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.agents.routes", 460),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.agents.routes", 460),)
     capabilities: tuple[CapabilitySpec, ...] = (
-        CapabilitySpec("agents.erase_account_checkpoints_page", "modules.agents.public:erase_account_checkpoints_page"),
+        CapabilitySpec(
+            "agents.erase_account_checkpoints_page",
+            "modules.agents.public:erase_account_checkpoints_page",
+        ),
     )
     erasure_module: str | None = "modules.agents.erasure"
     erasure_order: int = 10

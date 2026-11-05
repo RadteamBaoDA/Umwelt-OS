@@ -38,6 +38,7 @@ from modules.sources.public import SourceReadProjection as Source
 @dataclass(frozen=True)
 class ReadyVersionRef:
     """Reference a ready current version with source generation and privacy state."""
+
     document_id: UUID
     document_version_id: UUID
     source_id: UUID
@@ -52,6 +53,7 @@ class ReadyVersionRef:
 @dataclass(frozen=True)
 class ReviewVersionFence:
     """Snapshot document/source identity and current source generation for review."""
+
     document_id: UUID
     source_id: UUID
     current_source_generation: int
@@ -60,20 +62,32 @@ class ReviewVersionFence:
 
 
 async def list_ready_version_refs(
-    session: AsyncSession, limit: int = 50, cursor: str | None = None, *,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    limit: int = 50,
+    cursor: str | None = None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[list[ReadyVersionRef], str | None]:
     """Page through active-source current versions that have ready chunks."""
     access_fence = await _admit_document_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if not 1 <= limit <= 100:
         raise ValueError("Ready-version page size must be between 1 and 100")
     statement = (
         select(
-            Document.id, Document.created_at, Source.id, Source.generation,
-            DocumentVersion.id, DocumentVersion.version_number, Source.local_only,
-            Document.raw_uri, Document.mime_type,
+            Document.id,
+            Document.created_at,
+            Source.id,
+            Source.generation,
+            DocumentVersion.id,
+            DocumentVersion.version_number,
+            Source.local_only,
+            Document.raw_uri,
+            Document.mime_type,
         )
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
         .join(Source, Source.id == Document.source_id)
@@ -83,62 +97,130 @@ async def list_ready_version_refs(
             DocumentVersion.content != "",
             Source.status == "active",
             *_document_scope(scope),
-            select(DocumentChunk.id).where(DocumentChunk.document_version_id == DocumentVersion.id).exists(),
+            select(DocumentChunk.id)
+            .where(DocumentChunk.document_version_id == DocumentVersion.id)
+            .exists(),
         )
     )
     if cursor:
         scoped_cursor = _decode_document_owner_cursor(
-            cursor, kind="ready_versions", fence=access_fence, resource_id=None,
+            cursor,
+            kind="ready_versions",
+            fence=access_fence,
+            resource_id=None,
         )
         created_at, identifier = decode_cursor(scoped_cursor)
-        statement = statement.where(tuple_(Document.created_at, Document.id) < (created_at, identifier))
-    rows = list((await session.execute(statement.order_by(desc(Document.created_at), desc(Document.id)).limit(limit + 1))).all())
+        statement = statement.where(
+            tuple_(Document.created_at, Document.id) < (created_at, identifier)
+        )
+    rows = list(
+        (
+            await session.execute(
+                statement.order_by(desc(Document.created_at), desc(Document.id)).limit(limit + 1)
+            )
+        ).all()
+    )
     more = len(rows) > limit
     rows = rows[:limit]
-    result = [ReadyVersionRef(
-        document_id=document_id, document_version_id=version_id, source_id=source_id,
-        source_generation=generation, version_number=version_number, created_at=created_at,
-        local_only=local_only, raw_uri=raw_uri, mime_type=mime_type,
-    ) for (document_id, created_at, source_id, generation, version_id, version_number, local_only,
-           raw_uri, mime_type) in rows]
-    next_cursor = (_encode_document_owner_cursor(
-        encode_cursor(rows[-1][1], rows[-1][0]), kind="ready_versions",
-        fence=access_fence, resource_id=None,
-    ) if more and rows else None)
+    result = [
+        ReadyVersionRef(
+            document_id=document_id,
+            document_version_id=version_id,
+            source_id=source_id,
+            source_generation=generation,
+            version_number=version_number,
+            created_at=created_at,
+            local_only=local_only,
+            raw_uri=raw_uri,
+            mime_type=mime_type,
+        )
+        for (
+            document_id,
+            created_at,
+            source_id,
+            generation,
+            version_id,
+            version_number,
+            local_only,
+            raw_uri,
+            mime_type,
+        ) in rows
+    ]
+    next_cursor = (
+        _encode_document_owner_cursor(
+            encode_cursor(rows[-1][1], rows[-1][0]),
+            kind="ready_versions",
+            fence=access_fence,
+            resource_id=None,
+        )
+        if more and rows
+        else None
+    )
     return result, next_cursor
 
 
 async def get_ready_version_ref(
-    session: AsyncSession, version_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    version_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> ReadyVersionRef | None:
     """Resolve one version only while it remains the ready current version."""
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    row = (await session.execute(
-        select(
-            Document.id, Document.created_at, Source.id, Source.generation,
-            DocumentVersion.id, DocumentVersion.version_number, Source.local_only,
-            Document.raw_uri, Document.mime_type,
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    row = (
+        await session.execute(
+            select(
+                Document.id,
+                Document.created_at,
+                Source.id,
+                Source.generation,
+                DocumentVersion.id,
+                DocumentVersion.version_number,
+                Source.local_only,
+                Document.raw_uri,
+                Document.mime_type,
+            )
+            .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+            .join(Source, Source.id == Document.source_id)
+            .where(
+                DocumentVersion.id == version_id,
+                *_document_scope(scope),
+                Document.current_version == DocumentVersion.version_number,
+                Document.extraction_status.in_(("ready", "succeeded")),
+                DocumentVersion.content != "",
+                Source.status == "active",
+                select(DocumentChunk.id)
+                .where(DocumentChunk.document_version_id == DocumentVersion.id)
+                .exists(),
+            )
         )
-        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
-        .join(Source, Source.id == Document.source_id)
-        .where(
-            DocumentVersion.id == version_id,
-            *_document_scope(scope),
-            Document.current_version == DocumentVersion.version_number,
-            Document.extraction_status.in_(("ready", "succeeded")),
-            DocumentVersion.content != "",
-            Source.status == "active",
-            select(DocumentChunk.id).where(DocumentChunk.document_version_id == DocumentVersion.id).exists(),
-        )
-    )).one_or_none()
+    ).one_or_none()
     if row is None:
         return None
-    (document_id, created_at, source_id, generation, actual_version_id, version_number, local_only,
-     raw_uri, mime_type) = row
+    (
+        document_id,
+        created_at,
+        source_id,
+        generation,
+        actual_version_id,
+        version_number,
+        local_only,
+        raw_uri,
+        mime_type,
+    ) = row
     return ReadyVersionRef(
-        document_id=document_id, document_version_id=actual_version_id, source_id=source_id,
-        source_generation=generation, version_number=version_number,
-        created_at=created_at, local_only=local_only, raw_uri=raw_uri, mime_type=mime_type,
+        document_id=document_id,
+        document_version_id=actual_version_id,
+        source_id=source_id,
+        source_generation=generation,
+        version_number=version_number,
+        created_at=created_at,
+        local_only=local_only,
+        raw_uri=raw_uri,
+        mime_type=mime_type,
     )
 
 
@@ -164,8 +246,13 @@ def decode_version_cursor(cursor: str) -> int:
 
 
 async def list_versions(
-    session: AsyncSession, document_id: UUID, limit: int, cursor: str | None, *,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    document_id: UUID,
+    limit: int,
+    cursor: str | None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[list[DocumentVersion] | None, str | None]:
     """Page <=100 ascending immutable revisions through an admitted retained owner root.
 
@@ -176,16 +263,29 @@ async def list_versions(
     if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)):
         raise TypeError("Document history requires a workspace owner")
     fence = await _admit_document_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True
+    )
     if not 1 <= limit <= 100:
         raise ValueError("Version page size must be between 1 and 100")
-    after_version = decode_version_cursor(_decode_document_owner_cursor(
-        cursor, kind="versions", fence=fence, resource_id=document_id)) if cursor is not None else None
+    after_version = (
+        decode_version_cursor(
+            _decode_document_owner_cursor(
+                cursor, kind="versions", fence=fence, resource_id=document_id
+            )
+        )
+        if cursor is not None
+        else None
+    )
     scoped = _document_scope(scope, allow_member=True)
     if await session.scalar(select(Document.id).where(Document.id == document_id, *scoped)) is None:
         return None, None
-    statement = select(DocumentVersion).join(Document, Document.id == DocumentVersion.document_id).where(
-        Document.id == document_id, *scoped,
+    statement = (
+        select(DocumentVersion)
+        .join(Document, Document.id == DocumentVersion.document_id)
+        .where(
+            Document.id == document_id,
+            *scoped,
+        )
     )
     if after_version is not None:
         statement = statement.where(DocumentVersion.version_number > after_version)
@@ -195,13 +295,26 @@ async def list_versions(
     rows = list(result.all())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    next_cursor = _encode_document_owner_cursor(encode_version_cursor(rows[-1].version_number),
-        kind="versions", fence=fence, resource_id=document_id) if has_more and rows else None
+    next_cursor = (
+        _encode_document_owner_cursor(
+            encode_version_cursor(rows[-1].version_number),
+            kind="versions",
+            fence=fence,
+            resource_id=document_id,
+        )
+        if has_more and rows
+        else None
+    )
     return rows, next_cursor
 
 
 async def get_version(
-    session: AsyncSession, document_id: UUID, number: int, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    document_id: UUID,
+    number: int,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> DocumentVersion | None:
     """Read one exact historical owner revision through its retained scoped parent.
 
@@ -212,9 +325,12 @@ async def get_version(
     if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)):
         raise TypeError("Document history requires a workspace owner")
     await _admit_document_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True)
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True
+    )
     return await session.scalar(
-        select(DocumentVersion).join(Document, Document.id == DocumentVersion.document_id).where(
+        select(DocumentVersion)
+        .join(Document, Document.id == DocumentVersion.document_id)
+        .where(
             DocumentVersion.document_id == document_id,
             DocumentVersion.version_number == number,
             *_document_scope(scope, allow_member=True),
@@ -223,7 +339,11 @@ async def get_version(
 
 
 async def review_version_locator(
-    session: AsyncSession, version_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    version_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> tuple[UUID, UUID] | None:
     """Locate a retained version inside admitted exact workspace/Source scope only.
 
@@ -234,21 +354,30 @@ async def review_version_locator(
     Existing held callers acquire no earlier locks and supply the actual flag;
     this locator is read-only, never proof of write authority or retention locks.
     """
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    row = (await session.execute(
-        select(Document.id, Document.source_id)
-        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
-        .where(DocumentVersion.id == version_id, *_document_scope(scope))
-    )).one_or_none()
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    row = (
+        await session.execute(
+            select(Document.id, Document.source_id)
+            .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+            .where(DocumentVersion.id == version_id, *_document_scope(scope))
+        )
+    ).one_or_none()
     if row is None:
         return None
-    source = await sources.get_source_fence(session, row[1], scope=scope,
-                                          multi_workspace_enabled=multi_workspace_enabled)
+    source = await sources.get_source_fence(
+        session, row[1], scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     return (row[0], row[1]) if source is not None else None
 
 
 async def cleanup_evidence_version_document(
-    session: AsyncSession, version_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    version_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     source_id: UUID | None = None,
 ) -> UUID | None:
     """Return the Document that owned a version, from the retained cleanup evidence of a deleted Document.
@@ -256,10 +385,15 @@ async def cleanup_evidence_version_document(
     Fallback for callers whose live ``review_version_locator`` no longer resolves a version. Reads only
     immutable receipt references (no lock), so it cannot invert the privacy -> receipt -> owner order.
     """
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     statement = (
         select(DocumentCleanupOperation.document_id)
-        .join(DocumentCleanupEvidenceReference, DocumentCleanupEvidenceReference.operation_id == DocumentCleanupOperation.id)
+        .join(
+            DocumentCleanupEvidenceReference,
+            DocumentCleanupEvidenceReference.operation_id == DocumentCleanupOperation.id,
+        )
         .where(
             DocumentCleanupOperation.workspace_id == scope.workspace_id,
             DocumentCleanupEvidenceReference.workspace_id == scope.workspace_id,
@@ -273,39 +407,68 @@ async def cleanup_evidence_version_document(
 
 
 async def review_version_fences(
-    session: AsyncSession, version_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    version_ids: list[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> dict[UUID, ReviewVersionFence]:
     """Return source-generation snapshots for a bounded de-duplicated version set."""
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     ids = list(dict.fromkeys(version_ids))
     if len(ids) > 100:
         raise ValueError("Review version fence set exceeds its page limit")
     if not ids:
         return {}
-    rows = (await session.execute(
-        select(DocumentVersion.id, Document.id, Document.source_id, Source.generation, Source.name, DocumentVersion.version_number)
-        .join(Document, Document.id == DocumentVersion.document_id)
-        .join(Source, Source.id == Document.source_id)
-        .where(DocumentVersion.id.in_(ids), *_document_scope(scope))
-    )).all()
+    rows = (
+        await session.execute(
+            select(
+                DocumentVersion.id,
+                Document.id,
+                Document.source_id,
+                Source.generation,
+                Source.name,
+                DocumentVersion.version_number,
+            )
+            .join(Document, Document.id == DocumentVersion.document_id)
+            .join(Source, Source.id == Document.source_id)
+            .where(DocumentVersion.id.in_(ids), *_document_scope(scope))
+        )
+    ).all()
     return {
-        version_id: ReviewVersionFence(document_id, source_id, generation, source_name, version_number)
+        version_id: ReviewVersionFence(
+            document_id, source_id, generation, source_name, version_number
+        )
         for version_id, document_id, source_id, generation, source_name, version_number in rows
     }
 
 
 async def lock_document_ids(
-    session: AsyncSession, document_ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    document_ids: list[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[UUID]:
     """Lock a bounded, sorted set of retained document rows for owner transactions."""
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     ids = sorted(set(document_ids), key=str)
     if len(ids) > 100:
         raise ValueError("Document lock set exceeds its atomic limit")
     if not ids:
         return []
-    locked = list((await session.scalars(
-        select(Document.id).where(Document.id.in_(ids), *_document_scope(scope))
-        .order_by(Document.id).with_for_update()
-    )).all())
+    locked = list(
+        (
+            await session.scalars(
+                select(Document.id)
+                .where(Document.id.in_(ids), *_document_scope(scope))
+                .order_by(Document.id)
+                .with_for_update()
+            )
+        ).all()
+    )
     return locked

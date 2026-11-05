@@ -51,7 +51,9 @@ def _sql(statement) -> str:
     return str(statement.compile(dialect=postgresql.dialect()))
 
 
-@pytest.mark.parametrize("reader", [public.list_ready_events_after, public.list_terminal_runs_after])
+@pytest.mark.parametrize(
+    "reader", [public.list_ready_events_after, public.list_terminal_runs_after]
+)
 def test_position_is_a_tuple_not_an_opaque_cursor(reader) -> None:
     parameters = inspect.signature(reader).parameters
     assert "tuple" in str(parameters["position"].annotation)
@@ -59,7 +61,9 @@ def test_position_is_a_tuple_not_an_opaque_cursor(reader) -> None:
     assert parameters["multi_workspace_enabled"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
-@pytest.mark.parametrize("reader", [public.list_ready_events_after, public.list_terminal_runs_after])
+@pytest.mark.parametrize(
+    "reader", [public.list_ready_events_after, public.list_terminal_runs_after]
+)
 async def test_workspace_predicate_precedes_order_and_limit(reader, admission) -> None:
     session = _Session()
     await reader(session, POSITION, 25, scope=SCOPE, multi_workspace_enabled=False)
@@ -70,9 +74,13 @@ async def test_workspace_predicate_precedes_order_and_limit(reader, admission) -
     assert "(" in sql[where:order] and ") >" in sql[where:order]  # keyset tuple comparison
 
 
-@pytest.mark.parametrize("reader", [public.list_ready_events_after, public.list_terminal_runs_after])
+@pytest.mark.parametrize(
+    "reader", [public.list_ready_events_after, public.list_terminal_runs_after]
+)
 async def test_member_denied_before_any_query(reader) -> None:
-    member = WorkspaceContext(user_id=2, workspace_id=WORKSPACE_ID, role="member", membership_revision=1)
+    member = WorkspaceContext(
+        user_id=2, workspace_id=WORKSPACE_ID, role="member", membership_revision=1
+    )
     session = _Session()
     with pytest.raises(DomainError) as denied:
         await reader(session, None, scope=member, multi_workspace_enabled=True)
@@ -80,7 +88,9 @@ async def test_member_denied_before_any_query(reader) -> None:
     assert session.statements == []
 
 
-@pytest.mark.parametrize("reader", [public.list_ready_events_after, public.list_terminal_runs_after])
+@pytest.mark.parametrize(
+    "reader", [public.list_ready_events_after, public.list_terminal_runs_after]
+)
 async def test_stale_admission_denied_before_any_query(reader, admission) -> None:
     admission.side_effect = HTTPException(status_code=409, detail="stale")
     session = _Session()
@@ -133,7 +143,8 @@ async def test_terminal_run_payload_matches_declared_trigger_fields() -> None:
     run = _Run()
     session = _RunSession(run)
     [(_, _, _, payload)] = await public.list_terminal_runs_after(
-        session, None, scope=SCOPE, multi_workspace_enabled=False)
+        session, None, scope=SCOPE, multi_workspace_enabled=False
+    )
     assert payload == {"source_id": str(run.source_id), "status": "succeeded", "new_items": 4}
     conditions.validate_sample("connector_sync_result", payload)
     assert "source_generation >= " in _sql(session.statements[0])

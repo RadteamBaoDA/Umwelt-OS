@@ -36,50 +36,82 @@ class Harness:
         self.calls: list[str] = []
         self.provider = provider
         self.lease = SimpleNamespace(
-            token=uuid4(), source_generation=1, connector_revision=1, workspace_id=WS,
-            configuration_revision=5, cursor_before="c0",
+            token=uuid4(),
+            source_generation=1,
+            connector_revision=1,
+            workspace_id=WS,
+            configuration_revision=5,
+            cursor_before="c0",
         )
         self.session = MagicMock()
         self.session.rollback = AsyncMock(side_effect=lambda: self.calls.append("rollback"))
         self.redis = MagicMock()
-        self.request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-            settings=SimpleNamespace(multi_workspace_enabled=False), redis=self.redis,
-        )))
+        self.request = SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    settings=SimpleNamespace(multi_workspace_enabled=False),
+                    redis=self.redis,
+                )
+            )
+        )
         self.source = SimpleNamespace(id=uuid4(), provider=provider, generation=1, configuration={})
         self.payload = ProviderFetchRequest(
-            source_generation=1, connector_revision=1, admission_request_id=uuid4(), admission_token=uuid4(),
+            source_generation=1,
+            connector_revision=1,
+            admission_request_id=uuid4(),
+            admission_token=uuid4(),
         )
         self.access_fence = SimpleNamespace(configuration_revision=5)
         self.accepted: dict[str, Any] = {}
 
         def note(name: str, result: Any = None) -> AsyncMock:
             """Build an async spy that appends ``name`` to the call log."""
+
             async def fn(*a: Any, **kw: Any) -> Any:
                 """Record the call and return the canned result."""
                 self.calls.append(name)
                 self.last_kwargs = kw
                 return result
+
             return AsyncMock(side_effect=fn)
 
         monkeypatch.setattr(native_fetch, "is_native_provider", lambda p: True)
         monkeypatch.setattr(native_fetch.registry, "validate", lambda s: None)
-        monkeypatch.setattr(native_fetch.provisioning, "require_collection_fence", note("fence", True))
+        monkeypatch.setattr(
+            native_fetch.provisioning, "require_collection_fence", note("fence", True)
+        )
         monkeypatch.setattr(native_fetch, "provider_cooldown", note("cooldown", None))
-        monkeypatch.setattr(native_fetch.ingestion, "acquire_connector_collection", note("acquire", self.lease))
-        monkeypatch.setattr(native_fetch.sources, "get_source_fence", note(
-            "source_fence", SimpleNamespace(generation=1, workspace_id=WS)))
+        monkeypatch.setattr(
+            native_fetch.ingestion, "acquire_connector_collection", note("acquire", self.lease)
+        )
+        monkeypatch.setattr(
+            native_fetch.sources,
+            "get_source_fence",
+            note("source_fence", SimpleNamespace(generation=1, workspace_id=WS)),
+        )
         monkeypatch.setattr(native_fetch, "release_failed_collection", note("release"))
         monkeypatch.setattr(native_fetch, "settle_request_exit", note("settle"))
-        monkeypatch.setattr(native_fetch, "extend_provider_cooldown", note("extend", datetime.now(UTC) + timedelta(minutes=1)))
-        monkeypatch.setattr(native_fetch.ingestion, "release_connector_collection", note("release_lease"))
+        monkeypatch.setattr(
+            native_fetch,
+            "extend_provider_cooldown",
+            note("extend", datetime.now(UTC) + timedelta(minutes=1)),
+        )
+        monkeypatch.setattr(
+            native_fetch.ingestion, "release_connector_collection", note("release_lease")
+        )
 
         async def accept(session: Any, batch: Any, **kw: Any) -> Any:
             """Capture the accepted batch and return a queued receipt."""
             self.calls.append("accept")
             self.accepted = {"batch": batch, **kw}
             return SimpleNamespace(
-                workspace_id=WS, status="queued", batch_id=uuid4(), run_id=uuid4(),
-                received_update_count=0, record_count=len(batch.records), coverage=batch.coverage,
+                workspace_id=WS,
+                status="queued",
+                batch_id=uuid4(),
+                run_id=uuid4(),
+                received_update_count=0,
+                record_count=len(batch.records),
+                coverage=batch.coverage,
                 next_eligible_at=None,
             )
 
@@ -88,8 +120,13 @@ class Harness:
     async def run(self) -> Any:
         """Invoke the dispatcher with the harness collaborators."""
         return await run_provider_fetch(
-            self.session, self.request, self.source, self.payload,  # type: ignore[arg-type]
-            collector_token="tok", request_ref=SimpleNamespace(), scope=SCOPE,  # type: ignore[arg-type]
+            self.session,
+            self.request,
+            self.source,
+            self.payload,  # type: ignore[arg-type]
+            collector_token="tok",
+            request_ref=SimpleNamespace(),
+            scope=SCOPE,  # type: ignore[arg-type]
             access_fence=self.access_fence,  # type: ignore[arg-type]
         )
 
@@ -97,7 +134,12 @@ class Harness:
 class _Page(BaseProviderCollector):
     """Collector returning a canned page and recording hook order."""
 
-    def __init__(self, harness: Harness, page: CollectedPage | None = None, error: BaseException | None = None) -> None:
+    def __init__(
+        self,
+        harness: Harness,
+        page: CollectedPage | None = None,
+        error: BaseException | None = None,
+    ) -> None:
         """Bind the canned outcome."""
         self.h = harness
         self.page = page
@@ -118,16 +160,22 @@ class _Page(BaseProviderCollector):
 
 def _page(**kw: Any) -> CollectedPage:
     """Build a one-record page with defaults."""
-    return CollectedPage(records=[], coverage="returned_snapshot", collected_at=datetime.now(UTC), **kw)
+    return CollectedPage(
+        records=[], coverage="returned_snapshot", collected_at=datetime.now(UTC), **kw
+    )
 
 
-def _use(monkeypatch: pytest.MonkeyPatch, harness: Harness, collector: BaseProviderCollector) -> None:
+def _use(
+    monkeypatch: pytest.MonkeyPatch, harness: Harness, collector: BaseProviderCollector
+) -> None:
     """Register ``collector`` for the harness provider and restore the registry afterwards."""
     monkeypatch.setitem(native_fetch._COLLECTORS, harness.provider, collector)
 
 
 @pytest.mark.asyncio
-async def test_registered_provider_collects_and_accepts_without_dispatcher_edit(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_registered_provider_collects_and_accepts_without_dispatcher_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     h = Harness(monkeypatch)
     order: list[str] = []
 
@@ -136,12 +184,24 @@ async def test_registered_provider_collects_and_accepts_without_dispatcher_edit(
         order.append("pre_accept")
         h.calls.append("pre_accept")
 
-    _use(monkeypatch, h, _Page(h, _page(pre_accept=pre_accept, cursor_after="c1", has_cursor_after=True)))
+    _use(
+        monkeypatch,
+        h,
+        _Page(h, _page(pre_accept=pre_accept, cursor_after="c1", has_cursor_after=True)),
+    )
     read = await h.run()
     assert read.status == "queued"
     assert h.calls == [
-        "fence", "rollback", "cooldown", "acquire", "source_fence", "rollback", "prepare", "collect",
-        "pre_accept", "accept",
+        "fence",
+        "rollback",
+        "cooldown",
+        "acquire",
+        "source_fence",
+        "rollback",
+        "prepare",
+        "collect",
+        "pre_accept",
+        "accept",
     ]
     batch = h.accepted["batch"]
     assert batch.cursor_after == "c1" and batch.cursor_before == "c0"
@@ -157,10 +217,16 @@ async def test_cursor_defaults_to_lease_cursor(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
-async def test_provider_retry_deadline_page_releases_lease_without_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_provider_retry_deadline_page_releases_lease_without_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     h = Harness(monkeypatch)
     hook = AsyncMock()
-    _use(monkeypatch, h, _Page(h, _page(next_eligible_at=datetime.now(UTC) + timedelta(minutes=5), pre_accept=hook)))
+    _use(
+        monkeypatch,
+        h,
+        _Page(h, _page(next_eligible_at=datetime.now(UTC) + timedelta(minutes=5), pre_accept=hook)),
+    )
     read = await h.run()
     assert read.status == "rate_limited" and read.coverage == "returned_snapshot"
     assert h.calls[-3:] == ["extend", "release_lease", "settle"]
@@ -169,14 +235,22 @@ async def test_provider_retry_deadline_page_releases_lease_without_receipt(monke
 
 
 @pytest.mark.asyncio
-async def test_post_collect_hook_runs_before_rate_limit_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_post_collect_hook_runs_before_rate_limit_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     h = Harness(monkeypatch)
 
     async def post() -> None:
         """Fail like the Alpha credential capture check."""
         raise ConflictError("Alpha credential capture changed during collection")
 
-    _use(monkeypatch, h, _Page(h, _page(post_collect=post, next_eligible_at=datetime.now(UTC) + timedelta(minutes=5))))
+    _use(
+        monkeypatch,
+        h,
+        _Page(
+            h, _page(post_collect=post, next_eligible_at=datetime.now(UTC) + timedelta(minutes=5))
+        ),
+    )
     with pytest.raises(DomainError) as exc:
         await h.run()
     assert exc.value.status_code == 409
@@ -185,9 +259,15 @@ async def test_post_collect_hook_runs_before_rate_limit_gate(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_cooldown_before_lease_returns_rate_limited_without_acquiring(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cooldown_before_lease_returns_rate_limited_without_acquiring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     h = Harness(monkeypatch, provider="telegram")
-    monkeypatch.setattr(native_fetch, "provider_cooldown", AsyncMock(return_value=datetime.now(UTC) + timedelta(minutes=2)))
+    monkeypatch.setattr(
+        native_fetch,
+        "provider_cooldown",
+        AsyncMock(return_value=datetime.now(UTC) + timedelta(minutes=2)),
+    )
     read = await h.run()
     assert read.status == "rate_limited" and read.coverage == "pending_updates_only"
     assert "acquire" not in h.calls and h.calls[-1] == "settle"
@@ -196,13 +276,17 @@ async def test_cooldown_before_lease_returns_rate_limited_without_acquiring(monk
 @pytest.mark.asyncio
 async def test_stale_fence_is_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
     h = Harness(monkeypatch)
-    monkeypatch.setattr(native_fetch.provisioning, "require_collection_fence", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        native_fetch.provisioning, "require_collection_fence", AsyncMock(return_value=False)
+    )
     with pytest.raises(ConflictError, match="Connector collection fence is stale"):
         await h.run()
 
 
 @pytest.mark.asyncio
-async def test_changed_reservation_rolls_back_and_conflicts(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_changed_reservation_rolls_back_and_conflicts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     h = Harness(monkeypatch)
     h.lease.configuration_revision = 99
     with pytest.raises(ConflictError, match="Original collection reservation changed"):
@@ -213,7 +297,9 @@ async def test_changed_reservation_rolls_back_and_conflicts(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_admission_timeout_is_503(monkeypatch: pytest.MonkeyPatch) -> None:
     h = Harness(monkeypatch)
-    monkeypatch.setattr(native_fetch.ingestion, "acquire_connector_collection", AsyncMock(side_effect=TimeoutError))
+    monkeypatch.setattr(
+        native_fetch.ingestion, "acquire_connector_collection", AsyncMock(side_effect=TimeoutError)
+    )
     with pytest.raises(UnavailableError, match="admission exceeded its deadline"):
         await h.run()
 
@@ -245,7 +331,9 @@ async def test_github_deadline_starts_before_fencing(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_non_native_source_is_rejected_before_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_non_native_source_is_rejected_before_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     h = Harness(monkeypatch, provider="x")
     monkeypatch.setattr(native_fetch, "is_native_provider", lambda p: False)
     with pytest.raises(ConflictError, match="Native provider is not configured") as info:
@@ -271,9 +359,15 @@ async def test_scheduler_only_and_invalid_configuration(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
-async def test_collector_rate_limit_extends_cooldown_then_releases(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_collector_rate_limit_extends_cooldown_then_releases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     h = Harness(monkeypatch, provider="telegram")
-    _use(monkeypatch, h, _Page(h, error=ProviderRateLimited(datetime.now(UTC) + timedelta(minutes=1))))
+    _use(
+        monkeypatch,
+        h,
+        _Page(h, error=ProviderRateLimited(datetime.now(UTC) + timedelta(minutes=1))),
+    )
     read = await h.run()
     assert read.status == "rate_limited" and read.coverage == "pending_updates_only"
     assert h.calls[-3:] == ["extend", "release", "settle"]
@@ -286,13 +380,17 @@ async def test_admission_busy_returns_one_second_retry(monkeypatch: pytest.Monke
     before = datetime.now(UTC)
     read = await h.run()
     assert read.status == "rate_limited" and read.coverage == "returned_snapshot"
-    assert read.next_eligible_at is not None and read.next_eligible_at >= before + timedelta(seconds=1)
+    assert read.next_eligible_at is not None and read.next_eligible_at >= before + timedelta(
+        seconds=1
+    )
     assert h.calls[-2:] == ["release", "settle"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", [HTTPException(409, "x"), ConflictError("x")])
-async def test_http_errors_release_settle_and_reraise_same_exception(monkeypatch: pytest.MonkeyPatch, error: BaseException) -> None:
+async def test_http_errors_release_settle_and_reraise_same_exception(
+    monkeypatch: pytest.MonkeyPatch, error: BaseException
+) -> None:
     h = Harness(monkeypatch)
     _use(monkeypatch, h, _Page(h, error=error))
     with pytest.raises(type(error)) as info:
@@ -303,7 +401,9 @@ async def test_http_errors_release_settle_and_reraise_same_exception(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error", [TimeoutError(), httpx.ConnectError("x"), ValueError("x")])
-async def test_transport_errors_become_503(monkeypatch: pytest.MonkeyPatch, error: BaseException) -> None:
+async def test_transport_errors_become_503(
+    monkeypatch: pytest.MonkeyPatch, error: BaseException
+) -> None:
     h = Harness(monkeypatch)
     _use(monkeypatch, h, _Page(h, error=error))
     with pytest.raises(UnavailableError, match="Provider collection failed") as info:
@@ -322,7 +422,9 @@ async def test_cancellation_releases_lease_and_reraises(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
-async def test_prepare_failure_releases_lease_and_skips_collect(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_prepare_failure_releases_lease_and_skips_collect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     h = Harness(monkeypatch)
 
     class Boom(_Page):
@@ -362,8 +464,14 @@ async def test_github_permit_released_in_finally(monkeypatch: pytest.MonkeyPatch
 async def test_accepted_collection_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
     h = Harness(monkeypatch, provider="telegram")
     receipt = SimpleNamespace(
-        workspace_id=WS, status="succeeded", batch_id=None, run_id=None, received_update_count=0,
-        record_count=0, coverage="pending_updates_only", next_eligible_at=None,
+        workspace_id=WS,
+        status="succeeded",
+        batch_id=None,
+        run_id=None,
+        received_update_count=0,
+        record_count=0,
+        coverage="pending_updates_only",
+        next_eligible_at=None,
     )
 
     class T(BaseProviderCollector):
@@ -376,7 +484,9 @@ async def test_accepted_collection_outcomes(monkeypatch: pytest.MonkeyPatch) -> 
     _use(monkeypatch, h, T())
     read = await h.run()
     assert read.status == "succeeded" and read.batch_id is None
-    assert h.calls[-1] == "settle"  # replay-only: nothing accepted, so the dispatcher settles no_changes
+    assert (
+        h.calls[-1] == "settle"
+    )  # replay-only: nothing accepted, so the dispatcher settles no_changes
     assert h.last_kwargs == {"outcome": "no_changes"}
 
 
@@ -388,17 +498,33 @@ def test_default_collector_for_unregistered_provider() -> None:
     from modules.connectors import native_collectors as nc
 
     expected = {
-        "youtube": nc.FeedCollector, "arxiv": nc.FeedCollector, "huggingface": nc.HuggingFaceCollector,
-        "github": nc.GithubCollector, "alpha_vantage": nc.WorldDataCollector,
-        "open_meteo": nc.WorldDataCollector, "telegram": nc.TelegramCollector,
+        "youtube": nc.FeedCollector,
+        "arxiv": nc.FeedCollector,
+        "huggingface": nc.HuggingFaceCollector,
+        "github": nc.GithubCollector,
+        "alpha_vantage": nc.WorldDataCollector,
+        "open_meteo": nc.WorldDataCollector,
+        "telegram": nc.TelegramCollector,
     }
     for provider, cls in expected.items():
         assert type(native_fetch.resolve_collector(provider)) is cls
 
 
 def test_error_classification_handles_both_families() -> None:
-    assert native_fetch.request_failure(ConflictError("terms_not_accepted")) == ("terms_not_accepted", False)
+    assert native_fetch.request_failure(ConflictError("terms_not_accepted")) == (
+        "terms_not_accepted",
+        False,
+    )
     assert native_fetch.request_failure(ValidationFailedError("bad")) == ("schema_changed", False)
-    assert native_fetch.request_failure(ConflictError(native_fetch.GITHUB_RECONNECT_DETAIL)) == ("invalid_credential", False)
-    assert native_fetch.request_failure(UnavailableError("x")) == ("provider_collection_failed", True)
-    assert native_fetch.collection_error_code(ConflictError(native_fetch.GITHUB_RECONNECT_DETAIL)) == "provider_unauthorized"
+    assert native_fetch.request_failure(ConflictError(native_fetch.GITHUB_RECONNECT_DETAIL)) == (
+        "invalid_credential",
+        False,
+    )
+    assert native_fetch.request_failure(UnavailableError("x")) == (
+        "provider_collection_failed",
+        True,
+    )
+    assert (
+        native_fetch.collection_error_code(ConflictError(native_fetch.GITHUB_RECONNECT_DETAIL))
+        == "provider_unauthorized"
+    )

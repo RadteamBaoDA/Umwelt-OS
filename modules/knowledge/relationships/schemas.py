@@ -9,6 +9,7 @@ from modules.knowledge.entities.public import EvidenceRef, validate_metadata
 
 class EntityGraphRead(BaseModel):
     """Serialize the minimal entity identity embedded in a graph result."""
+
     id: UUID
     type: str
     name: str | None
@@ -22,6 +23,7 @@ class RelationshipCreate(BaseModel):
     determine the stored fact's origin. Derived relationships require evidence
     with both endpoint memberships, while owner relationships may omit evidence.
     """
+
     model_config = ConfigDict(extra="forbid")
     source_entity_id: UUID
     target_entity_id: UUID
@@ -43,6 +45,7 @@ class RelationshipCreate(BaseModel):
 
 class EvidenceRead(BaseModel):
     """Serialize relationship evidence with exact version, chunk, and source provenance."""
+
     id: UUID
     relationship_id: UUID
     document_id: UUID
@@ -63,6 +66,7 @@ class EvidenceRead(BaseModel):
 
 class RelationshipRead(BaseModel):
     """Serialize canonical state; any nullable validity boundary is explicitly unknown."""
+
     id: UUID
     source_entity_id: UUID
     target_entity_id: UUID
@@ -83,6 +87,7 @@ class RelationshipPage(BaseModel):
     Unavailable identifiers are bounded hints, not fabricated historical values;
     current evidence observations remain separately pageable through evidence API.
     """
+
     items: list[RelationshipRead]
     next_cursor: str | None
     canonical_history_available: bool = True
@@ -93,12 +98,14 @@ class RelationshipPage(BaseModel):
 
 class EvidencePage(BaseModel):
     """Return relationship evidence with its optional continuation cursor."""
+
     items: list[EvidenceRead]
     next_cursor: str | None
 
 
 class RelationshipExportEvidence(BaseModel):
     """Expose stable citation identity without excerpt, metadata, or provider payload."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     id: UUID
     source_id: UUID | None
@@ -114,6 +121,7 @@ class RelationshipExportEvidence(BaseModel):
 
 class RelationshipSourceExportFence(BaseModel):
     """Capture one source generation that supports a portable relationship citation."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     source_id: UUID
     generation: int = Field(ge=1)
@@ -121,6 +129,7 @@ class RelationshipSourceExportFence(BaseModel):
 
 class RelationshipExportRead(BaseModel):
     """Serialize allowlisted canonical relationship facts and exact support references."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     record_kind: Literal["relationship"] = "relationship"
     id: UUID
@@ -138,6 +147,7 @@ class RelationshipExportRead(BaseModel):
 
 class RelationshipExportFence(BaseModel):
     """Bind relationship fields and exact evidence membership to final validation."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     id: UUID
     created_at: datetime
@@ -149,6 +159,7 @@ class RelationshipExportFence(BaseModel):
 
 class RelationshipExportPage(BaseModel):
     """Return one bounded relationship page with fixed-cutoff and deletion fences."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     owner_id: int = Field(ge=1)
     record_kind: Literal["relationships"]
@@ -165,6 +176,7 @@ class RelationshipExportPage(BaseModel):
 
 class RelationshipExportFenceValidation(BaseModel):
     """Report whether captured relationship counts and citation identities remain valid."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     valid: bool
     reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
@@ -173,12 +185,14 @@ class RelationshipExportFenceValidation(BaseModel):
 
 class NeighborRead(BaseModel):
     """Pair one adjacent entity with the relationship connecting it to the focus."""
+
     entity: EntityGraphRead
     relationship: RelationshipRead
 
 
 class NeighborPage(BaseModel):
     """Return bounded neighbors, truncation state, and any continuation cursor."""
+
     items: list[NeighborRead]
     truncated: bool
     next_cursor: str | None
@@ -186,6 +200,7 @@ class NeighborPage(BaseModel):
 
 class CorrectionSupportRef(BaseModel):
     """Identify support evidence and endpoint memberships used by a correction."""
+
     id: UUID
     document_id: UUID | None
     source_id: UUID | None
@@ -198,6 +213,7 @@ class CorrectionSupportRef(BaseModel):
 
 class CorrectionRelationshipRef(BaseModel):
     """Describe a relationship and its supports for entity merge or split planning."""
+
     id: UUID
     source_entity_id: UUID
     target_entity_id: UUID
@@ -211,6 +227,7 @@ class CorrectionRelationshipRef(BaseModel):
 
 class RelationshipSnapshot(BaseModel):
     """Complete detached current owner state and exact support digest; no fake revision."""
+
     relationship: RelationshipRead
     endpoints: list[dict[str, Any]]
     memberships: list[dict[str, Any]]

@@ -90,7 +90,13 @@ async def list_operator_terms_review(
     return await provider_terms.list_operator_pending_terms(session, names)
 
 
-async def _owner_access(session: AsyncSession, request: Request, scope: WorkspaceContext, *, expected: AccessFence | None = None) -> AccessFence:
+async def _owner_access(
+    session: AsyncSession,
+    request: Request,
+    scope: WorkspaceContext,
+    *,
+    expected: AccessFence | None = None,
+) -> AccessFence:
     """Reject members and lock original account/session/workspace before domain access.
 
     Existing write dependencies retain CSRF admission. Capture this fence once;
@@ -100,7 +106,9 @@ async def _owner_access(session: AsyncSession, request: Request, scope: Workspac
     if scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
     return await lock_access_fence(
-        session, scope=scope, expected=expected,
+        session,
+        scope=scope,
+        expected=expected,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         auth_sessions=(authenticated_session_ref(request),),
     )
@@ -108,6 +116,7 @@ async def _owner_access(session: AsyncSession, request: Request, scope: Workspac
 
 class ConnectorState(BaseModel):
     """Represent a connector's source, configuration, cursor, and revision state."""
+
     model_config = ConfigDict(extra="forbid")
 
     workspace_id: UUID
@@ -124,6 +133,7 @@ class ConnectorState(BaseModel):
 
 class ManualSyncResult(BaseModel):
     """Return identifiers and current status for manually requested collection."""
+
     run_id: UUID | None = None
     batch_id: UUID | None = None
     status: str = "queued"
@@ -133,6 +143,7 @@ class ManualSyncResult(BaseModel):
 
 class McpCollectionRequest(BaseModel):
     """Carry a generation-checked MCP collection configuration; it never carries commands or URLs."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_generation: int = Field(ge=1)
@@ -141,6 +152,7 @@ class McpCollectionRequest(BaseModel):
 
 class McpScheduledCollectionRequest(BaseModel):
     """Carry only the source, provisioning, and reviewed connection identities baked into n8n."""
+
     model_config = ConfigDict(extra="forbid")
 
     source_generation: int = Field(ge=1)
@@ -153,6 +165,7 @@ class McpScheduledCollectionRequest(BaseModel):
 
 class WorldProviderCredentialPut(BaseModel):
     """Carry one write-only provider API key under source and connector revision fences."""
+
     model_config = ConfigDict(extra="forbid")
     expected_generation: int = Field(ge=1)
     expected_connector_revision: int = Field(ge=1)
@@ -164,8 +177,11 @@ class WorldProviderCredentialPut(BaseModel):
     dependencies=[Depends(module_dependency("connectors"))],
 )
 async def save_world_provider_credential(
-    source_id: UUID, payload: WorldProviderCredentialPut, request: Request,
-    session: Session, _owner: OwnerWrite,
+    source_id: UUID,
+    payload: WorldProviderCredentialPut,
+    request: Request,
+    session: Session,
+    _owner: OwnerWrite,
 ) -> dict[str, object]:
     """Encrypt and replace the Alpha Vantage key without returning its value.
 
@@ -175,15 +191,27 @@ async def save_world_provider_credential(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     await _owner_access(session, request, scope)
-    source = await sources.lock_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await sources.lock_source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     # PRODUCTION FIX: SourceFence has no provider; read it from the connector projection (row is locked above).
-    connector = await sources.get_connector_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    if connector is None or connector.provider != "alpha_vantage" or source.status != "active" or source.generation != payload.expected_generation:
+    connector = await sources.get_connector_source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
+    if (
+        connector is None
+        or connector.provider != "alpha_vantage"
+        or source.status != "active"
+        or source.generation != payload.expected_generation
+    ):
         raise HTTPException(status_code=409, detail="Alpha Vantage source generation changed")
     provisioning_row = await session.get(ConnectorProvisioning, source_id, with_for_update=True)
-    if provisioning_row is None or provisioning_row.desired_revision != payload.expected_connector_revision:
+    if (
+        provisioning_row is None
+        or provisioning_row.desired_revision != payload.expected_connector_revision
+    ):
         raise HTTPException(status_code=409, detail="Connector configuration revision changed")
     key = request.app.state.settings.connector_credential_encryption_key.get_secret_value()
     if not key:
@@ -192,17 +220,25 @@ async def save_world_provider_credential(
 
     operation_id = uuid7()
     ciphertext = encrypt_credential_input(
-        key, source_id=source.id, slot="native:alpha_vantage", operation_id=operation_id,
+        key,
+        source_id=source.id,
+        slot="native:alpha_vantage",
+        operation_id=operation_id,
         request={"api_key": payload.api_key},
-        binding={"provider": "alpha_vantage", "source_generation": source.generation,
-                 "configuration_revision": provisioning_row.desired_revision,
-                 "fingerprint": secret_fingerprint(key, payload.api_key)},
+        binding={
+            "provider": "alpha_vantage",
+            "source_generation": source.generation,
+            "configuration_revision": provisioning_row.desired_revision,
+            "fingerprint": secret_fingerprint(key, payload.api_key),
+        },
     )
     credential = await session.get(ConnectorWorldCredential, source_id, with_for_update=True)
     values = {
-        "provider": "alpha_vantage", "source_generation": source.generation,
+        "provider": "alpha_vantage",
+        "source_generation": source.generation,
         "configuration_revision": provisioning_row.desired_revision,
-        "operation_id": operation_id, "encrypted_key": ciphertext,
+        "operation_id": operation_id,
+        "encrypted_key": ciphertext,
     }
     if credential is None:
         session.add(ConnectorWorldCredential(source_id=source.id, **values))
@@ -215,7 +251,11 @@ async def save_world_provider_credential(
 
 @router.put("/{source_id}/mcp-collection", dependencies=[Depends(module_dependency("connectors"))])
 async def configure_mcp_collection(
-    source_id: UUID, payload: McpCollectionRequest, session: Session, request: Request, _owner: OwnerWrite
+    source_id: UUID,
+    payload: McpCollectionRequest,
+    session: Session,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> dict[str, Any]:
     """Save the allowlisted connection and grant calls of an active ``mcp`` source.
 
@@ -229,32 +269,59 @@ async def configure_mcp_collection(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source.type != mcp_collection.PROVIDER_ID or source.status != "active":
         raise HTTPException(status_code=409, detail="Active MCP source required")
     saved = await sources.set_connector_configuration(
-        session, source_id, payload.expected_generation,
+        session,
+        source_id,
+        payload.expected_generation,
         payload.configuration.model_dump(mode="json"),
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
     if saved is None:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="Source changed while configuration was validated")
-    prior = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        raise HTTPException(
+            status_code=409, detail="Source changed while configuration was validated"
+        )
+    prior = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     provisioned = await provisioning._save_desired_in_uow(
-        session, source_id, saved.generation,
+        session,
+        source_id,
+        saved.generation,
         prior.desired_revision if prior is not None else 0,
         saved.configuration,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
     if provisioned is None:
         await session.rollback()
-        raise HTTPException(status_code=409, detail="MCP source changed while scheduled configuration was saved")
-    await commit_with_replay(session, [make_source_change(
-        saved.id, saved.generation, saved.status, connector_state=provisioned.state,
-     scope=scope)], access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        raise HTTPException(
+            status_code=409, detail="MCP source changed while scheduled configuration was saved"
+        )
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(
+                saved.id,
+                saved.generation,
+                saved.status,
+                connector_state=provisioned.state,
+                scope=scope,
+            )
+        ],
+        access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    )
     return {
-        "source_id": saved.id, "source_generation": saved.generation,
+        "source_id": saved.id,
+        "source_generation": saved.generation,
         "expected_revision": provisioned.desired_revision,
         "configuration": saved.configuration,
     }
@@ -262,8 +329,11 @@ async def configure_mcp_collection(
 
 @router.post("/{source_id}/mcp-collect", response_model=ManualSyncResult, status_code=202)
 async def collect_mcp_scheduled(
-    source_id: UUID, payload: McpScheduledCollectionRequest, session: Session,
-    request: Request, authorization: Annotated[str | None, Header()] = None,
+    source_id: UUID,
+    payload: McpScheduledCollectionRequest,
+    session: Session,
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> ManualSyncResult:
     """Run n8n MCP collection under its bearer, source, connector revision and grant fences.
 
@@ -279,24 +349,45 @@ async def collect_mcp_scheduled(
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     token, scope, _access_fence = await _mcp_collector(
-        session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        authorization,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source.type != mcp_collection.PROVIDER_ID or source.status != "active":
         raise HTTPException(status_code=409, detail="Active MCP source required")
     try:
         config = mcp_collection.validate(source)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="MCP source configuration is invalid") from exc
-    if config.connection_id != payload.connection_id or not await provisioning.require_collection_fence(
-        session, source, payload.source_generation, payload.connector_revision, lock=True, backend_revision=payload.backend_revision,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+    if (
+        config.connection_id != payload.connection_id
+        or not await provisioning.require_collection_fence(
+            session,
+            source,
+            payload.source_generation,
+            payload.connector_revision,
+            lock=True,
+            backend_revision=payload.backend_revision,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
+        )
     ):
         raise HTTPException(status_code=409, detail="MCP source or provisioning revision is stale")
-    ref = CollectionRequestRef(request_id=payload.admission_request_id, admission_token=payload.admission_token)
+    ref = CollectionRequestRef(
+        request_id=payload.admission_request_id, admission_token=payload.admission_token
+    )
     await _prove_admission(
-        session, ref, source_id=source_id, source_generation=payload.source_generation,
-        connector_revision=payload.connector_revision, scope=scope)
+        session,
+        ref,
+        source_id=source_id,
+        source_generation=payload.source_generation,
+        connector_revision=payload.connector_revision,
+        scope=scope,
+    )
     runtime = getattr(request.app.state, "mcp_runtime", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="MCP runtime is unavailable")
@@ -304,24 +395,37 @@ async def collect_mcp_scheduled(
     await session.rollback()
     try:
         result = await mcp_collection.collect(
-            runtime, request.app.state.session_factory, source_id, payload.connector_revision,
-            payload.source_generation, collector_token=token, expected_connection_id=payload.connection_id,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, request_ref=ref,
+            runtime,
+            request.app.state.session_factory,
+            source_id,
+            payload.connector_revision,
+            payload.source_generation,
+            collector_token=token,
+            expected_connection_id=payload.connection_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            request_ref=ref,
         )
     except mcp_collection.McpCollectionError as exc:
         # Free the admitted slot now; the sweeper would otherwise hold it until expiry.
         await _settle_request_exit(session, ref, outcome="failed", error_code=exc.code)
         raise HTTPException(
-            status_code=401 if exc.code == "mcp_collector_revoked" else 409, detail=exc.code) from exc
+            status_code=401 if exc.code == "mcp_collector_revoked" else 409, detail=exc.code
+        ) from exc
     except LookupError as exc:
         await _settle_request_exit(session, ref, outcome="failed", error_code="source_not_found")
         raise HTTPException(status_code=404, detail="Source not found") from exc
     return ManualSyncResult(
-        run_id=result["run_id"], batch_id=result["batch_id"], status=result["status"],
-        failed_calls=result["failed_calls"])
+        run_id=result["run_id"],
+        batch_id=result["batch_id"],
+        status=result["status"],
+        failed_calls=result["failed_calls"],
+    )
 
 
-@router.get("/{source_id}/agent-browser-grant", dependencies=[Depends(module_dependency("connectors"))])
+@router.get(
+    "/{source_id}/agent-browser-grant", dependencies=[Depends(module_dependency("connectors"))]
+)
 async def read_agent_browser_grant(
     source_id: UUID, session: Session, request: Request, _owner: OwnerWrite
 ) -> dict[str, object]:
@@ -333,19 +437,28 @@ async def read_agent_browser_grant(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     await _owner_access(session, request, scope)
-    grant = await resolve_agent_browser_scope(session, _owner.user_id, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    grant = await resolve_agent_browser_scope(
+        session,
+        _owner.user_id,
+        source_id,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    )
     if grant is None:
         return {"available": False, "enabled": False}
     return {"available": True, **grant.__dict__}
 
 
-@router.put("/{source_id}/agent-browser-grant", dependencies=[Depends(module_dependency("connectors"))])
+@router.put(
+    "/{source_id}/agent-browser-grant", dependencies=[Depends(module_dependency("connectors"))]
+)
 async def update_agent_browser_grant(
     source_id: UUID,
     payload: AgentBrowserGrantPatch,
     expected_revision: int,
     session: Session,
-    request: Request, _owner: OwnerWrite,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> dict[str, object]:
     """Apply owner browser opt-in with optimistic grant and source configuration fences.
 
@@ -357,8 +470,13 @@ async def update_agent_browser_grant(
     await _owner_access(session, request, scope)
     try:
         grant = await update_agent_browser_grant_in_uow(
-            session, _owner.user_id, source_id, expected_revision, payload,
-            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+            session,
+            _owner.user_id,
+            source_id,
+            expected_revision,
+            payload,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
         )
         await session.commit()
     except LookupError as exc:
@@ -371,8 +489,13 @@ async def update_agent_browser_grant(
 
 
 async def _prove_admission(
-    session: AsyncSession, ref: CollectionRequestRef, *, source_id: UUID, source_generation: int,
-    connector_revision: int, scope: Scope,
+    session: AsyncSession,
+    ref: CollectionRequestRef,
+    *,
+    source_id: UUID,
+    source_generation: int,
+    connector_revision: int,
+    scope: Scope,
 ) -> None:
     """Re-prove the running request, unexpired slot and token under lock; stale or replayed is 409.
 
@@ -380,27 +503,39 @@ async def _prove_admission(
     its own rollback or commit. Used by fetch-only routes, which authorize a fetch but never settle.
     """
     if not await connectors_public.lock_collection_request_in_uow(
-        session, ref, source_id=source_id, source_generation=source_generation,
-        connector_revision=connector_revision, scope=scope,
+        session,
+        ref,
+        source_id=source_id,
+        source_generation=source_generation,
+        connector_revision=connector_revision,
+        scope=scope,
     ):
         raise HTTPException(status_code=409, detail="Collection admission is no longer current")
 
 
-async def _source(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> ConnectorSource:
+async def _source(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+) -> ConnectorSource:
     """Read only the explicit owner/job Source projection; absent/foreign identity is 404.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
     actual rollout flag; members have no Source/configuration/credential access. Service bearer capability remains distinct from principal scope.
     """
-    source = await sources.get_connector_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await sources.get_connector_source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source is None:
         raise HTTPException(status_code=404, detail="Source not found")
     return source
 
 
 async def _collector(
-    session: AsyncSession, source_id: UUID, authorization: str | None, *,
-    multi_workspace_enabled: bool, credential_scope: str = "ingestion:write",
+    session: AsyncSession,
+    source_id: UUID,
+    authorization: str | None,
+    *,
+    multi_workspace_enabled: bool,
+    credential_scope: str = "ingestion:write",
 ) -> tuple[str, InternalJobScope, AccessFence]:
     """Resolve the exact bearer/path/capability through Ingestion before domain locks.
 
@@ -413,20 +548,33 @@ async def _collector(
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(status_code=401, detail="Source collector authentication required")
     scope = await ingestion.resolve_collector_job_scope(
-        session, token, source_id=source_id, credential_scope=credential_scope,
+        session,
+        token,
+        source_id=source_id,
+        credential_scope=credential_scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
     if scope is None:
         raise HTTPException(status_code=401, detail="Source collector authentication required")
     access_fence = await read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     await _collector_current(
-        session, source_id, token, credential_scope=credential_scope, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        token,
+        credential_scope=credential_scope,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     source_fence = await sources.lock_source(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=access_fence,
     )
     if source_fence is None:
@@ -439,8 +587,13 @@ async def _collector(
 
 
 async def _collector_current(
-    session: AsyncSession, source_id: UUID, token: str, *, scope: InternalJobScope,
-    multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    token: str,
+    *,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
     credential_scope: str = "ingestion:write",
 ) -> None:
     """Recheck the original collector epoch without acquiring earlier locks or resolving anew.
@@ -449,29 +602,46 @@ async def _collector_current(
     remains with Ingestion. Missing token/module or changed original fence fails closed.
     """
     current = await read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if current != access_fence:
         raise HTTPException(status_code=409, detail="Original collector access changed")
     if not await ingestion.collector_can_ingest(
-        session, source_id, token, credential_scope=credential_scope,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        token,
+        credential_scope=credential_scope,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     ):
         raise HTTPException(status_code=401, detail="Source collector authentication required")
-    for module_id in (("connectors", "tools") if credential_scope == "mcp:collect" else ("connectors",)):
+    for module_id in (
+        ("connectors", "tools") if credential_scope == "mcp:collect" else ("connectors",)
+    ):
         if not await module_is_enabled(
-            session, module_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            module_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         ):
             raise HTTPException(status_code=404, detail="Connector collection unavailable")
 
 
 async def _mcp_collector(
-    session: AsyncSession, source_id: UUID, authorization: str | None, *,
+    session: AsyncSession,
+    source_id: UUID,
+    authorization: str | None,
+    *,
     multi_workspace_enabled: bool,
 ) -> tuple[str, InternalJobScope, AccessFence]:
     """Resolve only the distinct mcp:collect bearer into its exact original service subject."""
     return await _collector(
-        session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        authorization,
+        multi_workspace_enabled=multi_workspace_enabled,
         credential_scope="mcp:collect",
     )
 
@@ -499,22 +669,44 @@ async def fetch_native_provider(
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     collector_token, scope, access_fence = await _collector(
-        session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        authorization,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    request_ref = CollectionRequestRef(request_id=payload.admission_request_id, admission_token=payload.admission_token)
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    if not await module_is_enabled(session, "ingestion", multi_workspace_enabled=multi_workspace_enabled, scope=scope):
+    request_ref = CollectionRequestRef(
+        request_id=payload.admission_request_id, admission_token=payload.admission_token
+    )
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
+    if not await module_is_enabled(
+        session, "ingestion", multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    ):
         raise HTTPException(status_code=404, detail="Provider collection is unavailable")
     return await run_provider_fetch(
-        session, request, source, payload, collector_token=collector_token,
-        request_ref=request_ref, scope=scope, access_fence=access_fence,
+        session,
+        request,
+        source,
+        payload,
+        collector_token=collector_token,
+        request_ref=request_ref,
+        scope=scope,
+        access_fence=access_fence,
     )
 
 
-@router.put("/{source_id}/configuration", response_model=ConnectorState,
-            dependencies=[Depends(module_dependency("connectors"))])
+@router.put(
+    "/{source_id}/configuration",
+    response_model=ConnectorState,
+    dependencies=[Depends(module_dependency("connectors"))],
+)
 async def configure_source(
-    source_id: UUID, payload: ConnectorConfigurationRequest, session: Session, request: Request, _owner: OwnerWrite
+    source_id: UUID,
+    payload: ConnectorConfigurationRequest,
+    session: Session,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> ConnectorState:
     """Validate and persist generic RSS/Web/REST settings; named native sources use revisioned provider settings.
 
@@ -524,9 +716,13 @@ async def configure_source(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if is_native_provider(source.provider):
-        raise HTTPException(status_code=409, detail="Use provider settings to configure a native source")
+        raise HTTPException(
+            status_code=409, detail="Use provider settings to configure a native source"
+        )
     if source.type not in registry.SUPPORTED_TYPES:
         raise HTTPException(status_code=422, detail="This source type has no packaged connector")
     try:
@@ -552,39 +748,69 @@ async def configure_source(
         payload.expected_revision,
         candidate.configuration,
         desired,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
     if saved_result is None:
-        raise HTTPException(status_code=409, detail="Source or connector revision changed while configuration was validated")
+        raise HTTPException(
+            status_code=409,
+            detail="Source or connector revision changed while configuration was validated",
+        )
     saved, provisioning_row = saved_result
     result = registry.sync(saved, None)
     result["workspace_id"] = saved.workspace_id
     result["connector_revision"] = provisioning_row.desired_revision
-    await commit_with_replay(session, [
-        make_source_change(
-            saved.id, saved.generation, saved.status,
-            connector_state=provisioning_row.state,
-         scope=scope),
-    ], access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(
+                saved.id,
+                saved.generation,
+                saved.status,
+                connector_state=provisioning_row.state,
+                scope=scope,
+            ),
+        ],
+        access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    )
     return ConnectorState(**result)
 
 
-@router.get("/{source_id}/terms", response_model=provider_terms.ProviderTermsRead | None,
-            dependencies=[Depends(module_dependency("connectors"))])
+@router.get(
+    "/{source_id}/terms",
+    response_model=provider_terms.ProviderTermsRead | None,
+    dependencies=[Depends(module_dependency("connectors"))],
+)
 async def read_provider_terms(
-    source_id: UUID, session: Session, request: Request, _owner: Annotated[WorkspaceContext, Depends(require_workspace_read)],
+    source_id: UUID,
+    session: Session,
+    request: Request,
+    _owner: Annotated[WorkspaceContext, Depends(require_workspace_read)],
 ) -> provider_terms.ProviderTermsRead | None:
     """Owner read of provider terms state; members have no Source access."""
     if _owner.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
     return await provider_terms.get_terms(
-        session, source_id, scope=_owner, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+        session,
+        source_id,
+        scope=_owner,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
 
 
-@router.put("/{source_id}/terms", response_model=provider_terms.ProviderTermsRead,
-            dependencies=[Depends(module_dependency("connectors"))])
+@router.put(
+    "/{source_id}/terms",
+    response_model=provider_terms.ProviderTermsRead,
+    dependencies=[Depends(module_dependency("connectors"))],
+)
 async def acknowledge_provider_terms(
-    source_id: UUID, payload: provider_terms.ProviderTermsAcknowledge, session: Session, request: Request, _owner: OwnerWrite,
+    source_id: UUID,
+    payload: provider_terms.ProviderTermsAcknowledge,
+    session: Session,
+    request: Request,
+    _owner: OwnerWrite,
 ) -> provider_terms.ProviderTermsRead:
     """Owner acknowledges provider terms; clears a terms action-required gate at the new revision.
 
@@ -598,28 +824,46 @@ async def acknowledge_provider_terms(
     reviewer_user_id = request.state.auth_session.owner_id
     await session.rollback()
     result = await provider_terms.acknowledge_terms(
-        session, source_id, payload, scope=_owner,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+        session,
+        source_id,
+        payload,
+        scope=_owner,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     spec = get_provider_spec(result.provider_id)
-    if (spec is not None and spec.eligibility == "review" and result.decision == "operator_review_required"
-            and result.declared_use in ("personal", "noncommercial", "commercial")
-            and is_operator):
+    if (
+        spec is not None
+        and spec.eligibility == "review"
+        and result.decision == "operator_review_required"
+        and result.declared_use in ("personal", "noncommercial", "commercial")
+        and is_operator
+    ):
         result = await provider_terms.record_operator_review(
-            session, workspace_id=_owner.workspace_id, source_id=source_id,
+            session,
+            workspace_id=_owner.workspace_id,
+            source_id=source_id,
             reviewer_user_id=reviewer_user_id,
             body=provider_terms.OperatorTermsReview(
-                state="approved", allowed_use=cast(Any, result.declared_use),
+                state="approved",
+                allowed_use=cast(Any, result.declared_use),
                 evidence_ref=f"operator-acknowledge:{spec.id}:{spec.terms_url}@{spec.checked_on}",
-                reviewed_terms_version=result.terms_version),
-            instance_operator=True)
+                reviewed_terms_version=result.terms_version,
+            ),
+            instance_operator=True,
+        )
     await scheduler.clear_collection_block(session, source_id, terms_revision=result.terms_revision)
     await session.commit()
     return result
 
 
-@operator_router.put("/{workspace_id}/{source_id}/terms-review", response_model=provider_terms.ProviderTermsRead)
+@operator_router.put(
+    "/{workspace_id}/{source_id}/terms-review", response_model=provider_terms.ProviderTermsRead
+)
 async def review_provider_terms(
-    workspace_id: UUID, source_id: UUID, payload: provider_terms.OperatorTermsReview, session: Session,
+    workspace_id: UUID,
+    source_id: UUID,
+    payload: provider_terms.OperatorTermsReview,
+    session: Session,
     operator: Annotated[AuthSession, Depends(require_owner_write)],
 ) -> provider_terms.ProviderTermsRead:
     """Bootstrap-operator review of a review-class provider's acknowledged terms (no workspace role grants it)."""
@@ -627,40 +871,66 @@ async def review_provider_terms(
         raise HTTPException(status_code=403, detail="Instance operator required")
     await session.rollback()
     result = await provider_terms.record_operator_review(
-        session, workspace_id=workspace_id, source_id=source_id, reviewer_user_id=operator.owner_id,
-        body=payload, instance_operator=True)
+        session,
+        workspace_id=workspace_id,
+        source_id=source_id,
+        reviewer_user_id=operator.owner_id,
+        body=payload,
+        instance_operator=True,
+    )
     await scheduler.clear_collection_block(
-        session, source_id, terms_revision=result.terms_revision, workspace_id=workspace_id)
+        session, source_id, terms_revision=result.terms_revision, workspace_id=workspace_id
+    )
     await session.commit()
     return result
 
 
 async def _precheck_mcp_enabled(
-    session: AsyncSession, source_id: UUID, source: ConnectorSource,
-    *, multi_workspace_enabled: bool, scope: WorkspaceContext,
+    session: AsyncSession,
+    source_id: UUID,
+    source: ConnectorSource,
+    *,
+    multi_workspace_enabled: bool,
+    scope: WorkspaceContext,
 ) -> None:
     """Require an enabled, fully applied MCP source before a manual collection (HTTP 409 otherwise).
 
     Reads activation state and takes the collection fence with ``lock=True`` (the caller's
     later rollback/commit releases it). No commit here.
     """
-    provisioned = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    provisioned = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if (
-        source.status != "active" or provisioned is None
-        or provisioned.state != "active" or not provisioned.desired_enabled
+        source.status != "active"
+        or provisioned is None
+        or provisioned.state != "active"
+        or not provisioned.desired_enabled
         or provisioned.applied_revision != provisioned.desired_revision
         or provisioned.source_generation != source.generation
         or not await provisioning.require_collection_fence(
-            session, source, source.generation, provisioned.desired_revision, lock=True,
-            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+            session,
+            source,
+            source.generation,
+            provisioned.desired_revision,
+            lock=True,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
         )
     ):
         raise HTTPException(status_code=409, detail="Enable this MCP source before collecting")
 
 
 async def _queue_native_collection(
-    session: AsyncSession, request: Request, source_id: UUID, source: ConnectorSource, revision: int,
-    *, scope: WorkspaceContext, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    request: Request,
+    source_id: UUID,
+    source: ConnectorSource,
+    revision: int,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> ManualSyncResult:
     """Apply the slow-provider cooldown, then queue a durable manual collection request.
 
@@ -671,20 +941,31 @@ async def _queue_native_collection(
     """
     last_started = None
     if min_interval_minutes(source.provider) >= COLLECT_COOLDOWN_FLOOR_MINUTES:
-        last_started = await session.scalar(select(func.max(ConnectorCollectionRequest.attempt_started_at)).where(
-            ConnectorCollectionRequest.workspace_id == scope.workspace_id,
-            ConnectorCollectionRequest.source_id == source_id,
-            ConnectorCollectionRequest.status.in_(("running", "succeeded", "no_changes"))))
+        last_started = await session.scalar(
+            select(func.max(ConnectorCollectionRequest.attempt_started_at)).where(
+                ConnectorCollectionRequest.workspace_id == scope.workspace_id,
+                ConnectorCollectionRequest.source_id == source_id,
+                ConnectorCollectionRequest.status.in_(("running", "succeeded", "no_changes")),
+            )
+        )
     wait = collection_cooldown_seconds(source.provider, last_started, datetime.now(UTC))
     if wait:
         raise HTTPException(
-            status_code=429, detail={"code": "collection_too_soon", "retry_after": wait},
-            headers={"Retry-After": str(wait)})
+            status_code=429,
+            detail={"code": "collection_too_soon", "retry_after": wait},
+            headers={"Retry-After": str(wait)},
+        )
     await session.rollback()
     await _owner_access(session, request, scope, expected=access_fence)
     try:
         queued = await scheduler.request_collection(
-            session, scope, source_id, "manual", revision, multi_workspace_enabled=multi_workspace_enabled)
+            session,
+            scope,
+            source_id,
+            "manual",
+            revision,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     except (HTTPException, DomainError) as exc:
         if exc.detail == TERMS_INELIGIBLE:
             raise HTTPException(status_code=409, detail="terms_not_accepted") from exc
@@ -692,8 +973,15 @@ async def _queue_native_collection(
     return ManualSyncResult(status=queued.status, request_id=queued.request_id)
 
 
-@router.post("/{source_id}/collect", response_model=ManualSyncResult, status_code=202,
-             dependencies=[Depends(module_dependency("connectors")), Depends(require_budget("connector_run", 10, 60))])
+@router.post(
+    "/{source_id}/collect",
+    response_model=ManualSyncResult,
+    status_code=202,
+    dependencies=[
+        Depends(module_dependency("connectors")),
+        Depends(require_budget("connector_run", 10, 60)),
+    ],
+)
 async def trigger_collection(
     source_id: UUID,
     session: Session,
@@ -713,26 +1001,55 @@ async def trigger_collection(
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     access_fence = await _owner_access(session, request, scope)
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     settings = request.app.state.settings
     if source.type == mcp_collection.PROVIDER_ID:
         await _precheck_mcp_enabled(
-            session, source_id, source, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+            session, source_id, source, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+        )
         # Precheck passed: fall through to the generic native/n8n dispatch below.
-    if source.status != "active" or source.type not in {"rss", "web", "api", mcp_collection.PROVIDER_ID}:
+    if source.status != "active" or source.type not in {
+        "rss",
+        "web",
+        "api",
+        mcp_collection.PROVIDER_ID,
+    }:
         raise HTTPException(status_code=409, detail="Active packaged connector required")
-    provisioned = await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    if (provisioned is None or provisioned.state != "active"
+    provisioned = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
+    if (
+        provisioned is None
+        or provisioned.state != "active"
         or provisioned.applied_revision != provisioned.desired_revision
-        or provisioned.source_generation != source.generation):
-        raise HTTPException(status_code=409, detail="Enable this source from connector settings before collecting")
+        or provisioned.source_generation != source.generation
+    ):
+        raise HTTPException(
+            status_code=409, detail="Enable this source from connector settings before collecting"
+        )
     revision = provisioned.desired_revision
-    if not await provisioning.require_collection_fence(session, source, source.generation, revision, lock=True, multi_workspace_enabled=multi_workspace_enabled, scope=scope):
+    if not await provisioning.require_collection_fence(
+        session,
+        source,
+        source.generation,
+        revision,
+        lock=True,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    ):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
     if provisioned.execution_backend == "native":
         return await _queue_native_collection(
-            session, request, source_id, source, revision, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            request,
+            source_id,
+            source,
+            revision,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         )
     # MCP has no URL to validate: its saved calls are checked by mcp_collection.validate at run time.
     if not is_native_provider(source.provider) and source.type != mcp_collection.PROVIDER_ID:
@@ -741,50 +1058,89 @@ async def trigger_collection(
             await session.rollback()
             await validate_public_url(data["url"])
         except (KeyError, ValueError, TypeError) as exc:
-            raise HTTPException(status_code=409, detail="Configure and validate the connector before syncing") from exc
+            raise HTTPException(
+                status_code=409, detail="Configure and validate the connector before syncing"
+            ) from exc
     await session.rollback()
     await _owner_access(session, request, scope, expected=access_fence)
     result = await wake_packaged_collection(
-        session, source_id=source_id, source_generation=source.generation,
-        connector_revision=revision, settings=settings, timeout_seconds=75,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        source_id=source_id,
+        source_generation=source.generation,
+        connector_revision=revision,
+        settings=settings,
+        timeout_seconds=75,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
     if result.outcome == "acknowledged":
-        return ManualSyncResult(run_id=result.run_id, batch_id=result.batch_id, status=result.status or "queued")
+        return ManualSyncResult(
+            run_id=result.run_id, batch_id=result.batch_id, status=result.status or "queued"
+        )
     if result.outcome == "deferred":
         raise HTTPException(status_code=409, detail="A collection wake is already pending")
     if not (await resolve_n8n(session, settings, workspace_id=scope.workspace_id)).webhook_token:
-        raise HTTPException(status_code=503, detail="Manual n8n trigger authentication is not configured")
+        raise HTTPException(
+            status_code=503, detail="Manual n8n trigger authentication is not configured"
+        )
     if await sources.record_collection_result(
-        session, source_id, source.generation, datetime.now(UTC), "n8n_unavailable",
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        source_id,
+        source.generation,
+        datetime.now(UTC),
+        "n8n_unavailable",
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     ):
-        current = await sources.get_source_fence(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-        drafts = [make_source_change(current.id, current.generation, current.status, scope=scope)] if current is not None else []
-        await commit_with_replay(session, drafts, access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        current = await sources.get_source_fence(
+            session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+        )
+        drafts = (
+            [make_source_change(current.id, current.generation, current.status, scope=scope)]
+            if current is not None
+            else []
+        )
+        await commit_with_replay(
+            session,
+            drafts,
+            access_fence=access_fence,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
+        )
     if result.outcome == "ambiguous":
         raise HTTPException(status_code=503, detail="n8n collection wake outcome is unknown")
     raise HTTPException(status_code=503, detail="n8n collection workflow is unavailable or failed")
 
 
-@router.get("/{source_id}/collection-requests/{request_id}", response_model=CollectionRequestRead,
-            dependencies=[Depends(module_dependency("connectors"))])
+@router.get(
+    "/{source_id}/collection-requests/{request_id}",
+    response_model=CollectionRequestRead,
+    dependencies=[Depends(module_dependency("connectors"))],
+)
 async def read_collection_request(
-    source_id: UUID, request_id: UUID, session: Session, request: Request,
+    source_id: UUID,
+    request_id: UUID,
+    session: Session,
+    request: Request,
     _owner: Annotated[WorkspaceContext, Depends(require_workspace_read)],
 ) -> CollectionRequestRead:
     """Owner poll of one durable collection request; foreign or absent ids share one 404."""
     if _owner.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
     return await connectors_public.get_collection_request(
-        session, _owner, source_id, request_id,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+        session,
+        _owner,
+        source_id,
+        request_id,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
 
 
 @router.post("/{source_id}/validate", response_model=ConnectorState)
 async def validate_source(
     source_id: UUID,
-    request: Request, session: Session,
+    request: Request,
+    session: Session,
     payload: CollectionFence,
     authorization: Annotated[str | None, Header()] = None,
 ) -> ConnectorState:
@@ -795,33 +1151,68 @@ async def validate_source(
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     collector_token, scope, access_fence = await _collector(
-        session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        authorization,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if is_native_provider(source.provider):
         raise HTTPException(status_code=409, detail="native_collection_required")
     if not await provisioning.require_validation_fence(
-        session, source, payload.source_generation, payload.connector_revision,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        source,
+        payload.source_generation,
+        payload.connector_revision,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     ):
         raise HTTPException(status_code=409, detail="Connector validation fence is stale")
-    await _collector_current(session, source_id, collector_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+    await _collector_current(
+        session,
+        source_id,
+        collector_token,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
     await session.rollback()
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     try:
         data = registry.validate(source)
         await session.rollback()
         await validate_public_url(data["url"])
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    cursor = await ingestion.get_source_cursor(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    current = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    cursor = await ingestion.get_source_cursor(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
+    current = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if not await provisioning.require_validation_fence(
-        session, current, payload.source_generation, payload.connector_revision,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        current,
+        payload.source_generation,
+        payload.connector_revision,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     ):
-        raise HTTPException(status_code=409, detail="Connector validation fence changed during validation")
-    await _collector_current(session, source_id, collector_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+        raise HTTPException(
+            status_code=409, detail="Connector validation fence changed during validation"
+        )
+    await _collector_current(
+        session,
+        source_id,
+        collector_token,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
     result = registry.sync(source, cursor)
     result["workspace_id"] = source.workspace_id
     result["connector_revision"] = payload.connector_revision
@@ -850,47 +1241,95 @@ async def preview_rss(
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     collector_token, scope, access_fence = await _collector(
-        session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        authorization,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if is_native_provider(source.provider):
         raise HTTPException(status_code=409, detail="native_collection_required")
     if not await provisioning.require_collection_fence(
-        session, source, source_generation, connector_revision, lock=True,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        source,
+        source_generation,
+        connector_revision,
+        lock=True,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     ):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
-    await _collector_current(session, source_id, collector_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+    await _collector_current(
+        session,
+        source_id,
+        collector_token,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
     await session.rollback()
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     try:
         data = registry.validate(source)
         if source.type != "rss":
             raise ValueError("RSS/Atom source required")
         await session.rollback()
         await validate_public_url(data["url"])
-        cursor = await ingestion.get_source_cursor(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        cursor = await ingestion.get_source_cursor(
+            session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+        )
         settings = request.app.state.settings
         token = settings.browser_shared_token.get_secret_value()
         if not token:
             raise HTTPException(status_code=503, detail="Browser collector is not configured")
         await session.rollback()
-        await lock_access_fence(session, scope=scope, expected=access_fence,
-                                multi_workspace_enabled=multi_workspace_enabled)
+        await lock_access_fence(
+            session,
+            scope=scope,
+            expected=access_fence,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
         current_fence, _row, _slots = await provisioning.lock_connector(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            source_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
             expected_access_fence=access_fence,
         )
-        if (current_fence is None or current_fence.generation != source_generation
-                or not await provisioning.require_collection_fence(
-                    session, source, source_generation, connector_revision,
-                    scope=scope, multi_workspace_enabled=multi_workspace_enabled)):
+        if (
+            current_fence is None
+            or current_fence.generation != source_generation
+            or not await provisioning.require_collection_fence(
+                session,
+                source,
+                source_generation,
+                connector_revision,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        ):
             raise HTTPException(status_code=409, detail="Original RSS configuration changed")
         ref = CollectionRequestRef(request_id=admission_request_id, admission_token=admission_token)
-        await _prove_admission(session, ref, source_id=source_id, source_generation=source_generation,
-                               connector_revision=connector_revision, scope=scope)
-        await _collector_current(session, source_id, collector_token, scope=scope,
-                                 multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+        await _prove_admission(
+            session,
+            ref,
+            source_id=source_id,
+            source_generation=source_generation,
+            connector_revision=connector_revision,
+            scope=scope,
+        )
+        await _collector_current(
+            session,
+            source_id,
+            collector_token,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
         await session.rollback()
         async with httpx.AsyncClient(timeout=65) as client:
             response = await client.post(
@@ -902,20 +1341,50 @@ async def preview_rss(
         result = response.json()
         result["source_generation"] = source_generation
         result["connector_revision"] = connector_revision
-        await lock_access_fence(session, scope=scope, expected=access_fence,
-                                multi_workspace_enabled=multi_workspace_enabled)
-        await provisioning.lock_connector(session, source_id, scope=scope,
-                                          multi_workspace_enabled=multi_workspace_enabled,
-                                          expected_access_fence=access_fence)
-        current = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        await lock_access_fence(
+            session,
+            scope=scope,
+            expected=access_fence,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        await provisioning.lock_connector(
+            session,
+            source_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
+        )
+        current = await _source(
+            session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+        )
         if not await provisioning.require_collection_fence(
-            session, current, source_generation, connector_revision, lock=True,
-            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+            session,
+            current,
+            source_generation,
+            connector_revision,
+            lock=True,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
         ):
-            raise HTTPException(status_code=409, detail="Connector collection fence changed during collection")
-        await _prove_admission(session, ref, source_id=source_id, source_generation=source_generation,
-                               connector_revision=connector_revision, scope=scope)
-        await _collector_current(session, source_id, collector_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+            raise HTTPException(
+                status_code=409, detail="Connector collection fence changed during collection"
+            )
+        await _prove_admission(
+            session,
+            ref,
+            source_id=source_id,
+            source_generation=source_generation,
+            connector_revision=connector_revision,
+            scope=scope,
+        )
+        await _collector_current(
+            session,
+            source_id,
+            collector_token,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
         await session.rollback()
         return ConnectorPreview.model_validate(result)
     except (ValueError, httpx.HTTPError) as exc:
@@ -926,7 +1395,8 @@ async def preview_rss(
 async def admit_collection(
     source_id: UUID,
     payload: CollectionAdmissionRequest,
-    request: Request, session: Session,
+    request: Request,
+    session: Session,
     authorization: Annotated[str | None, Header()] = None,
 ) -> CollectionAdmissionRead:
     """Admit one managed-n8n run before any provider I/O; 409 when stale or busy.
@@ -936,26 +1406,41 @@ async def admit_collection(
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     try:
-        _, scope, _ = await _collector(session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled)
+        _, scope, _ = await _collector(
+            session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled
+        )
     except (HTTPException, DomainError) as exc:
         if exc.status_code != 401:
             raise
         await session.rollback()  # the MCP workflow holds only the distinct mcp:collect bearer
-        _, scope, _ = await _mcp_collector(session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled)
+        _, scope, _ = await _mcp_collector(
+            session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled
+        )
         # The mcp:collect bearer is valid only for an MCP source; every other type needs the collector bearer.
-        source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        source = await _source(
+            session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+        )
         if source.type != mcp_collection.PROVIDER_ID:
-            raise HTTPException(status_code=403, detail="MCP collector bearer is valid only for MCP sources") from exc
+            raise HTTPException(
+                status_code=403, detail="MCP collector bearer is valid only for MCP sources"
+            ) from exc
     await session.rollback()  # admission takes its own fence -> Source -> request locks
     return await connectors_public.admit_managed_collection(
-        session, scope, source_id, payload, trigger=payload.trigger, multi_workspace_enabled=multi_workspace_enabled)
+        session,
+        scope,
+        source_id,
+        payload,
+        trigger=payload.trigger,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
 
 
 @router.post("/{source_id}/sync", response_model=Receipt, status_code=202)
 async def receive_connector_batch(
     source_id: UUID,
     payload: ManagedConnectorReceipt,
-    request: Request, session: Session,
+    request: Request,
+    session: Session,
     authorization: Annotated[str | None, Header()] = None,
 ) -> Receipt:
     """Accept only generic collector batches after bearer and revision checks; native writes use owner receipt APIs.
@@ -965,17 +1450,35 @@ async def receive_connector_batch(
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     collector_token, scope, access_fence = await _collector(
-        session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        authorization,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if is_native_provider(source.provider):
         raise HTTPException(status_code=409, detail="native_collection_required")
     if not await provisioning.require_collection_fence(
-        session, source, payload.source_generation, payload.connector_revision, lock=True, backend_revision=payload.backend_revision,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        source,
+        payload.source_generation,
+        payload.connector_revision,
+        lock=True,
+        backend_revision=payload.backend_revision,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     ):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
-    await _collector_current(session, source_id, collector_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+    await _collector_current(
+        session,
+        source_id,
+        collector_token,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
     try:
         registry.validate(source)
     except ValueError as exc:
@@ -990,21 +1493,29 @@ async def receive_connector_batch(
         records=[record.model_dump() for record in payload.records],
     )
     await session.rollback()
-    await lock_access_fence(session, scope=scope, expected=access_fence,
-                            multi_workspace_enabled=multi_workspace_enabled)
+    await lock_access_fence(
+        session, scope=scope, expected=access_fence, multi_workspace_enabled=multi_workspace_enabled
+    )
     # Ingestion re-proves the running request, unexpired slot and token under lock (409 when stale)
     # and settles the request in the same commit as the batch.
     return await ingestion.receive_connector_batch(
-        session, batch, collector_token, multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        batch,
+        collector_token,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
         request_ref=CollectionRequestRef(
-            request_id=payload.admission_request_id, admission_token=payload.admission_token))
+            request_id=payload.admission_request_id, admission_token=payload.admission_token
+        ),
+    )
 
 
 @router.post("/{source_id}/no-changes", response_model=ManualSyncResult)
 async def acknowledge_no_changes(
     source_id: UUID,
     payload: ManagedNoChanges,
-    request: Request, session: Session,
+    request: Request,
+    session: Session,
     authorization: Annotated[str | None, Header()] = None,
 ) -> ManualSyncResult:
     """Record only generic collector no-change status under a verified admission; native providers persist a native receipt and cursor atomically.
@@ -1014,30 +1525,59 @@ async def acknowledge_no_changes(
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     collector_token, scope, access_fence = await _collector(
-        session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        authorization,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if is_native_provider(source.provider):
         raise HTTPException(status_code=409, detail="native_collection_required")
     if not await provisioning.require_collection_fence(
-        session, source, payload.source_generation, payload.connector_revision, lock=True, backend_revision=payload.backend_revision,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        source,
+        payload.source_generation,
+        payload.connector_revision,
+        lock=True,
+        backend_revision=payload.backend_revision,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     ):
         raise HTTPException(status_code=409, detail="Connector collection fence is stale")
-    await _collector_current(session, source_id, collector_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+    await _collector_current(
+        session,
+        source_id,
+        collector_token,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
     await session.rollback()
-    await lock_access_fence(session, scope=scope, expected=access_fence, multi_workspace_enabled=multi_workspace_enabled)
+    await lock_access_fence(
+        session, scope=scope, expected=access_fence, multi_workspace_enabled=multi_workspace_enabled
+    )
     await ingestion.accept_collection_no_changes(
-        session, source_id=source_id, source_generation=payload.source_generation,
+        session,
+        source_id=source_id,
+        source_generation=payload.source_generation,
         connector_revision=payload.connector_revision,
         request_ref=CollectionRequestRef(
-            request_id=payload.admission_request_id, admission_token=payload.admission_token),
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            request_id=payload.admission_request_id, admission_token=payload.admission_token
+        ),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     return ManualSyncResult(status="no_changes")
 
 
-@router.post("/{source_id}/crawl", response_model=CrawlResult, status_code=202,
-             dependencies=[Depends(require_budget("crawl", 10, 60))])
+@router.post(
+    "/{source_id}/crawl",
+    response_model=CrawlResult,
+    status_code=202,
+    dependencies=[Depends(require_budget("crawl", 10, 60))],
+)
 async def submit_crawl(
     source_id: UUID,
     payload: ManagedCrawlRequest,
@@ -1055,16 +1595,38 @@ async def submit_crawl(
     """
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
     collector_token, scope, access_fence = await _collector(
-        session, source_id, authorization, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        authorization,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     settings = request.app.state.settings
-    source = await _source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
-    if source.type != "web" or is_native_provider(source.provider) or not await provisioning.require_collection_fence(
-        session, source, payload.source_generation, payload.connector_revision, lock=True, backend_revision=payload.backend_revision,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+    source = await _source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
+    if (
+        source.type != "web"
+        or is_native_provider(source.provider)
+        or not await provisioning.require_collection_fence(
+            session,
+            source,
+            payload.source_generation,
+            payload.connector_revision,
+            lock=True,
+            backend_revision=payload.backend_revision,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
+        )
     ):
         raise HTTPException(status_code=409, detail="Active web source required")
-    await _collector_current(session, source_id, collector_token, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+    await _collector_current(
+        session,
+        source_id,
+        collector_token,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
     try:
         config = registry.configuration(source)
         if config.url is None:
@@ -1074,7 +1636,9 @@ async def submit_crawl(
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail="Invalid or unsafe source URL") from exc
     if payload.source_id != source_id or str(payload.url) != url:
-        raise HTTPException(status_code=422, detail="Crawl target must match the configured source URL")
+        raise HTTPException(
+            status_code=422, detail="Crawl target must match the configured source URL"
+        )
     if payload.mode != ("playwright" if config.js_render else "http"):
         raise HTTPException(status_code=422, detail="Crawl mode must match the configured source")
     if (
@@ -1082,13 +1646,18 @@ async def submit_crawl(
         or payload.max_depth > config.max_depth
         or payload.timeout_seconds > config.timeout_seconds
     ):
-        raise HTTPException(status_code=422, detail="Crawl request exceeds the configured source budget")
+        raise HTTPException(
+            status_code=422, detail="Crawl request exceeds the configured source budget"
+        )
     if not settings.browser_shared_token.get_secret_value():
         raise HTTPException(status_code=503, detail="Browser collector is not configured")
-    cursor = await ingestion.get_source_cursor(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    cursor = await ingestion.get_source_cursor(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     await session.rollback()
-    await lock_access_fence(session, scope=scope, expected=access_fence,
-                            multi_workspace_enabled=multi_workspace_enabled)
+    await lock_access_fence(
+        session, scope=scope, expected=access_fence, multi_workspace_enabled=multi_workspace_enabled
+    )
     receipt = await ingestion.queue_connector_crawl(
         session,
         source_id,
@@ -1102,8 +1671,10 @@ async def submit_crawl(
             "max_depth": payload.max_depth,
             "timeout_seconds": payload.timeout_seconds,
         },
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
         request_ref=CollectionRequestRef(
-            request_id=payload.admission_request_id, admission_token=payload.admission_token),
+            request_id=payload.admission_request_id, admission_token=payload.admission_token
+        ),
     )
     return CrawlResult(run_id=receipt.run_id)

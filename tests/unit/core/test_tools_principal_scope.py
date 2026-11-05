@@ -22,9 +22,14 @@ SCOPE_B = WorkspaceContext(user_id=2, workspace_id=WS_B, role="owner", membershi
 
 def _principal(scope: WorkspaceContext, name: str) -> ToolExecutionPrincipal:
     return ToolExecutionPrincipal(
-        actor_id=f"owner:{scope.user_id}", scope=scope, is_owner=True,
-        allowed_tools=frozenset({name}), source_ids=frozenset(),
-        owner_all_sources=True, destinations=frozenset({"dest"}), capabilities=frozenset(),
+        actor_id=f"owner:{scope.user_id}",
+        scope=scope,
+        is_owner=True,
+        allowed_tools=frozenset({name}),
+        source_ids=frozenset(),
+        owner_all_sources=True,
+        destinations=frozenset({"dest"}),
+        capabilities=frozenset(),
     )
 
 
@@ -66,13 +71,17 @@ async def _factory() -> Any:
 
 def _context(**extra: Any) -> dict[str, Any]:
     return {
-        "session_factory": _factory, "settings": SimpleNamespace(multi_workspace_enabled=True),
-        "destination_id": "dest", **extra,
+        "session_factory": _factory,
+        "settings": SimpleNamespace(multi_workspace_enabled=True),
+        "destination_id": "dest",
+        **extra,
     }
 
 
 @pytest.mark.asyncio
-async def test_concurrent_workspaces_do_not_share_module_state(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_concurrent_workspaces_do_not_share_module_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A's module is revoked while it waits on approval; B's concurrent enablement cannot revive it."""
     _install_workspace_modules(monkeypatch, lambda ws, n: ws == WS_A and n >= 2)
     registry = ToolRegistry()
@@ -83,7 +92,8 @@ async def test_concurrent_workspaces_do_not_share_module_state(monkeypatch: pyte
         return {}
 
     registry.register_tool(
-        ToolDefinition(name="t.write", risk=ToolRisk.INTERNAL_WRITE, module="sample"), handler,
+        ToolDefinition(name="t.write", risk=ToolRisk.INTERNAL_WRITE, module="sample"),
+        handler,
     )
     a_waiting, release = asyncio.Event(), asyncio.Event()
 
@@ -97,9 +107,13 @@ async def test_concurrent_workspaces_do_not_share_module_state(monkeypatch: pyte
         return True
 
     ctx = _context(approval_verifier=verifier, principal_revalidator=current)
-    task_a = asyncio.create_task(registry.invoke_tool("t.write", {}, _principal(SCOPE_A, "t.write"), context=ctx))
+    task_a = asyncio.create_task(
+        registry.invoke_tool("t.write", {}, _principal(SCOPE_A, "t.write"), context=ctx)
+    )
     await a_waiting.wait()
-    result_b = await registry.invoke_tool("t.write", {}, _principal(SCOPE_B, "t.write"), context=ctx)
+    result_b = await registry.invoke_tool(
+        "t.write", {}, _principal(SCOPE_B, "t.write"), context=ctx
+    )
     release.set()
     result_a = await task_a
     assert result_b.success is True
@@ -108,9 +122,12 @@ async def test_concurrent_workspaces_do_not_share_module_state(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("settings", [None, SimpleNamespace(), SimpleNamespace(multi_workspace_enabled=1)])
+@pytest.mark.parametrize(
+    "settings", [None, SimpleNamespace(), SimpleNamespace(multi_workspace_enabled=1)]
+)
 async def test_missing_or_non_bool_flag_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch, settings: object,
+    monkeypatch: pytest.MonkeyPatch,
+    settings: object,
 ) -> None:
     """The flag is never defaulted: absent or non-bool settings fail closed."""
     _install_workspace_modules(monkeypatch, lambda ws, n: False)
@@ -122,5 +139,7 @@ async def test_missing_or_non_bool_flag_is_unavailable(
     registry.register_tool(ToolDefinition(name="t.read", module="sample"), handler)
     context = _context()
     context["settings"] = settings
-    result = await registry.invoke_tool("t.read", {}, _principal(SCOPE_A, "t.read"), context=context)
+    result = await registry.invoke_tool(
+        "t.read", {}, _principal(SCOPE_A, "t.read"), context=context
+    )
     assert result.success is False and result.error_code == "tool_unavailable"

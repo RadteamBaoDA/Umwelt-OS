@@ -44,6 +44,7 @@ def _big_html() -> str:
 
 # ---------------------------------------------------------------- guardrail self-test
 
+
 async def test_guard_flags_an_inline_blocking_callback(loop_block_guard):
     """Negative control: a synchronous 150 ms call on the loop must be reported by the guard."""
     time.sleep(0.15)  # noqa: ASYNC251  # deliberate blocking call: this is the thing the guard must catch
@@ -53,6 +54,7 @@ async def test_guard_flags_an_inline_blocking_callback(loop_block_guard):
 
 
 # ---------------------------------------------------------------- A1
+
 
 def test_parse_page_matches_the_former_inline_parser():
     html = '<p>a</p><style>s</style><a href="/x">x</a><noscript>n</noscript><b>b &amp; c</b>'
@@ -78,8 +80,14 @@ async def test_run_web_parses_big_pages_off_the_loop(monkeypatch, loop_block_gua
 
     monkeypatch.setattr(collection, "_state", state)
     monkeypatch.setattr(collection, "_accept_generic", accept)
-    src = SimpleNamespace(id=1, type="web", provider=None, generation=1, status="active",
-                          configuration={"url": "https://a.example/", "max_pages": 1, "max_depth": 0})
+    src = SimpleNamespace(
+        id=1,
+        type="web",
+        provider=None,
+        generation=1,
+        status="active",
+        configuration={"url": "https://a.example/", "max_pages": 1, "max_depth": 0},
+    )
     await collection._run_web(SimpleNamespace(attempt=SimpleNamespace(source=src), gate=Gate()))
     expected = collection._PageText()
     expected.feed(html)
@@ -97,9 +105,20 @@ async def test_inline_page_parse_would_be_flagged(loop_block_guard):
 
 # ---------------------------------------------------------------- A2
 
+
 def _usgs_body(count: int = 8_000) -> bytes:
-    features = [{"id": f"id{n}", "properties": {"title": f"quake {n}", "time": 1_700_000_000_000 + n, "url": f"https://e.example/{n}"},
-                 "geometry": {"coordinates": [10.0, 20.0, 1.0]}} for n in range(count)]
+    features = [
+        {
+            "id": f"id{n}",
+            "properties": {
+                "title": f"quake {n}",
+                "time": 1_700_000_000_000 + n,
+                "url": f"https://e.example/{n}",
+            },
+            "geometry": {"coordinates": [10.0, 20.0, 1.0]},
+        }
+        for n in range(count)
+    ]
     return json.dumps({"features": features}).encode()
 
 
@@ -115,8 +134,16 @@ async def test_live_map_parse_is_offloaded_and_identical(monkeypatch, loop_block
     async def before_send():
         return None
 
-    got = await live_map.fetch_events("usgs", country=None, owner=None, repo=None, cik=None, secret=None,
-                                      contact=None, before_send=before_send)
+    got = await live_map.fetch_events(
+        "usgs",
+        country=None,
+        owner=None,
+        repo=None,
+        cik=None,
+        secret=None,
+        contact=None,
+        before_send=before_send,
+    )
     assert got == live_map._parse("usgs", body)
     assert len(got[0]) == live_map.MAX_ITEMS and got[1] is True
     loop_block_guard.assert_clean()
@@ -132,37 +159,81 @@ async def test_live_map_malformed_rows_still_map_to_value_error(monkeypatch):
         return None
 
     with pytest.raises(ValueError, match="provider_response_invalid"):
-        await live_map.fetch_events("usgs", country=None, owner=None, repo=None, cik=None, secret=None,
-                                    contact=None, before_send=before_send)
+        await live_map.fetch_events(
+            "usgs",
+            country=None,
+            owner=None,
+            repo=None,
+            cik=None,
+            secret=None,
+            contact=None,
+            before_send=before_send,
+        )
 
 
 # ---------------------------------------------------------------- A3
 
+
 def _crawl_payload(count: int = 500) -> list[dict]:
-    return [{"provider_id": f"p{n}", "content": "word " * 100, "observed_at": "2026-01-01T00:00:00+00:00",
-             "metadata": {"url": f"https://a.example/{n}"}} for n in range(count)]
+    return [
+        {
+            "provider_id": f"p{n}",
+            "content": "word " * 100,
+            "observed_at": "2026-01-01T00:00:00+00:00",
+            "metadata": {"url": f"https://a.example/{n}"},
+        }
+        for n in range(count)
+    ]
 
 
 def test_prepare_crawl_records_matches_the_former_inline_block():
     response = httpx.Response(200, json=_crawl_payload(40))
-    records, canonical, payload_hash, record_hashes = ingestion_worker._prepare_crawl_records(response)
+    records, canonical, payload_hash, record_hashes = ingestion_worker._prepare_crawl_records(
+        response
+    )
     old_records = [ConnectorRecord.model_validate(item) for item in response.json()]
     old_canonical = [r.model_dump(mode="json") for r in old_records]
-    old_hash = hashlib.sha256(json.dumps(old_canonical, sort_keys=True, separators=(",", ":"),
-                                         ensure_ascii=False).encode()).hexdigest()
-    old_record_hashes = [hashlib.sha256(json.dumps(
-        {"version": d.get("version"), "content": d["content"], "metadata": d["metadata"]},
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest() for d in old_canonical]
+    old_hash = hashlib.sha256(
+        json.dumps(
+            old_canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode()
+    ).hexdigest()
+    old_record_hashes = [
+        hashlib.sha256(
+            json.dumps(
+                {"version": d.get("version"), "content": d["content"], "metadata": d["metadata"]},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+        for d in old_canonical
+    ]
     assert records == old_records and canonical == old_canonical
     assert payload_hash == old_hash and record_hashes == old_record_hashes
 
 
-@pytest.mark.parametrize("body", [
-    b"not json", b"[]", b"{}",
-    json.dumps([{"provider_id": "", "content": "x", "observed_at": "2026-01-01T00:00:00Z"}]).encode(),
-    json.dumps([{"provider_id": "p", "content": "x", "observed_at": "2026-01-01T00:00:00Z",
-                 "metadata": {"world_data": 1}}]).encode(),
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"not json",
+        b"[]",
+        b"{}",
+        json.dumps(
+            [{"provider_id": "", "content": "x", "observed_at": "2026-01-01T00:00:00Z"}]
+        ).encode(),
+        json.dumps(
+            [
+                {
+                    "provider_id": "p",
+                    "content": "x",
+                    "observed_at": "2026-01-01T00:00:00Z",
+                    "metadata": {"world_data": 1},
+                }
+            ]
+        ).encode(),
+    ],
+)
 def test_prepare_crawl_records_keeps_the_error_contract(body):
     with pytest.raises(ValueError, match="Browser collector returned invalid records"):
         ingestion_worker._prepare_crawl_records(httpx.Response(200, content=body))
@@ -178,14 +249,27 @@ async def test_prepare_crawl_records_runs_off_the_loop(loop_block_guard):
 
 # ---------------------------------------------------------------- A4
 
+
 def _page(count: int) -> dict:
-    return {"data": {"items": [{"id": n, "title": f"t{n}", "body": "b" * 50, "updated": "2026-01-01T00:00:00Z"}
-                               for n in range(count)]}}
+    return {
+        "data": {
+            "items": [
+                {"id": n, "title": f"t{n}", "body": "b" * 50, "updated": "2026-01-01T00:00:00Z"}
+                for n in range(count)
+            ]
+        }
+    }
 
 
 async def test_collect_rest_offloads_json_and_mapping_with_identical_result(loop_block_guard):
-    config = SimpleNamespace(url="https://api.example.com/items", items_path="data.items", id_field="id",
-                             title_field="title", content_field="body", updated_field="updated")
+    config = SimpleNamespace(
+        url="https://api.example.com/items",
+        items_path="data.items",
+        id_field="id",
+        title_field="title",
+        content_field="body",
+        updated_field="updated",
+    )
     payload = _page(400)
     body = json.dumps(payload).encode()
     await loop_block_guard.reset()
@@ -200,8 +284,14 @@ async def test_collect_rest_offloads_json_and_mapping_with_identical_result(loop
 
 
 async def test_collect_rest_non_json_is_still_a_schema_change():
-    config = SimpleNamespace(url="https://api.example.com/items", items_path="data.items", id_field="id",
-                             title_field="title", content_field="body", updated_field="updated")
+    config = SimpleNamespace(
+        url="https://api.example.com/items",
+        items_path="data.items",
+        id_field="id",
+        title_field="title",
+        content_field="body",
+        updated_field="updated",
+    )
 
     async def fetch(url, **_kwargs):
         return rest.Fetched(b"<html>")
@@ -212,7 +302,11 @@ async def test_collect_rest_non_json_is_still_a_schema_change():
 
 async def test_provider_json_helpers_match_their_sync_counterparts():
     body = b'{"a": 1.5, "b": [1, 2]}'
-    assert await google_api._json_async(body) == google_api._json(body) == {"a": Decimal("1.5"), "b": [1, 2]}
+    assert (
+        await google_api._json_async(body)
+        == google_api._json(body)
+        == {"a": Decimal("1.5"), "b": [1, 2]}
+    )
     assert await local_services._decode_json_async(body) == local_services._decode_json(body)
     with pytest.raises(google_api.GoogleProviderError, match="response_not_json"):
         await google_api._json_async(b"nope")
@@ -222,13 +316,17 @@ async def test_provider_json_helpers_match_their_sync_counterparts():
 
 # ---------------------------------------------------------------- A5
 
+
 def _boom(kind: str):
     def raiser():
         raise ProviderPayloadError(kind)
+
     return raiser
 
 
-@pytest.mark.parametrize("kind", ["rate_limited", "incomplete", "credential", "entitlement", "invalid"])
+@pytest.mark.parametrize(
+    "kind", ["rate_limited", "incomplete", "credential", "entitlement", "invalid"]
+)
 async def test_payload_async_translates_errors_like_the_sync_wrapper(kind):
     try:
         collection._payload(_boom(kind))
@@ -256,7 +354,10 @@ async def test_big_payload_decode_does_not_block_the_loop(loop_block_guard):
 
 # ---------------------------------------------------------------- A6
 
-async def test_small_text_parse_timeout_joins_the_thread_and_keeps_the_exception(monkeypatch, tmp_path):
+
+async def test_small_text_parse_timeout_joins_the_thread_and_keeps_the_exception(
+    monkeypatch, tmp_path
+):
     finished = threading.Event()
 
     def slow_parse(*_args):
@@ -285,6 +386,7 @@ async def test_small_text_parse_success_and_error_mapping(tmp_path):
 
 # ---------------------------------------------------------------- A7
 
+
 @pytest.mark.parametrize("size", [0, 10, 65_536, 65_537, 3_000_000])
 async def test_content_hash_async_equals_content_hash(size):
     text = ("é" * size)[:size]
@@ -309,15 +411,30 @@ async def test_crawl_helpers_match_inline_expressions():
     from modules.connectors import crawl_digest as crawl
 
     body = b"<html>" + b"x" * 5000
-    assert crawl.page_digest_and_raw(body) == (hashlib.sha256(body).hexdigest(), base64.b64encode(body).decode("ascii"))
-    pages: list[dict[str, object]] = [{"final_url": "u", "raw_content": "r", "n": 1}, {"final_url": "v", "raw_content": "s"}]
-    expected = hashlib.sha256(json.dumps([{k: v for k, v in p.items() if k != "raw_content"} for p in pages],
-                                         sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    assert crawl.page_digest_and_raw(body) == (
+        hashlib.sha256(body).hexdigest(),
+        base64.b64encode(body).decode("ascii"),
+    )
+    pages: list[dict[str, object]] = [
+        {"final_url": "u", "raw_content": "r", "n": 1},
+        {"final_url": "v", "raw_content": "s"},
+    ]
+    expected = hashlib.sha256(
+        json.dumps(
+            [{k: v for k, v in p.items() if k != "raw_content"} for p in pages],
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode()
+    ).hexdigest()
     assert crawl.result_digest(pages) == expected
-    assert crawl.wire_size(pages) == len(json.dumps(pages, ensure_ascii=False, separators=(",", ":")).encode())
+    assert crawl.wire_size(pages) == len(
+        json.dumps(pages, ensure_ascii=False, separators=(",", ":")).encode()
+    )
 
 
 # ---------------------------------------------------------------- A8
+
 
 def test_get_auth_redis_is_a_coroutine_dependency():
     assert asyncio.iscoroutinefunction(get_auth_redis)
@@ -327,6 +444,7 @@ def test_get_auth_redis_is_a_coroutine_dependency():
 
 
 # ---------------------------------------------------------------- A10
+
 
 async def test_dns_lookup_runs_on_the_dedicated_pool_and_timeouts_spare_the_default_executor():
     names: list[str] = []
@@ -358,13 +476,20 @@ async def test_configure_default_executor_sets_an_explicit_size(monkeypatch):
     executor = async_runtime.configure_default_executor()
     try:
         assert executor._max_workers == 7
-        assert await asyncio.to_thread(lambda: threading.current_thread().name.startswith("umwelt-default"))
+        assert await asyncio.to_thread(
+            lambda: threading.current_thread().name.startswith("umwelt-default")
+        )
     finally:
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=4))  # restore a normal pool for later tests
+        loop.set_default_executor(
+            ThreadPoolExecutor(max_workers=4)
+        )  # restore a normal pool for later tests
         executor.shutdown(wait=True)
 
 
-@pytest.mark.parametrize(("raw", "expected"), [("", _CPU_DEFAULT), ("abc", _CPU_DEFAULT), ("0", _CPU_DEFAULT), ("12", 12)])
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("", _CPU_DEFAULT), ("abc", _CPU_DEFAULT), ("0", _CPU_DEFAULT), ("12", 12)],
+)
 def test_default_executor_workers_parses_the_environment(monkeypatch, raw, expected):
     monkeypatch.setenv("THREAD_POOL_WORKERS", raw)
     assert async_runtime.default_executor_workers() == expected
@@ -388,6 +513,7 @@ def test_startup_hooks_configure_the_executor():
 # Timing alone cannot guard small inputs, so these assert the call sites themselves: a spy on the
 # module's ``to_thread_joined`` for runnable paths and an AST scan for paths needing heavy fixtures.
 
+
 def _calls_in_async_functions(module: object, names: set[str]) -> list[str]:
     """Return ``func:name`` for every direct call to ``names`` (bare or attribute) inside an ``async def``."""
     tree = ast.parse(inspect.getsource(module))  # type: ignore[arg-type]
@@ -398,7 +524,13 @@ def _calls_in_async_functions(module: object, names: set[str]) -> list[str]:
         for node in ast.walk(fn):
             if isinstance(node, ast.Call):
                 target = node.func
-                called = target.id if isinstance(target, ast.Name) else target.attr if isinstance(target, ast.Attribute) else ""
+                called = (
+                    target.id
+                    if isinstance(target, ast.Name)
+                    else target.attr
+                    if isinstance(target, ast.Attribute)
+                    else ""
+                )
                 qualified = ast.unparse(target)
                 if called in names or qualified in names:
                     found.append(f"{fn.name}:{qualified}")
@@ -414,8 +546,14 @@ async def test_collect_rest_routes_json_and_mapping_through_to_thread_joined(mon
         return await real(fn, *args)
 
     monkeypatch.setattr(rest, "to_thread_joined", spy)
-    config = SimpleNamespace(url="https://api.example.com/items", items_path="data.items", id_field="id",
-                             title_field="title", content_field="body", updated_field="updated")
+    config = SimpleNamespace(
+        url="https://api.example.com/items",
+        items_path="data.items",
+        id_field="id",
+        title_field="title",
+        content_field="body",
+        updated_field="updated",
+    )
     body = json.dumps(_page(5)).encode()
 
     async def fetch(url, **_kwargs):
@@ -440,9 +578,19 @@ def test_collection_runners_only_reach_payload_through_the_async_wrapper():
     The remaining direct calls build tiny requests from owner configuration (no provider bytes).
     """
     tree = ast.parse(inspect.getsource(collection))
-    bodies = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == "_payload"]
-    heavy = [ast.unparse(n.args[0]) for n in bodies if n.args and (
-        "map" in ast.unparse(n.args[0]) or "decode_json" in ast.unparse(n.args[0]) or ast.unparse(n.args[0]) == "row.mapper")]
+    bodies = [
+        n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == "_payload"
+    ]
+    heavy = [
+        ast.unparse(n.args[0])
+        for n in bodies
+        if n.args
+        and (
+            "map" in ast.unparse(n.args[0])
+            or "decode_json" in ast.unparse(n.args[0])
+            or ast.unparse(n.args[0]) == "row.mapper"
+        )
+    ]
     # Only the lambda wrappers (mappers) and decode_json go through the async wrapper; none may remain sync.
     assert heavy == []
 
@@ -463,11 +611,20 @@ async def test_payload_async_goes_through_to_thread_joined(monkeypatch):
 def test_collect_web_job_runs_the_crawl_block_through_to_thread_joined():
     """The worker must offload via ``_prepare_crawl_records`` and keep decode/validate/hash off the loop."""
     tree = ast.parse(inspect.getsource(ingestion_worker._collect_web_job))
-    offloaded = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == "to_thread_joined"
-                 and n.args and ast.unparse(n.args[0]) == "_prepare_crawl_records"]
+    offloaded = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and ast.unparse(n.func) == "to_thread_joined"
+        and n.args
+        and ast.unparse(n.args[0]) == "_prepare_crawl_records"
+    ]
     assert len(offloaded) == 1
     inline = {ast.unparse(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
-    assert not {"response.json", "ConnectorRecord.model_validate", "json.dumps", "hashlib.sha256"} & inline
+    assert (
+        not {"response.json", "ConnectorRecord.model_validate", "json.dumps", "hashlib.sha256"}
+        & inline
+    )
     assert not any(c.endswith("model_dump") for c in inline)
 
 
@@ -475,6 +632,8 @@ def test_crawl_collector_offloads_its_large_digests():
     """crawl.py imports the optional crawlee extra, so its wiring is checked from source."""
     source = inspect.getsource(__import__("modules.connectors.crawl_digest", fromlist=["x"]))
     assert "def page_digest_and_raw" in source
-    crawl_source = (__import__("pathlib").Path(__file__).parents[2] / "modules/connectors/crawl.py").read_text()
+    crawl_source = (
+        __import__("pathlib").Path(__file__).parents[2] / "modules/connectors/crawl.py"
+    ).read_text()
     for helper in ("page_digest_and_raw", "compute_result_digest", "wire_size"):
         assert f"to_thread_joined({helper}" in crawl_source

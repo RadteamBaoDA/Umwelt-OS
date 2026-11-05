@@ -13,18 +13,35 @@ from modules.chat.schemas import MAX_QUOTE_LENGTH, AnswerContextRequest, Citatio
 def _evidence(content: str = "alpha beta gamma delta") -> EvidenceItem:
     """Build a minimal valid evidence item with fresh identifiers."""
     return EvidenceItem(
-        source_id=uuid4(), source_type="document", source_generation=1, local_only=False,
-        document_id=uuid4(), document_version_id=uuid4(), version_number=1, chunk_id=uuid4(),
-        chunk_index=0, content=content, title="Title", canonical_url=None,
-        observed_at=datetime(2026, 1, 1, tzinfo=UTC), published_at=None, metadata_is_version_snapshot=False, score=1.0,
+        source_id=uuid4(),
+        source_type="document",
+        source_generation=1,
+        local_only=False,
+        document_id=uuid4(),
+        document_version_id=uuid4(),
+        version_number=1,
+        chunk_id=uuid4(),
+        chunk_index=0,
+        content=content,
+        title="Title",
+        canonical_url=None,
+        observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        published_at=None,
+        metadata_is_version_snapshot=False,
+        score=1.0,
     )
 
 
 def test_extract_quote_is_exact_substring_and_prefers_overlap() -> None:
     """The quote is a contiguous chunk substring chosen by lexical overlap with the citing sentence."""
-    chunk = ("Cats sleep a lot during the day. " * 8) + "The reactor temperature reached 900 degrees. " + (
-        "Dogs bark at night. " * 8)
-    quote = citations.extract_supporting_quote("Reactor temperature was high [1].", chunk, 1, max_length=80)
+    chunk = (
+        ("Cats sleep a lot during the day. " * 8)
+        + "The reactor temperature reached 900 degrees. "
+        + ("Dogs bark at night. " * 8)
+    )
+    quote = citations.extract_supporting_quote(
+        "Reactor temperature was high [1].", chunk, 1, max_length=80
+    )
     assert quote in chunk
     assert "reactor" in quote.lower()
     assert len(quote) <= 80
@@ -35,13 +52,20 @@ def test_extract_quote_falls_back_without_overlap_and_handles_blank() -> None:
     chunk = "x" * 400
     assert citations.extract_supporting_quote("zzz qqq", chunk, 1, max_length=50) == "x" * 50
     assert citations.extract_supporting_quote("anything", "   ") == ""
-    assert len(citations.extract_supporting_quote("a", "y" * 10_000, max_length=10**6)) <= MAX_QUOTE_LENGTH
+    assert (
+        len(citations.extract_supporting_quote("a", "y" * 10_000, max_length=10**6))
+        <= MAX_QUOTE_LENGTH
+    )
 
 
 def test_validate_citations_reports_each_rejection_reason_in_order() -> None:
     """Every rejection path keeps its message and the valid citation uses authoritative metadata."""
     item = _evidence("The quick brown fox")
-    good = {"documentVersionId": item.document_version_id, "chunkId": item.chunk_id, "quote": "quick brown"}
+    good = {
+        "documentVersionId": item.document_version_id,
+        "chunkId": item.chunk_id,
+        "quote": "quick brown",
+    }
     missing_ids = {"quote": "x"}
     unknown = {"documentVersionId": uuid4(), "chunkId": uuid4(), "quote": "x"}
     empty_quote = {**good, "quote": ""}
@@ -50,7 +74,8 @@ def test_validate_citations_reports_each_rejection_reason_in_order() -> None:
     wrong_doc = {**good, "documentId": uuid4()}
     wrong_source = {**good, "sourceId": uuid4()}
     result = citations.validate_citations(
-        [good, missing_ids, unknown, empty_quote, too_long, absent, wrong_doc, wrong_source], [item],
+        [good, missing_ids, unknown, empty_quote, too_long, absent, wrong_doc, wrong_source],
+        [item],
     )
     assert result.is_valid is False
     assert [c.quote for c in result.valid_citations] == ["quick brown"]
@@ -68,7 +93,10 @@ def test_validate_citations_reports_each_rejection_reason_in_order() -> None:
 
 def test_date_context_range_variants() -> None:
     """datetime, date and ISO strings map to a half-open day range; garbage maps to none."""
-    assert retrieval._date_context_range(datetime(2026, 3, 1, 15, tzinfo=UTC)) == (date(2026, 3, 1), date(2026, 3, 2))
+    assert retrieval._date_context_range(datetime(2026, 3, 1, 15, tzinfo=UTC)) == (
+        date(2026, 3, 1),
+        date(2026, 3, 2),
+    )
     assert retrieval._date_context_range(date(2026, 3, 31)) == (date(2026, 3, 31), date(2026, 4, 1))
     assert retrieval._date_context_range("2026-03-01") == (date(2026, 3, 1), date(2026, 3, 2))
     assert retrieval._date_context_range("not-a-date") == (None, None)
@@ -107,9 +135,18 @@ def test_fit_context_budget_keeps_first_and_enforces_exact_selection() -> None:
 def test_observation_filters_always_start_with_permission_predicates() -> None:
     """Workspace and allowed-source predicates come first; optional filters are appended after."""
     args = SimpleNamespace(
-        current_only=True, aggregation="none", providers=["A "], metrics=None, symbols=None, region=None,
+        current_only=True,
+        aggregation="none",
+        providers=["A "],
+        metrics=None,
+        symbols=None,
+        region=None,
     )
     filters = db_query._observation_filters(
-        args, workspace_id=uuid4(), allowed_source_ids=[uuid4()], date_from=datetime(2026, 1, 1, tzinfo=UTC), date_to=None,  # type: ignore[arg-type]
+        args,
+        workspace_id=uuid4(),
+        allowed_source_ids=[uuid4()],
+        date_from=datetime(2026, 1, 1, tzinfo=UTC),
+        date_to=None,  # type: ignore[arg-type]
     )
     assert len(filters) == 5  # workspace, source, is_current, provider, date_from

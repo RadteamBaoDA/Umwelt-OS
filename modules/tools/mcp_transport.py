@@ -57,8 +57,18 @@ class McpOperationNetworkBudget:
         Raises:
             ValueError: If a configured operation bound is not positive.
         """
-        if min(deadline, max_requests, max_request_bytes, max_response_bytes,
-               max_inflight_requests, max_teardown_requests, max_teardown_bytes) <= 0:
+        if (
+            min(
+                deadline,
+                max_requests,
+                max_request_bytes,
+                max_response_bytes,
+                max_inflight_requests,
+                max_teardown_requests,
+                max_teardown_bytes,
+            )
+            <= 0
+        ):
             raise ValueError("MCP network limits and deadline must be positive")
         self.deadline = deadline
         self.max_requests = max_requests
@@ -139,7 +149,9 @@ class McpOperationNetworkBudget:
 class _BoundedRequestByteStream(AsyncByteStream):
     """Count each outbound body chunk before the pinned transport delegates it."""
 
-    def __init__(self, stream: AsyncByteStream, budget: McpOperationNetworkBudget, *, teardown: bool) -> None:
+    def __init__(
+        self, stream: AsyncByteStream, budget: McpOperationNetworkBudget, *, teardown: bool
+    ) -> None:
         """Wrap the SDK-owned request stream without materializing its full body."""
         self._stream = stream
         self._budget = budget
@@ -165,7 +177,9 @@ class _BoundedRequestByteStream(AsyncByteStream):
 class _BoundedResponseByteStream(AsyncByteStream):
     """Count response bytes before SDK JSON/SSE consumers see any chunk."""
 
-    def __init__(self, stream: AsyncByteStream, budget: McpOperationNetworkBudget, *, teardown: bool) -> None:
+    def __init__(
+        self, stream: AsyncByteStream, budget: McpOperationNetworkBudget, *, teardown: bool
+    ) -> None:
         """Wrap the delegate response and own the operation's open-stream slot."""
         self._stream = stream
         self._budget = budget
@@ -230,7 +244,9 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
         try:
             scheme, host, port, _path = normalize_mcp_url(str(url))
         except ValueError as exc:
-            raise McpTransportError("MCP request URL is outside the configured HTTP policy") from exc
+            raise McpTransportError(
+                "MCP request URL is outside the configured HTTP policy"
+            ) from exc
         return scheme, host, port
 
     async def _resolve_destination(self, origin: tuple[str, str, int]) -> str:
@@ -244,7 +260,10 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
             try:
                 async with asyncio.timeout(self._budget.remaining_seconds()):
                     rows = await asyncio.get_running_loop().getaddrinfo(
-                        host, port, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM,
+                        host,
+                        port,
+                        family=socket.AF_UNSPEC,
+                        type=socket.SOCK_STREAM,
                         proto=socket.IPPROTO_TCP,
                     )
             except OSError as exc:
@@ -252,7 +271,9 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
             addresses = []
             for family, _kind, _protocol, _canonical_name, sockaddr in rows:
                 if family not in {socket.AF_INET, socket.AF_INET6}:
-                    raise McpTransportError("MCP destination resolver returned an unsupported address family")
+                    raise McpTransportError(
+                        "MCP destination resolver returned an unsupported address family"
+                    )
                 addresses.append(sockaddr[0])
         else:
             addresses = [host]
@@ -269,7 +290,9 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
             try:
                 address = ipaddress.ip_address(address_text)
             except ValueError as exc:
-                raise McpTransportError("MCP destination resolver returned an invalid address") from exc
+                raise McpTransportError(
+                    "MCP destination resolver returned an invalid address"
+                ) from exc
             if isinstance(address, ipaddress.IPv6Address) and address.scope_id is not None:
                 raise McpTransportError("Scoped IP destinations are not supported")
             if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
@@ -281,13 +304,24 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
             approved_http_loopback = scheme == "http" and address.is_loopback and exception_allowed
             # NAT64/6to4/compat encodings are judged by the IPv4 they carry (metadata 169.254.169.254).
             carried = embedded_ipv4(address)
-            if (carried is not None and carried.is_link_local
-                    or address.is_link_local or address.is_multicast or address.is_unspecified
-                    or address.is_reserved and not approved_http_loopback
-                    or address.is_loopback and scheme != "http"):
+            if (
+                carried is not None
+                and carried.is_link_local
+                or address.is_link_local
+                or address.is_multicast
+                or address.is_unspecified
+                or address.is_reserved
+                and not approved_http_loopback
+                or address.is_loopback
+                and scheme != "http"
+            ):
                 raise McpTransportError("MCP destination resolved to a special-use address")
-            if scheme == "http" and (not exception_allowed or not (address.is_private or address.is_loopback)):
-                raise McpTransportError("Plain HTTP MCP destinations require an approved private or loopback CIDR")
+            if scheme == "http" and (
+                not exception_allowed or not (address.is_private or address.is_loopback)
+            ):
+                raise McpTransportError(
+                    "Plain HTTP MCP destinations require an approved private or loopback CIDR"
+                )
             if not is_public_address(address) and not exception_allowed:
                 raise McpTransportError("MCP destination resolved to a non-public address")
             normalized.append(address.compressed)
@@ -298,13 +332,16 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
         teardown = request.method == "DELETE"
         await self._budget.claim_request(teardown=teardown)
         delegated_response = False
-        request_stream = _BoundedRequestByteStream(cast(AsyncByteStream, request.stream), self._budget, teardown=teardown)
+        request_stream = _BoundedRequestByteStream(
+            cast(AsyncByteStream, request.stream), self._budget, teardown=teardown
+        )
         try:
             origin = self._validate_origin(request.url)
             if origin != self._configured_origin:
                 raise McpTransportError("MCP redirect changed the configured origin")
             if origin[0] == "http" and any(
-                request.headers.get(name) for name in ("authorization", "cookie", "proxy-authorization")
+                request.headers.get(name)
+                for name in ("authorization", "cookie", "proxy-authorization")
             ):
                 raise McpTransportError("Plain HTTP MCP requests cannot carry credentials")
             pinned_host = await self._resolve_destination(origin)
@@ -314,7 +351,8 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
             self._budget.remaining_seconds()
 
             headers: list[tuple[str, str | bytes]] = [
-                (name, value) for name, value in request.headers.multi_items()
+                (name, value)
+                for name, value in request.headers.multi_items()
                 if name.lower() not in {"host", "accept-encoding"}
             ]
             headers.extend((("host", request.url.netloc), ("accept-encoding", "identity")))
@@ -322,13 +360,19 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
             timeout = dict(extensions.get("timeout", {}) or {})
             for phase in ("connect", "read", "write", "pool"):
                 value = timeout.get(phase)
-                timeout[phase] = min(value, remaining) if isinstance(value, (int, float)) and value > 0 else remaining
+                timeout[phase] = (
+                    min(value, remaining)
+                    if isinstance(value, (int, float)) and value > 0
+                    else remaining
+                )
             extensions["timeout"] = timeout
             extensions["sni_hostname"] = origin[1]
             pinned_request = Request(
                 request.method,
                 request.url.copy_with(host=pinned_host),
-                headers=cast(Any, headers),  # mixed str/bytes items are normalised per header by httpx
+                headers=cast(
+                    Any, headers
+                ),  # mixed str/bytes items are normalised per header by httpx
                 stream=request_stream,
                 extensions=extensions,
             )
@@ -339,20 +383,30 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
             content_encoding = response.headers.get("content-encoding", "identity").strip().lower()
             if content_encoding not in {"", "identity"}:
                 await response.aclose()
-                raise McpTransportError("Compressed MCP responses are not supported by the bounded reader")
+                raise McpTransportError(
+                    "Compressed MCP responses are not supported by the bounded reader"
+                )
             content_length = response.headers.get("content-length")
             if content_length is not None:
                 try:
-                    if int(content_length) > (self._budget.max_teardown_bytes if teardown else self._budget.max_response_bytes):
+                    if int(content_length) > (
+                        self._budget.max_teardown_bytes
+                        if teardown
+                        else self._budget.max_response_bytes
+                    ):
                         await response.aclose()
-                        raise McpTransportError("MCP response exceeds the configured operation byte limit")
+                        raise McpTransportError(
+                            "MCP response exceeds the configured operation byte limit"
+                        )
                 except ValueError:
                     # Invalid lengths are still bounded by the response stream wrapper.
                     pass
             bounded_response = Response(
                 status_code=response.status_code,
                 headers=response.headers,
-                stream=_BoundedResponseByteStream(cast(AsyncByteStream, response.stream), self._budget, teardown=teardown),
+                stream=_BoundedResponseByteStream(
+                    cast(AsyncByteStream, response.stream), self._budget, teardown=teardown
+                ),
                 extensions=response.extensions,
             )
             delegated_response = True
@@ -374,7 +428,9 @@ class McpPinnedHttpTransport(AsyncBaseTransport):
         return self
 
     async def __aexit__(
-        self, exc_type: type[BaseException] | None = None, exc_value: BaseException | None = None,
+        self,
+        exc_type: type[BaseException] | None = None,
+        exc_value: BaseException | None = None,
         traceback: TracebackType | None = None,
     ) -> None:
         """Close the delegated connection pool when the caller-owned client exits."""
@@ -401,7 +457,9 @@ def create_mcp_http_client(
     if bearer_token:
         headers["Authorization"] = f"Bearer {bearer_token}"
     transport = McpPinnedHttpTransport(
-        endpoint, budget, approved_destination_cidrs=approved_destination_cidrs,
+        endpoint,
+        budget,
+        approved_destination_cidrs=approved_destination_cidrs,
     )
     timeout = max(0.1, min(timeout_seconds, budget.remaining_seconds()))
     return AsyncClient(

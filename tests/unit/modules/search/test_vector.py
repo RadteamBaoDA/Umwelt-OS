@@ -161,14 +161,13 @@ class TestVectorRankingAndTieBreaking:
         """Verify candidates with smaller distance (higher similarity) rank higher."""
         query_vec = [1.0, 0.0]
         candidates: list[tuple[UUID, list[float]]] = [
-            (UUID("00000000-0000-0000-0000-000000000003"), [0.0, 1.0]),       # orthogonal: dist 1.0
-            (UUID("00000000-0000-0000-0000-000000000001"), [1.0, 0.0]),       # identical: dist 0.0
-            (UUID("00000000-0000-0000-0000-000000000002"), [0.8, 0.6]),       # close: dist ~0.2
+            (UUID("00000000-0000-0000-0000-000000000003"), [0.0, 1.0]),  # orthogonal: dist 1.0
+            (UUID("00000000-0000-0000-0000-000000000001"), [1.0, 0.0]),  # identical: dist 0.0
+            (UUID("00000000-0000-0000-0000-000000000002"), [0.8, 0.6]),  # close: dist ~0.2
         ]
 
         scored = [
-            (chunk_id, compute_cosine_distance(query_vec, vec))
-            for chunk_id, vec in candidates
+            (chunk_id, compute_cosine_distance(query_vec, vec)) for chunk_id, vec in candidates
         ]
         # Sort ascending by distance, tie-break by chunk_id string
         ranked = sorted(scored, key=lambda item: (item[1], str(item[0])))
@@ -191,8 +190,7 @@ class TestVectorRankingAndTieBreaking:
             (id_a, [0.0, 1.0]),  # distance 1.0
         ]
         scored = [
-            (chunk_id, compute_cosine_distance(query_vec, vec))
-            for chunk_id, vec in candidates
+            (chunk_id, compute_cosine_distance(query_vec, vec)) for chunk_id, vec in candidates
         ]
         ranked = sorted(scored, key=lambda item: (item[1], str(item[0])))
 

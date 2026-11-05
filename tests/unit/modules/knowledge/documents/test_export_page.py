@@ -18,10 +18,20 @@ SRC = uuid4()
 def _header_row(index: int, current: int | None = 1) -> dict:  # type: ignore[type-arg]
     created = T0 + timedelta(minutes=index)
     return {
-        "document_id": uuid4(), "source_id": SRC, "document_created_at": created, "document_updated_at": created,
-        "document_current_version": 1, "document_title": f"Doc {index}", "document_content_type": "text/plain",
-        "document_mime_type": None, "document_canonical_url": "https://example.com/a?q=1#f" if index != 1 else "https://user:pw@example.com/a",
-        "source_status": "active", "source_generation": 2, "current_version_number": current,
+        "document_id": uuid4(),
+        "source_id": SRC,
+        "document_created_at": created,
+        "document_updated_at": created,
+        "document_current_version": 1,
+        "document_title": f"Doc {index}",
+        "document_content_type": "text/plain",
+        "document_mime_type": None,
+        "document_canonical_url": "https://example.com/a?q=1#f"
+        if index != 1
+        else "https://user:pw@example.com/a",
+        "source_status": "active",
+        "source_generation": 2,
+        "current_version_number": current,
         "accepted_generation": None,
     }
 
@@ -29,15 +39,34 @@ def _header_row(index: int, current: int | None = 1) -> dict:  # type: ignore[ty
 def _version_row(index: int) -> dict:  # type: ignore[type-arg]
     created = T0 + timedelta(minutes=index)
     return {
-        "document_id": uuid4(), "source_id": SRC, "document_created_at": created, "document_updated_at": created,
-        "document_current_version": 1, "source_status": "active", "source_generation": 2,
-        "version_id": uuid4(), "version_number": 1, "version_content": f"body {index}",
-        "version_content_hash": "a" * 64, "version_observed_at": created, "version_created_at": created,
-        "provider_id": None, "provider_version": None, "normalization_version": None,
-        "accepted_source_generation": None, "provenance_observed_at": None, "received_at": None,
-        "collected_at": None, "selection_observed_at": None, "provenance_title": None,
-        "provenance_canonical_url": None, "provenance_published_at": None, "provenance_content_type": None,
-        "interaction_read_at": None, "interaction_bookmarked_at": None, "interaction_dismissed_at": None,
+        "document_id": uuid4(),
+        "source_id": SRC,
+        "document_created_at": created,
+        "document_updated_at": created,
+        "document_current_version": 1,
+        "source_status": "active",
+        "source_generation": 2,
+        "version_id": uuid4(),
+        "version_number": 1,
+        "version_content": f"body {index}",
+        "version_content_hash": "a" * 64,
+        "version_observed_at": created,
+        "version_created_at": created,
+        "provider_id": None,
+        "provider_version": None,
+        "normalization_version": None,
+        "accepted_source_generation": None,
+        "provenance_observed_at": None,
+        "received_at": None,
+        "collected_at": None,
+        "selection_observed_at": None,
+        "provenance_title": None,
+        "provenance_canonical_url": None,
+        "provenance_published_at": None,
+        "provenance_content_type": None,
+        "interaction_read_at": None,
+        "interaction_bookmarked_at": None,
+        "interaction_dismissed_at": None,
     }
 
 
@@ -50,6 +79,7 @@ class _Stream:
         async def gen():  # type: ignore[no-untyped-def]
             for row in self._rows:
                 yield row
+
         return gen()
 
     async def close(self) -> None:
@@ -118,8 +148,10 @@ async def test_actor_mismatch_is_rejected() -> None:
 @pytest.mark.asyncio
 async def test_first_record_over_byte_budget_raises_and_later_record_ends_page() -> None:
     rows = [_header_row(0), _header_row(1)]
-    with patch_documents("EXPORT_PAGE_MAX_BYTES", 10), \
-            pytest.raises(ValueError, match="exceeds the page byte budget"):
+    with (
+        patch_documents("EXPORT_PAGE_MAX_BYTES", 10),
+        pytest.raises(ValueError, match="exceeds the page byte budget"),
+    ):
         await _page(_session(rows, count=2))
     probe = await _page(_session(rows[:1], count=1))
     one_record = probe.payload_bytes
@@ -134,7 +166,10 @@ async def test_versions_page_streams_rows_and_closes_stream() -> None:
     session = _session(rows, count=3)
     page = await _page(session, record_kind="versions")
     assert [item.content for item in page.items] == ["body 0", "body 1"]
-    assert page.fences[0].version_id == page.items[0].id and page.fences[0].version_content_digest == "a" * 64
+    assert (
+        page.fences[0].version_id == page.items[0].id
+        and page.fences[0].version_content_digest == "a" * 64
+    )
     assert page.items[0].provenance is None and page.items[0].is_current_version is True
     assert page.next_cursor is not None and session.opened.closed is True
     statement = session.stream.await_args.args[0]
@@ -144,19 +179,27 @@ async def test_versions_page_streams_rows_and_closes_stream() -> None:
 @pytest.mark.asyncio
 async def test_versions_first_record_over_budget_raises_and_still_closes_stream() -> None:
     session = _session([_version_row(0)], count=1)
-    with patch_documents("EXPORT_PAGE_MAX_BYTES", 10), pytest.raises(ValueError, match="version exceeds the page byte budget"):
+    with (
+        patch_documents("EXPORT_PAGE_MAX_BYTES", 10),
+        pytest.raises(ValueError, match="version exceeds the page byte budget"),
+    ):
         await _page(session, record_kind="versions")
     assert session.opened.closed is True
 
 
 # --- validate_export_fences ---------------------------------------------------------------
 
+
 def _fence(**over):  # type: ignore[no-untyped-def]
     from modules.knowledge.documents.schemas import DocumentExportFence
 
     base = {
-        "document_id": uuid4(), "document_created_at": T0, "document_updated_at": T0,
-        "document_current_version": 1, "source_id": SRC, "source_status": "active",
+        "document_id": uuid4(),
+        "document_created_at": T0,
+        "document_updated_at": T0,
+        "document_current_version": 1,
+        "source_id": SRC,
+        "source_status": "active",
         "current_source_generation": 2,
     }
     base.update(over)
@@ -164,7 +207,14 @@ def _fence(**over):  # type: ignore[no-untyped-def]
 
 
 def _live_row(**over):  # type: ignore[no-untyped-def]
-    base = {"created_at": T0, "updated_at": T0, "current_version": 1, "source_id": SRC, "status": "active", "generation": 2}
+    base = {
+        "created_at": T0,
+        "updated_at": T0,
+        "current_version": 1,
+        "source_id": SRC,
+        "status": "active",
+        "generation": 2,
+    }
     base.update(over)
     return SimpleNamespace(**base)
 
@@ -174,12 +224,22 @@ async def _validate(fences, *, rows, count=1, expected=1, kind="documents", elig
 
     session = MagicMock()
     session.scalar = AsyncMock(return_value=count)
-    session.execute = AsyncMock(side_effect=[SimpleNamespace(one_or_none=lambda row=row: row) for row in rows])
-    with patch.object(public.sources, "filter_export_eligible_sources",
-                      AsyncMock(return_value=[SRC] if eligible else [])):
+    session.execute = AsyncMock(
+        side_effect=[SimpleNamespace(one_or_none=lambda row=row: row) for row in rows]
+    )
+    with patch.object(
+        public.sources,
+        "filter_export_eligible_sources",
+        AsyncMock(return_value=[SRC] if eligible else []),
+    ):
         return await public.validate_export_fences(
-            session, owner_id=1, record_kind=kind, snapshot_at=T0, expected_snapshot_count=expected,
-            fences=fences, **SCOPE_KW,
+            session,
+            owner_id=1,
+            record_kind=kind,
+            snapshot_at=T0,
+            expected_snapshot_count=expected,
+            fences=fences,
+            **SCOPE_KW,
         )
 
 
@@ -192,39 +252,57 @@ async def test_fences_valid_when_everything_matches() -> None:
 @pytest.mark.asyncio
 async def test_fences_report_count_drift_before_row_checks() -> None:
     result = await _validate([_fence()], rows=[], count=5, expected=1)
-    assert (result.valid, result.reason, result.observed_snapshot_count) == (False, "snapshot_count_changed", 5)
+    assert (result.valid, result.reason, result.observed_snapshot_count) == (
+        False,
+        "snapshot_count_changed",
+        5,
+    )
 
 
 @pytest.mark.asyncio
 async def test_fences_report_source_generation_changes() -> None:
     mixed = [_fence(), _fence(current_source_generation=3)]
     assert (await _validate(mixed, rows=[])).reason == "source_generation_changed"
-    assert (await _validate([_fence()], rows=[], eligible=False)).reason == "source_generation_changed"
-    assert (await _validate([_fence()], rows=[_live_row(generation=9)])).reason == "source_generation_changed"
+    assert (
+        await _validate([_fence()], rows=[], eligible=False)
+    ).reason == "source_generation_changed"
+    assert (
+        await _validate([_fence()], rows=[_live_row(generation=9)])
+    ).reason == "source_generation_changed"
 
 
 @pytest.mark.asyncio
 async def test_fences_report_changed_or_deleted_record() -> None:
     assert (await _validate([_fence()], rows=[None])).reason == "record_changed"
-    assert (await _validate([_fence()], rows=[_live_row(current_version=4)])).reason == "record_changed"
+    assert (
+        await _validate([_fence()], rows=[_live_row(current_version=4)])
+    ).reason == "record_changed"
 
 
 @pytest.mark.asyncio
 async def test_version_fences_check_revision_identity() -> None:
-    fence = _fence(version_id=uuid4(), version_number=1, version_created_at=T0, version_content_digest="a" * 64)
+    fence = _fence(
+        version_id=uuid4(), version_number=1, version_created_at=T0, version_content_digest="a" * 64
+    )
     good = SimpleNamespace(version_number=1, created_at=T0, content_hash="a" * 64)
     ok = await _validate([fence], rows=[_live_row(), good], kind="versions")
     assert ok.valid is True
     bad = SimpleNamespace(version_number=1, created_at=T0, content_hash="b" * 64)
-    assert (await _validate([fence], rows=[_live_row(), bad], kind="versions")).reason == "record_changed"
-    assert (await _validate([fence], rows=[_live_row(), None], kind="versions")).reason == "evidence_unavailable"
+    assert (
+        await _validate([fence], rows=[_live_row(), bad], kind="versions")
+    ).reason == "record_changed"
+    assert (
+        await _validate([fence], rows=[_live_row(), None], kind="versions")
+    ).reason == "evidence_unavailable"
     with pytest.raises(ValueError, match="missing its immutable revision identity"):
         await _validate([_fence()], rows=[_live_row()], kind="versions")
 
 
 @pytest.mark.asyncio
 async def test_header_fence_with_version_identity_is_rejected() -> None:
-    fence = _fence(version_id=uuid4(), version_number=1, version_created_at=T0, version_content_digest="a" * 64)
+    fence = _fence(
+        version_id=uuid4(), version_number=1, version_created_at=T0, version_content_digest="a" * 64
+    )
     with pytest.raises(ValueError, match="cannot include a version identity"):
         await _validate([fence], rows=[_live_row()])
 

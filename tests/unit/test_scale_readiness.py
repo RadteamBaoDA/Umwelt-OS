@@ -1,4 +1,5 @@
 """Horizontal-scale readiness: per-role DB timeouts, Redis Sentinel wiring, queue-full signalling, stateless workers."""
+
 from __future__ import annotations
 
 import ast
@@ -39,7 +40,9 @@ class _FakeRedis:
 
 
 @pytest.mark.asyncio
-async def test_worker_roles_pass_explicit_statement_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_worker_roles_pass_explicit_statement_timeouts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Main worker, cron worker, model worker and chat worker all get a bounded, role-specific ``statement_timeout``."""
     seen: dict[str, dict[str, Any]] = {}
     role: list[str] = []
@@ -63,16 +66,27 @@ async def test_worker_roles_pass_explicit_statement_timeouts(monkeypatch: pytest
     monkeypatch.setattr(worker_main, "compose_agent_registry", fake_registry)
     monkeypatch.setattr(worker_main, "install_log_redaction", lambda: None)
     monkeypatch.setattr(worker_main, "set_process_role", lambda name: role.append(name))
-    monkeypatch.setattr(worker_main, "Settings", lambda: _settings(
-        DB_WORKER_STATEMENT_TIMEOUT_MS=111_000, DB_MODEL_WORKER_STATEMENT_TIMEOUT_MS=222_000,
-    ))
+    monkeypatch.setattr(
+        worker_main,
+        "Settings",
+        lambda: _settings(
+            DB_WORKER_STATEMENT_TIMEOUT_MS=111_000,
+            DB_MODEL_WORKER_STATEMENT_TIMEOUT_MS=222_000,
+        ),
+    )
+
     async def no_catch_up(_ctx: object) -> list[str]:
         """Skip the cron worker's missed-run scan (needs a real Redis hash)."""
         return []
 
     monkeypatch.setattr(worker_main, "catch_up_missed_runs", no_catch_up)
     try:
-        for hook in (worker_main.startup, worker_main.cron_startup, worker_main.model_startup, worker_main.chat_startup):
+        for hook in (
+            worker_main.startup,
+            worker_main.cron_startup,
+            worker_main.model_startup,
+            worker_main.chat_startup,
+        ):
             await hook({"redis": _FakeRedis()})
     finally:
         worker_main.set_wake_hook(None)  # the full-ctx workers install a process-wide wake hook
@@ -81,7 +95,9 @@ async def test_worker_roles_pass_explicit_statement_timeouts(monkeypatch: pytest
     assert seen["cron-worker"]["direct_pool_size"] == worker_main.CronWorkerSettings.max_jobs
     assert seen["model-worker"]["statement_timeout_ms"] == 222_000
     assert seen["chat-worker"]["statement_timeout_ms"] == 60_000
-    assert all(kw["statement_timeout_ms"] > 0 for kw in seen.values())  # nothing runs unbounded any more
+    assert all(
+        kw["statement_timeout_ms"] > 0 for kw in seen.values()
+    )  # nothing runs unbounded any more
     assert seen["worker"]["direct_pool_size"] == worker_main.WorkerSettings.max_jobs
 
 
@@ -97,10 +113,20 @@ def test_parse_sentinels() -> None:
 def test_worker_redis_settings_switch_to_sentinel() -> None:
     """Without sentinels the DSN is used unchanged; with them arq resolves the named master through Sentinel."""
     plain = build_redis_settings(_settings(REDIS_URL="redis://:pw@redis:6379/2"))
-    assert (plain.host, plain.port, plain.database, plain.password, plain.sentinel) == ("redis", 6379, 2, "pw", False)
-    ha = build_redis_settings(_settings(
-        REDIS_URL="redis://:pw@redis:6379/2", REDIS_SENTINELS="s1:26379,s2:26379", REDIS_MASTER_NAME="umwelt",
-    ))
+    assert (plain.host, plain.port, plain.database, plain.password, plain.sentinel) == (
+        "redis",
+        6379,
+        2,
+        "pw",
+        False,
+    )
+    ha = build_redis_settings(
+        _settings(
+            REDIS_URL="redis://:pw@redis:6379/2",
+            REDIS_SENTINELS="s1:26379,s2:26379",
+            REDIS_MASTER_NAME="umwelt",
+        )
+    )
     assert ha.sentinel and ha.host == [("s1", 26379), ("s2", 26379)]
     assert ha.sentinel_master == "umwelt" and ha.password == "pw" and ha.database == 2
 
@@ -109,7 +135,9 @@ def test_worker_redis_settings_switch_to_sentinel() -> None:
 async def test_api_redis_client_is_arq_redis_in_both_modes() -> None:
     """The API keeps the same ``ArqRedis`` type in single-instance and Sentinel mode (no I/O at creation)."""
     single = create_api_redis(_settings(REDIS_URL="redis://:pw@redis:6379/0"))
-    ha = create_api_redis(_settings(REDIS_URL="redis://:pw@redis:6379/3", REDIS_SENTINELS="s1,s2:26380"))
+    ha = create_api_redis(
+        _settings(REDIS_URL="redis://:pw@redis:6379/3", REDIS_SENTINELS="s1,s2:26380")
+    )
     try:
         assert isinstance(single, ArqRedis) and isinstance(ha, ArqRedis)
         assert single.connection_pool.connection_kwargs["host"] == "redis"
@@ -121,7 +149,13 @@ async def test_api_redis_client_is_arq_redis_in_both_modes() -> None:
         await ha.aclose()
 
 
-@pytest.mark.parametrize("error", [RedisConnectionError("down"), ResponseError("OOM command not allowed when used memory > 'maxmemory'")])
+@pytest.mark.parametrize(
+    "error",
+    [
+        RedisConnectionError("down"),
+        ResponseError("OOM command not allowed when used memory > 'maxmemory'"),
+    ],
+)
 def test_unhandled_redis_failure_is_a_retryable_503(error: Exception) -> None:
     """Enqueue failures (Redis down, or full under noeviction) answer 503 + Retry-After, never a bare 500."""
     app = FastAPI()
@@ -165,7 +199,14 @@ PER_PROCESS_STATE_ALLOWLIST = {
     # Live-map response/tile caches and burst pacing are courtesy limits per API process (already N=WEB_CONCURRENCY
     # processes today); the durable provider budget and retry deadline live in PostgreSQL (live_map.py) and stay
     # authoritative, so extra replicas only multiply the soft burst allowance, never the real quota.
-    "modules/dashboard/live_map_routes.py": {"_cache", "_tiles", "_next_send", "_recent", "_lock", "_parallel"},
+    "modules/dashboard/live_map_routes.py": {
+        "_cache",
+        "_tiles",
+        "_next_send",
+        "_recent",
+        "_lock",
+        "_parallel",
+    },
     # Per-process weather TTL cache (bounded to _MAX_ENTRIES); a miss costs one provider call.
     "modules/dashboard/local_weather.py": {"_CACHE"},
     # Static module registry memoised on first use (immutable after build).
@@ -188,15 +229,18 @@ def _module_level_state(tree: ast.Module) -> set[str]:
             continue
         func = value.func if isinstance(value, ast.Call) else None
         is_primitive = (
-            isinstance(func, ast.Attribute) and func.attr in STATE_CALLS
-            and isinstance(func.value, ast.Name) and func.value.id == "asyncio"
+            isinstance(func, ast.Attribute)
+            and func.attr in STATE_CALLS
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "asyncio"
         )
         for target in targets:
             if not isinstance(target, ast.Name):
                 continue
             lowered = target.id.lower()
             is_cache = isinstance(value, ast.Dict | ast.List | ast.Set) and any(
-                word in lowered for word in ("cache", "wakeup", "tasks", "tiles", "next_send", "recent", "inflight")
+                word in lowered
+                for word in ("cache", "wakeup", "tasks", "tiles", "next_send", "recent", "inflight")
             )
             if is_primitive or is_cache or isinstance(value, ast.Dict) and "cache" in lowered:
                 names.add(target.id)
@@ -231,7 +275,12 @@ def test_pgbouncer_overlay_routes_every_database_client_through_the_pooler() -> 
     assert ":" in image.split("/")[-1] and not image.endswith(":latest")  # pinned tag
     command = services["pgbouncer"]["command"][0]
     assert "pool_mode = transaction" in command
-    aliases = {"api": "bbd_api", "worker": "bbd_worker", "chat-worker": "bbd_chat", "model-worker": "bbd_model"}
+    aliases = {
+        "api": "bbd_api",
+        "worker": "bbd_worker",
+        "chat-worker": "bbd_chat",
+        "model-worker": "bbd_model",
+    }
     for name, alias in aliases.items():
         env = services[name]["environment"]
         assert env["PGBOUNCER_ENABLED"] == "true"
@@ -246,7 +295,11 @@ def test_pgbouncer_overlay_routes_every_database_client_through_the_pooler() -> 
 async def test_worker_sentinel_pool_carries_sentinel_password_and_api_timeouts() -> None:
     """Worker Sentinel mode builds its own pool so the sentinel password and socket timeouts match the API."""
     assert build_worker_redis_pool(_settings(REDIS_URL="redis://:pw@redis:6379/2")) is None
-    env = {"REDIS_URL": "redis://:pw@redis:6379/2", "REDIS_SENTINELS": "s1:26379,s2", "REDIS_SENTINEL_PASSWORD": "sp"}
+    env = {
+        "REDIS_URL": "redis://:pw@redis:6379/2",
+        "REDIS_SENTINELS": "s1:26379,s2",
+        "REDIS_SENTINEL_PASSWORD": "sp",
+    }
     worker = build_worker_redis_pool(_settings(**env))
     api = create_api_redis(_settings(**env))
     try:
@@ -255,8 +308,13 @@ async def test_worker_sentinel_pool_carries_sentinel_password_and_api_timeouts()
             pool = client.connection_pool
             assert pool.sentinel_manager.sentinel_kwargs["password"] == "sp"
             assert pool.connection_kwargs["password"] == "pw" and pool.connection_kwargs["db"] == 2
-            assert pool.connection_kwargs["socket_timeout"] == 5 and pool.connection_kwargs["retry_on_timeout"]
-        assert not worker.connection_pool.connection_kwargs.get("decode_responses")  # arq decodes bytes itself
+            assert (
+                pool.connection_kwargs["socket_timeout"] == 5
+                and pool.connection_kwargs["retry_on_timeout"]
+            )
+        assert not worker.connection_pool.connection_kwargs.get(
+            "decode_responses"
+        )  # arq decodes bytes itself
     finally:
         await worker.aclose() if worker else None
         await api.aclose()
@@ -264,5 +322,9 @@ async def test_worker_sentinel_pool_carries_sentinel_password_and_api_timeouts()
 
 def test_worker_settings_expose_sentinel_pool_attribute() -> None:
     """Every ARQ settings class declares ``redis_pool`` (None in direct mode) so Sentinel mode can supply it."""
-    for cls in (worker_main.WorkerSettings, worker_main.ModelWorkerSettings, worker_main.ChatWorkerSettings):
+    for cls in (
+        worker_main.WorkerSettings,
+        worker_main.ModelWorkerSettings,
+        worker_main.ChatWorkerSettings,
+    ):
         assert hasattr(cls, "redis_pool")

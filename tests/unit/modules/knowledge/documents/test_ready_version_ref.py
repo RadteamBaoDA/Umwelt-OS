@@ -12,7 +12,17 @@ from modules.knowledge.documents import public
 from tests.unit.modules._documents_patch import patch_documents
 from tests.unit.modules.knowledge.documents._scope import SCOPE_KW
 
-ROW = (uuid4(), datetime(2026, 1, 1, tzinfo=UTC), uuid4(), 3, uuid4(), 2, False, "raw://x", "text/markdown")
+ROW = (
+    uuid4(),
+    datetime(2026, 1, 1, tzinfo=UTC),
+    uuid4(),
+    3,
+    uuid4(),
+    2,
+    False,
+    "raw://x",
+    "text/markdown",
+)
 
 
 def _session(result: MagicMock) -> AsyncMock:

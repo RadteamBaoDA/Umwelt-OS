@@ -19,24 +19,89 @@ MAX_CONTENT_BYTES = 1_048_576
 MAX_METADATA_BYTES = 65_536
 # Built-in feed-class presets (RSS/Atom and JSON event/list feeds): news-shaped records, no typed measurement.
 BUILTIN_FEED_PROVIDER_IDS = (
-    "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "github_trending", "wwr_jobs", "vietnamworks_jobs", "itviec_jobs", "us_travel_advisories",
-    "noaa_tsunami", "jma_eqvol",
-    "gdacs_events", "nws_alerts", "emsc_quakes", "launch_library", "wikipedia_mostread", "wikipedia_top_views", "bmkg_quakes", "satnogs_observations",
+    "aljazeera_world",
+    "npr_news",
+    "fed_press",
+    "gdacs_rss",
+    "lobsters",
+    "github_trending",
+    "wwr_jobs",
+    "vietnamworks_jobs",
+    "itviec_jobs",
+    "us_travel_advisories",
+    "noaa_tsunami",
+    "jma_eqvol",
+    "gdacs_events",
+    "nws_alerts",
+    "emsc_quakes",
+    "launch_library",
+    "wikipedia_mostread",
+    "wikipedia_top_views",
+    "bmkg_quakes",
+    "satnogs_observations",
 )
 # Keyed news-shaped presets (providers/keyed.py).
 KEYED_FEED_PROVIDER_IDS = ("finnhub_news", "newsapi")
-NEWS_PROVIDER_IDS = (*BUILTIN_FEED_PROVIDER_IDS, *KEYED_FEED_PROVIDER_IDS, "bbc_world", "vnexpress_business", "dantri_news", "thanhnien_news", "tuoitre_news", "hn_top", "gdelt_economy", "google_news", "openalex", "sec_edgar")
+NEWS_PROVIDER_IDS = (
+    *BUILTIN_FEED_PROVIDER_IDS,
+    *KEYED_FEED_PROVIDER_IDS,
+    "bbc_world",
+    "vnexpress_business",
+    "dantri_news",
+    "thanhnien_news",
+    "tuoitre_news",
+    "hn_top",
+    "gdelt_economy",
+    "google_news",
+    "openalex",
+    "sec_edgar",
+)
 MEASUREMENT_PROVIDER_IDS = (
-    "alpha_vantage", "open_meteo", "world_bank", "frankfurter", "ecb", "binance", "vn_stock",
-    "alternative_me", "usgs", "coinpaprika", "coingecko", "cisa_kev", "nasa_eonet",
-    "fred", "openweathermap", "openaq", "nasa_firms",
-    "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",
+    "alpha_vantage",
+    "open_meteo",
+    "world_bank",
+    "frankfurter",
+    "ecb",
+    "binance",
+    "vn_stock",
+    "alternative_me",
+    "usgs",
+    "coinpaprika",
+    "coingecko",
+    "cisa_kev",
+    "nasa_eonet",
+    "fred",
+    "openweathermap",
+    "openaq",
+    "nasa_firms",
+    "noaa_kp",
+    "open_er_api",
+    "oecd_cli",
+    "iss_position",
+    "disease_sh",
+    "ioda",
+    "nvd",
 )
 PROVIDER_IDS = (
-    "youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x",
-    "github_releases", "github", "telegram", "notion", "slack",
-    "google_mail", "google_calendar", "google_drive", "health", "home_assistant",
-    *MEASUREMENT_PROVIDER_IDS, *NEWS_PROVIDER_IDS,
+    "youtube",
+    "arxiv",
+    "huggingface",
+    "bluesky",
+    "reddit",
+    "mastodon",
+    "x",
+    "github_releases",
+    "github",
+    "telegram",
+    "notion",
+    "slack",
+    "google_mail",
+    "google_calendar",
+    "google_drive",
+    "health",
+    "home_assistant",
+    *MEASUREMENT_PROVIDER_IDS,
+    *NEWS_PROVIDER_IDS,
 )
 # Bounded per-provider evidence keys retained beside the typed measurement (no arbitrary response mirroring).
 MEASUREMENT_PROVIDER_FIELDS = {
@@ -46,13 +111,49 @@ MEASUREMENT_PROVIDER_FIELDS = {
     "frankfurter": {"date", "base", "quote", "decimal_value", "providers"},
     "ecb": {"date", "base", "quote", "decimal_value"},
     "binance": {"symbol", "base", "quote", "decimal_value"},
-    "vn_stock": {"symbol", "date", "kind", "open", "high", "low", "close", "volume", "decimal_value"},
+    "vn_stock": {
+        "symbol",
+        "date",
+        "kind",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "decimal_value",
+    },
     "alternative_me": {"timestamp", "value_classification", "decimal_value"},
-    "usgs": {"place", "type", "status", "magType", "depth_km", "latitude", "longitude", "decimal_mag", "event_time", "updated"},
-    "cisa_kev": {"cveID", "vendorProject", "product", "dateAdded", "dueDate", "knownRansomwareCampaignUse"},
+    "usgs": {
+        "place",
+        "type",
+        "status",
+        "magType",
+        "depth_km",
+        "latitude",
+        "longitude",
+        "decimal_mag",
+        "event_time",
+        "updated",
+    },
+    "cisa_kev": {
+        "cveID",
+        "vendorProject",
+        "product",
+        "dateAdded",
+        "dueDate",
+        "knownRansomwareCampaignUse",
+    },
     "coinpaprika": {"id", "symbol", "last_updated", "quote", "decimal_value"},
     "coingecko": {"coin_id", "quote", "decimal_value", "last_updated_at"},
-    "nasa_eonet": {"categories", "closed", "latitude", "longitude", "event_time", "magnitude_unit", "decimal_value"},
+    "nasa_eonet": {
+        "categories",
+        "closed",
+        "latitude",
+        "longitude",
+        "event_time",
+        "magnitude_unit",
+        "decimal_value",
+    },
     "fred": {"series_id", "date", "decimal_value"},
     "openweathermap": {"dt", "place", "decimal_value"},
     "openaq": {"location_id", "sensor_id", "datetime", "decimal_value"},
@@ -67,13 +168,24 @@ MEASUREMENT_PROVIDER_FIELDS = {
 }
 
 
-_FEED_FIELDS = {"title", "summary", "canonical_url", "guid", "published_at", "provider_updated_at", "publisher"}
+_FEED_FIELDS = {
+    "title",
+    "summary",
+    "canonical_url",
+    "guid",
+    "published_at",
+    "provider_updated_at",
+    "publisher",
+}
 
 
 class WorldDataMeasurement(BaseModel):
     """Preserve one provider-declared numeric value with its original measurement semantics."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
-    provider: str = Field(min_length=1, max_length=64)  # membership checked against MEASUREMENT_PROVIDER_IDS
+    provider: str = Field(
+        min_length=1, max_length=64
+    )  # membership checked against MEASUREMENT_PROVIDER_IDS
     metric: str = Field(min_length=1, max_length=80)
     value: float | None
     unit: str = Field(min_length=1, max_length=64)
@@ -86,7 +198,9 @@ class WorldDataMeasurement(BaseModel):
     published_at: datetime | None = None
     quality: Literal["provider_reported", "forecast", "reference", "missing"]
     missing_reason: str | None = Field(default=None, max_length=64)
-    provider_fields: dict[str, str | float | int | None] = Field(default_factory=dict, max_length=12)
+    provider_fields: dict[str, str | float | int | None] = Field(
+        default_factory=dict, max_length=12
+    )
 
     @field_validator("provider")
     @classmethod
@@ -111,13 +225,16 @@ class WorldDataMeasurement(BaseModel):
         """Keep retained source-row evidence inside each provider's declared field set."""
         if self.provider_fields.keys() - MEASUREMENT_PROVIDER_FIELDS[self.provider]:
             raise ValueError("Structured provider row contains undeclared fields")
-        if (self.value is None) != (self.quality == "missing") or (self.value is None) != (self.missing_reason is not None):
+        if (self.value is None) != (self.quality == "missing") or (self.value is None) != (
+            self.missing_reason is not None
+        ):
             raise ValueError("Missing values must carry an explicit missing reason and quality")
         return self
 
 
 class DocumentDeletionRead(BaseModel):
     """Expose durable document-deletion progress without revealing storage paths."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     operation_id: UUID
     status: Literal["queued", "running", "succeeded", "failed"]
@@ -149,6 +266,7 @@ class DocumentDeletionRead(BaseModel):
 
 class ProviderTelegramMedia(BaseModel):
     """Describe safe media presence without requesting or storing binary data."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: Literal["photo", "video", "audio", "voice", "document", "animation", "sticker", "other"]
     caption: str | None = Field(default=None, max_length=4096)
@@ -158,6 +276,7 @@ class ProviderTelegramMedia(BaseModel):
 
 class ProviderTelegramMetadata(BaseModel):
     """Validate the bounded Telegram identity and presentation snapshot."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     bot_id: str = Field(pattern=r"^[0-9]{1,20}$")
     channel_id: str = Field(pattern=r"^-?[1-9][0-9]{0,19}$")
@@ -189,61 +308,173 @@ class ProviderTelegramMetadata(BaseModel):
 # metadata. Adding a provider requires an explicit bounded field contract here.
 _PROVIDER_SOURCE_FIELD_ALLOWLIST: dict[str, set[str]] = {
     "youtube": {"author", "summary", "title", "tags", "published_at", "provider_updated_at"},
-    "arxiv": {"author", "authors", "categories", "tags", "summary", "title", "published_at", "provider_updated_at"},
+    "arxiv": {
+        "author",
+        "authors",
+        "categories",
+        "tags",
+        "summary",
+        "title",
+        "published_at",
+        "provider_updated_at",
+    },
     "huggingface": {"author", "tags", "pipeline_tag", "created_at", "last_modified"},
     "bluesky": {"author", "canonical_url", "created_at"},
     "reddit": {"title", "subreddit", "author", "canonical_url", "created_at"},
     "mastodon": {"author", "canonical_url", "created_at"},
     "x": {"author_id", "canonical_url", "created_at", "language"},
     "google_mail": {"thread_id", "history_id", "subject", "from", "to", "date_header"},
-    "google_calendar": {"calendar_id", "event_id", "status", "start", "end", "start_timezone", "end_timezone", "recurrence", "html_link"},
+    "google_calendar": {
+        "calendar_id",
+        "event_id",
+        "status",
+        "start",
+        "end",
+        "start_timezone",
+        "end_timezone",
+        "recurrence",
+        "html_link",
+    },
     "google_drive": {"name", "mime_type", "modified_time", "web_view_link", "md5_checksum"},
     "notion": {"title", "canonical_url"},
     "slack": {"channel_id", "message_ts", "thread_ts", "user_id"},
     "health": {"patient_id", "observation_id", "value", "unit", "observed_at_source"},
-    "home_assistant": {"entity_id", "state", "observed_at_source", "unit_of_measurement", "friendly_name", "latitude", "longitude"},
-    "github_releases": {"node_id", "name", "body", "html_url", "tag_name", "draft", "prerelease", "author", "created_at", "published_at"},
+    "home_assistant": {
+        "entity_id",
+        "state",
+        "observed_at_source",
+        "unit_of_measurement",
+        "friendly_name",
+        "latitude",
+        "longitude",
+    },
+    "github_releases": {
+        "node_id",
+        "name",
+        "body",
+        "html_url",
+        "tag_name",
+        "draft",
+        "prerelease",
+        "author",
+        "created_at",
+        "published_at",
+    },
     "github": {"record_type", "node_id", "html_url"},
     "telegram": set(),
     **{provider: set() for provider in MEASUREMENT_PROVIDER_IDS},
     **dict.fromkeys((*BUILTIN_FEED_PROVIDER_IDS, *KEYED_FEED_PROVIDER_IDS), _FEED_FIELDS),
-    "bbc_world": _FEED_FIELDS, "vnexpress_business": _FEED_FIELDS, "tuoitre_news": _FEED_FIELDS, "thanhnien_news": _FEED_FIELDS, "dantri_news": _FEED_FIELDS, "google_news": _FEED_FIELDS,
+    "bbc_world": _FEED_FIELDS,
+    "vnexpress_business": _FEED_FIELDS,
+    "tuoitre_news": _FEED_FIELDS,
+    "thanhnien_news": _FEED_FIELDS,
+    "dantri_news": _FEED_FIELDS,
+    "google_news": _FEED_FIELDS,
     "sec_edgar": _FEED_FIELDS | {"form", "cik"},
-    "openalex": {"title", "summary", "canonical_url", "published_at", "authors", "doi", "source", "cited_by_count"},
+    "openalex": {
+        "title",
+        "summary",
+        "canonical_url",
+        "published_at",
+        "authors",
+        "doi",
+        "source",
+        "cited_by_count",
+    },
     "hn_top": {"title", "text", "url", "by", "time", "id", "type", "deleted", "dead"},
     "gdelt_economy": {"title", "url", "seendate", "domain", "language", "sourcecountry"},
 }
 
 # Maximum length of each string-typed source field (shared across providers).
 _SOURCE_FIELD_STRING_LIMITS: dict[str, int] = {
-    "author": 1000, "summary": 4000, "title": 500, "pipeline_tag": 128,
-    "node_id": 256, "name": 500, "body": 4000, "html_url": 2048,
-    "tag_name": 255, "record_type": 16, "last_modified": 64, "created_at": 64,
-    "published_at": 64, "provider_updated_at": 64,
-    "canonical_url": 2048, "guid": 512, "publisher": 200, "text": 4000, "url": 2048, "by": 128,
-    "subreddit": 21, "author_id": 255,
-    "type": 32, "form": 32, "cik": 10, "doi": 255, "source": 255, "seendate": 32, "domain": 255, "language": 64, "sourcecountry": 64,
-    "channel_id": 82, "message_ts": 24, "thread_ts": 24, "user_id": 255,
-    "thread_id": 255, "history_id": 255, "subject": 500, "from": 1000, "to": 2000,
-    "date_header": 255, "calendar_id": 255, "event_id": 255, "status": 32,
-    "start": 64, "end": 64, "start_timezone": 128, "end_timezone": 128,
-    "recurrence": 100, "mime_type": 128, "modified_time": 64, "html_link": 2048,
-    "web_view_link": 2048, "md5_checksum": 64,
-    "patient_id": 128, "observation_id": 255, "value": 64, "unit": 64,
-    "observed_at_source": 64, "entity_id": 255, "state": 512,
-    "unit_of_measurement": 64, "friendly_name": 512, "latitude": 64, "longitude": 64,
+    "author": 1000,
+    "summary": 4000,
+    "title": 500,
+    "pipeline_tag": 128,
+    "node_id": 256,
+    "name": 500,
+    "body": 4000,
+    "html_url": 2048,
+    "tag_name": 255,
+    "record_type": 16,
+    "last_modified": 64,
+    "created_at": 64,
+    "published_at": 64,
+    "provider_updated_at": 64,
+    "canonical_url": 2048,
+    "guid": 512,
+    "publisher": 200,
+    "text": 4000,
+    "url": 2048,
+    "by": 128,
+    "subreddit": 21,
+    "author_id": 255,
+    "type": 32,
+    "form": 32,
+    "cik": 10,
+    "doi": 255,
+    "source": 255,
+    "seendate": 32,
+    "domain": 255,
+    "language": 64,
+    "sourcecountry": 64,
+    "channel_id": 82,
+    "message_ts": 24,
+    "thread_ts": 24,
+    "user_id": 255,
+    "thread_id": 255,
+    "history_id": 255,
+    "subject": 500,
+    "from": 1000,
+    "to": 2000,
+    "date_header": 255,
+    "calendar_id": 255,
+    "event_id": 255,
+    "status": 32,
+    "start": 64,
+    "end": 64,
+    "start_timezone": 128,
+    "end_timezone": 128,
+    "recurrence": 100,
+    "mime_type": 128,
+    "modified_time": 64,
+    "html_link": 2048,
+    "web_view_link": 2048,
+    "md5_checksum": 64,
+    "patient_id": 128,
+    "observation_id": 255,
+    "value": 64,
+    "unit": 64,
+    "observed_at_source": 64,
+    "entity_id": 255,
+    "state": 512,
+    "unit_of_measurement": 64,
+    "friendly_name": 512,
+    "latitude": 64,
+    "longitude": 64,
 }
 
 _TIMESTAMP_FIELDS = frozenset(
-    {"created_at", "published_at", "last_modified", "provider_updated_at", "modified_time", "observed_at_source"}
+    {
+        "created_at",
+        "published_at",
+        "last_modified",
+        "provider_updated_at",
+        "modified_time",
+        "observed_at_source",
+    }
 )
 
 
 def _validate_string_list(key: str, value: Any) -> None:
     """Require a list of at most 100 strings, each within the per-key item bound."""
-    if not isinstance(value, list) or len(value) > 100 or any(
-        not isinstance(item, str) or len(item) > (1000 if key == "recurrence" else 255)
-        for item in value
+    if (
+        not isinstance(value, list)
+        or len(value) > 100
+        or any(
+            not isinstance(item, str) or len(item) > (1000 if key == "recurrence" else 255)
+            for item in value
+        )
     ):
         raise ValueError(f"Provider {key} must be a bounded string list")
 
@@ -265,7 +496,13 @@ def _validate_https_link(key: str, value: Any) -> None:
     from urllib.parse import urlsplit
 
     parsed_link = urlsplit(value) if isinstance(value, str) and len(value) <= 2048 else None
-    if parsed_link is None or parsed_link.scheme != "https" or not parsed_link.hostname or parsed_link.username or parsed_link.password:
+    if (
+        parsed_link is None
+        or parsed_link.scheme != "https"
+        or not parsed_link.hostname
+        or parsed_link.username
+        or parsed_link.password
+    ):
         raise ValueError(f"Provider {key} must be an HTTPS link without credentials")
 
 
@@ -276,7 +513,12 @@ def _validate_release_url(key: str, value: Any) -> None:
     if not isinstance(value, str) or len(value) > 2048:
         raise ValueError("Provider release URL must use HTTPS")
     parsed_url = urlsplit(value)
-    if parsed_url.scheme != "https" or parsed_url.netloc != "github.com" or parsed_url.username or parsed_url.password:
+    if (
+        parsed_url.scheme != "https"
+        or parsed_url.netloc != "github.com"
+        or parsed_url.username
+        or parsed_url.password
+    ):
         raise ValueError("Provider release URL must target github.com")
 
 
@@ -296,12 +538,13 @@ def _validate_calendar_boundary(key: str, value: str) -> None:
         # Calendar all-day events use YYYY-MM-DD; timed events must carry an offset.
         parsed_date = date.fromisoformat(value) if "T" not in value else None
         parsed_time = (
-            datetime.fromisoformat(value.replace("Z", "+00:00"))
-            if parsed_date is None else None
+            datetime.fromisoformat(value.replace("Z", "+00:00")) if parsed_date is None else None
         )
     except ValueError as exc:
         raise ValueError(f"Provider {key} must be an ISO date or timestamp") from exc
-    if parsed_date is None and (parsed_time is None or parsed_time.tzinfo is None or parsed_time.utcoffset() is None):
+    if parsed_date is None and (
+        parsed_time is None or parsed_time.tzinfo is None or parsed_time.utcoffset() is None
+    ):
         raise ValueError(f"Provider {key} timestamp must include a timezone")
 
 
@@ -340,8 +583,11 @@ def _validate_source_field(key: str, value: Any) -> None:
 
 class ProviderRecordMetadata(BaseModel):
     """Retain typed, bounded provider fields separately from generic metadata."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
-    provider: str = Field(min_length=1, max_length=64)  # membership checked against PROVIDER_IDS below
+    provider: str = Field(
+        min_length=1, max_length=64
+    )  # membership checked against PROVIDER_IDS below
     identity: str = Field(min_length=1, max_length=512)
     provider_version: str | None = Field(default=None, max_length=255)
     timestamp_basis: Literal["provider_modified", "provider_published", "collection"]
@@ -404,9 +650,9 @@ def validate_content(value: str) -> str:
 
 def validate_metadata(value: dict[str, Any]) -> dict[str, Any]:
     """Reject non-finite or non-JSON metadata and enforce the 64 KiB encoded limit."""
-    encoded = json.dumps(
-        value, ensure_ascii=False, allow_nan=False, separators=(",", ":")
-    ).encode("utf-8")
+    encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
     if len(encoded) > MAX_METADATA_BYTES:
         raise ValueError("metadata exceeds 64 KiB")
     return value
@@ -414,6 +660,7 @@ def validate_metadata(value: dict[str, Any]) -> dict[str, Any]:
 
 class DocumentCreate(BaseModel):
     """Validate a source-backed document and its initial content and metadata."""
+
     model_config = ConfigDict(extra="forbid")
 
     source_id: UUID
@@ -437,6 +684,7 @@ class DocumentCreate(BaseModel):
 
 class TelegramDocumentOrder(BaseModel):
     """Carry trusted Telegram order from owner-validated delivery proof."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     bot_id: str = Field(pattern=r"^[0-9]{1,20}$")
     epoch: int = Field(ge=1)
@@ -450,6 +698,7 @@ class NormalizedDocumentInput(BaseModel):
     ordering must agree with the retained typed delivery digest, bot, epoch, and
     update ID; callers cannot create that ordering through public document inputs.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     source_id: UUID
@@ -490,11 +739,23 @@ class NormalizedDocumentInput(BaseModel):
     @classmethod
     def bounded_provenance(cls, value: dict[str, Any]) -> dict[str, Any]:
         """Allow only declared provenance fields and enforce the metadata bound."""
-        allowed = {"title", "canonical_url", "published_at", "content_type", "author", "language", "metadata", "provider_record", "provider_scope_discriminator"}
+        allowed = {
+            "title",
+            "canonical_url",
+            "published_at",
+            "content_type",
+            "author",
+            "language",
+            "metadata",
+            "provider_record",
+            "provider_scope_discriminator",
+        }
         if value.keys() - allowed:
             raise ValueError("provenance contains unsupported fields")
         if "provider_record" in value:
-            value["provider_record"] = ProviderRecordMetadata.model_validate(value["provider_record"]).model_dump(mode="json")
+            value["provider_record"] = ProviderRecordMetadata.model_validate(
+                value["provider_record"]
+            ).model_dump(mode="json")
         return validate_metadata(value)
 
     @model_validator(mode="after")
@@ -508,11 +769,15 @@ class NormalizedDocumentInput(BaseModel):
         metadata = ProviderRecordMetadata.model_validate(raw)
         detail = metadata.telegram
         if metadata.provider == "telegram":
-            if self.telegram_order is None or detail is None or (
-                self.telegram_order.bot_id != detail.bot_id
-                or self.telegram_order.epoch != detail.epoch
-                or self.telegram_order.update_id != detail.update_id
-                or detail.raw_update_sha256 is None
+            if (
+                self.telegram_order is None
+                or detail is None
+                or (
+                    self.telegram_order.bot_id != detail.bot_id
+                    or self.telegram_order.epoch != detail.epoch
+                    or self.telegram_order.update_id != detail.update_id
+                    or detail.raw_update_sha256 is None
+                )
             ):
                 raise ValueError("Telegram order must match the immutable delivery proof")
         elif self.telegram_order is not None:
@@ -526,6 +791,7 @@ class NormalizedDocumentKeyState(BaseModel):
     No field proves a retained lock or grants permission. UUIDs and key spelling are
     strict; an absent identity cannot carry a pointer or deletion timestamp.
     """
+
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     external_id: str = Field(min_length=1, max_length=512)
     document_id: UUID | None
@@ -553,6 +819,7 @@ class NormalizedDocumentPreparation(BaseModel):
     Only Documents produces successor identity state after its exact local writes;
     callers discard it on commit/rollback and retain actual ordered locks separately.
     """
+
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     workspace_id: UUID
     source_id: UUID
@@ -569,6 +836,7 @@ class NormalizedDocumentPreparation(BaseModel):
 
 class NormalizedDocumentResult(BaseModel):
     """Report normalization disposition, selected revision, and generated chunks."""
+
     disposition: Literal["normalized", "duplicate", "tombstoned"]
     document_id: UUID | None
     document_version_id: UUID | None
@@ -580,6 +848,7 @@ class NormalizedDocumentResult(BaseModel):
 
 class ProviderDocumentSnapshotRead(BaseModel):
     """Expose immutable provider provenance for one exact document version."""
+
     model_config = ConfigDict(extra="forbid")
     document_id: UUID
     document_version_id: UUID
@@ -601,6 +870,7 @@ class ProviderDocumentSnapshotRead(BaseModel):
 
 class ObservationExportEvidenceCandidate(BaseModel):
     """Identify a retained observation's accepted document and provider provenance."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     observation_id: UUID
     source_id: UUID
@@ -614,6 +884,7 @@ class ObservationExportEvidenceCandidate(BaseModel):
 
 class ObservationExportEvidenceRead(BaseModel):
     """Confirm exact retained document evidence and captured current source generation."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     observation_id: UUID
     source_id: UUID
@@ -628,6 +899,7 @@ class ObservationExportEvidenceRead(BaseModel):
 
 class TimelineExportEvidenceCandidate(BaseModel):
     """Identify one exact event evidence reference and its accepted source generation."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     evidence_id: UUID
     source_id: UUID
@@ -639,6 +911,7 @@ class TimelineExportEvidenceCandidate(BaseModel):
 
 class TimelineExportEvidenceRead(BaseModel):
     """Confirm retained exact event evidence and separate accepted/current source generations."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     evidence_id: UUID
     source_id: UUID
@@ -651,6 +924,7 @@ class TimelineExportEvidenceRead(BaseModel):
 
 class ProviderDocumentSnapshotList(BaseModel):
     """Return a bounded current-version owner snapshot page."""
+
     model_config = ConfigDict(extra="forbid")
     items: list[ProviderDocumentSnapshotRead]
     next_cursor: str | None
@@ -658,6 +932,7 @@ class ProviderDocumentSnapshotList(BaseModel):
 
 class GadgetTelegramMediaRead(BaseModel):
     """Expose Telegram media kind and caption without provider file identifiers."""
+
     model_config = ConfigDict(extra="forbid")
     kind: Literal["photo", "video", "audio", "voice", "document", "animation", "sticker", "other"]
     caption: str | None = Field(default=None, max_length=4096)
@@ -666,6 +941,7 @@ class GadgetTelegramMediaRead(BaseModel):
 
 class GadgetTelegramRecordRead(BaseModel):
     """Expose channel and message display metadata without bot or delivery internals."""
+
     model_config = ConfigDict(extra="forbid")
     channel_id: str
     message_id: str
@@ -681,6 +957,7 @@ class GadgetTelegramRecordRead(BaseModel):
 
 class GadgetProviderMetadataRead(BaseModel):
     """Expose only typed provider fields needed to render owner dashboard records."""
+
     model_config = ConfigDict(extra="forbid")
     # Any registered provider id: a closed Literal here rejected every built-in feed/measurement provider
     # (e.g. nasa_eonet) and made the whole dashboard-projections page answer 422. Registration is already
@@ -692,6 +969,7 @@ class GadgetProviderMetadataRead(BaseModel):
 
 class GadgetDocumentProjectionRead(BaseModel):
     """Bounded current-version document data for source-scoped dashboard consumers."""
+
     model_config = ConfigDict(extra="forbid")
     document_id: UUID
     document_version_id: UUID
@@ -711,6 +989,7 @@ class GadgetDocumentProjectionRead(BaseModel):
 
 class GadgetDocumentSelectionFence(BaseModel):
     """Bind one exact selected version to its accepted source generation and provider scope."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     document_id: UUID
     document_version_id: UUID
@@ -724,6 +1003,7 @@ class GadgetDocumentSelectionFence(BaseModel):
 
 class GadgetHighlightProjectionPage(BaseModel):
     """Return one bounded current-version scan page and its durable immutable-version cursor."""
+
     model_config = ConfigDict(extra="forbid")
     items: list[GadgetDocumentProjectionRead] = Field(max_length=100)
     selection_fences: list[GadgetDocumentSelectionFence] = Field(max_length=100)
@@ -734,6 +1014,7 @@ class GadgetHighlightProjectionPage(BaseModel):
 
 class GadgetDocumentInteractionPatch(BaseModel):
     """Set durable read/bookmark state for a selected current version."""
+
     model_config = ConfigDict(extra="forbid")
     read: StrictBool | None = None
     bookmarked: StrictBool | None = None
@@ -749,6 +1030,7 @@ class GadgetDocumentInteractionPatch(BaseModel):
 
 class GadgetDocumentInteractionRead(BaseModel):
     """Return durable interaction timestamps for one exact version."""
+
     model_config = ConfigDict(extra="forbid")
     document_version_id: UUID
     read_at: datetime | None
@@ -758,6 +1040,7 @@ class GadgetDocumentInteractionRead(BaseModel):
 
 class GadgetDocumentProjectionList(BaseModel):
     """Page a bounded set of current document projections for owner dashboard use."""
+
     model_config = ConfigDict(extra="forbid")
     items: list[GadgetDocumentProjectionRead]
     next_cursor: str | None
@@ -765,6 +1048,7 @@ class GadgetDocumentProjectionList(BaseModel):
 
 class ProviderSnapshotRequest(BaseModel):
     """Validate an exact-version owner snapshot request."""
+
     model_config = ConfigDict(extra="forbid")
     version_ids: list[UUID] = Field(min_length=1, max_length=100)
 
@@ -779,6 +1063,7 @@ class ProviderSnapshotRequest(BaseModel):
 
 class DocumentPatch(BaseModel):
     """Validate mutable document metadata fields while leaving versions immutable."""
+
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = Field(default=None, min_length=1, max_length=500)
@@ -793,6 +1078,7 @@ class DocumentPatch(BaseModel):
 
 class ContentUpdate(BaseModel):
     """Request a new immutable content version using its expected current number."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_version: int = Field(ge=1)
@@ -807,6 +1093,7 @@ class ContentUpdate(BaseModel):
 
 class DocumentRead(BaseModel):
     """Serialize a document's current metadata, provenance, and version state."""
+
     id: UUID
     source_id: UUID
     external_id: str | None
@@ -829,6 +1116,7 @@ class DocumentRead(BaseModel):
 
 class VersionRead(BaseModel):
     """Serialize immutable content and identity fields for one document version."""
+
     id: UUID
     document_id: UUID
     version_number: int
@@ -840,6 +1128,7 @@ class VersionRead(BaseModel):
 
 class VersionList(BaseModel):
     """Return document versions with an optional continuation cursor."""
+
     items: list[VersionRead]
     next_cursor: str | None
 
@@ -958,14 +1247,19 @@ class DocumentExportFenceValidation(BaseModel):
 
     valid: bool
     reason: Literal[
-        "valid", "owner_unavailable", "snapshot_count_changed", "record_changed",
-        "source_generation_changed", "evidence_unavailable",
+        "valid",
+        "owner_unavailable",
+        "snapshot_count_changed",
+        "record_changed",
+        "source_generation_changed",
+        "evidence_unavailable",
     ]
     observed_snapshot_count: int = Field(ge=0)
 
 
 class EvidenceReferenceRead(BaseModel):
     """Expose exact versioned chunk provenance and excerpt for evidence review."""
+
     document_id: UUID
     document_version_id: UUID
     version_number: int
@@ -992,6 +1286,7 @@ class CitationTargetRead(BaseModel):
 
 class MemberDocumentRead(BaseModel):
     """Member view of a shared Document: no Source, storage URI, external id or free-form metadata."""
+
     id: UUID
     title: str
     content_type: str | None
@@ -1011,12 +1306,14 @@ class MemberDocumentRead(BaseModel):
 
 class MemberDocumentList(BaseModel):
     """Bounded member page of shared Documents."""
+
     items: list[MemberDocumentRead]
     next_cursor: str | None
 
 
 class DocumentList(BaseModel):
     """Return a bounded document page and its optional continuation cursor."""
+
     items: list[DocumentRead]
     next_cursor: str | None
 
@@ -1039,9 +1336,17 @@ class DocumentCleanupJobIdentity(BaseModel):
 class DocumentCleanupPreparationLimitError(Exception):
     """A cleanup closure owner exceeded its atomic bound; the message is the owner code only."""
 
-    OWNER_CODES = frozenset({
-        "documents", "observations", "entities", "relationships", "timeline", "temporal", "ingestion",
-    })
+    OWNER_CODES = frozenset(
+        {
+            "documents",
+            "observations",
+            "entities",
+            "relationships",
+            "timeline",
+            "temporal",
+            "ingestion",
+        }
+    )
 
     def __init__(self, owner_code: str) -> None:
         """Record which cleanup owner exceeded its dependency bound; reject unknown owner codes."""

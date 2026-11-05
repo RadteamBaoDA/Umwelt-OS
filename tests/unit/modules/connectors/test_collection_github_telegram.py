@@ -12,18 +12,29 @@ from modules.ingestion import public as ingestion
 from tests.unit.modules.connectors.test_collection import attempt, factory
 
 SNAPSHOT = SimpleNamespace(
-    state="ready", encrypted_token="x", verified_bot_id="7", operation_id=uuid4(), access_fence=None)
+    state="ready", encrypted_token="x", verified_bot_id="7", operation_id=uuid4(), access_fence=None
+)
 LEASE = SimpleNamespace(
-    token=uuid4(), cursor_before=None, source_generation=1, connector_revision=2, configuration_revision=None)
+    token=uuid4(),
+    cursor_before=None,
+    source_generation=1,
+    connector_revision=2,
+    configuration_revision=None,
+)
 
 
 def make_run(provider, **extras):
     att = attempt(provider)
     att.source.configuration["telegram_chat_ids"] = ["1"]
     run = collection.Run(
-        ctx={}, factory=factory([]), settings=SimpleNamespace(
-            connector_credential_encryption_key=SimpleNamespace(get_secret_value=lambda: "k")),
-        attempt=att, gate=None)
+        ctx={},
+        factory=factory([]),
+        settings=SimpleNamespace(
+            connector_credential_encryption_key=SimpleNamespace(get_secret_value=lambda: "k")
+        ),
+        attempt=att,
+        gate=None,
+    )
     run.extras.update(extras)
     return run
 
@@ -111,10 +122,15 @@ async def test_telegram_page_is_fenced_then_accepted_with_native_operation(monke
     monkeypatch.setattr(connectors, "get_native_credential_snapshot", snapshot)
     monkeypatch.setattr(ingestion, "read_telegram_collection_state", none)
     monkeypatch.setattr(ingestion, "accept_native_collection", accept)
-    monkeypatch.setattr("modules.connectors.credentials.decrypt_native_token", lambda key, snap: "123:abc")
+    monkeypatch.setattr(
+        "modules.connectors.credentials.decrypt_native_token", lambda key, snap: "123:abc"
+    )
     monkeypatch.setattr("modules.connectors.providers.telegram.fetch_telegram_updates", fetch)
     await collection._run_telegram(run)
     assert seen["token"] == "123:abc" and fences  # fenced before the accept
     assert seen["kwargs"]["expected_native_operation_id"] == SNAPSHOT.operation_id
-    assert seen["kwargs"]["request_ref"] is run.attempt.ref and seen["kwargs"]["collector_token"] is None
+    assert (
+        seen["kwargs"]["request_ref"] is run.attempt.ref
+        and seen["kwargs"]["collector_token"] is None
+    )
     assert seen["batch"].coverage == "pending_updates_only" and run.extras["accepted"]

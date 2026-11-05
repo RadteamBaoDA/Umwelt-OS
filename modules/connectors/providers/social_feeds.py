@@ -36,7 +36,11 @@ def _utc(value: object) -> datetime | None:
         parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
-    return parsed.astimezone(UTC) if parsed.tzinfo is not None and parsed.utcoffset() is not None else None
+    return (
+        parsed.astimezone(UTC)
+        if parsed.tzinfo is not None and parsed.utcoffset() is not None
+        else None
+    )
 
 
 def _text_record(
@@ -55,7 +59,9 @@ def _text_record(
         "provider": "bluesky",
         "source_id": identity[:512],
         "author": author[:255] if author else None,
-        "canonical_url": canonical_url[:2048] if canonical_url and len(canonical_url) <= 2048 else None,
+        "canonical_url": canonical_url[:2048]
+        if canonical_url and len(canonical_url) <= 2048
+        else None,
         "content_truncated": truncated,
     }
     source_fields: dict[str, object] = {"created_at": observed_at.isoformat()}
@@ -64,35 +70,56 @@ def _text_record(
     if canonical_url:
         source_fields["canonical_url"] = canonical_url
     metadata["provider_record"] = ProviderRecordMetadata(
-        provider="bluesky", identity=identity[:512], provider_version=version[:255] if version else None,
-        timestamp_basis="provider_published", coverage="returned_snapshot", content_truncated=truncated,
+        provider="bluesky",
+        identity=identity[:512],
+        provider_version=version[:255] if version else None,
+        timestamp_basis="provider_published",
+        coverage="returned_snapshot",
+        content_truncated=truncated,
         source_fields=source_fields,
     ).model_dump(mode="json", exclude_none=True)
     return IngestionRecord(
-        provider_id=identity[:512], content=content[:_MAX_TEXT], observed_at=observed_at,
-        version=version[:255] if version else None, metadata=metadata, collected_at=collected_at,
+        provider_id=identity[:512],
+        content=content[:_MAX_TEXT],
+        observed_at=observed_at,
+        version=version[:255] if version else None,
+        metadata=metadata,
+        collected_at=collected_at,
     )
 
 
 def _page(
-    rows: list[IngestionRecord], *, next_page: object, actor: str, prior: social_walk.Walk,
+    rows: list[IngestionRecord],
+    *,
+    next_page: object,
+    actor: str,
+    prior: social_walk.Walk,
 ) -> BlueskyCollectionPage:
     """Apply the catch-up walk to one page and align per-record provenance with its coverage.
 
     Posts older than the prior high-water mark are dropped. The v2 cursor is always returned so a
     finished walk keeps its high-water mark; coverage is truncated only while a backlog remains.
     """
-    if next_page is not None and (not isinstance(next_page, str) or not next_page or len(next_page) > _MAX_CURSOR_BYTES):
+    if next_page is not None and (
+        not isinstance(next_page, str) or not next_page or len(next_page) > _MAX_CURSOR_BYTES
+    ):
         raise ValueError("bluesky_cursor_invalid")
     bounded, walk = social_walk.step(prior, rows[:_MAX_RECORDS], next_page)
-    coverage: Literal["returned_snapshot", "truncated"] = "truncated" if walk.page else "returned_snapshot"
+    coverage: Literal["returned_snapshot", "truncated"] = (
+        "truncated" if walk.page else "returned_snapshot"
+    )
     if coverage == "truncated":
         for index, record in enumerate(bounded):
             raw = record.metadata.get("provider_record")
             if raw is None:
                 continue
-            provider_record = ProviderRecordMetadata.model_validate(raw).model_copy(update={"coverage": "truncated"})
-            metadata = {**record.metadata, "provider_record": provider_record.model_dump(mode="json", exclude_none=True)}
+            provider_record = ProviderRecordMetadata.model_validate(raw).model_copy(
+                update={"coverage": "truncated"}
+            )
+            metadata = {
+                **record.metadata,
+                "provider_record": provider_record.model_dump(mode="json", exclude_none=True),
+            }
             bounded[index] = record.model_copy(update={"metadata": metadata})
     cursor = social_walk.encode(walk, {"actor": actor}, _MAX_CURSOR_BYTES)
     return BlueskyCollectionPage(tuple(bounded), cursor, coverage)
@@ -122,16 +149,31 @@ def map_bluesky_profile_payload(
         author = author_obj.get("handle") if isinstance(author_obj, Mapping) else actor
         text = record.get("text") if isinstance(record, Mapping) else None
         created = _utc(record.get("createdAt")) if isinstance(record, Mapping) else None
-        if not isinstance(uri, str) or not isinstance(cid, str) or not isinstance(text, str) or created is None:
+        if (
+            not isinstance(uri, str)
+            or not isinstance(cid, str)
+            or not isinstance(text, str)
+            or created is None
+        ):
             raise ValueError("bluesky_response_invalid")
         if len(uri) > 512 or len(cid) > 255:
             raise ValueError("bluesky_response_invalid")
         post_url = (
             f"https://bsky.app/profile/{quote(author, safe='')}/post/{quote(uri.rsplit('/', 1)[-1], safe='')}"
-            if isinstance(author, str) else None
+            if isinstance(author, str)
+            else None
         )
-        rows.append(_text_record(uri, text, created, collected_at, canonical_url=post_url,
-                                 author=author if isinstance(author, str) else None, version=cid))
+        rows.append(
+            _text_record(
+                uri,
+                text,
+                created,
+                collected_at,
+                canonical_url=post_url,
+                author=author if isinstance(author, str) else None,
+                version=cid,
+            )
+        )
     prior = social_walk.decode(cursor, {"actor": actor}, _MAX_CURSOR_BYTES)
     return _page(rows, next_page=payload.get("cursor"), actor=actor, prior=prior)
 
@@ -145,7 +187,11 @@ async def collect_bluesky_profile(
 ) -> BlueskyCollectionPage:
     """Fetch one bounded public profile page and return its receipt-committed continuation."""
     actor = actor.strip()
-    if collected_at.tzinfo is None or collected_at.utcoffset() is None or not 1 <= len(actor) <= 253:
+    if (
+        collected_at.tzinfo is None
+        or collected_at.utcoffset() is None
+        or not 1 <= len(actor) <= 253
+    ):
         raise ValueError("provider_scope_invalid")
     params = {"actor": actor, "limit": "100", "filter": "posts_no_replies"}
     page_cursor = social_walk.decode(cursor, {"actor": actor}, _MAX_CURSOR_BYTES).page

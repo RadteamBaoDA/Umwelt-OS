@@ -111,7 +111,10 @@ class TestPromptAssembler:
         assert "</entity_context>" in prompt
 
         assert "<temporal_context>" in prompt
-        assert f"- Milestone 1 Completed (milestone) at {now.isoformat()}: All unit tests passed" in prompt
+        assert (
+            f"- Milestone 1 Completed (milestone) at {now.isoformat()}: All unit tests passed"
+            in prompt
+        )
         assert "</temporal_context>" in prompt
 
     def test_format_grounded_context_empty(self) -> None:
@@ -211,20 +214,34 @@ class TestContextBudgetAndReranking:
         config.defaults.resolve.return_value = MagicMock(model="m")
         evidence = [
             EvidenceItem(
-                source_id=uuid4(), source_generation=1, local_only=False, document_id=uuid4(),
-                document_version_id=uuid4(), version_number=1, chunk_id=uuid4(),
-                content="x", title="t",
+                source_id=uuid4(),
+                source_generation=1,
+                local_only=False,
+                document_id=uuid4(),
+                document_version_id=uuid4(),
+                version_number=1,
+                chunk_id=uuid4(),
+                content="x",
+                title="t",
             )
         ]
         with (
-            patch.object(retrieval.settings_public, "get_ai_execution_config", AsyncMock(return_value=config)),
+            patch.object(
+                retrieval.settings_public, "get_ai_execution_config", AsyncMock(return_value=config)
+            ),
             patch.object(retrieval.settings_public, "derive_for_role", lambda c, _a: c),
             patch.object(retrieval, "RequestPolicy", lambda **k: MagicMock()),
             patch.object(retrieval, "may_send", lambda *a, **k: True),
             patch.object(retrieval, "ModelGateway", lambda **k: gateway),
         ):
             _, status, _ = await _apply_configured_reranking(
-                session, MagicMock(), MagicMock(), MagicMock(), "q", evidence, SCOPE,
+                session,
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+                "q",
+                evidence,
+                SCOPE,
             )
         assert status == "applied"
         assert order == ["commit", "rerank"]
@@ -250,7 +267,10 @@ class TestFenceRevalidation:
         mock_fence.generation = 1
         mock_fence.local_only = False
 
-        with patch("modules.chat.retrieval.sources_public.get_source_fences", new=AsyncMock(return_value={src_id: mock_fence})):
+        with patch(
+            "modules.chat.retrieval.sources_public.get_source_fences",
+            new=AsyncMock(return_value={src_id: mock_fence}),
+        ):
             is_valid, reasons = await revalidate_context_fence(MagicMock(), context, scope=SCOPE)
             assert is_valid is False
             assert any("inactive" in r for r in reasons)
@@ -269,7 +289,10 @@ class TestFenceRevalidation:
         mock_fence.generation = 2  # newer generation
         mock_fence.local_only = False
 
-        with patch("modules.chat.retrieval.sources_public.get_source_fences", new=AsyncMock(return_value={src_id: mock_fence})):
+        with patch(
+            "modules.chat.retrieval.sources_public.get_source_fences",
+            new=AsyncMock(return_value={src_id: mock_fence}),
+        ):
             is_valid, reasons = await revalidate_context_fence(MagicMock(), context, scope=SCOPE)
             assert is_valid is False
             assert any("generation changed" in r for r in reasons)
@@ -288,8 +311,13 @@ class TestFenceRevalidation:
         mock_fence.generation = 1
         mock_fence.local_only = True
 
-        with patch("modules.chat.retrieval.sources_public.get_source_fences", new=AsyncMock(return_value={src_id: mock_fence})):
-            is_valid, reasons = await revalidate_context_fence(MagicMock(), context, destination="remote", scope=SCOPE)
+        with patch(
+            "modules.chat.retrieval.sources_public.get_source_fences",
+            new=AsyncMock(return_value={src_id: mock_fence}),
+        ):
+            is_valid, reasons = await revalidate_context_fence(
+                MagicMock(), context, destination="remote", scope=SCOPE
+            )
             assert is_valid is False
             assert any("local_only and cannot be sent" in r for r in reasons)
 
@@ -482,14 +510,16 @@ class TestCitationSynthesisAndValidation:
 
         res = validate_answer_citations(
             answer="Deployment succeeded on Tuesday.",
-            citations=[{
-                "sourceId": str(src_id),
-                "documentId": str(doc_id),
-                "documentVersionId": str(ver_id),
-                "chunkId": str(chunk_id),
-                "title": "Deployment Log",
-                "quote": "deployment completed on Tuesday",
-            }],
+            citations=[
+                {
+                    "sourceId": str(src_id),
+                    "documentId": str(doc_id),
+                    "documentVersionId": str(ver_id),
+                    "chunkId": str(chunk_id),
+                    "title": "Deployment Log",
+                    "quote": "deployment completed on Tuesday",
+                }
+            ],
             evidence=evidence,
         )
         assert res.has_sufficient_evidence is True
@@ -513,20 +543,34 @@ class TestDayScopedTemporalContext:
         async def fake_list_timeline(_session, query, limit, **_scope):
             seen.append(query)
             event = SimpleNamespace(
-                id=uuid4(), title="Meeting", type="note", started_at=datetime(2026, 10, 7, tzinfo=UTC),
-                summary="s", evidence=[],
+                id=uuid4(),
+                title="Meeting",
+                type="note",
+                started_at=datetime(2026, 10, 7, tzinfo=UTC),
+                summary="s",
+                evidence=[],
             )
             return SimpleNamespace(items=[event])
 
         day = date(2026, 10, 7)
         request = AnswerContextRequest(query="what happened", date_context=day)
         with (
-            patch.object(retrieval.search_public, "search", AsyncMock(side_effect=RuntimeError("skip"))),
+            patch.object(
+                retrieval.search_public, "search", AsyncMock(side_effect=RuntimeError("skip"))
+            ),
             patch.object(retrieval.timeline_public, "list_timeline", fake_list_timeline),
-            patch.object(retrieval.documents_public, "read_chat_evidence_chunks", AsyncMock(return_value=[])),
-            patch.object(retrieval, "_apply_configured_reranking", AsyncMock(return_value=([], "skipped", []))),
+            patch.object(
+                retrieval.documents_public, "read_chat_evidence_chunks", AsyncMock(return_value=[])
+            ),
+            patch.object(
+                retrieval,
+                "_apply_configured_reranking",
+                AsyncMock(return_value=([], "skipped", [])),
+            ),
         ):
-            ctx = await retrieval.build_context(MagicMock(), MagicMock(), MagicMock(), MagicMock(), request, SCOPE)
+            ctx = await retrieval.build_context(
+                MagicMock(), MagicMock(), MagicMock(), MagicMock(), request, SCOPE
+            )
         assert (seen[0].date_from, seen[0].date_to) == (day, day + timedelta(days=1))
         assert len(ctx.temporal_summaries) == 1
 
@@ -540,10 +584,19 @@ async def test_build_context_releases_connection_during_embed() -> None:
     search = AsyncMock(return_value=SimpleNamespace(warnings=[], items=[]))
     with (
         patch.object(retrieval.search_public, "search", search),
-        patch.object(retrieval.documents_public, "read_chat_evidence_chunks", AsyncMock(return_value=[])),
-        patch.object(retrieval, "_apply_configured_reranking", AsyncMock(return_value=([], "skipped", []))),
+        patch.object(
+            retrieval.documents_public, "read_chat_evidence_chunks", AsyncMock(return_value=[])
+        ),
+        patch.object(
+            retrieval, "_apply_configured_reranking", AsyncMock(return_value=([], "skipped", []))
+        ),
     ):
         await retrieval.build_context(
-            MagicMock(), MagicMock(), MagicMock(), MagicMock(), AnswerContextRequest(query="q"), SCOPE,
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            AnswerContextRequest(query="q"),
+            SCOPE,
         )
     assert search.call_args.kwargs["release_during_embed"] is True

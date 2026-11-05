@@ -14,8 +14,13 @@ from modules.connectors import public as connectors
 
 SOURCE_ID = uuid4()
 WORKSPACE_ID = uuid4()
-SCOPE = InternalJobScope(workspace_id=WORKSPACE_ID, actor_user_id=7, membership_revision=3,
-                         source_id=SOURCE_ID, source_generation=2)
+SCOPE = InternalJobScope(
+    workspace_id=WORKSPACE_ID,
+    actor_user_id=7,
+    membership_revision=3,
+    source_id=SOURCE_ID,
+    source_generation=2,
+)
 FENCE = AccessFence(WORKSPACE_ID, 7, 3, 5)
 HINTS = "modules.connectors.service.github_hints"
 
@@ -46,28 +51,58 @@ class _Session:
 
 def _hint(**over: Any) -> SimpleNamespace:
     base = {
-        "repository_id": "11", "binding_revision": 6, "resource": "issue", "capacity_reserved": False,
-        "state": "paused", "attempts": 3, "reconcile_page": 4, "claim_token": uuid4(), "claimed_revision": 1,
-        "claim_expires_at": datetime.now(UTC), "source_generation": 1, "connector_revision": 1,
+        "repository_id": "11",
+        "binding_revision": 6,
+        "resource": "issue",
+        "capacity_reserved": False,
+        "state": "paused",
+        "attempts": 3,
+        "reconcile_page": 4,
+        "claim_token": uuid4(),
+        "claimed_revision": 1,
+        "claim_expires_at": datetime.now(UTC),
+        "source_generation": 1,
+        "connector_revision": 1,
         "next_attempt_at": datetime.now(UTC) - timedelta(days=1),
     }
     return SimpleNamespace(**(base | over))
 
 
-async def _run(session: _Session, *, active: bool, source_status: str = "active", generation: int = 2,
-               binding_fence: Any = "default", provisioned: Any = "default") -> int:
+async def _run(
+    session: _Session,
+    *,
+    active: bool,
+    source_status: str = "active",
+    generation: int = 2,
+    binding_fence: Any = "default",
+    provisioned: Any = "default",
+) -> int:
     source = SimpleNamespace(generation=generation, status=source_status)
-    fence = SimpleNamespace(repository_id="11", binding_revision=6, resource_scope=("issue",), connector_revision=4) \
-        if binding_fence == "default" else binding_fence
+    fence = (
+        SimpleNamespace(
+            repository_id="11", binding_revision=6, resource_scope=("issue",), connector_revision=4
+        )
+        if binding_fence == "default"
+        else binding_fence
+    )
     prov = SimpleNamespace(desired_revision=4) if provisioned == "default" else provisioned
-    with patch(f"{HINTS}._read_scoped_source", AsyncMock(return_value=source)), \
-            patch(f"{HINTS}._connector_access", AsyncMock(return_value=FENCE)), \
-            patch("modules.sources.public.get_source_fence", AsyncMock(return_value=SimpleNamespace())), \
-            patch("modules.connectors.provisioning._lock_connector_rows", AsyncMock(return_value=(None, prov, {}))), \
-            patch(f"{HINTS}.lock_github_binding_fence_in_uow", AsyncMock(return_value=fence)):
+    with (
+        patch(f"{HINTS}._read_scoped_source", AsyncMock(return_value=source)),
+        patch(f"{HINTS}._connector_access", AsyncMock(return_value=FENCE)),
+        patch("modules.sources.public.get_source_fence", AsyncMock(return_value=SimpleNamespace())),
+        patch(
+            "modules.connectors.provisioning._lock_connector_rows",
+            AsyncMock(return_value=(None, prov, {})),
+        ),
+        patch(f"{HINTS}.lock_github_binding_fence_in_uow", AsyncMock(return_value=fence)),
+    ):
         return await connectors.reconcile_github_source_hints_lifecycle(
-            session, source_id=SOURCE_ID, source_generation=2, active=active,  # type: ignore[arg-type]
-            scope=SCOPE, multi_workspace_enabled=False,
+            session,
+            source_id=SOURCE_ID,
+            source_generation=2,
+            active=active,  # type: ignore[arg-type]
+            scope=SCOPE,
+            multi_workspace_enabled=False,
         )
 
 
@@ -84,7 +119,10 @@ async def test_rearm_returns_zero_without_provisioning_binding_candidates_or_cap
     s = _Session([], [[]])
     assert await _run(s, active=True) == 0 and s.log == ["scalars:github_source_hints"]
     s2 = _Session([None], [[_hint()]])
-    assert await _run(s2, active=True) == 0 and s2.log == ["scalars:github_source_hints", "scalar:github_webhook_capacity"]
+    assert await _run(s2, active=True) == 0 and s2.log == [
+        "scalars:github_source_hints",
+        "scalar:github_webhook_capacity",
+    ]
 
 
 @pytest.mark.asyncio
@@ -95,11 +133,21 @@ async def test_rearm_reserves_capacity_defers_when_full_and_flags_unverified_hin
     foreign = _hint(repository_id="99", capacity_reserved=True)
     capacity = SimpleNamespace(pending_count=10)
     assert await _run(_Session([capacity], [[ok, reserved, foreign]]), active=True) == 2
-    assert (ok.state, ok.capacity_reserved, ok.attempts, ok.reconcile_page) == ("pending", True, 0, 1)
+    assert (ok.state, ok.capacity_reserved, ok.attempts, ok.reconcile_page) == (
+        "pending",
+        True,
+        0,
+        1,
+    )
     assert (reserved.state, reserved.capacity_reserved) == ("pending", True)
     assert (foreign.state, foreign.capacity_reserved) == ("visibility_unverified", False)
     assert capacity.pending_count == 10 + 1 - 1  # +1 for ``ok``, -1 released by ``foreign``
-    assert ok.next_attempt_at >= now and ok.claim_token is None and ok.source_generation == 2 and ok.connector_revision == 4
+    assert (
+        ok.next_attempt_at >= now
+        and ok.claim_token is None
+        and ok.source_generation == 2
+        and ok.connector_revision == 4
+    )
 
     full = _hint()
     capacity_full = SimpleNamespace(pending_count=100_000)
@@ -107,7 +155,10 @@ async def test_rearm_reserves_capacity_defers_when_full_and_flags_unverified_hin
     assert full.state == "capacity_deferred" and full.capacity_reserved is False
     assert full.next_attempt_at > now + timedelta(seconds=30)
     wrong_resource = _hint(resource="release")
-    assert await _run(_Session([SimpleNamespace(pending_count=1)], [[wrong_resource]]), active=True) == 0
+    assert (
+        await _run(_Session([SimpleNamespace(pending_count=1)], [[wrong_resource]]), active=True)
+        == 0
+    )
     assert wrong_resource.state == "visibility_unverified"
 
 
@@ -117,10 +168,23 @@ async def test_inactive_cleanup_locks_grant_hints_and_capacity_only_when_a_slot_
     capacity = SimpleNamespace(pending_count=5)
     s = _Session([SimpleNamespace(), None, capacity], [[held]])
     result = await _run(s, active=False, source_status="paused")
-    assert s.log == ["scalar:connector_provisioning", "scalar:github_oauth_grants",
-                     "scalars:github_source_hints", "scalar:github_webhook_capacity"]
-    assert result == 1 and held.state == "paused" and held.capacity_reserved is False and capacity.pending_count == 4
+    assert s.log == [
+        "scalar:connector_provisioning",
+        "scalar:github_oauth_grants",
+        "scalars:github_source_hints",
+        "scalar:github_webhook_capacity",
+    ]
+    assert (
+        result == 1
+        and held.state == "paused"
+        and held.capacity_reserved is False
+        and capacity.pending_count == 4
+    )
     s2 = _Session([SimpleNamespace(), None], [[]])
     assert await _run(s2, active=False) == 0
-    assert s2.log == ["scalar:connector_provisioning", "scalar:github_oauth_grants", "scalars:github_source_hints"]
+    assert s2.log == [
+        "scalar:connector_provisioning",
+        "scalar:github_oauth_grants",
+        "scalars:github_source_hints",
+    ]
     assert await _run(_Session([None], []), active=False) == 0

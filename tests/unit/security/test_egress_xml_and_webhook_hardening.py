@@ -25,8 +25,11 @@ BOMB = b'<?xml version="1.0"?><!DOCTYPE a [<!ENTITY x "y">]><feed><entry>&x;</en
 
 def _settings(**kw: object) -> SimpleNamespace:
     base = {
-        "n8n_service_url": "http://n8n:5678/", "ai_allowed_endpoint_cidrs": [], "ai_allow_public_providers": False,
-        "ai_credential_encryption_key": SecretStr(""), "ai_credential_encryption_key_secondary": SecretStr(""),
+        "n8n_service_url": "http://n8n:5678/",
+        "ai_allowed_endpoint_cidrs": [],
+        "ai_allow_public_providers": False,
+        "ai_credential_encryption_key": SecretStr(""),
+        "ai_credential_encryption_key_secondary": SecretStr(""),
     }
     return SimpleNamespace(**(base | kw))
 
@@ -37,8 +40,15 @@ def test_n8n_owner_host_without_address_policy_fails_closed() -> None:
 
 
 def test_n8n_env_host_stays_plain_and_cidr_host_is_pinned() -> None:
-    assert public.n8n_http_client("http://n8n:5678", _settings(), timeout=5)._transport.__class__.__name__ != "ApprovedEndpointTransport"
-    client = public.n8n_http_client("http://other:5678", _settings(ai_allowed_endpoint_cidrs=["10.0.0.0/8"]), timeout=5)
+    assert (
+        public.n8n_http_client(
+            "http://n8n:5678", _settings(), timeout=5
+        )._transport.__class__.__name__
+        != "ApprovedEndpointTransport"
+    )
+    client = public.n8n_http_client(
+        "http://other:5678", _settings(ai_allowed_endpoint_cidrs=["10.0.0.0/8"]), timeout=5
+    )
     assert client._transport.__class__.__name__ == "ApprovedEndpointTransport"
 
 
@@ -61,13 +71,18 @@ def test_connector_key_ring_decrypts_with_secondary_and_encrypts_with_primary() 
 def test_ai_cipher_rotation() -> None:
     old, new = Fernet.generate_key().decode(), Fernet.generate_key().decode()
     legacy = public._cipher(_settings(ai_credential_encryption_key=SecretStr(old))).encrypt(b"k")
-    rotated = _settings(ai_credential_encryption_key=SecretStr(new), ai_credential_encryption_key_secondary=SecretStr(old))
+    rotated = _settings(
+        ai_credential_encryption_key=SecretStr(new),
+        ai_credential_encryption_key_secondary=SecretStr(old),
+    )
     assert public._cipher(rotated).decrypt(legacy) == b"k"
     assert Fernet(new.encode()).decrypt(public._cipher(rotated).encrypt(b"k")) == b"k"
 
 
 def _sign(secret: str, ts: str, body: bytes) -> str:
-    return "sha256=" + hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    return (
+        "sha256=" + hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    )
 
 
 def test_webhook_signature() -> None:
@@ -76,7 +91,12 @@ def test_webhook_signature() -> None:
     _verify_webhook_signature(secrets, "hook", body, ts, _sign("s3", ts, body))
     _verify_webhook_signature(secrets, "other", body, None, None)  # unconfigured alias: bearer only
     old = str(int(time.time()) - 3600)
-    for args in ((ts, "sha256=bad"), (None, None), (old, _sign("s3", old, body)), (ts, _sign("zz", ts, body))):
+    for args in (
+        (ts, "sha256=bad"),
+        (None, None),
+        (old, _sign("s3", old, body)),
+        (ts, _sign("zz", ts, body)),
+    ):
         with pytest.raises(HTTPException) as exc:
             _verify_webhook_signature(secrets, "hook", body, *args)
         assert exc.value.status_code == 401

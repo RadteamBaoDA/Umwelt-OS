@@ -25,10 +25,7 @@ def may_send(
         return False
     if destination_id.startswith(LOCAL_DESTINATION_PREFIX):
         return capability not in {"web_search", "search"}
-    if (
-        not credential_configured
-        or mapping.destination != "remote"
-    ):
+    if not credential_configured or mapping.destination != "remote":
         return False
     if capability in {"embeddings", "reranking"}:
         destinations = policy.embedding_destinations or policy.permitted_destinations

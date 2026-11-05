@@ -19,10 +19,15 @@ MEMBER = WorkspaceContext(user_id=8, workspace_id=WS, role="member", membership_
 async def test_p2_1_member_cannot_list_tools():
     from modules.tools import routes
 
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        mcp_runtime=None, tool_registry=MagicMock(list_tools=MagicMock(return_value=[])),
-        settings=SimpleNamespace(multi_workspace_enabled=False),
-    )))
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                mcp_runtime=None,
+                tool_registry=MagicMock(list_tools=MagicMock(return_value=[])),
+                settings=SimpleNamespace(multi_workspace_enabled=False),
+            )
+        )
+    )
     with pytest.raises(HTTPException) as exc:
         await routes.list_tools(request, MagicMock(), MEMBER, MagicMock())  # type: ignore[arg-type]
     assert exc.value.status_code == 403
@@ -50,9 +55,11 @@ async def test_p2_2_mcp_runtime_commits_hold_fence(method):
     admit = AsyncMock(return_value=fence)
     commit = AsyncMock()
     repo_name = method
-    with patch.object(mcp_runtime.mcp_repository, "admit", admit), \
-            patch.object(mcp_runtime.mcp_repository, repo_name, AsyncMock(return_value="r")), \
-            patch.object(mcp_runtime, "commit_with_replay", commit):
+    with (
+        patch.object(mcp_runtime.mcp_repository, "admit", admit),
+        patch.object(mcp_runtime.mcp_repository, repo_name, AsyncMock(return_value="r")),
+        patch.object(mcp_runtime, "commit_with_replay", commit),
+    ):
         if method == "record_draft_check":
             out = await runtime.record_draft_check(OWNER, uuid4(), 1, "ok")
         else:
@@ -74,8 +81,10 @@ async def test_p2_3_memory_reconciler_advances_cursor_and_wraps():
     sessions.return_value.__aexit__ = AsyncMock(return_value=False)
     ctx = {"session_factory": sessions, "settings": SimpleNamespace(multi_workspace_enabled=False)}
     worker._memory_reconcile_cursor = None
-    with patch.object(worker.documents, "pending_document_memory_cleanup_ids", listing), \
-            patch.object(worker, "_reopen_page", AsyncMock(return_value=0)):
+    with (
+        patch.object(worker.documents, "pending_document_memory_cleanup_ids", listing),
+        patch.object(worker, "_reopen_page", AsyncMock(return_value=0)),
+    ):
         await worker.reconcile_document_memory_cleanup(ctx)
         await worker.reconcile_document_memory_cleanup(ctx)
         await worker.reconcile_document_memory_cleanup(ctx)  # empty page wraps to the start
@@ -150,9 +159,13 @@ async def test_p3_7_automation_module_gate_runs_after_admission_lock():
 
     ctx = {"session_factory": factory, "settings": SimpleNamespace(multi_workspace_enabled=False)}
     owner = SimpleNamespace(user_id=7, membership_revision=1)
-    with patch.object(execution.workspaces, "resolve_workspace_owner_context", AsyncMock(return_value=owner)), \
-            patch.object(execution, "_admit", admit), \
-            patch.object(execution.settings_public, "module_is_enabled", module):
+    with (
+        patch.object(
+            execution.workspaces, "resolve_workspace_owner_context", AsyncMock(return_value=owner)
+        ),
+        patch.object(execution, "_admit", admit),
+        patch.object(execution.settings_public, "module_is_enabled", module),
+    ):
         assert await execution.process_run(ctx, str(uuid4())) == "paused"
     assert order == ["admit", "module"]
 
@@ -174,10 +187,17 @@ async def test_p3_7_connector_module_gate_runs_after_access_check():
         order.append("module")
         return False
 
-    with patch.object(scheduler, "_request_scope", lambda request: None), \
-            patch.object(scheduler.connectors, "_connector_access", access), \
-            patch("modules.settings.public.module_is_enabled", module):
-        assert await scheduler.admit_collection_request(session, uuid4(), multi_workspace_enabled=False) is None
+    with (
+        patch.object(scheduler, "_request_scope", lambda request: None),
+        patch.object(scheduler.connectors, "_connector_access", access),
+        patch("modules.settings.public.module_is_enabled", module),
+    ):
+        assert (
+            await scheduler.admit_collection_request(
+                session, uuid4(), multi_workspace_enabled=False
+            )
+            is None
+        )
     assert order == ["access", "module"]
 
 
@@ -194,9 +214,13 @@ async def test_p3_8_normalize_event_is_module_gated():
 
     work = SimpleNamespace(scope=None)
     ctx = {"session_factory": factory, "settings": SimpleNamespace(multi_workspace_enabled=False)}
-    with patch.object(worker, "_lock_worker_event", AsyncMock(return_value=work)), \
-            patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=False)), \
-            patch.object(worker, "_capture_worker_claim", MagicMock(side_effect=AssertionError("ungated"))):
+    with (
+        patch.object(worker, "_lock_worker_event", AsyncMock(return_value=work)),
+        patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=False)),
+        patch.object(
+            worker, "_capture_worker_claim", MagicMock(side_effect=AssertionError("ungated"))
+        ),
+    ):
         await worker.process_normalize_event(ctx, str(uuid4()))
     session.rollback.assert_awaited()
 
@@ -215,7 +239,15 @@ async def test_p2_5_source_coverage_cursor_survives_per_job_ctx_copy():
     async def factory():
         yield session
 
-    base = {"session_factory": factory, "settings": SimpleNamespace(multi_workspace_enabled=False), STATE_KEY: {}}
-    with patch.object(worker.sources, "resolve_source_purge_job_scope", AsyncMock(return_value=None)):
+    base = {
+        "session_factory": factory,
+        "settings": SimpleNamespace(multi_workspace_enabled=False),
+        STATE_KEY: {},
+    }
+    with patch.object(
+        worker.sources, "resolve_source_purge_job_scope", AsyncMock(return_value=None)
+    ):
         await worker.reconcile_source_coverage(dict(base))  # ARQ hands every job a fresh ctx copy
-    assert await read_cursor(dict(base), worker._COVERAGE_CURSOR_KEY, worker._CURSOR_KEYS) == ids[-1]
+    assert (
+        await read_cursor(dict(base), worker._COVERAGE_CURSOR_KEY, worker._CURSOR_KEYS) == ids[-1]
+    )

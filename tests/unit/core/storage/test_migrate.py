@@ -27,7 +27,9 @@ async def _seed(local: LocalFilesystemBackend, payloads: list[bytes]) -> list[st
     return keys
 
 
-async def test_copy_verifies_checksums_and_second_run_is_a_noop(tmp_path: Path, make_s3: Any) -> None:
+async def test_copy_verifies_checksums_and_second_run_is_a_noop(
+    tmp_path: Path, make_s3: Any
+) -> None:
     local, s3 = LocalFilesystemBackend(tmp_path), make_s3()
     payloads = [b"one", b"two" * 100]
     keys = await _seed(local, payloads)
@@ -48,7 +50,9 @@ async def test_dry_run_writes_nothing(tmp_path: Path, make_s3: Any) -> None:
     assert await s3.list_prefix("") == []
 
 
-async def test_different_existing_destination_is_a_failure_not_an_overwrite(tmp_path: Path, make_s3: Any) -> None:
+async def test_different_existing_destination_is_a_failure_not_an_overwrite(
+    tmp_path: Path, make_s3: Any
+) -> None:
     local, s3 = LocalFilesystemBackend(tmp_path), make_s3()
     (key,) = await _seed(local, [b"source"])
     await s3.put_stream(key, _chunks(b"other"), 100, workspace_id=WORKSPACE)
@@ -57,18 +61,27 @@ async def test_different_existing_destination_is_a_failure_not_an_overwrite(tmp_
     assert b"".join([block async for block in s3.open_stream(key)]) == b"other"
 
 
-async def test_oversize_and_non_canonical_keys_are_reported_not_fatal(tmp_path: Path, make_s3: Any) -> None:
+async def test_oversize_and_non_canonical_keys_are_reported_not_fatal(
+    tmp_path: Path, make_s3: Any
+) -> None:
     local, s3 = LocalFilesystemBackend(tmp_path), make_s3()
     await _seed(local, [b"x" * 500, b"ok"])
     legacy = tmp_path / "documents" / str(uuid4())
     legacy.mkdir(parents=True)
     (legacy / "legacy.txt").write_bytes(b"old")
     report = await migrate_objects(local, s3, max_bytes=100)
-    assert report.copied == 1 and len(report.failures) == 1 and report.skipped_other == 1 and not report.ok
+    assert (
+        report.copied == 1
+        and len(report.failures) == 1
+        and report.skipped_other == 1
+        and not report.ok
+    )
     assert len(await s3.list_prefix("workspaces")) == 1
 
 
-async def test_erased_workspace_is_not_resurrected_on_destination(tmp_path: Path, make_s3: Any, memory_fence: Any) -> None:
+async def test_erased_workspace_is_not_resurrected_on_destination(
+    tmp_path: Path, make_s3: Any, memory_fence: Any
+) -> None:
     local = LocalFilesystemBackend(tmp_path)
     fence = memory_fence
     fence.erased.add(WORKSPACE)

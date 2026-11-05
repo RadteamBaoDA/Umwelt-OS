@@ -106,7 +106,9 @@ async def _publish_ui_discards(c: _RunCtx, part_ids: list[str]) -> bool:
     return True
 
 
-async def _park_for_input(c: _RunCtx, args: RequestUserInputArgs, ttl_seconds: int) -> InputOutcome | None:
+async def _park_for_input(
+    c: _RunCtx, args: RequestUserInputArgs, ttl_seconds: int
+) -> InputOutcome | None:
     """Park the run on a user-input request and wait for the answer with no lock or transaction held.
 
     Publication happens inside the standard lock order (privacy -> conversation -> run, status must be
@@ -117,7 +119,9 @@ async def _park_for_input(c: _RunCtx, args: RequestUserInputArgs, ttl_seconds: i
     async with _live_run_fence(c, check_evidence=False) as (session, outcome, parked_run):
         if outcome is not _FenceOutcome.LIVE:
             return None
-        payload = await create_input_request(session, parked_run, args, ttl=resolve_ttl(ttl_seconds))
+        payload = await create_input_request(
+            session, parked_run, args, ttl=resolve_ttl(ttl_seconds)
+        )
         # create_input_request appended its own event; re-read the high-water mark so later local
         # events (and a concurrent submit's event) keep strictly increasing seqs.
         c.seq = await _next_event_seq(session, c.response_id, c.seq) - 1
@@ -142,8 +146,12 @@ async def _run_todos(c: _RunCtx, name: str, raw_args: str) -> str | None:
             await session.commit()
             return theme_result
         if name in TEMPLATE_TOOLS:
-            return await run_template_tool(name, raw_args or "{}", session, c.conversation_id, c.response_id)
-        return await run_todo_tool(name, raw_args or "{}", session, c.conversation_id, c.response_id)
+            return await run_template_tool(
+                name, raw_args or "{}", session, c.conversation_id, c.response_id
+            )
+        return await run_todo_tool(
+            name, raw_args or "{}", session, c.conversation_id, c.response_id
+        )
 
 
 @dataclass
@@ -158,7 +166,9 @@ class _TurnState:
     input_ttl_seconds: int
     last_cancel_check: float
     route_decision: dict[str, Any] | None = None
-    ui_parts: list[tuple[str, dict[str, str]]] = field(default_factory=list)  # (part_id, tool call) in stream order
+    ui_parts: list[tuple[str, dict[str, str]]] = field(
+        default_factory=list
+    )  # (part_id, tool call) in stream order
     ui_rounds: int = 0  # model rounds that produced at least one widget
     skill_rounds: int = 0  # data-tool continuation rounds
     input_requests: int = 0  # request_user_input calls answered or rejected so far this turn
@@ -243,7 +253,9 @@ class _TripImagesHandler:
     async def run(self, env: _ToolEnv, call: dict[str, str]) -> str:
         """Run the tool; egress is gated again inside it (owner flag + local-only) and never raises for model input."""
         return await media.run_trip_images_tool(
-            call["arguments"], config=env.setup.ai_config, local_only=env.setup.local_only_turn,
+            call["arguments"],
+            config=env.setup.ai_config,
+            local_only=env.setup.local_only_turn,
             secret=env.c.settings.csrf_signing_secret.get_secret_value(),
             subject=f"{env.claimed.workspace_id}:{env.claimed.actor_id}",
         )
@@ -336,7 +348,9 @@ class _RequestUserInputHandler:
             return json.dumps({"error": f"invalid request_user_input arguments: {str(exc)[:300]}"})
         outcome = await _park_for_input(env.c, input_args, env.ts.input_ttl_seconds)
         if outcome is None:
-            raise _RunStopped("Run ended while parked for user input")  # terminal state already persisted
+            raise _RunStopped(
+                "Run ended while parked for user input"
+            )  # terminal state already persisted
         return outcome.tool_result
 
 

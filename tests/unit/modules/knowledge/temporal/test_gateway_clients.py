@@ -17,8 +17,11 @@ def _context(dimensions: int | None = 3, reranking: bool = True, authorize: Any 
     """Minimal authorization stand-in exposing only what the clients read."""
     model = SimpleNamespace(role="r", mapping=object(), policy=object(), dimensions=dimensions)
     return SimpleNamespace(
-        reasoning=model, small_reasoning=SimpleNamespace(role="small", mapping=object(), policy=object()),
-        embedding=model, reranking=model if reranking else None, model_calls=[0],
+        reasoning=model,
+        small_reasoning=SimpleNamespace(role="small", mapping=object(), policy=object()),
+        embedding=model,
+        reranking=model if reranking else None,
+        model_calls=[0],
         authorize=authorize or AsyncMock(),
     )
 
@@ -59,8 +62,11 @@ async def test_llm_uses_small_model_and_structured_schema() -> None:
     gateway = SimpleNamespace(structured=AsyncMock(return_value=_completion('{"value": 2}')))
     llm, _, _ = _make_clients(context, gateway)
     result = await llm._generate_response(
-        [SimpleNamespace(role="user", content="x")], response_model=Out, max_tokens=10,
-        model_size=SimpleNamespace(value="small"))
+        [SimpleNamespace(role="user", content="x")],
+        response_model=Out,
+        max_tokens=10,
+        model_size=SimpleNamespace(value="small"),
+    )
     assert result == {"value": 2}
     args = gateway.structured.await_args.args
     assert args[0] == "small" and args[3] == [{"role": "user", "content": "x"}]
@@ -107,14 +113,20 @@ async def test_embedder_validates_order_dimensions_and_values() -> None:
     cases = {
         "graph_embedding_response_invalid": {"data": [good["data"][0]]},
         "graph_embedding_order_invalid": {"data": [good["data"][1], good["data"][0]]},
-        "graph_embedding_dimension_invalid": {"data": [{"index": 0, "embedding": [1, 0]}, good["data"][1]]},
-        "graph_embedding_value_invalid": {"data": [{"index": 0, "embedding": [0, 0, 0]}, good["data"][1]]},
+        "graph_embedding_dimension_invalid": {
+            "data": [{"index": 0, "embedding": [1, 0]}, good["data"][1]]
+        },
+        "graph_embedding_value_invalid": {
+            "data": [{"index": 0, "embedding": [0, 0, 0]}, good["data"][1]]
+        },
     }
     for code, payload in cases.items():
         gateway.embed.return_value = payload
         with pytest.raises(GraphOperationError, match=code):
             await embedder.create_batch(["a", "b"])
-    gateway.embed.return_value = {"data": [{"index": 0, "embedding": [float("nan"), 1, 1]}, good["data"][1]]}
+    gateway.embed.return_value = {
+        "data": [{"index": 0, "embedding": [float("nan"), 1, 1]}, good["data"][1]]
+    }
     with pytest.raises(GraphOperationError, match="graph_embedding_value_invalid"):
         await embedder.create_batch(["a", "b"])
 
@@ -137,7 +149,13 @@ async def test_embedder_input_and_dimension_guards() -> None:
 @pytest.mark.asyncio
 async def test_cross_encoder_ranks_by_score_then_index() -> None:
     """Valid rows are returned by descending score with index as the tiebreak."""
-    rows = {"results": [{"index": 1, "relevance_score": 0.5}, {"index": 0, "score": 0.5}, {"index": 2, "score": 0.9}]}
+    rows = {
+        "results": [
+            {"index": 1, "relevance_score": 0.5},
+            {"index": 0, "score": 0.5},
+            {"index": 2, "score": 0.9},
+        ]
+    }
     gateway = SimpleNamespace(rerank=AsyncMock(return_value=rows))
     _, _, ranker = _make_clients(_context(), gateway)
     assert await ranker.rank("q", ["a", "b", "c"]) == [("c", 0.9), ("a", 0.5), ("b", 0.5)]

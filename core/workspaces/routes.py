@@ -80,13 +80,19 @@ def _if_match(value: str | None) -> int | None:
     return int(cleaned)
 
 
-async def _lock_actor(request: Request, session: AsyncSession, auth: AuthSession, target: int | None = None) -> None:
+async def _lock_actor(
+    request: Request, session: AsyncSession, auth: AuthSession, target: int | None = None
+) -> None:
     """After CSRF/admission, lock sorted account IDs then exact session and recheck account/CSRF."""
     ids = (auth.owner_id,) if target is None else (auth.owner_id, target)
     submitted = request.headers.get("X-CSRF-Token", "")
     await lock_account_lifecycle(
-        session, ids, actor_user_id=auth.owner_id, token_hash=auth.token_hash,
-        csrf_hash=_hash(submitted), multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        session,
+        ids,
+        actor_user_id=auth.owner_id,
+        token_hash=auth.token_hash,
+        csrf_hash=_hash(submitted),
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
 
 
@@ -114,17 +120,31 @@ async def _allow_invitation_attempt(request: Request, redis: Redis, digest: str)
         async with asyncio.timeout(2):
             allowed = await cast(
                 "Awaitable[Any]",
-                redis.eval(script, 3, f"invite:ip:{key}:{minute}", f"invite:all:{minute}",
-                           f"invite:pair:{_hash(key + digest[:16])}:{minute}"),
+                redis.eval(
+                    script,
+                    3,
+                    f"invite:ip:{key}:{minute}",
+                    f"invite:all:{minute}",
+                    f"invite:pair:{_hash(key + digest[:16])}:{minute}",
+                ),
             )
     except (RedisError, TimeoutError):
-        raise HTTPException(status_code=503, detail="Invitation acceptance is temporarily unavailable") from None
+        raise HTTPException(
+            status_code=503, detail="Invitation acceptance is temporarily unavailable"
+        ) from None
     if not allowed:
-        raise HTTPException(status_code=429, detail="Too many invitation attempts", headers={"Retry-After": "60"})
+        raise HTTPException(
+            status_code=429, detail="Too many invitation attempts", headers={"Retry-After": "60"}
+        )
 
 
 async def _consume_google_enrollment(
-    request: Request, redis: Redis, digest: str, email: str, *, required: bool,
+    request: Request,
+    redis: Redis,
+    digest: str,
+    email: str,
+    *,
+    required: bool,
 ) -> dict[str, str] | None:
     """Consume 5-minute one-time proof, bound to invitation digest/email and signed CSRF cookie.
 
@@ -139,22 +159,34 @@ async def _consume_google_enrollment(
         raise HTTPException(status_code=410, detail="Enrollment is no longer available")
     try:
         async with asyncio.timeout(2):
-            raw = await redis.getdel(f"auth:google:enrollment:{_hash(handle)}") if len(handle) <= 256 else None
+            raw = (
+                await redis.getdel(f"auth:google:enrollment:{_hash(handle)}")
+                if len(handle) <= 256
+                else None
+            )
         proof = json.loads(raw) if raw else None
     except (RedisError, TimeoutError):
-        raise HTTPException(status_code=503, detail="Authentication is temporarily unavailable") from None
+        raise HTTPException(
+            status_code=503, detail="Authentication is temporarily unavailable"
+        ) from None
     except (ValueError, TypeError):
         proof = None
-    if (not isinstance(proof, dict) or proof.get("invitation_hash") != digest or proof.get("email") != email
-            or proof.get("csrf_cookie_hash") != _hash(request.cookies.get(CSRF_COOKIE, ""))
-            or not isinstance(proof.get("subject"), str) or not isinstance(proof.get("issuer"), str)):
+    if (
+        not isinstance(proof, dict)
+        or proof.get("invitation_hash") != digest
+        or proof.get("email") != email
+        or proof.get("csrf_cookie_hash") != _hash(request.cookies.get(CSRF_COOKIE, ""))
+        or not isinstance(proof.get("subject"), str)
+        or not isinstance(proof.get("issuer"), str)
+    ):
         raise HTTPException(status_code=410, detail="Enrollment is no longer available")
     return proof
 
 
 @router.get("", response_model=WorkspaceList)
 async def workspace_list(
-    auth: Annotated[AuthSession, Depends(require_account)], session: Annotated[AsyncSession, Depends(get_session)],
+    auth: Annotated[AuthSession, Depends(require_account)],
+    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> WorkspaceList:
     """List actor memberships, or all workspace metadata for the instance operator."""
     if is_instance_operator(auth):
@@ -164,21 +196,27 @@ async def workspace_list(
 
 @router.patch("/{workspace_id}", response_model=WorkspaceRead)
 async def workspace_edit(
-    workspace_id: UUID, body: WorkspaceEdit, request: Request,
+    workspace_id: UUID,
+    body: WorkspaceEdit,
+    request: Request,
     auth: Annotated[AuthSession, Depends(require_account_write)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> WorkspaceRead:
     """Rename actual owner workspace after current auth locks and body revision CAS."""
     await _lock_actor(request, session, auth)
-    result = await edit_workspace_in_uow(session, workspace_id, auth.owner_id, body.name, body.expected_revision)
+    result = await edit_workspace_in_uow(
+        session, workspace_id, auth.owner_id, body.name, body.expected_revision
+    )
     await session.commit()
     return result
 
 
 @router.get("/{workspace_id}/invitations", response_model=InvitationList)
 async def invitation_list(
-    workspace_id: UUID, auth: Annotated[AuthSession, Depends(require_account)],
-    session: Annotated[AsyncSession, Depends(get_session)], cursor: UUID | None = None,
+    workspace_id: UUID,
+    auth: Annotated[AuthSession, Depends(require_account)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    cursor: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> InvitationList:
     """Owner-only paginated invitation metadata; secrets/digests are never serialized."""
@@ -187,8 +225,10 @@ async def invitation_list(
 
 @router.get("/{workspace_id}/members", response_model=MemberList)
 async def member_list(
-    workspace_id: UUID, auth: Annotated[AuthSession, Depends(require_account)],
-    session: Annotated[AsyncSession, Depends(get_session)], cursor: int | None = None,
+    workspace_id: UUID,
+    auth: Annotated[AuthSession, Depends(require_account)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    cursor: int | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> MemberList:
     """Owner-only paginated member identities and membership revisions."""
@@ -197,37 +237,52 @@ async def member_list(
 
 @router.post("/{workspace_id}/invitations", response_model=InvitationCreated, status_code=201)
 async def invitation_create(
-    workspace_id: UUID, body: InvitationCreate, request: Request,
+    workspace_id: UUID,
+    body: InvitationCreate,
+    request: Request,
     auth: Annotated[AuthSession, Depends(require_account_write)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> InvitationCreated:
     """Commit owner CAS invitation and return the only bearer URL once, with 7-day expiry."""
     await _lock_actor(request, session, auth)
     invitation_id, secret, expiry = await create_invitation_in_uow(
-        session, workspace_id, auth.owner_id, body.email, body.expected_revision,
+        session,
+        workspace_id,
+        auth.owner_id,
+        body.email,
+        body.expected_revision,
     )
     await session.commit()
     origin = str(request.app.state.settings.public_origin).rstrip("/")
-    return InvitationCreated(invitation_id=invitation_id, invitation_url=f"{origin}/invitations/accept?token={secret}",
-                             expires_at=expiry)
+    return InvitationCreated(
+        invitation_id=invitation_id,
+        invitation_url=f"{origin}/invitations/accept?token={secret}",
+        expires_at=expiry,
+    )
 
 
 @router.delete("/{workspace_id}/invitations/{invitation_id}", status_code=204)
 async def invitation_revoke(
-    workspace_id: UUID, invitation_id: UUID, request: Request,
+    workspace_id: UUID,
+    invitation_id: UUID,
+    request: Request,
     auth: Annotated[AuthSession, Depends(require_account_write)],
     session: Annotated[AsyncSession, Depends(get_session)],
     revision: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> None:
     """Commit current-owner token revocation under If-Match; stale409/missing428."""
     await _lock_actor(request, session, auth)
-    await revoke_invitation_in_uow(session, workspace_id, auth.owner_id, invitation_id, _if_match(revision))
+    await revoke_invitation_in_uow(
+        session, workspace_id, auth.owner_id, invitation_id, _if_match(revision)
+    )
     await session.commit()
 
 
 @router.delete("/{workspace_id}/members/{user_id}", status_code=204)
 async def member_remove(
-    workspace_id: UUID, user_id: int, request: Request,
+    workspace_id: UUID,
+    user_id: int,
+    request: Request,
     auth: Annotated[AuthSession, Depends(require_account_write)],
     session: Annotated[AsyncSession, Depends(get_session)],
     revision: Annotated[str | None, Header(alias="If-Match")] = None,
@@ -240,37 +295,67 @@ async def member_remove(
 
 @router.get("/{workspace_id}/shares", response_model=ShareList)
 async def share_list(
-    workspace_id: UUID, resource_type: ShareKind, resource_id: UUID, request: Request,
-    auth: Annotated[AuthSession, Depends(require_account)], session: Annotated[AsyncSession, Depends(get_session)],
-    after: int | None = None, limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    workspace_id: UUID,
+    resource_type: ShareKind,
+    resource_id: UUID,
+    request: Request,
+    auth: Annotated[AuthSession, Depends(require_account)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    after: int | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> ShareList:
     """Owner-only share rows of one visible resource; keyset on member_user_id."""
     return await list_resource_shares(
-        session, workspace_id, auth.owner_id, resource_type=resource_type, resource_id=resource_id,
-        after=after, limit=limit,
+        session,
+        workspace_id,
+        auth.owner_id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        after=after,
+        limit=limit,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
 
 
-@router.put("/{workspace_id}/shares/{resource_type}/{resource_id}/{member_user_id}", response_model=ShareRead)
+@router.put(
+    "/{workspace_id}/shares/{resource_type}/{resource_id}/{member_user_id}",
+    response_model=ShareRead,
+)
 async def share_grant(
-    workspace_id: UUID, resource_type: ShareKind, resource_id: UUID, member_user_id: int, body: ShareUpsert,
-    request: Request, auth: Annotated[AuthSession, Depends(require_account_write)],
+    workspace_id: UUID,
+    resource_type: ShareKind,
+    resource_id: UUID,
+    member_user_id: int,
+    body: ShareUpsert,
+    request: Request,
+    auth: Annotated[AuthSession, Depends(require_account_write)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> ShareRead:
     """Owner grants one current member read access; CAS is the member's membership revision."""
     await _lock_actor(request, session, auth, member_user_id)
     result = await grant_share_in_uow(
-        session, workspace_id, auth.owner_id, resource_type, resource_id, member_user_id, body,
+        session,
+        workspace_id,
+        auth.owner_id,
+        resource_type,
+        resource_id,
+        member_user_id,
+        body,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     await session.commit()
     return result
 
 
-@router.delete("/{workspace_id}/shares/{resource_type}/{resource_id}/{member_user_id}", status_code=204)
+@router.delete(
+    "/{workspace_id}/shares/{resource_type}/{resource_id}/{member_user_id}", status_code=204
+)
 async def share_revoke(
-    workspace_id: UUID, resource_type: ShareKind, resource_id: UUID, member_user_id: int, request: Request,
+    workspace_id: UUID,
+    resource_type: ShareKind,
+    resource_id: UUID,
+    member_user_id: int,
+    request: Request,
     auth: Annotated[AuthSession, Depends(require_account_write)],
     session: Annotated[AsyncSession, Depends(get_session)],
     revision: Annotated[str | None, Header(alias="If-Match")] = None,
@@ -278,15 +363,24 @@ async def share_revoke(
     """Owner revokes a share; If-Match is the target member's membership revision."""
     await _lock_actor(request, session, auth, member_user_id)
     await revoke_share_in_uow(
-        session, workspace_id, auth.owner_id, resource_type, resource_id, member_user_id, _if_match(revision),
+        session,
+        workspace_id,
+        auth.owner_id,
+        resource_type,
+        resource_id,
+        member_user_id,
+        _if_match(revision),
     )
     await session.commit()
 
 
 @router.post("/invitations/accept", response_model=InvitationAccepted)
 async def invitation_accept(
-    body: InvitationAccept, request: Request, response: Response,
-    session: Annotated[AsyncSession, Depends(get_session)], redis: Annotated[Redis, Depends(get_auth_redis)],
+    body: InvitationAccept,
+    request: Request,
+    response: Response,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    redis: Annotated[Redis, Depends(get_auth_redis)],
     origin: Annotated[str | None, Header()] = None,
     csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 ) -> InvitationAccepted:
@@ -315,17 +409,30 @@ async def invitation_accept(
     target = await invitation_target(session, digest)
     existing = await account_id_for_email(session, target.email)
     if signed_in and body.google_enrollment:
-        raise HTTPException(status_code=403, detail="Google enrollment requires anonymous invitation acceptance")
-    proof = await _consume_google_enrollment(
-        request, redis, digest, target.email, required=body.google_enrollment,
-    ) if not signed_in else None
+        raise HTTPException(
+            status_code=403, detail="Google enrollment requires anonymous invitation acceptance"
+        )
+    proof = (
+        await _consume_google_enrollment(
+            request,
+            redis,
+            digest,
+            target.email,
+            required=body.google_enrollment,
+        )
+        if not signed_in
+        else None
+    )
     if proof is not None:
         response.delete_cookie(ENROLLMENT_COOKIE, path=ACCEPT_PATH)
     try:
         if auth is not None:
             actor = await lock_account_lifecycle(
-                session, (auth.owner_id, target.owner_user_id), actor_user_id=auth.owner_id,
-                token_hash=auth.token_hash, csrf_hash=_hash(csrf_token or ""),
+                session,
+                (auth.owner_id, target.owner_user_id),
+                actor_user_id=auth.owner_id,
+                token_hash=auth.token_hash,
+                csrf_hash=_hash(csrf_token or ""),
                 multi_workspace_enabled=settings.multi_workspace_enabled,
             )
             if actor is None:
@@ -334,21 +441,39 @@ async def invitation_accept(
                 raise HTTPException(status_code=403, detail="Invitation belongs to another account")
         else:
             if existing is not None or body.password is None:
-                raise HTTPException(status_code=401, detail="Authentication or password enrollment required")
+                raise HTTPException(
+                    status_code=401, detail="Authentication or password enrollment required"
+                )
             await lock_account_lifecycle(session, (target.owner_user_id,))
             actor = await provision_invited_account_in_uow(
-                session, target.email, body.password.get_secret_value(),
-                google_subject=proof["subject"] if proof else None, google_issuer=proof["issuer"] if proof else None,
+                session,
+                target.email,
+                body.password.get_secret_value(),
+                google_subject=proof["subject"] if proof else None,
+                google_issuer=proof["issuer"] if proof else None,
             )
-        if not settings.multi_workspace_enabled or await get_active_account(
-            session, target.owner_user_id, multi_workspace_enabled=settings.multi_workspace_enabled,
-        ) is None:
+        if (
+            not settings.multi_workspace_enabled
+            or await get_active_account(
+                session,
+                target.owner_user_id,
+                multi_workspace_enabled=settings.multi_workspace_enabled,
+            )
+            is None
+        ):
             raise HTTPException(status_code=410, detail="Invitation is no longer available")
         result = await accept_invitation_in_uow(
-            session, target, digest, actor.id, target.email, new_account=auth is None,
+            session,
+            target,
+            digest,
+            actor.id,
+            target.email,
+            new_account=auth is None,
         )
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(status_code=401, detail="Authentication or password enrollment required") from None
+        raise HTTPException(
+            status_code=401, detail="Authentication or password enrollment required"
+        ) from None
     return result

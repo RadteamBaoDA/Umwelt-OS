@@ -55,8 +55,15 @@ def vn_stock_requests(symbols: tuple[str, ...]) -> list[tuple[tuple[str, ...], P
     out: list[tuple[tuple[str, ...], ProviderRequest]] = []
     for base, group in ((STOCK_URL, stocks), (INDEX_URL, indices)):
         if group:
-            out.append((group, ProviderRequest(
-                "GET", f"{base}?q=code:{','.join(group)}&sort=date:desc&size={len(group) * ROWS_PER_SYMBOL}")))
+            out.append(
+                (
+                    group,
+                    ProviderRequest(
+                        "GET",
+                        f"{base}?q=code:{','.join(group)}&sort=date:desc&size={len(group) * ROWS_PER_SYMBOL}",
+                    ),
+                )
+            )
     return out
 
 
@@ -78,7 +85,10 @@ def _observed_at(row: dict[str, object], session_day: date, collected_at: dateti
 
 
 def map_vn_stock(
-    payload: object, collected_at: datetime, *, symbols: tuple[str, ...] = DEFAULT_VN_SYMBOLS,
+    payload: object,
+    collected_at: datetime,
+    *,
+    symbols: tuple[str, ...] = DEFAULT_VN_SYMBOLS,
 ) -> list[IngestionRecord]:
     """Map the latest session close of every requested code; one record per code, identity ``vn_stock:{CODE}:close``.
 
@@ -118,20 +128,36 @@ def map_vn_stock(
         unit = "points" if is_index else _STOCK_UNIT
         text = decimal_text(close)
         iso_day = day.isoformat()
-        records.append(build_record(
-            provider="vn_stock", identity=f"vn_stock:{code}:close",
-            content=f"{code} close on {iso_day}: {text} {unit} (VNDirect, unofficial public endpoint)",
-            title=f"{code} close", observed_at=_observed_at(row, day, collected_at), collected_at=collected_at,
-            version=content_version("vn_stock", code, iso_day, text, volume), metric="close", value=close,
-            unit=unit, currency=None, symbol=code, quality="provider_reported", timestamp_basis="provider_modified",
-            modified_at=_observed_at(row, day, collected_at),
-            provider_fields={
-                "symbol": code, "date": iso_day, "kind": "index" if is_index else "stock",
-                **{k: (None if v is None else float(v)) for k, v in ohlc.items()},
-                "close": float(close), "volume": None if volume is None else float(volume),
-            },
-        ))
+        records.append(
+            build_record(
+                provider="vn_stock",
+                identity=f"vn_stock:{code}:close",
+                content=f"{code} close on {iso_day}: {text} {unit} (VNDirect, unofficial public endpoint)",
+                title=f"{code} close",
+                observed_at=_observed_at(row, day, collected_at),
+                collected_at=collected_at,
+                version=content_version("vn_stock", code, iso_day, text, volume),
+                metric="close",
+                value=close,
+                unit=unit,
+                currency=None,
+                symbol=code,
+                quality="provider_reported",
+                timestamp_basis="provider_modified",
+                modified_at=_observed_at(row, day, collected_at),
+                provider_fields={
+                    "symbol": code,
+                    "date": iso_day,
+                    "kind": "index" if is_index else "stock",
+                    **{k: (None if v is None else float(v)) for k, v in ohlc.items()},
+                    "close": float(close),
+                    "volume": None if volume is None else float(volume),
+                },
+            )
+        )
     return records
 
 
-VN_STOCK_ADAPTERS: dict[str, PureAdapter] = {"vn_stock": PureAdapter(vn_stock_request, map_vn_stock)}
+VN_STOCK_ADAPTERS: dict[str, PureAdapter] = {
+    "vn_stock": PureAdapter(vn_stock_request, map_vn_stock)
+}

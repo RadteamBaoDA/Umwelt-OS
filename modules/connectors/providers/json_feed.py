@@ -40,7 +40,9 @@ from modules.connectors.providers.news import (
 )
 from modules.ingestion.public import IngestionRecord
 
-MAX_ROWS_SCANNED = 2000  # sanity bound on the decoded list; real feeds here return tens to a few hundred rows
+MAX_ROWS_SCANNED = (
+    2000  # sanity bound on the decoded list; real feeds here return tens to a few hundred rows
+)
 _TZ_SUFFIX_RE = re.compile(r"(?:Z|[+-]\d{2}:?\d{2})$")
 _MISSING = object()
 
@@ -66,7 +68,9 @@ class JsonFeed:
     lonlat: tuple[str, str] | None = None
     naive_utc: bool = False  # provider emits zone-less ISO times that are documented as UTC
     underscore_titles: bool = False  # Wikipedia article keys use ``_`` for spaces
-    skip_id_prefixes: tuple[str, ...] = ()  # non-content pages (Main_Page, Special:...) that top lists include
+    skip_id_prefixes: tuple[
+        str, ...
+    ] = ()  # non-content pages (Main_Page, Special:...) that top lists include
     accept: str = "application/json"
 
 
@@ -139,34 +143,56 @@ def map_json_feed(feed: JsonFeed, body: bytes, collected_at: datetime) -> list[I
         title_parts = [_text(item, path, _MAX_TITLE) for path in feed.title]
         raw_id = ":".join(p for p in id_parts if p) if all(id_parts) else ""
         title = " - ".join(p for p in title_parts if p)[:_MAX_TITLE]
-        if not raw_id or not title or any(raw_id.startswith(prefix) for prefix in feed.skip_id_prefixes):
+        if (
+            not raw_id
+            or not title
+            or any(raw_id.startswith(prefix) for prefix in feed.skip_id_prefixes)
+        ):
             continue
         if feed.underscore_titles:
             title = title.replace("_", " ")
-        lines = [f"{label}: {value}" for label, path in feed.summary if (value := _text(item, path, 400))]
+        lines = [
+            f"{label}: {value}" for label, path in feed.summary if (value := _text(item, path, 400))
+        ]
         if feed.lonlat:
             lon, lat = _coordinate(item, feed.lonlat[0], 180), _coordinate(item, feed.lonlat[1], 90)
             if lon is not None and lat is not None:
                 lines.append(f"Location: {lat}, {lon}")
         summary = plain_text("; ".join(lines), _MAX_SUMMARY)
         link_key = _text(item, feed.link, 400) if feed.link else None
-        link = https_link(feed.link_template.format(quote(link_key, safe=":/?=&%#._-")) if link_key else None)
+        link = https_link(
+            feed.link_template.format(quote(link_key, safe=":/?=&%#._-")) if link_key else None
+        )
         identity = _stable_id(f"{feed.provider}:{raw_id}")
         when = _item_time(feed, item, collected_at)
         iso = when.isoformat() if when else None
         fields: dict[str, Any] = {"title": title, "guid": identity, "publisher": feed.publisher}
-        for key, value in (("summary", summary or None), ("canonical_url", link), ("published_at", iso)):
+        for key, value in (
+            ("summary", summary or None),
+            ("canonical_url", link),
+            ("published_at", iso),
+        ):
             if value:
                 fields[key] = value
         record = _record(
-            provider=feed.provider, identity=identity, title=title, summary=summary,
-            observed_at=when or collected_at, collected_at=collected_at,
+            provider=feed.provider,
+            identity=identity,
+            title=title,
+            summary=summary,
+            observed_at=when or collected_at,
+            collected_at=collected_at,
             version=content_version(feed.provider, identity, title, summary, link, iso),
-            basis="provider_published" if when else "collection", modified_at=None,
-            coverage="returned_snapshot", source_fields=fields, canonical_url=link, published_at=iso,
+            basis="provider_published" if when else "collection",
+            modified_at=None,
+            coverage="returned_snapshot",
+            source_fields=fields,
+            canonical_url=link,
+            published_at=iso,
         )
         old = by_id.get(identity)
-        if old is None or (record.version or "") < (old[1].version or ""):  # reorder-proof duplicate pick
+        if old is None or (record.version or "") < (
+            old[1].version or ""
+        ):  # reorder-proof duplicate pick
             by_id[identity] = (when or datetime.min.replace(tzinfo=UTC), record)
     if not by_id:
         raise ProviderPayloadError(f"{feed.provider}_no_items", "incomplete")
@@ -181,23 +207,38 @@ def _wiki_day(template: str, days_back: int = 1) -> Callable[[datetime], str]:
     Pageview tops default to yesterday, the latest complete day. The featured feed passes 0: its ``mostread`` block
     already covers the previous day, and past-dated featured feeds often omit ``mostread`` (seen 2026-10-26).
     """
+
     def build(now: datetime) -> str:
         """Fill ``{y}/{m}/{d}`` with the UTC calendar day ``days_back`` before ``now``."""
         day = now - timedelta(days=days_back)
         return template.format(y=f"{day.year:04d}", m=f"{day.month:02d}", d=f"{day.day:02d}")
+
     return build
 
 
 WIKI_TEMPLATES = {
-    "wikipedia_mostread": ("https://api.wikimedia.org/feed/v1/wikipedia/{lang}/featured/{y}/{m}/{d}", 0),
+    "wikipedia_mostread": (
+        "https://api.wikimedia.org/feed/v1/wikipedia/{lang}/featured/{y}/{m}/{d}",
+        0,
+    ),
     "wikipedia_top_views": (
-        "https://wikimedia.org/api/rest_v1/metrics/pageviews/top/{lang}.wikipedia/all-access/{y}/{m}/{d}", 1),
+        "https://wikimedia.org/api/rest_v1/metrics/pageviews/top/{lang}.wikipedia/all-access/{y}/{m}/{d}",
+        1,
+    ),
 }
 # Main pages and special namespaces that top-view lists include, per language (English ones stay in _WIKI_SKIP).
 _WIKI_LOCAL_SKIP = {
     # Checked against live top-views 2026-11-02: main pages sit under the project namespace
     # (e.g. ko ``위키백과:대문``, de ``Wikipedia:Hauptseite``); only vi/ja use a bare main-page title.
-    "vi": ("Trang_Chính", "Đặc_biệt:", "Wikipedia:", "Tập_tin:", "Thể_loại:", "Thành_viên:", "Thảo_luận_Thành_viên:"),
+    "vi": (
+        "Trang_Chính",
+        "Đặc_biệt:",
+        "Wikipedia:",
+        "Tập_tin:",
+        "Thể_loại:",
+        "Thành_viên:",
+        "Thảo_luận_Thành_viên:",
+    ),
     "ja": ("メインページ", "特別:", "ファイル:"),
     "zh": ("Wikipedia:", "Special:", "Portal:", "Category:", "特殊:"),
     "fr": ("Spécial:", "Wikipédia:", "Fichier:"),
@@ -218,91 +259,171 @@ def localized_feed(feed: JsonFeed, language: str) -> JsonFeed:
     from dataclasses import replace
 
     skips = feed.skip_id_prefixes + _WIKI_LOCAL_SKIP.get(language, ())
-    link = feed.link_template.replace("https://en.wikipedia.org", f"https://{language}.wikipedia.org")
+    link = feed.link_template.replace(
+        "https://en.wikipedia.org", f"https://{language}.wikipedia.org"
+    )
     return replace(feed, link_template=link, skip_id_prefixes=skips)
 
 
-_WIKI_SKIP = ("Main_Page", "Special:", "Wikipedia:", "Portal:", "Help:", "File:", "Category:", "Talk:", "Template:")
+_WIKI_SKIP = (
+    "Main_Page",
+    "Special:",
+    "Wikipedia:",
+    "Portal:",
+    "Help:",
+    "File:",
+    "Category:",
+    "Talk:",
+    "Template:",
+)
 _WIKI_LINK = "https://en.wikipedia.org/wiki/{}"
 
 # Endpoint shapes were checked against live responses on 2026-10-21 (see docs/free-data-provider-policy.md).
 # Dropped after the same probe: ransomware_live (documented v2 paths 404 without a paid key) and safecast
 # (the public measurements list ignores its ordering parameter and returns years-old rows).
-JSON_FEEDS: dict[str, JsonFeed] = {f.provider: f for f in (
-    JsonFeed(
-        "gdacs_events", "GDACS",
-        "https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventlist=EQ;TC;FL;VO;WF;DR&alertlevel=Orange;Red",
-        "features", ("properties.eventtype", "properties.eventid"), ("properties.name",),
-        (("Alert", "properties.alertlevel"), ("Countries", "properties.country"),
-         ("Severity", "properties.severitydata.severitytext"), ("From", "properties.fromdate")),
-        time="properties.datemodified", link="properties.url.report", naive_utc=True,
-        lonlat=("geometry.coordinates.0", "geometry.coordinates.1"),
-    ),
-    JsonFeed(
-        "nws_alerts", "U.S. National Weather Service",
-        "https://api.weather.gov/alerts/active?status=actual&message_type=alert&severity=Extreme,Severe",
-        "features", ("properties.id",), ("properties.headline",),
-        (("Area", "properties.areaDesc"), ("Severity", "properties.severity"), ("Urgency", "properties.urgency"),
-         ("Ends", "properties.ends")),
-        time="properties.sent", link="properties.@id", accept="application/geo+json",
-    ),
-    JsonFeed(
-        "emsc_quakes", "EMSC",
-        "https://www.seismicportal.eu/fdsnws/event/1/query?limit=50&format=json&minmag=4",
-        "features", ("id",), ("properties.flynn_region",),
-        (("Magnitude", "properties.mag"), ("Depth (km)", "properties.depth")),
-        time="properties.time", lonlat=("properties.lon", "properties.lat"),
-    ),
-    JsonFeed(
-        "launch_library", "The Space Devs Launch Library",
-        "https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=10&mode=list",
-        "results", ("id",), ("name",),
-        (("Status", "status.name"), ("NET", "net"), ("Provider", "lsp_name"), ("Pad", "pad"),
-         ("Location", "location")),
-        time="last_updated", link="url",
-    ),
-    JsonFeed(
-        "wikipedia_mostread", "Wikipedia",
-        _wiki_day("https://api.wikimedia.org/feed/v1/wikipedia/en/featured/{y}/{m}/{d}", days_back=0),
-        "mostread.articles", ("title",), ("titles.normalized",),
-        (("Views", "views"), ("Rank", "rank"), ("About", "description")),
-        link="content_urls.desktop.page", skip_id_prefixes=_WIKI_SKIP,
-    ),
-    JsonFeed(
-        "wikipedia_top_views", "Wikipedia",
-        _wiki_day("https://wikimedia.org/api/rest_v1/metrics/pageviews/top/en.wikipedia/all-access/{y}/{m}/{d}"),
-        "items.0.articles", ("article",), ("article",),
-        (("Views", "views"), ("Rank", "rank")),
-        link="article", link_template=_WIKI_LINK, underscore_titles=True, skip_id_prefixes=_WIKI_SKIP,
-    ),
-    JsonFeed(
-        "bmkg_quakes", "BMKG",
-        "https://data.bmkg.go.id/DataMKG/TEWS/gempaterkini.json",
-        "Infogempa.gempa", ("DateTime", "Coordinates"), ("Wilayah",),
-        (("Magnitude", "Magnitude"), ("Depth", "Kedalaman"), ("Coordinates", "Coordinates"),
-         ("Tsunami potential", "Potensi")),
-        time="DateTime",
-    ),
-    JsonFeed(
-        "satnogs_observations", "SatNOGS Network",
-        "https://network.satnogs.org/api/observations/?format=json&status=good",
-        "", ("id",), ("tle0", "station_name"),
-        (("Start", "start"), ("End", "end"), ("NORAD", "norad_cat_id"), ("Mode", "transmitter_mode"),
-         ("Max elevation", "max_altitude")),
-        time="start",
-    ),
-)}
+JSON_FEEDS: dict[str, JsonFeed] = {
+    f.provider: f
+    for f in (
+        JsonFeed(
+            "gdacs_events",
+            "GDACS",
+            "https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventlist=EQ;TC;FL;VO;WF;DR&alertlevel=Orange;Red",
+            "features",
+            ("properties.eventtype", "properties.eventid"),
+            ("properties.name",),
+            (
+                ("Alert", "properties.alertlevel"),
+                ("Countries", "properties.country"),
+                ("Severity", "properties.severitydata.severitytext"),
+                ("From", "properties.fromdate"),
+            ),
+            time="properties.datemodified",
+            link="properties.url.report",
+            naive_utc=True,
+            lonlat=("geometry.coordinates.0", "geometry.coordinates.1"),
+        ),
+        JsonFeed(
+            "nws_alerts",
+            "U.S. National Weather Service",
+            "https://api.weather.gov/alerts/active?status=actual&message_type=alert&severity=Extreme,Severe",
+            "features",
+            ("properties.id",),
+            ("properties.headline",),
+            (
+                ("Area", "properties.areaDesc"),
+                ("Severity", "properties.severity"),
+                ("Urgency", "properties.urgency"),
+                ("Ends", "properties.ends"),
+            ),
+            time="properties.sent",
+            link="properties.@id",
+            accept="application/geo+json",
+        ),
+        JsonFeed(
+            "emsc_quakes",
+            "EMSC",
+            "https://www.seismicportal.eu/fdsnws/event/1/query?limit=50&format=json&minmag=4",
+            "features",
+            ("id",),
+            ("properties.flynn_region",),
+            (("Magnitude", "properties.mag"), ("Depth (km)", "properties.depth")),
+            time="properties.time",
+            lonlat=("properties.lon", "properties.lat"),
+        ),
+        JsonFeed(
+            "launch_library",
+            "The Space Devs Launch Library",
+            "https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=10&mode=list",
+            "results",
+            ("id",),
+            ("name",),
+            (
+                ("Status", "status.name"),
+                ("NET", "net"),
+                ("Provider", "lsp_name"),
+                ("Pad", "pad"),
+                ("Location", "location"),
+            ),
+            time="last_updated",
+            link="url",
+        ),
+        JsonFeed(
+            "wikipedia_mostread",
+            "Wikipedia",
+            _wiki_day(
+                "https://api.wikimedia.org/feed/v1/wikipedia/en/featured/{y}/{m}/{d}", days_back=0
+            ),
+            "mostread.articles",
+            ("title",),
+            ("titles.normalized",),
+            (("Views", "views"), ("Rank", "rank"), ("About", "description")),
+            link="content_urls.desktop.page",
+            skip_id_prefixes=_WIKI_SKIP,
+        ),
+        JsonFeed(
+            "wikipedia_top_views",
+            "Wikipedia",
+            _wiki_day(
+                "https://wikimedia.org/api/rest_v1/metrics/pageviews/top/en.wikipedia/all-access/{y}/{m}/{d}"
+            ),
+            "items.0.articles",
+            ("article",),
+            ("article",),
+            (("Views", "views"), ("Rank", "rank")),
+            link="article",
+            link_template=_WIKI_LINK,
+            underscore_titles=True,
+            skip_id_prefixes=_WIKI_SKIP,
+        ),
+        JsonFeed(
+            "bmkg_quakes",
+            "BMKG",
+            "https://data.bmkg.go.id/DataMKG/TEWS/gempaterkini.json",
+            "Infogempa.gempa",
+            ("DateTime", "Coordinates"),
+            ("Wilayah",),
+            (
+                ("Magnitude", "Magnitude"),
+                ("Depth", "Kedalaman"),
+                ("Coordinates", "Coordinates"),
+                ("Tsunami potential", "Potensi"),
+            ),
+            time="DateTime",
+        ),
+        JsonFeed(
+            "satnogs_observations",
+            "SatNOGS Network",
+            "https://network.satnogs.org/api/observations/?format=json&status=good",
+            "",
+            ("id",),
+            ("tle0", "station_name"),
+            (
+                ("Start", "start"),
+                ("End", "end"),
+                ("NORAD", "norad_cat_id"),
+                ("Mode", "transmitter_mode"),
+                ("Max elevation", "max_altitude"),
+            ),
+            time="start",
+        ),
+    )
+}
 
 
 def json_feed_adapters() -> dict[str, PureAdapter]:
     """``PureAdapter`` per row so the shared ``_run_pure`` path (gate, quota, terms) collects them."""
+
     def adapter(feed: JsonFeed) -> PureAdapter:
         """Bind one row into a request builder and a bytes mapper (``wiki_language`` re-targets Wikipedia rows)."""
-        def mapper(body: bytes, at: datetime, wiki_language: str | None = None) -> list[IngestionRecord]:
+
+        def mapper(
+            body: bytes, at: datetime, wiki_language: str | None = None
+        ) -> list[IngestionRecord]:
             """Map ``body`` with the row, localized to ``wiki_language`` when one is given."""
-            return map_json_feed(localized_feed(feed, wiki_language) if wiki_language else feed, body, at)
+            return map_json_feed(
+                localized_feed(feed, wiki_language) if wiki_language else feed, body, at
+            )
 
         return PureAdapter(lambda: feed_request(feed), mapper, binary=True)
 
     return {provider: adapter(feed) for provider, feed in JSON_FEEDS.items()}
-

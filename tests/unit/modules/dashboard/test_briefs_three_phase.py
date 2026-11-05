@@ -20,15 +20,28 @@ from modules.dashboard.models import DailyBrief
 DAY = date(2026, 10, 7)
 TZ = "Asia/Ho_Chi_Minh"
 SOURCE = str(uuid4())
-SCOPE = SimpleNamespace(workspace_id=uuid4(), actor_user_id=1, user_id=1)  # duck-typed scope; both ids so the canonical actor_id works
+SCOPE = SimpleNamespace(
+    workspace_id=uuid4(), actor_user_id=1, user_id=1
+)  # duck-typed scope; both ids so the canonical actor_id works
 
 
 def _fact() -> dict[str, Any]:
     return {
-        "kind": "stories", "id": str(uuid4()), "title": "Story", "detail": "", "source_ids": [SOURCE],
-        "_lineage_status": "supported", "_fact_hash": "a" * 64,
-        "_supports": [{"document_id": str(uuid4()), "document_version_id": str(uuid4()),
-                       "chunk_id": str(uuid4()), "source_id": SOURCE}],
+        "kind": "stories",
+        "id": str(uuid4()),
+        "title": "Story",
+        "detail": "",
+        "source_ids": [SOURCE],
+        "_lineage_status": "supported",
+        "_fact_hash": "a" * 64,
+        "_supports": [
+            {
+                "document_id": str(uuid4()),
+                "document_version_id": str(uuid4()),
+                "chunk_id": str(uuid4()),
+                "source_id": SOURCE,
+            }
+        ],
     }
 
 
@@ -87,12 +100,23 @@ class _Env:
 
     def config(self) -> SimpleNamespace:
         return SimpleNamespace(
-            system_prompts={}, defaults=SimpleNamespace(resolve=lambda _role: "mapping"), endpoint_destination_id="dest",
+            system_prompts={},
+            defaults=SimpleNamespace(resolve=lambda _role: "mapping"),
+            endpoint_destination_id="dest",
             privacy=SimpleNamespace(allow_remote_reasoning=True, reasoning_destinations=["dest"]),
-            configuration_revision=self.revision, gateway_base_url="http://gw", gateway_api_key="k", gateway_kind="custom",
-            request_timeout_seconds=5, gateway_identity="a" * 64, model_identity="a" * 64, endpoint_allowed_cidrs=[],
-            workspace_id=SCOPE.workspace_id, actor_user_id=1, membership_revision=1,
-            providers={}, allow_public_providers=False,
+            configuration_revision=self.revision,
+            gateway_base_url="http://gw",
+            gateway_api_key="k",
+            gateway_kind="custom",
+            request_timeout_seconds=5,
+            gateway_identity="a" * 64,
+            model_identity="a" * 64,
+            endpoint_allowed_cidrs=[],
+            workspace_id=SCOPE.workspace_id,
+            actor_user_id=1,
+            membership_revision=1,
+            providers={},
+            allow_public_providers=False,
         )
 
 
@@ -105,12 +129,16 @@ def env(monkeypatch: pytest.MonkeyPatch) -> _Env:  # noqa: C901  # test harness
         world.log.append("widgets")
         return []
 
-    async def facts(session: _Session, _widgets: object, *, lock_events: bool = False, **_scope: object) -> list:
+    async def facts(
+        session: _Session, _widgets: object, *, lock_events: bool = False, **_scope: object
+    ) -> list:
         session.tx = True
         world.log.append("facts+events" if lock_events else "facts")
         return copy.deepcopy(world.facts)
 
-    async def lock(session: _Session, _facts: object, *, extra_brief_ids: object = (), **_scope: object) -> None:
+    async def lock(
+        session: _Session, _facts: object, *, extra_brief_ids: object = (), **_scope: object
+    ) -> None:
         session.tx = True
         world.log.append("lock")
         if world.purged:
@@ -161,6 +189,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> _Env:  # noqa: C901  # test harness
     monkeypatch.setattr(briefs.settings_public, "get_ai_execution_config", config)
     monkeypatch.setattr(briefs.notifications, "emit", emit)
     monkeypatch.setattr(briefs, "commit_with_replay", commit)
+
     async def admit(*_args: object, **_kwargs: object) -> str:
         if world.on_admit is not None:
             world.on_admit()
@@ -175,8 +204,15 @@ def env(monkeypatch: pytest.MonkeyPatch) -> _Env:  # noqa: C901  # test harness
 
 async def _generate(world: _Env, *, guard: Any = None, force: bool = False) -> Any:
     return await briefs.generate_brief(
-        world.session, DAY, TZ, scope=SCOPE, multi_workspace_enabled=False,
-        settings=SimpleNamespace(), redis=SimpleNamespace(), force=force, publish_guard=guard,
+        world.session,
+        DAY,
+        TZ,
+        scope=SCOPE,
+        multi_workspace_enabled=False,
+        settings=SimpleNamespace(),
+        redis=SimpleNamespace(),
+        force=force,
+        publish_guard=guard,
     )
 
 
@@ -190,23 +226,48 @@ def _guard(world: _Env, results: dict[str, bool] | None = None) -> Callable[[Any
     return guard
 
 
-async def test_phases_run_in_order_with_canonical_lock_order_and_no_lock_during_model_wait(env: _Env) -> None:
+async def test_phases_run_in_order_with_canonical_lock_order_and_no_lock_during_model_wait(
+    env: _Env,
+) -> None:
     brief = await _generate(env, guard=_guard(env))
 
     assert env.log == [
         # A: snapshot under the locks, then roll back
-        "widgets", "facts", "lock", "widgets", "facts+events", "advisory", "config", "rollback",
+        "widgets",
+        "facts",
+        "lock",
+        "widgets",
+        "facts+events",
+        "advisory",
+        "config",
+        "rollback",
         # B: guard -> sources/documents -> events, settings recheck, egress, release at body write
-        "guardB", "lock", "widgets", "facts+events", "config", "egress", "rollback", "wait",
+        "guardB",
+        "lock",
+        "widgets",
+        "facts+events",
+        "config",
+        "egress",
+        "rollback",
+        "wait",
         # C: guard -> sources/documents -> events -> day advisory, publish
-        "guardC", "lock", "widgets", "facts+events", "config", "advisory", "notify", "commit",
+        "guardC",
+        "lock",
+        "widgets",
+        "facts+events",
+        "config",
+        "advisory",
+        "notify",
+        "commit",
     ]
     assert env.tx_during_wait == [False]
     assert brief.revision == 1 and len(env.committed) == 1
 
 
 @pytest.mark.parametrize("change", ["purge", "local_only"])
-async def test_mid_call_purge_or_local_only_flip_discards_the_output(env: _Env, change: str) -> None:
+async def test_mid_call_purge_or_local_only_flip_discards_the_output(
+    env: _Env, change: str
+) -> None:
     def mutate(_attempt: int) -> None:
         if change == "purge":
             env.purged = True
@@ -221,9 +282,20 @@ async def test_mid_call_purge_or_local_only_flip_discards_the_output(env: _Env, 
 
 
 async def test_purge_of_uncited_sent_source_discards_the_output(env: _Env) -> None:
-    task = {"kind": "tasks", "id": str(uuid4()), "title": "Task", "detail": "", "source_ids": [],
-            "_lineage_status": "independent", "_fact_hash": "b" * 64, "_supports": []}
-    env.facts = [task, _fact()]  # the model cites only [1] (the task); the story's Source is still sent
+    task = {
+        "kind": "tasks",
+        "id": str(uuid4()),
+        "title": "Task",
+        "detail": "",
+        "source_ids": [],
+        "_lineage_status": "independent",
+        "_fact_hash": "b" * 64,
+        "_supports": [],
+    }
+    env.facts = [
+        task,
+        _fact(),
+    ]  # the model cites only [1] (the task); the story's Source is still sent
 
     def mutate(_attempt: int) -> None:
         env.purged = True
@@ -246,7 +318,9 @@ async def test_fingerprint_mismatch_at_before_send_aborts_without_egress(env: _E
     assert not env.session.in_transaction()
 
 
-async def test_retry_refences_and_a_fence_failure_on_attempt_two_releases_the_locks(env: _Env) -> None:
+async def test_retry_refences_and_a_fence_failure_on_attempt_two_releases_the_locks(
+    env: _Env,
+) -> None:
     env.attempts = 2
 
     def purge_after_first(attempt: int) -> None:
@@ -261,7 +335,9 @@ async def test_retry_refences_and_a_fence_failure_on_attempt_two_releases_the_lo
 
 
 @pytest.mark.parametrize("exc", [asyncio.CancelledError, KeyboardInterrupt])
-async def test_fence_rolls_back_on_base_exception_in_before_send(env: _Env, exc: type[BaseException]) -> None:
+async def test_fence_rolls_back_on_base_exception_in_before_send(
+    env: _Env, exc: type[BaseException]
+) -> None:
     async def guard(session: _Session) -> bool:
         if "rollback" in env.log:  # Phase B
             session.tx = True
@@ -273,7 +349,9 @@ async def test_fence_rolls_back_on_base_exception_in_before_send(env: _Env, exc:
     assert "egress" not in env.log and not env.session.in_transaction()
 
 
-async def test_fence_rolls_back_when_the_policy_check_raises(env: _Env, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fence_rolls_back_when_the_policy_check_raises(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def broken(*_args: object) -> bool:
         raise RuntimeError("policy evaluation failed")
 
@@ -332,7 +410,9 @@ async def test_remote_consent_withdrawn_before_egress_is_denied(env: _Env) -> No
 async def test_concurrent_revision_is_not_reused_and_ours_is_numbered_after_it(env: _Env) -> None:
     def concurrent_publish(_attempt: int) -> None:
         # Another generation committed revision 3 for the same fingerprint while we waited.
-        env.latest = SimpleNamespace(id=uuid4(), revision=3, input_fingerprint="same", status="current")
+        env.latest = SimpleNamespace(
+            id=uuid4(), revision=3, input_fingerprint="same", status="current"
+        )
 
     env.on_wait = concurrent_publish
     brief = await _generate(env)
@@ -340,8 +420,12 @@ async def test_concurrent_revision_is_not_reused_and_ours_is_numbered_after_it(e
 
 
 @pytest.mark.parametrize("phase", ["B", "C"])
-async def test_publish_guard_is_rechecked_before_egress_and_before_publish(env: _Env, phase: str) -> None:
-    with pytest.raises(briefs.BriefEvidenceRevoked, match="trigger evidence"):  # automation maps this to skipped
+async def test_publish_guard_is_rechecked_before_egress_and_before_publish(
+    env: _Env, phase: str
+) -> None:
+    with pytest.raises(
+        briefs.BriefEvidenceRevoked, match="trigger evidence"
+    ):  # automation maps this to skipped
         await _generate(env, guard=_guard(env, {phase: False}))
     assert ("egress" in env.log) is (phase == "C")
     assert env.committed == [] and not env.session.in_transaction()
@@ -351,6 +435,7 @@ async def test_publish_guard_is_rechecked_before_egress_and_before_publish(env: 
 
 async def test_access_fence_change_before_egress_is_denied(env: _Env) -> None:
     """W2 drift check kept: workspace access re-admitted per attempt and compared to the Phase A fence."""
+
     def drift() -> None:
         if "egress" not in env.log and "rollback" in env.log:  # first admit after Phase A
             env.fence = "fence-2"
@@ -361,10 +446,14 @@ async def test_access_fence_change_before_egress_is_denied(env: _Env) -> None:
     assert "egress" not in env.log and not env.session.in_transaction()
 
 
-async def test_gateway_identity_drift_before_egress_is_denied(env: _Env, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_gateway_identity_drift_before_egress_is_denied(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def drift(call: int) -> None:
         if call == 2:
-            env.config = lambda: SimpleNamespace(**{**vars(_Env.config(env)), "gateway_identity": "b" * 64})  # type: ignore[method-assign]
+            env.config = lambda: SimpleNamespace(
+                **{**vars(_Env.config(env)), "gateway_identity": "b" * 64}
+            )  # type: ignore[method-assign]
 
     env.on_config = drift
     with pytest.raises(briefs.BriefUnavailable, match="Gateway configuration changed"):

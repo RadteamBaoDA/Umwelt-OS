@@ -20,7 +20,9 @@ def _exported_names() -> set[str]:
     names: set[str] = set()
     for family in metrics.REGISTRY.collect():
         names.add(family.name)
-        names.update(family.name + suffix for suffix in _SUFFIXES)  # labelled families have no samples until used
+        names.update(
+            family.name + suffix for suffix in _SUFFIXES
+        )  # labelled families have no samples until used
         names.update(sample.name for sample in family.samples)
     return names
 
@@ -35,15 +37,26 @@ def test_alert_rules_parse_and_reference_exported_metrics() -> None:
     document = yaml.safe_load((MONITORING / "alerts.yml").read_text())
     rules = [rule for group in document["groups"] for rule in group["rules"]]
     assert {rule["alert"] for rule in rules} >= {
-        "UmweltApi5xxRateHigh", "UmweltApiLatencyP95High", "UmweltQueueDepthHigh", "UmweltQueueOldestJobTooOld",
-        "UmweltOutboxLagHigh", "UmweltCronJobFailing", "UmweltCronJobStale", "UmweltDbPoolSaturated",
-        "UmweltModelBreakerOpen", "UmweltEventLoopLagHigh",
+        "UmweltApi5xxRateHigh",
+        "UmweltApiLatencyP95High",
+        "UmweltQueueDepthHigh",
+        "UmweltQueueOldestJobTooOld",
+        "UmweltOutboxLagHigh",
+        "UmweltCronJobFailing",
+        "UmweltCronJobStale",
+        "UmweltDbPoolSaturated",
+        "UmweltModelBreakerOpen",
+        "UmweltEventLoopLagHigh",
     }
     exported = _exported_names()
     docs = (ROOT / "docs" / "observability.md").read_text().lower()
     for rule in rules:
-        assert rule["expr"].strip() and rule["annotations"]["runbook"].startswith("docs/observability.md#")
-        assert f"### {rule['alert'].lower()}" in docs, f"missing runbook heading for {rule['alert']}"
+        assert rule["expr"].strip() and rule["annotations"]["runbook"].startswith(
+            "docs/observability.md#"
+        )
+        assert f"### {rule['alert'].lower()}" in docs, (
+            f"missing runbook heading for {rule['alert']}"
+        )
         for name in _referenced_names(rule["expr"]):
             assert name in exported, f"{rule['alert']} references unknown metric {name}"
 

@@ -38,7 +38,9 @@ class MetricsRead(BaseModel):
     buckets_ms: list[int]
     counters: list[CounterRead]
     histograms: list[HistogramRead]
-    note: str = "Process-local, bounded, content-free. Token cost values are estimates only, never billing."
+    note: str = (
+        "Process-local, bounded, content-free. Token cost values are estimates only, never billing."
+    )
 
 
 class RunRead(BaseModel):

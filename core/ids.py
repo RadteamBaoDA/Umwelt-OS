@@ -30,7 +30,10 @@ def uuid7() -> uuid.UUID:
     with _lock:
         now_ms = time.time_ns() // 1_000_000
         if now_ms > _last_ms:
-            _last_ms, _counter = now_ms, int.from_bytes(os.urandom(2), "big") & 0x7FF  # headroom before overflow
+            _last_ms, _counter = (
+                now_ms,
+                int.from_bytes(os.urandom(2), "big") & 0x7FF,
+            )  # headroom before overflow
         else:
             # Same millisecond or a backwards clock: keep the clamped timestamp and bump the counter.
             _counter += 1

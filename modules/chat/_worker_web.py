@@ -65,7 +65,9 @@ class _WebSearchRun:
 
 
 def _web_search_run(
-    reason: str | None, results: list[web.WebSearchResult] | None = None, provider: str = "",
+    reason: str | None,
+    results: list[web.WebSearchResult] | None = None,
+    provider: str = "",
 ) -> _WebSearchRun:
     """Map a code to the persisted outcome: None -> used (no_results when empty), transport codes -> unavailable, else skipped."""
     found = tuple(results or ())
@@ -75,7 +77,9 @@ def _web_search_run(
         status = "unavailable" if reason in _WEB_UNAVAILABLE_CODES else "skipped"
     outcome = WebSearchOutcomeRead.model_validate(
         {"status": status, "reason": reason, "result_count": len(found)},
-    ).model_dump(exclude={"query"})  # ``query`` is added by _rewrite_and_search only when a search ran
+    ).model_dump(
+        exclude={"query"}
+    )  # ``query`` is added by _rewrite_and_search only when a search ran
     return _WebSearchRun(outcome, found, provider, datetime.now(UTC) if found else None)
 
 
@@ -126,7 +130,9 @@ class _SearchAttempt:
 
 
 async def _search_targets(
-    attempt: _SearchAttempt, args: _SearchArgs, progress: _SearchProgress,
+    attempt: _SearchAttempt,
+    args: _SearchArgs,
+    progress: _SearchProgress,
 ) -> list[WebSearchTarget] | _WebSearchRun:
     """Re-read ``ai_settings`` FOR SHARE and resolve the permitted search targets (inside the fence).
 
@@ -136,23 +142,33 @@ async def _search_targets(
     """
     if not await settings_public.lock_ai_settings_for_share(attempt.fence, scope=args.scope):
         return _web_search_run("not_configured")
-    config = await settings_public.get_ai_execution_config(attempt.fence, args.settings, args.redis, scope=args.scope)
+    config = await settings_public.get_ai_execution_config(
+        attempt.fence, args.settings, args.redis, scope=args.scope
+    )
     if progress.first_identity is None:
         progress.first_identity = config.gateway_identity
     elif progress.first_identity != config.gateway_identity:
         return _web_search_run("not_configured")
     primary = WebSearchTarget(
-        provider=config.web_search_provider, endpoint=config.web_search_endpoint,
-        api_key=config.web_search_api_key, credential_configured=config.web_search_credential_configured,
+        provider=config.web_search_provider,
+        endpoint=config.web_search_endpoint,
+        api_key=config.web_search_api_key,
+        credential_configured=config.web_search_credential_configured,
     )
-    targets = [target for target in (primary, *config.web_search_fallbacks)
-               if web.target_permitted(target, config.privacy)]
+    targets = [
+        target
+        for target in (primary, *config.web_search_fallbacks)
+        if web.target_permitted(target, config.privacy)
+    ]
     attempt.target_count = len(targets)
     return targets
 
 
 async def _gate_search_attempt(
-    attempt: _SearchAttempt, args: _SearchArgs, index: int, progress: _SearchProgress,
+    attempt: _SearchAttempt,
+    args: _SearchArgs,
+    index: int,
+    progress: _SearchProgress,
 ) -> WebSearchTarget | _WebSearchRun:
     """Decide inside the egress fence whether attempt ``index`` may send; returns its target or an early outcome.
 
@@ -162,8 +178,12 @@ async def _gate_search_attempt(
     """
     try:
         await _lock_live_response(
-            attempt.fence, args.response_id, args.conversation_id, args.expected_fence,
-            scope=args.scope, access_fence=args.access_fence,
+            attempt.fence,
+            args.response_id,
+            args.conversation_id,
+            args.expected_fence,
+            scope=args.scope,
+            access_fence=args.access_fence,
         )
     except (PrivacyFenceChanged, ResponseNoLongerActive):
         return _web_search_run("run_inactive")
@@ -173,16 +193,23 @@ async def _gate_search_attempt(
     if isinstance(targets, _WebSearchRun):
         return targets
     if index >= len(targets):
-        return _web_search_run(progress.last_error.code if progress.last_error else "not_configured")
+        return _web_search_run(
+            progress.last_error.code if progress.last_error else "not_configured"
+        )
     for source_id in args.scoped_source_ids:
         source = await sources_public.get_source_fence(
-            attempt.fence, source_id, scope=args.scope, multi_workspace_enabled=multi_workspace_enabled(),
+            attempt.fence,
+            source_id,
+            scope=args.scope,
+            multi_workspace_enabled=multi_workspace_enabled(),
         )
         if source is None or source.local_only:
             return _web_search_run("local_only_context")
     if not progress.quota_consumed:
         if not await web.consume_daily_quota(
-            args.redis, f"{args.scope.workspace_id}:{args.scope.actor_user_id}", args.settings.web_search_daily_limit,
+            args.redis,
+            f"{args.scope.workspace_id}:{args.scope.actor_user_id}",
+            args.settings.web_search_daily_limit,
         ):
             return _web_search_run("daily_limit")
         progress.quota_consumed = True
@@ -190,13 +217,17 @@ async def _gate_search_attempt(
 
 
 async def _send_search(
-    attempt: _SearchAttempt, args: _SearchArgs, deadline: asyncio.Timeout, target: WebSearchTarget,
+    attempt: _SearchAttempt,
+    args: _SearchArgs,
+    deadline: asyncio.Timeout,
+    target: WebSearchTarget,
 ) -> _WebSearchRun:
     """Send the search through one target; the fence is released as soon as the request body is written.
 
     ``body_sent`` fires when the body leaves the process: the egress deadline is lifted (a rollback after
     egress must not be cancelled) and the fence released, so provider response waits never hold the lock.
     """
+
     async def body_written() -> None:
         """Release the attempt's fence once the request body leaves the process."""
         deadline.reschedule(None)  # rollback after egress must not be cancelled
@@ -207,7 +238,9 @@ async def _send_search(
         if candidate.endpoint is None:
             raise RuntimeError("invariant violated: candidate.endpoint must not be None")
         return approved_web_search_transport(
-            candidate.endpoint, args.settings.ai_allowed_endpoint_hosts, args.settings.web_search_allowed_cidrs,
+            candidate.endpoint,
+            args.settings.ai_allowed_endpoint_hosts,
+            args.settings.web_search_allowed_cidrs,
             allow_http=candidate.provider == "searxng",
         )
 
@@ -247,8 +280,16 @@ async def _search_for_run(
     except web.WebSearchError as exc:
         return _web_search_run(exc.code)
     args = _SearchArgs(
-        message, scoped_source_ids, response_id, conversation_id, expected_fence, session_factory, settings,
-        redis, scope, access_fence,
+        message,
+        scoped_source_ids,
+        response_id,
+        conversation_id,
+        expected_fence,
+        session_factory,
+        settings,
+        redis,
+        scope,
+        access_fence,
     )
     progress = _SearchProgress()
     # Reacquire the fence for every attempt: a connect timeout can occur before any body is sent.
@@ -301,17 +342,27 @@ async def _publish_web_search(
     """Persist ``_web_search_outcome`` and publish the URL-free ``web_search`` event in one locked transaction."""
     async with session_factory() as session:
         _, live_run = await _lock_live_response(
-            session, response_id, conversation_id, expected_fence, scope=scope, access_fence=access_fence,
+            session,
+            response_id,
+            conversation_id,
+            expected_fence,
+            scope=scope,
+            access_fence=access_fence,
         )
-        live_run.retrieval_context = {**dict(live_run.retrieval_context or {}), WEB_SEARCH_OUTCOME_KEY: outcome}
+        live_run.retrieval_context = {
+            **dict(live_run.retrieval_context or {}),
+            WEB_SEARCH_OUTCOME_KEY: outcome,
+        }
         seq = await _next_event_seq(session, response_id, current_seq)
-        session.add(StreamEvent(
-            response_id=response_id,
-            seq=seq,
-            event_type="web_search",
-            event_id=make_event_id(response_id, seq),
-            data=dict(outcome),
-        ))
+        session.add(
+            StreamEvent(
+                response_id=response_id,
+                seq=seq,
+                event_type="web_search",
+                event_id=make_event_id(response_id, seq),
+                data=dict(outcome),
+            )
+        )
         await session.commit()
     return seq
 
@@ -339,13 +390,23 @@ async def _publish_tool_status(
     """
     async with session_factory() as session:
         await _lock_live_response(
-            session, response_id, conversation_id, expected_fence, scope=scope, access_fence=access_fence,
+            session,
+            response_id,
+            conversation_id,
+            expected_fence,
+            scope=scope,
+            access_fence=access_fence,
         )
         seq = await _next_event_seq(session, response_id, current_seq)
-        session.add(StreamEvent(
-            response_id=response_id, seq=seq, event_type="tool.status",
-            event_id=make_event_id(response_id, seq), data={"tool": tool, "state": state},
-        ))
+        session.add(
+            StreamEvent(
+                response_id=response_id,
+                seq=seq,
+                event_type="tool.status",
+                event_id=make_event_id(response_id, seq),
+                data={"tool": tool, "state": state},
+            )
+        )
         await session.commit()
     return seq
 
@@ -371,8 +432,12 @@ REWRITE_INSTRUCTIONS = (
 
 
 async def _rewrite_web_query(
-    session_factory: async_sessionmaker[AsyncSession], settings: Settings, redis: Redis, scope: InternalJobScope,
-    user_prompt: str, prior_messages: list[dict[str, str]],
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    redis: Redis,
+    scope: InternalJobScope,
+    user_prompt: str,
+    prior_messages: list[dict[str, str]],
 ) -> str:
     """Turn the user's prompt into one standalone web search query, or return the literal prompt.
 
@@ -389,15 +454,21 @@ async def _rewrite_web_query(
     # ponytail: single query only; upgrade path is several queries merged/deduped across providers.
     try:
         async with session_factory() as session:
-            base = await settings_public.get_ai_execution_config(session, settings, redis, scope=scope)
+            base = await settings_public.get_ai_execution_config(
+                session, settings, redis, scope=scope
+            )
             await session.rollback()  # release locks before egress
         config = settings_public.derive_for_role(base, "chat")
         mapping = base.defaults.resolve("chat")
         policy = RequestPolicy(
-            workspace_id=config.workspace_id, actor_user_id=config.actor_user_id,
-            membership_revision=config.membership_revision, gateway_identity=config.gateway_identity,
+            workspace_id=config.workspace_id,
+            actor_user_id=config.actor_user_id,
+            membership_revision=config.membership_revision,
+            gateway_identity=config.gateway_identity,
             reasoning_allowed=config.privacy.allow_remote_reasoning,
-            permitted_destinations=frozenset({config.endpoint_destination_id} if config.endpoint_destination_id else ()),
+            permitted_destinations=frozenset(
+                {config.endpoint_destination_id} if config.endpoint_destination_id else ()
+            ),
             reasoning_destinations=frozenset(config.privacy.reasoning_destinations),
             configuration_revision=config.configuration_revision,
         )
@@ -405,7 +476,9 @@ async def _rewrite_web_query(
         async def recheck_send() -> None:
             """Fail the attempt when settings or access drifted since the config was resolved."""
             async with session_factory() as check:
-                current = await settings_public.get_ai_execution_config(check, settings, redis, scope=scope)
+                current = await settings_public.get_ai_execution_config(
+                    check, settings, redis, scope=scope
+                )
             if (
                 current.configuration_revision != base.configuration_revision
                 or current.gateway_identity != base.gateway_identity
@@ -413,27 +486,45 @@ async def _rewrite_web_query(
                 raise PrivacyPolicyDenied("Configuration changed before web query rewrite")
 
         gateway = ModelGatewayFactory.for_settings(
-            session_factory, redis, scope, settings.ai_allowed_endpoint_cidrs,
-            evidence_provider=settings_public.capability_evidence, gateway_cls=ModelGateway,
+            session_factory,
+            redis,
+            scope,
+            settings.ai_allowed_endpoint_cidrs,
+            evidence_provider=settings_public.capability_evidence,
+            gateway_cls=ModelGateway,
         ).create(
-            config, timeout_seconds=REWRITE_TIMEOUT_SECONDS, before_send=recheck_send,
+            config,
+            timeout_seconds=REWRITE_TIMEOUT_SECONDS,
+            before_send=recheck_send,
             destination_id=config.endpoint_destination_id or "remote",
         )
         # User messages only: assistant output may carry private evidence that must not reach the search provider.
         window = [
             {"role": "user", "content": m["content"][:REWRITE_MESSAGE_CHARS]}
-            for m in prior_messages if m.get("role") == "user" and isinstance(m.get("content"), str)
+            for m in prior_messages
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
         ][-REWRITE_USER_MESSAGES:]
         window.append({"role": "user", "content": user_prompt[:REWRITE_MESSAGE_CHARS]})
         schema = {
-            "name": "web_search_query", "strict": True,
-            "schema": {"type": "object", "properties": {"query": {"type": "string"}},
-                       "required": ["query"], "additionalProperties": False},
+            "name": "web_search_query",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
         }
         async with asyncio.timeout(REWRITE_TIMEOUT_SECONDS):
             response = await gateway.structured(
-                "chat", mapping, policy, [{"role": "system", "content": REWRITE_INSTRUCTIONS}, *window], schema,
-                max_tokens=64, temperature=0, before_send=recheck_send,
+                "chat",
+                mapping,
+                policy,
+                [{"role": "system", "content": REWRITE_INSTRUCTIONS}, *window],
+                schema,
+                max_tokens=64,
+                temperature=0,
+                before_send=recheck_send,
             )
         raw = json.loads(response["choices"][0]["message"]["content"])["query"]
         query = web.normalize_query(raw)
@@ -446,19 +537,38 @@ async def _rewrite_web_query(
 
 
 async def _rewrite_and_search(
-    session_factory: async_sessionmaker[AsyncSession], settings: Settings, redis: Redis, user_prompt: str,
-    prior_messages: list[dict[str, str]], scoped_source_ids: list[UUID], response_id: UUID,
-    conversation_id: UUID, expected_fence: object, *, scope: InternalJobScope, access_fence: AccessFence,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    redis: Redis,
+    user_prompt: str,
+    prior_messages: list[dict[str, str]],
+    scoped_source_ids: list[UUID],
+    response_id: UUID,
+    conversation_id: UUID,
+    expected_fence: object,
+    *,
+    scope: InternalJobScope,
+    access_fence: AccessFence,
 ) -> _WebSearchRun:
     """Rewrite the prompt into a search query, run ``_search_for_run`` with it and record the query used.
 
     Runs as the concurrent search task, so the rewrite overlaps retrieval. The query is stored on the outcome
     only when a search actually ran (status ``used``); skipped/unavailable outcomes never sent anything.
     """
-    query = await _rewrite_web_query(session_factory, settings, redis, scope, user_prompt, prior_messages)
+    query = await _rewrite_web_query(
+        session_factory, settings, redis, scope, user_prompt, prior_messages
+    )
     run = await _search_for_run(
-        query, scoped_source_ids, response_id, conversation_id, expected_fence, session_factory, settings, redis,
-        scope=scope, access_fence=access_fence,
+        query,
+        scoped_source_ids,
+        response_id,
+        conversation_id,
+        expected_fence,
+        session_factory,
+        settings,
+        redis,
+        scope=scope,
+        access_fence=access_fence,
     )
     if run.outcome.get("status") == "used":
         run = replace(run, outcome={**run.outcome, "query": query})

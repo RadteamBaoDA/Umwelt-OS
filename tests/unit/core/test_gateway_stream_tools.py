@@ -19,8 +19,13 @@ WORKSPACE_ID = uuid4()
 IDENTITY = "a" * 64
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WORKSPACE_ID, role="owner", membership_revision=3)
 POLICY = RequestPolicy(
-    workspace_id=WORKSPACE_ID, actor_user_id=7, membership_revision=3, gateway_identity=IDENTITY,
-    configuration_revision=1, reasoning_allowed=True, permitted_destinations=frozenset({"d"}),
+    workspace_id=WORKSPACE_ID,
+    actor_user_id=7,
+    membership_revision=3,
+    gateway_identity=IDENTITY,
+    configuration_revision=1,
+    reasoning_allowed=True,
+    permitted_destinations=frozenset({"d"}),
 )
 MAPPING = ModelMapping(model="m", version="1", destination="remote")
 TOOLS = [{"type": "function", "function": {"name": "t", "parameters": {"type": "object"}}}]
@@ -50,12 +55,21 @@ def _gateway(evidence: _Evidence | None = None) -> ModelGateway:
     redis = MagicMock()
     redis.get = AsyncMock(return_value=None)
     return ModelGateway(
-        redis=redis, base_url="https://x/v1", api_key="k", destination_id="d", scope=SCOPE,
-        gateway_identity=IDENTITY, configuration_revision=1, before_send=AsyncMock(), evidence=evidence,
+        redis=redis,
+        base_url="https://x/v1",
+        api_key="k",
+        destination_id="d",
+        scope=SCOPE,
+        gateway_identity=IDENTITY,
+        configuration_revision=1,
+        before_send=AsyncMock(),
+        evidence=evidence,
     )
 
 
-async def _run(gw: ModelGateway, *, error: Exception | None = None, **kwargs: Any) -> dict[str, Any]:
+async def _run(
+    gw: ModelGateway, *, error: Exception | None = None, **kwargs: Any
+) -> dict[str, Any]:
     """Drain one stream against a fake OpenAI client and return the kwargs given to create()."""
     seen: dict[str, Any] = {}
 
@@ -65,7 +79,9 @@ async def _run(gw: ModelGateway, *, error: Exception | None = None, **kwargs: An
             raise error
 
         async def chunks() -> Any:
-            yield MagicMock(model_dump=lambda **_: {"choices": [{"index": 0, "delta": {"content": "hi"}}]})
+            yield MagicMock(
+                model_dump=lambda **_: {"choices": [{"index": 0, "delta": {"content": "hi"}}]}
+            )
 
         return chunks()
 
@@ -76,10 +92,13 @@ async def _run(gw: ModelGateway, *, error: Exception | None = None, **kwargs: An
     async def fake_openai(*_a: object, **_k: object) -> Any:
         yield client
 
-    with patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai), \
-         patch.object(ModelGateway, "_http_client", return_value=MagicMock()), \
-         patch.object(ModelGateway, "_breaker_check", AsyncMock()), patch.object(ModelGateway, "_breaker_ok", AsyncMock()), \
-         patch.object(ModelGateway, "_lease", side_effect=lambda *_: _null_ctx()):
+    with (
+        patch("core.model_gateway.client.AsyncOpenAI", side_effect=fake_openai),
+        patch.object(ModelGateway, "_http_client", return_value=MagicMock()),
+        patch.object(ModelGateway, "_breaker_check", AsyncMock()),
+        patch.object(ModelGateway, "_breaker_ok", AsyncMock()),
+        patch.object(ModelGateway, "_lease", side_effect=lambda *_: _null_ctx()),
+    ):
         _ = [x async for x in gw.stream("chat", MAPPING, POLICY, [], **kwargs)]
     return seen
 
@@ -92,7 +111,9 @@ async def _null_ctx() -> Any:
 
 def _status_error(status: int, message: str) -> APIStatusError:
     """Provider HTTP error as the OpenAI SDK raises it."""
-    response = httpx.Response(status, request=httpx.Request("POST", "https://x/v1/chat/completions"))
+    response = httpx.Response(
+        status, request=httpx.Request("POST", "https://x/v1/chat/completions")
+    )
     return APIStatusError(message, response=response, body=None)
 
 
@@ -116,7 +137,10 @@ async def test_missing_evidence_does_not_block_stream_and_records_supported() ->
     evidence = _Evidence()
     seen = await _run(_gateway(evidence), tools=TOOLS)
     assert seen["tools"] == TOOLS
-    assert ("streaming", "supported") in evidence.records and ("tools", "supported") in evidence.records
+    assert ("streaming", "supported") in evidence.records and (
+        "tools",
+        "supported",
+    ) in evidence.records
 
 
 @pytest.mark.asyncio
@@ -133,7 +157,11 @@ async def test_tools_rejection_is_recorded_unsupported() -> None:
     """A 400 naming tools is a clear capability rejection: raised for the caller's fallback and recorded."""
     evidence = _Evidence()
     with pytest.raises(CapabilityUnsupported):
-        await _run(_gateway(evidence), tools=TOOLS, error=_status_error(400, "tools are not supported by this model"))
+        await _run(
+            _gateway(evidence),
+            tools=TOOLS,
+            error=_status_error(400, "tools are not supported by this model"),
+        )
     assert ("tools", "unsupported") in evidence.records
 
 
@@ -141,7 +169,10 @@ async def test_tools_rejection_is_recorded_unsupported() -> None:
 async def test_transient_error_is_never_recorded_unsupported() -> None:
     """A 500 carries the real status in the error and records nothing (a blip must not overwrite ``supported``)."""
     evidence = _Evidence()
-    with patch.object(ModelGateway, "_on_retryable_status", AsyncMock(return_value=False)),          pytest.raises(ModelGatewayError, match="HTTP 500"):
+    with (
+        patch.object(ModelGateway, "_on_retryable_status", AsyncMock(return_value=False)),
+        pytest.raises(ModelGatewayError, match="HTTP 500"),
+    ):
         await _run(_gateway(evidence), tools=TOOLS, error=_status_error(500, "upstream exploded"))
     assert evidence.records == []
 
@@ -159,13 +190,28 @@ async def test_embed_cohere_uses_native_body_and_normalizes_reply() -> None:
     gw = _gateway()
     seen: dict[str, Any] = {}
 
-    async def fake_request(role: str, mapping: Any, policy: Any, capability: str, path: str, payload: dict[str, Any], *a: Any, **k: Any) -> Any:
+    async def fake_request(
+        role: str,
+        mapping: Any,
+        policy: Any,
+        capability: str,
+        path: str,
+        payload: dict[str, Any],
+        *a: Any,
+        **k: Any,
+    ) -> Any:
         seen.update(path=path, payload=payload)
         return {"embeddings": {"float": [[0.1, 0.2]]}}
 
-    cohere = ModelMapping(model="cohere/embed-multilingual-light-v3.0", version="1", destination="remote")
+    cohere = ModelMapping(
+        model="cohere/embed-multilingual-light-v3.0", version="1", destination="remote"
+    )
     with patch.object(ModelGateway, "_request", side_effect=fake_request):
         out = await gw.embed("embedding", cohere, POLICY, ["hi"], probe=True)
     assert seen["path"] == "embeddings-native"
-    assert seen["payload"] == {"texts": ["hi"], "input_type": "search_document", "embedding_types": ["float"]}
+    assert seen["payload"] == {
+        "texts": ["hi"],
+        "input_type": "search_document",
+        "embedding_types": ["float"],
+    }
     assert out["data"] == [{"index": 0, "embedding": [0.1, 0.2]}]

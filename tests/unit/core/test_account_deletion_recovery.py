@@ -13,16 +13,27 @@ from scripts import account_deletion
 
 
 def tombstone(**changes):
-    fields = {"id": 1, "account_state": "disabled", "password_hash": "", "email": None,
-              "default_workspace_id": None, "email_verified_at": None,
-              "email_verification_source": None, "created_at": datetime(1970, 1, 1, tzinfo=UTC)}
+    fields = {
+        "id": 1,
+        "account_state": "disabled",
+        "password_hash": "",
+        "email": None,
+        "default_workspace_id": None,
+        "email_verified_at": None,
+        "email_verification_source": None,
+        "created_at": datetime(1970, 1, 1, tzinfo=UTC),
+    }
     return SimpleNamespace(**(fields | changes))
 
 
 @pytest.fixture
 def recovery_context(monkeypatch):
-    session = MagicMock(get=AsyncMock(return_value=tombstone()), scalar=AsyncMock(return_value=False),
-                        flush=AsyncMock(), commit=AsyncMock())
+    session = MagicMock(
+        get=AsyncMock(return_value=tombstone()),
+        scalar=AsyncMock(return_value=False),
+        flush=AsyncMock(),
+        commit=AsyncMock(),
+    )
     lock = AsyncMock()
     provision = AsyncMock(return_value=uuid4())
     monkeypatch.setattr(recovery, "lock_account_lifecycle", lock)
@@ -47,11 +58,18 @@ async def test_recovery_creates_only_fresh_workspace_under_lifecycle_lock(recove
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("changes", [
-    {"account_state": "active"}, {"password_hash": "old-hash"}, {"email": "old@example.test"},
-    {"default_workspace_id": uuid4()}, {"email_verified_at": datetime.now(UTC)},
-    {"email_verification_source": "google_oidc"}, {"created_at": datetime.now(UTC)},
-])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"account_state": "active"},
+        {"password_hash": "old-hash"},
+        {"email": "old@example.test"},
+        {"default_workspace_id": uuid4()},
+        {"email_verified_at": datetime.now(UTC)},
+        {"email_verification_source": "google_oidc"},
+        {"created_at": datetime.now(UTC)},
+    ],
+)
 async def test_recovery_refuses_non_sanitized_or_active_account(recovery_context, changes):
     session, _lock, provision = recovery_context
     session.get.return_value = tombstone(**changes)
@@ -67,11 +85,19 @@ async def test_recovery_refuses_pending_operation_or_domain_residue(recovery_con
     session.scalar.return_value = True
     with pytest.raises(ValueError, match="incomplete"):
         await recovery.recover_bootstrap_account_in_uow(session, "new-private-password")
-    query = str(session.scalar.call_args.args[0].compile(dialect=postgresql.dialect(),
-                                                       compile_kwargs={"literal_binds": True}))
-    for required in ("account_deletion_operations.account_id = 1", "workspaces.owner_user_id = 1",
-                     "auth_session.owner_id = 1", "google_identity.owner_id = 1",
-                     "chat_todos.actor_user_id = 1", "workspace_shares.member_user_id = 1"):
+    query = str(
+        session.scalar.call_args.args[0].compile(
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    )
+    for required in (
+        "account_deletion_operations.account_id = 1",
+        "workspaces.owner_user_id = 1",
+        "auth_session.owner_id = 1",
+        "google_identity.owner_id = 1",
+        "chat_todos.actor_user_id = 1",
+        "workspace_shares.member_user_id = 1",
+    ):
         assert required in query
     assert "github_oauth_grants.github_user_id = 1" not in query
     provision.assert_not_awaited()
@@ -110,10 +136,17 @@ async def test_cli_recovery_failure_exits_session_without_commit(monkeypatch, ca
     context.__aexit__ = AsyncMock(return_value=False)
     factory = MagicMock(return_value=context)
     engine = MagicMock(dispose=AsyncMock())
-    monkeypatch.setattr(account_deletion, "Settings", lambda: SimpleNamespace(database_url="unused", admin_database_url="unused"))
+    monkeypatch.setattr(
+        account_deletion,
+        "Settings",
+        lambda: SimpleNamespace(database_url="unused", admin_database_url="unused"),
+    )
     monkeypatch.setattr(account_deletion, "make_session_factory", lambda _url: (engine, factory))
-    monkeypatch.setattr(account_deletion, "recover_bootstrap_account_in_uow",
-                        AsyncMock(side_effect=RuntimeError("provision failed")))
+    monkeypatch.setattr(
+        account_deletion,
+        "recover_bootstrap_account_in_uow",
+        AsyncMock(side_effect=RuntimeError("provision failed")),
+    )
     with pytest.raises(RuntimeError, match="provision failed"):
         await account_deletion.run("recover-bootstrap", None, password="secret-never-log")
     session.commit.assert_not_awaited()
@@ -129,7 +162,11 @@ async def test_cli_commits_recovery_once_without_printing_password(monkeypatch, 
     context.__aenter__ = AsyncMock(return_value=session)
     factory = MagicMock(return_value=context)
     engine = MagicMock(dispose=AsyncMock())
-    monkeypatch.setattr(account_deletion, "Settings", lambda: SimpleNamespace(database_url="unused", admin_database_url="unused"))
+    monkeypatch.setattr(
+        account_deletion,
+        "Settings",
+        lambda: SimpleNamespace(database_url="unused", admin_database_url="unused"),
+    )
     monkeypatch.setattr(account_deletion, "make_session_factory", lambda _url: (engine, factory))
     recover = AsyncMock()
     monkeypatch.setattr(account_deletion, "recover_bootstrap_account_in_uow", recover)
@@ -140,7 +177,11 @@ async def test_cli_commits_recovery_once_without_printing_password(monkeypatch, 
 
 
 def test_cli_refuses_piped_password_before_reading(monkeypatch):
-    monkeypatch.setattr(account_deletion.sys, "argv", ["account_deletion", "recover-bootstrap", "--confirm-new-workspace"])
+    monkeypatch.setattr(
+        account_deletion.sys,
+        "argv",
+        ["account_deletion", "recover-bootstrap", "--confirm-new-workspace"],
+    )
     monkeypatch.setattr(account_deletion.sys.stdin, "isatty", lambda: False)
     password_prompt = MagicMock()
     monkeypatch.setattr(account_deletion, "getpass", password_prompt)
@@ -151,7 +192,11 @@ def test_cli_refuses_piped_password_before_reading(monkeypatch):
 
 def test_cli_does_not_print_database_exception_parameters(monkeypatch, capsys):
     monkeypatch.setattr(account_deletion.sys, "argv", ["account_deletion", "status"])
-    monkeypatch.setattr(account_deletion, "run", AsyncMock(side_effect=RuntimeError("credential-hash SQL parameters")))
+    monkeypatch.setattr(
+        account_deletion,
+        "run",
+        AsyncMock(side_effect=RuntimeError("credential-hash SQL parameters")),
+    )
     with pytest.raises(SystemExit, match="1"):
         account_deletion.main()
     output = capsys.readouterr()

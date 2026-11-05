@@ -28,7 +28,10 @@ async def test_preflight_and_purge_reject_foreign_evidence_before_sql() -> None:
         assert caught.value.status_code == 409
         with admitted(), pytest.raises(DomainError):
             await agents.purge_document_copied_evidence_page(
-                session, bad, preflight=_preflight(), **CTX,  # type: ignore[arg-type]
+                session,
+                bad,
+                preflight=_preflight(),
+                **CTX,  # type: ignore[arg-type]
             )
     assert session.sql == []
 
@@ -47,6 +50,9 @@ async def test_purge_member_denied_before_sql() -> None:
     session = Recorder()
     with admitted(), pytest.raises(DomainError) as caught:
         await agents.purge_document_copied_evidence_page(
-            session, evidence(), preflight=_preflight(), **MEMBER_CTX,  # type: ignore[arg-type]
+            session,
+            evidence(),
+            preflight=_preflight(),
+            **MEMBER_CTX,  # type: ignore[arg-type]
         )
     assert caught.value.status_code == 403 and session.sql == []

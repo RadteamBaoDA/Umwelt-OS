@@ -31,7 +31,9 @@ SCRAM_ITERATIONS = 4096
 # SASLprep leaves unchanged. ``scripts/ensure_env.py`` generates URL-safe tokens that satisfy this.
 _ASCII_PRINTABLE = re.compile(r"[\x21-\x7e]+")
 # A SCRAM verifier only contains these characters, so it is safe inside a plain single-quoted literal.
-_VERIFIER_CHARSET = re.compile(r"SCRAM-SHA-256\$\d+:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+")
+_VERIFIER_CHARSET = re.compile(
+    r"SCRAM-SHA-256\$\d+:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+"
+)
 
 
 def _b64(raw: bytes) -> str:
@@ -39,7 +41,9 @@ def _b64(raw: bytes) -> str:
     return base64.b64encode(raw).decode("ascii")
 
 
-def scram_sha256_verifier(password: str, *, salt: bytes | None = None, iterations: int = SCRAM_ITERATIONS) -> str:
+def scram_sha256_verifier(
+    password: str, *, salt: bytes | None = None, iterations: int = SCRAM_ITERATIONS
+) -> str:
     """Return the PostgreSQL ``SCRAM-SHA-256$iter:salt$StoredKey:ServerKey`` verifier for ``password``.
 
     Args:
@@ -83,7 +87,10 @@ async def provision(settings: Settings) -> int:
         return 0
     reader = make_url(settings.chat_sql_reader_database_url)
     if reader.username != LOGIN_ROLE or not reader.password:
-        print(f"CHAT_SQL_READER_DATABASE_URL must log in as {LOGIN_ROLE} with a password.", file=sys.stderr)
+        print(
+            f"CHAT_SQL_READER_DATABASE_URL must log in as {LOGIN_ROLE} with a password.",
+            file=sys.stderr,
+        )
         return 1
     try:
         verifier = scram_sha256_verifier(reader.password)
@@ -93,7 +100,9 @@ async def provision(settings: Settings) -> int:
     if not _VERIFIER_CHARSET.fullmatch(verifier):  # guards the literal interpolation below
         raise RuntimeError("unexpected SCRAM verifier format")
     # hide_parameters keeps bind values out of SQLAlchemy exception text and echo logs.
-    engine = create_async_engine(settings.admin_database_url, isolation_level="AUTOCOMMIT", hide_parameters=True)
+    engine = create_async_engine(
+        settings.admin_database_url, isolation_level="AUTOCOMMIT", hide_parameters=True
+    )
     try:
         async with engine.connect() as conn:
             # Only the salted SCRAM verifier crosses the wire, so the statement is safe to appear in server logs;
@@ -102,7 +111,10 @@ async def provision(settings: Settings) -> int:
     except Exception as exc:  # noqa: BLE001 - deliberately generic; str(exc) would carry statement text
         orig = getattr(exc, "orig", None)
         sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None) or "unknown"
-        print(f"Applying the {LOGIN_ROLE} password failed: {type(exc).__name__} (SQLSTATE {sqlstate}).", file=sys.stderr)
+        print(
+            f"Applying the {LOGIN_ROLE} password failed: {type(exc).__name__} (SQLSTATE {sqlstate}).",
+            file=sys.stderr,
+        )
         return 1
     finally:
         await engine.dispose()
@@ -126,7 +138,9 @@ async def grant_runtime_role(settings: Settings) -> int:
         print(f"The runtime user must not be {LOGIN_ROLE}.", file=sys.stderr)
         return 1
     quoted = '"' + runtime.replace('"', '""') + '"'
-    engine = create_async_engine(settings.admin_database_url, isolation_level="AUTOCOMMIT", hide_parameters=True)
+    engine = create_async_engine(
+        settings.admin_database_url, isolation_level="AUTOCOMMIT", hide_parameters=True
+    )
     try:
         async with engine.connect() as conn:
             # Refuse to widen a group role that someone made loginable or superuser (migration 0020 resets it).
@@ -136,7 +150,10 @@ async def grant_runtime_role(settings: Settings) -> int:
                 )
             ).first()
             if unsafe:
-                print(f"{APP_GROUP_ROLE} has unsafe attributes; refusing to grant it.", file=sys.stderr)
+                print(
+                    f"{APP_GROUP_ROLE} has unsafe attributes; refusing to grant it.",
+                    file=sys.stderr,
+                )
                 return 1
             await conn.exec_driver_sql(f"GRANT {APP_GROUP_ROLE} TO {quoted}")
             # The reader could inherit the group through the runtime role; pg_roles guard = no reader, no check.
@@ -147,12 +164,18 @@ async def grant_runtime_role(settings: Settings) -> int:
             ).first()
             if reaches and reaches[0]:
                 await conn.exec_driver_sql(f"REVOKE {APP_GROUP_ROLE} FROM {quoted}")
-                print(f"{LOGIN_ROLE} would reach {APP_GROUP_ROLE}; the grant was reverted.", file=sys.stderr)
+                print(
+                    f"{LOGIN_ROLE} would reach {APP_GROUP_ROLE}; the grant was reverted.",
+                    file=sys.stderr,
+                )
                 return 1
     except Exception as exc:  # noqa: BLE001 - deliberately generic; str(exc) would carry statement text
         orig = getattr(exc, "orig", None)
         sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None) or "unknown"
-        print(f"Granting {APP_GROUP_ROLE} to the runtime user failed: {type(exc).__name__} (SQLSTATE {sqlstate}).", file=sys.stderr)
+        print(
+            f"Granting {APP_GROUP_ROLE} to the runtime user failed: {type(exc).__name__} (SQLSTATE {sqlstate}).",
+            file=sys.stderr,
+        )
         return 1
     finally:
         await engine.dispose()

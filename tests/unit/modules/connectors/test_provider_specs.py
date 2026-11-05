@@ -18,19 +18,53 @@ from modules.knowledge.documents.schemas import (
     WorldDataMeasurement,
 )
 
-MEASUREMENT_IDS = {"world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "coingecko"}
-NEWS_IDS = {"bbc_world", "vnexpress_business", "tuoitre_news", "thanhnien_news", "dantri_news", "hn_top", "gdelt_economy", "google_news"}
+MEASUREMENT_IDS = {
+    "world_bank",
+    "frankfurter",
+    "ecb",
+    "binance",
+    "alternative_me",
+    "usgs",
+    "coinpaprika",
+    "coingecko",
+}
+NEWS_IDS = {
+    "bbc_world",
+    "vnexpress_business",
+    "tuoitre_news",
+    "thanhnien_news",
+    "dantri_news",
+    "hn_top",
+    "gdelt_economy",
+    "google_news",
+}
 
 
 def test_frozen_ids_with_expected_eligibility() -> None:
     eligibility = {spec.id: spec.eligibility for spec in FREE_PROVIDER_SPECS}
     assert len(eligibility) >= 21
-    for open_id in ("world_bank", "frankfurter", "ecb", "usgs", "alternative_me", "cisa_kev", "sec_edgar", "openalex"):
+    for open_id in (
+        "world_bank",
+        "frankfurter",
+        "ecb",
+        "usgs",
+        "alternative_me",
+        "cisa_kev",
+        "sec_edgar",
+        "openalex",
+    ):
         assert eligibility[open_id] == "open"
     assert eligibility["vnexpress_business"] == eligibility["tuoitre_news"] == "noncommercial"
     assert eligibility["thanhnien_news"] == eligibility["dantri_news"] == "noncommercial"
     assert eligibility["alpha_vantage"] == eligibility["coinpaprika"] == "personal"
-    for review_id in ("bbc_world", "binance", "coingecko", "hn_top", "gdelt_economy", "google_news"):
+    for review_id in (
+        "bbc_world",
+        "binance",
+        "coingecko",
+        "hn_top",
+        "gdelt_economy",
+        "google_news",
+    ):
         assert eligibility[review_id] == "review"
 
 
@@ -39,13 +73,22 @@ def test_personal_provider_cannot_activate_for_incompatible_use(deployment_use: 
     assert not deployment_use_matches("personal", deployment_use)
 
 
-@pytest.mark.parametrize(("eligibility", "use", "expected"), [
-    ("open", "unknown", True), ("open", "commercial", True),
-    ("personal", "personal", True), ("personal", "noncommercial", False),
-    ("noncommercial", "personal", True), ("noncommercial", "noncommercial", True),
-    ("noncommercial", "commercial", False), ("noncommercial", "unknown", False),
-    ("review", "personal", False), ("review", "commercial", False), ("surprise", "personal", False),
-])
+@pytest.mark.parametrize(
+    ("eligibility", "use", "expected"),
+    [
+        ("open", "unknown", True),
+        ("open", "commercial", True),
+        ("personal", "personal", True),
+        ("personal", "noncommercial", False),
+        ("noncommercial", "personal", True),
+        ("noncommercial", "noncommercial", True),
+        ("noncommercial", "commercial", False),
+        ("noncommercial", "unknown", False),
+        ("review", "personal", False),
+        ("review", "commercial", False),
+        ("surprise", "personal", False),
+    ],
+)
 def test_deployment_use_matrix(eligibility: str, use: str, expected: bool) -> None:
     assert deployment_use_matches(eligibility, use) is expected
 
@@ -54,7 +97,9 @@ def test_terms_require_acknowledgement_for_every_provider() -> None:
     spec = get_provider_spec("world_bank")
     assert spec is not None
     assert not evaluate_terms(spec, declared_use="unknown", acknowledged_terms_version=None).allowed
-    assert evaluate_terms(spec, declared_use="unknown", acknowledged_terms_version="2026-10").allowed
+    assert evaluate_terms(
+        spec, declared_use="unknown", acknowledged_terms_version="2026-10"
+    ).allowed
 
 
 def test_review_provider_needs_matching_operator_approval() -> None:
@@ -67,12 +112,18 @@ def test_review_provider_needs_matching_operator_approval() -> None:
     approved = OperatorReview("approved", "noncommercial", "ticket-1", "v1")
     assert evaluate_terms(spec, **base, review=approved).allowed
     # Terms corrected by the owner after review: the review no longer applies.
-    assert not evaluate_terms(spec, declared_use="noncommercial", acknowledged_terms_version="v2", review=approved).allowed
+    assert not evaluate_terms(
+        spec, declared_use="noncommercial", acknowledged_terms_version="v2", review=approved
+    ).allowed
     # Review limited to personal use does not cover a noncommercial declaration.
     narrow = OperatorReview("approved", "personal", "ticket-1", "v1")
     assert evaluate_terms(spec, **base, review=narrow).code == "use_incompatible"
-    assert not evaluate_terms(spec, **base, review=OperatorReview("approved", "commercial", None, "v1")).allowed
-    assert not evaluate_terms(spec, declared_use="unknown", acknowledged_terms_version="v1", review=approved).allowed
+    assert not evaluate_terms(
+        spec, **base, review=OperatorReview("approved", "commercial", None, "v1")
+    ).allowed
+    assert not evaluate_terms(
+        spec, declared_use="unknown", acknowledged_terms_version="v1", review=approved
+    ).allowed
 
 
 def test_specs_never_claim_runtime_acceptance_or_unproven_code() -> None:
@@ -83,9 +134,20 @@ def test_specs_never_claim_runtime_acceptance_or_unproven_code() -> None:
 
     implemented = {spec.id for spec in FREE_PROVIDER_SPECS if spec.code_implemented}
     assert implemented == {"alpha_vantage"} | set(DISPATCHABLE)
-    assert all(_adapter_for(type("SourceRef", (), {
-        "provider": provider, "type": PROVIDER_SOURCE_TYPES[provider],
-    })()) is not None for provider in DISPATCHABLE)
+    assert all(
+        _adapter_for(
+            type(
+                "SourceRef",
+                (),
+                {
+                    "provider": provider,
+                    "type": PROVIDER_SOURCE_TYPES[provider],
+                },
+            )()
+        )
+        is not None
+        for provider in DISPATCHABLE
+    )
     assert "coingecko" in implemented
 
 
@@ -120,21 +182,34 @@ def test_registry_and_typed_schema_ids_are_equal_for_supported_providers() -> No
     assert supported <= set(PROVIDER_IDS)
     assert {spec.id for spec in FREE_PROVIDER_SPECS} <= set(PROVIDER_IDS)
     for provider in MEASUREMENT_IDS:
-        WorldDataMeasurement(provider=provider, metric="m", value=1.0, unit="u", quality="provider_reported")  # type: ignore[arg-type]
+        WorldDataMeasurement(
+            provider=provider, metric="m", value=1.0, unit="u", quality="provider_reported"
+        )  # type: ignore[arg-type]
     for provider in NEWS_IDS:
         ProviderRecordMetadata(
-            provider=provider, identity="x", timestamp_basis="collection",  # type: ignore[arg-type]
-            coverage="returned_snapshot", content_truncated=False)
+            provider=provider,
+            identity="x",
+            timestamp_basis="collection",  # type: ignore[arg-type]
+            coverage="returned_snapshot",
+            content_truncated=False,
+        )
 
 
 def _measurement(provider: str, **fields: object) -> WorldDataMeasurement:
     return WorldDataMeasurement(
-        provider=provider, metric="gdp", value=1.5, unit="USD", quality="provider_reported",  # type: ignore[arg-type]
-        provider_fields=fields)  # type: ignore[arg-type]
+        provider=provider,
+        metric="gdp",
+        value=1.5,
+        unit="USD",
+        quality="provider_reported",  # type: ignore[arg-type]
+        provider_fields=fields,
+    )  # type: ignore[arg-type]
 
 
 def test_measurement_provider_fields_follow_per_provider_allowlist() -> None:
-    _measurement("world_bank", country="VN", indicator="NY.GDP.MKTP.CD", period="2025", decimal_value="1.5")
+    _measurement(
+        "world_bank", country="VN", indicator="NY.GDP.MKTP.CD", period="2025", decimal_value="1.5"
+    )
     _measurement("ecb", date="2026-10-07", base="EUR", quote="USD", decimal_value="1.1")
     with pytest.raises(ValidationError):
         _measurement("world_bank", symbol="IBM")
@@ -144,45 +219,118 @@ def test_measurement_provider_fields_follow_per_provider_allowlist() -> None:
 
 def test_missing_value_still_requires_reason() -> None:
     with pytest.raises(ValidationError):
-        WorldDataMeasurement(provider="world_bank", metric="gdp", value=None, unit="USD", quality="missing")
-    WorldDataMeasurement(provider="world_bank", metric="gdp", value=None, unit="USD", quality="missing",
-                         missing_reason="provider_null")
+        WorldDataMeasurement(
+            provider="world_bank", metric="gdp", value=None, unit="USD", quality="missing"
+        )
+    WorldDataMeasurement(
+        provider="world_bank",
+        metric="gdp",
+        value=None,
+        unit="USD",
+        quality="missing",
+        missing_reason="provider_null",
+    )
 
 
 def test_structured_provider_requires_matching_world_data_and_news_forbids_it() -> None:
     with pytest.raises(ValidationError):
-        ProviderRecordMetadata(provider="usgs", identity="us1", timestamp_basis="provider_modified",
-                               coverage="returned_snapshot", content_truncated=False)
+        ProviderRecordMetadata(
+            provider="usgs",
+            identity="us1",
+            timestamp_basis="provider_modified",
+            coverage="returned_snapshot",
+            content_truncated=False,
+        )
     measurement = _measurement("usgs", place="X")
-    ok = ProviderRecordMetadata(provider="usgs", identity="us1", timestamp_basis="provider_modified",
-                                coverage="returned_snapshot", content_truncated=False, world_data=measurement)
+    ok = ProviderRecordMetadata(
+        provider="usgs",
+        identity="us1",
+        timestamp_basis="provider_modified",
+        coverage="returned_snapshot",
+        content_truncated=False,
+        world_data=measurement,
+    )
     assert ok.world_data == measurement
     with pytest.raises(ValidationError):
-        ProviderRecordMetadata(provider="ecb", identity="e", timestamp_basis="collection",
-                               coverage="returned_snapshot", content_truncated=False, world_data=measurement)
+        ProviderRecordMetadata(
+            provider="ecb",
+            identity="e",
+            timestamp_basis="collection",
+            coverage="returned_snapshot",
+            content_truncated=False,
+            world_data=measurement,
+        )
     with pytest.raises(ValidationError):
-        ProviderRecordMetadata(provider="bbc_world", identity="b", timestamp_basis="collection",
-                               coverage="returned_snapshot", content_truncated=False, world_data=measurement)
+        ProviderRecordMetadata(
+            provider="bbc_world",
+            identity="b",
+            timestamp_basis="collection",
+            coverage="returned_snapshot",
+            content_truncated=False,
+            world_data=measurement,
+        )
 
 
-@pytest.mark.parametrize(("provider", "fields", "valid"), [
-    ("bbc_world", {"title": "t", "summary": "s", "canonical_url": "https://www.bbc.co.uk/a", "guid": "g",
-                   "published_at": "2026-10-07T10:00:00Z", "publisher": "BBC"}, True),
-    ("bbc_world", {"canonical_url": "http://insecure.example/a"}, False),
-    ("bbc_world", {"by": "someone"}, False),
-    ("hn_top", {"title": "t", "url": "https://example.com/a", "by": "u", "time": 1_700_000_000, "id": 1,
-                "type": "story", "deleted": False, "dead": False}, True),
-    ("hn_top", {"time": "yesterday"}, False),
-    ("hn_top", {"id": True}, False),
-    ("gdelt_economy", {"title": "t", "url": "https://example.com/a", "seendate": "20261007T100000Z",
-                       "domain": "example.com", "language": "English", "sourcecountry": "US"}, True),
-    ("gdelt_economy", {"published_at": "2026-10-07T10:00:00Z"}, False),
-])
-def test_news_source_field_allowlists(provider: str, fields: dict[str, object], valid: bool) -> None:
+@pytest.mark.parametrize(
+    ("provider", "fields", "valid"),
+    [
+        (
+            "bbc_world",
+            {
+                "title": "t",
+                "summary": "s",
+                "canonical_url": "https://www.bbc.co.uk/a",
+                "guid": "g",
+                "published_at": "2026-10-07T10:00:00Z",
+                "publisher": "BBC",
+            },
+            True,
+        ),
+        ("bbc_world", {"canonical_url": "http://insecure.example/a"}, False),
+        ("bbc_world", {"by": "someone"}, False),
+        (
+            "hn_top",
+            {
+                "title": "t",
+                "url": "https://example.com/a",
+                "by": "u",
+                "time": 1_700_000_000,
+                "id": 1,
+                "type": "story",
+                "deleted": False,
+                "dead": False,
+            },
+            True,
+        ),
+        ("hn_top", {"time": "yesterday"}, False),
+        ("hn_top", {"id": True}, False),
+        (
+            "gdelt_economy",
+            {
+                "title": "t",
+                "url": "https://example.com/a",
+                "seendate": "20261007T100000Z",
+                "domain": "example.com",
+                "language": "English",
+                "sourcecountry": "US",
+            },
+            True,
+        ),
+        ("gdelt_economy", {"published_at": "2026-10-07T10:00:00Z"}, False),
+    ],
+)
+def test_news_source_field_allowlists(
+    provider: str, fields: dict[str, object], valid: bool
+) -> None:
     def build() -> ProviderRecordMetadata:
         return ProviderRecordMetadata(
-            provider=provider, identity="i", timestamp_basis="collection",  # type: ignore[arg-type]
-            coverage="returned_snapshot", content_truncated=False, source_fields=fields)
+            provider=provider,
+            identity="i",
+            timestamp_basis="collection",  # type: ignore[arg-type]
+            coverage="returned_snapshot",
+            content_truncated=False,
+            source_fields=fields,
+        )
 
     if valid:
         build()
@@ -194,10 +342,14 @@ def test_news_source_field_allowlists(provider: str, fields: dict[str, object], 
 def test_fixed_providers_have_static_example_config_and_sample():
     from modules.connectors.catalog import list_catalog
     from modules.connectors.provider_specs import DISPATCHABLE
+
     entries = {e.provider_id: e for e in list_catalog()}
     for pid in DISPATCHABLE:
         e = entries[pid]
         if not e.scope_fields:
-            assert e.example_config is not None and e.example_config["schedule_interval_minutes"] == e.default_interval_minutes
+            assert (
+                e.example_config is not None
+                and e.example_config["schedule_interval_minutes"] == e.default_interval_minutes
+            )
             assert e.sample_output
     assert entries["youtube"].example_config is None

@@ -20,8 +20,12 @@ from modules.knowledge.entities.models import (
 
 
 async def _admit(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
-    lock: bool = False, expected: AccessFence | None = None,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    lock: bool = False,
+    expected: AccessFence | None = None,
 ) -> AccessFence:
     """Require owner scope and capture or lock authorization before entity locks.
 
@@ -30,27 +34,54 @@ async def _admit(
     (with ``expected``) or read access fence. No commit.
     """
     return await admit_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
-        allowed_scopes=ALL_SCOPE_TYPES, scope_label="entity workspace", admin_read_only_on_lock=True,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=lock,
+        expected=expected,
+        allowed_scopes=ALL_SCOPE_TYPES,
+        scope_label="entity workspace",
+        admin_read_only_on_lock=True,
     )
 
 
 async def _schedule_entity_change(
-    session: AsyncSession, entity: Entity, fields: list[str], origin: str, *,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    entity: Entity,
+    fields: list[str],
+    origin: str,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Flush workspace-local support and revision scheduling without committing."""
     from modules.knowledge.temporal import public as temporal
-    rows = list((await session.execute(select(
-        EntityEvidenceMembership.document_version_id, EntityEvidenceMembership.chunk_id,
-    ).where(
-        EntityEvidenceMembership.workspace_id == scope.workspace_id,
-        EntityEvidenceMembership.entity_id == entity.id,
-    ).limit(10_001))).all())
+
+    rows = list(
+        (
+            await session.execute(
+                select(
+                    EntityEvidenceMembership.document_version_id,
+                    EntityEvidenceMembership.chunk_id,
+                )
+                .where(
+                    EntityEvidenceMembership.workspace_id == scope.workspace_id,
+                    EntityEvidenceMembership.entity_id == entity.id,
+                )
+                .limit(10_001)
+            )
+        ).all()
+    )
     if len(rows) > 10_000:
         raise ValueError("Entity change exceeds complete support bound")
     await temporal.schedule_canonical_change(
-        session, kind="entity", canonical_id=entity.id, revision=entity.revision,
-        fields=fields, support=[(version, chunk) for version, chunk in rows], origin=origin,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        kind="entity",
+        canonical_id=entity.id,
+        revision=entity.revision,
+        fields=fields,
+        support=[(version, chunk) for version, chunk in rows],
+        origin=origin,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )

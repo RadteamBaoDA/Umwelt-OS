@@ -35,15 +35,22 @@ async def test_inspect_reports_exact_ids_and_fingerprints(monkeypatch: pytest.Mo
     result = await scenario.adapter.inspect_write_receipt(receipt, scenario.context())
     graph = scenario.graph
     assert result.episode_present
-    assert result.episode_state_fingerprint == _episode_state_fingerprint(graph.episodes[scenario.episode_id])
+    assert result.episode_state_fingerprint == _episode_state_fingerprint(
+        graph.episodes[scenario.episode_id]
+    )
     assert result.entity_ids_present == (scenario.entity_id,)
     assert result.current_entity_state_fingerprints == (
-        (scenario.entity_id, _entity_state_fingerprint(graph.entities[scenario.entity_id], DIMS)),)
+        (scenario.entity_id, _entity_state_fingerprint(graph.entities[scenario.entity_id], DIMS)),
+    )
     assert result.mention_ids_present == (scenario.mention_id,)
     assert result.current_mention_links[0].relationship_type == "MENTIONS"
     assert set(result.fact_ids_present) == {scenario.fact_shared, scenario.fact_solo}
-    assert result.current_fact_states == tuple(sorted(
-        (_fact_state(graph.edges[f], DIMS) for f in result.fact_ids_present), key=lambda s: s.fact_id))
+    assert result.current_fact_states == tuple(
+        sorted(
+            (_fact_state(graph.edges[f], DIMS) for f in result.fact_ids_present),
+            key=lambda s: s.fact_id,
+        )
+    )
     assert result.incident_links == ()
     assert graph.events[0] == ("fence_enter",) and graph.events[-1] == ("fence_exit",)
 
@@ -53,13 +60,21 @@ async def test_inspect_reports_incident_links(monkeypatch: pytest.MonkeyPatch) -
     """Live incident links of journaled nodes are returned in inventory form."""
     scenario = _scenario(monkeypatch)
     edge_id = str(uuid4())
-    scenario.graph.node_links[scenario.entity_id] = [{
-        "edge_id": edge_id, "relationship_type": "REL", "source_node_id": scenario.source_node,
-        "target_node_id": scenario.entity_id, "episode_ids": [scenario.other_episode],
-    }]
-    result = await scenario.adapter.inspect_write_receipt(scenario.receipts()[1], scenario.context())
-    assert [(item.edge_id, item.relationship_type, item.episode_ids) for item in result.incident_links] == [
-        (edge_id, "REL", (scenario.other_episode,))]
+    scenario.graph.node_links[scenario.entity_id] = [
+        {
+            "edge_id": edge_id,
+            "relationship_type": "REL",
+            "source_node_id": scenario.source_node,
+            "target_node_id": scenario.entity_id,
+            "episode_ids": [scenario.other_episode],
+        }
+    ]
+    result = await scenario.adapter.inspect_write_receipt(
+        scenario.receipts()[1], scenario.context()
+    )
+    assert [
+        (item.edge_id, item.relationship_type, item.episode_ids) for item in result.incident_links
+    ] == [(edge_id, "REL", (scenario.other_episode,))]
 
 
 @pytest.mark.asyncio
@@ -120,7 +135,10 @@ async def test_inspect_maps_unexpected_errors(monkeypatch: pytest.MonkeyPatch) -
 def _request(scenario: Scenario) -> Any:
     """Build the minimal episode request for bulk-intent journaling."""
     return SimpleNamespace(
-        episode_id=UUID(scenario.episode_id), group_id=GROUP, mapping_revision=0, canonical_bindings=(),
+        episode_id=UUID(scenario.episode_id),
+        group_id=GROUP,
+        mapping_revision=0,
+        canonical_bindings=(),
     )
 
 
@@ -145,18 +163,26 @@ async def test_bulk_intent_ids_phase_then_hydrated_phase(monkeypatch: pytest.Mon
     latest: list[Any] = [shell]
     context = scenario.context()
     driver = FakeDriver(scenario.graph)
-    await scenario.adapter._record_bulk_write_intent(request, context, shell, latest, **inputs, driver=driver)
+    await scenario.adapter._record_bulk_write_intent(
+        request, context, shell, latest, **inputs, driver=driver
+    )
     assert latest[0].phase == "bulk_ids_intent" and scenario.journal[-1] is latest[0]
     assert latest[0].entity_ids == (scenario.entity_id,)
     assert latest[0].prior_entity_state_fingerprints[0][1] is True
     assert scenario.validate_partition.await_count == 1
     entity = scenario.graph.entities[scenario.entity_id]
     payload = {
-        "uuid": scenario.entity_id, "group_id": GROUP, "name": entity.name, "summary": entity.summary,
-        "created_at": entity.created_at, "labels": ["Entity"], "name_embedding": list(entity.name_embedding),
+        "uuid": scenario.entity_id,
+        "group_id": GROUP,
+        "name": entity.name,
+        "summary": entity.summary,
+        "created_at": entity.created_at,
+        "labels": ["Entity"],
+        "name_embedding": list(entity.name_embedding),
     }
     await scenario.adapter._record_bulk_write_intent(
-        request, context, shell, latest, **inputs, driver=driver, final_node_payloads=[payload])
+        request, context, shell, latest, **inputs, driver=driver, final_node_payloads=[payload]
+    )
     assert latest[0].phase == "bulk_write_intent"
     assert latest[0].intended_entity_state_fingerprints[0][0] == scenario.entity_id
     # ids pass + hydrated pass + recheck after the durable hydrated intent
@@ -164,7 +190,9 @@ async def test_bulk_intent_ids_phase_then_hydrated_phase(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_bulk_intent_rejects_foreign_group_and_wraps_journal_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_bulk_intent_rejects_foreign_group_and_wraps_journal_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Foreign-group objects and journal failures surface as stable graph errors."""
     scenario = _scenario(monkeypatch)
     request = _request(scenario)
@@ -173,9 +201,15 @@ async def test_bulk_intent_rejects_foreign_group_and_wraps_journal_failure(monke
     inputs["nodes"] = [SimpleNamespace(**{**vars(inputs["nodes"][0]), "group_id": "other"})]
     with pytest.raises(GraphOperationError, match="graph_write_intent_identifiers_invalid"):
         await scenario.adapter._record_bulk_write_intent(
-            request, scenario.context(), shell, [shell], **inputs, driver=FakeDriver(scenario.graph))
+            request, scenario.context(), shell, [shell], **inputs, driver=FakeDriver(scenario.graph)
+        )
     scenario.validate_partition.side_effect = RuntimeError("down")
     with pytest.raises(GraphOperationError, match="graph_write_intent_unavailable"):
         await scenario.adapter._record_bulk_write_intent(
-            request, scenario.context(), shell, [shell], **_bulk_inputs(scenario),
-            driver=FakeDriver(scenario.graph))
+            request,
+            scenario.context(),
+            shell,
+            [shell],
+            **_bulk_inputs(scenario),
+            driver=FakeDriver(scenario.graph),
+        )

@@ -25,6 +25,7 @@ from modules.sources.public import SourceFence
 @dataclass(frozen=True)
 class ConnectorObservation:
     """Capture owner-visible connector state while omitting credential material."""
+
     fence: SourceFence
     access_fence: AccessFence
     desired_revision: int
@@ -48,9 +49,16 @@ def _connector_observation(
         return None
     if row is None:
         return ConnectorObservation(
-            fence=source, access_fence=access_fence, desired_revision=0, applied_revision=0,
-            state="saved_not_active", error_code=None, credential_recovery="supported",
-            desired_enabled=False, credential_presence=(), header_auth_configured=False,
+            fence=source,
+            access_fence=access_fence,
+            desired_revision=0,
+            applied_revision=0,
+            state="saved_not_active",
+            error_code=None,
+            credential_recovery="supported",
+            desired_enabled=False,
+            credential_presence=(),
+            header_auth_configured=False,
         )
     unresolved = any(
         credential.state in {"dispatching", "reconciliation_required", "delete_pending"}
@@ -64,7 +72,8 @@ def _connector_observation(
             state = "reconciliation_required"
     desired_configuration = row.desired_configuration
     return ConnectorObservation(
-        fence=source, access_fence=access_fence,
+        fence=source,
+        access_fence=access_fence,
         desired_revision=row.desired_revision,
         applied_revision=row.applied_revision,
         state=state,
@@ -83,12 +92,23 @@ def _connector_observation(
 
 
 async def capture_connector_observation(
-    session: AsyncSession, source_id: UUID,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> ConnectorObservation | None:
     """Read a coherent source/provisioning/credential snapshot under lock order."""
-    source, row, slots = await lock_connector(session, source_id, _ALL_CREDENTIAL_SLOTS, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    source, row, slots = await lock_connector(
+        session,
+        source_id,
+        _ALL_CREDENTIAL_SLOTS,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    access_fence = await _connector_access(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     return _connector_observation(source, row, slots, access_fence)
 
 
@@ -97,7 +117,8 @@ async def commit_connector_observation(
     before: ConnectorObservation | None,
     *,
     operation_id: UUID | None = None,
-    scope: Scope, multi_workspace_enabled: bool,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Commit connector state and publish a source event when its safe view changed.
 
@@ -106,8 +127,19 @@ async def commit_connector_observation(
     correlates an emitted source change with its durable provider operation.
     With ``before=None`` there is no comparable snapshot and no event draft.
     """
-    access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=before.access_fence if before is not None else None)
-    if before is not None and await sources.get_source_fence(session, before.fence.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != before.fence:
+    access_fence = await _connector_access(
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=before.access_fence if before is not None else None,
+    )
+    if (
+        before is not None
+        and await sources.get_source_fence(
+            session, before.fence.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        != before.fence
+    ):
         raise ConflictError("Connector observation Source changed")
     await session.flush()
     drafts: list[ReplayDraft] = []
@@ -123,23 +155,36 @@ async def commit_connector_observation(
             ).where(ConnectorProvisioning.source_id == before.fence.id)
         )
         row = result.one_or_none()
-        credential_rows = list((await session.execute(
-            select(
-                ConnectorManagedCredential.slot,
-                ConnectorManagedCredential.credential_id.is_not(None),
-                ConnectorManagedCredential.state,
-            ).where(ConnectorManagedCredential.source_id == before.fence.id)
-        )).all())
+        credential_rows = list(
+            (
+                await session.execute(
+                    select(
+                        ConnectorManagedCredential.slot,
+                        ConnectorManagedCredential.credential_id.is_not(None),
+                        ConnectorManagedCredential.state,
+                    ).where(ConnectorManagedCredential.source_id == before.fence.id)
+                )
+            ).all()
+        )
         if row is None:
             after = ConnectorObservation(
-                fence=before.fence, access_fence=access_fence, desired_revision=0, applied_revision=0,
-                state="saved_not_active", error_code=None, credential_recovery="supported",
-                desired_enabled=False, credential_presence=(), header_auth_configured=False,
+                fence=before.fence,
+                access_fence=access_fence,
+                desired_revision=0,
+                applied_revision=0,
+                state="saved_not_active",
+                error_code=None,
+                credential_recovery="supported",
+                desired_enabled=False,
+                credential_presence=(),
+                header_auth_configured=False,
             )
         else:
             values = {slot: (present, state) for slot, present, state in credential_rows}
-            unresolved = any(state in {"dispatching", "reconciliation_required", "delete_pending"}
-                             for _present, state in values.values())
+            unresolved = any(
+                state in {"dispatching", "reconciliation_required", "delete_pending"}
+                for _present, state in values.values()
+            )
             state = row.state
             error_code = row.error_code
             if unresolved:
@@ -148,7 +193,8 @@ async def commit_connector_observation(
                     state = "reconciliation_required"
             desired_configuration = row.desired_configuration
             after = ConnectorObservation(
-                fence=before.fence, access_fence=access_fence,
+                fence=before.fence,
+                access_fence=access_fence,
                 desired_revision=row.desired_revision,
                 applied_revision=row.applied_revision,
                 state=state,
@@ -165,11 +211,20 @@ async def commit_connector_observation(
                 ),
             )
         if after != before:
-            drafts.append(make_source_change(
-                before.fence.id,
-                before.fence.generation,
-                before.fence.status,
-                connector_state=after.state,
-                operation_id=operation_id, scope=scope,
-            ))
-    await commit_with_replay(session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+            drafts.append(
+                make_source_change(
+                    before.fence.id,
+                    before.fence.generation,
+                    before.fence.status,
+                    connector_state=after.state,
+                    operation_id=operation_id,
+                    scope=scope,
+                )
+            )
+    await commit_with_replay(
+        session,
+        drafts,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )

@@ -57,7 +57,9 @@ class _Conn:
         self.log.append(sql)
         if self.fail and sql.startswith("ALTER"):
             raise self.fail
-        return SimpleNamespace(first=lambda: (1,) if self.unsafe and sql.startswith("SELECT") else None)
+        return SimpleNamespace(
+            first=lambda: (1,) if self.unsafe and sql.startswith("SELECT") else None
+        )
 
 
 class _Engine:
@@ -110,15 +112,24 @@ def test_error_message_has_no_password_or_statement(
 
 def test_distinct_runtime_user_only_when_usernames_differ() -> None:
     """A runtime user equal to the admin user needs no grant; a different one is returned for the group grant."""
-    same = SimpleNamespace(database_url="postgresql+asyncpg://a:p@h/db", admin_database_url="postgresql+asyncpg://a:p@h/db")
-    diff = SimpleNamespace(database_url="postgresql+asyncpg://app:p@h/db", admin_database_url="postgresql+asyncpg://adm:p@h/db")
+    same = SimpleNamespace(
+        database_url="postgresql+asyncpg://a:p@h/db",
+        admin_database_url="postgresql+asyncpg://a:p@h/db",
+    )
+    diff = SimpleNamespace(
+        database_url="postgresql+asyncpg://app:p@h/db",
+        admin_database_url="postgresql+asyncpg://adm:p@h/db",
+    )
     assert mod.distinct_runtime_user(same) is None  # type: ignore[arg-type]
     assert mod.distinct_runtime_user(diff) == "app"  # type: ignore[arg-type]
     assert asyncio.run(mod.grant_runtime_role(same)) == 0  # type: ignore[arg-type]
 
 
 def _runtime_settings(user: str) -> Any:
-    return SimpleNamespace(database_url=f"postgresql+asyncpg://{user}:p@h/db", admin_database_url="postgresql+asyncpg://adm:p@h/db")
+    return SimpleNamespace(
+        database_url=f"postgresql+asyncpg://{user}:p@h/db",
+        admin_database_url="postgresql+asyncpg://adm:p@h/db",
+    )
 
 
 def test_grant_refuses_reader_login_as_runtime_user(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,16 +140,22 @@ def test_grant_refuses_reader_login_as_runtime_user(monkeypatch: pytest.MonkeyPa
     assert log == []
 
 
-def test_grant_refuses_unsafe_group_role(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_grant_refuses_unsafe_group_role(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """A loginable/superuser umwelt_app blocks the grant with a generic message."""
     log: list[str] = []
-    monkeypatch.setattr(mod, "create_async_engine", lambda url, **kw: _Engine(log, None, unsafe=True))
+    monkeypatch.setattr(
+        mod, "create_async_engine", lambda url, **kw: _Engine(log, None, unsafe=True)
+    )
     assert asyncio.run(mod.grant_runtime_role(_runtime_settings("app"))) == 1
     assert not any(s.startswith("GRANT") for s in log)
     assert "unsafe attributes" in capsys.readouterr().err
 
 
-def test_grant_reverted_when_reader_would_reach_group(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_grant_reverted_when_reader_would_reach_group(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """If the reader login ends up a member after the grant, the grant is revoked and the run fails."""
     log: list[str] = []
 

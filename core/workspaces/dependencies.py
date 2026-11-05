@@ -53,7 +53,8 @@ async def _request_account(request: Request, session: AsyncSession) -> AccountRe
     ):
         return authenticated
     current = await get_active_account(
-        session, authenticated.id,
+        session,
+        authenticated.id,
         multi_workspace_enabled=gate,
     )
     if current is None:
@@ -66,7 +67,10 @@ async def _request_account(request: Request, session: AsyncSession) -> AccountRe
 
 
 async def _selected_workspace(
-    request: Request, session: AsyncSession, account_id: int, workspace_id: UUID | str | None,
+    request: Request,
+    session: AsyncSession,
+    account_id: int,
+    workspace_id: UUID | str | None,
 ) -> WorkspaceContext:
     """Resolve current visible membership; only bootstrap can omit proven default selection.
 
@@ -90,7 +94,9 @@ async def _selected_workspace(
         info["_verified_active_account"] = (account.id, gate, account)
     try:
         await read_access_fence(
-            session, scope=context, multi_workspace_enabled=gate,
+            session,
+            scope=context,
+            multi_workspace_enabled=gate,
         )
     finally:
         if type(info) is dict:
@@ -99,7 +105,9 @@ async def _selected_workspace(
 
 
 async def _default_workspace(
-    request: Request, session: AsyncSession, workspace_id: UUID | str | None,
+    request: Request,
+    session: AsyncSession,
+    workspace_id: UUID | str | None,
 ) -> WorkspaceContext:
     """Derive actor-owned default; reject explicit Chat/Memory context mismatch with 409.
 
@@ -120,7 +128,9 @@ async def _default_workspace(
         info["_verified_active_account"] = (account.id, gate, account)
     try:
         await read_access_fence(
-            session, scope=context, multi_workspace_enabled=gate,
+            session,
+            scope=context,
+            multi_workspace_enabled=gate,
         )
     finally:
         if type(info) is dict:
@@ -162,17 +172,26 @@ async def require_workspace_observer_read(
     selected = _parse_workspace_id(workspace_id)
     if account.id == 1 and selected is not None:
         viewer = await resolve_admin_workspace_context(
-            session, actor_user_id=account.id, workspace_id=selected,
+            session,
+            actor_user_id=account.id,
+            workspace_id=selected,
             multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )
         if viewer is not None and viewer.workspace_owner_user_id != account.id:
             fence = await read_access_fence(
-                session, scope=viewer, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+                session,
+                scope=viewer,
+                multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
             )
-            require_publication_gate(request, PublicationFence(
-                scope=viewer, access_fence=fence,
-                auth_session=authenticated_session_ref(request), grants=(),
-            ))
+            require_publication_gate(
+                request,
+                PublicationFence(
+                    scope=viewer,
+                    access_fence=fence,
+                    auth_session=authenticated_session_ref(request),
+                    grants=(),
+                ),
+            )
             return viewer
     try:
         return await _selected_workspace(request, session, account.id, workspace_id)
@@ -182,18 +201,27 @@ async def require_workspace_observer_read(
     if selected is None:
         raise RuntimeError("invariant violated: selected must not be None")
     viewer = await resolve_admin_workspace_context(
-        session, actor_user_id=account.id, workspace_id=selected,
+        session,
+        actor_user_id=account.id,
+        workspace_id=selected,
         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if viewer is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
     fence = await read_access_fence(
-        session, scope=viewer, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        session,
+        scope=viewer,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
-    require_publication_gate(request, PublicationFence(
-        scope=viewer, access_fence=fence,
-        auth_session=authenticated_session_ref(request), grants=(),
-    ))
+    require_publication_gate(
+        request,
+        PublicationFence(
+            scope=viewer,
+            access_fence=fence,
+            auth_session=authenticated_session_ref(request),
+            grants=(),
+        ),
+    )
     return viewer
 
 

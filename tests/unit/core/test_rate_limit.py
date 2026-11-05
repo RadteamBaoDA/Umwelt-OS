@@ -45,7 +45,11 @@ def _client(fail=False, **settings):
 
 def test_limit_hit_and_per_session_isolation():
     c = _client()
-    assert [c.post("/x", cookies={"bbd_session": "a"}).status_code for _ in range(3)] == [200, 200, 429]
+    assert [c.post("/x", cookies={"bbd_session": "a"}).status_code for _ in range(3)] == [
+        200,
+        200,
+        429,
+    ]
     r = c.post("/x", cookies={"bbd_session": "a"})
     assert r.headers["Retry-After"] and r.json()["error"]["code"] == "RATE_LIMITED"
     assert c.post("/x", cookies={"bbd_session": "b"}).status_code == 200
@@ -85,7 +89,11 @@ def test_anonymous_budget_ignores_cookie_and_authorization_and_keys_on_ip():
         return {}
 
     c = TestClient(app)
-    codes = [c.post("/p", cookies={"bbd_session": str(i)}, headers={"Authorization": f"Bearer {i}"}).status_code
-             for i in range(3)]
+    codes = [
+        c.post(
+            "/p", cookies={"bbd_session": str(i)}, headers={"Authorization": f"Bearer {i}"}
+        ).status_code
+        for i in range(3)
+    ]
     assert codes == [200, 200, 429]
     assert len(store) == 1  # one IP bucket regardless of cookie/Authorization

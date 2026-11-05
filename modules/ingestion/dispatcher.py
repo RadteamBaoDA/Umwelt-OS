@@ -21,7 +21,10 @@ from core.workspaces.schemas import Scope
 from modules.ingestion import public
 
 __all__ = [
-    "DISPATCH_SCAN_STATE", "DISPATCH_STALE_AFTER", "dispatch_pending_work", "mark_event_delivered",
+    "DISPATCH_SCAN_STATE",
+    "DISPATCH_STALE_AFTER",
+    "dispatch_pending_work",
+    "mark_event_delivered",
     "valid_event_envelope",
 ]
 
@@ -36,12 +39,17 @@ def __getattr__(name: str) -> Any:
 
 
 async def mark_event_delivered(
-    session: AsyncSession, event_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    event_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Forward the owner flush-only acknowledgement; caller holds ordered locks and commits.
 
     Entities' old dispatcher import remains an explicit required-scope caller migration.
     This compatibility module path introduces no commit or earlier-lock acquisition.
     """
-    return await public.mark_event_delivered(session, event_id, scope=scope,
-                                             multi_workspace_enabled=multi_workspace_enabled)
+    return await public.mark_event_delivered(
+        session, event_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )

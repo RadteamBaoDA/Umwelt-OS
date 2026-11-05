@@ -14,7 +14,9 @@ _spec.loader.exec_module(_mod)
 evaluate = _mod.evaluate
 
 
-def test_update_does_not_regrow_an_empty_baseline_but_creates_a_missing_one(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_update_does_not_regrow_an_empty_baseline_but_creates_a_missing_one(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
     """``--update`` with ``{}`` stays empty; with no baseline file it is created from oversize files."""
     baseline = tmp_path / "baseline.json"
     monkeypatch.setattr(_mod, "BASELINE", baseline)
@@ -39,5 +41,7 @@ def test_baselined_file_growth_fails_but_equal_passes() -> None:
 
 
 def test_shrunk_or_deleted_baseline_entries_are_stale() -> None:
-    violations, stale = evaluate({"a.py": 1600, "b.py": 10}, {"a.py": 1700, "b.py": 1800, "c.py": 1600})
+    violations, stale = evaluate(
+        {"a.py": 1600, "b.py": 10}, {"a.py": 1700, "b.py": 1800, "c.py": 1600}
+    )
     assert violations == [] and len(stale) == 3

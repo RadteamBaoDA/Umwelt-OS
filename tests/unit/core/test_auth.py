@@ -192,7 +192,9 @@ class TestSessionDependencies:
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
         session.get.return_value = valid_row
-        with patch("core.auth.dependencies.get_active_account", AsyncMock(return_value=MagicMock())) as active:
+        with patch(
+            "core.auth.dependencies.get_active_account", AsyncMock(return_value=MagicMock())
+        ) as active:
             result = await _current_session(request, session, "valid-token")
         active.assert_awaited_once()
         assert result == valid_row
@@ -212,7 +214,9 @@ class TestSessionDependencies:
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
         session.get.return_value = valid_row
-        with patch("core.auth.dependencies.get_active_account", AsyncMock(return_value=MagicMock())):
+        with patch(
+            "core.auth.dependencies.get_active_account", AsyncMock(return_value=MagicMock())
+        ):
             res = await require_owner(request, session)
         assert res == valid_row
 

@@ -87,10 +87,15 @@ class _PreparedFences:
 
 
 def _prepare_native_fences(
-    sink: object, principal: ToolExecutionPrincipal, destination_kind: str, multi_workspace_enabled: bool,
+    sink: object,
+    principal: ToolExecutionPrincipal,
+    destination_kind: str,
+    multi_workspace_enabled: bool,
 ) -> _PreparedFences | None:
     """Validate one sink and principal without I/O; None means the complete result must be denied."""
-    if type(multi_workspace_enabled) is not bool or not isinstance(principal, ToolExecutionPrincipal):
+    if type(multi_workspace_enabled) is not bool or not isinstance(
+        principal, ToolExecutionPrincipal
+    ):
         return None
     try:
         destination = ToolDestination(destination_kind)
@@ -101,8 +106,10 @@ def _prepare_native_fences(
     records = sink.get("records")
     captured_generations = sink.get("source_generations")
     if (
-        not isinstance(records, list) or len(records) > 100
-        or not isinstance(captured_generations, dict) or len(captured_generations) > 100
+        not isinstance(records, list)
+        or len(records) > 100
+        or not isinstance(captured_generations, dict)
+        or len(captured_generations) > 100
     ):
         return None
     source_generations: dict[UUID, int] = {}
@@ -117,9 +124,10 @@ def _prepare_native_fences(
     if (
         (principal.owner_all_sources and not principal.is_owner)
         or (not principal.is_owner and not principal_source_ids)
-        or (not principal.owner_all_sources and any(
-            source_id not in principal_source_ids for source_id in source_generations
-        ))
+        or (
+            not principal.owner_all_sources
+            and any(source_id not in principal_source_ids for source_id in source_generations)
+        )
     ):
         return None
 
@@ -132,7 +140,8 @@ def _prepare_native_fences(
             or not isinstance(fence.document_id, UUID)
             or not isinstance(fence.document_version_id, UUID)
             or not isinstance(fence.source_id, UUID)
-            or type(fence.source_generation) is not int or fence.source_generation < 1
+            or type(fence.source_generation) is not int
+            or fence.source_generation < 1
             or (fence.chunk_id is not None and not isinstance(fence.chunk_id, UUID))
             or source_generations.get(fence.source_id) != fence.source_generation
             or (not principal.owner_all_sources and fence.source_id not in principal_source_ids)
@@ -145,7 +154,11 @@ def _prepare_native_fences(
         (search_fences if fence.chunk_id is not None else document_fences).append(fence)
 
     return _PreparedFences(
-        destination, source_generations, principal_source_ids, tuple(search_fences), tuple(document_fences),
+        destination,
+        source_generations,
+        principal_source_ids,
+        tuple(search_fences),
+        tuple(document_fences),
     )
 
 
@@ -177,9 +190,14 @@ async def revalidate_native_output_fences(
 
         async with session_factory() as session:
             current_sources = await sources.list_tool_sources(
-                session, limit=100, cursor=None,
-                source_ids=frozenset(source_generations), owner_all=False,
-                destination=destination, scope=principal.scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                limit=100,
+                cursor=None,
+                source_ids=frozenset(source_generations),
+                owner_all=False,
+                destination=destination,
+                scope=principal.scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
         current_generation_map = {item.id: item.generation for item in current_sources.items}
         if current_sources.next_cursor is not None or current_generation_map != source_generations:
@@ -190,9 +208,13 @@ async def revalidate_native_output_fences(
 
             async with session_factory() as session:
                 valid = await search.revalidate_tool_search_fences(
-                    session, search_fences, source_ids=principal_source_ids,
-                    owner_all=principal.owner_all_sources, destination=destination,
-                    scope=principal.scope, multi_workspace_enabled=multi_workspace_enabled,
+                    session,
+                    search_fences,
+                    source_ids=principal_source_ids,
+                    owner_all=principal.owner_all_sources,
+                    destination=destination,
+                    scope=principal.scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                 )
             if not valid:
                 return False
@@ -201,9 +223,13 @@ async def revalidate_native_output_fences(
 
             async with session_factory() as session:
                 valid = await documents.revalidate_tool_document_fences(
-                    session, document_fences, source_ids=principal_source_ids,
-                    owner_all=principal.owner_all_sources, destination=destination,
-                    scope=principal.scope, multi_workspace_enabled=multi_workspace_enabled,
+                    session,
+                    document_fences,
+                    source_ids=principal_source_ids,
+                    owner_all=principal.owner_all_sources,
+                    destination=destination,
+                    scope=principal.scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                 )
             if not valid:
                 return False
@@ -215,8 +241,14 @@ async def revalidate_native_output_fences(
 
 async def _revalidate_combined_fences(
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    search_fences: dict[Any, Any], document_fences: dict[Any, Any], *, allowed_ids: Any,
-    owner_all: bool, destination: Any, scope: Scope, multi_workspace_enabled: bool,
+    search_fences: dict[Any, Any],
+    document_fences: dict[Any, Any],
+    *,
+    allowed_ids: Any,
+    owner_all: bool,
+    destination: Any,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Run the Search then Document owner fence checks over de-duplicated fences, 100 per call.
 
@@ -232,8 +264,12 @@ async def _revalidate_combined_fences(
         async with session_factory() as session:
             for offset in range(0, len(unique), 100):
                 combined_ok = combined_ok and await search.revalidate_tool_search_fences(
-                    session, unique[offset:offset + 100], source_ids=allowed_ids, owner_all=owner_all,
-                    destination=destination, scope=scope,
+                    session,
+                    unique[offset : offset + 100],
+                    source_ids=allowed_ids,
+                    owner_all=owner_all,
+                    destination=destination,
+                    scope=scope,
                     multi_workspace_enabled=multi_workspace_enabled,
                 )
     if document_fences and combined_ok:
@@ -243,8 +279,12 @@ async def _revalidate_combined_fences(
         async with session_factory() as session:
             for offset in range(0, len(unique), 100):
                 combined_ok = combined_ok and await documents.revalidate_tool_document_fences(
-                    session, unique[offset:offset + 100], source_ids=allowed_ids, owner_all=owner_all,
-                    destination=destination, scope=scope,
+                    session,
+                    unique[offset : offset + 100],
+                    source_ids=allowed_ids,
+                    owner_all=owner_all,
+                    destination=destination,
+                    scope=scope,
                     multi_workspace_enabled=multi_workspace_enabled,
                 )
     return combined_ok
@@ -270,7 +310,9 @@ async def revalidate_native_output_fences_many(
     for index, (sink, principal) in enumerate(items):
         if principal is None:
             continue
-        prepared = _prepare_native_fences(sink, principal, destination_kind, multi_workspace_enabled)
+        prepared = _prepare_native_fences(
+            sink, principal, destination_kind, multi_workspace_enabled
+        )
         if prepared is None:
             continue
         key = (principal.scope, principal.owner_all_sources, prepared.principal_source_ids)
@@ -282,7 +324,10 @@ async def revalidate_native_output_fences_many(
         if principal is None:
             raise RuntimeError("invariant violated: principal must not be None")
         return await revalidate_native_output_fences(
-            session_factory, sink, principal, destination_kind=destination_kind,
+            session_factory,
+            sink,
+            principal,
+            destination_kind=destination_kind,
             multi_workspace_enabled=multi_workspace_enabled,
         )
 
@@ -297,8 +342,13 @@ async def revalidate_native_output_fences_many(
             async with session_factory() as session:
                 for offset in range(0, len(all_ids), 100):
                     page = await sources.list_tool_sources(
-                        session, limit=100, cursor=None, source_ids=frozenset(all_ids[offset:offset + 100]),
-                        owner_all=False, destination=destination, scope=scope,
+                        session,
+                        limit=100,
+                        cursor=None,
+                        source_ids=frozenset(all_ids[offset : offset + 100]),
+                        owner_all=False,
+                        destination=destination,
+                        scope=scope,
                         multi_workspace_enabled=multi_workspace_enabled,
                     )
                     overflow = overflow or page.next_cursor is not None
@@ -307,20 +357,41 @@ async def revalidate_native_output_fences_many(
                 raise ValueError("combined source read overflowed")
             # A row is current only if every captured source is still visible at the same generation.
             live = [
-                (index, p) for index, p in members
+                (index, p)
+                for index, p in members
                 if all(current.get(sid) == gen for sid, gen in p.source_generations.items())
             ]
             search_fences = {
-                (f.document_id, f.document_version_id, f.source_id, f.source_generation, f.chunk_id): f
-                for _, p in live for f in p.search_fences
+                (
+                    f.document_id,
+                    f.document_version_id,
+                    f.source_id,
+                    f.source_generation,
+                    f.chunk_id,
+                ): f
+                for _, p in live
+                for f in p.search_fences
             }
             document_fences = {
-                (f.document_id, f.document_version_id, f.source_id, f.source_generation, f.chunk_id): f
-                for _, p in live for f in p.document_fences
+                (
+                    f.document_id,
+                    f.document_version_id,
+                    f.source_id,
+                    f.source_generation,
+                    f.chunk_id,
+                ): f
+                for _, p in live
+                for f in p.document_fences
             }
             combined_ok = await _revalidate_combined_fences(
-                session_factory, search_fences, document_fences, allowed_ids=allowed_ids, owner_all=owner_all,
-                destination=destination, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session_factory,
+                search_fences,
+                document_fences,
+                allowed_ids=allowed_ids,
+                owner_all=owner_all,
+                destination=destination,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
             if combined_ok:
                 for index, _ in live:
@@ -341,8 +412,12 @@ PURGED_CONVERSATION_ID = UUID(int=0)
 
 
 async def _assert_source_browser_cleanup_in_uow(
-    session: AsyncSession, source_id: UUID, *, scope: Scope,
-    multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
     source_fence: SourceFence,
 ) -> int:
     """Freshly prove an exact cleanup anchor through nonlocking owner-public reads.
@@ -365,32 +440,56 @@ async def _assert_source_browser_cleanup_in_uow(
         raise TypeError("An explicit Source browser cleanup scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
         raise ForbiddenError("Workspace owner required")
-    if (not isinstance(source_id, UUID) or type(multi_workspace_enabled) is not bool
-            or not isinstance(access_fence, AccessFence) or not isinstance(source_fence, SourceFence)):
-        raise TypeError("Source browser cleanup requires typed fences and an explicit boolean feature flag")
+    if (
+        not isinstance(source_id, UUID)
+        or type(multi_workspace_enabled) is not bool
+        or not isinstance(access_fence, AccessFence)
+        or not isinstance(source_fence, SourceFence)
+    ):
+        raise TypeError(
+            "Source browser cleanup requires typed fences and an explicit boolean feature flag"
+        )
     actor_user_id = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
-    if (access_fence.workspace_id != scope.workspace_id or access_fence.user_id != actor_user_id
-            or access_fence.membership_revision != scope.membership_revision
-            or source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id
-            or (isinstance(scope, InternalJobScope) and scope.source_id is not None and (
-                scope.source_id != source_id or scope.source_generation != source_fence.generation
-            ))):
+    if (
+        access_fence.workspace_id != scope.workspace_id
+        or access_fence.user_id != actor_user_id
+        or access_fence.membership_revision != scope.membership_revision
+        or source_fence.id != source_id
+        or source_fence.workspace_id != scope.workspace_id
+        or (
+            isinstance(scope, InternalJobScope)
+            and scope.source_id is not None
+            and (scope.source_id != source_id or scope.source_generation != source_fence.generation)
+        )
+    ):
         raise ConflictError("Source browser cleanup subject changed")
     with session.no_autoflush:
         current_access = await workspaces.read_access_fence(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         current_source = await sources.get_source_fence(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            source_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
-    if (current_access != access_fence or current_source is None
-            or current_source != source_fence or current_source.status not in {"active", "paused", "archived"}):
+    if (
+        current_access != access_fence
+        or current_source is None
+        or current_source != source_fence
+        or current_source.status not in {"active", "paused", "archived"}
+    ):
         raise ConflictError("Source browser cleanup anchor is unavailable or stale")
     return actor_user_id
 
 
 def _source_browser_job_ids(
-    source_id: UUID, *, workspace_id: UUID, actor_user_id: int,
+    source_id: UUID,
+    *,
+    workspace_id: UUID,
+    actor_user_id: int,
 ) -> Select[UUID]:
     """Build the complete identity-only relation for an already-proven Source cleanup.
 
@@ -410,7 +509,11 @@ def _source_browser_job_ids(
 
 
 async def _lock_source_browser_rows_in_uow(
-    session: AsyncSession, source_id: UUID, *, workspace_id: UUID, actor_user_id: int,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    workspace_id: UUID,
+    actor_user_id: int,
 ) -> None:
     """Lock the entire identity-scoped job set by UUID, then its pages by evidence PK UUID.
 
@@ -425,10 +528,14 @@ async def _lock_source_browser_rows_in_uow(
     """
     from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 
-    job_ids = _source_browser_job_ids(source_id, workspace_id=workspace_id, actor_user_id=actor_user_id)
+    job_ids = _source_browser_job_ids(
+        source_id, workspace_id=workspace_id, actor_user_id=actor_user_id
+    )
     with session.no_autoflush:
         jobs = await session.stream_scalars(
-            job_ids.order_by(BrowserReadJob.id).with_for_update().execution_options(populate_existing=True)
+            job_ids.order_by(BrowserReadJob.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         try:
             async for _job_id in jobs:
@@ -437,8 +544,11 @@ async def _lock_source_browser_rows_in_uow(
             await jobs.close()
         # Drain every earlier job lock before acquiring the first evidence row lock.
         pages = await session.stream_scalars(
-            select(BrowserPageEvidence.id).where(BrowserPageEvidence.job_id.in_(job_ids))
-            .order_by(BrowserPageEvidence.id).with_for_update().execution_options(populate_existing=True)
+            select(BrowserPageEvidence.id)
+            .where(BrowserPageEvidence.job_id.in_(job_ids))
+            .order_by(BrowserPageEvidence.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         try:
             async for _page_id in pages:
@@ -448,7 +558,11 @@ async def _lock_source_browser_rows_in_uow(
 
 
 async def _purge_source_browser_rows_in_uow(
-    session: AsyncSession, source_id: UUID, *, workspace_id: UUID, actor_user_id: int,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    workspace_id: UUID,
+    actor_user_id: int,
 ) -> int:
     """Erase all prepared Source page payloads and scrub private links, retaining job tombstones.
 
@@ -464,18 +578,26 @@ async def _purge_source_browser_rows_in_uow(
     """
     from modules.tools.models import BrowserPageEvidence, BrowserReadJob
 
-    job_ids = _source_browser_job_ids(source_id, workspace_id=workspace_id, actor_user_id=actor_user_id)
+    job_ids = _source_browser_job_ids(
+        source_id, workspace_id=workspace_id, actor_user_id=actor_user_id
+    )
     result = await session.execute(
         delete(BrowserPageEvidence).where(BrowserPageEvidence.job_id.in_(job_ids))
     )
     await session.execute(
-        update(BrowserReadJob).where(
-            BrowserReadJob.id.in_(job_ids), BrowserReadJob.status.in_(("queued", "running", "uncertain")),
-        ).values(cancel_requested=True, status="cancel_requested")
+        update(BrowserReadJob)
+        .where(
+            BrowserReadJob.id.in_(job_ids),
+            BrowserReadJob.status.in_(("queued", "running", "uncertain")),
+        )
+        .values(cancel_requested=True, status="cancel_requested")
     )
     await session.execute(
-        update(BrowserReadJob).where(BrowserReadJob.id.in_(job_ids)).values(
-            auth_session_hash=PURGED_SESSION_HASH, conversation_id=PURGED_CONVERSATION_ID,
+        update(BrowserReadJob)
+        .where(BrowserReadJob.id.in_(job_ids))
+        .values(
+            auth_session_hash=PURGED_SESSION_HASH,
+            conversation_id=PURGED_CONVERSATION_ID,
         )
     )
     await session.flush()
@@ -483,8 +605,12 @@ async def _purge_source_browser_rows_in_uow(
 
 
 async def lock_source_browser_results_in_uow(
-    session: AsyncSession, source_id: UUID, *, scope: Scope,
-    multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
     source_fence: SourceFence,
 ) -> None:
     """Prepare complete historical Source browser cleanup under caller-held lifecycle locks.
@@ -509,17 +635,28 @@ async def lock_source_browser_results_in_uow(
     That remaining writer integration is a prerequisite for combined lifecycle acceptance.
     """
     actor_user_id = await _assert_source_browser_cleanup_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     await _lock_source_browser_rows_in_uow(
-        session, source_id, workspace_id=scope.workspace_id, actor_user_id=actor_user_id,
+        session,
+        source_id,
+        workspace_id=scope.workspace_id,
+        actor_user_id=actor_user_id,
     )
 
 
 async def purge_source_browser_results_in_uow(
-    session: AsyncSession, source_id: UUID, *, scope: Scope,
-    multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
     source_fence: SourceFence,
 ) -> int:
     """Apply Source-only browser erasure after preparation in the same retained transaction.
@@ -542,11 +679,18 @@ async def purge_source_browser_results_in_uow(
     cleanup, browser writer/retention conversion and HTTP publication remain separate gates.
     """
     actor_user_id = await _assert_source_browser_cleanup_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
     return await _purge_source_browser_rows_in_uow(
-        session, source_id, workspace_id=scope.workspace_id, actor_user_id=actor_user_id,
+        session,
+        source_id,
+        workspace_id=scope.workspace_id,
+        actor_user_id=actor_user_id,
     )
 
 
@@ -585,9 +729,16 @@ async def purge_browser_results_in_uow(
         selectors.append(BrowserReadJob.conversation_id.in_(tuple(conversation_ids)))
     if not selectors:
         return 0
-    job_ids = tuple((await session.scalars(select(BrowserReadJob.id).where(
-        BrowserReadJob.workspace_id == scope.workspace_id, or_(*selectors),
-    ))).all())
+    job_ids = tuple(
+        (
+            await session.scalars(
+                select(BrowserReadJob.id).where(
+                    BrowserReadJob.workspace_id == scope.workspace_id,
+                    or_(*selectors),
+                )
+            )
+        ).all()
+    )
     if not job_ids:
         return 0
     from sqlalchemy import delete
@@ -597,14 +748,20 @@ async def purge_browser_results_in_uow(
     )
     live = ("queued", "running", "uncertain")
     await session.execute(
-        update(BrowserReadJob).where(
-            BrowserReadJob.id.in_(job_ids), BrowserReadJob.status.in_(live),
-        ).values(cancel_requested=True, status="cancel_requested")
+        update(BrowserReadJob)
+        .where(
+            BrowserReadJob.id.in_(job_ids),
+            BrowserReadJob.status.in_(live),
+        )
+        .values(cancel_requested=True, status="cancel_requested")
     )
     # Unlink the owner session and conversation from every matched job.
     await session.execute(
-        update(BrowserReadJob).where(BrowserReadJob.id.in_(job_ids)).values(
-            auth_session_hash=PURGED_SESSION_HASH, conversation_id=PURGED_CONVERSATION_ID,
+        update(BrowserReadJob)
+        .where(BrowserReadJob.id.in_(job_ids))
+        .values(
+            auth_session_hash=PURGED_SESSION_HASH,
+            conversation_id=PURGED_CONVERSATION_ID,
         )
     )
     await session.flush()
@@ -626,13 +783,30 @@ async def purge_expired_browser_evidence(session: AsyncSession, *, limit: int = 
         raise ValueError("Browser evidence cleanup limit must be between 1 and 1000")
     now = datetime.now(UTC)
     terminal = ("succeeded", "cancelled", "failed", "expired")
-    ids = tuple((await session.scalars(select(BrowserReadJob.id).where(
-        BrowserReadJob.expires_at <= now, BrowserReadJob.status.in_(terminal),
-        exists(select(BrowserPageEvidence.id).where(BrowserPageEvidence.job_id == BrowserReadJob.id)),
-    ).order_by(BrowserReadJob.expires_at, BrowserReadJob.id).limit(limit).with_for_update(skip_locked=True))).all())
+    ids = tuple(
+        (
+            await session.scalars(
+                select(BrowserReadJob.id)
+                .where(
+                    BrowserReadJob.expires_at <= now,
+                    BrowserReadJob.status.in_(terminal),
+                    exists(
+                        select(BrowserPageEvidence.id).where(
+                            BrowserPageEvidence.job_id == BrowserReadJob.id
+                        )
+                    ),
+                )
+                .order_by(BrowserReadJob.expires_at, BrowserReadJob.id)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+        ).all()
+    )
     if not ids:
         return 0
-    result = await session.execute(delete(BrowserPageEvidence).where(BrowserPageEvidence.job_id.in_(ids)))
+    result = await session.execute(
+        delete(BrowserPageEvidence).where(BrowserPageEvidence.job_id.in_(ids))
+    )
     await session.flush()
     return int(cast("CursorResult[Any]", result).rowcount or 0)
 
@@ -664,14 +838,25 @@ def webhook_profile_revision(settings: Any, alias: str) -> str | None:
 
 
 async def send_webhook_once(
-    settings: Any, alias: str, payload: dict[str, Any], *, idempotency_key: str,
-    headers: dict[str, str], before_send: Any,
+    settings: Any,
+    alias: str,
+    payload: dict[str, Any],
+    *,
+    idempotency_key: str,
+    headers: dict[str, str],
+    before_send: Any,
 ) -> str:
     """Send one allowlisted webhook for a caller-owned no-replay ledger (see ``webhook.send_once``)."""
     from modules.tools.webhook import send_once
 
     return await send_once(
-        settings, alias, payload, idempotency_key=idempotency_key, headers=headers, before_send=before_send)
+        settings,
+        alias,
+        payload,
+        idempotency_key=idempotency_key,
+        headers=headers,
+        before_send=before_send,
+    )
 
 
 __all__ = [

@@ -1,4 +1,5 @@
 """Legacy BBD-OS names and webhook paths must keep resolving beside the Umwelt-OS ones."""
+
 from uuid import UUID
 
 import pytest
@@ -29,8 +30,14 @@ class _Api:
 
 def test_names_and_paths() -> None:
     """Current and legacy forms are exposed; new builds use the current path."""
-    assert connector_workflow_names(SOURCE) == (f"Umwelt-OS connector {SOURCE}", f"BBD-OS connector {SOURCE}")
-    assert workflow_webhook_paths(SOURCE, "web") == (f"umwelt-collect-url-{SOURCE.hex}", f"bbd-collect-url-{SOURCE.hex}")
+    assert connector_workflow_names(SOURCE) == (
+        f"Umwelt-OS connector {SOURCE}",
+        f"BBD-OS connector {SOURCE}",
+    )
+    assert workflow_webhook_paths(SOURCE, "web") == (
+        f"umwelt-collect-url-{SOURCE.hex}",
+        f"bbd-collect-url-{SOURCE.hex}",
+    )
     assert workflow_webhook_path(SOURCE, "rss") == f"umwelt-collect-rss-{SOURCE.hex}"
     assert alternate_workflow_name("other name") is None
 

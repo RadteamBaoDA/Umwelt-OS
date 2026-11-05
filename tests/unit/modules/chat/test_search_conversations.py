@@ -28,15 +28,22 @@ def _sql(session: MagicMock) -> tuple[str, dict[str, object]]:
 @pytest.mark.asyncio
 async def test_history_off_returns_nothing_and_never_queries() -> None:
     session = _session()
-    with patch("modules.chat.public._chat_export_privacy", AsyncMock(return_value=(False, True, None))):
-        assert await search_conversations(session, "plan", limit=10, offset=0, archived=False, **KW) == []
+    with patch(
+        "modules.chat.public._chat_export_privacy", AsyncMock(return_value=(False, True, None))
+    ):
+        assert (
+            await search_conversations(session, "plan", limit=10, offset=0, archived=False, **KW)
+            == []
+        )
     session.scalars.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_query_excludes_ephemeral_expired_automation_and_is_bounded() -> None:
     session = _session()
-    with patch("modules.chat.public._chat_export_privacy", AsyncMock(return_value=(True, True, None))):
+    with patch(
+        "modules.chat.public._chat_export_privacy", AsyncMock(return_value=(True, True, None))
+    ):
         await search_conversations(session, "plan", limit=7, offset=3, archived=False, **KW)
     sql, _ = _sql(session)
     assert "chat_conversations.ephemeral IS false" in sql
@@ -49,8 +56,12 @@ async def test_query_excludes_ephemeral_expired_automation_and_is_bounded() -> N
 @pytest.mark.asyncio
 async def test_like_metacharacters_are_literal() -> None:
     session = _session()
-    with patch("modules.chat.public._chat_export_privacy", AsyncMock(return_value=(True, True, None))):
-        await search_conversations(session, f" 100%_a{BS}b ", limit=5, offset=0, archived=True, **KW)
+    with patch(
+        "modules.chat.public._chat_export_privacy", AsyncMock(return_value=(True, True, None))
+    ):
+        await search_conversations(
+            session, f" 100%_a{BS}b ", limit=5, offset=0, archived=True, **KW
+        )
     sql, params = _sql(session)
     assert "ESCAPE" in sql
     assert f"%100{BS}%{BS}_a{BS}{BS}b%" in params.values()
@@ -59,7 +70,9 @@ async def test_like_metacharacters_are_literal() -> None:
 @pytest.mark.asyncio
 async def test_workspace_and_actor_bind_before_limit() -> None:
     session = _session()
-    with patch("modules.chat.public._chat_export_privacy", AsyncMock(return_value=(True, True, None))):
+    with patch(
+        "modules.chat.public._chat_export_privacy", AsyncMock(return_value=(True, True, None))
+    ):
         await search_conversations(session, "plan", limit=7, offset=3, archived=False, **KW)
     sql, params = _sql(session)
     assert sql.index("chat_conversations.workspace_id =") < sql.index("LIMIT")

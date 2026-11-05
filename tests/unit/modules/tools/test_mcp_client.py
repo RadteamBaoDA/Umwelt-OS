@@ -71,6 +71,7 @@ def dummy_connection() -> ConnectionRead:
 @pytest.fixture
 def mock_operation_slot():
     """Return an async context manager mock for the operation slot."""
+
     @asynccontextmanager
     async def _slot(connection_id: UUID, deadline: float):
         yield
@@ -111,7 +112,9 @@ class TestMcpSdkClientManagementRevalidation:
         revalidator.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_management_request_fails_when_connection_not_current(self, mock_operation_slot) -> None:
+    async def test_management_request_fails_when_connection_not_current(
+        self, mock_operation_slot
+    ) -> None:
         """Verify _management_request_is_current returns False when connection_is_current is False."""
         client = McpSdkClient(
             load_connection=AsyncMock(),
@@ -131,7 +134,9 @@ class TestMcpSdkClientManagementRevalidation:
         revalidator.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_management_request_fails_on_revalidator_exception(self, mock_operation_slot) -> None:
+    async def test_management_request_fails_on_revalidator_exception(
+        self, mock_operation_slot
+    ) -> None:
         """Verify _management_request_is_current returns False when revalidator raises."""
         client = McpSdkClient(
             load_connection=AsyncMock(),
@@ -154,7 +159,9 @@ class TestMcpSdkClientOpenClient:
     """Unit tests for client opening, transport routing, and profile checks."""
 
     @pytest.mark.asyncio
-    async def test_open_http_client_validates_transport(self, mock_operation_slot, dummy_connection) -> None:
+    async def test_open_http_client_validates_transport(
+        self, mock_operation_slot, dummy_connection
+    ) -> None:
         """Verify _open_http_client rejects mismatched transport types."""
         client = McpSdkClient(
             load_connection=AsyncMock(),
@@ -165,7 +172,10 @@ class TestMcpSdkClientOpenClient:
         )
         invalid_conn = dummy_connection.model_copy(update={"transport": McpTransport.STDIO})
         budget = McpOperationNetworkBudget(
-            deadline=100.0, max_requests=10, max_request_bytes=1000, max_response_bytes=1000,
+            deadline=100.0,
+            max_requests=10,
+            max_request_bytes=1000,
+            max_response_bytes=1000,
             before_request=AsyncMock(return_value=True),
         )
 
@@ -174,7 +184,9 @@ class TestMcpSdkClientOpenClient:
                 pass
 
     @pytest.mark.asyncio
-    async def test_open_http_client_requires_bearer_token(self, mock_operation_slot, dummy_connection) -> None:
+    async def test_open_http_client_requires_bearer_token(
+        self, mock_operation_slot, dummy_connection
+    ) -> None:
         """Verify _open_http_client raises McpUnavailable when bearer token is missing."""
         client = McpSdkClient(
             load_connection=AsyncMock(),
@@ -184,7 +196,10 @@ class TestMcpSdkClientOpenClient:
             operation_slot=mock_operation_slot,
         )
         budget = McpOperationNetworkBudget(
-            deadline=100.0, max_requests=10, max_request_bytes=1000, max_response_bytes=1000,
+            deadline=100.0,
+            max_requests=10,
+            max_request_bytes=1000,
+            max_response_bytes=1000,
             before_request=AsyncMock(return_value=True),
         )
 
@@ -193,7 +208,9 @@ class TestMcpSdkClientOpenClient:
                 pass
 
     @pytest.mark.asyncio
-    async def test_open_http_client_rejects_unexpected_credential(self, mock_operation_slot, dummy_connection) -> None:
+    async def test_open_http_client_rejects_unexpected_credential(
+        self, mock_operation_slot, dummy_connection
+    ) -> None:
         """Verify _open_http_client raises McpTransportError when unauthenticated connection has token."""
         client = McpSdkClient(
             load_connection=AsyncMock(),
@@ -204,7 +221,10 @@ class TestMcpSdkClientOpenClient:
         )
         unauth_conn = dummy_connection.model_copy(update={"auth_method": "none"})
         budget = McpOperationNetworkBudget(
-            deadline=100.0, max_requests=10, max_request_bytes=1000, max_response_bytes=1000,
+            deadline=100.0,
+            max_requests=10,
+            max_request_bytes=1000,
+            max_response_bytes=1000,
             before_request=AsyncMock(return_value=True),
         )
 
@@ -213,7 +233,9 @@ class TestMcpSdkClientOpenClient:
                 pass
 
     @pytest.mark.asyncio
-    async def test_open_client_rejects_http_with_profile_hash(self, mock_operation_slot, dummy_connection) -> None:
+    async def test_open_client_rejects_http_with_profile_hash(
+        self, mock_operation_slot, dummy_connection
+    ) -> None:
         """Verify HTTP connection carrying deployment profile hash is rejected."""
         client = McpSdkClient(
             load_connection=AsyncMock(),
@@ -224,16 +246,23 @@ class TestMcpSdkClientOpenClient:
         )
         invalid_conn = dummy_connection.model_copy(update={"deployment_profile_hash": "a" * 64})
         budget = McpOperationNetworkBudget(
-            deadline=100.0, max_requests=10, max_request_bytes=1000, max_response_bytes=1000,
+            deadline=100.0,
+            max_requests=10,
+            max_request_bytes=1000,
+            max_response_bytes=1000,
             before_request=AsyncMock(return_value=True),
         )
 
-        with pytest.raises(McpTransportError, match="unexpectedly carries a stdio profile identity"):
+        with pytest.raises(
+            McpTransportError, match="unexpectedly carries a stdio profile identity"
+        ):
             async with client._open_client(SCOPE, invalid_conn, "token", budget, "ordinary"):
                 pass
 
     @pytest.mark.asyncio
-    async def test_open_client_stdio_rejects_bearer(self, mock_operation_slot, dummy_connection) -> None:
+    async def test_open_client_stdio_rejects_bearer(
+        self, mock_operation_slot, dummy_connection
+    ) -> None:
         """Verify stdio transport rejects bearer credentials."""
         client = McpSdkClient(
             load_connection=AsyncMock(),
@@ -242,9 +271,14 @@ class TestMcpSdkClientOpenClient:
             connection_is_current=AsyncMock(),
             operation_slot=mock_operation_slot,
         )
-        stdio_conn = dummy_connection.model_copy(update={"transport": McpTransport.STDIO, "auth_method": "bearer"})
+        stdio_conn = dummy_connection.model_copy(
+            update={"transport": McpTransport.STDIO, "auth_method": "bearer"}
+        )
         budget = McpOperationNetworkBudget(
-            deadline=100.0, max_requests=10, max_request_bytes=1000, max_response_bytes=1000,
+            deadline=100.0,
+            max_requests=10,
+            max_request_bytes=1000,
+            max_response_bytes=1000,
             before_request=AsyncMock(return_value=True),
         )
 
@@ -291,7 +325,9 @@ class TestMcpSdkClientCheckConnection:
         )
 
     @pytest.mark.asyncio
-    async def test_check_connection_timeout_error_translation(self, mock_operation_slot, dummy_connection) -> None:
+    async def test_check_connection_timeout_error_translation(
+        self, mock_operation_slot, dummy_connection
+    ) -> None:
         """Verify TimeoutError translates to 'timeout' outcome."""
         load_connection = AsyncMock(return_value=(dummy_connection, "secret-token"))
         record_draft_check = AsyncMock(return_value=dummy_connection)
@@ -322,7 +358,9 @@ class TestMcpSdkClientCheckConnection:
         )
 
     @pytest.mark.asyncio
-    async def test_check_connection_permission_error_translation(self, mock_operation_slot, dummy_connection) -> None:
+    async def test_check_connection_permission_error_translation(
+        self, mock_operation_slot, dummy_connection
+    ) -> None:
         """Verify PermissionError translates to 'auth_error' outcome."""
         load_connection = AsyncMock(return_value=(dummy_connection, "secret-token"))
         record_draft_check = AsyncMock(return_value=dummy_connection)
@@ -353,7 +391,9 @@ class TestMcpSdkClientCheckConnection:
         )
 
     @pytest.mark.asyncio
-    async def test_check_connection_transport_error_translation(self, mock_operation_slot, dummy_connection) -> None:
+    async def test_check_connection_transport_error_translation(
+        self, mock_operation_slot, dummy_connection
+    ) -> None:
         """Verify McpTransportError translates to 'unavailable' outcome."""
         load_connection = AsyncMock(return_value=(dummy_connection, "secret-token"))
         record_draft_check = AsyncMock(return_value=dummy_connection)
@@ -384,7 +424,9 @@ class TestMcpSdkClientCheckConnection:
         )
 
     @pytest.mark.asyncio
-    async def test_check_connection_conflict_when_authority_revoked(self, mock_operation_slot, dummy_connection) -> None:
+    async def test_check_connection_conflict_when_authority_revoked(
+        self, mock_operation_slot, dummy_connection
+    ) -> None:
         """Verify McpConflict is raised when authority changes before check."""
         client = McpSdkClient(
             load_connection=AsyncMock(),
@@ -420,7 +462,9 @@ class TestMcpSdkClientDiscovery:
         mock_sdk_client.list_tools = AsyncMock()
 
         with pytest.raises(McpTransportError, match="ten-page aggregate limit"):
-            await client._list_capability_pages(mock_sdk_client, "tool", page_count=10, capability_count=0)
+            await client._list_capability_pages(
+                mock_sdk_client, "tool", page_count=10, capability_count=0
+            )
 
     @pytest.mark.asyncio
     async def test_discovery_repeated_cursor_raises(self, mock_operation_slot) -> None:
@@ -441,7 +485,9 @@ class TestMcpSdkClientDiscovery:
         mock_sdk_client.list_tools = AsyncMock(return_value=mock_page)
 
         with pytest.raises(McpTransportError, match="repeated or invalid page cursor"):
-            await client._list_capability_pages(mock_sdk_client, "tool", page_count=0, capability_count=0)
+            await client._list_capability_pages(
+                mock_sdk_client, "tool", page_count=0, capability_count=0
+            )
 
     @pytest.mark.asyncio
     async def test_discovery_exceeds_capability_limit_raises(self, mock_operation_slot) -> None:
@@ -462,7 +508,9 @@ class TestMcpSdkClientDiscovery:
         mock_sdk_client.list_tools = AsyncMock(return_value=mock_page)
 
         with pytest.raises(McpTransportError, match="200-capability aggregate limit"):
-            await client._list_capability_pages(mock_sdk_client, "tool", page_count=0, capability_count=198)
+            await client._list_capability_pages(
+                mock_sdk_client, "tool", page_count=0, capability_count=198
+            )
 
     def test_normalize_capability_validates_and_hashes(self, mock_operation_slot) -> None:
         """Verify capability descriptor canonicalization and SHA-256 hashing."""
@@ -532,7 +580,9 @@ class TestMcpSdkClientToolAndResourceCalls:
             )
 
     @pytest.mark.asyncio
-    async def test_call_tool_descriptor_conflict(self, mock_operation_slot, dummy_connection) -> None:
+    async def test_call_tool_descriptor_conflict(
+        self, mock_operation_slot, dummy_connection
+    ) -> None:
         """Verify call_tool raises McpConflict when server descriptor does not match fence."""
         load_connection = AsyncMock(return_value=(dummy_connection, "secret-token"))
         client = McpSdkClient(
@@ -571,8 +621,12 @@ class TestMcpSdkClientToolAndResourceCalls:
         async def mock_open_client(*args, **kwargs):
             yield mock_client
 
-        with patch.object(client, "_open_client", side_effect=mock_open_client), \
-             patch.object(client, "_list_capability_pages", AsyncMock(return_value=([descriptor], 1, 1))):
+        with (
+            patch.object(client, "_open_client", side_effect=mock_open_client),
+            patch.object(
+                client, "_list_capability_pages", AsyncMock(return_value=([descriptor], 1, 1))
+            ),
+        ):
             with pytest.raises(mcp_repository.McpConflict, match="descriptor changed"):
                 await client.call_tool(
                     scope=SCOPE,

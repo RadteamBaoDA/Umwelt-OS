@@ -54,10 +54,14 @@ class GoogleCollectionResult:
 
 
 def _provider_record(
-    *, provider: str, identity: str, version: str | None,
+    *,
+    provider: str,
+    identity: str,
+    version: str | None,
     timestamp_basis: Literal["provider_modified", "provider_published", "collection"],
     provider_modified_at: datetime | None,
-    source_fields: dict[str, object], content_truncated: bool = False,
+    source_fields: dict[str, object],
+    content_truncated: bool = False,
 ) -> dict[str, object]:
     """Build the typed provider provenance envelope consumed by durable native ingestion.
 
@@ -176,13 +180,19 @@ def _read_cursor(raw: str | None, provider: str) -> dict[str, Any] | None:
     except (TypeError, ValueError) as exc:
         raise GoogleProviderError("cursor_invalid") from exc
     version = value.get("v") if isinstance(value, dict) else None
-    if (not isinstance(value, dict) or isinstance(version, bool) or version not in {1, 2}
-            or value.get("provider") != provider):
+    if (
+        not isinstance(value, dict)
+        or isinstance(version, bool)
+        or version not in {1, 2}
+        or value.get("provider") != provider
+    ):
         raise GoogleProviderError("cursor_invalid")
     return value
 
 
-def _append_record(records: list[IngestionRecord], record: IngestionRecord, current_bytes: int) -> int:
+def _append_record(
+    records: list[IngestionRecord], record: IngestionRecord, current_bytes: int
+) -> int:
     """Append within record and ingestion-batch caps or fail before a cursor can advance."""
     record_bytes = len(record.model_dump_json().encode("utf-8"))
     if len(records) >= MAX_RECORDS or current_bytes + record_bytes > MAX_BATCH_BYTES:
@@ -201,8 +211,14 @@ def _gmail_message_record(message: object, collected_at: datetime) -> IngestionR
         raise GoogleProviderError("gmail_message_invalid")
     identifier = message.get("id")
     thread_id = message.get("threadId")
-    if (not isinstance(identifier, str) or not identifier or len(identifier) > 512
-            or not isinstance(thread_id, str) or not thread_id or len(thread_id) > 512):
+    if (
+        not isinstance(identifier, str)
+        or not identifier
+        or len(identifier) > 512
+        or not isinstance(thread_id, str)
+        or not thread_id
+        or len(thread_id) > 512
+    ):
         raise GoogleProviderError("gmail_message_identity_invalid")
     raw_payload = message.get("payload")
     payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
@@ -210,7 +226,8 @@ def _gmail_message_record(message: object, collected_at: datetime) -> IngestionR
     headers: list[Any] = raw_headers if isinstance(raw_headers, list) else []
     fields = {
         item.get("name", "").lower(): item.get("value", "")
-        for item in headers if isinstance(item, dict) and isinstance(item.get("name"), str)
+        for item in headers
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
     }
     text_parts: list[str] = []
     pending = [payload]
@@ -226,8 +243,12 @@ def _gmail_message_record(message: object, collected_at: datetime) -> IngestionR
         raw_body = part.get("body")
         body: dict[str, Any] = raw_body if isinstance(raw_body, dict) else {}
         data = body.get("data")
-        if (part.get("mimeType") == "text/plain" and isinstance(data, str)
-                and not body.get("attachmentId") and not part.get("filename")):
+        if (
+            part.get("mimeType") == "text/plain"
+            and isinstance(data, str)
+            and not body.get("attachmentId")
+            and not part.get("filename")
+        ):
             try:
                 decoded = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8")
             except (ValueError, UnicodeDecodeError) as exc:
@@ -243,8 +264,11 @@ def _gmail_message_record(message: object, collected_at: datetime) -> IngestionR
     snippet: str = raw_snippet if isinstance(raw_snippet, str) else ""
     content: str = body_text or snippet
     raw_internal_date = message.get("internalDate")
-    if (isinstance(raw_internal_date, bool) or not isinstance(raw_internal_date, (str, int))
-            or not str(raw_internal_date).isdigit()):
+    if (
+        isinstance(raw_internal_date, bool)
+        or not isinstance(raw_internal_date, (str, int))
+        or not str(raw_internal_date).isdigit()
+    ):
         raise GoogleProviderError("gmail_timestamp_invalid")
     try:
         observed_at = datetime.fromtimestamp(int(raw_internal_date) / 1000, tz=UTC)
@@ -266,14 +290,19 @@ def _gmail_message_record(message: object, collected_at: datetime) -> IngestionR
         metadata={
             "thread_id": thread_id,
             "history_id": history_id,
-            "label_ids": [value for value in message.get("labelIds", []) if isinstance(value, str)][:100],
+            "label_ids": [value for value in message.get("labelIds", []) if isinstance(value, str)][
+                :100
+            ],
             "subject": subject,
             "from": _text(fields.get("from", ""), 1000),
             "to": _text(fields.get("to", ""), 2000),
             "date_header": _text(fields.get("date", ""), 255),
             "provider_record": _provider_record(
-                provider="google_mail", identity=identifier, version=history_id,
-                timestamp_basis="provider_published", provider_modified_at=None,
+                provider="google_mail",
+                identity=identifier,
+                version=history_id,
+                timestamp_basis="provider_published",
+                provider_modified_at=None,
                 source_fields={
                     "thread_id": thread_id,
                     "history_id": history_id,
@@ -302,13 +331,19 @@ class _GmailPass:
 def _history_state(selected_labels: list[str], history_id: object) -> dict[str, Any]:
     """Return a fresh v2 cursor positioned at the start of the history phase for ``history_id``."""
     return {
-        "v": 2, "provider": "gmail", "labels": selected_labels, "phase": "history",
-        "history_id": history_id, "history_page_token": None, "history_offset": 0,
+        "v": 2,
+        "provider": "gmail",
+        "labels": selected_labels,
+        "phase": "history",
+        "history_id": history_id,
+        "history_page_token": None,
+        "history_offset": 0,
     }
 
 
 async def _gmail_initial_state(
-    run: _GmailPass, state: dict[str, Any] | None,
+    run: _GmailPass,
+    state: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Create or migrate the Gmail cursor state for this receipt.
 
@@ -330,10 +365,14 @@ async def _gmail_initial_state(
         if not isinstance(history_id, str) or not history_id.isdigit():
             raise GoogleProviderError("gmail_profile_invalid")
         return {
-            "v": 2, "provider": "gmail", "labels": run.selected_labels, "phase": "snapshot",
+            "v": 2,
+            "provider": "gmail",
+            "labels": run.selected_labels,
+            "phase": "snapshot",
             "history_id": history_id,
             "snapshot_after": int((collected - timedelta(days=30)).timestamp()),
-            "page_token": None, "offset": 0,
+            "page_token": None,
+            "offset": 0,
         }
     if "phase" not in state:
         # Existing v1 cursors are already past the snapshot and continue from their history ID.
@@ -349,18 +388,23 @@ async def _gmail_collect_message(run: _GmailPass, identifier: str) -> None:
     Raises:
         GoogleProviderError: malformed message or labels payload.
     """
-    message = await _json_async(await run.budget.get(
-        f"{GMAIL_ORIGIN}/messages/{quote(identifier, safe='')}?format=full"))
+    message = await _json_async(
+        await run.budget.get(f"{GMAIL_ORIGIN}/messages/{quote(identifier, safe='')}?format=full")
+    )
     if not isinstance(message, dict):
         raise GoogleProviderError("gmail_message_invalid")
     labels = message.get("labelIds", [])
     if not isinstance(labels, list):
         raise GoogleProviderError("gmail_labels_invalid")
     if set(run.selected_labels).intersection(value for value in labels if isinstance(value, str)):
-        run.batch_bytes = _append_record(run.records, _gmail_message_record(message, run.collected), run.batch_bytes)
+        run.batch_bytes = _append_record(
+            run.records, _gmail_message_record(message, run.collected), run.batch_bytes
+        )
 
 
-def _gmail_pause_result(run: _GmailPass, state: dict[str, Any], pause: _ReceiptPause) -> GoogleCollectionResult:
+def _gmail_pause_result(
+    run: _GmailPass, state: dict[str, Any], pause: _ReceiptPause
+) -> GoogleCollectionResult:
     """Turn a receipt pause into a truncated partial result, or raise when no progress was made.
 
     Raises:
@@ -375,26 +419,41 @@ def _gmail_pause_result(run: _GmailPass, state: dict[str, Any], pause: _ReceiptP
     return GoogleCollectionResult(tuple(run.records), result_cursor, "truncated")
 
 
-async def _gmail_snapshot_step(run: _GmailPass, state: dict[str, Any], history_id: str) -> GoogleCollectionResult:
+async def _gmail_snapshot_step(
+    run: _GmailPass, state: dict[str, Any], history_id: str
+) -> GoogleCollectionResult:
     """Collect one snapshot page (resuming at the saved offset) and advance to the next page or history phase."""
     snapshot_after = state.get("snapshot_after")
     page_token = state.get("page_token")
     offset = state.get("offset", 0)
-    if (isinstance(snapshot_after, bool) or not isinstance(snapshot_after, int)
-            or page_token is not None and (not isinstance(page_token, str) or not page_token)
-            or isinstance(offset, bool) or not isinstance(offset, int) or offset < 0):
+    if (
+        isinstance(snapshot_after, bool)
+        or not isinstance(snapshot_after, int)
+        or page_token is not None
+        and (not isinstance(page_token, str) or not page_token)
+        or isinstance(offset, bool)
+        or not isinstance(offset, int)
+        or offset < 0
+    ):
         raise GoogleProviderError("gmail_cursor_invalid")
     params: dict[str, Any] = {
-        "labelIds": run.selected_labels, "q": f"after:{snapshot_after}", "maxResults": MAX_GMAIL_DETAILS_PER_RECEIPT,
+        "labelIds": run.selected_labels,
+        "q": f"after:{snapshot_after}",
+        "maxResults": MAX_GMAIL_DETAILS_PER_RECEIPT,
     }
     if page_token:
         params["pageToken"] = page_token
     try:
-        page = await _json_async(await run.budget.get(f"{GMAIL_ORIGIN}/messages?{urlencode(params, doseq=True)}"))
+        page = await _json_async(
+            await run.budget.get(f"{GMAIL_ORIGIN}/messages?{urlencode(params, doseq=True)}")
+        )
         if not isinstance(page, dict) or not isinstance(page.get("messages", []), list):
             raise GoogleProviderError("gmail_messages_invalid")
-        ids = [item["id"] for item in page.get("messages", []) if isinstance(item, dict)
-               and isinstance(item.get("id"), str)]
+        ids = [
+            item["id"]
+            for item in page.get("messages", [])
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
         if offset > len(ids):
             raise GoogleProviderError("gmail_cursor_offset_invalid")
         for index in range(offset, len(ids)):
@@ -408,8 +467,11 @@ async def _gmail_snapshot_step(run: _GmailPass, state: dict[str, Any], history_i
     except _ReceiptPause as pause:
         return _gmail_pause_result(run, state, pause)
     result_cursor = _cursor_json(state)
-    return GoogleCollectionResult(tuple(run.records), result_cursor,
-                                  "truncated" if state.get("phase") == "snapshot" else "returned_snapshot")
+    return GoogleCollectionResult(
+        tuple(run.records),
+        result_cursor,
+        "truncated" if state.get("phase") == "snapshot" else "returned_snapshot",
+    )
 
 
 def _history_message_ids(page: dict[str, Any]) -> list[str]:
@@ -437,20 +499,31 @@ def _history_message_ids(page: dict[str, Any]) -> list[str]:
     return message_ids
 
 
-async def _gmail_history_step(run: _GmailPass, state: dict[str, Any], history_id: str) -> GoogleCollectionResult:
+async def _gmail_history_step(
+    run: _GmailPass, state: dict[str, Any], history_id: str
+) -> GoogleCollectionResult:
     """Collect one bounded slice of a history page, replaying the page until all its IDs are done."""
     page_token = state.get("history_page_token")
     offset = state.get("history_offset", 0)
-    if (page_token is not None and (not isinstance(page_token, str) or not page_token)
-            or isinstance(offset, bool) or not isinstance(offset, int) or offset < 0):
+    if (
+        page_token is not None
+        and (not isinstance(page_token, str) or not page_token)
+        or isinstance(offset, bool)
+        or not isinstance(offset, int)
+        or offset < 0
+    ):
         raise GoogleProviderError("gmail_cursor_invalid")
     params: dict[str, Any] = {
-        "startHistoryId": history_id, "historyTypes": ["messageAdded", "labelAdded"], "maxResults": 100,
+        "startHistoryId": history_id,
+        "historyTypes": ["messageAdded", "labelAdded"],
+        "maxResults": 100,
     }
     if page_token:
         params["pageToken"] = page_token
     try:
-        page = await _json_async(await run.budget.get(f"{GMAIL_ORIGIN}/history?{urlencode(params, doseq=True)}"))
+        page = await _json_async(
+            await run.budget.get(f"{GMAIL_ORIGIN}/history?{urlencode(params, doseq=True)}")
+        )
         if not isinstance(page, dict):
             raise GoogleProviderError("gmail_page_invalid")
         message_ids = _history_message_ids(page)
@@ -474,8 +547,9 @@ async def _gmail_history_step(run: _GmailPass, state: dict[str, Any], history_id
         return _gmail_pause_result(run, state, pause)
     result_cursor = _cursor_json(state)
     complete_page = state.get("history_offset", 0) == 0 and state.get("history_page_token") is None
-    return GoogleCollectionResult(tuple(run.records), result_cursor,
-                                  "returned_snapshot" if complete_page else "truncated")
+    return GoogleCollectionResult(
+        tuple(run.records), result_cursor, "returned_snapshot" if complete_page else "truncated"
+    )
 
 
 async def collect_gmail(
@@ -493,15 +567,24 @@ async def collect_gmail(
     never causes already accepted messages to be fetched again. The caller must commit each
     returned cursor only with the matching durable ingestion receipt.
     """
-    if (not label_ids or any(not isinstance(label, str) or not label or len(label) > 256 or "/" in label
-                             for label in label_ids) or len(set(label_ids)) != len(label_ids)):
+    if (
+        not label_ids
+        or any(
+            not isinstance(label, str) or not label or len(label) > 256 or "/" in label
+            for label in label_ids
+        )
+        or len(set(label_ids)) != len(label_ids)
+    ):
         raise GoogleProviderError("gmail_label_scope_invalid")
     state = _read_cursor(cursor, "gmail")
     collected = collected_at or datetime.now(UTC)
     if collected.tzinfo is None:
         raise GoogleProviderError("collection_time_invalid")
     run = _GmailPass(
-        _RequestBudget(access_token, before_request), sorted(label_ids), collected, cursor,
+        _RequestBudget(access_token, before_request),
+        sorted(label_ids),
+        collected,
+        cursor,
     )
     state = await _gmail_initial_state(run, state)
     history_id = state.get("history_id")
@@ -515,7 +598,9 @@ async def collect_gmail(
     return await _gmail_history_step(run, state, history_id)
 
 
-def _calendar_event_record(calendar_id: str, event: object, collected_at: datetime) -> IngestionRecord:
+def _calendar_event_record(
+    calendar_id: str, event: object, collected_at: datetime
+) -> IngestionRecord:
     """Map an event with cancellation/recurrence metadata and typed provider identity/version.
 
     The event start remains the observed event time; the provider ``updated`` timestamp, when
@@ -526,8 +611,13 @@ def _calendar_event_record(calendar_id: str, event: object, collected_at: dateti
     event_id = event.get("id")
     status = event.get("status", "confirmed")
     provider_id = f"{calendar_id}/{event_id}" if isinstance(event_id, str) else ""
-    if (not isinstance(event_id, str) or not event_id or len(provider_id) > 512
-            or not isinstance(status, str) or status not in {"confirmed", "tentative", "cancelled"}):
+    if (
+        not isinstance(event_id, str)
+        or not event_id
+        or len(provider_id) > 512
+        or not isinstance(status, str)
+        or status not in {"confirmed", "tentative", "cancelled"}
+    ):
         raise GoogleProviderError("calendar_event_identity_invalid")
     raw_start = event.get("start")
     raw_end = event.get("end")
@@ -537,11 +627,15 @@ def _calendar_event_record(calendar_id: str, event: object, collected_at: dateti
     raw_updated = event.get("updated") or event.get("created")
     if isinstance(raw_start_value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_start_value):
         try:
-            observed_at = datetime.combine(date.fromisoformat(raw_start_value), datetime.min.time(), tzinfo=UTC)
+            observed_at = datetime.combine(
+                date.fromisoformat(raw_start_value), datetime.min.time(), tzinfo=UTC
+            )
         except ValueError as exc:
             raise GoogleProviderError("calendar_event_time_invalid") from exc
     else:
-        observed_at = _utc(raw_start_value or raw_updated, fallback=collected_at if status == "cancelled" else None)
+        observed_at = _utc(
+            raw_start_value or raw_updated, fallback=collected_at if status == "cancelled" else None
+        )
     title = _text(event.get("summary", ""), 1000)
     description = _text(event.get("description", ""), 10000)
     content = title + ("\n\n" if title and description else "") + description
@@ -561,36 +655,66 @@ def _calendar_event_record(calendar_id: str, event: object, collected_at: dateti
             "status": status,
             "start": _text(raw_start_value, 512) if isinstance(raw_start_value, str) else None,
             "end": _text(end.get("dateTime") or end.get("date"), 512)
-            if isinstance(end.get("dateTime") or end.get("date"), str) else None,
-            "start_timezone": _text(start["timeZone"], 128) if isinstance(start.get("timeZone"), str) else None,
-            "end_timezone": _text(end["timeZone"], 128) if isinstance(end.get("timeZone"), str) else None,
+            if isinstance(end.get("dateTime") or end.get("date"), str)
+            else None,
+            "start_timezone": _text(start["timeZone"], 128)
+            if isinstance(start.get("timeZone"), str)
+            else None,
+            "end_timezone": _text(end["timeZone"], 128)
+            if isinstance(end.get("timeZone"), str)
+            else None,
             "recurrence": [_text(item, 1000) for item in recurrence[:32]],
             "recurring_event_id": event.get("recurringEventId"),
             "original_start_time": event.get("originalStartTime"),
-            "html_link": _text(event["htmlLink"], 2048) if isinstance(event.get("htmlLink"), str) else None,
+            "html_link": _text(event["htmlLink"], 2048)
+            if isinstance(event.get("htmlLink"), str)
+            else None,
             "provider_record": _provider_record(
-                provider="google_calendar", identity=provider_id,
+                provider="google_calendar",
+                identity=provider_id,
                 version=updated if isinstance(updated, str) else None,
                 timestamp_basis="provider_modified" if isinstance(updated, str) else "collection",
                 provider_modified_at=_utc(updated) if isinstance(updated, str) else None,
-                content_truncated=(len(event.get("summary", "")) > 1000
-                                   if isinstance(event.get("summary", ""), str) else False)
-                or (len(event.get("description", "")) > 10000
-                    if isinstance(event.get("description", ""), str) else False),
+                content_truncated=(
+                    len(event.get("summary", "")) > 1000
+                    if isinstance(event.get("summary", ""), str)
+                    else False
+                )
+                or (
+                    len(event.get("description", "")) > 10000
+                    if isinstance(event.get("description", ""), str)
+                    else False
+                ),
                 source_fields={
                     "calendar_id": calendar_id,
                     "event_id": event_id,
                     "status": status,
                     "recurrence": [_text(item, 255) for item in recurrence[:32]],
-                    **({"start": _text(raw_start_value, 64)} if isinstance(raw_start_value, str) else {}),
-                    **({"end": _text(end.get("dateTime") or end.get("date"), 64)}
-                       if isinstance(end.get("dateTime") or end.get("date"), str) else {}),
-                    **({"start_timezone": _text(start["timeZone"], 128)}
-                       if isinstance(start.get("timeZone"), str) else {}),
-                    **({"end_timezone": _text(end["timeZone"], 128)}
-                       if isinstance(end.get("timeZone"), str) else {}),
-                    **({"html_link": _text(event["htmlLink"], 2048)}
-                       if isinstance(event.get("htmlLink"), str) else {}),
+                    **(
+                        {"start": _text(raw_start_value, 64)}
+                        if isinstance(raw_start_value, str)
+                        else {}
+                    ),
+                    **(
+                        {"end": _text(end.get("dateTime") or end.get("date"), 64)}
+                        if isinstance(end.get("dateTime") or end.get("date"), str)
+                        else {}
+                    ),
+                    **(
+                        {"start_timezone": _text(start["timeZone"], 128)}
+                        if isinstance(start.get("timeZone"), str)
+                        else {}
+                    ),
+                    **(
+                        {"end_timezone": _text(end["timeZone"], 128)}
+                        if isinstance(end.get("timeZone"), str)
+                        else {}
+                    ),
+                    **(
+                        {"html_link": _text(event["htmlLink"], 2048)}
+                        if isinstance(event.get("htmlLink"), str)
+                        else {}
+                    ),
                 },
             ),
         },
@@ -598,7 +722,10 @@ def _calendar_event_record(calendar_id: str, event: object, collected_at: dateti
 
 
 def _calendar_state(
-    state: dict[str, Any] | None, selected_ids: list[str], scope_hash: str, collected: datetime,
+    state: dict[str, Any] | None,
+    selected_ids: list[str],
+    scope_hash: str,
+    collected: datetime,
 ) -> dict[str, Any]:
     """Create, migrate (v1 per-ID tokens) or validate the calendar cursor against the selected scope.
 
@@ -610,10 +737,14 @@ def _calendar_state(
     """
     if state is None:
         state = {
-            "v": 2, "provider": "calendar", "scope_hash": scope_hash,
+            "v": 2,
+            "provider": "calendar",
+            "scope_hash": scope_hash,
             "time_min": (collected - timedelta(days=30)).isoformat(),
             "time_max": (collected + timedelta(days=90)).isoformat(),
-            "tokens": [None] * len(selected_ids), "calendar_index": 0, "page_token": None,
+            "tokens": [None] * len(selected_ids),
+            "calendar_index": 0,
+            "page_token": None,
         }
     elif "scope_hash" not in state:
         # V1 stored tokens by ID and continues compatible tokens; newly selected calendars bootstrap.
@@ -623,11 +754,14 @@ def _calendar_state(
         if any(not isinstance(token, str) or not token for token in old_tokens.values()):
             raise GoogleProviderError("calendar_cursor_invalid")
         state = {
-            "v": 2, "provider": "calendar", "scope_hash": scope_hash,
+            "v": 2,
+            "provider": "calendar",
+            "scope_hash": scope_hash,
             "time_min": (collected - timedelta(days=30)).isoformat(),
             "time_max": (collected + timedelta(days=90)).isoformat(),
             "tokens": [old_tokens.get(calendar_id) for calendar_id in selected_ids],
-            "calendar_index": 0, "page_token": None,
+            "calendar_index": 0,
+            "page_token": None,
         }
     if state.get("scope_hash") != scope_hash:
         raise GoogleProviderError("calendar_cursor_scope_changed")
@@ -636,19 +770,29 @@ def _calendar_state(
     page_token = state.get("page_token")
     time_min = state.get("time_min")
     time_max = state.get("time_max")
-    if (not isinstance(tokens, list) or len(tokens) != len(selected_ids)
-            or any(token is not None and (not isinstance(token, str) or not token) for token in tokens)
-            or isinstance(calendar_index, bool) or not isinstance(calendar_index, int)
-            or not 0 <= calendar_index < len(selected_ids)
-            or page_token is not None and (not isinstance(page_token, str) or not page_token)
-            or not isinstance(time_min, str) or not isinstance(time_max, str)):
+    if (
+        not isinstance(tokens, list)
+        or len(tokens) != len(selected_ids)
+        or any(token is not None and (not isinstance(token, str) or not token) for token in tokens)
+        or isinstance(calendar_index, bool)
+        or not isinstance(calendar_index, int)
+        or not 0 <= calendar_index < len(selected_ids)
+        or page_token is not None
+        and (not isinstance(page_token, str) or not page_token)
+        or not isinstance(time_min, str)
+        or not isinstance(time_max, str)
+    ):
         raise GoogleProviderError("calendar_cursor_invalid")
     return state
 
 
 async def _calendar_events_page(
-    budget: _RequestBudget, calendar_id: str, sync_token: str | None, page_token: str | None,
-    time_min: str, time_max: str,
+    budget: _RequestBudget,
+    calendar_id: str,
+    sync_token: str | None,
+    page_token: str | None,
+    time_min: str,
+    time_max: str,
 ) -> tuple[dict[str, Any], list[Any]]:
     """Fetch one bounded (20-event) page, using the sync token when present else the fixed time window.
 
@@ -686,8 +830,13 @@ async def collect_calendar(
     order. Each API page is limited to 20 events, so 25 calls cannot exceed the 500-record receipt
     cap. Continuation state advances only with the caller's durable receipt.
     """
-    if (not calendar_ids or any(not isinstance(value, str) or not value or len(value) > 512 for value in calendar_ids)
-            or len(set(calendar_ids)) != len(calendar_ids)):
+    if (
+        not calendar_ids
+        or any(
+            not isinstance(value, str) or not value or len(value) > 512 for value in calendar_ids
+        )
+        or len(set(calendar_ids)) != len(calendar_ids)
+    ):
         raise GoogleProviderError("calendar_scope_invalid")
     selected_ids = sorted(calendar_ids)
     scope_hash = hashlib.sha256("\0".join(selected_ids).encode("utf-8")).hexdigest()
@@ -710,10 +859,12 @@ async def collect_calendar(
             calendar_id = selected_ids[calendar_index]
             token = tokens[calendar_index]
             page, items = await _calendar_events_page(
-                budget, calendar_id, token, page_token, time_min, time_max)
+                budget, calendar_id, token, page_token, time_min, time_max
+            )
             for event in items:
                 batch_bytes = _append_record(
-                    records, _calendar_event_record(calendar_id, event, collected), batch_bytes)
+                    records, _calendar_event_record(calendar_id, event, collected), batch_bytes
+                )
             next_page = _next_page(page)
             if next_page:
                 page_token = next_page
@@ -727,7 +878,9 @@ async def collect_calendar(
                 page_token = None
                 if calendar_index == len(selected_ids):
                     calendar_index = 0
-                state.update({"tokens": tokens, "calendar_index": calendar_index, "page_token": None})
+                state.update(
+                    {"tokens": tokens, "calendar_index": calendar_index, "page_token": None}
+                )
                 # A completed sweep is one receipt boundary; do not query the newly refreshed sync tokens again.
                 if calendar_index == 0 and all(isinstance(value, str) for value in tokens):
                     break
@@ -740,12 +893,19 @@ async def collect_calendar(
                 raise pause.deferred from pause
             raise GoogleProviderError("calendar_cursor_no_progress") from pause
         return GoogleCollectionResult(tuple(records), result_cursor, "truncated")
-    complete = calendar_index == 0 and page_token is None and all(isinstance(token, str) for token in tokens)
-    return GoogleCollectionResult(tuple(records), _cursor_json(state),
-                                  "returned_snapshot" if complete else "truncated")
+    complete = (
+        calendar_index == 0
+        and page_token is None
+        and all(isinstance(token, str) for token in tokens)
+    )
+    return GoogleCollectionResult(
+        tuple(records), _cursor_json(state), "returned_snapshot" if complete else "truncated"
+    )
 
 
-def _drive_file_record(file: object, content: bytes, mime_type: str, collected_at: datetime) -> IngestionRecord:
+def _drive_file_record(
+    file: object, content: bytes, mime_type: str, collected_at: datetime
+) -> IngestionRecord:
     """Map an allowed Drive text file with identity, modification version and typed provenance.
 
     Only parser-supported text is passed here; the source envelope retains bounded Drive metadata
@@ -769,7 +929,9 @@ def _drive_file_record(file: object, content: bytes, mime_type: str, collected_a
     modified = file.get("modifiedTime")
     observed_at = _utc(modified, fallback=collected_at)
     name = _text(file.get("name", ""), 500)
-    modified_version = modified if isinstance(modified, str) else str(file.get("version", "snapshot"))
+    modified_version = (
+        modified if isinstance(modified, str) else str(file.get("version", "snapshot"))
+    )
     return IngestionRecord(
         provider_id=file["id"],
         content=text,
@@ -780,10 +942,15 @@ def _drive_file_record(file: object, content: bytes, mime_type: str, collected_a
             "name": name,
             "mime_type": mime_type,
             "modified_time": modified,
-            "web_view_link": _text(file["webViewLink"], 2048) if isinstance(file.get("webViewLink"), str) else None,
-            "md5_checksum": _text(file["md5Checksum"], 64) if isinstance(file.get("md5Checksum"), str) else None,
+            "web_view_link": _text(file["webViewLink"], 2048)
+            if isinstance(file.get("webViewLink"), str)
+            else None,
+            "md5_checksum": _text(file["md5Checksum"], 64)
+            if isinstance(file.get("md5Checksum"), str)
+            else None,
             "provider_record": _provider_record(
-                provider="google_drive", identity=file["id"],
+                provider="google_drive",
+                identity=file["id"],
                 version=modified_version[:255] if isinstance(modified, str) else None,
                 timestamp_basis="provider_modified" if isinstance(modified, str) else "collection",
                 provider_modified_at=observed_at if isinstance(modified, str) else None,
@@ -791,10 +958,16 @@ def _drive_file_record(file: object, content: bytes, mime_type: str, collected_a
                     "name": name,
                     "mime_type": mime_type,
                     **({"modified_time": _text(modified, 64)} if isinstance(modified, str) else {}),
-                    **({"web_view_link": _text(file["webViewLink"], 2048)}
-                       if isinstance(file.get("webViewLink"), str) else {}),
-                    **({"md5_checksum": _text(file["md5Checksum"], 64)}
-                       if isinstance(file.get("md5Checksum"), str) else {}),
+                    **(
+                        {"web_view_link": _text(file["webViewLink"], 2048)}
+                        if isinstance(file.get("webViewLink"), str)
+                        else {}
+                    ),
+                    **(
+                        {"md5_checksum": _text(file["md5Checksum"], 64)}
+                        if isinstance(file.get("md5Checksum"), str)
+                        else {}
+                    ),
                 },
             ),
         },
@@ -802,7 +975,9 @@ def _drive_file_record(file: object, content: bytes, mime_type: str, collected_a
 
 
 async def _drive_file_content(
-    budget: _RequestBudget, file: dict[str, Any], collected_at: datetime,
+    budget: _RequestBudget,
+    file: dict[str, Any],
+    collected_at: datetime,
 ) -> IngestionRecord | None:
     """Fetch one selected Drive file as exported Google Doc text or an existing parser text MIME."""
     identifier = file.get("id")
@@ -811,7 +986,9 @@ async def _drive_file_content(
         raise GoogleProviderError("drive_file_invalid")
     quoted_id = quote(identifier, safe="")
     if mime_type == _GOOGLE_DOC:
-        body = await budget.get(f"{DRIVE_ORIGIN}/files/{quoted_id}/export?mimeType=text%2Fplain", accept="text/plain")
+        body = await budget.get(
+            f"{DRIVE_ORIGIN}/files/{quoted_id}/export?mimeType=text%2Fplain", accept="text/plain"
+        )
         return _drive_file_record(file, body, "text/plain", collected_at)
     if mime_type not in _TEXT_MIMES:
         return None
@@ -822,7 +999,9 @@ async def _drive_file_content(
 async def _drive_file_metadata(budget: _RequestBudget, identifier: str) -> dict[str, Any]:
     """Read only Drive file metadata fields required for type filtering and provenance."""
     fields = "id,name,mimeType,modifiedTime,webViewLink,md5Checksum,version,trashed,parents"
-    body = await budget.get(f"{DRIVE_ORIGIN}/files/{quote(identifier, safe='')}?{urlencode({'fields': fields})}")
+    body = await budget.get(
+        f"{DRIVE_ORIGIN}/files/{quote(identifier, safe='')}?{urlencode({'fields': fields})}"
+    )
     value = await _json_async(body)
     if not isinstance(value, dict) or value.get("id") != identifier:
         raise GoogleProviderError("drive_file_invalid")
@@ -830,8 +1009,12 @@ async def _drive_file_metadata(budget: _RequestBudget, identifier: str) -> dict[
 
 
 async def _expand_folder_children(
-    budget: _RequestBudget, identifier: str, files: dict[str, dict[str, Any]],
-    visited_folders: set[str], pending: list[str], pages: int,
+    budget: _RequestBudget,
+    identifier: str,
+    files: dict[str, dict[str, Any]],
+    visited_folders: set[str],
+    pending: list[str],
+    pages: int,
 ) -> int:
     """Page through one folder's non-trashed children, queueing sub-folders and recording files.
 
@@ -875,7 +1058,8 @@ async def _expand_folder_children(
 
 
 async def _expand_drive_scope(
-    budget: _RequestBudget, scope_ids: tuple[str, ...],
+    budget: _RequestBudget,
+    scope_ids: tuple[str, ...],
 ) -> dict[str, dict[str, Any]]:
     """Resolve selected files and recursively expand folders under shared page, byte and record caps.
 
@@ -904,12 +1088,16 @@ async def _expand_drive_scope(
         visited_folders.add(identifier)
         if len(files) + len(visited_folders) > MAX_RECORDS:
             raise rest.CollectionIncomplete
-        pages = await _expand_folder_children(budget, identifier, files, visited_folders, pending, pages)
+        pages = await _expand_folder_children(
+            budget, identifier, files, visited_folders, pending, pages
+        )
     return files
 
 
 async def _drive_change_in_scope(
-    budget: _RequestBudget, file: dict[str, Any], scope_ids: tuple[str, ...],
+    budget: _RequestBudget,
+    file: dict[str, Any],
+    scope_ids: tuple[str, ...],
 ) -> bool:
     """Check selected-file and ancestor-folder membership without retaining an unbounded file index.
 
@@ -936,7 +1124,9 @@ async def _drive_change_in_scope(
         visited.add(parent_id)
         ancestor = await _drive_file_metadata(budget, parent_id)
         next_parents = ancestor.get("parents", [])
-        if not isinstance(next_parents, list) or any(not isinstance(parent, str) for parent in next_parents):
+        if not isinstance(next_parents, list) or any(
+            not isinstance(parent, str) for parent in next_parents
+        ):
             raise GoogleProviderError("drive_change_parents_invalid")
         pending.extend(next_parents)
     if pending:
@@ -978,7 +1168,11 @@ async def _drive_snapshot_scope_item(run: _DrivePass, folders: list[Any], index:
 
 
 async def _drive_snapshot_child(
-    run: _DrivePass, folders: list[Any], folder: dict[str, Any], items: list[Any], offset: int,
+    run: _DrivePass,
+    folders: list[Any],
+    folder: dict[str, Any],
+    items: list[Any],
+    offset: int,
 ) -> None:
     """Process the folder child at ``offset`` (queue sub-folders, collect files) and advance the offset.
 
@@ -999,7 +1193,8 @@ async def _drive_snapshot_child(
 async def _drive_fetch_folder_page(run: _DrivePass, folder: dict[str, Any]) -> None:
     """Fetch the next bounded (3-child) page of ``folder`` and store it with its continuation token."""
     params: dict[str, str | int] = {
-        "q": f"'{folder['id']}' in parents and trashed = false", "pageSize": 3,
+        "q": f"'{folder['id']}' in parents and trashed = false",
+        "pageSize": 3,
         "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink,md5Checksum,version,trashed,parents)",
     }
     if folder.get("page_token"):
@@ -1008,10 +1203,14 @@ async def _drive_fetch_folder_page(run: _DrivePass, folder: dict[str, Any]) -> N
     if not isinstance(page, dict) or not isinstance(page.get("files", []), list):
         raise GoogleProviderError("drive_folder_children_invalid")
     children = page.get("files", [])
-    if len(children) > 3 or any(not isinstance(item, dict) or not isinstance(item.get("id"), str) for item in children):
+    if len(children) > 3 or any(
+        not isinstance(item, dict) or not isinstance(item.get("id"), str) for item in children
+    ):
         raise GoogleProviderError("drive_folder_child_invalid")
     next_page = _next_page(page)
-    folder.update({"items": children, "offset": 0, "page_token": next_page, "done": next_page is None})
+    folder.update(
+        {"items": children, "offset": 0, "page_token": next_page, "done": next_page is None}
+    )
 
 
 async def _drive_snapshot_phase(run: _DrivePass) -> None:
@@ -1022,19 +1221,33 @@ async def _drive_snapshot_phase(run: _DrivePass) -> None:
     """
     state, file_ids = run.state, run.file_ids
     if not isinstance(state.get("change_token"), str):
-        start_page = await _json_async(await run.budget.get(
-            f"{DRIVE_ORIGIN}/changes/startPageToken?{urlencode({'fields': 'startPageToken'})}"))
+        start_page = await _json_async(
+            await run.budget.get(
+                f"{DRIVE_ORIGIN}/changes/startPageToken?{urlencode({'fields': 'startPageToken'})}"
+            )
+        )
         start_token = start_page.get("startPageToken") if isinstance(start_page, dict) else None
         if not isinstance(start_token, str) or not start_token:
             raise GoogleProviderError("drive_start_token_invalid")
         state["change_token"] = start_token
     index, folders = state.get("scope_index"), state.get("folders")
-    if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index <= len(file_ids) or not isinstance(folders, list):
+    if (
+        isinstance(index, bool)
+        or not isinstance(index, int)
+        or not 0 <= index <= len(file_ids)
+        or not isinstance(folders, list)
+    ):
         raise GoogleProviderError("drive_cursor_invalid")
     while True:
         folder = state.get("folder")
         if folder is None and folders:
-            folder = {"id": folders.pop(), "page_token": None, "items": [], "offset": 0, "done": False}
+            folder = {
+                "id": folders.pop(),
+                "page_token": None,
+                "items": [],
+                "offset": 0,
+                "done": False,
+            }
             state["folder"] = folder
         if folder is None and index < len(file_ids):
             await _drive_snapshot_scope_item(run, folders, index)
@@ -1072,7 +1285,9 @@ async def _drive_apply_change(run: _DrivePass, items: list[Any], offset: int) ->
     if change.get("removed") is not True:
         if not isinstance(file, dict) or file.get("id") != change["fileId"]:
             raise GoogleProviderError("drive_change_file_invalid")
-        if file.get("trashed") is not True and await _drive_change_in_scope(run.budget, file, run.file_ids):
+        if file.get("trashed") is not True and await _drive_change_in_scope(
+            run.budget, file, run.file_ids
+        ):
             await _drive_append_content(run, file)
     state["change_offset"] = offset + 1
 
@@ -1080,10 +1295,19 @@ async def _drive_apply_change(run: _DrivePass, items: list[Any], offset: int) ->
 async def _drive_fetch_changes_page(run: _DrivePass, token: str) -> None:
     """Fetch one bounded (3-change) changes page and record its continuation or next start token."""
     state = run.state
-    page = await _json_async(await run.budget.get(f"{DRIVE_ORIGIN}/changes?{urlencode({
-        'pageToken': token, 'pageSize': 3,
-        'fields': 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,modifiedTime,webViewLink,md5Checksum,version,trashed,parents))',
-    })}"))
+    page = await _json_async(
+        await run.budget.get(
+            f"{DRIVE_ORIGIN}/changes?{
+                urlencode(
+                    {
+                        'pageToken': token,
+                        'pageSize': 3,
+                        'fields': 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,modifiedTime,webViewLink,md5Checksum,version,trashed,parents))',
+                    }
+                )
+            }"
+        )
+    )
     if not isinstance(page, dict) or not isinstance(page.get("changes", []), list):
         raise GoogleProviderError("drive_changes_invalid")
     changes = page.get("changes", [])
@@ -1119,8 +1343,15 @@ async def _drive_changes_phase(run: _DrivePass) -> None:
         if new_start is not None:
             if not isinstance(new_start, str) or not new_start:
                 raise GoogleProviderError("drive_next_token_invalid")
-            run.state = {"v": 2, "provider": "drive", "phase": "changes", "scope_hash": run.scope_hash,
-                         "change_token": new_start, "change_items": [], "change_offset": 0}
+            run.state = {
+                "v": 2,
+                "provider": "drive",
+                "phase": "changes",
+                "scope_hash": run.scope_hash,
+                "change_token": new_start,
+                "change_items": [],
+                "change_offset": 0,
+            }
             return
         token = state.get("change_token")
         if not isinstance(token, str) or not token:
@@ -1135,15 +1366,29 @@ def _drive_initial_state(state: dict[str, Any] | None, scope_hash: str) -> dict[
         GoogleProviderError: ``drive_cursor_invalid`` for a legacy cursor without a usable token.
     """
     if state is None:
-        return {"v": 2, "provider": "drive", "phase": "snapshot", "scope_hash": scope_hash,
-                "scope_index": 0, "folders": [], "folder": None}
+        return {
+            "v": 2,
+            "provider": "drive",
+            "phase": "snapshot",
+            "scope_hash": scope_hash,
+            "scope_index": 0,
+            "folders": [],
+            "folder": None,
+        }
     if state.get("phase") is None:
         # Older cursors already hold a changes start token, so continue without repeating the snapshot.
         old_token = state.get("page_token")
         if not isinstance(old_token, str) or not old_token:
             raise GoogleProviderError("drive_cursor_invalid")
-        return {"v": 2, "provider": "drive", "phase": "changes", "scope_hash": scope_hash,
-                "change_token": old_token, "change_items": [], "change_offset": 0}
+        return {
+            "v": 2,
+            "provider": "drive",
+            "phase": "changes",
+            "scope_hash": scope_hash,
+            "change_token": old_token,
+            "change_items": [],
+            "change_offset": 0,
+        }
     return state
 
 
@@ -1161,8 +1406,14 @@ async def collect_drive(
     without rereading accepted files. Parent ancestry scopes nested-folder changes without retaining
     an unbounded index. Google Docs export as plain text; unsupported binary types are skipped.
     """
-    if (not file_ids or any(not isinstance(value, str) or not value or len(value) > 512 or "/" in value for value in file_ids)
-            or len(set(file_ids)) != len(file_ids)):
+    if (
+        not file_ids
+        or any(
+            not isinstance(value, str) or not value or len(value) > 512 or "/" in value
+            for value in file_ids
+        )
+        or len(set(file_ids)) != len(file_ids)
+    ):
         raise GoogleProviderError("drive_scope_invalid")
     original_cursor = cursor
     state = _read_cursor(cursor, "drive")
@@ -1176,7 +1427,10 @@ async def collect_drive(
     if collected.tzinfo is None:
         raise GoogleProviderError("collection_time_invalid")
     run = _DrivePass(
-        _RequestBudget(access_token, before_request), collected, file_ids, scope_hash,
+        _RequestBudget(access_token, before_request),
+        collected,
+        file_ids,
+        scope_hash,
         _drive_initial_state(state, scope_hash),
     )
     try:

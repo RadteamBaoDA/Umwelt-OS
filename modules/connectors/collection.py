@@ -67,21 +67,64 @@ from modules.sources import public as sources
 from modules.sources.public import ConnectorSource, SourceFence
 
 RENEW_EVERY_SECONDS = 20
-PAYLOAD_RATE_LIMIT_BACKOFF = timedelta(minutes=15)  # body-level throttling carries no Retry-After; coarse until observed
-PURE_MAX_BYTES = {"ecb": 256 * 1024, "cisa_kev": 4 * 1024 * 1024}  # every other P3 body is capped at macro.MAX_BODY_BYTES
+PAYLOAD_RATE_LIMIT_BACKOFF = timedelta(
+    minutes=15
+)  # body-level throttling carries no Retry-After; coarse until observed
+PURE_MAX_BYTES = {
+    "ecb": 256 * 1024,
+    "cisa_kev": 4 * 1024 * 1024,
+}  # every other P3 body is capped at macro.MAX_BODY_BYTES
 PURE_PROVIDERS = (  # coingecko needs a key slot
-    "world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "nasa_eonet", "cisa_kev",
+    "world_bank",
+    "frankfurter",
+    "ecb",
+    "binance",
+    "alternative_me",
+    "usgs",
+    "coinpaprika",
+    "nasa_eonet",
+    "cisa_kev",
     *JSON_FEEDS,  # table-driven JSON list/event feeds (providers/json_feed.py)
-    "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",  # bespoke keyless mappers
+    "noaa_kp",
+    "open_er_api",
+    "oecd_cli",
+    "iss_position",
+    "disease_sh",
+    "ioda",
+    "nvd",  # bespoke keyless mappers
     "vn_stock",
 )
-KEYED_PROVIDERS = {provider: row.placement for provider, row in KEYED.items()}  # provider -> stored credential header_name (header | query:<p> | path:<t>)
-SIMPLE_NATIVE = frozenset({"youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x", "github_releases", "alpha_vantage", "open_meteo", "google_mail", "google_calendar", "google_drive", "health", "home_assistant", "notion", "slack"})
+KEYED_PROVIDERS = {
+    provider: row.placement for provider, row in KEYED.items()
+}  # provider -> stored credential header_name (header | query:<p> | path:<t>)
+SIMPLE_NATIVE = frozenset(
+    {
+        "youtube",
+        "arxiv",
+        "huggingface",
+        "bluesky",
+        "reddit",
+        "mastodon",
+        "x",
+        "github_releases",
+        "alpha_vantage",
+        "open_meteo",
+        "google_mail",
+        "google_calendar",
+        "google_drive",
+        "health",
+        "home_assistant",
+        "notion",
+        "slack",
+    }
+)
 # Both HTTP-shaped error families a collaborator (Sources, terms, access admission) may raise.
 _HTTP_ERRORS = (HTTPException, DomainError)
 HEADER_AUTH_PROVIDERS = LOCAL_SERVICE_PROVIDERS
 REVISIONED_REST_PROVIDERS = frozenset({"notion", "slack", "mastodon", "x"})
-REFUSED_HERE: frozenset[str] = frozenset()  # providers that must never run here (GitHub/Telegram are native now)
+REFUSED_HERE: frozenset[str] = (
+    frozenset()
+)  # providers that must never run here (GitHub/Telegram are native now)
 Snapshot = tuple[int, int, int]
 
 
@@ -144,7 +187,9 @@ class Run:
 Adapter = Callable[[Run], Awaitable[None]]
 logger = logging.getLogger(__name__)
 
-ADAPTERS: dict[str, Adapter] = {}  # provider id -> explicit adapter (HN and later free providers register here)
+ADAPTERS: dict[
+    str, Adapter
+] = {}  # provider id -> explicit adapter (HN and later free providers register here)
 
 
 class SendGate:
@@ -157,12 +202,22 @@ class SendGate:
     """
 
     def __init__(
-        self, factory: async_sessionmaker[AsyncSession], attempt: Attempt, *, settings: Settings,
-        deadline: float, quota_provider: str | None, fingerprint: Callable[[], Awaitable[str | None]] | None = None,
+        self,
+        factory: async_sessionmaker[AsyncSession],
+        attempt: Attempt,
+        *,
+        settings: Settings,
+        deadline: float,
+        quota_provider: str | None,
+        fingerprint: Callable[[], Awaitable[str | None]] | None = None,
     ) -> None:
         """Bind the per-attempt gate to its session factory, attempt, deadline, quota provider and fingerprint callback."""
         self._factory, self._a, self._settings = factory, attempt, settings
-        self._deadline, self._quota_provider, self._fingerprint = deadline, quota_provider, fingerprint
+        self._deadline, self._quota_provider, self._fingerprint = (
+            deadline,
+            quota_provider,
+            fingerprint,
+        )
         self.sends = 0
         self.captured_operation: UUID | None = None
         self._armed = False
@@ -183,6 +238,7 @@ class SendGate:
 
     def bind_credential(self, fingerprint: str) -> None:
         """Key the shared credential budget on a deployment-keyed fingerprint (never the key)."""
+
         async def bound() -> str:
             """Return the already-computed fingerprint."""
             return fingerprint
@@ -204,12 +260,16 @@ class SendGate:
             raise TimeoutError
         async with self._factory() as session:
             if not await scheduler.renew_admission(
-                session, a.ref.request_id, a.ref.admission_token, multi_workspace_enabled=a.multi,
+                session,
+                a.ref.request_id,
+                a.ref.admission_token,
+                multi_workspace_enabled=a.multi,
             ):
                 raise CollectionFenceLost("admission_lost")
             try:
                 source = await sources.get_connector_source(
-                    session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi)
+                    session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi
+                )
                 if source is None:
                     raise CollectionFenceLost("source_inactive", "source_inactive")
                 revision = await provider_terms.require_terms_eligible(session, source)
@@ -221,18 +281,31 @@ class SendGate:
                 raise CollectionFenceLost("terms_changed", "revision_changed")
             if source.provider == "alpha_vantage" and self.captured_operation is not None:
                 await self._check_world_credential(session, source)
-            if (source.provider in KEYED_PROVIDERS or source.provider in HEADER_AUTH_PROVIDERS
-                    or source.provider in REVISIONED_REST_PROVIDERS):
+            if (
+                source.provider in KEYED_PROVIDERS
+                or source.provider in HEADER_AUTH_PROVIDERS
+                or source.provider in REVISIONED_REST_PROVIDERS
+            ):
                 await self._check_credential_revision(session, source)
 
-    async def _check_credential_revision(self, session: AsyncSession, source: ConnectorSource) -> None:
+    async def _check_credential_revision(
+        self, session: AsyncSession, source: ConnectorSource
+    ) -> None:
         """Owner key re-entry bumps ``credential_revision``; any send admitted before it is lost."""
         a = self._a
         try:
             source_fence, row, _ = await provisioning.lock_connector(
-                session, source.id, scope=a.scope, multi_workspace_enabled=a.multi,
-                expected_access_fence=a.access_fence)
-            if source_fence is None or row is None or row.credential_revision != a.credential_revision:
+                session,
+                source.id,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+                expected_access_fence=a.access_fence,
+            )
+            if (
+                source_fence is None
+                or row is None
+                or row.credential_revision != a.credential_revision
+            ):
                 raise CollectionFenceLost("credential_changed", "revision_changed")
         finally:
             await session.rollback()
@@ -242,13 +315,27 @@ class SendGate:
         a = self._a
         try:
             source_fence, row, _ = await provisioning.lock_connector(
-                session, source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=a.scope,
-                multi_workspace_enabled=a.multi, expected_access_fence=a.access_fence)
-            if source_fence is None or row is None or not await connectors.validate_world_credential_operation_in_uow(
-                session, source.id, source_generation=source.generation, connector_revision=a.connector_revision,
-                expected_operation_id=self.captured_operation,  # type: ignore[arg-type]
-                scope=a.scope, multi_workspace_enabled=a.multi, access_fence=a.access_fence,
-                source_fence=source_fence,
+                session,
+                source.id,
+                provisioning._ALL_CREDENTIAL_SLOTS,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+                expected_access_fence=a.access_fence,
+            )
+            if (
+                source_fence is None
+                or row is None
+                or not await connectors.validate_world_credential_operation_in_uow(
+                    session,
+                    source.id,
+                    source_generation=source.generation,
+                    connector_revision=a.connector_revision,
+                    expected_operation_id=self.captured_operation,  # type: ignore[arg-type]
+                    scope=a.scope,
+                    multi_workspace_enabled=a.multi,
+                    access_fence=a.access_fence,
+                    source_fence=source_fence,
+                )
             ):
                 raise CollectionFenceLost("credential_changed", "revision_changed")
         finally:
@@ -264,9 +351,16 @@ class SendGate:
         async with self._factory() as session:
             try:
                 await quota.debit_send(
-                    session, provider_id=self._quota_provider, workspace_id=a.scope.workspace_id,
-                    request_id=a.ref.request_id, admission_token=a.ref.admission_token, attempt=a.attempt,
-                    send_sequence=self.sends, request_target=self._quota_provider, credential=fingerprint)
+                    session,
+                    provider_id=self._quota_provider,
+                    workspace_id=a.scope.workspace_id,
+                    request_id=a.ref.request_id,
+                    admission_token=a.ref.admission_token,
+                    attempt=a.attempt,
+                    send_sequence=self.sends,
+                    request_target=self._quota_provider,
+                    credential=fingerprint,
+                )
                 await session.commit()  # the debit is durable BEFORE bytes leave the process
             except BaseException:
                 await session.rollback()
@@ -275,6 +369,7 @@ class SendGate:
 
 def _alpha_fingerprint(run_state: dict[str, Any]) -> Callable[[], Awaitable[str | None]]:
     """Build the cached, deployment-keyed Alpha Vantage key fingerprint callback shared by the gate and quota debit."""
+
     async def fingerprint() -> str | None:
         """Deployment-keyed fingerprint of the Alpha key so one key shares one budget across workspaces."""
         from modules.connectors.providers.world_data import get_alpha_vantage_key
@@ -284,29 +379,52 @@ def _alpha_fingerprint(run_state: dict[str, Any]) -> Callable[[], Awaitable[str 
         a: Attempt = run_state["attempt"]
         async with run_state["factory"]() as session:
             credential = await get_alpha_vantage_key(
-                session, a.source, run_state["settings"], scope=a.scope, multi_workspace_enabled=a.multi,
-                access_fence=a.access_fence, source_fence=a.source_fence)
+                session,
+                a.source,
+                run_state["settings"],
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+                access_fence=a.access_fence,
+                source_fence=a.source_fence,
+            )
         if credential is None:
             raise CollectionFenceLost("credential_changed", "revision_changed")
         run_state["alpha"] = quota.credential_fingerprint(
-            credential[0], deployment_key=run_state["settings"].connector_credential_encryption_key.get_secret_value())
+            credential[0],
+            deployment_key=run_state[
+                "settings"
+            ].connector_credential_encryption_key.get_secret_value(),
+        )
         return str(run_state["alpha"])
 
     return fingerprint
 
 
 async def _load_attempt(
-    factory: async_sessionmaker[AsyncSession], admission: CollectionAdmissionRead, multi: bool,
+    factory: async_sessionmaker[AsyncSession],
+    admission: CollectionAdmissionRead,
+    multi: bool,
 ) -> Attempt | None:
     """Reload scope, source and fences from the durable request; None when it is no longer ours."""
     async with factory() as session:
         request = await session.get(ConnectorCollectionRequest, admission.request_id)
-        if request is None or request.status != "running" or request.active_admission_token != admission.admission_token:
+        if (
+            request is None
+            or request.status != "running"
+            or request.active_admission_token != admission.admission_token
+        ):
             await session.rollback()
             return None
         scope = scheduler._request_scope(request)
-        captured: Snapshot = (request.source_generation, request.connector_revision, request.backend_revision)
-        terms_revision, access_revision = request.terms_revision, request.access_configuration_revision
+        captured: Snapshot = (
+            request.source_generation,
+            request.connector_revision,
+            request.backend_revision,
+        )
+        terms_revision, access_revision = (
+            request.terms_revision,
+            request.access_configuration_revision,
+        )
         source: ConnectorSource | None = None
         source_fence: SourceFence | None = None
         access_fence: AccessFence | None = None
@@ -314,11 +432,23 @@ async def _load_attempt(
         denied = "permission_lost"
         for resolve in (1, 2):  # a 409 is re-resolved once, then becomes terminal stale_scope
             try:
-                await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi)
-                source = await sources.get_connector_source(session, request.source_id, scope=scope, multi_workspace_enabled=multi)
-                source_fence = await sources.get_source_fence(session, request.source_id, scope=scope, multi_workspace_enabled=multi)
-                access_fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi)
-                row = await session.get(ConnectorProvisioning, request.source_id) if source is not None else None
+                await connectors._connector_access(
+                    session, scope=scope, multi_workspace_enabled=multi
+                )
+                source = await sources.get_connector_source(
+                    session, request.source_id, scope=scope, multi_workspace_enabled=multi
+                )
+                source_fence = await sources.get_source_fence(
+                    session, request.source_id, scope=scope, multi_workspace_enabled=multi
+                )
+                access_fence = await read_access_fence(
+                    session, scope=scope, multi_workspace_enabled=multi
+                )
+                row = (
+                    await session.get(ConnectorProvisioning, request.source_id)
+                    if source is not None
+                    else None
+                )
                 break
             except _HTTP_ERRORS as exc:
                 source = None
@@ -329,8 +459,15 @@ async def _load_attempt(
                 break
         # Copy every ORM field used below before the rollback: rollback expires the rows and the session
         # closes on exit, so a later attribute read raises DetachedInstanceError (seen as executor_error).
-        provisioned = None if row is None else (
-            row.desired_revision, row.backend_revision, (row.desired_configuration or {}).get("auth_method"))
+        provisioned = (
+            None
+            if row is None
+            else (
+                row.desired_revision,
+                row.backend_revision,
+                (row.desired_configuration or {}).get("auth_method"),
+            )
+        )
         credential_revision = request.credential_revision
         await session.rollback()
     if source is None or source_fence is None or access_fence is None or provisioned is None:
@@ -344,24 +481,40 @@ async def _load_attempt(
         await _settle(factory, admission, outcome="cancelled", error_code="revision_changed")
         return None
     return Attempt(
-        ref=CollectionRequestRef(request_id=admission.request_id, admission_token=admission.admission_token),
-        attempt=admission.attempt, scope=scope, multi=multi, source=source, access_fence=access_fence,
-        source_fence=source_fence, terms_revision=terms_revision, connector_revision=desired_revision,
-        authenticated=auth_method not in (None, "none") or source.provider in {"google_mail", "google_calendar", "google_drive"},
+        ref=CollectionRequestRef(
+            request_id=admission.request_id, admission_token=admission.admission_token
+        ),
+        attempt=admission.attempt,
+        scope=scope,
+        multi=multi,
+        source=source,
+        access_fence=access_fence,
+        source_fence=source_fence,
+        terms_revision=terms_revision,
+        connector_revision=desired_revision,
+        authenticated=auth_method not in (None, "none")
+        or source.provider in {"google_mail", "google_calendar", "google_drive"},
         credential_revision=credential_revision,
     )
 
 
 async def _settle(
-    factory: async_sessionmaker[AsyncSession], admission: CollectionAdmissionRead, **kwargs: Any,
+    factory: async_sessionmaker[AsyncSession],
+    admission: CollectionAdmissionRead,
+    **kwargs: Any,
 ) -> bool:
     """Settle the admission in its own short session; returns whether the scheduler accepted the settlement."""
     async with factory() as session:
-        return await scheduler.settle_admission(session, admission.request_id, admission.admission_token, **kwargs)
+        return await scheduler.settle_admission(
+            session, admission.request_id, admission.admission_token, **kwargs
+        )
 
 
 async def _heartbeat(
-    factory: async_sessionmaker[AsyncSession], attempt: Attempt, main: "asyncio.Task[Any]", lost: asyncio.Event,
+    factory: async_sessionmaker[AsyncSession],
+    attempt: Attempt,
+    main: "asyncio.Task[Any]",
+    lost: asyncio.Event,
     interval: float = RENEW_EVERY_SECONDS,
 ) -> None:
     """Renew the slot independently of response streaming; a failed renewal stops the attempt."""
@@ -369,7 +522,11 @@ async def _heartbeat(
         await asyncio.sleep(interval)
         async with factory() as session:
             ok = await scheduler.renew_admission(
-                session, attempt.ref.request_id, attempt.ref.admission_token, multi_workspace_enabled=attempt.multi)
+                session,
+                attempt.ref.request_id,
+                attempt.ref.admission_token,
+                multi_workspace_enabled=attempt.multi,
+            )
         if not ok:
             lost.set()
             main.cancel()
@@ -383,11 +540,14 @@ async def _record_rate_limit(run: Run, deadline: datetime) -> None:
         return
     fingerprint = await run.gate._fingerprint() if run.gate._fingerprint is not None else None
     async with run.factory() as session:
-        await quota.defer_provider(session, provider_id=provider_id, until=deadline, credential=fingerprint)
+        await quota.defer_provider(
+            session, provider_id=provider_id, until=deadline, credential=fingerprint
+        )
         await session.commit()
 
 
 # ---------------------------------------------------------------- generic adapters
+
 
 def _records(raw: list[dict[str, Any]]) -> list[IngestionRecord]:
     """Validate raw adapter dicts into ``IngestionRecord`` objects stamped with one shared collection time."""
@@ -396,7 +556,9 @@ def _records(raw: list[dict[str, Any]]) -> list[IngestionRecord]:
 
 
 async def _publish_realtime_snapshot(
-    run: Run, records: Sequence[IngestionRecord], collected_at: datetime,
+    run: Run,
+    records: Sequence[IngestionRecord],
+    collected_at: datetime,
 ) -> None:
     """Publish a bounded hot snapshot to Redis and wake up active SSE streams after ingestion commits.
 
@@ -437,7 +599,9 @@ async def _publish_realtime_snapshot(
                 "observed_at": rec.observed_at.isoformat(),
                 "title": str((rec.metadata or {}).get("title") or "")[:240],
             }
-            for rec in sorted(run.extras.get("preview") or records, key=lambda r: r.observed_at, reverse=True)[:25]
+            for rec in sorted(
+                run.extras.get("preview") or records, key=lambda r: r.observed_at, reverse=True
+            )[:25]
         ]
         payload = json.dumps(
             {
@@ -462,40 +626,69 @@ async def _publish_realtime_snapshot(
 
 
 async def _accept_generic(
-    run: Run, records: list[dict[str, Any]], cursor_before: str | None, cursor_after: str | None,
+    run: Run,
+    records: list[dict[str, Any]],
+    cursor_before: str | None,
+    cursor_after: str | None,
     update: CollectionStateUpdate | None = None,
 ) -> None:
     """Hand a generic collection to the ingestion owner; empty means a no-change settlement."""
     a = run.attempt
     async with run.factory() as session:
-        await lock_access_fence(session, scope=a.scope, expected=a.access_fence, multi_workspace_enabled=a.multi)
+        await lock_access_fence(
+            session, scope=a.scope, expected=a.access_fence, multi_workspace_enabled=a.multi
+        )
         parsed = _records(records) if records else []
         if parsed:
             # Re-polled items already stored add only garbage rows; an all-seen poll settles as no-change.
             parsed = await ingestion.drop_seen_records(
-                session, source_id=a.source.id, source_generation=a.source.generation,
-                provider=a.source.provider, records=parsed)
+                session,
+                source_id=a.source.id,
+                source_generation=a.source.generation,
+                provider=a.source.provider,
+                records=parsed,
+            )
             if not parsed and cursor_after != cursor_before:
                 # The no-change path carries no batch cursor, so hand it the cursor this walk earned.
                 update = replace(update or CollectionStateUpdate(), cursor_after=cursor_after)
         if not parsed:
             await ingestion.accept_collection_no_changes(
-                session, source_id=a.source.id, source_generation=a.source.generation,
-                connector_revision=a.connector_revision, request_ref=a.ref, scope=a.scope,
-                multi_workspace_enabled=a.multi, state_update=update, expected_cursor=cursor_before)
+                session,
+                source_id=a.source.id,
+                source_generation=a.source.generation,
+                connector_revision=a.connector_revision,
+                request_ref=a.ref,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+                state_update=update,
+                expected_cursor=cursor_before,
+            )
             return
         batch = ReceiveBatch(
-            source_id=a.source.id, source_generation=a.source.generation, connector_revision=a.connector_revision,
-            batch_key=f"connector-request:{a.ref.request_id}", cursor_before=cursor_before, cursor_after=cursor_after,
-            records=parsed)
+            source_id=a.source.id,
+            source_generation=a.source.generation,
+            connector_revision=a.connector_revision,
+            batch_key=f"connector-request:{a.ref.request_id}",
+            cursor_before=cursor_before,
+            cursor_after=cursor_after,
+            records=parsed,
+        )
         await ingestion.receive_connector_batch(
-            session, batch, None, scope=a.scope, multi_workspace_enabled=a.multi, request_ref=a.ref,
-            state_update=update)
+            session,
+            batch,
+            None,
+            scope=a.scope,
+            multi_workspace_enabled=a.multi,
+            request_ref=a.ref,
+            state_update=update,
+        )
     await _publish_realtime_snapshot(run, parsed, datetime.now(UTC))
 
 
 def _generic_update(
-    update: CollectionStateUpdate | None, selection: dict[str, Any] | None, taken: int,
+    update: CollectionStateUpdate | None,
+    selection: dict[str, Any] | None,
+    taken: int,
 ) -> CollectionStateUpdate | None:
     """Attach a generic path's run stats to its state update; no-op when the path recorded none.
 
@@ -505,7 +698,11 @@ def _generic_update(
     """
     if not selection:
         return update
-    stats = {"new": taken, "backlog": selection.get("backlog", 0), "failed_calls": selection.get("failed_calls", 0)}
+    stats = {
+        "new": taken,
+        "backlog": selection.get("backlog", 0),
+        "failed_calls": selection.get("failed_calls", 0),
+    }
     if selection.get("truncated"):
         stats["truncated"] = True
     return replace(update or CollectionStateUpdate(), stats=stats)
@@ -516,7 +713,8 @@ async def _state(run: Run) -> CollectionState:
     a = run.attempt
     async with run.factory() as session:
         state = await ingestion.get_collection_state(
-            session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi)
+            session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi
+        )
         await session.rollback()
     return state
 
@@ -545,7 +743,9 @@ class Walk:
     not_modified: bool = False
 
 
-async def _accept_walk(run: Run, state: CollectionState, walk: Walk, resume: rest.Checkpoint | None) -> None:
+async def _accept_walk(
+    run: Run, state: CollectionState, walk: Walk, resume: rest.Checkpoint | None
+) -> None:
     """Commit a walk: complete => cursor + validators advance; partial => checkpoint only.
 
     The checkpoint, validators, cursor, batch, receipt, request outcome and slot release share the
@@ -553,24 +753,48 @@ async def _accept_walk(run: Run, state: CollectionState, walk: Walk, resume: res
     """
     cursor = state.cursor
     if walk.not_modified:  # 304: cursor, validators and last-good observations stay untouched
-        await _accept_generic(run, [], cursor, cursor, CollectionStateUpdate(continuation_state=None))
+        await _accept_generic(
+            run, [], cursor, cursor, CollectionStateUpdate(continuation_state=None)
+        )
         return
     if walk.next_url is None:
         cursor_after = walk.max_time or cursor
         update = CollectionStateUpdate(
-            continuation_state=None, update_validators=True, etag=walk.etag, last_modified=walk.last_modified,
-            cursor_after=cursor_after if cursor_after != cursor else None)
-        await _accept_generic(run, walk.records, cursor, cursor_after, _generic_update(update, getattr(run, "extras", {}).get("selection"), len(walk.records)))
+            continuation_state=None,
+            update_validators=True,
+            etag=walk.etag,
+            last_modified=walk.last_modified,
+            cursor_after=cursor_after if cursor_after != cursor else None,
+        )
+        await _accept_generic(
+            run,
+            walk.records,
+            cursor,
+            cursor_after,
+            _generic_update(update, getattr(run, "extras", {}).get("selection"), len(walk.records)),
+        )
         return
     checkpoint = rest.Checkpoint(
-        url=walk.next_url, revision=run.attempt.connector_revision, cursor=cursor, max_time=walk.max_time,
-        etag=walk.etag, last_modified=walk.last_modified,
-        ids=[rest.id_hash(str(r["provider_id"])) for r in walk.records] or (resume.ids if resume else []))
+        url=walk.next_url,
+        revision=run.attempt.connector_revision,
+        cursor=cursor,
+        max_time=walk.max_time,
+        etag=walk.etag,
+        last_modified=walk.last_modified,
+        ids=[rest.id_hash(str(r["provider_id"])) for r in walk.records]
+        or (resume.ids if resume else []),
+    )
     await _accept_generic(
-        run, walk.records, cursor, cursor,
+        run,
+        walk.records,
+        cursor,
+        cursor,
         _generic_update(
             CollectionStateUpdate(continuation_state=checkpoint.encode(), coverage="partial"),
-            getattr(run, "extras", {}).get("selection"), len(walk.records)))
+            getattr(run, "extras", {}).get("selection"),
+            len(walk.records),
+        ),
+    )
 
 
 async def _rest_secret(run: Run) -> tuple[str, str]:
@@ -583,21 +807,37 @@ async def _rest_secret(run: Run) -> tuple[str, str]:
         row = await session.get(ConnectorRestCredential, a.source.id)
         # Copy the columns before rollback: rollback expires the ORM row and a lazy reload outside the
         # session raises (surfacing as executor_error instead of the credential outcome).
-        credential = None if row is None else SimpleNamespace(
-            state=row.state, encrypted_secret=row.encrypted_secret, source_generation=row.source_generation,
-            configuration_revision=row.configuration_revision, operation_id=row.operation_id, header_name=row.header_name)
+        credential = (
+            None
+            if row is None
+            else SimpleNamespace(
+                state=row.state,
+                encrypted_secret=row.encrypted_secret,
+                source_generation=row.source_generation,
+                configuration_revision=row.configuration_revision,
+                operation_id=row.operation_id,
+                header_name=row.header_name,
+            )
+        )
         await session.rollback()
     if (
-        credential is None or credential.state != "ready" or credential.encrypted_secret is None
+        credential is None
+        or credential.state != "ready"
+        or credential.encrypted_secret is None
         or credential.source_generation != a.source.generation
         or credential.configuration_revision != a.connector_revision
     ):
         raise rest.ProviderHttpError(401)  # owner re-entry required
     try:
         secret = decrypt_rest_secret(
-            run.settings.connector_credential_encryption_key.get_secret_value(), credential.encrypted_secret,
-            source_id=a.source.id, operation_id=credential.operation_id, source_generation=credential.source_generation,
-            configuration_revision=credential.configuration_revision, header_name=credential.header_name)
+            run.settings.connector_credential_encryption_key.get_secret_value(),
+            credential.encrypted_secret,
+            source_id=a.source.id,
+            operation_id=credential.operation_id,
+            source_generation=credential.source_generation,
+            configuration_revision=credential.configuration_revision,
+            header_name=credential.header_name,
+        )
     except CredentialEncryptionUnavailable as exc:
         raise rest.ProviderHttpError(401) from exc
     return credential.header_name, secret
@@ -614,8 +854,14 @@ async def _optional_rest_secret(run: Run) -> tuple[str, str] | None:
     a = run.attempt
     async with run.factory() as session:
         credential = await session.get(ConnectorRestCredential, a.source.id)
-        snapshot = None if credential is None else (
-            credential.state, credential.source_generation, credential.configuration_revision,
+        snapshot = (
+            None
+            if credential is None
+            else (
+                credential.state,
+                credential.source_generation,
+                credential.configuration_revision,
+            )
         )
         await session.rollback()
     if snapshot is None:
@@ -626,9 +872,12 @@ async def _optional_rest_secret(run: Run) -> tuple[str, str] | None:
 
 
 def _with_header(
-    send: Callable[..., Awaitable[rest.Fetched]], header: str, secret: str,
+    send: Callable[..., Awaitable[rest.Fetched]],
+    header: str,
+    secret: str,
 ) -> Callable[..., Awaitable[rest.Fetched]]:
     """Wrap a gated send so the owner-entered header rides every same-origin request."""
+
     async def fetch(url: str, headers: dict[str, str] | None = None, **kwargs: Any) -> rest.Fetched:
         """Call the wrapped sender with the owner-supplied header merged over the caller's headers."""
         return await send(url, headers={**(headers or {}), header: secret}, **kwargs)
@@ -647,13 +896,31 @@ async def _run_rest(run: Run) -> None:
     config = configuration(a.source)
     state = await _state(run)
     resume = rest.Checkpoint.decode(
-        state.continuation_state, revision=a.connector_revision, cursor=state.cursor, origin_url=str(config.url))
+        state.continuation_state,
+        revision=a.connector_revision,
+        cursor=state.cursor,
+        origin_url=str(config.url),
+    )
     collected = await rest.collect_rest(
-        config, state.cursor, fetch=fetch, resume=resume,
-        conditional=None if resume else _conditional(state, a.connector_revision))
-    await _accept_walk(run, state, Walk(
-        collected.records, collected.continuation_url, collected.max_time, collected.etag,
-        collected.last_modified, collected.not_modified), resume)
+        config,
+        state.cursor,
+        fetch=fetch,
+        resume=resume,
+        conditional=None if resume else _conditional(state, a.connector_revision),
+    )
+    await _accept_walk(
+        run,
+        state,
+        Walk(
+            collected.records,
+            collected.continuation_url,
+            collected.max_time,
+            collected.etag,
+            collected.last_modified,
+            collected.not_modified,
+        ),
+        resume,
+    )
 
 
 class _NotModified(Exception):  # control-flow signal for HTTP 304
@@ -672,7 +939,11 @@ async def _run_rss(run: Run) -> None:
     config = configuration(a.source)
     state = await _state(run)
     resume = rest.Checkpoint.decode(
-        state.continuation_state, revision=a.connector_revision, cursor=state.cursor, origin_url=None)
+        state.continuation_state,
+        revision=a.connector_revision,
+        cursor=state.cursor,
+        origin_url=None,
+    )
     conditional = None if resume else _conditional(state, a.connector_revision)
     stats: dict[str, Any] = {}
     first: dict[str, Any] = {"pending": True}
@@ -691,7 +962,9 @@ async def _run_rss(run: Run) -> None:
         return fetched.body
 
     try:
-        result = await read_rss(resume.url if resume else str(config.feed_url), state.cursor, fetch=fetch, stats=stats)
+        result = await read_rss(
+            resume.url if resume else str(config.feed_url), state.cursor, fetch=fetch, stats=stats
+        )
     except _NotModified:
         await _accept_walk(run, state, Walk([], None, None, None, None, not_modified=True), resume)
         return
@@ -710,13 +983,25 @@ async def _run_rss(run: Run) -> None:
         seen.add(identifier)
         records.append(record)
     newest = str(result["cursor_after"]) if result["cursor_after"] is not None else None
-    max_time = rest.later(resume.max_time if resume else None, newest if newest != state.cursor else None)
-    await _accept_walk(run, state, Walk(
-        records, stats.get("resume_url"), max_time,
-        resume.etag if resume else first.get("etag"), resume.last_modified if resume else first.get("lm")), resume)
+    max_time = rest.later(
+        resume.max_time if resume else None, newest if newest != state.cursor else None
+    )
+    await _accept_walk(
+        run,
+        state,
+        Walk(
+            records,
+            stats.get("resume_url"),
+            max_time,
+            resume.etag if resume else first.get("etag"),
+            resume.last_modified if resume else first.get("lm"),
+        ),
+        resume,
+    )
 
 
 # ---------------------------------------------------------------- native web + MCP (generic sources)
+
 
 class _PageText(HTMLParser):
     """Visible text and anchors of one HTML page (stdlib; no optional crawl extra needed)."""
@@ -774,12 +1059,21 @@ async def _run_web(run: Run) -> None:
         a = run.attempt
         async with run.factory() as session:
             await ingestion.queue_connector_crawl(
-                session, a.source.id, a.source.generation, a.connector_revision, state.cursor,
+                session,
+                a.source.id,
+                a.source.generation,
+                a.connector_revision,
+                state.cursor,
                 {
-                    "url": start, "mode": "playwright", "max_pages": config.max_pages,
-                    "max_depth": config.max_depth, "timeout_seconds": config.timeout_seconds,
+                    "url": start,
+                    "mode": "playwright",
+                    "max_pages": config.max_pages,
+                    "max_depth": config.max_depth,
+                    "timeout_seconds": config.timeout_seconds,
                 },
-                scope=a.scope, multi_workspace_enabled=a.multi, request_ref=a.ref,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+                request_ref=a.ref,
             )
         return
     origin = rest._origin(start)
@@ -789,15 +1083,25 @@ async def _run_web(run: Run) -> None:
     while queue and len(records) < config.max_pages:
         url, depth = queue.pop(0)
         fetched = await run.gate.fetch_bytes(
-            url, headers={"Accept": "text/html,application/xhtml+xml"},
-            max_bytes=min(rest.MAX_PAGE_BYTES, rest.MAX_TRANSPORT_BYTES - spent), timeout=config.timeout_seconds)
+            url,
+            headers={"Accept": "text/html,application/xhtml+xml"},
+            max_bytes=min(rest.MAX_PAGE_BYTES, rest.MAX_TRANSPORT_BYTES - spent),
+            timeout=config.timeout_seconds,
+        )
         body = _require_body(fetched)
         spent += len(body)
         # HTMLParser.feed on a multi-MB page would stall the worker loop (heartbeats, heavy-slot renewal).
         parts, links = await to_thread_joined(_parse_page, body.decode("utf-8", errors="replace"))
-        records.append(normalize({
-            "provider_id": url, "content": "\n".join(parts)[:200_000],
-            "observed_at": datetime.now(UTC).isoformat(), "metadata": {"url": url}}))
+        records.append(
+            normalize(
+                {
+                    "provider_id": url,
+                    "content": "\n".join(parts)[:200_000],
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "metadata": {"url": url},
+                }
+            )
+        )
         if depth < config.max_depth:
             for href in links:
                 target = urldefrag(urljoin(url, href))[0]
@@ -829,7 +1133,9 @@ async def _run_mcp(run: Run) -> None:
         """Per-call authorization hook: run the gate, remember the first lost-authority exception and re-raise it."""
         nonlocal lost
         try:
-            await run.gate()  # raises CollectionFenceLost / TermsIneligible / TimeoutError; never returns False
+            await (
+                run.gate()
+            )  # raises CollectionFenceLost / TermsIneligible / TimeoutError; never returns False
         except (CollectionFenceLost, TermsIneligible, TimeoutError) as exc:
             lost = exc
             raise
@@ -838,9 +1144,16 @@ async def _run_mcp(run: Run) -> None:
     for call in config.calls:
         try:
             read = await tools.read_collection_capability(
-                cast(Any, runtime), connection_id=config.connection_id, grant_id=call.grant_id, source_id=a.source.id,
-                source_generation=a.source.generation, arguments=call.arguments, authorize_extra=authorized,
-                scope=a.scope, multi_workspace_enabled=a.multi)
+                cast(Any, runtime),
+                connection_id=config.connection_id,
+                grant_id=call.grant_id,
+                source_id=a.source.id,
+                source_generation=a.source.generation,
+                arguments=call.arguments,
+                authorize_extra=authorized,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+            )
             records.extend(mcp_collection.normalize(read, call.arguments, collected_at))
         except (CollectionFenceLost, TermsIneligible, TimeoutError, asyncio.CancelledError):
             raise
@@ -850,14 +1163,20 @@ async def _run_mcp(run: Run) -> None:
             failed += 1
     if failed == len(config.calls):
         raise mcp_collection.McpCollectionError("mcp_collection_failed")
-    kept = records[:mcp_collection.MAX_RECORDS]
+    kept = records[: mcp_collection.MAX_RECORDS]
     # The generic accept path carries no coverage, so the dropped tail and failed calls are reported in receipt stats.
     selection = {"backlog": len(records) - len(kept), "failed_calls": failed}
     await _accept_generic(
-        run, kept, state.cursor, "mcp:" + collected_at.isoformat(), _generic_update(None, selection, len(kept)))
+        run,
+        kept,
+        state.cursor,
+        "mcp:" + collected_at.isoformat(),
+        _generic_update(None, selection, len(kept)),
+    )
 
 
 # ---------------------------------------------------------------- simple native providers
+
 
 @dataclass(frozen=True)
 class NativeCall:
@@ -879,7 +1198,9 @@ NativeHandler = Callable[[NativeCall], Awaitable[Any | None]]
 _NATIVE_HANDLERS: dict[str, NativeHandler] = {}
 
 
-def register_native_provider(providers: Sequence[str] | frozenset[str], handler: NativeHandler) -> None:
+def register_native_provider(
+    providers: Sequence[str] | frozenset[str], handler: NativeHandler
+) -> None:
     """Register ``handler`` for every provider name in ``providers`` (new native providers plug in here).
 
     Later registrations replace earlier ones for the same name; no dispatcher edit is needed.
@@ -894,8 +1215,11 @@ async def _native_feed(call: NativeCall) -> Any:
 
     run = call.run
     return await collect_provider_feed(
-        run.attempt.source, collected_at=call.collected_at, session_factory=run.factory,
-        before_request=run.gate)
+        run.attempt.source,
+        collected_at=call.collected_at,
+        session_factory=run.factory,
+        before_request=run.gate,
+    )
 
 
 async def _native_huggingface(call: NativeCall) -> Any:
@@ -903,7 +1227,8 @@ async def _native_huggingface(call: NativeCall) -> Any:
     from modules.connectors.providers.research import collect_huggingface_models
 
     return await collect_huggingface_models(
-        call.run.attempt.source, collected_at=call.collected_at, before_request=call.run.gate)
+        call.run.attempt.source, collected_at=call.collected_at, before_request=call.run.gate
+    )
 
 
 async def _native_bluesky(call: NativeCall) -> None:
@@ -913,14 +1238,21 @@ async def _native_bluesky(call: NativeCall) -> None:
     run, gate = call.run, call.run.gate
     config = connectors.ConnectorConfig.model_validate(run.attempt.source.configuration)
     page = await collect_bluesky_profile(
-        config.bluesky_actor or "", collected_at=call.collected_at,
+        config.bluesky_actor or "",
+        collected_at=call.collected_at,
         cursor=call.lease.cursor_before,
         fetch_bytes=lambda url: gate.fetch_bytes(
-            url, max_bytes=5 * 1024 * 1024, headers={"Accept": "application/json"}),
+            url, max_bytes=5 * 1024 * 1024, headers={"Accept": "application/json"}
+        ),
     )
     await _credential_fence(run)
     await _accept_native(
-        run, call.lease, page.records, page.coverage, call.collected_at, cursor_after=page.cursor_after,
+        run,
+        call.lease,
+        page.records,
+        page.coverage,
+        call.collected_at,
+        cursor_after=page.cursor_after,
     )
 
 
@@ -938,15 +1270,23 @@ async def _native_reddit(call: NativeCall) -> None:
         await _credential_fence(run, reddit=binding)
 
     page = await collect_reddit_subreddit(
-        config.reddit_subreddit or "", token, cursor=call.lease.cursor_before,
+        config.reddit_subreddit or "",
+        token,
+        cursor=call.lease.cursor_before,
         collected_at=call.collected_at,
         fetch_bytes=lambda url, **kwargs: rest.fetch_bounded(
-            url, before_send=before_reddit_send, **kwargs),
+            url, before_send=before_reddit_send, **kwargs
+        ),
     )
     await _credential_fence(run, reddit=binding)
     await _accept_native(
-        run, call.lease, page.records, page.coverage, call.collected_at,
-        cursor_after=page.cursor_after, reddit_binding=binding,
+        run,
+        call.lease,
+        page.records,
+        page.coverage,
+        call.collected_at,
+        cursor_after=page.cursor_after,
+        reddit_binding=binding,
     )
 
 
@@ -964,10 +1304,13 @@ async def _native_mastodon_x(call: NativeCall) -> None:
         if optional_credential is not None and optional_credential[0] != "Authorization":
             raise CredentialMissing
         social_page = await collect_mastodon_scope(
-            config.mastodon_instance_url or "", account=config.mastodon_account,
+            config.mastodon_instance_url or "",
+            account=config.mastodon_account,
             hashtag=config.mastodon_hashtag,
             access_token=optional_credential[1] if optional_credential is not None else None,
-            cursor=call.lease.cursor_before, collected_at=call.collected_at, fetch_bytes=gate.fetch_bytes,
+            cursor=call.lease.cursor_before,
+            collected_at=call.collected_at,
+            fetch_bytes=gate.fetch_bytes,
         )
         credential_revision = a.credential_revision if optional_credential is not None else None
     else:
@@ -978,14 +1321,23 @@ async def _native_mastodon_x(call: NativeCall) -> None:
         if header_name != "Authorization" or not bearer_token or a.credential_revision is None:
             raise CredentialMissing
         social_page = await collect_x_scope(
-            account=config.x_account, query=config.x_query, access_token=bearer_token,
-            cursor=call.lease.cursor_before, collected_at=call.collected_at, fetch_bytes=gate.fetch_bytes,
+            account=config.x_account,
+            query=config.x_query,
+            access_token=bearer_token,
+            cursor=call.lease.cursor_before,
+            collected_at=call.collected_at,
+            fetch_bytes=gate.fetch_bytes,
         )
         credential_revision = a.credential_revision
     await _credential_fence(run)
     await _accept_native(
-        run, call.lease, social_page.records, social_page.coverage, call.collected_at,
-        provider_credential_revision=credential_revision, cursor_after=social_page.cursor_after,
+        run,
+        call.lease,
+        social_page.records,
+        social_page.coverage,
+        call.collected_at,
+        provider_credential_revision=credential_revision,
+        cursor_after=social_page.cursor_after,
     )
 
 
@@ -1005,23 +1357,38 @@ async def _native_google(call: NativeCall) -> None:
     config = connectors.ConnectorConfig.model_validate(a.source.configuration)
     if provider == "google_mail":
         page = await google_api.collect_gmail(
-            token, config.google_mail_label_ids or (), before_request=before_google_send,
-            cursor=call.lease.cursor_before, collected_at=call.collected_at,
+            token,
+            config.google_mail_label_ids or (),
+            before_request=before_google_send,
+            cursor=call.lease.cursor_before,
+            collected_at=call.collected_at,
         )
     elif provider == "google_calendar":
         page = await google_api.collect_calendar(
-            token, config.google_calendar_ids or (), before_request=before_google_send,
-            cursor=call.lease.cursor_before, collected_at=call.collected_at,
+            token,
+            config.google_calendar_ids or (),
+            before_request=before_google_send,
+            cursor=call.lease.cursor_before,
+            collected_at=call.collected_at,
         )
     else:
         page = await google_api.collect_drive(
-            token, config.google_drive_ids or (), before_request=before_google_send,
-            cursor=call.lease.cursor_before, collected_at=call.collected_at,
+            token,
+            config.google_drive_ids or (),
+            before_request=before_google_send,
+            cursor=call.lease.cursor_before,
+            collected_at=call.collected_at,
         )
     await _credential_fence(run, google=binding)
     await _accept_proof(
-        run, call.lease, records=page.records, coverage=page.coverage, cursor_after=page.cursor_after,
-        collected_at=call.collected_at, google_binding=binding)
+        run,
+        call.lease,
+        records=page.records,
+        coverage=page.coverage,
+        cursor_after=page.cursor_after,
+        collected_at=call.collected_at,
+        google_binding=binding,
+    )
 
 
 async def _native_workspace_rest(call: NativeCall) -> None:
@@ -1040,17 +1407,25 @@ async def _native_workspace_rest(call: NativeCall) -> None:
     config = connectors.ConnectorConfig.model_validate(a.source.configuration)
     if a.source.provider == "notion":
         page = await collect_notion_pages(
-            bearer_token, NotionScope(tuple(config.notion_page_ids or ())),
-            fetch_bytes=gate.fetch_bytes, collected_at=call.collected_at,
+            bearer_token,
+            NotionScope(tuple(config.notion_page_ids or ())),
+            fetch_bytes=gate.fetch_bytes,
+            collected_at=call.collected_at,
         )
     else:
         page = await collect_slack_channel_messages(
-            bearer_token, SlackScope(tuple(config.slack_channel_ids or ())),
-            fetch_bytes=gate.fetch_bytes, collected_at=call.collected_at,
+            bearer_token,
+            SlackScope(tuple(config.slack_channel_ids or ())),
+            fetch_bytes=gate.fetch_bytes,
+            collected_at=call.collected_at,
         )
     await _credential_fence(run)
     await _accept_native(
-        run, call.lease, page.records, page.coverage, call.collected_at,
+        run,
+        call.lease,
+        page.records,
+        page.coverage,
+        call.collected_at,
         provider_credential_revision=a.credential_revision,
     )
 
@@ -1101,14 +1476,20 @@ async def _native_local_service(call: NativeCall) -> None:
     try:
         if provider == "health":
             records = await collect_fhir_observations(
-                config.fhir_base_url or "", config.fhir_patient_id or "",
-                bearer_token=bearer_token, before_send=before_local_send, collected_at=call.collected_at,
+                config.fhir_base_url or "",
+                config.fhir_patient_id or "",
+                bearer_token=bearer_token,
+                before_send=before_local_send,
+                collected_at=call.collected_at,
             )
         else:
             page = await collect_home_assistant_snapshot(
-                config.ha_base_url or "", tuple(config.ha_entity_ids or ()),
-                bearer_token=bearer_token, before_send=before_local_send,
-                cursor=call.lease.cursor_before, collected_at=call.collected_at,
+                config.ha_base_url or "",
+                tuple(config.ha_entity_ids or ()),
+                bearer_token=bearer_token,
+                before_send=before_local_send,
+                cursor=call.lease.cursor_before,
+                collected_at=call.collected_at,
             )
     except LocalServiceError as exc:
         mapped = _local_service_failure(str(exc))
@@ -1119,8 +1500,14 @@ async def _native_local_service(call: NativeCall) -> None:
     if provider == "health":
         await _accept_native(run, call.lease, records, "returned_snapshot", call.collected_at)
     else:
-        await _accept_native(run, call.lease, page.records, page.coverage, call.collected_at,
-                             cursor_after=page.cursor_after)
+        await _accept_native(
+            run,
+            call.lease,
+            page.records,
+            page.coverage,
+            call.collected_at,
+            cursor_after=page.cursor_after,
+        )
 
 
 async def _native_github_releases(call: NativeCall) -> Any:
@@ -1128,7 +1515,8 @@ async def _native_github_releases(call: NativeCall) -> Any:
     from modules.connectors.providers.social import collect_github_releases
 
     return await collect_github_releases(
-        call.run.attempt.source, collected_at=call.collected_at, before_request=call.run.gate)
+        call.run.attempt.source, collected_at=call.collected_at, before_request=call.run.gate
+    )
 
 
 async def _native_world_data(call: NativeCall) -> Any:
@@ -1137,9 +1525,17 @@ async def _native_world_data(call: NativeCall) -> Any:
 
     run, a = call.run, call.run.attempt
     return await collect_world_data(
-        a.source, collected_at=call.collected_at, settings=run.settings, session=call.session,
-        redis=_Unmetered(), scope=a.scope, multi_workspace_enabled=a.multi, access_fence=a.access_fence,
-        source_fence=a.source_fence, before_request=run.gate)
+        a.source,
+        collected_at=call.collected_at,
+        settings=run.settings,
+        session=call.session,
+        redis=_Unmetered(),
+        scope=a.scope,
+        multi_workspace_enabled=a.multi,
+        access_fence=a.access_fence,
+        source_fence=a.source_fence,
+        before_request=run.gate,
+    )
 
 
 register_native_provider(("youtube", "arxiv"), _native_feed)
@@ -1187,18 +1583,29 @@ async def _lease(run: Run) -> Any:
     a = run.attempt
     async with run.factory() as session:
         lease = await ingestion.acquire_connector_collection(
-            session, source_id=a.source.id, source_generation=a.source.generation,
-            connector_revision=a.connector_revision, collector_token=None, scope=a.scope,
-            multi_workspace_enabled=a.multi, request_ref=a.ref)
+            session,
+            source_id=a.source.id,
+            source_generation=a.source.generation,
+            connector_revision=a.connector_revision,
+            collector_token=None,
+            scope=a.scope,
+            multi_workspace_enabled=a.multi,
+            request_ref=a.ref,
+        )
     run.extras["lease"] = lease
     return lease
 
 
 async def _accept_native(
-    run: Run, lease: Any, records: Sequence[IngestionRecord], coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"],
-    collected_at: datetime, state_update: CollectionStateUpdate | None = None,
+    run: Run,
+    lease: Any,
+    records: Sequence[IngestionRecord],
+    coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"],
+    collected_at: datetime,
+    state_update: CollectionStateUpdate | None = None,
     provider_credential_revision: int | None = None,
-    cursor_after: str | None = None, reddit_binding: tuple[UUID, int] | None = None,
+    cursor_after: str | None = None,
+    reddit_binding: tuple[UUID, int] | None = None,
 ) -> None:
     """Hand a leased native page and any required provider-credential proof to ingestion.
 
@@ -1215,23 +1622,42 @@ async def _accept_native(
         state_update = replace(state_update or CollectionStateUpdate(), stats=stats)
     if (fingerprint := run.extras.get("native_fp")) is not None:
         # Same transaction as the cursor: the fingerprint of the native query params the cursor belongs to.
-        state_update = replace(state_update or CollectionStateUpdate(), continuation_state=fingerprint)
+        state_update = replace(
+            state_update or CollectionStateUpdate(), continuation_state=fingerprint
+        )
     batch = NativeCollectionBatch(
-        source_id=a.source.id, source_generation=a.source.generation, connector_revision=a.connector_revision,
-        lease_token=lease.token, cursor_before=lease.cursor_before,
+        source_id=a.source.id,
+        source_generation=a.source.generation,
+        connector_revision=a.connector_revision,
+        lease_token=lease.token,
+        cursor_before=lease.cursor_before,
         cursor_after=cursor_after if cursor_after is not None else lease.cursor_before,
-        records=list(records), telegram_deliveries=(), telegram_raw_deliveries=(),
-        coverage=coverage, github_segment=None, collected_at=collected_at,
+        records=list(records),
+        telegram_deliveries=(),
+        telegram_raw_deliveries=(),
+        coverage=coverage,
+        github_segment=None,
+        collected_at=collected_at,
         provider_credential_revision=provider_credential_revision,
         reddit_operation_id=reddit_binding[0] if reddit_binding is not None else None,
-        reddit_token_revision=reddit_binding[1] if reddit_binding is not None else None)
+        reddit_token_revision=reddit_binding[1] if reddit_binding is not None else None,
+    )
     async with run.factory() as session:
         await ingestion.accept_native_collection(
-            session, batch, collector_token=None, lease=lease, scope=a.scope, multi_workspace_enabled=a.multi,
+            session,
+            batch,
+            collector_token=None,
+            lease=lease,
+            scope=a.scope,
+            multi_workspace_enabled=a.multi,
             expected_native_operation_id=None,
-            expected_world_credential_operation_id=gate.captured_operation if a.source.provider == "alpha_vantage" else None,
-            request_ref=a.ref, state_update=state_update,
-            provider_credential_revision=provider_credential_revision)
+            expected_world_credential_operation_id=gate.captured_operation
+            if a.source.provider == "alpha_vantage"
+            else None,
+            request_ref=a.ref,
+            state_update=state_update,
+            provider_credential_revision=provider_credential_revision,
+        )
     run.extras["accepted"] = True
     await _publish_realtime_snapshot(run, records, collected_at)
 
@@ -1246,6 +1672,7 @@ class _Unmetered:
 
 # ---------------------------------------------------------------- P2/P3 free providers (fixed endpoints)
 
+
 def _payload(fn: Callable[..., Any], *args: Any) -> Any:
     """Run a pure mapper and translate ``ProviderPayloadError.kind`` into executor failure signals."""
     from modules.connectors.providers.macro import ProviderPayloadError
@@ -1254,7 +1681,9 @@ def _payload(fn: Callable[..., Any], *args: Any) -> Any:
         return fn(*args)
     except ProviderPayloadError as exc:
         if exc.kind == "rate_limited":
-            raise connectors.ProviderRateLimited(datetime.now(UTC) + PAYLOAD_RATE_LIMIT_BACKOFF) from exc
+            raise connectors.ProviderRateLimited(
+                datetime.now(UTC) + PAYLOAD_RATE_LIMIT_BACKOFF
+            ) from exc
         if exc.kind == "incomplete":
             raise rest.CollectionIncomplete from exc
         if exc.kind in {"credential", "entitlement"}:
@@ -1273,15 +1702,27 @@ async def _payload_async(fn: Callable[..., Any], *args: Any) -> Any:
 
 def _coverage(records: Sequence[IngestionRecord]) -> Literal["returned_snapshot", "truncated"]:
     """Page coverage must equal the records' coverage (ingress rejects a mismatch)."""
-    return "truncated" if any(r.metadata["provider_record"]["coverage"] == "truncated" for r in records) else "returned_snapshot"
+    return (
+        "truncated"
+        if any(r.metadata["provider_record"]["coverage"] == "truncated" for r in records)
+        else "returned_snapshot"
+    )
 
 
-async def _get_body(run: Run, request: Any, *, max_bytes: int, timeout: float | None = None) -> rest.Fetched:  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
+async def _get_body(
+    run: Run,
+    request: Any,
+    *,
+    max_bytes: int,
+    timeout: float | None = None,  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
+) -> rest.Fetched:
     """One gated send (terms + quota + fences before the wire); no redirects, bounded bytes."""
     extra: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
     if getattr(request, "body", None) is not None:  # read-only POST search (VietnamWorks)
         extra["json_body"] = request.body
-    return await run.gate.fetch_bytes(request.url, headers=request.headers or None, max_bytes=max_bytes, **extra)
+    return await run.gate.fetch_bytes(
+        request.url, headers=request.headers or None, max_bytes=max_bytes, **extra
+    )
 
 
 def _require_body(fetched: rest.Fetched) -> bytes:
@@ -1291,8 +1732,12 @@ def _require_body(fetched: rest.Fetched) -> bytes:
     return fetched.body
 
 
-SOCIAL_WALK_PROVIDERS = frozenset({"bluesky", "reddit", "mastodon", "x"})  # catch-up walk (providers/social_walk.py)
-DEDUP_ONLY_PROVIDERS = frozenset({"hn_top", "google_news", "vietnamworks_jobs", "itviec_jobs"})  # late-surfacing feeds: a cursor floor would drop items
+SOCIAL_WALK_PROVIDERS = frozenset(
+    {"bluesky", "reddit", "mastodon", "x"}
+)  # catch-up walk (providers/social_walk.py)
+DEDUP_ONLY_PROVIDERS = frozenset(
+    {"hn_top", "google_news", "vietnamworks_jobs", "itviec_jobs"}
+)  # late-surfacing feeds: a cursor floor would drop items
 
 
 def _run_stats(run: Run, taken: Sequence[IngestionRecord]) -> dict[str, Any] | None:
@@ -1307,10 +1752,15 @@ def _run_stats(run: Run, taken: Sequence[IngestionRecord]) -> dict[str, Any] | N
         return None
     gap = selection.get("gap")
     stats: dict[str, Any] = {
-        "new": len(taken), "backlog": selection.get("backlog", 0), "gap": list(gap) if gap else None,
-        "duplicates": selection.get("duplicates", 0), "failed_sections": list(selection.get("failed_sections", ())),
+        "new": len(taken),
+        "backlog": selection.get("backlog", 0),
+        "gap": list(gap) if gap else None,
+        "duplicates": selection.get("duplicates", 0),
+        "failed_sections": list(selection.get("failed_sections", ())),
     }
-    if "caught_up" in selection:  # social catch-up walks: backlog size is unknown (None), only the walk state is
+    if (
+        "caught_up" in selection
+    ):  # social catch-up walks: backlog size is unknown (None), only the walk state is
         stats["caught_up"] = selection["caught_up"]
     return stats
 
@@ -1345,7 +1795,10 @@ async def _resume_cursor(run: Run, lease: Any) -> str | None:
 
 
 async def _select(
-    run: Run, lease: Any, records: Sequence[IngestionRecord], collected_at: datetime,
+    run: Run,
+    lease: Any,
+    records: Sequence[IngestionRecord],
+    collected_at: datetime,
 ) -> tuple[list[IngestionRecord], str | None]:
     """Choose which mapped records to accept and the cursor to commit with them.
 
@@ -1365,13 +1818,25 @@ async def _select(
     dedup_only = source.provider in DEDUP_ONLY_PROVIDERS
     async with run.factory() as session:
         seen_keys = await ingestion.seen_record_keys(
-            session, source_id=source.id, source_generation=source.generation, provider=source.provider,
-            keys=[ingestion.native_record_key(r) for r in records])
+            session,
+            source_id=source.id,
+            source_generation=source.generation,
+            provider=source.provider,
+            keys=[ingestion.native_record_key(r) for r in records],
+        )
         await session.rollback()
     chosen = select_incremental(
-        records, cursor=None if dedup_only else run.extras.get("resume_cursor", lease.cursor_before), seen=lambda r: ingestion.native_record_key(r) in seen_keys,
-        filters=selection_filters(source.configuration or {}), now=collected_at)
-    run.extras["selection"] = {"backlog": chosen.backlog, "gap": chosen.gap, "duplicates": chosen.duplicates}
+        records,
+        cursor=None if dedup_only else run.extras.get("resume_cursor", lease.cursor_before),
+        seen=lambda r: ingestion.native_record_key(r) in seen_keys,
+        filters=selection_filters(source.configuration or {}),
+        now=collected_at,
+    )
+    run.extras["selection"] = {
+        "backlog": chosen.backlog,
+        "gap": chosen.gap,
+        "duplicates": chosen.duplicates,
+    }
     return list(chosen.taken), None if dedup_only else chosen.cursor_after
 
 
@@ -1386,15 +1851,26 @@ async def _run_pure(run: Run) -> None:
     lease = await _lease(run)
     cursor = await _resume_cursor(run, lease)
     request = PURE_ADAPTERS[provider].request()
-    if (url := provider_options.build_url(provider, cfg, cursor=cursor, now=collected_at)) is not None:
-        request = replace(request, url=url)  # owner options / native resume; headers stay the adapter's
+    if (
+        url := provider_options.build_url(provider, cfg, cursor=cursor, now=collected_at)
+    ) is not None:
+        request = replace(
+            request, url=url
+        )  # owner options / native resume; headers stay the adapter's
     fetched = await _get_body(run, request, max_bytes=PURE_MAX_BYTES.get(provider, MAX_BODY_BYTES))
     records = await _payload_async(
         lambda *a: map_pure_provider_body(*a, **provider_options.map_options(provider, cfg)),
-        provider, _require_body(fetched), collected_at)  # mapper scope follows the requested scope
-    records = provider_options.filter_records(provider, cfg, records)  # region / KEV / NVD / FX / Kp (client)
+        provider,
+        _require_body(fetched),
+        collected_at,
+    )  # mapper scope follows the requested scope
+    records = provider_options.filter_records(
+        provider, cfg, records
+    )  # region / KEV / NVD / FX / Kp (client)
     records, cursor_after = await _select(run, lease, records, collected_at)
-    await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
+    await _accept_native(
+        run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after
+    )
 
 
 async def _run_coinpaprika(run: Run) -> None:
@@ -1412,14 +1888,18 @@ async def _run_coinpaprika(run: Run) -> None:
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
     records: list[IngestionRecord] = []
-    for index, (coin, url) in enumerate(zip(
-            provider_options.selected_coins(cfg), provider_options.coin_urls(cfg), strict=True)):
+    for index, (coin, url) in enumerate(
+        zip(provider_options.selected_coins(cfg), provider_options.coin_urls(cfg), strict=True)
+    ):
         if index:
             await asyncio.sleep(provider_options.COINPAPRIKA_GAP_SECONDS)
-        fetched = await _get_body(run, replace(PURE_ADAPTERS["coinpaprika"].request(), url=url),
-                                  max_bytes=MAX_BODY_BYTES)
-        records += await _payload_async(lambda body, coin=coin: map_coinpaprika(decode_json(body), collected_at, coin_id=coin),
-                            _require_body(fetched))
+        fetched = await _get_body(
+            run, replace(PURE_ADAPTERS["coinpaprika"].request(), url=url), max_bytes=MAX_BODY_BYTES
+        )
+        records += await _payload_async(
+            lambda body, coin=coin: map_coinpaprika(decode_json(body), collected_at, coin_id=coin),
+            _require_body(fetched),
+        )
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
@@ -1443,8 +1923,11 @@ async def _run_vn_stock(run: Run) -> None:
             await asyncio.sleep(1.0)
         fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
         records += await _payload_async(
-            lambda body, group=group: vn_stock.map_vn_stock(decode_json(body), collected_at, symbols=group),
-            _require_body(fetched))
+            lambda body, group=group: vn_stock.map_vn_stock(
+                decode_json(body), collected_at, symbols=group
+            ),
+            _require_body(fetched),
+        )
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
@@ -1462,17 +1945,30 @@ async def _run_vietnamworks(run: Run) -> None:
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
     batches: list[list[IngestionRecord]] = []
-    for index, request in enumerate(_payload(jobs.vietnamworks_requests, provider_options.selected_job_keywords(cfg))):
+    for index, request in enumerate(
+        _payload(jobs.vietnamworks_requests, provider_options.selected_job_keywords(cfg))
+    ):
         if index:
             await asyncio.sleep(1.0)
         fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
-        batches.append(await _payload_async(
-            lambda body: jobs.map_vietnamworks(
-                decode_json(body), collected_at, cities=cfg.get("job_cities") or (), levels=cfg.get("job_levels") or (),
-                min_salary_usd=cfg.get("job_min_salary_usd")),
-            _require_body(fetched)))
-    records, cursor_after = await _select(run, lease, jobs.merge_keyword_records(batches), collected_at)
-    await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
+        batches.append(
+            await _payload_async(
+                lambda body: jobs.map_vietnamworks(
+                    decode_json(body),
+                    collected_at,
+                    cities=cfg.get("job_cities") or (),
+                    levels=cfg.get("job_levels") or (),
+                    min_salary_usd=cfg.get("job_min_salary_usd"),
+                ),
+                _require_body(fetched),
+            )
+        )
+    records, cursor_after = await _select(
+        run, lease, jobs.merge_keyword_records(batches), collected_at
+    )
+    await _accept_native(
+        run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after
+    )
 
 
 async def _run_itviec(run: Run) -> None:
@@ -1490,7 +1986,11 @@ async def _run_itviec(run: Run) -> None:
     source = run.attempt.source
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
-    searches = _payload(jobs.itviec_search_requests, provider_options.selected_job_keywords(cfg), cfg.get("job_cities") or ())
+    searches = _payload(
+        jobs.itviec_search_requests,
+        provider_options.selected_job_keywords(cfg),
+        cfg.get("job_cities") or (),
+    )
     urls: dict[str, None] = {}
     first = True
 
@@ -1500,30 +2000,43 @@ async def _run_itviec(run: Run) -> None:
         if not first:
             await asyncio.sleep(jobs.ITVIEC_REQUEST_GAP_SECONDS)
         first = False
-        return _require_body(await _get_body(run, request, max_bytes=MAX_BODY_BYTES)).decode("utf-8", errors="replace")
+        return _require_body(await _get_body(run, request, max_bytes=MAX_BODY_BYTES)).decode(
+            "utf-8", errors="replace"
+        )
 
     for request in searches:
         urls.update(dict.fromkeys(jobs.parse_itviec_item_list(await page(request))))
     async with run.factory() as session:
         seen = await ingestion.seen_provider_ids(
-            session, source_id=source.id, source_generation=source.generation,
-            provider_ids=[f"itviec:{u.rsplit('/', 1)[1]}" for u in urls])
+            session,
+            source_id=source.id,
+            source_generation=source.generation,
+            provider_ids=[f"itviec:{u.rsplit('/', 1)[1]}" for u in urls],
+        )
         await session.rollback()
     fresh = [u for u in urls if f"itviec:{u.rsplit('/', 1)[1]}" not in seen]
     if fresh:
         shift = int(collected_at.timestamp() // 21600) % len(fresh)
         fresh = fresh[shift:] + fresh[:shift]
     pages: list[tuple[str, str]] = []
-    for url in fresh[:jobs.ITVIEC_MAX_DETAIL_FETCHES]:
+    for url in fresh[: jobs.ITVIEC_MAX_DETAIL_FETCHES]:
         try:
             pages.append((url, await page(jobs.itviec_detail_request(url))))
         except rest.ProviderHttpError as exc:
             if exc.status_code not in {404, 410}:
                 raise
     records = await _payload_async(
-        lambda: jobs.map_itviec(pages, collected_at, levels=cfg.get("job_levels") or (), min_salary_usd=cfg.get("job_min_salary_usd")))
+        lambda: jobs.map_itviec(
+            pages,
+            collected_at,
+            levels=cfg.get("job_levels") or (),
+            min_salary_usd=cfg.get("job_min_salary_usd"),
+        )
+    )
     records, cursor_after = await _select(run, lease, records, collected_at)
-    await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
+    await _accept_native(
+        run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after
+    )
 
 
 async def _keyed_secret(run: Run) -> str:
@@ -1539,8 +2052,12 @@ async def _keyed_secret(run: Run) -> str:
         raise CredentialMissing from exc
     if stored_placement != placement:
         raise CredentialMissing
-    run.gate.bind_credential(quota.credential_fingerprint(
-        secret, deployment_key=run.settings.connector_credential_encryption_key.get_secret_value()))
+    run.gate.bind_credential(
+        quota.credential_fingerprint(
+            secret,
+            deployment_key=run.settings.connector_credential_encryption_key.get_secret_value(),
+        )
+    )
     return secret
 
 
@@ -1571,7 +2088,11 @@ async def _run_coingecko(run: Run) -> None:
 
 
 async def _fetch_sections(
-    run: Run, provider: str, sections: list[tuple[str, str]], revision: str, collected_at: datetime,
+    run: Run,
+    provider: str,
+    sections: list[tuple[str, str]],
+    revision: str,
+    collected_at: datetime,
 ) -> tuple[list[IngestionRecord], list[str]]:
     """GET every selected section unconditionally, merge by stable item id, and report failed slugs.
 
@@ -1586,9 +2107,19 @@ async def _fetch_sections(
     first_error: Exception | None = None
     for slug, url in sections:
         try:
-            fetched = await _get_body(run, _news.feed_request(provider, None, revision, url), max_bytes=_news.MAX_FEED_BYTES)
+            fetched = await _get_body(
+                run,
+                _news.feed_request(provider, None, revision, url),
+                max_bytes=_news.MAX_FEED_BYTES,
+            )
             result = await asyncio.to_thread(
-                _payload, _news.map_feed_response, provider, 200, _require_body(fetched), collected_at)
+                _payload,
+                _news.map_feed_response,
+                provider,
+                200,
+                _require_body(fetched),
+                collected_at,
+            )
         except (rest.ProviderHttpError, rest.CollectionIncomplete, ValueError) as exc:
             failed.append(slug)
             first_error = first_error or exc
@@ -1614,33 +2145,61 @@ async def _run_feed(run: Run) -> None:
     collected_at, revision = datetime.now(UTC), str(a.connector_revision)
     state = await _state(run)
     sections = _payload(news.section_urls, provider, a.source.configuration)
-    url = sections[0][1] if sections else _payload(news.preset_url, provider, a.source.configuration)
-    stored = news.FeedValidators(
-        url, revision, state.etag, state.last_modified,
-    ) if state.validators_revision == a.connector_revision else None
+    url = (
+        sections[0][1] if sections else _payload(news.preset_url, provider, a.source.configuration)
+    )
+    stored = (
+        news.FeedValidators(
+            url,
+            revision,
+            state.etag,
+            state.last_modified,
+        )
+        if state.validators_revision == a.connector_revision
+        else None
+    )
     lease = await _lease(run)
     if len(sections) > 1:
         found, failed = await _fetch_sections(run, provider, sections, revision, collected_at)
         update = None
     else:
         failed = []
-        fetched = await _get_body(run, news.feed_request(provider, stored, revision, url), max_bytes=news.MAX_FEED_BYTES)
+        fetched = await _get_body(
+            run, news.feed_request(provider, stored, revision, url), max_bytes=news.MAX_FEED_BYTES
+        )
         # feedparser-style XML parse of up to MAX_FEED_BYTES is CPU-bound: keep it off the event loop.
-        result = await asyncio.to_thread(_payload, news.map_feed_response, provider, 200 if fetched.body is not None else 304, fetched.body or b"", collected_at)
+        result = await asyncio.to_thread(
+            _payload,
+            news.map_feed_response,
+            provider,
+            200 if fetched.body is not None else 304,
+            fetched.body or b"",
+            collected_at,
+        )
         if result.not_modified:
             await _accept_native(run, lease, (), "returned_snapshot", collected_at)
             return
         captured = news.capture_validators(
-            provider, {"etag": fetched.etag or "", "last-modified": fetched.last_modified or ""}, revision, url)
+            provider,
+            {"etag": fetched.etag or "", "last-modified": fetched.last_modified or ""},
+            revision,
+            url,
+        )
         update = CollectionStateUpdate(
-            update_validators=True, etag=captured.etag if captured else None,
-            last_modified=captured.last_modified if captured else None)
+            update_validators=True,
+            etag=captured.etag if captured else None,
+            last_modified=captured.last_modified if captured else None,
+        )
         found = list(result.records)
-    found = provider_options.filter_records(provider, a.source.configuration or {}, found)  # e.g. advisory level
+    found = provider_options.filter_records(
+        provider, a.source.configuration or {}, found
+    )  # e.g. advisory level
     records, cursor_after = await _select(run, lease, found, collected_at)
     if "selection" in run.extras:
         run.extras["selection"]["failed_sections"] = failed
-    await _accept_native(run, lease, records, _coverage(records), collected_at, update, cursor_after=cursor_after)
+    await _accept_native(
+        run, lease, records, _coverage(records), collected_at, update, cursor_after=cursor_after
+    )
 
 
 async def _run_hn(run: Run) -> None:
@@ -1651,21 +2210,32 @@ async def _run_hn(run: Run) -> None:
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
     listing = provider_options.build_url("hn_top", cfg, cursor=None, now=collected_at)
-    top = _require_body(await _get_body(
-        run, news.hn_top_request(listing) if listing else news.hn_top_request(), max_bytes=64 * 1024))
+    top = _require_body(
+        await _get_body(
+            run,
+            news.hn_top_request(listing) if listing else news.hn_top_request(),
+            max_bytes=64 * 1024,
+        )
+    )
     ids = _payload(news.parse_hn_top_ids, top, provider_options.hn_limit(cfg))
     bodies: dict[int, bytes | None] = {}
     for item_id in ids:
         try:
-            bodies[item_id] = (await _get_body(run, news.hn_item_request(item_id), max_bytes=64 * 1024)).body
+            bodies[item_id] = (
+                await _get_body(run, news.hn_item_request(item_id), max_bytes=64 * 1024)
+            ).body
         except rest.ProviderHttpError as exc:
             if exc.status_code != 404:
                 raise
             bodies[item_id] = None  # removed item: skipped and counted by the mapper
-    result = await _payload_async(news.map_hn_stories, ids, bodies, collected_at, provider_options.hn_limit(cfg))
+    result = await _payload_async(
+        news.map_hn_stories, ids, bodies, collected_at, provider_options.hn_limit(cfg)
+    )
     run.extras["skipped"] = result.skipped
     records, cursor_after = await _select(run, lease, result.records, collected_at)
-    await _accept_native(run, lease, records, "returned_snapshot", collected_at, cursor_after=cursor_after)
+    await _accept_native(
+        run, lease, records, "returned_snapshot", collected_at, cursor_after=cursor_after
+    )
 
 
 async def _run_gdelt(run: Run) -> None:
@@ -1679,12 +2249,18 @@ async def _run_gdelt(run: Run) -> None:
     lease = await _lease(run)
     cursor = await _resume_cursor(run, lease)
     request = gdelt_request()
-    if (url := provider_options.build_url("gdelt_economy", cfg, cursor=cursor, now=collected_at)) is not None:
+    if (
+        url := provider_options.build_url("gdelt_economy", cfg, cursor=cursor, now=collected_at)
+    ) is not None:
         request = replace(request, url=url)
     fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES, timeout=GDELT_TIMEOUT_SECONDS)
-    records = await _payload_async(map_news_body, "gdelt_economy", _require_body(fetched), collected_at)
+    records = await _payload_async(
+        map_news_body, "gdelt_economy", _require_body(fetched), collected_at
+    )
     records, cursor_after = await _select(run, lease, records, collected_at)
-    await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
+    await _accept_native(
+        run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after
+    )
 
 
 async def _run_sec_edgar(run: Run) -> None:
@@ -1707,31 +2283,46 @@ async def _run_openalex(run: Run) -> None:
     from modules.connectors.providers import scholarly
 
     collected_at = datetime.now(UTC)
-    request = _payload(scholarly.openalex_request, (run.attempt.source.configuration or {}).get("scholarly_query"))
+    request = _payload(
+        scholarly.openalex_request, (run.attempt.source.configuration or {}).get("scholarly_query")
+    )
     lease = await _lease(run)
     fetched = await _get_body(run, request, max_bytes=scholarly.OPENALEX_MAX_BODY)
     records = await _payload_async(scholarly.map_openalex, _require_body(fetched), collected_at)
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
-ADAPTERS.update({
-    **dict.fromkeys(PURE_PROVIDERS, _run_pure),
-    "vietnamworks_jobs": _run_vietnamworks,
-    "itviec_jobs": _run_itviec,
-    "vn_stock": _run_vn_stock,  # two endpoints (stocks, indices); overrides the single-request runner
-    **dict.fromkeys(KEYED, _run_keyed),
-    "coingecko": _run_coingecko,
-    **dict.fromkeys(_news.FEED_URLS, _run_feed),  # every fixed-URL feed preset shares one adapter
-    "coinpaprika": _run_coinpaprika,  # one call per selected coin
-    "google_news": _run_feed, "openalex": _run_openalex, "sec_edgar": _run_sec_edgar, "hn_top": _run_hn, "gdelt_economy": _run_gdelt,
-})
+ADAPTERS.update(
+    {
+        **dict.fromkeys(PURE_PROVIDERS, _run_pure),
+        "vietnamworks_jobs": _run_vietnamworks,
+        "itviec_jobs": _run_itviec,
+        "vn_stock": _run_vn_stock,  # two endpoints (stocks, indices); overrides the single-request runner
+        **dict.fromkeys(KEYED, _run_keyed),
+        "coingecko": _run_coingecko,
+        **dict.fromkeys(
+            _news.FEED_URLS, _run_feed
+        ),  # every fixed-URL feed preset shares one adapter
+        "coinpaprika": _run_coinpaprika,  # one call per selected coin
+        "google_news": _run_feed,
+        "openalex": _run_openalex,
+        "sec_edgar": _run_sec_edgar,
+        "hn_top": _run_hn,
+        "gdelt_economy": _run_gdelt,
+    }
+)
 
 
 # ---------------------------------------------------------------- GitHub / Telegram (proof-bearing)
 
+
 async def _credential_fence(
-    run: Run, *, github: tuple[Any, tuple[UUID, int]] | None = None, telegram: Any = None,
-    google: tuple[UUID, int] | None = None, reddit: tuple[UUID, int] | None = None,
+    run: Run,
+    *,
+    github: tuple[Any, tuple[UUID, int]] | None = None,
+    telegram: Any = None,
+    google: tuple[UUID, int] | None = None,
+    reddit: tuple[UUID, int] | None = None,
 ) -> None:
     """Before every send/accept, recheck source credentials and provider grant under ordered locks.
 
@@ -1744,54 +2335,111 @@ async def _credential_fence(
     async with run.factory() as session:
         try:
             current, row, _ = await provisioning.lock_connector(
-                session, a.source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=a.scope,
-                multi_workspace_enabled=a.multi, expected_access_fence=a.access_fence)
-            if (current != a.source_fence or row is None or row.credential_revision != a.credential_revision
-                    or not await provisioning.require_collection_fence(
-                        session, a.source, lease.source_generation, lease.connector_revision,
-                        scope=a.scope, multi_workspace_enabled=a.multi)):
+                session,
+                a.source.id,
+                provisioning._ALL_CREDENTIAL_SLOTS,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+                expected_access_fence=a.access_fence,
+            )
+            if (
+                current != a.source_fence
+                or row is None
+                or row.credential_revision != a.credential_revision
+                or not await provisioning.require_collection_fence(
+                    session,
+                    a.source,
+                    lease.source_generation,
+                    lease.connector_revision,
+                    scope=a.scope,
+                    multi_workspace_enabled=a.multi,
+                )
+            ):
                 raise CollectionFenceLost("credential_changed", "revision_changed")
             await ingestion.lock_source_credentials_in_uow(
-                session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi,
-                access_fence=a.access_fence, source_fence=a.source_fence)
+                session,
+                a.source.id,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+                access_fence=a.access_fence,
+                source_fence=a.source_fence,
+            )
             if github is not None:
                 fence, binding = github
                 now_fence = await connectors.lock_github_binding_fence_in_uow(
-                    session, a.source.id, source_generation=lease.source_generation,
-                    connector_revision=lease.connector_revision, scope=a.scope, multi_workspace_enabled=a.multi,
-                    access_fence=a.access_fence, source_fence=a.source_fence)
+                    session,
+                    a.source.id,
+                    source_generation=lease.source_generation,
+                    connector_revision=lease.connector_revision,
+                    scope=a.scope,
+                    multi_workspace_enabled=a.multi,
+                    access_fence=a.access_fence,
+                    source_fence=a.source_fence,
+                )
                 grant = await session.get(GithubOAuthGrant, a.source.id, populate_existing=True)
-                if now_fence != fence or grant is None or binding != (grant.operation_id, grant.token_revision):
+                if (
+                    now_fence != fence
+                    or grant is None
+                    or binding != (grant.operation_id, grant.token_revision)
+                ):
                     raise CollectionFenceLost("credential_changed", "revision_changed")
             if telegram is not None:
                 now_native = await connectors.get_native_credential_snapshot(
-                    session, a.source.id, source_generation=lease.source_generation,
-                    connector_revision=lease.connector_revision, scope=a.scope, multi_workspace_enabled=a.multi)
+                    session,
+                    a.source.id,
+                    source_generation=lease.source_generation,
+                    connector_revision=lease.connector_revision,
+                    scope=a.scope,
+                    multi_workspace_enabled=a.multi,
+                )
                 if now_native != telegram or telegram.access_fence != a.access_fence:
                     raise CollectionFenceLost("credential_changed", "revision_changed")
             if google is not None:
-                grant = await session.scalar(select(ConnectorOAuthGrant).where(
-                    ConnectorOAuthGrant.source_id == a.source.id,
-                ).with_for_update())
-                if (grant is None or grant.state != "ready" or grant.credential_revision != a.credential_revision
-                        or (grant.operation_id, grant.token_revision) != google
-                        or grant.source_generation != lease.source_generation
-                        or grant.configuration_revision != lease.connector_revision):
+                grant = await session.scalar(
+                    select(ConnectorOAuthGrant)
+                    .where(
+                        ConnectorOAuthGrant.source_id == a.source.id,
+                    )
+                    .with_for_update()
+                )
+                if (
+                    grant is None
+                    or grant.state != "ready"
+                    or grant.credential_revision != a.credential_revision
+                    or (grant.operation_id, grant.token_revision) != google
+                    or grant.source_generation != lease.source_generation
+                    or grant.configuration_revision != lease.connector_revision
+                ):
                     raise CollectionFenceLost("credential_changed", "revision_changed")
             if reddit is not None:
-                grant = await session.scalar(select(ConnectorOAuthGrant).where(
-                    ConnectorOAuthGrant.source_id == a.source.id,
-                ).with_for_update())
-                if (grant is None or grant.provider != "reddit" or grant.state != "ready"
-                        or grant.workspace_id != a.scope.workspace_id or grant.owner_id != a.scope.actor_user_id
-                        or grant.credential_revision != a.credential_revision
-                        or (grant.operation_id, grant.token_revision) != reddit
-                        or grant.source_generation != lease.source_generation
-                        or grant.configuration_revision != lease.connector_revision):
+                grant = await session.scalar(
+                    select(ConnectorOAuthGrant)
+                    .where(
+                        ConnectorOAuthGrant.source_id == a.source.id,
+                    )
+                    .with_for_update()
+                )
+                if (
+                    grant is None
+                    or grant.provider != "reddit"
+                    or grant.state != "ready"
+                    or grant.workspace_id != a.scope.workspace_id
+                    or grant.owner_id != a.scope.actor_user_id
+                    or grant.credential_revision != a.credential_revision
+                    or (grant.operation_id, grant.token_revision) != reddit
+                    or grant.source_generation != lease.source_generation
+                    or grant.configuration_revision != lease.connector_revision
+                ):
                     raise CollectionFenceLost("credential_changed", "revision_changed")
             if not await ingestion.validate_connector_collection_in_uow(
-                session, lease, collector_token=None, scope=a.scope, multi_workspace_enabled=a.multi,
-                access_fence=a.access_fence, source_fence=a.source_fence, request_ref=a.ref,
+                session,
+                lease,
+                collector_token=None,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+                access_fence=a.access_fence,
+                source_fence=a.source_fence,
+                request_ref=a.ref,
             ):
                 raise CollectionFenceLost("admission_lost")
         finally:
@@ -1812,32 +2460,67 @@ async def _google_access_token(run: Run) -> tuple[str, tuple[UUID, int]]:
     a = run.attempt
     async with run.factory() as session:
         current, row, _ = await provisioning.lock_connector(
-            session, a.source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=a.scope,
-            multi_workspace_enabled=a.multi, expected_access_fence=a.access_fence)
-        if (current != a.source_fence or row is None or row.credential_revision != a.credential_revision
-                or not await provisioning.require_collection_fence(
-                    session, a.source, a.source.generation, a.connector_revision,
-                    scope=a.scope, multi_workspace_enabled=a.multi)):
+            session,
+            a.source.id,
+            provisioning._ALL_CREDENTIAL_SLOTS,
+            scope=a.scope,
+            multi_workspace_enabled=a.multi,
+            expected_access_fence=a.access_fence,
+        )
+        if (
+            current != a.source_fence
+            or row is None
+            or row.credential_revision != a.credential_revision
+            or not await provisioning.require_collection_fence(
+                session,
+                a.source,
+                a.source.generation,
+                a.connector_revision,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+            )
+        ):
             await session.rollback()
             raise CollectionFenceLost("credential_changed", "revision_changed")
         await ingestion.lock_source_credentials_in_uow(
-            session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi,
-            access_fence=a.access_fence, source_fence=a.source_fence)
-        grant = await session.scalar(select(ConnectorOAuthGrant).where(
-            ConnectorOAuthGrant.source_id == a.source.id,
-        ).with_for_update())
-        if (grant is None or grant.state != "ready" or grant.provider != a.source.provider
-                or grant.workspace_id != a.scope.workspace_id or grant.owner_id != a.scope.actor_user_id
-                or grant.source_generation != a.source.generation
-                or grant.configuration_revision != a.connector_revision
-                or grant.credential_revision != a.credential_revision or not grant.encrypted_tokens
-                or _PROVIDER_SCOPES.get(grant.provider) not in grant.granted_scopes):
+            session,
+            a.source.id,
+            scope=a.scope,
+            multi_workspace_enabled=a.multi,
+            access_fence=a.access_fence,
+            source_fence=a.source_fence,
+        )
+        grant = await session.scalar(
+            select(ConnectorOAuthGrant)
+            .where(
+                ConnectorOAuthGrant.source_id == a.source.id,
+            )
+            .with_for_update()
+        )
+        if (
+            grant is None
+            or grant.state != "ready"
+            or grant.provider != a.source.provider
+            or grant.workspace_id != a.scope.workspace_id
+            or grant.owner_id != a.scope.actor_user_id
+            or grant.source_generation != a.source.generation
+            or grant.configuration_revision != a.connector_revision
+            or grant.credential_revision != a.credential_revision
+            or not grant.encrypted_tokens
+            or _PROVIDER_SCOPES.get(grant.provider) not in grant.granted_scopes
+        ):
             await session.rollback()
             raise CredentialMissing
         try:
             key = run.settings.connector_credential_encryption_key.get_secret_value()
-            tokens = _open_cipher(key, grant.encrypted_tokens, a.source.id, grant.operation_id,
-                                  grant.source_generation, grant.configuration_revision)
+            tokens = _open_cipher(
+                key,
+                grant.encrypted_tokens,
+                a.source.id,
+                grant.operation_id,
+                grant.source_generation,
+                grant.configuration_revision,
+            )
             access = tokens.get("access_token")
             refresh = tokens.get("refresh_token")
             if not isinstance(access, str) or not isinstance(refresh, str):
@@ -1851,8 +2534,13 @@ async def _google_access_token(run: Run) -> tuple[str, tuple[UUID, int]]:
             tokens.update(rotated)
             grant.token_revision += 1
             grant.encrypted_tokens = _cipher(
-                key, a.source.id, grant.operation_id, grant.source_generation,
-                grant.configuration_revision, tokens)
+                key,
+                a.source.id,
+                grant.operation_id,
+                grant.source_generation,
+                grant.configuration_revision,
+                tokens,
+            )
             grant.token_expires_at = datetime.fromisoformat(rotated["access_expires_at"])
             binding = (grant.operation_id, grant.token_revision)
             access = rotated["access_token"]
@@ -1875,22 +2563,45 @@ async def _reddit_access_token(run: Run) -> tuple[str, tuple[UUID, int]]:
     a = run.attempt
     async with run.factory() as session:
         current, row, _ = await provisioning.lock_connector(
-            session, a.source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=a.scope,
-            multi_workspace_enabled=a.multi, expected_access_fence=a.access_fence)
-        if (current != a.source_fence or row is None or a.credential_revision is None
-                or row.credential_revision != a.credential_revision
-                or not await provisioning.require_collection_fence(
-                    session, a.source, a.source.generation, a.connector_revision,
-                    scope=a.scope, multi_workspace_enabled=a.multi)):
+            session,
+            a.source.id,
+            provisioning._ALL_CREDENTIAL_SLOTS,
+            scope=a.scope,
+            multi_workspace_enabled=a.multi,
+            expected_access_fence=a.access_fence,
+        )
+        if (
+            current != a.source_fence
+            or row is None
+            or a.credential_revision is None
+            or row.credential_revision != a.credential_revision
+            or not await provisioning.require_collection_fence(
+                session,
+                a.source,
+                a.source.generation,
+                a.connector_revision,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+            )
+        ):
             await session.rollback()
             raise CollectionFenceLost("credential_changed", "revision_changed")
         await ingestion.lock_source_credentials_in_uow(
-            session, a.source.id, scope=a.scope, multi_workspace_enabled=a.multi,
-            access_fence=a.access_fence, source_fence=a.source_fence)
+            session,
+            a.source.id,
+            scope=a.scope,
+            multi_workspace_enabled=a.multi,
+            access_fence=a.access_fence,
+            source_fence=a.source_fence,
+        )
         try:
             access_token, operation_id, token_revision = await refresh_reddit_grant(
-                session, run.settings, a.source.id, workspace_id=a.scope.workspace_id,
-                owner_id=a.scope.actor_user_id, source_generation=a.source.generation,
+                session,
+                run.settings,
+                a.source.id,
+                workspace_id=a.scope.workspace_id,
+                owner_id=a.scope.actor_user_id,
+                source_generation=a.source.generation,
                 configuration_revision=a.connector_revision,
                 credential_revision=a.credential_revision,
             )
@@ -1901,10 +2612,18 @@ async def _reddit_access_token(run: Run) -> tuple[str, tuple[UUID, int]]:
 
 
 async def _accept_proof(
-    run: Run, lease: Any, *, records: Sequence[IngestionRecord],
-    coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"], cursor_after: str | None,
-    collected_at: datetime, github_segment: Any = None, telegram: Sequence[Any] = (), raw: Sequence[Any] = (),
-    native_operation_id: UUID | None = None, google_binding: tuple[UUID, int] | None = None,
+    run: Run,
+    lease: Any,
+    *,
+    records: Sequence[IngestionRecord],
+    coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"],
+    cursor_after: str | None,
+    collected_at: datetime,
+    github_segment: Any = None,
+    telegram: Sequence[Any] = (),
+    raw: Sequence[Any] = (),
+    native_operation_id: UUID | None = None,
+    google_binding: tuple[UUID, int] | None = None,
     reddit_binding: tuple[UUID, int] | None = None,
 ) -> None:
     """Hand a proof-bearing page to ingestion for one atomic receipt and cursor commit.
@@ -1914,20 +2633,35 @@ async def _accept_proof(
     """
     a = run.attempt
     batch = NativeCollectionBatch(
-        source_id=a.source.id, source_generation=lease.source_generation, connector_revision=lease.connector_revision,
-        lease_token=lease.token, cursor_before=lease.cursor_before, cursor_after=cursor_after,
-        records=list(records), telegram_deliveries=tuple(telegram), telegram_raw_deliveries=tuple(raw),
-        coverage=coverage, github_segment=github_segment,
+        source_id=a.source.id,
+        source_generation=lease.source_generation,
+        connector_revision=lease.connector_revision,
+        lease_token=lease.token,
+        cursor_before=lease.cursor_before,
+        cursor_after=cursor_after,
+        records=list(records),
+        telegram_deliveries=tuple(telegram),
+        telegram_raw_deliveries=tuple(raw),
+        coverage=coverage,
+        github_segment=github_segment,
         google_operation_id=google_binding[0] if google_binding is not None else None,
         google_token_revision=google_binding[1] if google_binding is not None else None,
         reddit_operation_id=reddit_binding[0] if reddit_binding is not None else None,
         reddit_token_revision=reddit_binding[1] if reddit_binding is not None else None,
-        collected_at=collected_at)
+        collected_at=collected_at,
+    )
     async with run.factory() as session:
         await ingestion.accept_native_collection(
-            session, batch, collector_token=None, lease=lease, scope=a.scope, multi_workspace_enabled=a.multi,
-            expected_native_operation_id=native_operation_id, expected_world_credential_operation_id=None,
-            request_ref=a.ref)
+            session,
+            batch,
+            collector_token=None,
+            lease=lease,
+            scope=a.scope,
+            multi_workspace_enabled=a.multi,
+            expected_native_operation_id=native_operation_id,
+            expected_world_credential_operation_id=None,
+            request_ref=a.ref,
+        )
     run.extras["accepted"] = True
 
 
@@ -1946,29 +2680,59 @@ async def _run_github(run: Run) -> None:
     lease = await _lease(run)
     async with run.factory() as session:
         claim = await connectors.claim_github_hint(
-            session, source_id=source.id, source_generation=lease.source_generation,
-            connector_revision=lease.connector_revision, multi_workspace_enabled=a.multi, scope=a.scope)
+            session,
+            source_id=source.id,
+            source_generation=lease.source_generation,
+            connector_revision=lease.connector_revision,
+            multi_workspace_enabled=a.multi,
+            scope=a.scope,
+        )
     async with run.factory() as session:
         try:
             await provisioning.lock_connector(
-                session, source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=a.scope,
-                multi_workspace_enabled=a.multi, expected_access_fence=a.access_fence)
+                session,
+                source.id,
+                provisioning._ALL_CREDENTIAL_SLOTS,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+                expected_access_fence=a.access_fence,
+            )
             fence = await connectors.lock_github_binding_fence_in_uow(
-                session, source.id, source_generation=lease.source_generation,
-                connector_revision=lease.connector_revision, scope=a.scope, multi_workspace_enabled=a.multi,
-                access_fence=a.access_fence, source_fence=a.source_fence)
+                session,
+                source.id,
+                source_generation=lease.source_generation,
+                connector_revision=lease.connector_revision,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+                access_fence=a.access_fence,
+                source_fence=a.source_fence,
+            )
             if fence is None:
                 raise CredentialMissing
-            grant = await session.scalar(select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source.id).with_for_update())
-            if (grant is None or grant.state != "ready" or grant.encrypted_tokens is None
-                    or grant.source_generation != lease.source_generation
-                    or grant.configuration_revision != lease.connector_revision
-                    or grant.expires_at is None or grant.expires_at <= datetime.now(UTC)):
+            grant = await session.scalar(
+                select(GithubOAuthGrant)
+                .where(GithubOAuthGrant.source_id == source.id)
+                .with_for_update()
+            )
+            if (
+                grant is None
+                or grant.state != "ready"
+                or grant.encrypted_tokens is None
+                or grant.source_generation != lease.source_generation
+                or grant.configuration_revision != lease.connector_revision
+                or grant.expires_at is None
+                or grant.expires_at <= datetime.now(UTC)
+            ):
                 raise CredentialMissing
             binding = (grant.operation_id, grant.token_revision)
             pair = github_oauth._open_token_cipher(
-                run.settings.connector_credential_encryption_key.get_secret_value(), grant.encrypted_tokens,
-                source.id, grant.operation_id, grant.source_generation, grant.configuration_revision)
+                run.settings.connector_credential_encryption_key.get_secret_value(),
+                grant.encrypted_tokens,
+                source.id,
+                grant.operation_id,
+                grant.source_generation,
+                grant.configuration_revision,
+            )
         finally:
             await session.rollback()
     token = pair.get("access_token")
@@ -1983,27 +2747,47 @@ async def _run_github(run: Run) -> None:
         nonlocal held
         await run.gate()
         await _credential_fence(run, github=(fence, binding))
-        if redis is not None:  # cluster-wide single GitHub network slot; expiry outlives the run deadline
+        if (
+            redis is not None
+        ):  # cluster-wide single GitHub network slot; expiry outlives the run deadline
             if not await redis.set("connectors:provider:active:github", permit, nx=True, ex=75):
                 raise connectors.ProviderRateLimited(datetime.now(UTC) + timedelta(seconds=1))
             held = True
 
     try:
         proof = await collect_github_segment(
-            config, token, fence=fence, cursor_before=lease.cursor_before, collected_at=collected_at,
+            config,
+            token,
+            fence=fence,
+            cursor_before=lease.cursor_before,
+            collected_at=collected_at,
             before_request=before_send,
-            hint_claim=GitHubHintClaimProof.model_validate(claim.model_dump(mode="python")) if claim is not None else None)
+            hint_claim=GitHubHintClaimProof.model_validate(claim.model_dump(mode="python"))
+            if claim is not None
+            else None,
+        )
     finally:
         if held and redis is not None:
             with suppress(Exception):
                 await redis.eval(
                     "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end",
-                    1, "connectors:provider:active:github", permit)
-    validated = validate_github_segment(fence, config, lease.cursor_before, proof, collected_at=collected_at)
+                    1,
+                    "connectors:provider:active:github",
+                    permit,
+                )
+    validated = validate_github_segment(
+        fence, config, lease.cursor_before, proof, collected_at=collected_at
+    )
     await _credential_fence(run, github=(fence, binding))
     await _accept_proof(
-        run, lease, records=validated.records, coverage=validated.coverage, cursor_after=validated.cursor_after,
-        collected_at=collected_at, github_segment=proof)
+        run,
+        lease,
+        records=validated.records,
+        coverage=validated.coverage,
+        cursor_after=validated.cursor_after,
+        collected_at=collected_at,
+        github_segment=proof,
+    )
 
 
 async def _run_telegram(run: Run) -> None:
@@ -2021,18 +2805,36 @@ async def _run_telegram(run: Run) -> None:
     async with run.factory() as session:
         try:
             await provisioning.lock_connector(
-                session, source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=a.scope,
-                multi_workspace_enabled=a.multi, expected_access_fence=a.access_fence)
+                session,
+                source.id,
+                provisioning._ALL_CREDENTIAL_SLOTS,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+                expected_access_fence=a.access_fence,
+            )
             snapshot = await connectors.get_native_credential_snapshot(
-                session, source.id, source_generation=lease.source_generation,
-                connector_revision=lease.connector_revision, scope=a.scope, multi_workspace_enabled=a.multi)
-            if snapshot is None or snapshot.state != "ready" or not snapshot.encrypted_token or not snapshot.verified_bot_id:
+                session,
+                source.id,
+                source_generation=lease.source_generation,
+                connector_revision=lease.connector_revision,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+            )
+            if (
+                snapshot is None
+                or snapshot.state != "ready"
+                or not snapshot.encrypted_token
+                or not snapshot.verified_bot_id
+            ):
                 raise CredentialMissing
-            token = decrypt_native_token(run.settings.connector_credential_encryption_key.get_secret_value(), snapshot)
+            token = decrypt_native_token(
+                run.settings.connector_credential_encryption_key.get_secret_value(), snapshot
+            )
         finally:
             await session.rollback()
         cursor = await ingestion.read_telegram_collection_state(
-            session, lease, scope=a.scope, multi_workspace_enabled=a.multi)
+            session, lease, scope=a.scope, multi_workspace_enabled=a.multi
+        )
     allowed = frozenset(cast("list[str]", source.configuration["telegram_chat_ids"]))
 
     async def before_send() -> None:
@@ -2045,13 +2847,21 @@ async def _run_telegram(run: Run) -> None:
     for page_number in range(5):
         remaining = 25 * 1024 * 1024 - total_bytes
         page = await fetch_telegram_updates(
-            token, offset=offset, remaining_bytes=min(10 * 1024 * 1024, remaining), before_request=before_send)
+            token,
+            offset=offset,
+            remaining_bytes=min(10 * 1024 * 1024, remaining),
+            before_request=before_send,
+        )
         total_bytes += page.transport_bytes
         total_updates += len(page.deliveries)
         if page.transport_bytes > remaining or total_updates > 500:
             raise ValueError("telegram_trigger_limit_exceeded")
         classification = classify_telegram_probe(
-            cursor, page.deliveries, received_at=page.collected_at, verified_bot_id=snapshot.verified_bot_id)
+            cursor,
+            page.deliveries,
+            received_at=page.collected_at,
+            verified_bot_id=snapshot.verified_bot_id,
+        )
         if classification.conflict_code is not None:
             raise ValueError("telegram_stream_conflict")
         replay = set(classification.replay_update_ids)
@@ -2059,12 +2869,19 @@ async def _run_telegram(run: Run) -> None:
             if page_number == 4 or cursor is None or cursor.last_update_id >= 2**63 - 1:
                 await _credential_fence(run, telegram=snapshot)
                 await _accept_proof(
-                    run, lease, records=(), coverage="pending_updates_only", cursor_after=lease.cursor_before,
-                    collected_at=page.collected_at, native_operation_id=snapshot.operation_id)
+                    run,
+                    lease,
+                    records=(),
+                    coverage="pending_updates_only",
+                    cursor_after=lease.cursor_before,
+                    collected_at=page.collected_at,
+                    native_operation_id=snapshot.operation_id,
+                )
                 return
             async with run.factory() as session:
                 await ingestion.release_connector_collection(
-                    session, lease, error_code=None, scope=a.scope, multi_workspace_enabled=a.multi)
+                    session, lease, error_code=None, scope=a.scope, multi_workspace_enabled=a.multi
+                )
             lease = await _lease(run)
             if lease.configuration_revision != a.access_fence.configuration_revision:
                 raise CollectionFenceLost("access_changed", "revision_changed")
@@ -2072,16 +2889,33 @@ async def _run_telegram(run: Run) -> None:
             continue
         proofs = {p.update_id: p for p in classification.delivery_proofs}
         records = [
-            record for d in page.deliveries if d.update_id not in replay
-            if (record := map_telegram_update(
-                d.update, allowed_chat_ids=allowed, proof=proofs[d.update_id], collected_at=page.collected_at)) is not None
+            record
+            for d in page.deliveries
+            if d.update_id not in replay
+            if (
+                record := map_telegram_update(
+                    d.update,
+                    allowed_chat_ids=allowed,
+                    proof=proofs[d.update_id],
+                    collected_at=page.collected_at,
+                )
+            )
+            is not None
         ]
         await _credential_fence(run, telegram=snapshot)
         await _accept_proof(
-            run, lease, records=records, coverage="pending_updates_only",
-            cursor_after=classification.cursor_after.model_dump_json() if classification.cursor_after is not None else lease.cursor_before,
-            collected_at=page.collected_at, telegram=classification.delivery_proofs, raw=page.deliveries,
-            native_operation_id=snapshot.operation_id)
+            run,
+            lease,
+            records=records,
+            coverage="pending_updates_only",
+            cursor_after=classification.cursor_after.model_dump_json()
+            if classification.cursor_after is not None
+            else lease.cursor_before,
+            collected_at=page.collected_at,
+            telegram=classification.delivery_proofs,
+            raw=page.deliveries,
+            native_operation_id=snapshot.operation_id,
+        )
         return
 
 
@@ -2089,6 +2923,7 @@ ADAPTERS.update({"github": _run_github, "telegram": _run_telegram})
 
 
 # ---------------------------------------------------------------- orchestration
+
 
 def _classify(exc: BaseException, *, keyless: bool = False) -> dict[str, Any]:
     """Map an adapter failure to ``settle_admission`` arguments (never response text).
@@ -2119,12 +2954,19 @@ def _classify(exc: BaseException, *, keyless: bool = False) -> dict[str, Any]:
     if isinstance(exc, rest.ProviderHttpError):
         if exc.status_code in {401, 403} and not keyless:
             return {"outcome": "failed", "error_code": "invalid_credential"}
-        return {"outcome": "failed", "error_code": "provider_unavailable" if exc.retryable else "provider_rejected",
-                "retryable": exc.retryable}
+        return {
+            "outcome": "failed",
+            "error_code": "provider_unavailable" if exc.retryable else "provider_rejected",
+            "retryable": exc.retryable,
+        }
     if isinstance(exc, (TimeoutError, httpx.HTTPError, OSError)):
         return {"outcome": "failed", "error_code": "provider_timeout", "retryable": True}
     if is_http_error(exc):
-        return {"outcome": "failed", "error_code": "ingestion_conflict", "retryable": error_status(exc) == 409}
+        return {
+            "outcome": "failed",
+            "error_code": "ingestion_conflict",
+            "retryable": error_status(exc) == 409,
+        }
     if isinstance(exc, ValueError):
         return {"outcome": "failed", "error_code": "provider_response_invalid"}
     return {"outcome": "failed", "error_code": "executor_error", "retryable": True}
@@ -2154,14 +2996,21 @@ async def _release_lease(run: Run, error_code: str) -> None:
     with suppress(BaseException):
         async with asyncio.timeout(3), run.factory() as session:
             await ingestion.release_connector_collection(
-                session, lease, error_code=error_code, scope=a.scope, multi_workspace_enabled=a.multi)
+                session,
+                lease,
+                error_code=error_code,
+                scope=a.scope,
+                multi_workspace_enabled=a.multi,
+            )
 
 
 def _adapter_for(source: ConnectorSource) -> Adapter | None:
     """Resolve the collection adapter for a source: type-based for provider-less sources, else registered or native; ``None`` if unsupported."""
     provider = source.provider
     if provider is None:
-        return {"api": _run_rest, "rss": _run_rss, "web": _run_web, "mcp": _run_mcp}.get(source.type)
+        return {"api": _run_rest, "rss": _run_rss, "web": _run_web, "mcp": _run_mcp}.get(
+            source.type
+        )
     if provider in ADAPTERS:
         return ADAPTERS[provider]
     return _run_native if provider in SIMPLE_NATIVE else None
@@ -2191,9 +3040,15 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
     quota_policies = get_quota_policies(attempt.source.provider)
     state: dict[str, Any] = {"attempt": attempt, "factory": factory, "settings": settings}
     gate = SendGate(
-        factory, attempt, settings=settings, deadline=time.monotonic() + rest.RUN_DEADLINE_SECONDS,
+        factory,
+        attempt,
+        settings=settings,
+        deadline=time.monotonic() + rest.RUN_DEADLINE_SECONDS,
         quota_provider=attempt.source.provider if quota_policies else None,
-        fingerprint=_alpha_fingerprint(state) if attempt.source.provider == "alpha_vantage" else None)
+        fingerprint=_alpha_fingerprint(state)
+        if attempt.source.provider == "alpha_vantage"
+        else None,
+    )
     run = Run(ctx=ctx, factory=factory, settings=settings, attempt=attempt, gate=gate)
     lost = asyncio.Event()
     main = asyncio.current_task()
@@ -2220,18 +3075,30 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
     except connectors.ProviderRateLimited as exc:
         with suppress(Exception):
             await _record_rate_limit(run, exc.next_eligible_at)
-        settle = {"outcome": "failed", "error_code": "provider_rate_limited", "retryable": True,
-                  "provider_deadline": exc.next_eligible_at}
+        settle = {
+            "outcome": "failed",
+            "error_code": "provider_rate_limited",
+            "retryable": True,
+            "provider_deadline": exc.next_eligible_at,
+        }
     except Exception as exc:  # deliberate boundary: every failure must settle the request
         settle = _classify(exc, keyless=_sends_no_credential(attempt.source))
         if isinstance(exc, rest.ProviderHttpError):
             # The settled code hides the upstream status; log it (never the body or URL) to tell throttles from rejects.
-            logger.warning("Collection provider HTTP %s; provider=%s request_id=%s error_code=%s",
-                           exc.status_code, attempt.source.provider, admission.request_id, settle.get("error_code"))
+            logger.warning(
+                "Collection provider HTTP %s; provider=%s request_id=%s error_code=%s",
+                exc.status_code,
+                attempt.source.provider,
+                admission.request_id,
+                settle.get("error_code"),
+            )
         if settle["error_code"] == "executor_error":
             # Unclassified failure: the settled code alone hides the cause, so keep the traceback (no response body).
-            logger.exception("Collection adapter failed; provider=%s request_id=%s",
-                             attempt.source.provider, admission.request_id)
+            logger.exception(
+                "Collection adapter failed; provider=%s request_id=%s",
+                attempt.source.provider,
+                admission.request_id,
+            )
     finally:
         beat.cancel()
         with suppress(asyncio.CancelledError):
@@ -2245,4 +3112,3 @@ async def collect_source(ctx: dict[str, object], request_id: str) -> None:
     from modules.connectors.worker import process_collection_request
 
     await process_collection_request({**ctx, "collection_executor": execute_collection}, request_id)
-

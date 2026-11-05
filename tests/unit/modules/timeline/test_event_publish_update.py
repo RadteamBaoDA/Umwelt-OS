@@ -37,8 +37,12 @@ class _Result:
 class _Session:
     """Scripted session: queued ``scalar``/``scalars``/``execute`` results, recording writes in order."""
 
-    def __init__(self, scalar: list[Any] | None = None, scalars: list[list[Any]] | None = None,
-                 execute: list[list[Any]] | None = None) -> None:
+    def __init__(
+        self,
+        scalar: list[Any] | None = None,
+        scalars: list[list[Any]] | None = None,
+        execute: list[list[Any]] | None = None,
+    ) -> None:
         self.scalar_q, self.scalars_q, self.execute_q = scalar or [], scalars or [], execute or []
         self.added: list[Any] = []
         self.executed: list[tuple[str, Any]] = []
@@ -76,46 +80,96 @@ class _Session:
 
 def _setup_publish(*, participant: bool = True, extra_proposal: bool = False) -> SimpleNamespace:
     doc_version, chunk, entity, membership = uuid4(), uuid4(), uuid4(), uuid4()
-    participants = [ParticipantProposal(membership_id=membership, role=" lead ", chunk_ids=[chunk])] if participant else []
+    participants = (
+        [ParticipantProposal(membership_id=membership, role=" lead ", chunk_ids=[chunk])]
+        if participant
+        else []
+    )
     event = EventProposal(
-        type="strike", title="Port strike", confidence=0.8, date_precision="date", occurred_date=date(2026, 1, 5),
-        evidence_chunk_ids=[chunk], participants=participants,
+        type="strike",
+        title="Port strike",
+        confidence=0.8,
+        date_precision="date",
+        occurred_date=date(2026, 1, 5),
+        evidence_chunk_ids=[chunk],
+        participants=participants,
     )
     events = [event]
     if extra_proposal:
         events.append(event.model_copy(update={"summary": "z"}))  # same candidate hash, larger JSON
     ready = SimpleNamespace(
-        document_id=uuid4(), document_version_id=doc_version, source_id=uuid4(), source_generation=2, observed_at=NOW,
+        document_id=uuid4(),
+        document_version_id=doc_version,
+        source_id=uuid4(),
+        source_generation=2,
+        observed_at=NOW,
     )
     ref = SimpleNamespace(
-        chunk_id=chunk, source_id=ready.source_id, document_id=ready.document_id, document_version_id=doc_version,
-        version_number=1, observed_at=NOW, title="Doc", canonical_url="https://example.test", excerpt="x",
+        chunk_id=chunk,
+        source_id=ready.source_id,
+        document_id=ready.document_id,
+        document_version_id=doc_version,
+        version_number=1,
+        observed_at=NOW,
+        title="Doc",
+        canonical_url="https://example.test",
+        excerpt="x",
         metadata_is_version_snapshot=True,
     )
     membership_ref = SimpleNamespace(membership_id=membership, chunk_id=chunk, entity_id=entity)
     work = SimpleNamespace(source_generation=2, document_version_id=doc_version)
     return SimpleNamespace(
-        proposals=EventExtractionOutput(events=events), ready=ready, ref=ref, chunk=chunk, entity=entity,
-        membership=membership, membership_ref=membership_ref, work=work,
+        proposals=EventExtractionOutput(events=events),
+        ready=ready,
+        ref=ref,
+        chunk=chunk,
+        entity=entity,
+        membership=membership,
+        membership_ref=membership_ref,
+        work=work,
     )
 
 
-async def _publish(s: SimpleNamespace, session: _Session, *, finish: bool = True, revision: int = 3,
-                   canonical: Any = None) -> tuple[bool, SimpleNamespace]:
+async def _publish(
+    s: SimpleNamespace,
+    session: _Session,
+    *,
+    finish: bool = True,
+    revision: int = 3,
+    canonical: Any = None,
+) -> tuple[bool, SimpleNamespace]:
     probes = SimpleNamespace(
-        finish=AsyncMock(return_value=finish), schedule=AsyncMock(),
-        entity_refs=AsyncMock(return_value=canonical if canonical is not None else [
-            SimpleNamespace(canonical_id=s.entity, revision=revision)]),
+        finish=AsyncMock(return_value=finish),
+        schedule=AsyncMock(),
+        entity_refs=AsyncMock(
+            return_value=canonical
+            if canonical is not None
+            else [SimpleNamespace(canonical_id=s.entity, revision=revision)]
+        ),
     )
-    with patch.object(public.documents, "read_extraction_evidence_refs", AsyncMock(return_value=[s.ref])), \
-         patch.object(public, "_read_evidence_closure", AsyncMock(return_value=[s.ref])), \
-         patch.object(public.entities, "list_version_membership_refs", AsyncMock(return_value=[s.membership_ref])), \
-         patch.object(public.entities, "get_entity_refs", probes.entity_refs), \
-         patch.object(public, "finish_extraction_work", probes.finish), \
-         patch.object(public, "_schedule_temporal_event", probes.schedule):
+    with (
+        patch.object(
+            public.documents, "read_extraction_evidence_refs", AsyncMock(return_value=[s.ref])
+        ),
+        patch.object(public, "_read_evidence_closure", AsyncMock(return_value=[s.ref])),
+        patch.object(
+            public.entities,
+            "list_version_membership_refs",
+            AsyncMock(return_value=[s.membership_ref]),
+        ),
+        patch.object(public.entities, "get_entity_refs", probes.entity_refs),
+        patch.object(public, "finish_extraction_work", probes.finish),
+        patch.object(public, "_schedule_temporal_event", probes.schedule),
+    ):
         result = await public.publish_extracted_events(
-            session, work_id=uuid4(), lease_owner="lease", ready=s.ready, proposals=s.proposals, model="m",  # type: ignore[arg-type]
-            membership_revisions={s.membership: 3}, **KW,
+            session,
+            work_id=uuid4(),
+            lease_owner="lease",
+            ready=s.ready,
+            proposals=s.proposals,
+            model="m",  # type: ignore[arg-type]
+            membership_revisions={s.membership: 3},
+            **KW,
         )
     return result, probes
 
@@ -129,17 +183,33 @@ async def test_publish_creates_event_evidence_participant_and_result() -> None:
     ok, probes = await _publish(s, session)
     assert ok is True
     event = next(obj for obj in session.added if isinstance(obj, Event))
-    assert (event.origin, event.type, event.title, event.source_id) == ("derived", "strike", "Port strike", s.ready.source_id)
-    assert event.extraction_identity == f"{s.ready.document_version_id}:2:events-v1:events-prompt-v1"
+    assert (event.origin, event.type, event.title, event.source_id) == (
+        "derived",
+        "strike",
+        "Port strike",
+        s.ready.source_id,
+    )
+    assert (
+        event.extraction_identity == f"{s.ready.document_version_id}:2:events-v1:events-prompt-v1"
+    )
     assert event.candidate_hash and len(event.candidate_hash) == 64
     participant = next(obj for obj in session.added if isinstance(obj, EventParticipant))
-    assert (participant.entity_id, participant.role, participant.origin) == (s.entity, "lead", "derived")
+    assert (participant.entity_id, participant.role, participant.origin) == (
+        s.entity,
+        "lead",
+        "derived",
+    )
     kinds = [kind for kind, _ in session.executed]
     assert kinds == ["Insert", "Insert"]
     evidence_params = session.executed[0][1]
     assert len(evidence_params) == 1 and evidence_params[0]["chunk_id"] == s.chunk
-    assert evidence_params[0]["source_generation"] == 2 and evidence_params[0]["candidate_hash"] == event.candidate_hash
-    assert session.executed[1][1] == [{"participant_id": participant.id, "event_evidence_id": participant_evidence.id}]
+    assert (
+        evidence_params[0]["source_generation"] == 2
+        and evidence_params[0]["candidate_hash"] == event.candidate_hash
+    )
+    assert session.executed[1][1] == [
+        {"participant_id": participant.id, "event_evidence_id": participant_evidence.id}
+    ]
     payload = probes.finish.await_args.args[3]
     assert payload[0]["event_id"] == str(event.id) and payload[0]["refresh_conflicts"] == []
     assert payload[0]["support"]["membership_ids"] == [str(s.membership)]
@@ -158,7 +228,9 @@ async def test_publish_coalesces_equal_candidates_to_smallest_json() -> None:
     assert ok is True
     assert len([obj for obj in session.added if isinstance(obj, Event)]) == 1
     published = probes.finish.await_args.args[3]
-    assert len(published) == 1 and published[0]["proposal"]["summary"] == "z"  # \"z\" sorts before null in canonical JSON
+    assert (
+        len(published) == 1 and published[0]["proposal"]["summary"] == "z"
+    )  # \"z\" sorts before null in canonical JSON
     probes.entity_refs.assert_not_awaited()
 
 
@@ -170,11 +242,30 @@ async def test_publish_refreshes_existing_event_respecting_owner_fields_and_conf
 
     def existing_event() -> Event:
         return Event(
-            id=uuid4(), workspace_id=WS, source_id=s.ready.source_id, type="strike", subtype=None, title="Old title",
-            summary=None, importance_score=None, confidence=0.8, metadata_json={}, origin="derived",
-            date_precision="date", started_at=None, ended_at=None, occurred_date=date(2026, 1, 9), end_date=None,
-            occurrence_timezone=None, observed_at=NOW, valid_from=None, valid_to=None, revision=4,
-            owner_fields=["title", "occurred_date", "evidence"], extraction_identity="x", candidate_hash=candidate,
+            id=uuid4(),
+            workspace_id=WS,
+            source_id=s.ready.source_id,
+            type="strike",
+            subtype=None,
+            title="Old title",
+            summary=None,
+            importance_score=None,
+            confidence=0.8,
+            metadata_json={},
+            origin="derived",
+            date_precision="date",
+            started_at=None,
+            ended_at=None,
+            occurred_date=date(2026, 1, 9),
+            end_date=None,
+            occurrence_timezone=None,
+            observed_at=NOW,
+            valid_from=None,
+            valid_to=None,
+            revision=4,
+            owner_fields=["title", "occurred_date", "evidence"],
+            extraction_identity="x",
+            candidate_hash=candidate,
         )
 
     probe = _Session(scalar=[s.work], scalars=[[], []])
@@ -198,7 +289,11 @@ async def test_publish_refreshes_existing_event_respecting_owner_fields_and_conf
     session = _Session(scalar=[s.work], scalars=[[changed], []])
     await _publish(s, session)
     # Proposal is date precision; unowned refresh sets date fields and bumps the revision.
-    assert changed.revision == 5 and changed.date_precision == "date" and changed.occurred_date == date(2026, 1, 5)
+    assert (
+        changed.revision == 5
+        and changed.date_precision == "date"
+        and changed.occurred_date == date(2026, 1, 5)
+    )
 
     conflict = existing_event()
     conflict.owner_fields = ["evidence", "date_precision"]
@@ -227,15 +322,26 @@ async def test_publish_skips_suppressed_and_lost_leases() -> None:
     lost, probes = await _publish(s, _Session(scalar=[None]))
     assert lost is False
     probes.finish.assert_not_awaited()
-    drifted, _ = await _publish(s, _Session(scalar=[SimpleNamespace(source_generation=9, document_version_id=s.work.document_version_id)]))
+    drifted, _ = await _publish(
+        s,
+        _Session(
+            scalar=[
+                SimpleNamespace(source_generation=9, document_version_id=s.work.document_version_id)
+            ]
+        ),
+    )
     assert drifted is False
-    not_finished, probes = await _publish(s, _Session(scalar=[s.work], scalars=[[], []]), finish=False)
+    not_finished, probes = await _publish(
+        s, _Session(scalar=[s.work], scalars=[[], []]), finish=False
+    )
     assert not_finished is False
     probes.schedule.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["unknown_membership", "not_subset", "entity_changed", "revision_changed"])
+@pytest.mark.parametrize(
+    "case", ["unknown_membership", "not_subset", "entity_changed", "revision_changed"]
+)
 async def test_publish_rejects_drift_with_value_errors(case: str) -> None:
     """Unknown participants and canonical identity or revision drift abort with ``ValueError``."""
     s = _setup_publish()
@@ -259,43 +365,90 @@ async def test_publish_rejects_drift_with_value_errors(case: str) -> None:
 
 def _event(origin: str = "manual", **over: Any) -> Event:
     base: dict[str, Any] = {
-        "id": uuid4(), "workspace_id": WS, "source_id": None, "type": "strike", "subtype": None,
-        "title": "Port strike", "summary": None, "importance_score": None, "confidence": None,
-        "metadata_json": {}, "origin": origin, "date_precision": "unknown", "started_at": None,
-        "ended_at": None, "occurred_date": None, "end_date": None, "occurrence_timezone": None,
-        "observed_at": None, "valid_from": None, "valid_to": None, "revision": 2, "owner_fields": [],
+        "id": uuid4(),
+        "workspace_id": WS,
+        "source_id": None,
+        "type": "strike",
+        "subtype": None,
+        "title": "Port strike",
+        "summary": None,
+        "importance_score": None,
+        "confidence": None,
+        "metadata_json": {},
+        "origin": origin,
+        "date_precision": "unknown",
+        "started_at": None,
+        "ended_at": None,
+        "occurred_date": None,
+        "end_date": None,
+        "occurrence_timezone": None,
+        "observed_at": None,
+        "valid_from": None,
+        "valid_to": None,
+        "revision": 2,
+        "owner_fields": [],
         "deleted_at": None,
     }
     base.update(over)
     return Event(**base)
 
 
-async def _update(event: Event | None, payload: EventPatch, *, initial: Any = "same", snapshots_differ: bool = False,
-                  closure_drift: bool = False, lock_none: bool = False, old_rows: list[Any] | None = None,
-                  evidence_rows: list[Any] | None = None) -> tuple[Any, SimpleNamespace, _Session]:
-    initial_row = SimpleNamespace(revision=2, origin=event.origin if event else "manual", deleted_at=None)
-    row = SimpleNamespace(id=uuid4(), source_id=uuid4(), document_id=uuid4(), document_version_id=uuid4(), chunk_id=uuid4())
+async def _update(
+    event: Event | None,
+    payload: EventPatch,
+    *,
+    initial: Any = "same",
+    snapshots_differ: bool = False,
+    closure_drift: bool = False,
+    lock_none: bool = False,
+    old_rows: list[Any] | None = None,
+    evidence_rows: list[Any] | None = None,
+) -> tuple[Any, SimpleNamespace, _Session]:
+    initial_row = SimpleNamespace(
+        revision=2, origin=event.origin if event else "manual", deleted_at=None
+    )
+    row = SimpleNamespace(
+        id=uuid4(),
+        source_id=uuid4(),
+        document_id=uuid4(),
+        document_version_id=uuid4(),
+        chunk_id=uuid4(),
+    )
     evidence_snapshots = [[row], [row, row] if snapshots_differ else [row]]
-    execute = [[initial_row] if initial == "same" else [], evidence_snapshots[0], [], evidence_snapshots[1], []]
+    execute = [
+        [initial_row] if initial == "same" else [],
+        evidence_snapshots[0],
+        [],
+        evidence_snapshots[1],
+        [],
+    ]
     session = _Session(scalar=[event], scalars=[old_rows or []], execute=execute)
     closure = [SimpleNamespace(source_id=uuid4(), document_id=uuid4())]
     probes = SimpleNamespace(
         closure=AsyncMock(side_effect=[closure, [] if closure_drift else closure]),
-        lock_source=AsyncMock(return_value=None if lock_none else object()), lock_docs=AsyncMock(),
-        entity_refs=AsyncMock(), set_participants=AsyncMock(), evidence_rows=AsyncMock(return_value=evidence_rows or []),
-        remove=AsyncMock(), schedule=AsyncMock(), commit=AsyncMock(), read=AsyncMock(return_value="READ"),
+        lock_source=AsyncMock(return_value=None if lock_none else object()),
+        lock_docs=AsyncMock(),
+        entity_refs=AsyncMock(),
+        set_participants=AsyncMock(),
+        evidence_rows=AsyncMock(return_value=evidence_rows or []),
+        remove=AsyncMock(),
+        schedule=AsyncMock(),
+        commit=AsyncMock(),
+        read=AsyncMock(return_value="READ"),
     )
-    with patch.object(public, "_admit", AsyncMock(return_value=FENCE)), \
-         patch.object(public, "_read_evidence_closure", probes.closure), \
-         patch("modules.sources.public.lock_source", probes.lock_source), \
-         patch.object(public.documents, "lock_document_ids", probes.lock_docs), \
-         patch.object(public.entities, "get_entity_refs", probes.entity_refs), \
-         patch.object(public, "_set_participants", probes.set_participants), \
-         patch.object(public, "_evidence_rows", probes.evidence_rows), \
-         patch.object(public, "_remove_unsupported_derived_participants", probes.remove), \
-         patch.object(public, "_schedule_temporal_event", probes.schedule), \
-         patch.object(public, "commit_with_replay", probes.commit), \
-         patch.object(public, "_event_read", probes.read):
+    with (
+        patch.object(public, "_admit", AsyncMock(return_value=FENCE)),
+        patch.object(public, "_read_evidence_closure", probes.closure),
+        patch("modules.sources.public.lock_source", probes.lock_source),
+        patch.object(public.documents, "lock_document_ids", probes.lock_docs),
+        patch.object(public.entities, "get_entity_refs", probes.entity_refs),
+        patch.object(public, "_set_participants", probes.set_participants),
+        patch.object(public, "_evidence_rows", probes.evidence_rows),
+        patch.object(public, "_remove_unsupported_derived_participants", probes.remove),
+        patch.object(public, "_schedule_temporal_event", probes.schedule),
+        patch.object(public, "commit_with_replay", probes.commit),
+        patch.object(public, "_event_read", probes.read),
+    ):
         result = await public.update_event(session, event.id if event else uuid4(), payload, **KW)  # type: ignore[arg-type]
     return result, probes, session
 
@@ -304,10 +457,17 @@ async def _update(event: Event | None, payload: EventPatch, *, initial: Any = "s
 async def test_update_applies_scalar_changes_and_audits() -> None:
     """A title correction bumps the revision, writes one audit row, schedules and commits with replay."""
     event = _event()
-    result, probes, session = await _update(event, EventPatch(expected_revision=2, reason="typo", title="Port strike ends"))
+    result, probes, session = await _update(
+        event, EventPatch(expected_revision=2, reason="typo", title="Port strike ends")
+    )
     assert result == "READ" and event.title == "Port strike ends" and event.revision == 3
     audit = next(obj for obj in session.added if isinstance(obj, EventAudit))
-    assert (audit.prior_revision, audit.resulting_revision, audit.reason, audit.actor_id) == (2, 3, "typo", 1)
+    assert (audit.prior_revision, audit.resulting_revision, audit.reason, audit.actor_id) == (
+        2,
+        3,
+        "typo",
+        1,
+    )
     assert audit.changed_json == {"title": "Port strike ends"}
     probes.schedule.assert_awaited_once()
     assert probes.schedule.await_args.args[2] == ["title"]
@@ -331,10 +491,19 @@ async def test_update_participants_and_evidence_replace_support() -> None:
     event = _event("derived")
     version, chunk = uuid4(), uuid4()
     ref = SimpleNamespace(
-        source_id=uuid4(), document_id=uuid4(), document_version_id=version, chunk_id=chunk, version_number=1,
-        observed_at=NOW, title="T", canonical_url=None, metadata_is_version_snapshot=True,
+        source_id=uuid4(),
+        document_id=uuid4(),
+        document_version_id=version,
+        chunk_id=chunk,
+        version_number=1,
+        observed_at=NOW,
+        title="T",
+        canonical_url=None,
+        metadata_is_version_snapshot=True,
     )
-    payload = EventPatch(expected_revision=2, reason="support", participants=[], evidence=[(version, chunk)])
+    payload = EventPatch(
+        expected_revision=2, reason="support", participants=[], evidence=[(version, chunk)]
+    )
     result, probes, session = await _update(event, payload, evidence_rows=[ref])
     assert result == "READ"
     probes.set_participants.assert_awaited_once()
@@ -361,8 +530,12 @@ async def test_update_missing_stale_and_noop_cases() -> None:
     with pytest.raises(ValueError, match="stale event revision"):
         await _update(_event(), patch_title, snapshots_differ=True)
     with pytest.raises(ValueError, match="stale event evidence closure"):
-        await _update(_event(), patch_title, closure_drift=True, old_rows=[SimpleNamespace(
-            document_version_id=uuid4(), chunk_id=uuid4())])
+        await _update(
+            _event(),
+            patch_title,
+            closure_drift=True,
+            old_rows=[SimpleNamespace(document_version_id=uuid4(), chunk_id=uuid4())],
+        )
     with pytest.raises(ValueError, match="source is unavailable"):
         await _update(_event(), patch_title, lock_none=True)
     with pytest.raises(ValueError, match="no changes"):
@@ -371,4 +544,8 @@ async def test_update_missing_stale_and_noop_cases() -> None:
         await _update(_event(), EventPatch(expected_revision=2, reason="r", date_precision="timed"))
     with pytest.raises(ValueError, match="one source"):
         two = [SimpleNamespace(source_id=uuid4()), SimpleNamespace(source_id=uuid4())]
-        await _update(_event(), EventPatch(expected_revision=2, reason="r", evidence=[(uuid4(), uuid4())]), evidence_rows=two)
+        await _update(
+            _event(),
+            EventPatch(expected_revision=2, reason="r", evidence=[(uuid4(), uuid4())]),
+            evidence_rows=two,
+        )

@@ -21,14 +21,17 @@ class AccountSessionRef:
         """Reject malformed actor/digest locators before short session admission."""
         if type(self.account_id) is not int or self.account_id <= 0:
             raise ValueError("A positive account ID is required")
-        if not isinstance(self.token_hash, str) or len(self.token_hash) != 64 or any(
-            character not in "0123456789abcdef" for character in self.token_hash
+        if (
+            not isinstance(self.token_hash, str)
+            or len(self.token_hash) != 64
+            or any(character not in "0123456789abcdef" for character in self.token_hash)
         ):
             raise ValueError("A session digest is required")
 
 
 class SetupRequest(BaseModel):
     """Validated first-run owner password request with an optional display name."""
+
     password: str = Field(min_length=12, max_length=128)
     display_name: str | None = Field(default=None, max_length=200)
 
@@ -43,22 +46,26 @@ class SetupRequest(BaseModel):
 
 class SetupStatus(BaseModel):
     """Reports whether first-run owner setup is still required."""
+
     setupRequired: bool
 
 
 class SetupResponse(BaseModel):
     """Reports successful singleton owner creation."""
+
     created: bool
 
 
 class LoginRequest(BaseModel):
     """Exact normalized email login; omission selects bootstrap account 1 only."""
+
     password: str = Field(min_length=1, max_length=128)
     identifier: str | None = Field(default=None, max_length=320)
 
 
 class AuthState(BaseModel):
     """Authenticated response containing the client CSRF token."""
+
     authenticated: bool = True
     csrfToken: str
     isInstanceAdmin: bool = False
@@ -66,6 +73,7 @@ class AuthState(BaseModel):
 
 class CsrfResponse(BaseModel):
     """Response carrying a newly issued client CSRF token."""
+
     csrfToken: str
 
 
@@ -87,12 +95,14 @@ class AccountRead(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     """Current password plus a replacement validated with the same policy as first-run setup."""
+
     currentPassword: str = Field(min_length=1, max_length=128)
     newPassword: str = Field(min_length=12, max_length=128)
 
 
 class SessionInfo(BaseModel):
     """One live session of the caller: opaque id, timestamps, and whether it is the requesting session."""
+
     id: str
     createdAt: datetime
     lastSeenAt: datetime | None
@@ -102,4 +112,5 @@ class SessionInfo(BaseModel):
 
 class RevokeOthersResponse(BaseModel):
     """Count of sessions deleted by revoke-others."""
+
     revoked: int

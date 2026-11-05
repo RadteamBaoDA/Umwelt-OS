@@ -19,18 +19,107 @@ UNCITED_ANSWER_NOTICE = "[Uncited] "
 
 _WORD_RE = re.compile(r"[a-z0-9\u00c0-\u024f\u1e00-\u1eff]{2,}", re.IGNORECASE)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
-_STOPWORDS = frozenset({
-    "the", "and", "for", "that", "this", "with", "from", "are", "was", "were",
-    "have", "has", "had", "not", "but", "what", "all", "can", "will", "into",
-    "your", "about", "there", "their", "which", "when", "where", "who", "how",
-    "why", "out", "use", "used", "using", "than", "then", "also", "some", "such",
-    "more", "other", "its", "our", "you", "they", "them", "these", "those",
-    "would", "could", "should", "may", "might", "must", "shall", "been", "being",
-    "does", "did", "doing", "done", "each", "any", "only", "very", "just", "over",
-    "under", "between", "after", "before", "through", "during", "without", "within",
-    "của", "và", "các", "có", "trong", "được", "cho", "là", "với", "không", "những",
-    "một", "này", "đã", "khi", "về", "như", "từ", "theo", "đến", "hay", "hoặc",
-})
+_STOPWORDS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "that",
+        "this",
+        "with",
+        "from",
+        "are",
+        "was",
+        "were",
+        "have",
+        "has",
+        "had",
+        "not",
+        "but",
+        "what",
+        "all",
+        "can",
+        "will",
+        "into",
+        "your",
+        "about",
+        "there",
+        "their",
+        "which",
+        "when",
+        "where",
+        "who",
+        "how",
+        "why",
+        "out",
+        "use",
+        "used",
+        "using",
+        "than",
+        "then",
+        "also",
+        "some",
+        "such",
+        "more",
+        "other",
+        "its",
+        "our",
+        "you",
+        "they",
+        "them",
+        "these",
+        "those",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "been",
+        "being",
+        "does",
+        "did",
+        "doing",
+        "done",
+        "each",
+        "any",
+        "only",
+        "very",
+        "just",
+        "over",
+        "under",
+        "between",
+        "after",
+        "before",
+        "through",
+        "during",
+        "without",
+        "within",
+        "của",
+        "và",
+        "các",
+        "có",
+        "trong",
+        "được",
+        "cho",
+        "là",
+        "với",
+        "không",
+        "những",
+        "một",
+        "này",
+        "đã",
+        "khi",
+        "về",
+        "như",
+        "từ",
+        "theo",
+        "đến",
+        "hay",
+        "hoặc",
+    }
+)
 
 
 _NUM = r"\d{1,4}(?:\s*,\s*\d{1,4})*"
@@ -41,7 +130,10 @@ _CODE_RE = re.compile(r"```.*?```|`[^`\n]+`", re.DOTALL)
 
 def _outside_code(text: str) -> list[tuple[str, bool]]:
     """Split text into (segment, is_prose) pairs; fenced and inline code are not prose."""
-    return [(part, i % 2 == 0) for i, part in enumerate(re.split(f"({_CODE_RE.pattern})", text, flags=re.DOTALL))]
+    return [
+        (part, i % 2 == 0)
+        for i, part in enumerate(re.split(f"({_CODE_RE.pattern})", text, flags=re.DOTALL))
+    ]
 
 
 def _run_numbers(run: str) -> list[int]:
@@ -300,6 +392,7 @@ def renumber_citation_markers(answer: str, mapping: dict[int, int], evidence_cou
     mapping are removed and an emptied run is dropped with one leading space. Other bracketed
     integers (``[2023]``) and code regions are left untouched.
     """
+
     def repl(match: re.Match[str]) -> str:
         """Rewrite one marker run: renumber known citations, drop unknown ones, keep non-citations."""
         nums = _run_numbers(match.group(2))
@@ -309,7 +402,9 @@ def renumber_citation_markers(answer: str, mapping: dict[int, int], evidence_cou
         kept = "".join(f"[{k}]" for k in new)
         return match.group(1) + kept if kept else ""
 
-    return "".join(_MARKER_RE.sub(repl, part) if prose else part for part, prose in _outside_code(answer))
+    return "".join(
+        _MARKER_RE.sub(repl, part) if prose else part for part, prose in _outside_code(answer)
+    )
 
 
 def _normalize_whitespace(text: str) -> str:
@@ -359,9 +454,7 @@ def validate_citations(
     if isinstance(evidence, dict):
         evidence_map = evidence
     else:
-        evidence_map = {
-            (item.document_version_id, item.chunk_id): item for item in evidence
-        }
+        evidence_map = {(item.document_version_id, item.chunk_id): item for item in evidence}
 
     valid_citations: list[Citation] = []
     rejected_citations: list[dict[str, Any]] = []
@@ -409,7 +502,9 @@ def _validate_one_citation(
     if evidence_item is None:
         return f"Reference (version={version_id}, chunk={chunk_id}) not in retrieved evidence set"
     if doc_id and doc_id != evidence_item.document_id:
-        return f"Document ID {doc_id} does not match evidence document ID {evidence_item.document_id}"
+        return (
+            f"Document ID {doc_id} does not match evidence document ID {evidence_item.document_id}"
+        )
     if source_id and source_id != evidence_item.source_id:
         return f"Source ID {source_id} does not match evidence source ID {evidence_item.source_id}"
     if not quote:
@@ -501,7 +596,9 @@ def validate_answer_citations(
 
     evidence_list = list(evidence.values()) if isinstance(evidence, dict) else list(evidence)
     if not effective_citations and evidence_list:
-        attributed_answer, attributed_citations = post_hoc_attribute_citations(answer, evidence_list)
+        attributed_answer, attributed_citations = post_hoc_attribute_citations(
+            answer, evidence_list
+        )
         if attributed_citations:
             effective_answer = attributed_answer
             effective_citations = list(attributed_citations)
@@ -511,9 +608,7 @@ def validate_answer_citations(
         bool(evidence) if isinstance(evidence, (list, dict)) else False
     )
     can_allow_uncited = (
-        allow_uncited_conversational
-        and not citations
-        and len(validation.rejected_citations) == 0
+        allow_uncited_conversational and not citations and len(validation.rejected_citations) == 0
     )
     final_answer = ensure_grounded_answer(
         effective_answer,
@@ -531,4 +626,3 @@ def validate_answer_citations(
         has_sufficient_evidence=has_sufficient,
         warnings=warnings,
     )
-

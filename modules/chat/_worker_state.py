@@ -162,7 +162,9 @@ class _RoundState:
     # Provider thinking blocks (Anthropic) of this round: must ride back with the tool results or the next round 400s.
     reasoning_details: list[dict[str, Any]] = field(default_factory=list)
     started: bool = False  # any chunk received; a capability fallback is only safe before this
-    ui_state: dict[str, dict[str, Any]] = field(default_factory=dict)  # per part id: length, milestones, parse clock, snapshot
+    ui_state: dict[str, dict[str, Any]] = field(
+        default_factory=dict
+    )  # per part id: length, milestones, parse clock, snapshot
     text_start: int = 0
 
 
@@ -198,7 +200,11 @@ def _parse_sse_chunk(payload: str) -> _SseChunk | None:
 
 
 async def _fence_live_run(
-    session: AsyncSession, c: _RunCtx, *, check_evidence: bool, budgeted: bool = False,
+    session: AsyncSession,
+    c: _RunCtx,
+    *,
+    check_evidence: bool,
+    budgeted: bool = False,
 ) -> tuple[_FenceOutcome, ResponseRun]:
     """Lock the live run (privacy -> conversation -> run), honour Stop, optionally revalidate evidence.
 
@@ -210,7 +216,12 @@ async def _fence_live_run(
     lightweight lock-only revalidation between full ones.
     """
     _, live_run = await _lock_live_response(
-        session, c.response_id, c.conversation_id, c.privacy_fence, scope=c.job_scope, access_fence=c.access_fence,
+        session,
+        c.response_id,
+        c.conversation_id,
+        c.privacy_fence,
+        scope=c.job_scope,
+        access_fence=c.access_fence,
     )
     if await is_run_cancelled(c.response_id, c.redis):
         await _cancel_response_locked(session, live_run, c.seq)
@@ -231,11 +242,19 @@ def _full_revalidation_due(c: _RunCtx, now: float) -> bool:
     stops publication on the very next flush; only the extra heavy checks wait at most this budget.
     """
     interval = float(getattr(c.settings, "chat_flush_full_revalidate_seconds", 0.0) or 0.0)
-    return interval <= 0.0 or c.last_full_revalidation is None or now - c.last_full_revalidation >= interval
+    return (
+        interval <= 0.0
+        or c.last_full_revalidation is None
+        or now - c.last_full_revalidation >= interval
+    )
 
 
 async def _evidence_still_valid(
-    session: AsyncSession, c: _RunCtx, live_run: ResponseRun, *, budgeted: bool = False,
+    session: AsyncSession,
+    c: _RunCtx,
+    live_run: ResponseRun,
+    *,
+    budgeted: bool = False,
 ) -> bool:
     """Revalidate (and lock) every cited evidence reference; on drift redact the run and commit.
 
@@ -250,8 +269,13 @@ async def _evidence_still_valid(
     now = asyncio.get_running_loop().time()
     lightweight = budgeted and not _full_revalidation_due(c, now)
     fences_ok, _fence_reasons = await revalidate_context_fence(
-        session, answer_context, destination="remote",
-        require_current_versions=c.selected_only, lock_evidence=True, lightweight=lightweight, scope=c.scope,
+        session,
+        answer_context,
+        destination="remote",
+        require_current_versions=c.selected_only,
+        lock_evidence=True,
+        lightweight=lightweight,
+        scope=c.scope,
     )
     if fences_ok and not lightweight:
         c.last_full_revalidation = now
@@ -264,7 +288,10 @@ async def _evidence_still_valid(
 
 @contextlib.asynccontextmanager
 async def _live_run_fence(
-    c: _RunCtx, *, check_evidence: bool, budgeted: bool = False,
+    c: _RunCtx,
+    *,
+    check_evidence: bool,
+    budgeted: bool = False,
 ) -> AsyncIterator[tuple[AsyncSession, _FenceOutcome, ResponseRun]]:
     """Open a session and yield it with the live-run fence outcome (see ``_fence_live_run``).
 
@@ -272,28 +299,45 @@ async def _live_run_fence(
     inside the block only when the outcome is ``LIVE``.
     """
     async with c.session_factory() as session:
-        outcome, live_run = await _fence_live_run(session, c, check_evidence=check_evidence, budgeted=budgeted)
+        outcome, live_run = await _fence_live_run(
+            session, c, check_evidence=check_evidence, budgeted=budgeted
+        )
         yield session, outcome, live_run
 
 
-def _add_event(session: AsyncSession, c: _RunCtx, seq: int, event_type: str, data: dict[str, Any]) -> None:
+def _add_event(
+    session: AsyncSession, c: _RunCtx, seq: int, event_type: str, data: dict[str, Any]
+) -> None:
     """Stage one ``StreamEvent`` row for this run at an already allocated ``seq``."""
-    session.add(StreamEvent(
-        response_id=c.response_id, seq=seq, event_type=event_type,
-        event_id=make_event_id(c.response_id, seq), data=data,
-    ))
+    session.add(
+        StreamEvent(
+            response_id=c.response_id,
+            seq=seq,
+            event_type=event_type,
+            event_id=make_event_id(c.response_id, seq),
+            data=data,
+        )
+    )
 
 
 async def _publish_status(c: _RunCtx, tool: str, state: str) -> None:
     """Publish a ``tool.status`` event through ``_publish_tool_status`` and advance ``c.seq``."""
     c.seq = await _publish_tool_status(
-        c.session_factory, c.response_id, c.conversation_id, c.privacy_fence, c.seq, tool, state,
-        scope=c.scope, access_fence=c.access,
+        c.session_factory,
+        c.response_id,
+        c.conversation_id,
+        c.privacy_fence,
+        c.seq,
+        tool,
+        state,
+        scope=c.scope,
+        access_fence=c.access,
     )
 
 
 async def _claim_run(
-    response_id: UUID, session_factory: async_sessionmaker[AsyncSession],
+    response_id: UUID,
+    session_factory: async_sessionmaker[AsyncSession],
 ) -> _ClaimedRun | None:
     """Atomically move a pending run to streaming and publish its first ``status`` event (seq 1).
 
@@ -308,9 +352,12 @@ async def _claim_run(
                 .where(ResponseRun.id == response_id, ResponseRun.status == "pending")
                 .values(status="streaming")
                 .returning(
-                    ResponseRun.conversation_id, ResponseRun.user_message_id,
-                    ResponseRun.retrieval_context, ResponseRun.ephemeral,
-                    ResponseRun.workspace_id, ResponseRun.actor_user_id,
+                    ResponseRun.conversation_id,
+                    ResponseRun.user_message_id,
+                    ResponseRun.retrieval_context,
+                    ResponseRun.ephemeral,
+                    ResponseRun.workspace_id,
+                    ResponseRun.actor_user_id,
                 )
             )
             claimed = result.fetchone()
@@ -318,19 +365,29 @@ async def _claim_run(
                 # Run was already claimed or cancelled before start
                 return None
             row = cast(
-                "tuple[UUID, UUID, dict[str, Any] | None, bool, UUID, int]", tuple(claimed),
+                "tuple[UUID, UUID, dict[str, Any] | None, bool, UUID, int]",
+                tuple(claimed),
             )
-            session.add(StreamEvent(
-                response_id=response_id, seq=_CLAIM_SEQ, event_type="status",
-                event_id=make_event_id(response_id, _CLAIM_SEQ), data={"status": "streaming"},
-            ))
+            session.add(
+                StreamEvent(
+                    response_id=response_id,
+                    seq=_CLAIM_SEQ,
+                    event_type="status",
+                    event_id=make_event_id(response_id, _CLAIM_SEQ),
+                    data={"status": "streaming"},
+                )
+            )
             await session.commit()
     except asyncio.CancelledError:
         # Cancelled around the claim commit: the run may be `streaming` with nothing published. Hand it back
         # now (no-op unless it is `streaming`) instead of waiting RECOVER_STREAMING_AFTER.
         try:
-            await asyncio.wait_for(_release_on_shutdown(response_id, session_factory, None), SHUTDOWN_RELEASE_TIMEOUT)
+            await asyncio.wait_for(
+                _release_on_shutdown(response_id, session_factory, None), SHUTDOWN_RELEASE_TIMEOUT
+            )
         except Exception as exc:  # noqa: BLE001  # boundary: recovery is the safety net
-            logger.warning("Chat run claim-cancel release failed for %s (%s)", response_id, type(exc).__name__)
+            logger.warning(
+                "Chat run claim-cancel release failed for %s (%s)", response_id, type(exc).__name__
+            )
         raise
     return _ClaimedRun(*row)

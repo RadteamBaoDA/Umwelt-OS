@@ -99,7 +99,9 @@ def _snap_end_to_structure(
     return snapped_end, snapped_content
 
 
-def chunk_text(text: str, target_tokens: int = 750, overlap_ratio: float = 0.12) -> list[ChunkDraft]:
+def chunk_text(
+    text: str, target_tokens: int = 750, overlap_ratio: float = 0.12
+) -> list[ChunkDraft]:
     """Split text into UTF-8-safe token chunks, retaining the configured overlap and each chunk start offset. Reject invalid settings; empty text returns no chunks."""
     if target_tokens < 1 or not 0 <= overlap_ratio < 1:
         raise ValueError("Invalid chunking settings")
@@ -136,7 +138,12 @@ def chunk_text(text: str, target_tokens: int = 750, overlap_ratio: float = 0.12)
         content = raw_bytes.decode("utf-8")
         if end < len(tokens):
             end, content = _snap_end_to_structure(
-                token_bytes, boundaries, start, end, raw_bytes, content,
+                token_bytes,
+                boundaries,
+                start,
+                end,
+                raw_bytes,
+                content,
             )
         metadata: dict[str, object] = {"start_token": start}
         if heading_offsets:
@@ -150,9 +157,5 @@ def chunk_text(text: str, target_tokens: int = 750, overlap_ratio: float = 0.12)
         next_start = start + 1
         overlap_boundary = end - overlap
         overlap_pos = bisect_right(boundaries, overlap_boundary) - 1
-        start = (
-            boundaries[overlap_pos]
-            if overlap_pos >= 0 and overlap_pos >= next_start
-            else end
-        )
+        start = boundaries[overlap_pos] if overlap_pos >= 0 and overlap_pos >= next_start else end
     return chunks

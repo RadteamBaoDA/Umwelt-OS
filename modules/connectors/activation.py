@@ -52,13 +52,17 @@ def prepare_credential_assignment(
     This helper does not persist either value.
     """
     if existing is not None and existing.state in {
-        "dispatching", "reconciliation_required", "delete_pending"
+        "dispatching",
+        "reconciliation_required",
+        "delete_pending",
     }:
         raise ValueError("Credential operation is unresolved")
     existing_binding = existing.resolved_binding if existing is not None else None
     if secret is None:
         if (
-            existing is None or existing.state != "ready" or not existing.credential_id
+            existing is None
+            or existing.state != "ready"
+            or not existing.credential_id
             or not isinstance(existing_binding, dict)
             or existing_binding.get("header_name") != header_name
         ):
@@ -74,8 +78,11 @@ def prepare_credential_assignment(
         "secret_fingerprint": secret_fingerprint(encryption_key, secret),
     }
     if (
-        existing is not None and existing.state == "ready" and existing.credential_id
-        and isinstance(existing_binding, dict) and existing_binding == expected
+        existing is not None
+        and existing.state == "ready"
+        and existing.credential_id
+        and isinstance(existing_binding, dict)
+        and existing_binding == expected
     ):
         # Exact fingerprint and binding equality avoids a needless provider mutation.
         return ({"binding": expected, "credential_id": existing.credential_id}, None)
@@ -128,8 +135,15 @@ class _CredentialScan:
 
 
 async def _intent_is_current(
-    session: AsyncSession, intent: dict[str, Any], required: Any, row: ConnectorProvisioning,
-    source_fence: SourceFence, access_fence: AccessFence, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    intent: dict[str, Any],
+    required: Any,
+    row: ConnectorProvisioning,
+    source_fence: SourceFence,
+    access_fence: AccessFence,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Return whether the prepared intent still matches the locked rows and original fence.
 
@@ -139,7 +153,9 @@ async def _intent_is_current(
     """
     return bool(
         isinstance(required, dict)
-        and await provisioning._operation_matches(session, intent, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        and await provisioning._operation_matches(
+            session, intent, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
         and intent.get("workspace_id") == str(access_fence.workspace_id)
         and intent.get("actor_user_id") == access_fence.user_id
         and intent.get("membership_revision") == access_fence.membership_revision
@@ -155,7 +171,9 @@ async def _intent_is_current(
 
 
 def _classify_required_slot(
-    value: Any, credential: Any, intent: dict[str, Any],
+    value: Any,
+    credential: Any,
+    intent: dict[str, Any],
 ) -> tuple[str, UUID | None]:
     """Classify one required credential slot without touching the database.
 
@@ -193,10 +211,14 @@ def _classify_required_slot(
         ):
             return "in_flight", expected_operation_id
     if (
-        credential is None or credential.state != "ready"
+        credential is None
+        or credential.state != "ready"
         or not credential.credential_id
         or credential.resolved_binding != value.get("binding")
-        or (value.get("credential_id") is not None and credential.credential_id != value.get("credential_id"))
+        or (
+            value.get("credential_id") is not None
+            and credential.credential_id != value.get("credential_id")
+        )
     ):
         return "unresolved", None
     if operation_id is not None:
@@ -212,8 +234,15 @@ def _classify_required_slot(
 
 
 async def _scan_required_credentials(
-    session: AsyncSession, intent: dict[str, Any], required: Any, row: ConnectorProvisioning,
-    slots: dict[str, Any], before: Any, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    intent: dict[str, Any],
+    required: Any,
+    row: ConnectorProvisioning,
+    slots: dict[str, Any],
+    before: Any,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> _CredentialScan:
     """Walk the required slots in order and settle the first non-ready one.
 
@@ -229,10 +258,13 @@ async def _scan_required_credentials(
         if kind in ("invalid", "unresolved"):
             row.state = "reconciliation_required"
             row.error_code = (
-                "activation_credential_intent_invalid" if kind == "invalid"
+                "activation_credential_intent_invalid"
+                if kind == "invalid"
                 else "activation_credential_binding_unresolved"
             )
-            await provisioning.commit_connector_observation(session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+            await provisioning.commit_connector_observation(
+                session, before, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+            )
             scan.stop = True
             return scan
         if kind == "in_flight":
@@ -252,22 +284,33 @@ async def _scan_required_credentials(
 
 
 async def _begin_workflow_enable(
-    session: AsyncSession, source_id: UUID, row: ConnectorProvisioning, intent: dict[str, Any],
-    required: Any, ready_ids: dict[str, str], before: Any,
-    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_id: UUID,
+    row: ConnectorProvisioning,
+    intent: dict[str, Any],
+    required: Any,
+    ready_ids: dict[str, str],
+    before: Any,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> bool:
     """Build the workflow body and persist the prepared enable operation (commits the observation).
 
     Returns ``False`` after a rollback when the source disappeared or ``begin_enable_in_uow``
     refused; ``True`` after the observation commit so the driver loop re-reads the locked state.
     """
-    source = await sources.get_connector_source(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    source = await sources.get_connector_source(
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source is None:
         await session.rollback()
         return False
     operation_id = uuid7()
     name = (
-        row.workflow_name if row.workflow_id and row.workflow_name
+        row.workflow_name
+        if row.workflow_id and row.workflow_name
         else workflow_name(source_id, operation_id)
     )
     body = build_workflow(
@@ -291,12 +334,20 @@ async def _begin_workflow_enable(
         operation_id,
         required_credentials=required,
         activation_id=UUID(str(intent["id"])),
-        access_fence=access_fence, multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
     if prepared is None:
         await session.rollback()
         return False
-    await provisioning.commit_connector_observation(session, before, operation_id=operation_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+    await provisioning.commit_connector_observation(
+        session,
+        before,
+        operation_id=operation_id,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+    )
     return True
 
 
@@ -306,7 +357,10 @@ async def drive_activation(
     api: N8nApi,
     credentials: N8nCredentials,
     encryption_key: str,
-    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> bool:
     """Progress a persisted activation under its captured principal/configuration fence.
 
@@ -328,10 +382,16 @@ async def drive_activation(
 
     for _ in range(8):
         # Dead read kept for SQL/lock-order parity with the pre-split implementation (values unused).
-        await provisioning.activation_status(session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        await provisioning.activation_status(
+            session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+        )
         source_fence, row, slots = await provisioning.lock_connector(
-            session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, expected_access_fence=access_fence,
-            multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+            session,
+            source_id,
+            provisioning._ALL_CREDENTIAL_SLOTS,
+            expected_access_fence=access_fence,
+            multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
         )
         if source_fence is None or row is None or not isinstance(row.activation_intent, dict):
             await session.rollback()
@@ -339,24 +399,42 @@ async def drive_activation(
         intent = row.activation_intent
         required = intent.get("required_credentials")
         if not await _intent_is_current(
-            session, intent, required, row, source_fence, access_fence,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            intent,
+            required,
+            row,
+            source_fence,
+            access_fence,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         ):
             await session.rollback()
             return False
         before = provisioning._connector_observation(source_fence, row, slots, access_fence)
 
         scan = await _scan_required_credentials(
-            session, intent, required, row, slots, before,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            intent,
+            required,
+            row,
+            slots,
+            before,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         if scan.stop:
             return False
         if scan.pending is not None:
             await session.rollback()
             progressed = await provisioning.drive_credential_operation(
-                session, source_id, scan.pending[0], credentials, encryption_key,
-                multi_workspace_enabled=multi_workspace_enabled, scope=scope, access_fence=access_fence,
+                session,
+                source_id,
+                scan.pending[0],
+                credentials,
+                encryption_key,
+                multi_workspace_enabled=multi_workspace_enabled,
+                scope=scope,
+                access_fence=access_fence,
             )
             if progressed:
                 continue
@@ -366,33 +444,64 @@ async def drive_activation(
             original_operation = copy.deepcopy(row.workflow_operation)
             await session.rollback()
             return await provisioning.drive_workflow_operation(
-                session, source_id, api, original_operation=original_operation, access_fence=access_fence,
-                multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+                session,
+                source_id,
+                api,
+                original_operation=original_operation,
+                access_fence=access_fence,
+                multi_workspace_enabled=multi_workspace_enabled,
+                scope=scope,
             )
 
         if not await _begin_workflow_enable(
-            session, source_id, row, intent, required, scan.ready_ids, before,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            session,
+            source_id,
+            row,
+            intent,
+            required,
+            scan.ready_ids,
+            before,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
         ):
             return False
     # No mutable envelope is reconstructed after transport: this is still pre-dispatch.
     source_fence, row, slots = await provisioning.lock_connector(
-        session, source_id, provisioning._ALL_CREDENTIAL_SLOTS, expected_access_fence=access_fence,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        source_id,
+        provisioning._ALL_CREDENTIAL_SLOTS,
+        expected_access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
-    original_operation_late = copy.deepcopy(row.workflow_operation) if row is not None and row.workflow_operation is not None else None
+    original_operation_late = (
+        copy.deepcopy(row.workflow_operation)
+        if row is not None and row.workflow_operation is not None
+        else None
+    )
     await session.rollback()
     if not isinstance(original_operation_late, dict):
         return False
     return await provisioning.drive_workflow_operation(
-        session, source_id, api, original_operation=original_operation_late, access_fence=access_fence,
-        multi_workspace_enabled=multi_workspace_enabled, scope=scope,
+        session,
+        source_id,
+        api,
+        original_operation=original_operation_late,
+        access_fence=access_fence,
+        multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
     )
 
 
 async def activate_native_in_uow(
-    session: AsyncSession, source_id: UUID, source_fence: SourceFence, row: ConnectorProvisioning,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    source_fence: SourceFence,
+    row: ConnectorProvisioning,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> str:
     """Activate the native backend on already-locked Source/provisioning rows; the caller commits.
 
@@ -407,15 +516,21 @@ async def activate_native_in_uow(
     from modules.settings.public import module_is_enabled
 
     source = await sources.get_connector_source(
-        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope)
+        session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
+    )
     if source is not None and source.status == "active" and source_fence.local_only:
         # Privacy boundary: local-only sources (Home Assistant, FHIR, ...) never leave the device, so no collection may be scheduled.
         return "local_only_source"
     if (
-        source is None or source.status != "active" or source_fence.local_only
-        or row.source_generation != source.generation or row.workflow_operation is not None
+        source is None
+        or source.status != "active"
+        or source_fence.local_only
+        or row.source_generation != source.generation
+        or row.workflow_operation is not None
         or row.activation_intent is not None
-        or not await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        or not await module_is_enabled(
+            session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
     ):
         return "source_inactive"
     if not collection.supports_native(source):
@@ -425,11 +540,15 @@ async def activate_native_in_uow(
     except (HTTPException, DomainError):
         return "terms_not_accepted"
     desired = row.desired_configuration or {}
-    keyed_header = collection.KEYED_PROVIDERS.get(source.provider or "")  # fixed header, no owner-set auth config
+    keyed_header = collection.KEYED_PROVIDERS.get(
+        source.provider or ""
+    )  # fixed header, no owner-set auth config
     if keyed_header or desired.get("auth_method") == "http_header":
         credential = await session.get(ConnectorRestCredential, source_id, with_for_update=True)
         if (
-            credential is None or credential.state != "ready" or credential.encrypted_secret is None
+            credential is None
+            or credential.state != "ready"
+            or credential.encrypted_secret is None
             or credential.source_generation != source.generation
             or credential.configuration_revision != row.desired_revision
             or credential.header_name != (keyed_header or desired.get("auth_header_name"))
@@ -439,24 +558,37 @@ async def activate_native_in_uow(
         return "native_unsupported"
     if source.provider == "github":  # GitHub needs the owner's grant for this exact revision
         grant = await session.get(GithubOAuthGrant, source_id)
-        if (grant is None or grant.state != "ready" or grant.encrypted_tokens is None
-                or grant.source_generation != source.generation
-                or grant.configuration_revision != row.desired_revision):
+        if (
+            grant is None
+            or grant.state != "ready"
+            or grant.encrypted_tokens is None
+            or grant.source_generation != source.generation
+            or grant.configuration_revision != row.desired_revision
+        ):
             return "invalid_credential"
     elif source.provider == "telegram":  # Telegram needs the bot credential for this exact revision
         native_credential = await session.get(ConnectorNativeCredential, source_id)
-        if (native_credential is None or native_credential.state != "ready"
-                or native_credential.source_generation != source.generation
-                or native_credential.configuration_revision != row.desired_revision):
+        if (
+            native_credential is None
+            or native_credential.state != "ready"
+            or native_credential.source_generation != source.generation
+            or native_credential.configuration_revision != row.desired_revision
+        ):
             return "invalid_credential"
     if source.provider in {"google_mail", "google_calendar", "google_drive", "reddit"}:
         oauth_grant = await session.get(ConnectorOAuthGrant, source_id, with_for_update=True)
         owner_id = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
-        if (oauth_grant is None or oauth_grant.state != "ready" or oauth_grant.encrypted_tokens is None
-                or oauth_grant.provider != source.provider or oauth_grant.workspace_id != source.workspace_id
-                or oauth_grant.owner_id != owner_id or oauth_grant.source_generation != source.generation
-                or oauth_grant.configuration_revision != row.desired_revision
-                or oauth_grant.credential_revision != row.credential_revision):
+        if (
+            oauth_grant is None
+            or oauth_grant.state != "ready"
+            or oauth_grant.encrypted_tokens is None
+            or oauth_grant.provider != source.provider
+            or oauth_grant.workspace_id != source.workspace_id
+            or oauth_grant.owner_id != owner_id
+            or oauth_grant.source_generation != source.generation
+            or oauth_grant.configuration_revision != row.desired_revision
+            or oauth_grant.credential_revision != row.credential_revision
+        ):
             return "invalid_credential"
     row.execution_backend = "native"
     row.desired_enabled = True
@@ -470,5 +602,10 @@ async def activate_native_in_uow(
     # Sources saved before the per-provider floor existed are clamped here instead of migrated.
     interval = max(int(interval), min_interval_minutes(source.provider))
     await scheduler.upsert_schedule(
-        session, workspace_id=source.workspace_id, source_id=source_id, interval_minutes=interval, enabled=True)
+        session,
+        workspace_id=source.workspace_id,
+        source_id=source_id,
+        interval_minutes=interval,
+        enabled=True,
+    )
     return ""

@@ -18,19 +18,31 @@ OwnerWrite = Annotated[object, Depends(require_account_write)]
 
 
 @router.get("", response_model=OnboardingStateRead)
-async def read_progress(request: Request, session: Session, _owner: OwnerRead) -> OnboardingStateRead:
+async def read_progress(
+    request: Request, session: Session, _owner: OwnerRead
+) -> OnboardingStateRead:
     """Return actual active account onboarding; selected workspace is irrelevant."""
-    return await read_onboarding_state(session, actor_user_id=request.state.account.id,
-                                       multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    return await read_onboarding_state(
+        session,
+        actor_user_id=request.state.account.id,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
 
 
 @router.put("", response_model=OnboardingStateRead)
 async def save_progress(
-    value: OnboardingStateUpdate, request: Request, session: Session, _owner: OwnerWrite,
+    value: OnboardingStateUpdate,
+    request: Request,
+    session: Session,
+    _owner: OwnerWrite,
 ) -> OnboardingStateRead:
     """Save account step with exact session/CSRF admission, auth-before-state lock and CAS."""
-    result = await save_onboarding_state(session, value, actor_user_id=request.state.account.id,
-                                         multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-                                         auth_sessions=(authenticated_session_ref(request),))
+    result = await save_onboarding_state(
+        session,
+        value,
+        actor_user_id=request.state.account.id,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        auth_sessions=(authenticated_session_ref(request),),
+    )
     await session.commit()
     return result

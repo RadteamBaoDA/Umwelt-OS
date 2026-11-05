@@ -31,9 +31,15 @@ def test_member_head_is_virtual_and_never_reads_replay(monkeypatch) -> None:
         return fence
 
     monkeypatch.setattr(realtime.workspaces, "read_access_fence", read_fence)
-    head = asyncio.run(realtime.current_head(
-        SimpleNamespace(), scope=member, multi_workspace_enabled=False, access_fence=fence))
-    assert (head.sequence, head.floor_sequence) == (0, 1)  # any session query would raise AttributeError
+    head = asyncio.run(
+        realtime.current_head(
+            SimpleNamespace(), scope=member, multi_workspace_enabled=False, access_fence=fence
+        )
+    )
+    assert (head.sequence, head.floor_sequence) == (
+        0,
+        1,
+    )  # any session query would raise AttributeError
 
 
 def test_commit_with_replay_still_refuses_member() -> None:
@@ -44,8 +50,11 @@ def test_commit_with_replay_still_refuses_member() -> None:
             return None
 
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(realtime.commit_with_replay(
-            S(), (), scope=member, multi_workspace_enabled=False, access_fence=fence))  # type: ignore[arg-type]
+        asyncio.run(
+            realtime.commit_with_replay(
+                S(), (), scope=member, multi_workspace_enabled=False, access_fence=fence
+            )
+        )  # type: ignore[arg-type]
     assert exc.value.status_code == 403
 
 
@@ -70,13 +79,24 @@ def test_member_replay_page_rechecks_membership_and_skips_query(monkeypatch) -> 
     monkeypatch.setattr(realtime_routes.workspaces, "lock_access_fence", lock)
     monkeypatch.setattr(realtime_routes, "current_head", head)
     monkeypatch.setattr(realtime_routes, "_cleanup_session", noop)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        session_factory=Sess, settings=SimpleNamespace(multi_workspace_enabled=False))))
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                session_factory=Sess, settings=SimpleNamespace(multi_workspace_enabled=False)
+            )
+        )
+    )
 
     def page(position):
-        return asyncio.run(realtime_routes._read_replay_page(
-            request, workspace=member, fence=object(), auth_session=object(),  # type: ignore[arg-type]
-            position=position))
+        return asyncio.run(
+            realtime_routes._read_replay_page(
+                request,
+                workspace=member,
+                fence=object(),
+                auth_session=object(),  # type: ignore[arg-type]
+                position=position,
+            )
+        )
 
     ok = page(ReplayCursor(epoch=epoch, sequence=0))
     assert locked and ok.messages == () and ok.reason is None

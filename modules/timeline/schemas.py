@@ -27,6 +27,7 @@ def _clean(value: str | None) -> str | None:
 
 class TimelineExportParticipant(BaseModel):
     """Serialize a stable participant identity and role without arbitrary metadata."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     entity_id: UUID
     role: str = Field(min_length=1, max_length=64)
@@ -35,6 +36,7 @@ class TimelineExportParticipant(BaseModel):
 
 class TimelineExportEvidence(BaseModel):
     """Bind one exported event support to an exact retained source generation and chunk."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     source_id: UUID
     source_generation: int = Field(ge=1)
@@ -45,6 +47,7 @@ class TimelineExportEvidence(BaseModel):
 
 class TimelineExportRead(BaseModel):
     """Expose portable canonical event facts and only eligible stable references."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     record_kind: Literal["event"] = "event"
     id: UUID
@@ -73,6 +76,7 @@ class TimelineExportRead(BaseModel):
 
 class TimelineExportFence(BaseModel):
     """Bind the current event revision, children and source generations for finalization."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     id: UUID
     created_at: datetime
@@ -86,6 +90,7 @@ class TimelineExportFence(BaseModel):
 
 class TimelineExportPage(BaseModel):
     """Return an immutable bounded event page and its snapshot fences."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     owner_id: int = Field(ge=1)
     record_kind: Literal["events"]
@@ -100,6 +105,7 @@ class TimelineExportPage(BaseModel):
 
 class TimelineExportFenceValidation(BaseModel):
     """Report whether the event snapshot and captured parent/child fences remain current."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
     valid: bool
     reason: Literal["valid", "owner_unavailable", "snapshot_count_changed", "record_changed"]
@@ -108,6 +114,7 @@ class TimelineExportFenceValidation(BaseModel):
 
 class ParticipantInput(BaseModel):
     """Validate one canonical participant and its role metadata."""
+
     model_config = ConfigDict(extra="forbid")
     entity_id: UUID
     role: str = Field(min_length=1, max_length=64)
@@ -131,6 +138,7 @@ class ParticipantInput(BaseModel):
 
 class EventCreate(BaseModel):
     """Validate a manual event without permitting derived or server-owned fields."""
+
     model_config = ConfigDict(extra="forbid")
     type: str = Field(min_length=1, max_length=64)
     subtype: str | None = Field(default=None, max_length=64)
@@ -200,18 +208,37 @@ class EventCreate(BaseModel):
     def validate_time_shape(self) -> "EventCreate":
         """Enforce distinct timed, date-only, and unknown occurrence representations."""
         if self.date_precision == "timed":
-            if self.started_at is None or self.occurred_date is not None or self.end_date is not None:
-                raise ValueError("timed events require started_at and forbid calendar occurrence fields")
+            if (
+                self.started_at is None
+                or self.occurred_date is not None
+                or self.end_date is not None
+            ):
+                raise ValueError(
+                    "timed events require started_at and forbid calendar occurrence fields"
+                )
             if self.ended_at is not None and self.ended_at < self.started_at:
                 raise ValueError("ended_at must be at or after started_at")
         elif self.date_precision == "date":
-            if self.occurred_date is None or self.started_at is not None or self.ended_at is not None:
+            if (
+                self.occurred_date is None
+                or self.started_at is not None
+                or self.ended_at is not None
+            ):
                 raise ValueError("date events require occurred_date and forbid timestamps")
             if self.end_date is not None and self.end_date < self.occurred_date:
                 raise ValueError("end_date must be at or after occurred_date")
-        elif any((self.started_at is not None, self.ended_at is not None, self.occurred_date is not None, self.end_date is not None)):
+        elif any(
+            (
+                self.started_at is not None,
+                self.ended_at is not None,
+                self.occurred_date is not None,
+                self.end_date is not None,
+            )
+        ):
             raise ValueError("unknown events cannot contain occurrence fields")
-        if self.valid_to is not None and (self.valid_from is None or self.valid_to <= self.valid_from):
+        if self.valid_to is not None and (
+            self.valid_from is None or self.valid_to <= self.valid_from
+        ):
             raise ValueError("validity must be a nonempty half-open range")
         pairs = [tuple(item) for item in self.evidence]
         if len(set(pairs)) != len(pairs):
@@ -224,6 +251,7 @@ class EventCreate(BaseModel):
 
 class EventPatch(BaseModel):
     """Validate a partial manual correction fenced by expected revision and reason."""
+
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=1)
     reason: str = Field(min_length=1, max_length=300)
@@ -327,6 +355,7 @@ class EventPatch(BaseModel):
 
 class EventRead(BaseModel):
     """Serialize canonical event state with participant and evidence provenance."""
+
     id: UUID
     source_id: UUID | None
     type: str
@@ -355,6 +384,7 @@ class EventRead(BaseModel):
 
 class EventPage(BaseModel):
     """Return bounded event results and a continuation cursor."""
+
     items: list[EventRead]
     next_cursor: str | None
 
@@ -385,6 +415,7 @@ class BriefEventSupport(BaseModel):
 
 class CorrelationSignalRead(BaseModel):
     """Expose one timed, region-scoped canonical event with exact live evidence IDs only."""
+
     signal_id: UUID
     event_id: UUID
     event_type: Literal["military", "economic", "disaster", "escalation"]
@@ -402,12 +433,14 @@ class CorrelationSignalRead(BaseModel):
 
 class CorrelationSignalPage(BaseModel):
     """Return a fixed-size bounded domain slice and whether its query was truncated."""
+
     items: list[CorrelationSignalRead] = Field(max_length=100)
     truncated: bool = False
 
 
 class TimelineQuery(BaseModel):
     """Normalize timeline filters for cursor fingerprinting and calendar boundaries."""
+
     date_from: date | None = None
     date_to: date | None = None
     timezone: str = "Asia/Ho_Chi_Minh"
@@ -454,7 +487,11 @@ class TimelineQuery(BaseModel):
         """Require both date boundaries or neither and a nonempty half-open range."""
         if (self.date_from is None) != (self.date_to is None):
             raise ValueError("date_from and date_to must be supplied together")
-        if self.date_from is not None and self.date_to is not None and self.date_to <= self.date_from:
+        if (
+            self.date_from is not None
+            and self.date_to is not None
+            and self.date_to <= self.date_from
+        ):
             raise ValueError("date_to must be after date_from")
         if self.precision == "unknown" and self.date_from is not None:
             raise ValueError("unknown precision cannot be combined with date filters")
@@ -463,4 +500,5 @@ class TimelineQuery(BaseModel):
 
 class TimelinePage(EventPage):
     """Return timeline events in explicitly ordered time-precision partitions."""
+
     partition_order: tuple[str, ...] = ("timed", "date", "unknown")

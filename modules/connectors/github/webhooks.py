@@ -18,10 +18,30 @@ MAX_GITHUB_WEBHOOK_BYTES = 256 * 1024
 _SIGNATURE = re.compile(r"^sha256=[0-9a-f]{64}$")
 _POSITIVE_ID = re.compile(r"^[1-9][0-9]{0,19}$")
 _REFRESH_ACTIONS = {
-    "assigned", "auto_merge_disabled", "auto_merge_enabled", "closed", "converted_to_draft",
-    "demilestoned", "dequeued", "edited", "enqueued", "labeled", "locked", "milestoned",
-    "opened", "ready_for_review", "reopened", "review_request_removed", "review_requested",
-    "synchronize", "unassigned", "unlabeled", "unlocked", "transferred", "pinned", "unpinned",
+    "assigned",
+    "auto_merge_disabled",
+    "auto_merge_enabled",
+    "closed",
+    "converted_to_draft",
+    "demilestoned",
+    "dequeued",
+    "edited",
+    "enqueued",
+    "labeled",
+    "locked",
+    "milestoned",
+    "opened",
+    "ready_for_review",
+    "reopened",
+    "review_request_removed",
+    "review_requested",
+    "synchronize",
+    "unassigned",
+    "unlabeled",
+    "unlocked",
+    "transferred",
+    "pinned",
+    "unpinned",
 }
 
 
@@ -32,7 +52,9 @@ class GitHubTargetHint(BaseModel):
     resource: Literal["issue", "pull", "commit", "release"]
     locator_kind: Literal["number", "release_id", "sha", "ref", "repository", "installation"]
     locator: StrictStr = Field(min_length=1, max_length=256)
-    intent: Literal["refresh", "delete_candidate", "visibility_lost", "visibility_check", "reconcile"]
+    intent: Literal[
+        "refresh", "delete_candidate", "visibility_lost", "visibility_check", "reconcile"
+    ]
 
 
 class VerifiedGitHubDelivery(BaseModel):
@@ -81,7 +103,12 @@ class GitHubWebhookReceipt(BaseModel):
 
 def verify_github_signature(raw_body: bytes, signature: str | None, secret: str) -> bool:
     """Verify the exact request bytes with GitHub's SHA-256 HMAC before JSON parsing."""
-    if len(raw_body) > MAX_GITHUB_WEBHOOK_BYTES or not secret or signature is None or _SIGNATURE.fullmatch(signature) is None:
+    if (
+        len(raw_body) > MAX_GITHUB_WEBHOOK_BYTES
+        or not secret
+        or signature is None
+        or _SIGNATURE.fullmatch(signature) is None
+    ):
         return False
     expected = "sha256=" + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
@@ -102,7 +129,13 @@ def _json_shape(value: Any) -> None:
             stack.extend((child, depth + 1) for child in node.values())
         elif isinstance(node, list):
             stack.extend((child, depth + 1) for child in node)
-        elif node is None or isinstance(node, (str, bool, int)) or isinstance(node, float) and node == node and abs(node) != float("inf"):
+        elif (
+            node is None
+            or isinstance(node, (str, bool, int))
+            or isinstance(node, float)
+            and node == node
+            and abs(node) != float("inf")
+        ):
             continue
         else:
             raise ValueError("Webhook JSON contains a non-JSON value")
@@ -133,7 +166,14 @@ class _EventContext:
 
 # A handler returns the bounded target hints for its event, or ``None`` when the event is ignored.
 _EventHandler = Callable[[_EventContext], "list[GitHubTargetHint] | None"]
-_RELEASE_REFRESH_ACTIONS = {"created", "edited", "published", "unpublished", "prereleased", "released"}
+_RELEASE_REFRESH_ACTIONS = {
+    "created",
+    "edited",
+    "published",
+    "unpublished",
+    "prereleased",
+    "released",
+}
 _EVENT_HANDLERS: dict[str, _EventHandler] = {}
 
 
@@ -153,10 +193,14 @@ def _hint(
     resource: Literal["issue", "pull", "commit", "release"],
     locator_kind: Literal["number", "release_id", "sha", "ref", "repository", "installation"],
     locator: str,
-    intent: Literal["refresh", "delete_candidate", "visibility_lost", "visibility_check", "reconcile"],
+    intent: Literal[
+        "refresh", "delete_candidate", "visibility_lost", "visibility_check", "reconcile"
+    ],
 ) -> GitHubTargetHint:
     """Build one target hint (thin positional wrapper keeping handler bodies short)."""
-    return GitHubTargetHint(resource=resource, locator_kind=locator_kind, locator=locator, intent=intent)
+    return GitHubTargetHint(
+        resource=resource, locator_kind=locator_kind, locator=locator, intent=intent
+    )
 
 
 def _number_hints(ctx: _EventContext, event: str) -> list[GitHubTargetHint] | None:
@@ -197,7 +241,9 @@ def _push_hints(ctx: _EventContext) -> list[GitHubTargetHint] | None:
     """Reconcile a bounded branch/tag ref; ignore other refs."""
     ref = ctx.body.get("ref")
     if (
-        ctx.repository_id and isinstance(ref, str) and 1 <= len(ref.encode("utf-8")) <= 256
+        ctx.repository_id
+        and isinstance(ref, str)
+        and 1 <= len(ref.encode("utf-8")) <= 256
         and ref.startswith(("refs/heads/", "refs/tags/"))
     ):
         return [_hint("commit", "ref", ref, "reconcile")]
@@ -207,7 +253,13 @@ def _push_hints(ctx: _EventContext) -> list[GitHubTargetHint] | None:
 @_handles("repository")
 def _repository_hints(ctx: _EventContext) -> list[GitHubTargetHint] | None:
     """Re-check repository visibility for visibility-changing actions."""
-    if ctx.repository_id and ctx.action in {"publicized", "privatized", "edited", "renamed", "transferred"}:
+    if ctx.repository_id and ctx.action in {
+        "publicized",
+        "privatized",
+        "edited",
+        "renamed",
+        "transferred",
+    }:
         return [_hint("issue", "repository", ctx.repository_id, "visibility_check")]
     return None
 
@@ -309,9 +361,15 @@ def parse_github_delivery(
         targets.clear()
         disposition = "ignored"
     return VerifiedGitHubDelivery(
-        receiver_revision=receiver_revision, delivery_id=delivery_id,
-        raw_sha256=hashlib.sha256(raw_body).hexdigest(), event=event, action=action,
-        app_id=_provider_id(app_id) or "", installation_id=installation_id,
-        repository_id=repository_id, received_at=received_at or datetime.now(UTC),
-        targets=tuple(targets), disposition=disposition,
+        receiver_revision=receiver_revision,
+        delivery_id=delivery_id,
+        raw_sha256=hashlib.sha256(raw_body).hexdigest(),
+        event=event,
+        action=action,
+        app_id=_provider_id(app_id) or "",
+        installation_id=installation_id,
+        repository_id=repository_id,
+        received_at=received_at or datetime.now(UTC),
+        targets=tuple(targets),
+        disposition=disposition,
     )

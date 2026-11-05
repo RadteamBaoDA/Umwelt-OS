@@ -59,8 +59,14 @@ def _origin(url: str) -> tuple[str, str, int]:
         port = explicit_port if explicit_port is not None else (443 if scheme == "https" else 80)
     except ValueError as exc:
         raise LocalServiceError("configured_origin_invalid") from exc
-    if (scheme not in {"http", "https"} or not host or parts.username or parts.password
-            or port < 1 or port > 65535):
+    if (
+        scheme not in {"http", "https"}
+        or not host
+        or parts.username
+        or parts.password
+        or port < 1
+        or port > 65535
+    ):
         raise LocalServiceError("configured_origin_invalid")
     return scheme, host, port
 
@@ -107,10 +113,17 @@ async def _resolve_local_addresses(host: str, port: int) -> list[Any]:
     for address in parsed_addresses:
         # NAT64/6to4/compat encodings of link-local (cloud metadata) are rejected via the IPv4 they carry.
         carried = embedded_ipv4(address)
-        if carried is not None and (carried.is_link_local or carried.is_unspecified or carried.is_multicast):
+        if carried is not None and (
+            carried.is_link_local or carried.is_unspecified or carried.is_multicast
+        ):
             raise LocalServiceError("destination_not_allowed")
-        if (address.is_link_local or address.is_multicast or address.is_unspecified
-                or address.is_reserved and not address.is_loopback):
+        if (
+            address.is_link_local
+            or address.is_multicast
+            or address.is_unspecified
+            or address.is_reserved
+            and not address.is_loopback
+        ):
             raise LocalServiceError("destination_not_allowed")
         if not (address.is_private or address.is_loopback):
             raise LocalServiceError("destination_not_local")
@@ -183,10 +196,15 @@ async def fetch_configured_origin(
     await before_send()
     try:
         async with httpx.AsyncClient(
-            timeout=timeout, trust_env=False, follow_redirects=False, verify=True,
+            timeout=timeout,
+            trust_env=False,
+            follow_redirects=False,
+            verify=True,
         ) as client:
             async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
-                async with client.stream("GET", pinned_url, headers=headers, extensions=extensions) as response:
+                async with client.stream(
+                    "GET", pinned_url, headers=headers, extensions=extensions
+                ) as response:
                     return await _read_local_response(response, max_bytes)
     except LocalServiceError:
         raise
@@ -220,7 +238,9 @@ def _instant(value: object) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def map_fhir_observation(resource: object, *, patient_id: str, collected_at: datetime) -> IngestionRecord | None:
+def map_fhir_observation(
+    resource: object, *, patient_id: str, collected_at: datetime
+) -> IngestionRecord | None:
     """Map one exact-patient FHIR R4 Observation, preserving its ID, value, unit and source time.
 
     Non-Observation resources, other patients, and unsupported value types are skipped. A valid
@@ -240,7 +260,11 @@ def map_fhir_observation(resource: object, *, patient_id: str, collected_at: dat
     if not isinstance(identifier, str) or not identifier or not isinstance(value_quantity, dict):
         return None
     raw_value, unit = value_quantity.get("value"), value_quantity.get("unit")
-    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float, Decimal)) or not isinstance(unit, str):
+    if (
+        isinstance(raw_value, bool)
+        or not isinstance(raw_value, (int, float, Decimal))
+        or not isinstance(unit, str)
+    ):
         return None
     try:
         value = Decimal(str(raw_value))
@@ -254,12 +278,27 @@ def map_fhir_observation(resource: object, *, patient_id: str, collected_at: dat
     if raw_time is None:
         raw_time = resource.get("issued")
     observed_at = _instant(raw_time)
-    version = resource.get("meta", {}).get("versionId") if isinstance(resource.get("meta"), dict) else None
-    code = resource.get("code", {}).get("coding", []) if isinstance(resource.get("code"), dict) else []
-    coding = [
-        {key: item[key] for key in ("system", "code", "display") if isinstance(item.get(key), str)}
-        for item in code if isinstance(item, dict)
-    ][:16] if isinstance(code, list) else []
+    version = (
+        resource.get("meta", {}).get("versionId")
+        if isinstance(resource.get("meta"), dict)
+        else None
+    )
+    code = (
+        resource.get("code", {}).get("coding", []) if isinstance(resource.get("code"), dict) else []
+    )
+    coding = (
+        [
+            {
+                key: item[key]
+                for key in ("system", "code", "display")
+                if isinstance(item.get(key), str)
+            }
+            for item in code
+            if isinstance(item, dict)
+        ][:16]
+        if isinstance(code, list)
+        else []
+    )
     exact_value = str(value)
     provider_record = ProviderRecordMetadata(
         provider="health",
@@ -317,17 +356,31 @@ async def collect_fhir_observations(
     floor = since or (collected - timedelta(days=30))
     if floor.tzinfo is None or collected.tzinfo is None:
         raise LocalServiceError("collection_time_invalid")
-    query = urlencode({"patient": patient_id, "_lastUpdated": f"ge{floor.astimezone(UTC).isoformat()}", "_count": "100"})
-    current = urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/") + "/Observation", query, ""))
+    query = urlencode(
+        {
+            "patient": patient_id,
+            "_lastUpdated": f"ge{floor.astimezone(UTC).isoformat()}",
+            "_count": "100",
+        }
+    )
+    current = urlunsplit(
+        (parts.scheme, parts.netloc, parts.path.rstrip("/") + "/Observation", query, "")
+    )
     visited: set[str] = set()
     records: list[IngestionRecord] = []
     for _ in range(MAX_FHIR_PAGES):
         if current in visited:
             raise LocalServiceError("pagination_loop")
         visited.add(current)
-        body = await fetch_configured_origin(base_url, current, before_send=before_send, bearer_token=bearer_token)
+        body = await fetch_configured_origin(
+            base_url, current, before_send=before_send, bearer_token=bearer_token
+        )
         bundle = await _decode_json_async(body)
-        if not isinstance(bundle, dict) or bundle.get("resourceType") != "Bundle" or not isinstance(bundle.get("entry", []), list):
+        if (
+            not isinstance(bundle, dict)
+            or bundle.get("resourceType") != "Bundle"
+            or not isinstance(bundle.get("entry", []), list)
+        ):
             raise LocalServiceError("fhir_bundle_invalid")
         for entry in bundle.get("entry", []):
             resource = entry.get("resource") if isinstance(entry, dict) else None
@@ -337,12 +390,26 @@ async def collect_fhir_observations(
                 if len(records) > 500:
                     raise LocalServiceError("record_limit_exceeded")
         links = bundle.get("link", [])
-        next_link = next((link.get("url") for link in links if isinstance(link, dict) and link.get("relation") == "next"), None) if isinstance(links, list) else None
+        next_link = (
+            next(
+                (
+                    link.get("url")
+                    for link in links
+                    if isinstance(link, dict) and link.get("relation") == "next"
+                ),
+                None,
+            )
+            if isinstance(links, list)
+            else None
+        )
         if not next_link:
             return records
         expected_path = parts.path.rstrip("/") + "/Observation"
-        if (not isinstance(next_link, str) or _origin(next_link) != origin
-                or urlsplit(next_link).path != expected_path):
+        if (
+            not isinstance(next_link, str)
+            or _origin(next_link) != origin
+            or urlsplit(next_link).path != expected_path
+        ):
             raise LocalServiceError("pagination_origin_changed")
         current = next_link
     raise LocalServiceError("page_limit_exceeded")
@@ -360,13 +427,20 @@ def _ha_resume_index(cursor: str | None, scope_hash: str, entity_count: int) -> 
         except (TypeError, ValueError):
             saved = None
         saved_version = saved.get("v") if isinstance(saved, dict) else None
-        if isinstance(saved, dict) and isinstance(saved_version, int) and not isinstance(saved_version, bool) \
-                and saved_version == 1 \
-                and saved.get("provider") == "home_assistant" \
-                and saved.get("scope_hash") == scope_hash:
+        if (
+            isinstance(saved, dict)
+            and isinstance(saved_version, int)
+            and not isinstance(saved_version, bool)
+            and saved_version == 1
+            and saved.get("provider") == "home_assistant"
+            and saved.get("scope_hash") == scope_hash
+        ):
             saved_index = saved.get("index")
-            if (not isinstance(saved_index, bool) and isinstance(saved_index, int)
-                    and 0 <= saved_index < entity_count):
+            if (
+                not isinstance(saved_index, bool)
+                and isinstance(saved_index, int)
+                and 0 <= saved_index < entity_count
+            ):
                 index = saved_index
     return index
 
@@ -388,7 +462,7 @@ def _ha_state_record(state: object, entity_id: str, collected: datetime) -> Inge
     for key in ("unit_of_measurement", "friendly_name", "latitude", "longitude"):
         value = attributes.get(key)
         if isinstance(value, (str, int, float, Decimal)) and not isinstance(value, bool):
-            source_fields[key] = str(value)[:512 if key == "friendly_name" else 64]
+            source_fields[key] = str(value)[: 512 if key == "friendly_name" else 64]
     record_value = str(raw_state) if raw_state is not None else ""
     provider_record = ProviderRecordMetadata(
         provider="home_assistant",
@@ -411,8 +485,11 @@ def _ha_state_record(state: object, entity_id: str, collected: datetime) -> Inge
         collected_at=collected.astimezone(UTC),
         version=str(state.get("last_updated") or state.get("last_changed") or "snapshot"),
         metadata={
-            "entity_id": entity_id, "state": record_value[:512], "observed_at_source": str(raw_time),
-            **source_fields, "provider_record": provider_record.model_dump(mode="json", exclude_none=True),
+            "entity_id": entity_id,
+            "state": record_value[:512],
+            "observed_at_source": str(raw_time),
+            **source_fields,
+            "provider_record": provider_record.model_dump(mode="json", exclude_none=True),
         },
     )
 
@@ -434,10 +511,18 @@ async def collect_home_assistant_snapshot(
     Only state, source timestamps, unit, name and actual source latitude/longitude are retained.
     No unselected state is fetched and no device-control endpoint is constructed.
     """
-    if not entity_ids or len(entity_ids) > MAX_HA_ENTITIES or len(set(entity_ids)) != len(entity_ids):
+    if (
+        not entity_ids
+        or len(entity_ids) > MAX_HA_ENTITIES
+        or len(set(entity_ids)) != len(entity_ids)
+    ):
         raise LocalServiceError("entity_scope_invalid")
-    if any(not isinstance(entity_id, str) or len(entity_id) > 255
-           or re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_]+", entity_id) is None for entity_id in entity_ids):
+    if any(
+        not isinstance(entity_id, str)
+        or len(entity_id) > 255
+        or re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_]+", entity_id) is None
+        for entity_id in entity_ids
+    ):
         raise LocalServiceError("entity_scope_invalid")
     parts = urlsplit(base_url)
     collected = collected_at or datetime.now(UTC)
@@ -453,7 +538,9 @@ async def collect_home_assistant_snapshot(
         path = parts.path.rstrip("/") + "/api/states/" + quote(entity_id, safe=".")
         request_url = urlunsplit((parts.scheme, parts.netloc, path, "", ""))
         try:
-            body = await fetch_configured_origin(base_url, request_url, before_send=before_send, bearer_token=bearer_token)
+            body = await fetch_configured_origin(
+                base_url, request_url, before_send=before_send, bearer_token=bearer_token
+            )
         except LocalServiceError as exc:
             if str(exc) == "http_404":
                 index += 1
@@ -470,12 +557,18 @@ async def collect_home_assistant_snapshot(
         index += 1
     complete = index >= len(entity_ids)
     cursor_after = json.dumps(
-        {"v": 1, "provider": "home_assistant", "scope_hash": scope_hash,
-         "index": 0 if complete else index},
+        {
+            "v": 1,
+            "provider": "home_assistant",
+            "scope_hash": scope_hash,
+            "index": 0 if complete else index,
+        },
         separators=(",", ":"),
     )
     return HomeAssistantCollectionResult(
-        tuple(records), cursor_after, "returned_snapshot" if complete else "truncated",
+        tuple(records),
+        cursor_after,
+        "returned_snapshot" if complete else "truncated",
     )
 
 

@@ -26,7 +26,10 @@ def test_inline_think_block_split_across_chunks() -> None:
 
 
 def test_plain_content_and_late_tag_stay_answer() -> None:
-    assert _run(["Hello ", "<think>not reasoning</think>"]) == ("", "Hello <think>not reasoning</think>")
+    assert _run(["Hello ", "<think>not reasoning</think>"]) == (
+        "",
+        "Hello <think>not reasoning</think>",
+    )
     assert _run(["<th", "ing else"]) == ("", "<thing else")
 
 
@@ -36,7 +39,9 @@ def test_unclosed_block_flushes_as_reasoning() -> None:
 
 def test_split_reasoning_rewrites_chunk_fields() -> None:
     splitters: dict[int, _ThinkSplitter] = {}
-    chunk: dict[str, Any] = {"choices": [{"index": 0, "delta": {"reasoning": "r1", "content": "<think>r2</think>ans"}}]}
+    chunk: dict[str, Any] = {
+        "choices": [{"index": 0, "delta": {"reasoning": "r1", "content": "<think>r2</think>ans"}}]
+    }
     _split_reasoning(chunk, splitters)
     assert chunk["choices"][0]["delta"] == {"reasoning_content": "r1r2", "content": "ans"}
     empty: dict[str, Any] = {"choices": [{"index": 0, "delta": {"reasoning_content": "x"}}]}
@@ -46,7 +51,9 @@ def test_split_reasoning_rewrites_chunk_fields() -> None:
 
 def test_upstream_reason_redacts_secrets() -> None:
     key = "sk-" + "A1b2C3d4" * 4
-    exc: Any = SimpleNamespace(status_code=401, message=f"Bad key {key}; header Bearer abc.def.ghi; blob {'Z' * 40}")
+    exc: Any = SimpleNamespace(
+        status_code=401, message=f"Bad key {key}; header Bearer abc.def.ghi; blob {'Z' * 40}"
+    )
     reason = _upstream_reason(exc)
     assert key not in reason and "abc.def.ghi" not in reason and "Z" * 40 not in reason
     assert reason.startswith("HTTP 401: Bad key [redacted]")

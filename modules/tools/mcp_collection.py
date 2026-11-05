@@ -65,13 +65,17 @@ async def read_collection_capability(
         raise mcp_repository.McpUnavailable("MCP discovery is unavailable")
     connection, discovery, grants = selection
     grant = next((item for item in grants if item.id == grant_id), None)
-    capability = next((item for item in discovery.capabilities if grant and item.id == grant.capability_id), None)
+    capability = next(
+        (item for item in discovery.capabilities if grant and item.id == grant.capability_id), None
+    )
     if grant is None or capability is None or capability.kind not in {"tool", "resource"}:
         raise mcp_repository.McpConflict("Collection capability is not currently granted")
     if capability.kind == "tool":
         schema = capability.descriptor.get("inputSchema")
         if not isinstance(schema, dict) or validate_json_schema(arguments, schema):
-            raise mcp_repository.McpConflict("Collection arguments do not match the reviewed input schema")
+            raise mcp_repository.McpConflict(
+                "Collection arguments do not match the reviewed input schema"
+            )
     elif arguments:
         raise mcp_repository.McpConflict("Collection resources accept no arguments")
 
@@ -84,28 +88,39 @@ async def read_collection_capability(
         try:
             async with runtime.session_factory() as session:
                 await runtime._admit(session, scope)
-                if not await mcp_repository.revalidate_capability_fence(session, fence, scope=scope):
+                if not await mcp_repository.revalidate_capability_fence(
+                    session, fence, scope=scope
+                ):
                     return False
-                current = await mcp_repository.get_current_selection(session, connection_id, scope=scope)
+                current = await mcp_repository.get_current_selection(
+                    session, connection_id, scope=scope
+                )
                 source = await sources_public.get_source_fence(
-                    session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+                    session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+                )
             if current is None or source is None:
                 return False
             live, live_discovery, live_grants = current
             live_grant = next((item for item in live_grants if item.id == grant_id), None)
             return bool(
-                source.status == "active" and source.generation == source_generation
-                and live.enabled and live.revision == fence.connection_revision
+                source.status == "active"
+                and source.generation == source_generation
+                and live.enabled
+                and live.revision == fence.connection_revision
                 and live_discovery.id == fence.discovery_id
-                and live_grant is not None and live_grant.purpose == "collection"
+                and live_grant is not None
+                and live_grant.purpose == "collection"
                 and live_grant.risk == McpRisk.READ_ONLY
                 and live_grant.grant_revision == fence.grant_revision
                 and live_grant.source_ids == (source_id,)
-                and (live.transport != McpTransport.STDIO or (
-                    live.deployment_profile_id is not None
-                    and runtime.profile_catalog.get_identity(live.deployment_profile_id)
-                    == fence.deployment_profile_hash
-                ))
+                and (
+                    live.transport != McpTransport.STDIO
+                    or (
+                        live.deployment_profile_id is not None
+                        and runtime.profile_catalog.get_identity(live.deployment_profile_id)
+                        == fence.deployment_profile_hash
+                    )
+                )
             )
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
             return False
@@ -115,7 +130,12 @@ async def read_collection_capability(
     else:
         payload = await runtime.client.read_resource(scope, fence, "resource", authorized)
     return McpCollectionRead(
-        connection_id=connection.id, grant_id=grant.id, grant_revision=grant.grant_revision,
-        connection_revision=connection.revision, kind=capability.kind,
-        remote_key=capability.remote_key, descriptor_hash=capability.descriptor_hash, payload=payload,
+        connection_id=connection.id,
+        grant_id=grant.id,
+        grant_revision=grant.grant_revision,
+        connection_revision=connection.revision,
+        kind=capability.kind,
+        remote_key=capability.remote_key,
+        descriptor_hash=capability.descriptor_hash,
+        payload=payload,
     )

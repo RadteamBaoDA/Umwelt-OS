@@ -26,6 +26,7 @@ class _Rec:
             if isinstance(result, BaseException):
                 raise result
             return result
+
         return AsyncMock(side_effect=_call)
 
 
@@ -33,12 +34,18 @@ def _ctx(session: AsyncMock) -> dict[str, object]:
     cm = MagicMock()
     cm.__aenter__ = AsyncMock(return_value=session)
     cm.__aexit__ = AsyncMock(return_value=False)
-    return {"session_factory": MagicMock(return_value=cm), "settings": SimpleNamespace(multi_workspace_enabled=True)}
+    return {
+        "session_factory": MagicMock(return_value=cm),
+        "settings": SimpleNamespace(multi_workspace_enabled=True),
+    }
 
 
 def _projection(source_id: object, document_id: object) -> SimpleNamespace:
     return SimpleNamespace(
-        source_id=source_id, document_id=document_id, document_version_id=uuid4(), version_number=1,
+        source_id=source_id,
+        document_id=document_id,
+        document_version_id=uuid4(),
+        version_number=1,
         current_source_generation=4,
     )
 
@@ -50,26 +57,49 @@ def _session(checkpoint: SimpleNamespace | None, workspace_ids: list[object]) ->
     return session
 
 
-def _patches(rec: _Rec, *, projection: SimpleNamespace, read_fence: object = FENCE, enabled: bool = True,
-             list_projections: AsyncMock | None = None) -> list[object]:
+def _patches(
+    rec: _Rec,
+    *,
+    projection: SimpleNamespace,
+    read_fence: object = FENCE,
+    enabled: bool = True,
+    list_projections: AsyncMock | None = None,
+) -> list[object]:
     source_id = projection.source_id
     owner = SimpleNamespace(user_id=1, membership_revision=2)
     source_fence = SimpleNamespace(status="active", generation=4)
     return [
         patch.object(worker, "_read_cursor", rec.mock("read_cursor", None)),
         patch.object(worker, "_write_cursor", rec.mock("write_cursor")),
-        patch.object(worker.documents, "list_ready_document_workspace_ids", rec.mock("init_scan", [])),
-        patch.object(worker.workspaces, "resolve_workspace_owner_context", rec.mock("owner", owner)),
+        patch.object(
+            worker.documents, "list_ready_document_workspace_ids", rec.mock("init_scan", [])
+        ),
+        patch.object(
+            worker.workspaces, "resolve_workspace_owner_context", rec.mock("owner", owner)
+        ),
         patch.object(worker.workspaces, "read_access_fence", rec.mock("read_fence", read_fence)),
         patch.object(worker.workspaces, "lock_access_fence", rec.mock("lock_fence", FENCE)),
         patch.object(worker.settings_public, "module_is_enabled", rec.mock("module", enabled)),
-        patch.object(worker.sources, "list_active_gadget_sources",
-                     rec.mock("source_page", SimpleNamespace(items=[SimpleNamespace(id=source_id)], next_cursor="sc"))),
-        patch.object(worker.documents, "list_news_document_projections",
-                     list_projections or rec.mock("projections", ([projection], "dc"))),
+        patch.object(
+            worker.sources,
+            "list_active_gadget_sources",
+            rec.mock(
+                "source_page",
+                SimpleNamespace(items=[SimpleNamespace(id=source_id)], next_cursor="sc"),
+            ),
+        ),
+        patch.object(
+            worker.documents,
+            "list_news_document_projections",
+            list_projections or rec.mock("projections", ([projection], "dc")),
+        ),
         patch.object(worker.sources, "lock_source", rec.mock("lock_source", source_fence)),
-        patch.object(worker.documents, "lock_document_ids", rec.mock("lock_docs", [projection.document_id])),
-        patch.object(worker.documents, "get_news_document_projection", rec.mock("reproject", projection)),
+        patch.object(
+            worker.documents, "lock_document_ids", rec.mock("lock_docs", [projection.document_id])
+        ),
+        patch.object(
+            worker.documents, "get_news_document_projection", rec.mock("reproject", projection)
+        ),
         patch.object(worker, "cluster_observation", rec.mock("cluster")),
         patch.object(worker, "commit_with_replay", rec.mock("commit")),
     ]
@@ -77,6 +107,7 @@ def _patches(rec: _Rec, *, projection: SimpleNamespace, read_fence: object = FEN
 
 async def _run(session: AsyncMock, patches: list[object]) -> int:
     from contextlib import ExitStack
+
     with ExitStack() as stack:
         for item in patches:
             stack.enter_context(item)  # type: ignore[arg-type]
@@ -94,10 +125,23 @@ async def test_recovery_clusters_page_in_domain_lock_order_and_advances_cursors(
     count = await _run(session, _patches(rec, projection=projection))
     assert count == 1
     assert rec.order == [
-        "read_cursor", "init_scan", "write_cursor",  # initialization pass finds nothing
-        "read_cursor", "owner", "read_fence", "module", "lock_fence",
-        "source_page", "projections", "lock_source", "lock_docs", "reproject", "cluster",
-        "advisory_lock", "commit", "write_cursor",
+        "read_cursor",
+        "init_scan",
+        "write_cursor",  # initialization pass finds nothing
+        "read_cursor",
+        "owner",
+        "read_fence",
+        "module",
+        "lock_fence",
+        "source_page",
+        "projections",
+        "lock_source",
+        "lock_docs",
+        "reproject",
+        "cluster",
+        "advisory_lock",
+        "commit",
+        "write_cursor",
     ]
     # More documents remain on this source page, so only the document cursor moves.
     assert checkpoint.document_cursor == "dc" and checkpoint.source_cursor is None
@@ -110,7 +154,9 @@ async def test_recovery_advances_source_cursor_when_documents_exhausted() -> Non
     projection = _projection(uuid4(), uuid4())
     checkpoint = SimpleNamespace(source_cursor=None, document_cursor="old")
     session = _session(checkpoint, [uuid4()])
-    patches = _patches(rec, projection=projection, list_projections=rec.mock("projections", ([], None)))
+    patches = _patches(
+        rec, projection=projection, list_projections=rec.mock("projections", ([], None))
+    )
     assert await _run(session, patches) == 0
     assert checkpoint.source_cursor == "sc" and checkpoint.document_cursor is None
     assert "cluster" not in rec.order
@@ -131,11 +177,23 @@ async def test_recovery_restarts_page_when_stored_cursor_is_undecodable() -> Non
 
     checkpoint = SimpleNamespace(source_cursor=None, document_cursor="stale")
     session = _session(checkpoint, [uuid4()])
-    assert await _run(session, _patches(rec, projection=projection, list_projections=AsyncMock(side_effect=projections))) == 1
+    assert (
+        await _run(
+            session,
+            _patches(
+                rec, projection=projection, list_projections=AsyncMock(side_effect=projections)
+            ),
+        )
+        == 1
+    )
     assert calls == ["stale", None]
-    other = _patches(_Rec(), projection=projection, list_projections=AsyncMock(side_effect=ValueError("boom")))
+    other = _patches(
+        _Rec(), projection=projection, list_projections=AsyncMock(side_effect=ValueError("boom"))
+    )
     with pytest.raises(ValueError, match="boom"):
-        await _run(_session(SimpleNamespace(source_cursor=None, document_cursor="stale"), [uuid4()]), other)
+        await _run(
+            _session(SimpleNamespace(source_cursor=None, document_cursor="stale"), [uuid4()]), other
+        )
 
 
 @pytest.mark.asyncio
@@ -160,7 +218,10 @@ async def test_recovery_skips_disabled_module_and_missing_checkpoint() -> None:
     """A disabled module or missing checkpoint processes nothing and takes no cursor lock."""
     projection = _projection(uuid4(), uuid4())
     rec = _Rec()
-    assert await _run(_session(None, [uuid4()]), _patches(rec, projection=projection, enabled=False)) == 0
+    assert (
+        await _run(_session(None, [uuid4()]), _patches(rec, projection=projection, enabled=False))
+        == 0
+    )
     assert "lock_fence" not in rec.order
     rec = _Rec()
     assert await _run(_session(None, [uuid4()]), _patches(rec, projection=projection)) == 0
@@ -178,12 +239,27 @@ async def test_initialization_pass_creates_checkpoints_for_legacy_workspaces() -
     session = _session(None, [])
     session.execute = AsyncMock(side_effect=lambda *_a, **_k: rec.order.append("advisory_lock"))
     patches = _patches(rec, projection=projection)
-    patches.append(patch.object(worker.documents, "list_ready_document_workspace_ids", rec.mock("init_scan", [workspace_id])))
-    patches.append(patch.object(worker, "_ensure_recovery_checkpoint", rec.mock("ensure_checkpoint")))
+    patches.append(
+        patch.object(
+            worker.documents,
+            "list_ready_document_workspace_ids",
+            rec.mock("init_scan", [workspace_id]),
+        )
+    )
+    patches.append(
+        patch.object(worker, "_ensure_recovery_checkpoint", rec.mock("ensure_checkpoint"))
+    )
     await _run(session, patches)
     assert rec.order[:9] == [
-        "read_cursor", "init_scan", "owner", "read_fence", "module", "lock_fence",
-        "advisory_lock", "ensure_checkpoint", "commit",
+        "read_cursor",
+        "init_scan",
+        "owner",
+        "read_fence",
+        "module",
+        "lock_fence",
+        "advisory_lock",
+        "ensure_checkpoint",
+        "commit",
     ]
     assert rec.order[9] == "write_cursor"
 
@@ -203,7 +279,10 @@ async def test_ensure_recovery_checkpoint_inserts_on_conflict_then_locks() -> No
 
     session.execute, session.scalar, session.commit = execute, scalar, AsyncMock()
     await worker._ensure_recovery_checkpoint(session, WS)
-    assert "INSERT INTO news_recovery_checkpoints" in stmts[0] and "ON CONFLICT (workspace_id) DO NOTHING" in stmts[0]
+    assert (
+        "INSERT INTO news_recovery_checkpoints" in stmts[0]
+        and "ON CONFLICT (workspace_id) DO NOTHING" in stmts[0]
+    )
     assert stmts[1].startswith("SELECT") and stmts[1].endswith("FOR UPDATE")
     session.add.assert_not_called()
     session.commit.assert_not_called()

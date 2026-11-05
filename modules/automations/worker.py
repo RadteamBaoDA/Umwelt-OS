@@ -39,28 +39,45 @@ async def reconcile_automation_runs(ctx: dict[str, Any]) -> int:
     flag = cast(Settings, ctx["settings"]).multi_workspace_enabled
     after = await worker_cursors.read_cursor(ctx, CURSOR_KEY, ALLOWED)
     async with factory() as session:  # identity-only discovery from the root table
-        ids = list(await session.scalars(
-            select(Automation.workspace_id).where(
-                Automation.deleted_at.is_(None), *([Automation.workspace_id > after] if after else []),
-            ).distinct().order_by(Automation.workspace_id).limit(PAGE)))
-    await worker_cursors.write_cursor(ctx, CURSOR_KEY, ids[-1] if len(ids) == PAGE else None, ALLOWED)
+        ids = list(
+            await session.scalars(
+                select(Automation.workspace_id)
+                .where(
+                    Automation.deleted_at.is_(None),
+                    *([Automation.workspace_id > after] if after else []),
+                )
+                .distinct()
+                .order_by(Automation.workspace_id)
+                .limit(PAGE)
+            )
+        )
+    await worker_cursors.write_cursor(
+        ctx, CURSOR_KEY, ids[-1] if len(ids) == PAGE else None, ALLOWED
+    )
     enqueued = 0
     for workspace_id in ids:  # one session per step; never two workspace locks together
         try:
             async with factory() as session:
                 owner = await workspaces.resolve_workspace_owner_context(
-                    session, workspace_id, multi_workspace_enabled=flag)
+                    session, workspace_id, multi_workspace_enabled=flag
+                )
                 if owner is None:
                     continue
                 scope = InternalJobScope(
-                    workspace_id=workspace_id, actor_user_id=owner.user_id, membership_revision=owner.membership_revision)
-                if not await module_is_enabled(session, "automations", scope=scope, multi_workspace_enabled=flag):
+                    workspace_id=workspace_id,
+                    actor_user_id=owner.user_id,
+                    membership_revision=owner.membership_revision,
+                )
+                if not await module_is_enabled(
+                    session, "automations", scope=scope, multi_workspace_enabled=flag
+                ):
                     continue
             await scheduler.tick(factory, scope=scope, multi_workspace_enabled=flag)
             await producers.sweep(factory, scope=scope, multi_workspace_enabled=flag)
             await execution.fan_out_triggers(factory, scope=scope, multi_workspace_enabled=flag)
             enqueued += await execution.dispatch_runs(
-                factory, cast(ArqRedis, ctx["redis"]), scope=scope, multi_workspace_enabled=flag)
+                factory, cast(ArqRedis, ctx["redis"]), scope=scope, multi_workspace_enabled=flag
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001  # one failing workspace must not starve the rest of the pass

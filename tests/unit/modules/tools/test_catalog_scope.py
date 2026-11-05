@@ -20,9 +20,15 @@ async def test_visible_tools_pass_workspace_modules() -> None:
     modules = {"tools": object()}
     registry = MagicMock()
     registry.list_tools.return_value = []
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        tool_registry=registry, mcp_runtime=None, settings=SimpleNamespace(multi_workspace_enabled=False),
-    )))
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                tool_registry=registry,
+                mcp_runtime=None,
+                settings=SimpleNamespace(multi_workspace_enabled=False),
+            )
+        )
+    )
     with patch.object(routes, "read_workspace_modules", AsyncMock(return_value=modules)) as read:
         await routes._workspace_tools(request, object(), SCOPE)  # type: ignore[arg-type]
     read.assert_awaited_once()

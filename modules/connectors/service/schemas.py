@@ -83,6 +83,7 @@ class ProviderRateLimited(RuntimeError):
 @dataclass(frozen=True)
 class NativeCredentialSnapshot:
     """Detach Telegram reservation and immutable source-binding identity without ORM access."""
+
     access_fence: AccessFence
     workspace_id: UUID
     source_id: UUID
@@ -113,6 +114,7 @@ class NativeCredentialRevocationSnapshot:
 
 class TelegramScopeValidation(BaseModel):
     """Represent successful Bot API identity and all configured channel checks."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     verified_bot_id: str = Field(pattern=r"^[0-9]{1,20}$")
@@ -130,6 +132,7 @@ class TelegramScopeValidation(BaseModel):
 
 class TelegramUpdatePage(BaseModel):
     """Represent one bounded Bot API response with its actual transport byte count."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     deliveries: tuple[TelegramRawDelivery, ...] = Field(max_length=100)
@@ -200,6 +203,7 @@ class ConnectorConfig(BaseModel):
     Social, Google, FHIR, Home Assistant, Notion, and Slack selections are checked against the
     provider-specific field bounds before they can be persisted or activated.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     url: HttpUrl | None = None
@@ -216,8 +220,12 @@ class ConnectorConfig(BaseModel):
     timezone: str = DEFAULT_TIMEZONE
     schedule_interval_minutes: Literal[15, 30, 60, 360, 1440] | None = None
     youtube_channel_id: str | None = Field(default=None, pattern=r"^UC[A-Za-z0-9_-]{22}$")
-    arxiv_category: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9.-]{0,63}$")
-    huggingface_author: str | None = Field(default=None, min_length=1, max_length=96, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$")
+    arxiv_category: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9.-]{0,63}$"
+    )
+    huggingface_author: str | None = Field(
+        default=None, min_length=1, max_length=96, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"
+    )
     bluesky_actor: str | None = Field(default=None, min_length=3, max_length=253)
     reddit_subreddit: str | None = Field(default=None, min_length=2, max_length=21)
     mastodon_instance_url: str | None = Field(default=None, min_length=8, max_length=512)
@@ -225,8 +233,12 @@ class ConnectorConfig(BaseModel):
     mastodon_hashtag: str | None = Field(default=None, min_length=1, max_length=100)
     x_account: str | None = Field(default=None, min_length=1, max_length=15)
     x_query: str | None = Field(default=None, min_length=1, max_length=512)
-    github_owner: str | None = Field(default=None, min_length=1, max_length=39, pattern=r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$")
-    github_repository: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]{1,100}$")
+    github_owner: str | None = Field(
+        default=None, min_length=1, max_length=39, pattern=r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"
+    )
+    github_repository: str | None = Field(
+        default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]{1,100}$"
+    )
     include_issues: bool = False
     include_pulls: bool = False
     include_commits: bool = False
@@ -234,8 +246,12 @@ class ConnectorConfig(BaseModel):
     github_history_days: StrictInt = Field(default=90, ge=1, le=365)
     telegram_chat_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=100)
     market_symbols: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=5)
-    coingecko_assets: tuple["CoinGeckoAsset", ...] | None = Field(default=None, min_length=1, max_length=20)
-    market_currency: str | None = Field(default=None, min_length=3, max_length=3, pattern=r"^[A-Z]{3}$")
+    coingecko_assets: tuple["CoinGeckoAsset", ...] | None = Field(
+        default=None, min_length=1, max_length=20
+    )
+    market_currency: str | None = Field(
+        default=None, min_length=3, max_length=3, pattern=r"^[A-Z]{3}$"
+    )
     market_exchange_timezone: str | None = Field(default=None, min_length=1, max_length=64)
     weather_latitude: float | None = Field(default=None, ge=-90, le=90)
     weather_longitude: float | None = Field(default=None, ge=-180, le=180)
@@ -246,7 +262,10 @@ class ConnectorConfig(BaseModel):
     news_locale: Literal["vi-VN", "en-US"] | None = None
     sec_cik: str | None = Field(default=None, pattern=r"^[0-9]{10}$")
     sec_contact_email: str | None = Field(
-        default=None, max_length=254, pattern=r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$")
+        default=None,
+        max_length=254,
+        pattern=r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$",
+    )
     scholarly_query: str | None = Field(default=None, min_length=1, max_length=200)
     fred_series_id: str | None = Field(default=None, pattern=r"^[A-Z0-9_]{1,25}$")
     owm_latitude: float | None = Field(default=None, ge=-90, le=90)
@@ -273,7 +292,9 @@ class ConnectorConfig(BaseModel):
     exclude_keywords: tuple[str, ...] | None = Field(default=None, max_length=20)
     max_age_days: StrictInt | None = Field(default=None, ge=1, le=365)
     # RSS section slugs (providers with a catalog only; the registry checks membership per provider).
-    feed_sections: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=MAX_SECTIONS)
+    feed_sections: tuple[str, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_SECTIONS
+    )
     # Wave D per-type options (enums/bounded values; the registry allows each only on its own provider).
     hn_list: HnList | None = None
     gdelt_query: str | None = Field(default=None, min_length=1, max_length=100)
@@ -283,11 +304,17 @@ class ConnectorConfig(BaseModel):
     usgs_min_magnitude: UsgsMagnitude | None = None
     usgs_period: UsgsPeriod | None = None
     min_magnitude: float | None = Field(default=None, ge=2.0, le=8.0)
-    eonet_categories: tuple[EonetCategory, ...] | None = Field(default=None, min_length=1, max_length=13)
+    eonet_categories: tuple[EonetCategory, ...] | None = Field(
+        default=None, min_length=1, max_length=13
+    )
     eonet_status: EonetStatus | None = None
     eonet_days: StrictInt | None = Field(default=None, ge=1, le=30)
-    gdacs_event_types: tuple[GdacsType, ...] | None = Field(default=None, min_length=1, max_length=6)
-    gdacs_alert_levels: tuple[GdacsAlert, ...] | None = Field(default=None, min_length=1, max_length=3)
+    gdacs_event_types: tuple[GdacsType, ...] | None = Field(
+        default=None, min_length=1, max_length=6
+    )
+    gdacs_alert_levels: tuple[GdacsAlert, ...] | None = Field(
+        default=None, min_length=1, max_length=3
+    )
     nws_severity: tuple[NwsSeverity, ...] | None = Field(default=None, min_length=1, max_length=4)
     nws_area: NwsArea | None = None
     nvd_severity: tuple[NvdSeverity, ...] | None = Field(default=None, min_length=1, max_length=4)
@@ -306,8 +333,12 @@ class ConnectorConfig(BaseModel):
     fx_quotes: tuple[FxCurrency, ...] | None = Field(default=None, min_length=1, max_length=10)
     oecd_countries: tuple[OecdArea, ...] | None = Field(default=None, min_length=1, max_length=10)
     crypto_symbols: tuple[CryptoPair, ...] | None = Field(default=None, min_length=1, max_length=10)
-    vn_symbols: tuple[VnSymbol, ...] | None = Field(default=None, min_length=1, max_length=MAX_VN_SYMBOLS)
-    job_keywords: tuple[JobKeyword, ...] | None = Field(default=None, min_length=1, max_length=MAX_JOB_KEYWORDS)
+    vn_symbols: tuple[VnSymbol, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_VN_SYMBOLS
+    )
+    job_keywords: tuple[JobKeyword, ...] | None = Field(
+        default=None, min_length=1, max_length=MAX_JOB_KEYWORDS
+    )
     job_cities: tuple[JobCity, ...] | None = Field(default=None, min_length=1, max_length=3)
     job_levels: tuple[JobLevel, ...] | None = Field(default=None, min_length=1, max_length=5)
     job_min_salary_usd: StrictInt | None = Field(default=None, ge=0, le=20000)
@@ -412,8 +443,16 @@ class ConnectorConfig(BaseModel):
             port = parts.port
         except ValueError as exc:
             raise ValueError("Mastodon instance port is invalid") from exc
-        if (parts.scheme != "https" or not parts.hostname or parts.username or parts.password
-                or parts.path not in {"", "/"} or parts.query or parts.fragment or port not in (None, 443)):
+        if (
+            parts.scheme != "https"
+            or not parts.hostname
+            or parts.username
+            or parts.password
+            or parts.path not in {"", "/"}
+            or parts.query
+            or parts.fragment
+            or port not in (None, 443)
+        ):
             raise ValueError("Mastodon requires an HTTPS instance origin")
         return f"https://{parts.hostname.lower()}"
 
@@ -421,7 +460,10 @@ class ConnectorConfig(BaseModel):
     @classmethod
     def valid_mastodon_account(cls, value: str | None) -> str | None:
         """Accept one Mastodon acct identifier, excluding path and query syntax."""
-        if value is not None and re.fullmatch(r"@?[A-Za-z0-9_.-]{1,64}(?:@[A-Za-z0-9.-]{1,253})?", value) is None:
+        if (
+            value is not None
+            and re.fullmatch(r"@?[A-Za-z0-9_.-]{1,64}(?:@[A-Za-z0-9.-]{1,253})?", value) is None
+        ):
             raise ValueError("Mastodon account scope is invalid")
         return value
 
@@ -485,7 +527,8 @@ class ConnectorConfig(BaseModel):
 def _require_unique_matching(values: Sequence[str] | None, pattern: str, message: str) -> None:
     """Raise ``ValueError(message)`` unless ``values`` is None or unique with every item matching ``pattern``."""
     if values is not None and (
-        len(set(values)) != len(values) or any(re.fullmatch(pattern, value) is None for value in values)
+        len(set(values)) != len(values)
+        or any(re.fullmatch(pattern, value) is None for value in values)
     ):
         raise ValueError(message)
 
@@ -493,20 +536,33 @@ def _require_unique_matching(values: Sequence[str] | None, pattern: str, message
 def _check_market_and_weather_scope(config: "ConnectorConfig") -> None:
     """Validate Alpha Vantage market symbols/currency, CoinGecko assets and Open-Meteo weather scope."""
     _require_unique_matching(
-        config.market_symbols, r"[A-Z0-9.^_-]{1,20}", "Market symbols must be unique uppercase provider symbols",
+        config.market_symbols,
+        r"[A-Z0-9.^_-]{1,20}",
+        "Market symbols must be unique uppercase provider symbols",
     )
-    if config.coingecko_assets is not None and len({asset.id for asset in config.coingecko_assets}) != len(config.coingecko_assets):
+    if config.coingecko_assets is not None and len(
+        {asset.id for asset in config.coingecko_assets}
+    ) != len(config.coingecko_assets):
         raise ValueError("CoinGecko asset IDs must be unique")
     if config.market_symbols is not None and config.schedule_interval_minutes not in (None, 1440):
         raise ValueError("Alpha Vantage collection must be scheduled at most once per day")
     if (config.market_currency is None) != (config.market_exchange_timezone is None):
         raise ValueError("Market currency and exchange timezone must be configured together")
-    weather_fields = (config.weather_latitude, config.weather_longitude, config.weather_timezone, config.weather_metrics)
-    if any(value is not None for value in weather_fields) and any(value is None for value in weather_fields):
+    weather_fields = (
+        config.weather_latitude,
+        config.weather_longitude,
+        config.weather_timezone,
+        config.weather_metrics,
+    )
+    if any(value is not None for value in weather_fields) and any(
+        value is None for value in weather_fields
+    ):
         raise ValueError("Weather coordinates, timezone, and metrics must be configured together")
     if config.weather_metrics is not None and (
         len(set(config.weather_metrics)) != len(config.weather_metrics)
-        or not set(config.weather_metrics).issubset({"temperature_2m", "relative_humidity_2m", "precipitation", "wind_speed_10m"})
+        or not set(config.weather_metrics).issubset(
+            {"temperature_2m", "relative_humidity_2m", "precipitation", "wind_speed_10m"}
+        )
     ):
         raise ValueError("Weather metric is outside the Open-Meteo bounded allowlist")
 
@@ -514,30 +570,45 @@ def _check_market_and_weather_scope(config: "ConnectorConfig") -> None:
 def _check_workspace_app_scope(config: "ConnectorConfig") -> None:
     """Validate Gmail, Google Calendar/Drive, Notion and Slack identifier lists (unique, bounded patterns)."""
     _require_unique_matching(
-        config.google_mail_label_ids, r"[A-Za-z0-9_-]{1,225}", "Gmail labels must be unique provider label IDs",
+        config.google_mail_label_ids,
+        r"[A-Za-z0-9_-]{1,225}",
+        "Gmail labels must be unique provider label IDs",
     )
     _require_unique_matching(
-        config.google_calendar_ids, r"[^\s\x00-\x1f]{1,256}", "Google Calendar IDs must be unique non-empty identifiers",
+        config.google_calendar_ids,
+        r"[^\s\x00-\x1f]{1,256}",
+        "Google Calendar IDs must be unique non-empty identifiers",
     )
     _require_unique_matching(
-        config.google_drive_ids, r"[A-Za-z0-9_-]{5,200}", "Google Drive IDs must be unique provider file IDs",
+        config.google_drive_ids,
+        r"[A-Za-z0-9_-]{5,200}",
+        "Google Drive IDs must be unique provider file IDs",
     )
     _require_unique_matching(
-        config.notion_page_ids, r"[A-Za-z0-9_-]{1,128}", "Notion page IDs must be unique provider identifiers",
+        config.notion_page_ids,
+        r"[A-Za-z0-9_-]{1,128}",
+        "Notion page IDs must be unique provider identifiers",
     )
     _require_unique_matching(
-        config.slack_channel_ids, r"[CG][A-Z0-9]{1,80}", "Slack scopes require unique channel identifiers",
+        config.slack_channel_ids,
+        r"[CG][A-Z0-9]{1,80}",
+        "Slack scopes require unique channel identifiers",
     )
 
 
 def _check_social_scope(config: "ConnectorConfig") -> None:
     """Require exactly one Mastodon account/hashtag (with instance URL) and one bounded X account/query."""
-    if (bool(config.mastodon_account) == bool(config.mastodon_hashtag)
-            and (config.mastodon_account is not None or config.mastodon_hashtag is not None)):
+    if bool(config.mastodon_account) == bool(config.mastodon_hashtag) and (
+        config.mastodon_account is not None or config.mastodon_hashtag is not None
+    ):
         raise ValueError("Choose exactly one Mastodon account or hashtag")
-    if (config.mastodon_account is not None or config.mastodon_hashtag is not None) and not config.mastodon_instance_url:
+    if (
+        config.mastodon_account is not None or config.mastodon_hashtag is not None
+    ) and not config.mastodon_instance_url:
         raise ValueError("Mastodon requires an instance URL for account or hashtag scope")
-    if bool(config.x_account) == bool(config.x_query) and (config.x_account is not None or config.x_query is not None):
+    if bool(config.x_account) == bool(config.x_query) and (
+        config.x_account is not None or config.x_query is not None
+    ):
         raise ValueError("Choose exactly one X account or search query")
     if config.x_query is not None and not 1 <= len(config.x_query) <= 512:
         raise ValueError("X search query is outside the supported bounds")
@@ -553,21 +624,32 @@ def _check_local_service_scope(config: "ConnectorConfig") -> None:
             port = parts.port
         except ValueError as exc:
             raise ValueError("Local service endpoint port is invalid") from exc
-        if (parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password
-                or parts.query or parts.fragment or (port is not None and not 1 <= port <= 65535)):
+        if (
+            parts.scheme not in {"http", "https"}
+            or not parts.hostname
+            or parts.username
+            or parts.password
+            or parts.query
+            or parts.fragment
+            or (port is not None and not 1 <= port <= 65535)
+        ):
             raise ValueError("Local service endpoint must be a credential-free HTTP(S) origin")
     if config.fhir_patient_id is not None and (
-        "/" in config.fhir_patient_id or re.fullmatch(r"[A-Za-z0-9.-]{1,128}", config.fhir_patient_id) is None
+        "/" in config.fhir_patient_id
+        or re.fullmatch(r"[A-Za-z0-9.-]{1,128}", config.fhir_patient_id) is None
     ):
         raise ValueError("FHIR patient ID must be one identifier")
     _require_unique_matching(
-        config.ha_entity_ids, r"[a-z0-9_]+\.[a-z0-9_]+", "Home Assistant entity IDs must be unique entity identifiers",
+        config.ha_entity_ids,
+        r"[a-z0-9_]+\.[a-z0-9_]+",
+        "Home Assistant entity IDs must be unique entity identifiers",
     )
 
 
 @dataclass(frozen=True)
 class ConnectorConfigurationSnapshot:
     """Expose persisted connector settings and activation state without secret values."""
+
     workspace_id: UUID
     source_id: UUID
     source_type: str
@@ -590,6 +672,7 @@ class ConnectorConfigurationSnapshot:
 @dataclass(frozen=True)
 class ProviderScopeSnapshot:
     """Expose only a generation-fenced digest of supported provider scope."""
+
     workspace_id: UUID
     source_id: UUID
     source_generation: int
@@ -599,6 +682,7 @@ class ProviderScopeSnapshot:
 
 class ConnectorRecord(BaseModel):
     """Validate one normalized record returned by a connector collector."""
+
     model_config = ConfigDict(extra="forbid")
 
     provider_id: str = Field(min_length=1, max_length=512)
@@ -610,6 +694,7 @@ class ConnectorRecord(BaseModel):
 
 class ProviderCollectionPage(BaseModel):
     """Bound provider mapper output to detached ingestion records and coverage state."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     records: tuple[IngestionRecord, ...] = Field(max_length=500)
@@ -628,6 +713,7 @@ class ProviderCollectionPage(BaseModel):
 
 class ConnectorReceipt(BaseModel):
     """Validate an acknowledged nonempty batch and its generation/revision fence."""
+
     model_config = ConfigDict(extra="forbid")
 
     cursor_before: str | None = Field(default=None, max_length=4096)
@@ -640,6 +726,7 @@ class ConnectorReceipt(BaseModel):
 
 class ConnectorPreview(BaseModel):
     """Validate a preview batch, which may contain no records."""
+
     model_config = ConfigDict(extra="forbid")
 
     cursor_before: str | None = Field(default=None, max_length=4096)
@@ -651,6 +738,7 @@ class ConnectorPreview(BaseModel):
 
 class CollectionFence(BaseModel):
     """Bind collection work to one source generation and connector revision."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     source_generation: int = Field(ge=1)
@@ -661,6 +749,7 @@ class CollectionFence(BaseModel):
 
 class ConnectorConfigurationRequest(BaseModel):
     """Validate a revision-fenced connector configuration replacement."""
+
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=0)
@@ -673,6 +762,7 @@ class RSSRequest(BaseModel):
     ``HttpUrl`` does not check DNS address visibility; collection-time
     ``validate_public_url`` performs the public-address check before transport.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     url: HttpUrl
@@ -681,6 +771,7 @@ class RSSRequest(BaseModel):
 
 class CrawlRequest(BaseModel):
     """Validate source/revision-fenced crawl settings and bounded traversal limits."""
+
     model_config = ConfigDict(extra="forbid")
 
     source_id: UUID
@@ -696,6 +787,7 @@ class CrawlRequest(BaseModel):
 
 class CrawlResult(BaseModel):
     """Return the durable ingestion run ID created by a crawl submission."""
+
     run_id: UUID
 
 

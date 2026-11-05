@@ -24,8 +24,13 @@ from modules.timeline.routes import router as timeline_router
 
 OPERATOR = {"require_owner", "require_owner_write"}
 SCOPED = {
-    "require_account", "require_account_write", "require_workspace_read", "require_workspace_observer_read", "require_workspace_write",
-    "require_default_workspace_read", "require_default_workspace_write",
+    "require_account",
+    "require_account_write",
+    "require_workspace_read",
+    "require_workspace_observer_read",
+    "require_workspace_write",
+    "require_default_workspace_read",
+    "require_default_workspace_write",
 }
 # Routes that deliberately keep the bootstrap-operator dependency.
 OPERATOR_ROUTES = {
@@ -48,9 +53,21 @@ CAPABILITY_ROUTES = {
 }
 OPERATOR_ROUTERS = (operations_router, observability_router)
 FLIPPED_ROUTERS = (
-    tasks_router, goals_router, timeline_router, entities_router, relationships_router, temporal_router,
-    observations_router, sources_router, ingestion_router, documents_router, connectors_router,
-    provisioning_router, builtins_router, github_router, onboarding_router,
+    tasks_router,
+    goals_router,
+    timeline_router,
+    entities_router,
+    relationships_router,
+    temporal_router,
+    observations_router,
+    sources_router,
+    ingestion_router,
+    documents_router,
+    connectors_router,
+    provisioning_router,
+    builtins_router,
+    github_router,
+    onboarding_router,
 )
 
 

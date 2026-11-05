@@ -26,8 +26,12 @@ FLAG = False
 
 def _principal() -> ToolExecutionPrincipal:
     return ToolExecutionPrincipal(
-        actor_id="owner:7", scope=OWNER, is_owner=True, owner_all_sources=True,
-        destinations=frozenset({"local"}), capabilities=frozenset({"source.read"}),
+        actor_id="owner:7",
+        scope=OWNER,
+        is_owner=True,
+        owner_all_sources=True,
+        destinations=frozenset({"local"}),
+        capabilities=frozenset({"source.read"}),
     )
 
 
@@ -39,7 +43,10 @@ async def _session_cm() -> Any:
 def _remote_case() -> tuple[dict[str, Any], str]:
     source_id, document_id, version_id = uuid4(), uuid4(), uuid4()
     fence = ToolOutputFence(
-        document_id=document_id, document_version_id=version_id, source_id=source_id, source_generation=1,
+        document_id=document_id,
+        document_version_id=version_id,
+        source_id=source_id,
+        source_generation=1,
     )
     return {"records": [fence], "source_generations": {source_id: 1}}, str(source_id)
 
@@ -54,11 +61,15 @@ async def test_document_only_fences_revalidate_with_scope_keywords() -> None:
     """Fakes REQUIRE scope/flag keywords: before T-F1 the missing scope was swallowed as 'suppress'."""
     sink, _ = _remote_case()
 
-    async def list_sources(session: object, *, scope: Any, multi_workspace_enabled: bool, **_k: object) -> Any:
+    async def list_sources(
+        session: object, *, scope: Any, multi_workspace_enabled: bool, **_k: object
+    ) -> Any:
         assert scope == OWNER and multi_workspace_enabled is FLAG
         return _sources_page(sink)
 
-    async def revalidate(session: object, fences: object, *, scope: Any, multi_workspace_enabled: bool, **_k: object) -> bool:
+    async def revalidate(
+        session: object, fences: object, *, scope: Any, multi_workspace_enabled: bool, **_k: object
+    ) -> bool:
         assert scope == OWNER and multi_workspace_enabled is FLAG
         return True
 
@@ -66,9 +77,16 @@ async def test_document_only_fences_revalidate_with_scope_keywords() -> None:
         patch("modules.sources.public.list_tool_sources", list_sources),
         patch("modules.knowledge.documents.public.revalidate_tool_document_fences", revalidate),
     ):
-        assert await revalidate_native_output_fences(
-            _session_cm, sink, _principal(), destination_kind="remote", multi_workspace_enabled=FLAG,
-        ) is True
+        assert (
+            await revalidate_native_output_fences(
+                _session_cm,
+                sink,
+                _principal(),
+                destination_kind="remote",
+                multi_workspace_enabled=FLAG,
+            )
+            is True
+        )
 
 
 @pytest.mark.asyncio
@@ -77,21 +95,41 @@ async def test_type_errors_propagate_and_non_bool_flag_fails_closed() -> None:
     boom = AsyncMock(side_effect=TypeError("missing scope"))
     with patch("modules.sources.public.list_tool_sources", boom), pytest.raises(TypeError):
         await revalidate_native_output_fences(
-            _session_cm, sink, _principal(), destination_kind="remote", multi_workspace_enabled=FLAG,
+            _session_cm,
+            sink,
+            _principal(),
+            destination_kind="remote",
+            multi_workspace_enabled=FLAG,
         )
     denied = AsyncMock(side_effect=HTTPException(status_code=403))
     with patch("modules.sources.public.list_tool_sources", denied):
-        assert await revalidate_native_output_fences(
-            _session_cm, sink, _principal(), destination_kind="remote", multi_workspace_enabled=FLAG,
-        ) is False
-    assert await revalidate_native_output_fences(
-        _session_cm, sink, _principal(), destination_kind="remote", multi_workspace_enabled=1,  # type: ignore[arg-type]
-    ) is False
+        assert (
+            await revalidate_native_output_fences(
+                _session_cm,
+                sink,
+                _principal(),
+                destination_kind="remote",
+                multi_workspace_enabled=FLAG,
+            )
+            is False
+        )
+    assert (
+        await revalidate_native_output_fences(
+            _session_cm,
+            sink,
+            _principal(),
+            destination_kind="remote",
+            multi_workspace_enabled=1,  # type: ignore[arg-type]
+        )
+        is False
+    )
 
 
 def _context() -> dict[str, Any]:
     return {
-        "principal": _principal(), "session": object(), "destination_kind": "local",
+        "principal": _principal(),
+        "session": object(),
+        "destination_kind": "local",
         "settings": SimpleNamespace(multi_workspace_enabled=FLAG),
     }
 
@@ -105,6 +143,7 @@ async def test_handlers_pass_principal_scope_and_flag() -> None:
         async def call(*_a: object, **kw: object) -> object:
             seen[name] = kw
             return result
+
         return call
 
     page = SimpleNamespace(items=[], next_cursor=None)
@@ -113,7 +152,9 @@ async def test_handlers_pass_principal_scope_and_flag() -> None:
         patch("modules.sources.public.list_tool_sources", spy("list_sources", page)),
         patch("modules.sources.public.get_tool_source", spy("get_source", tool_source)),
         patch("modules.knowledge.documents.public.get_tool_document", spy("get_document", None)),
-        patch("modules.knowledge.documents.public.list_tool_documents", spy("list_documents", page)),
+        patch(
+            "modules.knowledge.documents.public.list_tool_documents", spy("list_documents", page)
+        ),
     ):
         await builtins._handle_sources_list_sources({}, _context())
         await builtins._handle_sources_get_source({"source_id": str(source_id)}, _context())
@@ -136,15 +177,24 @@ async def test_purge_is_workspace_scoped_and_denies_member_before_query() -> Non
     session = AsyncMock()
     with pytest.raises(DomainError) as caught:
         await purge_browser_results_in_uow(
-            session, run_ids=[uuid4()], scope=MEMBER, multi_workspace_enabled=FLAG,
+            session,
+            run_ids=[uuid4()],
+            scope=MEMBER,
+            multi_workspace_enabled=FLAG,
         )
     assert caught.value.status_code == 403
     session.scalars.assert_not_called()
 
     session.scalars = AsyncMock(return_value=MagicMock(all=list))
-    assert await purge_browser_results_in_uow(
-        session, run_ids=[uuid4()], scope=OWNER, multi_workspace_enabled=FLAG,
-    ) == 0
+    assert (
+        await purge_browser_results_in_uow(
+            session,
+            run_ids=[uuid4()],
+            scope=OWNER,
+            multi_workspace_enabled=FLAG,
+        )
+        == 0
+    )
     text = str(session.scalars.call_args.args[0].compile(dialect=postgresql.dialect()))
     assert "browser_read_jobs.workspace_id =" in text
 
@@ -154,6 +204,13 @@ async def test_purge_is_workspace_scoped_and_denies_member_before_query() -> Non
 async def test_transport_errors_fail_closed(error: Exception) -> None:
     sink, _ = _remote_case()
     with patch("modules.sources.public.list_tool_sources", AsyncMock(side_effect=error)):
-        assert await revalidate_native_output_fences(
-            _session_cm, sink, _principal(), destination_kind="remote", multi_workspace_enabled=FLAG,
-        ) is False
+        assert (
+            await revalidate_native_output_fences(
+                _session_cm,
+                sink,
+                _principal(),
+                destination_kind="remote",
+                multi_workspace_enabled=FLAG,
+            )
+            is False
+        )

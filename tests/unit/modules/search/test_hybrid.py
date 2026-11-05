@@ -125,7 +125,9 @@ class TestTieBreaking:
             effective_mode="hybrid",
         )
 
-        assert pytest.approx(ranked[id_higher_str], abs=1e-9) == pytest.approx(ranked[id_lower_str], abs=1e-9)
+        assert pytest.approx(ranked[id_higher_str], abs=1e-9) == pytest.approx(
+            ranked[id_lower_str], abs=1e-9
+        )
         # Tie break should choose id_lower_str first because "0..." < "f..."
         assert ordered == [id_lower_str, id_higher_str]
 
@@ -177,11 +179,15 @@ class TestSearchCursorsAndPagination:
         source_id = uuid4()
         fences = {source_id: 1}
 
-        cursor_local = _encode_cursor(req, offset=10, destination=ToolDestination.LOCAL, source_generation_fences=fences)
+        cursor_local = _encode_cursor(
+            req, offset=10, destination=ToolDestination.LOCAL, source_generation_fences=fences
+        )
         req_with_cursor = SearchRequest(query="test", limit=10, cursor=cursor_local)
 
         with pytest.raises(DomainError) as exc_info:
-            _offset(req_with_cursor, destination=ToolDestination.REMOTE, source_generation_fences=fences)
+            _offset(
+                req_with_cursor, destination=ToolDestination.REMOTE, source_generation_fences=fences
+            )
         assert exc_info.value.status_code == 422
 
     def test_offset_exceeding_max_candidates_rejected(self) -> None:

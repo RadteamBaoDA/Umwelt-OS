@@ -206,7 +206,9 @@ class TestGridCoordinatesAndLayoutValidation:
         id2 = uuid4()
         items = [LayoutItem(instance_id=id1, x=0, y=0, w=10, h=4)]
         minimum_sizes = {id1: (2, 2), id2: (2, 2)}  # id2 missing from items!
-        with pytest.raises(ValueError, match="layout instances must exactly match the dashboard instances"):
+        with pytest.raises(
+            ValueError, match="layout instances must exactly match the dashboard instances"
+        ):
             validate_layout(items, columns=20, minimum_sizes=minimum_sizes)
 
     def test_default_desktop_layout_packing(self) -> None:
@@ -226,7 +228,10 @@ class TestGridCoordinatesAndLayoutValidation:
         # First item starts at (0, 0)
         assert layout[0].instance_id == id1
         assert (layout[0].x, layout[0].y) == (0, 0)
-        assert (layout[0].w, layout[0].h) == (20, 4)  # last (only) rect of row 1 stretches to the edge
+        assert (layout[0].w, layout[0].h) == (
+            20,
+            4,
+        )  # last (only) rect of row 1 stretches to the edge
 
         # Second item wraps to x=0, y=4
         assert layout[1].instance_id == id2

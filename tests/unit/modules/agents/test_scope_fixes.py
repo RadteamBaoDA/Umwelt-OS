@@ -18,9 +18,16 @@ MOVED = type(FENCE)(workspace_id=WS, user_id=7, membership_revision=2, configura
 
 def _live_run(**overrides: object) -> SimpleNamespace:
     values = {
-        "workspace_id": WS, "owner_id": 7, "membership_revision": 2, "configuration_revision": 5,
-        "status": "running", "cancel_requested": False, "evidence_revoked": False,
-        "claim_generation": 1, "auth_session_hash": "h", "profile_revision_hash": "p",
+        "workspace_id": WS,
+        "owner_id": 7,
+        "membership_revision": 2,
+        "configuration_revision": 5,
+        "status": "running",
+        "cancel_requested": False,
+        "evidence_revoked": False,
+        "claim_generation": 1,
+        "auth_session_hash": "h",
+        "profile_revision_hash": "p",
         "profile_snapshot": {"id": "x"},
     }
     values.update(overrides)
@@ -29,8 +36,12 @@ def _live_run(**overrides: object) -> SimpleNamespace:
 
 def _auth(**overrides: object) -> agents.BrowserRunAuthorization:
     values: dict[str, object] = {
-        "run_id": uuid4(), "owner_id": 7, "auth_session_hash": "h", "claim_generation": 1,
-        "profile_id": "x", "profile_revision_hash": "p",
+        "run_id": uuid4(),
+        "owner_id": 7,
+        "auth_session_hash": "h",
+        "claim_generation": 1,
+        "profile_id": "x",
+        "profile_revision_hash": "p",
     }
     values.update(overrides)
     return SimpleNamespace(**values)  # type: ignore[return-value]
@@ -38,8 +49,20 @@ def _auth(**overrides: object) -> agents.BrowserRunAuthorization:
 
 def _harness() -> HarnessContext:
     return HarnessContext(
-        uuid4(), JOB, FENCE, 1, MagicMock(), MagicMock(), SimpleNamespace(multi_workspace_enabled=False),
-        MagicMock(), MagicMock(), MagicMock(), 1, 0.0, frozenset(), {},
+        uuid4(),
+        JOB,
+        FENCE,
+        1,
+        MagicMock(),
+        MagicMock(),
+        SimpleNamespace(multi_workspace_enabled=False),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        1,
+        0.0,
+        frozenset(),
+        {},
     )
 
 
@@ -49,10 +72,18 @@ def _harness() -> HarnessContext:
 async def test_reserve_refuses_a_changed_epoch() -> None:
     session = MagicMock()
     session.scalar = AsyncMock(return_value=_live_run())
-    with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=MOVED)), \
-            pytest.raises(PermissionError, match="authorization changed"):
+    with (
+        patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=MOVED)),
+        pytest.raises(PermissionError, match="authorization changed"),
+    ):
         await agents.reserve_browser_run_budget_in_uow(
-            session, uuid4(), 1, 1, "d" * 64, 1, **CTX,
+            session,
+            uuid4(),
+            1,
+            1,
+            "d" * 64,
+            1,
+            **CTX,
         )
     assert session.scalar.await_count == 1
 
@@ -60,8 +91,10 @@ async def test_reserve_refuses_a_changed_epoch() -> None:
 async def test_reserve_refuses_a_foreign_run() -> None:
     session = MagicMock()
     session.scalar = AsyncMock(return_value=None)
-    with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)), \
-            pytest.raises(PermissionError, match="no longer current"):
+    with (
+        patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)),
+        pytest.raises(PermissionError, match="no longer current"),
+    ):
         await agents.reserve_browser_run_budget_in_uow(session, uuid4(), 1, 1, "d" * 64, 1, **CTX)
     where = str(session.scalar.await_args.args[0].compile()).split("WHERE", 1)[1]
     assert "workspace_id" in where and "owner_id" in where
@@ -79,7 +112,10 @@ async def test_revalidate_owner_mismatch_is_false_before_any_select() -> None:
     session = MagicMock()
     session.scalar = AsyncMock()
     with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)):
-        assert await agents.revalidate_browser_run_authority(session, _auth(owner_id=8), **CTX) is False
+        assert (
+            await agents.revalidate_browser_run_authority(session, _auth(owner_id=8), **CTX)
+            is False
+        )
     session.scalar.assert_not_awaited()
 
 
@@ -90,12 +126,17 @@ async def test_revalidate_returns_false_when_admission_is_denied(status: int) ->
 
 
 async def test_revalidate_reraises_unexpected_status_and_bad_flag() -> None:
-    with patch.object(agents, "admit", AsyncMock(side_effect=HTTPException(status_code=500))), \
-            pytest.raises(HTTPException):
+    with (
+        patch.object(agents, "admit", AsyncMock(side_effect=HTTPException(status_code=500))),
+        pytest.raises(HTTPException),
+    ):
         await agents.revalidate_browser_run_authority(MagicMock(), _auth(), **CTX)
     with pytest.raises(TypeError):
         await agents.revalidate_browser_run_authority(
-            MagicMock(), _auth(), scope=OWNER, multi_workspace_enabled=1,  # type: ignore[arg-type]
+            MagicMock(),
+            _auth(),
+            scope=OWNER,
+            multi_workspace_enabled=1,  # type: ignore[arg-type]
         )
 
 
@@ -104,40 +145,60 @@ async def test_revalidate_reraises_unexpected_status_and_bad_flag() -> None:
 
 async def test_type_error_from_revalidation_propagates_in_agents_public() -> None:
     item = SimpleNamespace(tool_name="webhook.send", source_fences={})
-    with patch.object(agents, "_restore_fences", MagicMock(return_value={})), \
-            patch.object(agents, "ToolExecutionPrincipal", MagicMock()), \
-            patch.object(agents, "revalidate_native_output_fences", AsyncMock(side_effect=TypeError("bad"))), \
-            pytest.raises(TypeError):
+    with (
+        patch.object(agents, "_restore_fences", MagicMock(return_value={})),
+        patch.object(agents, "ToolExecutionPrincipal", MagicMock()),
+        patch.object(
+            agents, "revalidate_native_output_fences", AsyncMock(side_effect=TypeError("bad"))
+        ),
+        pytest.raises(TypeError),
+    ):
         await agents._approval_fences_current(MagicMock(), item, **CTX)  # type: ignore[arg-type]
     row = SimpleNamespace(source_fences={"x": 1}, answer="a")
-    with patch.object(agents, "_restore_fences", MagicMock(return_value={})), \
-            patch.object(agents, "_read", MagicMock(return_value=SimpleNamespace(answer="a"))), \
-            patch.object(agents, "_result_principal", MagicMock(return_value=object())), \
-            patch.object(agents, "revalidate_native_output_fences", AsyncMock(side_effect=TypeError("bad"))), \
-            pytest.raises(TypeError):
+    with (
+        patch.object(agents, "_restore_fences", MagicMock(return_value={})),
+        patch.object(agents, "_read", MagicMock(return_value=SimpleNamespace(answer="a"))),
+        patch.object(agents, "_result_principal", MagicMock(return_value=object())),
+        patch.object(
+            agents, "revalidate_native_output_fences", AsyncMock(side_effect=TypeError("bad"))
+        ),
+        pytest.raises(TypeError),
+    ):
         await agents._read_current_result(row, MagicMock(), multi_workspace_enabled=False)  # type: ignore[arg-type]
 
 
 async def test_malformed_fences_still_deny_without_calling_revalidation() -> None:
     item = SimpleNamespace(tool_name="webhook.send", source_fences={})
     revalidate = AsyncMock()
-    with patch.object(agents, "_restore_fences", MagicMock(side_effect=ValueError("bad"))), \
-            patch.object(agents, "ToolExecutionPrincipal", MagicMock()), \
-            patch.object(agents, "revalidate_native_output_fences", revalidate):
+    with (
+        patch.object(agents, "_restore_fences", MagicMock(side_effect=ValueError("bad"))),
+        patch.object(agents, "ToolExecutionPrincipal", MagicMock()),
+        patch.object(agents, "revalidate_native_output_fences", revalidate),
+    ):
         assert await agents._approval_fences_current(MagicMock(), item, **CTX) is False  # type: ignore[arg-type]
     revalidate.assert_not_awaited()
 
 
 async def test_harness_authorize_propagates_type_error_but_denies_other_failures() -> None:
     context = _harness()
-    context._run_snapshot = AsyncMock(return_value=SimpleNamespace(owner_id=7, auth_session_hash="h"))  # type: ignore[method-assign]
+    context._run_snapshot = AsyncMock(
+        return_value=SimpleNamespace(owner_id=7, auth_session_hash="h")
+    )  # type: ignore[method-assign]
     context.decode_fences = MagicMock(return_value={})  # type: ignore[method-assign]
     context.owner_principal = MagicMock()  # type: ignore[method-assign]
     state = {"source_fences": {"x": 1}}
-    with patch("modules.agents.harness.revalidate_native_output_fences", AsyncMock(side_effect=TypeError("bad"))), \
-            pytest.raises(TypeError):
+    with (
+        patch(
+            "modules.agents.harness.revalidate_native_output_fences",
+            AsyncMock(side_effect=TypeError("bad")),
+        ),
+        pytest.raises(TypeError),
+    ):
         await context.authorize_internal_write(state, uuid4(), MagicMock(), {})  # type: ignore[arg-type]
-    with patch("modules.agents.harness.revalidate_native_output_fences", AsyncMock(side_effect=RuntimeError("x"))):
+    with patch(
+        "modules.agents.harness.revalidate_native_output_fences",
+        AsyncMock(side_effect=RuntimeError("x")),
+    ):
         assert await context.authorize_internal_write(state, uuid4(), MagicMock(), {}) is False  # type: ignore[arg-type]
 
 
@@ -146,9 +207,13 @@ async def test_revalidate_principal_uses_local_modules_not_the_shared_registry()
     context._run_snapshot = AsyncMock(return_value=SimpleNamespace(owner_id=7))  # type: ignore[method-assign]
     context.session_factory = _factory(MagicMock())
     context.registry.list_tools.return_value = []
-    lifecycle = SimpleNamespace(modules=[SimpleNamespace(id="agents", enabled=True, explicitly_disabled=False)])
+    lifecycle = SimpleNamespace(
+        modules=[SimpleNamespace(id="agents", enabled=True, explicitly_disabled=False)]
+    )
     principal = SimpleNamespace(scope=JOB, actor_id="owner:7", is_owner=True)
-    with patch("modules.settings.public.read_module_availability", AsyncMock(return_value=lifecycle)):
+    with patch(
+        "modules.settings.public.read_module_availability", AsyncMock(return_value=lifecycle)
+    ):
         assert await context.revalidate_principal(principal) is True  # type: ignore[arg-type]
     context.registry.set_module_registry.assert_not_called()
     assert context.modules is not None
@@ -160,14 +225,21 @@ async def test_revalidate_principal_uses_local_modules_not_the_shared_registry()
 
 def _worker_ctx(session: MagicMock) -> dict[str, object]:
     return {
-        "settings": SimpleNamespace(multi_workspace_enabled=False), "session_factory": _factory(session),
-        "db_engine": MagicMock(), "redis": MagicMock(), "agent_tool_registry": MagicMock(),
+        "settings": SimpleNamespace(multi_workspace_enabled=False),
+        "session_factory": _factory(session),
+        "db_engine": MagicMock(),
+        "redis": MagicMock(),
+        "agent_tool_registry": MagicMock(),
     }
 
 
 def _identity_session() -> MagicMock:
     identity = SimpleNamespace(
-        workspace_id=WS, owner_id=7, membership_revision=2, configuration_revision=5, status="queued",
+        workspace_id=WS,
+        owner_id=7,
+        membership_revision=2,
+        configuration_revision=5,
+        status="queued",
     )
     session = MagicMock()
     session.execute = AsyncMock(return_value=MagicMock(one_or_none=lambda: identity))
@@ -177,9 +249,11 @@ def _identity_session() -> MagicMock:
 
 async def test_worker_changed_epoch_terminates_with_workspace_access_changed() -> None:
     session = _identity_session()
-    with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=MOVED)), \
-            patch.object(worker, "_terminate_unadmitted", AsyncMock()) as terminate, \
-            patch.object(worker, "_claim_run", AsyncMock()) as claim:
+    with (
+        patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=MOVED)),
+        patch.object(worker, "_terminate_unadmitted", AsyncMock()) as terminate,
+        patch.object(worker, "_claim_run", AsyncMock()) as claim,
+    ):
         await worker.process_agent_run(_worker_ctx(session), str(uuid4()), 1)
     assert terminate.await_args.args[-1] == "workspace_access_changed"
     claim.assert_not_awaited()
@@ -193,12 +267,16 @@ async def test_worker_claim_conflict_terminates_instead_of_escaping() -> None:
         yield (MagicMock(), 1)
 
     availability = SimpleNamespace(modules=[])
-    with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)), \
-            patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=True)), \
-            patch("modules.settings.public.read_module_availability", AsyncMock(return_value=availability)), \
-            patch.object(worker, "_run_lease", lease), \
-            patch.object(worker, "_terminate_unadmitted", AsyncMock()) as terminate, \
-            patch.object(worker, "_claim_run", AsyncMock(side_effect=HTTPException(status_code=409))):
+    with (
+        patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)),
+        patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=True)),
+        patch(
+            "modules.settings.public.read_module_availability", AsyncMock(return_value=availability)
+        ),
+        patch.object(worker, "_run_lease", lease),
+        patch.object(worker, "_terminate_unadmitted", AsyncMock()) as terminate,
+        patch.object(worker, "_claim_run", AsyncMock(side_effect=HTTPException(status_code=409))),
+    ):
         await worker.process_agent_run(_worker_ctx(session), str(uuid4()), 1)
     assert terminate.await_args.args[-1] == "workspace_access_changed"
 
@@ -231,16 +309,20 @@ async def test_reconcile_dispatches_rows_queued_behind_a_full_page_of_disabled_w
     session = _reconcile_session([first, [(good_run, 1, good_ws, 7)]], seen)
 
     async def resolve(_session: object, workspace_id: object, **_kw: object) -> SimpleNamespace:
-        return SimpleNamespace(user_id=9 if workspace_id == disabled_ws else 7, membership_revision=1)
+        return SimpleNamespace(
+            user_id=9 if workspace_id == disabled_ws else 7, membership_revision=1
+        )
 
     async def enabled(_session: object, _module: str, *, scope: object, **_kw: object) -> bool:
         return scope.workspace_id != disabled_ws  # type: ignore[attr-defined]
 
     enqueue = AsyncMock(return_value=True)
-    with patch.object(worker.workspaces, "resolve_workspace_owner_context", resolve), \
-            patch("modules.settings.public.module_is_enabled", enabled), \
-            patch.object(worker, "expire_pending_approvals", AsyncMock()), \
-            patch.object(worker, "_enqueue_generation", enqueue):
+    with (
+        patch.object(worker.workspaces, "resolve_workspace_owner_context", resolve),
+        patch("modules.settings.public.module_is_enabled", enabled),
+        patch.object(worker, "expire_pending_approvals", AsyncMock()),
+        patch.object(worker, "_enqueue_generation", enqueue),
+    ):
         assert await worker.reconcile_agent_dispatch(_worker_ctx(session)) == 1
     enqueue.assert_awaited_once()
     assert enqueue.await_args.args[1] == good_run
@@ -253,9 +335,13 @@ async def test_reconcile_enqueues_owner_unavailable_rows_so_recipe_j_can_termina
     seen: list[str] = []
     session = _reconcile_session([[(run_id, 1, uuid4(), 9)]], seen)
     enqueue = AsyncMock(return_value=True)
-    with patch.object(worker.workspaces, "resolve_workspace_owner_context", AsyncMock(return_value=None)), \
-            patch.object(worker, "expire_pending_approvals", AsyncMock()), \
-            patch.object(worker, "_enqueue_generation", enqueue):
+    with (
+        patch.object(
+            worker.workspaces, "resolve_workspace_owner_context", AsyncMock(return_value=None)
+        ),
+        patch.object(worker, "expire_pending_approvals", AsyncMock()),
+        patch.object(worker, "_enqueue_generation", enqueue),
+    ):
         assert await worker.reconcile_agent_dispatch(_worker_ctx(session)) == 1
     assert enqueue.await_args.args[1] == run_id
 
@@ -278,18 +364,30 @@ async def test_start_profile_run_locks_admission_then_creates_then_commits_with_
         order.append("commit")
         assert kwargs["access_fence"] == FENCE
 
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        settings=SimpleNamespace(multi_workspace_enabled=False), tool_registry=MagicMock(),
-        redis=SimpleNamespace(enqueue_job=AsyncMock()),
-    )))
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(multi_workspace_enabled=False),
+                tool_registry=MagicMock(),
+                redis=SimpleNamespace(enqueue_job=AsyncMock()),
+            )
+        )
+    )
     payload = agents.ProfileRunStart(
-        prompt="p", conversation_id=uuid4(), client_request_id="c1", expected_profile_revision=0,
+        prompt="p",
+        conversation_id=uuid4(),
+        client_request_id="c1",
+        expected_profile_revision=0,
         token_budget=None,
     )
     owner = SimpleNamespace(token_hash="a" * 64)
-    with patch.object(routes.settings_public, "get_ai_execution_config", AsyncMock(return_value=None)), \
-            patch.object(routes.public, "lock_write_admission", lock), \
-            patch.object(routes.public, "create_profile_run_in_uow", create), \
-            patch.object(routes, "commit_with_replay", commit):
+    with (
+        patch.object(
+            routes.settings_public, "get_ai_execution_config", AsyncMock(return_value=None)
+        ),
+        patch.object(routes.public, "lock_write_admission", lock),
+        patch.object(routes.public, "create_profile_run_in_uow", create),
+        patch.object(routes, "commit_with_replay", commit),
+    ):
         await routes.start_run("knowledge", payload, request, MagicMock(), owner, OWNER)  # type: ignore[arg-type]
     assert order == ["lock", "create", "commit"]

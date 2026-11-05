@@ -23,9 +23,12 @@ from modules.sources.public import SourceFence
 
 
 async def create_collector_credential(
-    session: AsyncSession, source_id: UUID, *,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
     credential_scope: Literal["ingestion:write", "mcp:collect"] = "ingestion:write",
-    scope: Scope, multi_workspace_enabled: bool,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> str:
     """Acquire real admission/Source then rotate one literal collector capability, flush only.
 
@@ -38,25 +41,38 @@ async def create_collector_credential(
     if credential_scope not in ("ingestion:write", "mcp:collect"):
         raise ValueError("Unsupported collector credential capability")
     source = await sources.lock_source(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if source is None or source.status == "archived":
         raise LookupError("Source not found")
     access_fence = await _admit_ingestion_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     return await create_collector_credential_in_uow(
-        session, source_id, credential_scope=credential_scope, scope=scope,
+        session,
+        source_id,
+        credential_scope=credential_scope,
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source,
+        access_fence=access_fence,
+        source_fence=source,
     )
 
 
 async def create_collector_credential_in_uow(
-    session: AsyncSession, source_id: UUID, *,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
     credential_scope: Literal["ingestion:write", "mcp:collect"] = "ingestion:write",
-    scope: Scope, multi_workspace_enabled: bool,
-    access_fence: AccessFence, source_fence: SourceFence,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> str:
     """Rotate an exact active/paused nonlocal Source capability under held earlier parents.
 
@@ -71,16 +87,26 @@ async def create_collector_credential_in_uow(
     if credential_scope not in ("ingestion:write", "mcp:collect"):
         raise ValueError("Unsupported collector credential capability")
     current_access = await _admit_ingestion_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     current_source = await sources.get_source_fence(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if current_source is None:
         raise NotFoundError(detail="Source not found")
-    if (current_access != access_fence or current_source != source_fence
-            or source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id
-            or current_source.status not in {"active", "paused"} or current_source.local_only):
+    if (
+        current_access != access_fence
+        or current_source != source_fence
+        or source_fence.id != source_id
+        or source_fence.workspace_id != scope.workspace_id
+        or current_source.status not in {"active", "paused"}
+        or current_source.local_only
+    ):
         raise ConflictError(detail="Collector credential issuance fence is stale")
     now = datetime.now(UTC)
     credentials = list(
@@ -92,7 +118,8 @@ async def create_collector_credential_in_uow(
                     CollectorCredential.scope == credential_scope,
                     CollectorCredential.revoked_at.is_(None),
                 )
-                .order_by(CollectorCredential.token_hash).with_for_update()
+                .order_by(CollectorCredential.token_hash)
+                .with_for_update()
                 .execution_options(populate_existing=True)
             )
         ).all()
@@ -100,14 +127,23 @@ async def create_collector_credential_in_uow(
     for credential in credentials:
         credential.revoked_at = now
     token = secrets.token_urlsafe(32)
-    session.add(CollectorCredential(
-        token_hash=hashlib.sha256(token.encode()).hexdigest(), source_id=source_id, scope=credential_scope,
-    ))
+    session.add(
+        CollectorCredential(
+            token_hash=hashlib.sha256(token.encode()).hexdigest(),
+            source_id=source_id,
+            scope=credential_scope,
+        )
+    )
     await session.flush()
     return token
 
 
-async def revoke_collector_credential(session: AsyncSession, token: str, *, scope: Scope, multi_workspace_enabled: bool,
+async def revoke_collector_credential(
+    session: AsyncSession,
+    token: str,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Discover a token Source, acquire ordered admission/Source, then revoke its exact row.
 
@@ -121,11 +157,16 @@ async def revoke_collector_credential(session: AsyncSession, token: str, *, scop
     if source_id is None:
         return
     await sources.lock_source_set(
-        session, (source_id,), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        (source_id,),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     row = await session.scalar(
         select(CollectorCredential)
-        .where(CollectorCredential.token_hash == token_hash, CollectorCredential.source_id == source_id)
+        .where(
+            CollectorCredential.token_hash == token_hash, CollectorCredential.source_id == source_id
+        )
         .with_for_update()
         .execution_options(populate_existing=True)
     )
@@ -134,8 +175,13 @@ async def revoke_collector_credential(session: AsyncSession, token: str, *, scop
 
 
 async def lock_source_credentials_in_uow(
-    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
-    access_fence: AccessFence, source_fence: SourceFence,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
 ) -> None:
     """Prepare exact Source token rows, sorted by hash, without revoking or committing.
 
@@ -149,29 +195,54 @@ async def lock_source_credentials_in_uow(
     parent lock or authority token is acquired.
     """
     current_access = await _admit_ingestion_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     current_source = await sources.get_source_fence(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    if (current_access != access_fence or current_source is None
-            or current_source != source_fence or current_source.status not in {"active", "paused", "archived"}):
+    if (
+        current_access != access_fence
+        or current_source is None
+        or current_source != source_fence
+        or current_source.status not in {"active", "paused", "archived"}
+    ):
         raise ConflictError(detail="Source credential preparation is stale")
-    (await session.scalars(select(CollectorCredential).where(
-        CollectorCredential.source_id == source_id,
-    ).order_by(CollectorCredential.token_hash).with_for_update()
-                          .execution_options(populate_existing=True))).all()
+    (
+        await session.scalars(
+            select(CollectorCredential)
+            .where(
+                CollectorCredential.source_id == source_id,
+            )
+            .order_by(CollectorCredential.token_hash)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).all()
 
 
-async def revoke_source_credentials(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+async def revoke_source_credentials(
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Revoke tokens under caller-held admission/Source locks; no earlier lock acquisition.
 
     Source lifecycle callers own ordered locks and commit. Nonlocking owner DTO proof
     checks exact scope/generation; this helper never recursively locks Source or auth.
     """
-    if await _source_in_scope(session, source_id, scope=scope,
-                              multi_workspace_enabled=multi_workspace_enabled) is None:
+    if (
+        await _source_in_scope(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        is None
+    ):
         return
     await session.execute(
         update(CollectorCredential)
@@ -181,22 +252,38 @@ async def revoke_source_credentials(session: AsyncSession, source_id: UUID, *, s
 
 
 async def collector_can_ingest(
-    session: AsyncSession, source_id: UUID, token: str, *, credential_scope: str = "ingestion:write", scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    token: str,
+    *,
+    credential_scope: str = "ingestion:write",
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Check literal credential capability and active Source under actual scoped owner admission.
 
     This nonlocking read is not intake admission. Collection wrappers acquire ordered
     access/Source locks and recheck token revocation before effects.
     """
-    await _admit_ingestion_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await _admit_ingestion_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     token_hash = hashlib.sha256(token.encode()).hexdigest()
-    credential_valid = bool(await session.scalar(
-        select(CollectorCredential.token_hash).where(
-            CollectorCredential.token_hash == token_hash,
-            CollectorCredential.source_id == source_id,
-            CollectorCredential.scope == credential_scope,
-            CollectorCredential.revoked_at.is_(None),
+    credential_valid = bool(
+        await session.scalar(
+            select(CollectorCredential.token_hash).where(
+                CollectorCredential.token_hash == token_hash,
+                CollectorCredential.source_id == source_id,
+                CollectorCredential.scope == credential_scope,
+                CollectorCredential.revoked_at.is_(None),
+            )
         )
-    ))
-    source = await _source_in_scope(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) if credential_valid else None
+    )
+    source = (
+        await _source_in_scope(
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        if credential_valid
+        else None
+    )
     return source is not None and source.status == "active"

@@ -58,8 +58,12 @@ class _CitedAnswer:
 
 
 def _validate_document_citations(
-    text: str, answer_context: AnswerContext, answer_request: AnswerContextRequest,
-    doc_numbers: list[int], ui_parts: list[tuple[str, dict[str, str]]], total_count: int,
+    text: str,
+    answer_context: AnswerContext,
+    answer_request: AnswerContextRequest,
+    doc_numbers: list[int],
+    ui_parts: list[tuple[str, dict[str, str]]],
+    total_count: int,
 ) -> tuple[Any, dict[int, int]]:
     """Validate document citations (prose markers plus widget-cited numbers) against the retrieved evidence.
 
@@ -83,12 +87,18 @@ def _validate_document_citations(
     unique_numbers = list(first_by_key.values())
     candidate_citations: list[Citation | dict[str, Any]] = [
         Citation(
-            sourceType="document", sourceId=item.source_id, documentId=item.document_id,
-            documentVersionId=item.document_version_id, chunkId=item.chunk_id,
-            title=item.title, url=item.canonical_url, observedAt=item.observed_at,
+            sourceType="document",
+            sourceId=item.source_id,
+            documentId=item.document_id,
+            documentVersionId=item.document_version_id,
+            chunkId=item.chunk_id,
+            title=item.title,
+            url=item.canonical_url,
+            observedAt=item.observed_at,
             quote=extract_supporting_quote(text, item.content, citation_number=n),
         )
-        for n, item in ((n, answer_context.evidence[n - 1]) for n in unique_numbers) if item.content.strip()
+        for n, item in ((n, answer_context.evidence[n - 1]) for n in unique_numbers)
+        if item.content.strip()
     ]
     all_markers = parse_citation_markers(text, max(total_count + 20, 20))
     allow_uncited_turn = (
@@ -98,7 +108,10 @@ def _validate_document_citations(
         and not answer_request.selected_refs
     )
     validated = validate_answer_citations(
-        text, candidate_citations, answer_context.evidence, allow_uncited_conversational=allow_uncited_turn,
+        text,
+        candidate_citations,
+        answer_context.evidence,
+        allow_uncited_conversational=allow_uncited_turn,
     )
     kept = {(c.documentVersionId, c.chunkId): i for i, c in enumerate(validated.citations, 1)}
     number_map = {n: kept[key] for n in candidate_numbers if (key := evidence_key(n)) in kept}
@@ -109,8 +122,14 @@ def _validate_document_citations(
 
 
 def _web_citations_for(
-    text: str, validated: Any, number_map: dict[int, int], doc_numbers: list[int], web_numbers: list[int],
-    web_run: _WebSearchRun, evidence_count: int, total_count: int,
+    text: str,
+    validated: Any,
+    number_map: dict[int, int],
+    doc_numbers: list[int],
+    web_numbers: list[int],
+    web_run: _WebSearchRun,
+    evidence_count: int,
+    total_count: int,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Map cited web numbers to server-built ``WebCitation`` rows numbered after the kept documents.
 
@@ -123,7 +142,9 @@ def _web_citations_for(
     web_only = (
         not validated.citations
         and all(n in number_map for n in doc_numbers)
-        and all(n <= total_count for n in parse_citation_markers(text, total_count + 20))  # "[2023]" is text
+        and all(
+            n <= total_count for n in parse_citation_markers(text, total_count + 20)
+        )  # "[2023]" is text
     )
     if validated.citations or web_only:
         answer_text = text if web_only else answer_text
@@ -134,16 +155,24 @@ def _web_citations_for(
                 number_map[n] = by_url[hit.url]
                 continue
             number_map[n] = by_url[hit.url] = len(validated.citations) + len(web_citations) + 1
-            web_citations.append(WebCitation(
-                url=hit.url, title=hit.title, quote=hit.snippet,
-                provider=web_run.provider, retrievedAt=web_run.retrieved_at or datetime.now(UTC),
-            ).model_dump(mode="json"))
+            web_citations.append(
+                WebCitation(
+                    url=hit.url,
+                    title=hit.title,
+                    quote=hit.snippet,
+                    provider=web_run.provider,
+                    retrievedAt=web_run.retrieved_at or datetime.now(UTC),
+                ).model_dump(mode="json")
+            )
     return answer_text, web_citations
 
 
 def _validate_citations(
-    text: str, answer_context: AnswerContext, answer_request: AnswerContextRequest,
-    web_run: _WebSearchRun | None, ui_parts: list[tuple[str, dict[str, str]]],
+    text: str,
+    answer_context: AnswerContext,
+    answer_request: AnswerContextRequest,
+    web_run: _WebSearchRun | None,
+    ui_parts: list[tuple[str, dict[str, str]]],
 ) -> _CitedAnswer:
     """Validate the streamed answer's citations and renumber its markers (pure; no I/O).
 
@@ -158,21 +187,39 @@ def _validate_citations(
     doc_numbers = [n for n in cited_numbers if n <= evidence_count]
     web_numbers = [n for n in cited_numbers if n > evidence_count]
     validated, number_map = _validate_document_citations(
-        text, answer_context, answer_request, doc_numbers, ui_parts, total_count,
+        text,
+        answer_context,
+        answer_request,
+        doc_numbers,
+        ui_parts,
+        total_count,
     )
     answer_text = validated.answer
     web_citations: list[dict[str, Any]] = []
     if web_numbers and web_run is not None:
         answer_text, web_citations = _web_citations_for(
-            text, validated, number_map, doc_numbers, web_numbers, web_run, evidence_count, total_count,
+            text,
+            validated,
+            number_map,
+            doc_numbers,
+            web_numbers,
+            web_run,
+            evidence_count,
+            total_count,
         )
-    final_answer = renumber_citation_markers(answer_text, number_map, max(total_count, 1 if number_map else 0))
-    valid_citations = [c.model_dump(mode="json", by_alias=True) for c in validated.citations] + web_citations
+    final_answer = renumber_citation_markers(
+        answer_text, number_map, max(total_count, 1 if number_map else 0)
+    )
+    valid_citations = [
+        c.model_dump(mode="json", by_alias=True) for c in validated.citations
+    ] + web_citations
     return _CitedAnswer(final_answer, valid_citations, number_map)
 
 
 def _finalize_widgets(
-    env: _ToolEnv, final_answer: str, cited: _CitedAnswer,
+    env: _ToolEnv,
+    final_answer: str,
+    cited: _CitedAnswer,
 ) -> list[dict[str, Any]]:
     """Build the persisted Generative UI parts of the turn (pure).
 
@@ -185,19 +232,28 @@ def _finalize_widgets(
     generative_uis: list[dict[str, Any]] = []
     if ts.ui_parts:
         widget_citations = {
-            n: cited.valid_citations[m - 1] for n, m in cited.number_map.items() if 0 < m <= len(cited.valid_citations)
+            n: cited.valid_citations[m - 1]
+            for n, m in cited.number_map.items()
+            if 0 < m <= len(cited.valid_citations)
         }
         for part_id, call in ts.ui_parts:
             part = finalize_generative_ui(
-                call["name"], call["arguments"], widget_citations, setup.local_only_turn,
-                title_hint=" ".join(turn.user_prompt.split()), locale=setup.ui_locale,
+                call["name"],
+                call["arguments"],
+                widget_citations,
+                setup.local_only_turn,
+                title_hint=" ".join(turn.user_prompt.split()),
+                locale=setup.ui_locale,
             )
             if part is not None:
                 generative_uis.append({**part, "part_id": part_id})
     elif not ts.tools_active:
         fallback = fallback_generative_ui(
-            turn.user_prompt, final_answer, cast(AnswerContext, turn.answer_context).evidence,
-            local_only=setup.local_only_turn, decision=ts.route_decision,
+            turn.user_prompt,
+            final_answer,
+            cast(AnswerContext, turn.answer_context).evidence,
+            local_only=setup.local_only_turn,
+            decision=ts.route_decision,
         )
         if fallback is not None:
             generative_uis.append({**fallback, "part_id": "part-1"})
@@ -205,30 +261,54 @@ def _finalize_widgets(
 
 
 def _assistant_metadata(
-    st: _StreamState, generative_uis: list[dict[str, Any]], route_decision: dict[str, Any] | None,
+    st: _StreamState,
+    generative_uis: list[dict[str, Any]],
+    route_decision: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Message ``metadata_json`` kwargs: reasoning, Generative UI parts and the router audit trail (pure).
 
     Returns ``{}`` when there is nothing to store so the column keeps its default.
     """
-    generative_ui = generative_uis[0] if generative_uis else None  # first part, kept for older clients
+    generative_ui = (
+        generative_uis[0] if generative_uis else None
+    )  # first part, kept for older clients
     if generative_ui is None and route_decision is None and not st.accumulated_reasoning:
         return {}
-    return {"metadata_json": {
-        **({"reasoning": st.accumulated_reasoning,
-            **({"reasoning_truncated": True} if st.reasoning_truncated else {})}
-           if st.accumulated_reasoning else {}),
-        **({"generative_ui": generative_ui, "generative_ui_parts": generative_uis}
-           if generative_ui is not None else {}),
-        # Audit trail of the external router's choice (category + renderer only, no content).
-        **({"viz_decision": {"visualization": route_decision["visualization"],
-                             "renderer": route_decision["renderer"]}}
-           if route_decision is not None else {}),
-    }}
+    return {
+        "metadata_json": {
+            **(
+                {
+                    "reasoning": st.accumulated_reasoning,
+                    **({"reasoning_truncated": True} if st.reasoning_truncated else {}),
+                }
+                if st.accumulated_reasoning
+                else {}
+            ),
+            **(
+                {"generative_ui": generative_ui, "generative_ui_parts": generative_uis}
+                if generative_ui is not None
+                else {}
+            ),
+            # Audit trail of the external router's choice (category + renderer only, no content).
+            **(
+                {
+                    "viz_decision": {
+                        "visualization": route_decision["visualization"],
+                        "renderer": route_decision["renderer"],
+                    }
+                }
+                if route_decision is not None
+                else {}
+            ),
+        }
+    }
 
 
 async def _persist_final(
-    env: _ToolEnv, st: _StreamState, final_answer: str, valid_citations: list[dict[str, Any]],
+    env: _ToolEnv,
+    st: _StreamState,
+    final_answer: str,
+    valid_citations: list[dict[str, Any]],
     generative_uis: list[dict[str, Any]],
 ) -> None:
     """Persist the completed assistant message, mark the run completed and publish the terminal events.
@@ -242,28 +322,40 @@ async def _persist_final(
         outcome, live_run = await _fence_live_run(session, c, check_evidence=False)
         if outcome is not _FenceOutcome.LIVE:
             raise _RunStopped("Response was stopped before completion")
-        conversation = await session.scalar(select(Conversation).where(Conversation.id == c.conversation_id))
+        conversation = await session.scalar(
+            select(Conversation).where(Conversation.id == c.conversation_id)
+        )
         if not await _evidence_still_valid(session, c, live_run):
             raise _RunStopped("Evidence was deleted before completion")
         model_ident = setup.mapping.model if setup.mapping else setup.role
         assistant_msg = Message(
-            conversation_id=c.conversation_id, role="assistant", content=final_answer,
-            model_identity=model_ident, citations=valid_citations, response_id=c.response_id,
+            conversation_id=c.conversation_id,
+            role="assistant",
+            content=final_answer,
+            model_identity=model_ident,
+            citations=valid_citations,
+            response_id=c.response_id,
             revision_of_message_id=turn.revision_of_message_id,
             **_assistant_metadata(st, generative_uis, env.ts.route_decision),
         )
         session.add(assistant_msg)
         await session.flush()
         ephemeral_flag = env.claimed.ephemeral
-        expires_at = conversation.expires_at if ephemeral_flag and conversation is not None else None
+        expires_at = (
+            conversation.expires_at if ephemeral_flag and conversation is not None else None
+        )
         await session.execute(
             update(ResponseRun)
             .where(ResponseRun.id == c.response_id, ResponseRun.status == "streaming")
             .values(
-                status="completed", assistant_message_id=assistant_msg.id,
+                status="completed",
+                assistant_message_id=assistant_msg.id,
                 model_alias=setup.role,  # historical column name; stores the role
-                model_name=model_ident, citations=valid_citations, ephemeral=ephemeral_flag,
-                expires_at=expires_at, completed_at=func.now(),
+                model_name=model_ident,
+                citations=valid_citations,
+                ephemeral=ephemeral_flag,
+                expires_at=expires_at,
+                completed_at=func.now(),
             )
         )
         if valid_citations:
@@ -273,7 +365,10 @@ async def _persist_final(
             c.seq = await _next_event_seq(session, c.response_id, c.seq)
             _add_event(session, c, c.seq, "message.ui.done", part)
         done_payload: dict[str, Any] = {
-            "text": final_answer, "citations": valid_citations, "model": model_ident, "status": "completed",
+            "text": final_answer,
+            "citations": valid_citations,
+            "model": model_ident,
+            "status": "completed",
         }
         if generative_uis:
             done_payload["generative_ui"] = generative_uis[0]

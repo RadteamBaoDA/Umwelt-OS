@@ -220,7 +220,9 @@ def _patch_engine(monkeypatch: pytest.MonkeyPatch, conn: _RecordingConn) -> _Fak
     return _FakeAppEngine(conn.events)
 
 
-async def test_user_sql_runs_on_reader_after_app_fence_and_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_user_sql_runs_on_reader_after_app_fence_and_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Order: reader pid, app upsert+commit, READ ONLY, model SQL, reader rollback, app delete; no set_config."""
     conn = _RecordingConn()
     app = _patch_engine(monkeypatch, conn)
@@ -236,18 +238,25 @@ async def test_user_sql_runs_on_reader_after_app_fence_and_read_only(monkeypatch
     ev = conn.events
     assert not any("set_config" in e for e in ev)
     steps = [
-        "reader:SELECT pg_backend_pid()", "app:begin", "app:INSERT", "app:commit",
+        "reader:SELECT pg_backend_pid()",
+        "app:begin",
+        "app:INSERT",
+        "app:commit",
         "reader:SET TRANSACTION READ ONLY",
     ]
     assert ev[: len(steps)] == steps
-    assert user_sql in ev[len(steps) + 1]  # statement_timeout sits between READ ONLY and the model query
+    assert (
+        user_sql in ev[len(steps) + 1]
+    )  # statement_timeout sits between READ ONLY and the model query
     assert ev[-4:] == ["reader:rollback", "app:begin", "app:DELETE", "app:commit"]
     assert not any("ROLE" in s for s in conn.statements)
     assert conn.rollbacks == 1
     assert '"avg_val": 1' in out and '"mode": "sql"' in out
 
 
-async def test_invalid_sql_is_rejected_before_any_statement_executes(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_invalid_sql_is_rejected_before_any_statement_executes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A rejected query never reaches the database."""
     conn = _RecordingConn()
     _patch_engine(monkeypatch, conn)
@@ -263,22 +272,33 @@ async def test_invalid_sql_is_rejected_before_any_statement_executes(monkeypatch
     assert conn.statements == []
 
 
-async def test_model_query_error_still_rolls_back_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_model_query_error_still_rolls_back_and_reraises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A query that raises still rolls the reader transaction back and surfaces the original error."""
     conn = _RecordingConn(fail=True)
     app = _patch_engine(monkeypatch, conn)
     with pytest.raises(RuntimeError, match="division by zero"):
         await db_query._run_sql_as_reader(
-            "SELECT 1 / 0 FROM scoped_observations", app_engine=app,  # type: ignore[arg-type]
-            workspace_id=uuid4(), allowed_source_ids=[uuid4()], max_rows=5,
+            "SELECT 1 / 0 FROM scoped_observations",
+            app_engine=app,  # type: ignore[arg-type]
+            workspace_id=uuid4(),
+            allowed_source_ids=[uuid4()],
+            max_rows=5,
         )
     assert conn.rollbacks == 1
-    assert conn.events[-3:] == ["app:begin", "app:DELETE", "app:commit"]  # fence removed even on error
+    assert conn.events[-3:] == [
+        "app:begin",
+        "app:DELETE",
+        "app:commit",
+    ]  # fence removed even on error
 
 
 async def test_sql_mode_fails_closed_without_reader_url(monkeypatch: pytest.MonkeyPatch) -> None:
     """With CHAT_SQL_READER_DATABASE_URL unset the tool is disabled; it never falls back to the app connection."""
-    monkeypatch.setattr(db_query, "Settings", lambda: type("S", (), {"chat_sql_reader_database_url": None})())
+    monkeypatch.setattr(
+        db_query, "Settings", lambda: type("S", (), {"chat_sql_reader_database_url": None})()
+    )
     with pytest.raises(ChatSqlReaderUnavailableError, match="CHAT_SQL_READER_DATABASE_URL"):
         await db_query._execute_sql_mode(
             _NoQuerySession(),  # type: ignore[arg-type]
@@ -299,14 +319,19 @@ async def test_sql_mode_fails_closed_without_reader_url(monkeypatch: pytest.Monk
     ],
 )
 async def test_non_uuid_ids_fail_before_any_statement_executes(
-    monkeypatch: pytest.MonkeyPatch, workspace_id: Any, source_ids: list[Any],
+    monkeypatch: pytest.MonkeyPatch,
+    workspace_id: Any,
+    source_ids: list[Any],
 ) -> None:
     """Anything that is not a uuid.UUID instance (even a valid-looking str) is refused before any I/O."""
     conn = _RecordingConn()
     app = _patch_engine(monkeypatch, conn)
     with pytest.raises(TypeError):
         await db_query._run_sql_as_reader(
-            "SELECT 1 FROM scoped_observations", app_engine=app,  # type: ignore[arg-type]
-            workspace_id=workspace_id, allowed_source_ids=source_ids, max_rows=5,
+            "SELECT 1 FROM scoped_observations",
+            app_engine=app,  # type: ignore[arg-type]
+            workspace_id=workspace_id,
+            allowed_source_ids=source_ids,
+            max_rows=5,
         )
     assert conn.statements == []

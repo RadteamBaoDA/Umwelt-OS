@@ -21,11 +21,20 @@ from tests.unit.modules.connectors.test_keyed_providers import BODIES, CFG
 # Late enough that the time-bounded fixtures (NOAA Kp, ECB) are inside their freshness windows.
 NOW = datetime(2026, 10, 22, 0, 0, tzinfo=UTC)
 _PURE_FIXTURES = {
-    "world_bank": "world_bank_vn_gdp.json", "frankfurter": "frankfurter_usd_vnd.json",
-    "ecb": "ecb_eurofxref_daily.xml", "binance": "binance_btcusdt.json", "alternative_me": "fear_greed.json",
-    "usgs": "usgs_4_5_day.geojson", "coinpaprika": "coinpaprika_btc.json", "coingecko": "coingecko_btc.json",
-    "noaa_kp": "noaa_kp.json", "open_er_api": "open_er_api.json", "oecd_cli": "oecd_cli.json",
-    "iss_position": "iss_position.json", "disease_sh": "disease_sh.json", "vn_stock": "vn_stock_prices.json",
+    "world_bank": "world_bank_vn_gdp.json",
+    "frankfurter": "frankfurter_usd_vnd.json",
+    "ecb": "ecb_eurofxref_daily.xml",
+    "binance": "binance_btcusdt.json",
+    "alternative_me": "fear_greed.json",
+    "usgs": "usgs_4_5_day.geojson",
+    "coinpaprika": "coinpaprika_btc.json",
+    "coingecko": "coingecko_btc.json",
+    "noaa_kp": "noaa_kp.json",
+    "open_er_api": "open_er_api.json",
+    "oecd_cli": "oecd_cli.json",
+    "iss_position": "iss_position.json",
+    "disease_sh": "disease_sh.json",
+    "vn_stock": "vn_stock_prices.json",
 }
 
 
@@ -36,10 +45,19 @@ def _open_meteo_records(collected_at: datetime) -> list:
 
     from modules.connectors.providers.world_data import _weather_records
 
-    config = ConnectorConfig(weather_latitude=21.0, weather_longitude=105.8, weather_timezone="UTC", weather_metrics=("temperature_2m",))
+    config = ConnectorConfig(
+        weather_latitude=21.0,
+        weather_longitude=105.8,
+        weather_timezone="UTC",
+        weather_metrics=("temperature_2m",),
+    )
     payload = {
-        "timezone": "UTC", "hourly_units": {"temperature_2m": "C"},
-        "hourly": {"time": ["2026-10-21T22:00", "2026-10-21T23:00", "2026-10-22T00:00"], "temperature_2m": [24.0, 23.5, 23.0]},
+        "timezone": "UTC",
+        "hourly_units": {"temperature_2m": "C"},
+        "hourly": {
+            "time": ["2026-10-21T22:00", "2026-10-21T23:00", "2026-10-22T00:00"],
+            "temperature_2m": [24.0, 23.5, 23.0],
+        },
     }
     source = SimpleNamespace(id=UUID(int=7))
     return _weather_records(source, config, payload, collected_at, coverage="returned_snapshot")  # type: ignore[arg-type]
@@ -50,7 +68,11 @@ def _emit(provider: str, collected_at: datetime) -> list:
     if provider in _PURE_FIXTURES:
         return map_pure_provider_body(provider, fixture(_PURE_FIXTURES[provider]), collected_at)
     if provider == "alpha_vantage":
-        config = ConnectorConfig(market_symbols=("IBM",), market_currency="USD", market_exchange_timezone="America/New_York")
+        config = ConnectorConfig(
+            market_symbols=("IBM",),
+            market_currency="USD",
+            market_exchange_timezone="America/New_York",
+        )
         return _market_records(None, config, jfixture("alpha_vantage_ibm_daily.json"), collected_at)
     if provider == "open_meteo":
         return _open_meteo_records(collected_at)
@@ -95,8 +117,19 @@ def test_emitted_metrics_and_symbols_match_catalog(provider: str) -> None:
 def test_suggested_symbols_are_what_adapters_emit() -> None:
     """Suggested symbols for symbol-keyed providers appear in the emitted symbols."""
     emitted = _emitted()
-    assert {pair[0] for pair in DEFAULT_BINANCE_PAIRS} <= set(provider_metrics("binance").suggested_symbols)
-    for provider in ("binance", "coinpaprika", "coingecko", "frankfurter", "ecb", "open_er_api", "oecd_cli", "fred"):
+    assert {pair[0] for pair in DEFAULT_BINANCE_PAIRS} <= set(
+        provider_metrics("binance").suggested_symbols
+    )
+    for provider in (
+        "binance",
+        "coinpaprika",
+        "coingecko",
+        "frankfurter",
+        "ecb",
+        "open_er_api",
+        "oecd_cli",
+        "fred",
+    ):
         entry = provider_metrics(provider)
         symbols = {wd(r)["symbol"] for r in emitted[provider]}
         assert symbols & set(entry.suggested_symbols), (provider, symbols, entry.suggested_symbols)
@@ -106,12 +139,19 @@ def test_fx_suggestions_are_emitted_pairs() -> None:
     """Every suggested symbol of a fixture-backed provider is one the adapter emits (no invented pairs)."""
     for provider, records in _emitted().items():
         entry = provider_metrics(provider)
-        if entry is None or not entry.symbol_keyed or not entry.suggested_symbols or provider in {"binance", "coingecko", "fred"}:
+        if (
+            entry is None
+            or not entry.symbol_keyed
+            or not entry.suggested_symbols
+            or provider in {"binance", "coingecko", "fred"}
+        ):
             continue
         assert set(entry.suggested_symbols) <= {wd(r)["symbol"] for r in records}, provider
     from modules.connectors.providers.macro import OPEN_ER_QUOTES
 
-    assert set(provider_metrics("open_er_api").suggested_symbols) == {f"USD/{q}" for q in OPEN_ER_QUOTES}
+    assert set(provider_metrics("open_er_api").suggested_symbols) == {
+        f"USD/{q}" for q in OPEN_ER_QUOTES
+    }
 
 
 def test_region_and_series_flags_match_adapter_output() -> None:
@@ -127,9 +167,15 @@ def test_region_and_series_flags_match_adapter_output() -> None:
             assert distinct, (provider, regions)
             assert all(not row["symbol"] for row in rows), provider
         if entry.region_keyed:
-            assert all(regions), (provider, regions)  # a region-keyed series needs a region on every row
+            assert all(regions), (
+                provider,
+                regions,
+            )  # a region-keyed series needs a region on every row
         elif entry.charts_as_series and not entry.symbol_keyed:
-            assert len(distinct) <= 1, (provider, distinct)  # one series per source unless keyed by region
+            assert len(distinct) <= 1, (
+                provider,
+                distinct,
+            )  # one series per source unless keyed by region
         if entry.suggested_regions:
             assert entry.region_keyed, provider
             assert set(entry.suggested_regions) <= distinct, (provider, distinct)
@@ -149,8 +195,11 @@ def _series_key(record) -> tuple:
     return data["metric"], data["symbol"], data["region"]
 
 
-_CHARTED = sorted(p for p in (*_PURE_FIXTURES, "alpha_vantage", "open_meteo", "fred", "openweathermap", "openaq")
-                  if provider_metrics(p).charts_as_series)
+_CHARTED = sorted(
+    p
+    for p in (*_PURE_FIXTURES, "alpha_vantage", "open_meteo", "fred", "openweathermap", "openaq")
+    if provider_metrics(p).charts_as_series
+)
 
 
 @pytest.mark.parametrize("provider", _CHARTED)
@@ -171,14 +220,21 @@ def test_series_history_accumulates(provider: str) -> None:
     assert first_ids == later_ids, (provider, "identity must be all-or-nothing clock dependent")
     before = {r.provider_id: r.observed_at for r in first}
     if any(r.observed_at != before[r.provider_id] for r in later):
-        assert all(r.observed_at != before[r.provider_id] for r in later), (provider, "collection clock must advance every revision")
+        assert all(r.observed_at != before[r.provider_id] for r in later), (
+            provider,
+            "collection clock must advance every revision",
+        )
         return  # same id, new observed_at: the revision history is the series
     by_series: dict[tuple, list] = {}
     for record in first:
         by_series.setdefault(_series_key(record), []).append(record)
     for key, rows in by_series.items():
         if len({r.observed_at for r in rows}) > 1:
-            assert len({r.provider_id for r in rows}) == len(rows), (provider, key, "distinct samples share an id")
+            assert len({r.provider_id for r in rows}) == len(rows), (
+                provider,
+                key,
+                "distinct samples share an id",
+            )
 
 
 def test_oecd_cli_requests_history_and_maps_each_period() -> None:
@@ -216,7 +272,11 @@ def test_cadence_matches_fixture_spacing() -> None:
             ordered = sorted(series)
             gaps = [(b - a).total_seconds() / 86400 for a, b in pairwise(ordered)]
             # 4x tolerance: weekends/holidays leave gaps in daily market and FX series.
-            assert all(g <= entry.cadence_days * 4 for g in gaps), (provider, gaps, entry.cadence_days)
+            assert all(g <= entry.cadence_days * 4 for g in gaps), (
+                provider,
+                gaps,
+                entry.cadence_days,
+            )
 
 
 def _second_sample(provider: str) -> list:

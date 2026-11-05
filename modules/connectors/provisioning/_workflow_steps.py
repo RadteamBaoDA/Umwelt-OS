@@ -27,9 +27,14 @@ from modules.sources.public import SourceFence
 
 
 async def claim_workflow_step(
-    session: AsyncSession, source_id: UUID,
-    *, scope: Scope, multi_workspace_enabled: bool,
-    original_operation: dict[str, object], access_fence: AccessFence, service_url: str,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    original_operation: dict[str, object],
+    access_fence: AccessFence,
+    service_url: str,
 ) -> dict[str, object] | None:
     """Claim current activation or exact retained prepared deactivation under original access.
 
@@ -41,28 +46,42 @@ async def claim_workflow_step(
     Deactivation remains usable after Source/config advancement without changing its lineage.
     """
     before = await lock_retained_connector_effect(
-        session, source_id, original_operation=original_operation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     source, row, slots = await _read_retained_connector_rows(
-        session, source_id, original_operation=original_operation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     if source is None or row is None or not isinstance(row.workflow_operation, dict):
         return None
     operation = copy.deepcopy(row.workflow_operation)
     step = operation.get("step")
-    if operation.get("retained_effect_result") or not _retained_operation_matches(operation, original_operation, source_id=source_id, scope=scope, access_fence=access_fence):
+    if operation.get("retained_effect_result") or not _retained_operation_matches(
+        operation, original_operation, source_id=source_id, scope=scope, access_fence=access_fence
+    ):
         return None
     if not isinstance(step, dict) or step.get("state") != "prepared":
         return None
     cleanup = step.get("kind") == "deactivate"
-    if cleanup and (not isinstance(step.get("target"), str)
-                    or step.get("target") != operation.get("workflow_id")
-                    or step.get("target") != row.workflow_id):
+    if cleanup and (
+        not isinstance(step.get("target"), str)
+        or step.get("target") != operation.get("workflow_id")
+        or step.get("target") != row.workflow_id
+    ):
         return None
-    if not cleanup and operation.get("kind") == "enable" and not _required_credentials_match(
-        operation.get("required_credentials", {}), slots
+    if (
+        not cleanup
+        and operation.get("kind") == "enable"
+        and not _required_credentials_match(operation.get("required_credentials", {}), slots)
     ):
         operation["error"] = "required_credential_binding_unresolved"
         step["state"] = "blocked"
@@ -70,13 +89,28 @@ async def claim_workflow_step(
         row.workflow_operation = operation
         row.state = "reconciliation_required"
         row.error_code = "required_credential_binding_unresolved"
-        await commit_retained_connector_effect(session, before, source_id=source_id, original_operation=original_operation, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+        await commit_retained_connector_effect(
+            session,
+            before,
+            source_id=source_id,
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
         return None
-    if not cleanup and operation.get("kind") == "enable" and (
-        operation.get("cleanup_required") or not row.desired_enabled or source.status != "active" or source.local_only
-        or row.source_generation != operation.get("source_generation")
-        or row.desired_revision != operation.get("revision")
-        or source.generation != operation.get("source_generation")
+    if (
+        not cleanup
+        and operation.get("kind") == "enable"
+        and (
+            operation.get("cleanup_required")
+            or not row.desired_enabled
+            or source.status != "active"
+            or source.local_only
+            or row.source_generation != operation.get("source_generation")
+            or row.desired_revision != operation.get("revision")
+            or source.generation != operation.get("source_generation")
+        )
     ):
         if row.workflow_id:
             operation["cleanup_required"] = True
@@ -90,24 +124,54 @@ async def claim_workflow_step(
             row.workflow_operation = None
             row.state = "disabled" if source.status != "active" else "saved_not_active"
         row.desired_enabled = False
-        if isinstance(row.activation_intent, dict) and row.activation_intent.get("id") == operation.get("activation_id"):
+        if isinstance(row.activation_intent, dict) and row.activation_intent.get(
+            "id"
+        ) == operation.get("activation_id"):
             row.activation_intent = None
-        await commit_retained_connector_effect(session, before, source_id=source_id, original_operation=original_operation, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+        await commit_retained_connector_effect(
+            session,
+            before,
+            source_id=source_id,
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
         return None
-    _bind_n8n_service(row, service_url, has_liability=bool(row.workflow_id or row.old_workflow_id or step.get("target")))
+    _bind_n8n_service(
+        row,
+        service_url,
+        has_liability=bool(row.workflow_id or row.old_workflow_id or step.get("target")),
+    )
     step["state"] = "dispatched"
     step["dispatch_started_at"] = datetime.now(UTC).isoformat()
     operation["step"] = step
     row.workflow_operation = operation
     # Commit the step's dispatch barrier before the workflow driver calls n8n.
-    await commit_retained_connector_effect(session, before, source_id=source_id, original_operation=original_operation, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+    await commit_retained_connector_effect(
+        session,
+        before,
+        source_id=source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
     return operation
 
 
 def _acknowledgement_matches(
-    row: ConnectorProvisioning, operation: dict[str, object], step: dict[str, object],
-    original_operation: dict[str, object], *, source_id: UUID, operation_id: UUID, step_id: str,
-    workflow_id: str | None, scope: Scope, access_fence: AccessFence,
+    row: ConnectorProvisioning,
+    operation: dict[str, object],
+    step: dict[str, object],
+    original_operation: dict[str, object],
+    *,
+    source_id: UUID,
+    operation_id: UUID,
+    step_id: str,
+    workflow_id: str | None,
+    scope: Scope,
+    access_fence: AccessFence,
 ) -> bool:
     """Return whether a workflow acknowledgement names the retained dispatched step exactly.
 
@@ -118,19 +182,36 @@ def _acknowledgement_matches(
     """
     return not (
         operation.get("retained_effect_result")
-        or not _retained_operation_matches(operation, original_operation, source_id=source_id, scope=scope, access_fence=access_fence)
-        or operation.get("id") != str(operation_id) or step.get("id") != step_id
+        or not _retained_operation_matches(
+            operation,
+            original_operation,
+            source_id=source_id,
+            scope=scope,
+            access_fence=access_fence,
+        )
+        or operation.get("id") != str(operation_id)
+        or step.get("id") != step_id
         or step.get("state") != "dispatched"
         or step.get("kind") in {"update", "activate", "deactivate"}
-        and (step.get("target") != operation.get("workflow_id") or step.get("target") != row.workflow_id)
-        or step.get("kind") == "update" and workflow_id != step.get("target")
-        or step.get("kind") == "create" and (step.get("target") is not None or not workflow_id)
+        and (
+            step.get("target") != operation.get("workflow_id")
+            or step.get("target") != row.workflow_id
+        )
+        or step.get("kind") == "update"
+        and workflow_id != step.get("target")
+        or step.get("kind") == "create"
+        and (step.get("target") is not None or not workflow_id)
     )
 
 
 def _apply_acknowledged_step(
-    row: ConnectorProvisioning, source: SourceFence | None, operation: dict[str, Any], *,
-    kind: object, current: bool, target: str | None,
+    row: ConnectorProvisioning,
+    source: SourceFence | None,
+    operation: dict[str, Any],
+    *,
+    kind: object,
+    current: bool,
+    target: str | None,
 ) -> None:
     """Advance the provisioning row after an acknowledged step according to the step ``kind``.
 
@@ -148,7 +229,9 @@ def _apply_acknowledged_step(
             operation["cleanup_required"] = True
             operation["phase"] = "deactivate"
             operation["step"] = _step("deactivate", target)
-            row.state = "disabled" if source is None or source.status != "active" else "saved_not_active"
+            row.state = (
+                "disabled" if source is None or source.status != "active" else "saved_not_active"
+            )
             row.error_code = "deactivation_pending"
         row.workflow_operation = operation
     elif kind == "activate" and current:
@@ -157,23 +240,26 @@ def _apply_acknowledged_step(
         row.error_code = None
         row.workflow_operation = None
         finalize_backend(row)
-        if (
-            isinstance(row.activation_intent, dict)
-            and row.activation_intent.get("id") == operation.get("activation_id")
-        ):
+        if isinstance(row.activation_intent, dict) and row.activation_intent.get(
+            "id"
+        ) == operation.get("activation_id"):
             row.activation_intent = None
     elif kind in {"activate", "create", "update"}:
         operation["cleanup_required"] = True
         operation["phase"] = "deactivate"
         operation["step"] = _step("deactivate", target)
-        row.state = "disabled" if source is None or source.status != "active" else "saved_not_active"
+        row.state = (
+            "disabled" if source is None or source.status != "active" else "saved_not_active"
+        )
         row.error_code = "deactivation_pending"
         row.workflow_operation = operation
         row.desired_enabled = False
     elif kind == "deactivate":
         row.workflow_operation = None
         row.error_code = None
-        row.state = "disabled" if source is None or source.status != "active" else "saved_not_active"
+        row.state = (
+            "disabled" if source is None or source.status != "active" else "saved_not_active"
+        )
         if (
             operation.get("cleanup_required")
             and isinstance(row.activation_intent, dict)
@@ -194,8 +280,10 @@ async def acknowledge_workflow_step(
     step_id: str,
     *,
     workflow_id: str | None = None,
-    scope: Scope, multi_workspace_enabled: bool,
-    original_operation: dict[str, object], access_fence: AccessFence,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    original_operation: dict[str, object],
+    access_fence: AccessFence,
 ) -> bool:
     """Acknowledge a matching dispatched step and flush its workflow transition.
 
@@ -210,16 +298,31 @@ async def acknowledge_workflow_step(
     from modules.settings.public import module_is_enabled
 
     source, row, slots = await _read_retained_connector_rows(
-        session, source_id, original_operation=original_operation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     operation = copy.deepcopy(row.workflow_operation) if row is not None else None
     step = operation.get("step") if isinstance(operation, dict) else None
     if (
-        row is None or not isinstance(operation, dict) or not isinstance(step, dict) or source is None
+        row is None
+        or not isinstance(operation, dict)
+        or not isinstance(step, dict)
+        or source is None
         or not _acknowledgement_matches(
-            row, operation, step, original_operation, source_id=source_id, operation_id=operation_id,
-            step_id=step_id, workflow_id=workflow_id, scope=scope, access_fence=access_fence,
+            row,
+            operation,
+            step,
+            original_operation,
+            source_id=source_id,
+            operation_id=operation_id,
+            step_id=step_id,
+            workflow_id=workflow_id,
+            scope=scope,
+            access_fence=access_fence,
         )
     ):
         return False
@@ -234,8 +337,13 @@ async def acknowledge_workflow_step(
         row.workflow_name = str(operation.get("workflow_name") or row.workflow_name or "")
     kind = step.get("kind")
     current = bool(
-        await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        and source is not None and source.status == "active" and not source.local_only and row.desired_enabled
+        await module_is_enabled(
+            session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        and source is not None
+        and source.status == "active"
+        and not source.local_only
+        and row.desired_enabled
         and not operation.get("cleanup_required")
         and source.generation == operation.get("source_generation")
         and row.source_generation == operation.get("source_generation")
@@ -257,8 +365,11 @@ async def resolve_unknown_workflow_create(
     operation_id: UUID,
     step_id: str,
     workflow_id: str,
-    *, scope: Scope, multi_workspace_enabled: bool,
-    original_operation: dict[str, object], access_fence: AccessFence,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    original_operation: dict[str, object],
+    access_fence: AccessFence,
 ) -> bool:
     """Attach recovered workflow under held observation admission/Source/provisioning locks.
 
@@ -270,18 +381,34 @@ async def resolve_unknown_workflow_create(
     from modules.settings.public import module_is_enabled
 
     source, row, slots = await _read_retained_connector_rows(
-        session, source_id, original_operation=original_operation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     operation = copy.deepcopy(row.workflow_operation) if row is not None else None
     step = operation.get("step") if isinstance(operation, dict) else None
     if (
-        row is None or not isinstance(operation, dict) or not isinstance(step, dict)
+        row is None
+        or not isinstance(operation, dict)
+        or not isinstance(step, dict)
         or operation.get("retained_effect_result")
-        or not _retained_operation_matches(operation, original_operation, source_id=source_id, scope=scope, access_fence=access_fence)
-        or source is None or not isinstance(workflow_id, str) or not workflow_id
-        or operation.get("id") != str(operation_id) or step.get("id") != step_id
-        or step.get("kind") != "create" or step.get("state") != "unknown"
+        or not _retained_operation_matches(
+            operation,
+            original_operation,
+            source_id=source_id,
+            scope=scope,
+            access_fence=access_fence,
+        )
+        or source is None
+        or not isinstance(workflow_id, str)
+        or not workflow_id
+        or operation.get("id") != str(operation_id)
+        or step.get("id") != step_id
+        or step.get("kind") != "create"
+        or step.get("state") != "unknown"
         or step.get("target") is not None
     ):
         return False
@@ -289,8 +416,13 @@ async def resolve_unknown_workflow_create(
     row.workflow_name = str(operation.get("workflow_name") or row.workflow_name or "")
     operation["workflow_id"] = workflow_id
     current = bool(
-        await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        and source is not None and source.status == "active" and not source.local_only and row.desired_enabled
+        await module_is_enabled(
+            session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        and source is not None
+        and source.status == "active"
+        and not source.local_only
+        and row.desired_enabled
         and not operation.get("cleanup_required")
         and source.generation == operation.get("source_generation")
         and row.source_generation == operation.get("source_generation")
@@ -306,7 +438,9 @@ async def resolve_unknown_workflow_create(
         operation["cleanup_required"] = True
         operation["phase"] = "deactivate"
         operation["step"] = _step("deactivate", workflow_id)
-        row.state = "disabled" if source is None or source.status != "active" else "saved_not_active"
+        row.state = (
+            "disabled" if source is None or source.status != "active" else "saved_not_active"
+        )
         row.error_code = "deactivation_pending"
     row.workflow_operation = operation
     await session.flush()
@@ -318,8 +452,11 @@ async def defer_unknown_workflow_create(
     source_id: UUID,
     operation_id: UUID | str,
     step_id: str,
-    *, scope: Scope, multi_workspace_enabled: bool,
-    original_operation: dict[str, object], access_fence: AccessFence,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    original_operation: dict[str, object],
+    access_fence: AccessFence,
 ) -> bool:
     """Acquire original retained parents and move one exact unknown-create barrier later.
 
@@ -327,22 +464,40 @@ async def defer_unknown_workflow_create(
     envelope/step CAS remains mandatory; no blind redispatch or commit is performed.
     """
     await lock_retained_connector_effect(
-        session, source_id, original_operation=original_operation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     source, row, _ = await _read_retained_connector_rows(
-        session, source_id, original_operation=original_operation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     operation = row.workflow_operation if row is not None else None
     step = operation.get("step") if isinstance(operation, dict) else None
     if (
-        not isinstance(operation, dict) or not isinstance(step, dict)
+        not isinstance(operation, dict)
+        or not isinstance(step, dict)
         or operation.get("retained_effect_result")
-        or not _retained_operation_matches(operation, original_operation, source_id=source_id, scope=scope, access_fence=access_fence)
-        or source is None or row is None
-        or operation.get("id") != str(operation_id) or step.get("id") != step_id
-        or step.get("kind") != "create" or step.get("state") != "unknown"
+        or not _retained_operation_matches(
+            operation,
+            original_operation,
+            source_id=source_id,
+            scope=scope,
+            access_fence=access_fence,
+        )
+        or source is None
+        or row is None
+        or operation.get("id") != str(operation_id)
+        or step.get("id") != step_id
+        or step.get("kind") != "create"
+        or step.get("state") != "unknown"
     ):
         return False
     latest = await session.scalar(
@@ -370,8 +525,10 @@ async def fail_workflow_step(
     error_code: str,
     *,
     unknown: bool,
-    scope: Scope, multi_workspace_enabled: bool,
-    original_operation: dict[str, object], access_fence: AccessFence,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    original_operation: dict[str, object],
+    access_fence: AccessFence,
 ) -> bool:
     """Record a rejected or ambiguous workflow result and flush recovery state.
 
@@ -386,23 +543,41 @@ async def fail_workflow_step(
     from modules.settings.public import module_is_enabled
 
     source, row, _ = await _read_retained_connector_rows(
-        session, source_id, original_operation=original_operation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     operation = copy.deepcopy(row.workflow_operation) if row is not None else None
     step = operation.get("step") if isinstance(operation, dict) else None
     if (
-        row is None or not isinstance(operation, dict) or not isinstance(step, dict)
+        row is None
+        or not isinstance(operation, dict)
+        or not isinstance(step, dict)
         or operation.get("retained_effect_result")
-        or not _retained_operation_matches(operation, original_operation, source_id=source_id, scope=scope, access_fence=access_fence)
+        or not _retained_operation_matches(
+            operation,
+            original_operation,
+            source_id=source_id,
+            scope=scope,
+            access_fence=access_fence,
+        )
         or source is None
-        or operation.get("id") != str(operation_id) or step.get("id") != step_id
+        or operation.get("id") != str(operation_id)
+        or step.get("id") != step_id
         or step.get("state") != "dispatched"
     ):
         return False
     current = bool(
-        await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        and source is not None and source.status == "active" and not source.local_only and row.desired_enabled
+        await module_is_enabled(
+            session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        and source is not None
+        and source.status == "active"
+        and not source.local_only
+        and row.desired_enabled
         and not operation.get("cleanup_required")
         and source.generation == operation.get("source_generation")
         and row.source_generation == operation.get("source_generation")
@@ -416,18 +591,27 @@ async def fail_workflow_step(
             operation["step"] = _step("deactivate", target)
             row.workflow_operation = operation
             row.error_code = "deactivation_pending"
-            row.state = "disabled" if source is None or source.status != "active" else "saved_not_active"
+            row.state = (
+                "disabled" if source is None or source.status != "active" else "saved_not_active"
+            )
         else:
             row.workflow_operation = None
             if current:
                 row.desired_enabled = False
                 row.state = "saved_not_active"
                 row.error_code = error_code
-                if isinstance(row.activation_intent, dict) and row.activation_intent.get("id") == operation.get("activation_id"):
+                if isinstance(row.activation_intent, dict) and row.activation_intent.get(
+                    "id"
+                ) == operation.get("activation_id"):
                     row.activation_intent = None
             elif not row.desired_enabled or source is None or source.status != "active":
                 row.state = "disabled"
-                row.error_code = "workflow_operation_rejected" if source is not None and source.generation == operation.get("source_generation") else row.error_code
+                row.error_code = (
+                    "workflow_operation_rejected"
+                    if source is not None
+                    and source.generation == operation.get("source_generation")
+                    else row.error_code
+                )
             else:
                 row.state = "saved_not_active"
         await session.flush()
@@ -440,8 +624,10 @@ async def fail_workflow_step(
     row.workflow_operation = operation
     row.error_code = error_code if current else "workflow_operation_pending"
     row.state = (
-        "reconciliation_required" if current
-        else "disabled" if not row.desired_enabled or source is None or source.status != "active"
+        "reconciliation_required"
+        if current
+        else "disabled"
+        if not row.desired_enabled or source is None or source.status != "active"
         else "saved_not_active"
     )
     await session.flush()

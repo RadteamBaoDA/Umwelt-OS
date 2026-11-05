@@ -16,19 +16,51 @@ T0 = datetime(2026, 1, 1, tzinfo=UTC)
 SCOPE = InternalJobScope(workspace_id=uuid4(), actor_user_id=1, membership_revision=1)
 
 
-def _msg(role: str, content: str, at: datetime, *, revision_of: UUID | None = None, citations: Any = None,
-         id: UUID | None = None) -> SimpleNamespace:
-    return SimpleNamespace(id=id or uuid4(), role=role, content=content, created_at=at,
-                           revision_of_message_id=revision_of, citations=citations or [])
+def _msg(
+    role: str,
+    content: str,
+    at: datetime,
+    *,
+    revision_of: UUID | None = None,
+    citations: Any = None,
+    id: UUID | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=id or uuid4(),
+        role=role,
+        content=content,
+        created_at=at,
+        revision_of_message_id=revision_of,
+        citations=citations or [],
+    )
 
 
-def _turn(i: int, *, status: str = "completed", user_at: datetime | None = None, revision_of: UUID | None = None,
-          citations: Any = None, answer: bool = True, text: str | None = None):
+def _turn(
+    i: int,
+    *,
+    status: str = "completed",
+    user_at: datetime | None = None,
+    revision_of: UUID | None = None,
+    citations: Any = None,
+    answer: bool = True,
+    text: str | None = None,
+):
     at = user_at or T0 + timedelta(minutes=i)
     user = _msg("user", text or f"q{i}", at, revision_of=revision_of)
-    asst = _msg("assistant", text or f"a{i}", at + timedelta(seconds=1), revision_of=revision_of, citations=citations)
-    run = SimpleNamespace(id=uuid4(), user_message_id=user.id, status=status, created_at=at,
-                          assistant_message_id=asst.id if answer else None)
+    asst = _msg(
+        "assistant",
+        text or f"a{i}",
+        at + timedelta(seconds=1),
+        revision_of=revision_of,
+        citations=citations,
+    )
+    run = SimpleNamespace(
+        id=uuid4(),
+        user_message_id=user.id,
+        status=status,
+        created_at=at,
+        assistant_message_id=asst.id if answer else None,
+    )
     return user, asst, run
 
 
@@ -49,8 +81,12 @@ def test_latest_twenty_chronological() -> None:
 
 def test_failed_cancelled_pending_and_answerless_dropped() -> None:
     ok = _turn(0)
-    bad = [_turn(1, status="failed"), _turn(2, status="cancelled"), _turn(3, status="pending"),
-           _turn(4, answer=False)]
+    bad = [
+        _turn(1, status="failed"),
+        _turn(2, status="cancelled"),
+        _turn(3, status="pending"),
+        _turn(4, answer=False),
+    ]
     msgs, runs = _flat(ok, *bad)
     assert _texts(select_turns(msgs, runs)) == ["q0"]
 
@@ -103,8 +139,15 @@ def test_char_cap_keeps_newest_whole_turns() -> None:
 
 
 def _cite(chunk: UUID, version: UUID, source: UUID, doc: UUID) -> dict[str, Any]:
-    return {"sourceType": "document", "sourceId": str(source), "documentId": str(doc),
-            "documentVersionId": str(version), "chunkId": str(chunk), "title": "T", "quote": "Q"}
+    return {
+        "sourceType": "document",
+        "sourceId": str(source),
+        "documentId": str(doc),
+        "documentVersionId": str(version),
+        "chunkId": str(chunk),
+        "title": "T",
+        "quote": "Q",
+    }
 
 
 async def test_revoked_evidence_turn_is_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -113,23 +156,32 @@ async def test_revoked_evidence_turn_is_omitted(monkeypatch: pytest.MonkeyPatch)
     live = _turn(1, citations=[_cite(chunk, ver, src, doc)])
     local = _turn(2, citations=[_cite(chunk, ver, src, doc)])
     plain = _turn(3)
-    evidence = SimpleNamespace(document_version_id=ver, chunk_id=chunk, source_id=src, document_id=doc,
-                               local_only=False)
+    evidence = SimpleNamespace(
+        document_version_id=ver, chunk_id=chunk, source_id=src, document_id=doc, local_only=False
+    )
     lock = AsyncMock(return_value=[evidence])
     monkeypatch.setattr("modules.knowledge.documents.public.lock_chat_evidence_chunks", lock)
     turns = [Turn(t[0], t[1]) for t in (gone, live, plain)]
     assert await history.revoked_assistant_ids(None, turns, SCOPE) == {gone[1].id}  # type: ignore[arg-type]
     assert lock.await_args.kwargs["scope"] == SCOPE
     evidence.local_only = True
-    assert await history.revoked_assistant_ids(None, [Turn(local[0], local[1])], SCOPE) == {local[1].id}  # type: ignore[arg-type]
+    assert await history.revoked_assistant_ids(None, [Turn(local[0], local[1])], SCOPE) == {
+        local[1].id
+    }  # type: ignore[arg-type]
 
 
-async def test_unparseable_citation_or_lock_failure_is_conservative(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_unparseable_citation_or_lock_failure_is_conservative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bad = _turn(0, citations=[{"nonsense": 1}])
     ok = _turn(1, citations=[_cite(uuid4(), uuid4(), uuid4(), uuid4())])
-    monkeypatch.setattr("modules.knowledge.documents.public.lock_chat_evidence_chunks",
-                        AsyncMock(side_effect=ValueError("changed")))
-    got = await history.revoked_assistant_ids(None, [Turn(bad[0], bad[1]), Turn(ok[0], ok[1])], SCOPE)  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        "modules.knowledge.documents.public.lock_chat_evidence_chunks",
+        AsyncMock(side_effect=ValueError("changed")),
+    )
+    got = await history.revoked_assistant_ids(
+        None, [Turn(bad[0], bad[1]), Turn(ok[0], ok[1])], SCOPE
+    )  # type: ignore[arg-type]
     assert got == {bad[1].id, ok[1].id}
 
 
@@ -151,24 +203,38 @@ async def test_loader_scopes_queries_and_formats(monkeypatch: pytest.MonkeyPatch
 
 def test_widget_summary_drops_records_and_is_bounded() -> None:
     rows = [[f"row{i}", "x" * 40] for i in range(400)]
-    raw = {"kind": "table", "title": "Sales", "table": {
-        "columns": [{"key": "a", "label": "A"}], "rows": rows, "records": [{"a": r[0]} for r in rows],
-        "citations": [{"documentId": "secret-doc"}]}}
+    raw = {
+        "kind": "table",
+        "title": "Sales",
+        "table": {
+            "columns": [{"key": "a", "label": "A"}],
+            "rows": rows,
+            "records": [{"a": r[0]} for r in rows],
+            "citations": [{"documentId": "secret-doc"}],
+        },
+    }
     out = history.widget_summary(raw)
     assert out.startswith("\n\n[Widget shown to the user: table") and "Sales" in out
     assert len(out) <= history.WIDGET_SUMMARY_MAX_CHARS
-    assert "records" not in out and "secret-doc" not in out and "[truncated]" in out and "row0" in out
+    assert (
+        "records" not in out and "secret-doc" not in out and "[truncated]" in out and "row0" in out
+    )
 
 
 def test_widget_summary_truncates_markup_and_skips_invalid_or_streaming() -> None:
     sandbox = {"kind": "sandboxed_ui", "sandbox": {"html": "<p>" + "z" * 5000 + "</p>"}}
     out = history.widget_summary(sandbox)
     assert "[truncated]" in out and len(out) <= history.WIDGET_SUMMARY_MAX_CHARS
-    assert history.widget_summary({"kind": "table", "status": "streaming", "table": {"rows": []}}) == ""
+    assert (
+        history.widget_summary({"kind": "table", "status": "streaming", "table": {"rows": []}})
+        == ""
+    )
     assert history.widget_summary({"kind": "nope"}) == "" and history.widget_summary(None) == ""
 
 
-async def test_loader_appends_widget_summary_but_not_for_revoked_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_loader_appends_widget_summary_but_not_for_revoked_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     kept, dropped = _turn(0), _turn(1)
     widget = {"kind": "table", "title": "T", "table": {"rows": [["1"]]}}
     kept[1].metadata_json = {"generative_ui": widget}
@@ -176,14 +242,20 @@ async def test_loader_appends_widget_summary_but_not_for_revoked_turn(monkeypatc
     msgs, runs = _flat(kept, dropped)
     monkeypatch.setattr(history, "revoked_assistant_ids", AsyncMock(return_value={dropped[1].id}))
     calls = iter([msgs, runs])
-    session = SimpleNamespace(scalars=AsyncMock(side_effect=lambda *_a: SimpleNamespace(all=lambda: next(calls))))
+    session = SimpleNamespace(
+        scalars=AsyncMock(side_effect=lambda *_a: SimpleNamespace(all=lambda: next(calls)))
+    )
     out = await history.load_effective_history(session, uuid4(), T0 + timedelta(days=1), SCOPE)  # type: ignore[arg-type]
     assert [m["role"] for m in out] == ["user", "assistant"]
     assert out[1]["content"].startswith("a0\n\n[Widget shown to the user: table")
 
 
 def test_widget_summaries_cover_every_part_within_one_shared_budget() -> None:
-    big = {"kind": "table", "title": "Big", "table": {"columns": [], "rows": [[f"r{i}", "x" * 40] for i in range(300)]}}
+    big = {
+        "kind": "table",
+        "title": "Big",
+        "table": {"columns": [], "rows": [[f"r{i}", "x" * 40] for i in range(300)]},
+    }
     small = {"kind": "plan", "title": "Roadmap", "plan": {"steps": [{"title": "s"}]}}
     out = history.widget_summaries({"generative_ui": big, "generative_ui_parts": [big, small]})
     assert out.count("[Widget shown to the user:") == 2 and "Roadmap" in out

@@ -36,7 +36,9 @@ if TYPE_CHECKING:
 class OutboxScopeRuntime(Protocol):
     """Scope/admission services the outbox needs from the module that owns principal resolution."""
 
-    async def admit(self, session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> AccessFence:
+    async def admit(
+        self, session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool
+    ) -> AccessFence:
         """Read current admission without locks; raises the owner's authorization errors."""
         ...
 
@@ -45,7 +47,11 @@ class OutboxScopeRuntime(Protocol):
         ...
 
     async def resolve_scope(
-        self, session: AsyncSession, event_id: UUID, *, multi_workspace_enabled: bool,
+        self,
+        session: AsyncSession,
+        event_id: UUID,
+        *,
+        multi_workspace_enabled: bool,
     ) -> InternalJobScope | None:
         """Resolve the retained job scope of one stored event, ``None`` when unresolvable."""
         ...
@@ -76,7 +82,10 @@ class EventHandler:
         """Prove the event against its owner state before the outbox row is built (default: accept)."""
 
     async def verify_outbox(
-        self, session: AsyncSession, ctx: PublishContext, outbox: EventOutbox,
+        self,
+        session: AsyncSession,
+        ctx: PublishContext,
+        outbox: EventOutbox,
     ) -> None:
         """Prove the fully built outbox row before it is added to the session (default: accept)."""
 
@@ -85,7 +94,13 @@ class EventHandler:
         raise NotImplementedError
 
     async def validate_dispatch(
-        self, session: AsyncSession, event: EventOutbox, scope: InternalJobScope, *, now: datetime, enabled: bool,
+        self,
+        session: AsyncSession,
+        event: EventOutbox,
+        scope: InternalJobScope,
+        *,
+        now: datetime,
+        enabled: bool,
     ) -> bool:
         """Decide whether a locked, envelope-valid event may be claimed now (default: yes).
 
@@ -173,18 +188,27 @@ def build_event_registry(descriptors: Iterable[ModuleDescriptor]) -> EventRegist
                 raise ValueError(f"Event type {spec.event_type} has more than one consumer")
             if spec.event_type not in descriptor.consumed_events:
                 raise ValueError(
-                    f"Module {descriptor.id} handles {spec.event_type} but does not declare it in consumed_events")
+                    f"Module {descriptor.id} handles {spec.event_type} but does not declare it in consumed_events"
+                )
             if not spec.producers:
                 raise ValueError(f"Event type {spec.event_type} declares no producers")
             for producer in spec.producers:
                 owner = by_id.get(producer.removeprefix("modules."))
                 if owner is None or not producer.startswith("modules."):
-                    raise ValueError(f"Producer {producer} of {spec.event_type} has no module descriptor")
+                    raise ValueError(
+                        f"Producer {producer} of {spec.event_type} has no module descriptor"
+                    )
                 if spec.event_type not in owner.emitted_events:
                     raise ValueError(
-                        f"Module {owner.id} publishes {spec.event_type} but does not declare it in emitted_events")
+                        f"Module {owner.id} publishes {spec.event_type} but does not declare it in emitted_events"
+                    )
             routes[spec.event_type] = EventRoute(
-                spec.event_type, spec.job_name, frozenset(spec.producers), spec.handler, descriptor.id)
+                spec.event_type,
+                spec.job_name,
+                frozenset(spec.producers),
+                spec.handler,
+                descriptor.id,
+            )
     return EventRegistry(routes=routes, runtime_target=runtimes[0] if runtimes else "")
 
 

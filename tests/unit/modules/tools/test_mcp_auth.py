@@ -53,7 +53,9 @@ def dummy_tool_execution_principal() -> ToolExecutionPrincipal:
     """Return a mock ToolExecutionPrincipal for testing."""
     return ToolExecutionPrincipal(
         actor_id="mcp-client:test",
-        scope=WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1),
+        scope=WorkspaceContext(
+            user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1
+        ),
         is_owner=False,
         allowed_tools=frozenset({"test_tool"}),
         source_ids=frozenset(),
@@ -103,7 +105,9 @@ class TestInboundHelperClasses:
     @pytest.mark.asyncio
     async def test_response_buffer_captures_valid_json(self) -> None:
         """Verify InboundResponseBuffer captures application/json headers and body."""
-        buffer = InboundResponseBuffer(max_body_bytes=1024, deadline=asyncio.get_running_loop().time() + 10)
+        buffer = InboundResponseBuffer(
+            max_body_bytes=1024, deadline=asyncio.get_running_loop().time() + 10
+        )
         start_msg = {
             "type": "http.response.start",
             "status": 200,
@@ -120,7 +124,9 @@ class TestInboundHelperClasses:
     @pytest.mark.asyncio
     async def test_response_buffer_rejects_non_json(self) -> None:
         """Verify InboundResponseBuffer raises ValueError for non-JSON content-type."""
-        buffer = InboundResponseBuffer(max_body_bytes=1024, deadline=asyncio.get_running_loop().time() + 10)
+        buffer = InboundResponseBuffer(
+            max_body_bytes=1024, deadline=asyncio.get_running_loop().time() + 10
+        )
         start_msg = {
             "type": "http.response.start",
             "status": 200,
@@ -132,7 +138,9 @@ class TestInboundHelperClasses:
     @pytest.mark.asyncio
     async def test_response_buffer_rejects_streaming(self) -> None:
         """Verify InboundResponseBuffer raises ValueError on streaming bodies."""
-        buffer = InboundResponseBuffer(max_body_bytes=1024, deadline=asyncio.get_running_loop().time() + 10)
+        buffer = InboundResponseBuffer(
+            max_body_bytes=1024, deadline=asyncio.get_running_loop().time() + 10
+        )
         start_msg = {
             "type": "http.response.start",
             "status": 200,
@@ -185,22 +193,28 @@ class TestInboundMcpGuardHttpPipeline:
     """Unit tests for ASGI request handling and security filtering."""
 
     @pytest.fixture
-    def guard(self, mock_admission, dummy_principal, dummy_tool_execution_principal) -> InboundMcpGuard:
+    def guard(
+        self, mock_admission, dummy_principal, dummy_tool_execution_principal
+    ) -> InboundMcpGuard:
         """Return configured InboundMcpGuard instance."""
         admission, _ = mock_admission
         app = AsyncMock()
 
         async def dummy_app(scope, receive, send):
-            await send({
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [(b"content-type", b"application/json")],
-            })
-            await send({
-                "type": "http.response.body",
-                "body": b'{"jsonrpc":"2.0","result":{}}',
-                "more_body": False,
-            })
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"content-type", b"application/json")],
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": b'{"jsonrpc":"2.0","result":{}}',
+                    "more_body": False,
+                }
+            )
 
         app.side_effect = dummy_app
 
@@ -399,6 +413,7 @@ class TestInboundMcpGuardHttpPipeline:
 
         disconnect_event = asyncio.Event()
         called = False
+
         async def mock_receive():
             nonlocal called
             if not called:

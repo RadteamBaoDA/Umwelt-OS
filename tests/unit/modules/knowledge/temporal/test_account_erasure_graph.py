@@ -39,7 +39,11 @@ class _Record(dict[str, Any]):
 
 class _Result:
     def __init__(
-        self, record: dict[str, Any] | None, *, events: list[str], name: str,
+        self,
+        record: dict[str, Any] | None,
+        *,
+        events: list[str],
+        name: str,
         consume_error: bool = False,
     ) -> None:
         self.record = _Record(record) if record is not None else None
@@ -57,8 +61,13 @@ class _Result:
 
 class _Graph:
     def __init__(
-        self, *, edges: int = 0, foreign: bool = False, nodes: int = 0,
-        schema_count: int = 1, fence_error: bool = False,
+        self,
+        *,
+        edges: int = 0,
+        foreign: bool = False,
+        nodes: int = 0,
+        schema_count: int = 1,
+        fence_error: bool = False,
     ) -> None:
         self.edges, self.foreign, self.nodes = edges, foreign, nodes
         self.schema_count, self.fence_error = schema_count, fence_error
@@ -79,7 +88,9 @@ class _Graph:
         self.timeouts.append(query.timeout)
         if "SET f.erased = true" in text:
             self.erased = True
-            return _Result({"erased": True}, events=self.events, name="fence", consume_error=self.fence_error)
+            return _Result(
+                {"erased": True}, events=self.events, name="fence", consume_error=self.fence_error
+            )
         self.events.append(text)
         row: dict[str, Any] | None = {"found": 0}
         if text == PARTITION_FENCE_SCHEMA:
@@ -113,16 +124,22 @@ def _context(monkeypatch: pytest.MonkeyPatch, graph: _Graph) -> dict[str, Any]:
     monkeypatch.setattr(erasure, "authorize_account_erasure", AsyncMock())
     return {
         "session_factory": lambda: _Session(),
-        "settings": SimpleNamespace(graph_host="localhost", graph_port=7687,
-                                    graph_username="neo4j", graph_password=SimpleNamespace(
-                                        get_secret_value=lambda: "secret"), graph_database="neo4j"),
+        "settings": SimpleNamespace(
+            graph_host="localhost",
+            graph_port=7687,
+            graph_username="neo4j",
+            graph_password=SimpleNamespace(get_secret_value=lambda: "secret"),
+            graph_database="neo4j",
+        ),
     }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("edges,foreign", [(1, False), (0, True)])
 async def test_graph_nodes_wait_for_owned_edges_and_reject_foreign_edges(
-    monkeypatch: pytest.MonkeyPatch, edges: int, foreign: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    edges: int,
+    foreign: bool,
 ) -> None:
     graph = _Graph(edges=edges, foreign=foreign)
     ctx = _context(monkeypatch, graph)
@@ -149,7 +166,10 @@ async def test_unknown_fence_commit_never_deletes_and_retry_preserves_tombstone(
     assert not any("DELETE" in query for query in graph.queries)
     assert graph.erased
     graph.fence_error = False
-    assert await erasure.erase_account_graph_page(ctx, scope, {}) == (False, {"after": str(UUID(int=21))})
+    assert await erasure.erase_account_graph_page(ctx, scope, {}) == (
+        False,
+        {"after": str(UUID(int=21))},
+    )
     assert graph.erased
     assert graph.queries.count(ERASE_PARTITION_FENCE) == 2
     assert graph.events.index("fence:committed") < next(
@@ -158,17 +178,23 @@ async def test_unknown_fence_commit_never_deletes_and_retry_preserves_tombstone(
 
 
 @pytest.mark.asyncio
-async def test_schema_name_collision_cannot_fence_or_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_schema_name_collision_cannot_fence_or_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     graph = _Graph(schema_count=0)
     with pytest.raises(ValueError, match="uniqueness"):
         await erasure.erase_account_graph_page(
-            _context(monkeypatch, graph), AccountErasureScope(UUID(int=22), 7, UUID(int=23)), {},
+            _context(monkeypatch, graph),
+            AccountErasureScope(UUID(int=22), 7, UUID(int=23)),
+            {},
         )
     assert not graph.erased
     assert not any("DELETE" in query for query in graph.queries)
 
 
-@pytest.mark.parametrize("rows", [[], [{}], [{"found": True}], [{"found": 0}], [{"found": 1}, {"found": 1}]])
+@pytest.mark.parametrize(
+    "rows", [[], [{}], [{"found": True}], [{"found": 0}], [{"found": 1}, {"found": 1}]]
+)
 def test_schema_proof_must_be_exact_positive_integer(rows: list[dict[str, Any]]) -> None:
     with pytest.raises(ValueError, match="uniqueness"):
         require_partition_fence_schema(rows)
@@ -180,7 +206,9 @@ async def test_empty_partition_advances_after_fence_and_absence_with_bounded_que
 ) -> None:
     graph = _Graph()
     assert await erasure.erase_account_graph_page(
-        _context(monkeypatch, graph), AccountErasureScope(UUID(int=22), 7, UUID(int=23)), {},
+        _context(monkeypatch, graph),
+        AccountErasureScope(UUID(int=22), 7, UUID(int=23)),
+        {},
     ) == (False, {"after": str(UUID(int=21))})
     assert "RETURN count(n) AS found" in graph.queries[-1]
     assert all(timeout == erasure.QUERY_SECONDS for timeout in graph.timeouts)
@@ -195,12 +223,16 @@ async def test_stalled_graph_io_expires_without_advancing(monkeypatch: pytest.Mo
     graph = _Graph()
     original_timeout = asyncio.timeout
     monkeypatch.setattr(erasure.asyncio, "timeout", lambda _seconds: original_timeout(0.01))
+
     async def stall(*_args: object, **_kwargs: object) -> _Result:
         await asyncio.Event().wait()
         raise AssertionError("Unreachable")
+
     graph.run = stall  # type: ignore[method-assign]
     with pytest.raises(TimeoutError):
         await erasure.erase_account_graph_page(
-            _context(monkeypatch, graph), AccountErasureScope(UUID(int=22), 7, UUID(int=23)), {},
+            _context(monkeypatch, graph),
+            AccountErasureScope(UUID(int=22), 7, UUID(int=23)),
+            {},
         )
     assert not graph.erased

@@ -173,9 +173,13 @@ class AnswerContextRequest(BaseModel):
     entity_ids: list[UUID] = Field(default_factory=list, max_length=MAX_ENTITY_SCOPE)
     date_context: datetime | date | str | None = None
     timezone: str | None = None
-    selected_refs: list[SelectedEvidenceRef] = Field(default_factory=list, max_length=MAX_SELECTED_REFS)
+    selected_refs: list[SelectedEvidenceRef] = Field(
+        default_factory=list, max_length=MAX_SELECTED_REFS
+    )
     selected_only: bool = False
-    selection_fences: list[GadgetDocumentSelectionFence] = Field(default_factory=list, max_length=32)
+    selection_fences: list[GadgetDocumentSelectionFence] = Field(
+        default_factory=list, max_length=32
+    )
     limit: int = Field(default=20, ge=1, le=MAX_RETRIEVAL_LIMIT)
     context_budget_bytes: int = Field(
         default=DEFAULT_CONTEXT_BUDGET_BYTES, ge=1000, le=MAX_CONTEXT_BUDGET_BYTES
@@ -202,7 +206,9 @@ class AnswerContext(BaseModel):
     has_sufficient_evidence: bool = False
     total_evidence_bytes: int = 0
     fence_snapshot: dict[str, Any] = Field(default_factory=dict)
-    selection_fences: list[GadgetDocumentSelectionFence] = Field(default_factory=list, max_length=32)
+    selection_fences: list[GadgetDocumentSelectionFence] = Field(
+        default_factory=list, max_length=32
+    )
     policy: dict[str, Any] | None = None
 
 
@@ -271,7 +277,9 @@ class _GenerativeUIBase(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    part_id: str | None = Field(default=None, max_length=64)  # stable id of this widget within its assistant turn
+    part_id: str | None = Field(
+        default=None, max_length=64
+    )  # stable id of this widget within its assistant turn
     status: Literal["streaming", "completed"] = "completed"
     visualization: str | None = None
     renderer: str | None = None
@@ -335,7 +343,12 @@ class FormUIPayload(_GenerativeUIBase):
 
 
 GenerativeUIPayload = Annotated[
-    SandboxedUIPayload | TableUIPayload | ChartUIPayload | PlanUIPayload | TimePickerUIPayload | FormUIPayload,
+    SandboxedUIPayload
+    | TableUIPayload
+    | ChartUIPayload
+    | PlanUIPayload
+    | TimePickerUIPayload
+    | FormUIPayload,
     Field(discriminator="kind"),
 ]
 _GENERATIVE_UI_ADAPTER: TypeAdapter[GenerativeUIPayload] = TypeAdapter(GenerativeUIPayload)
@@ -451,8 +464,11 @@ class ChatExportMessageRead(BaseModel):
     content: str
     response_id: UUID | None = None
     revision_of_message_id: UUID | None = None
-    citations: list[Annotated[ChatExportCitation | ChatExportWebCitation, Field(discriminator="source_type")]] = Field(
-        default_factory=list, max_length=100,
+    citations: list[
+        Annotated[ChatExportCitation | ChatExportWebCitation, Field(discriminator="source_type")]
+    ] = Field(
+        default_factory=list,
+        max_length=100,
     )
     omitted_citation_count: int = Field(default=0, ge=0)
     created_at: datetime
@@ -518,8 +534,9 @@ class ChatExportPage(BaseModel):
         """Require a persisted privacy row to have an aware timestamp fence."""
         if self.privacy_persisted != (self.privacy_updated_at is not None):
             raise ValueError("Chat export privacy persistence marker is inconsistent")
-        if (self.privacy_updated_at is not None
-                and (self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None)):
+        if self.privacy_updated_at is not None and (
+            self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None
+        ):
             raise ValueError("Chat export privacy timestamp must be timezone-aware")
         return self
 
@@ -531,9 +548,14 @@ class ChatExportFenceValidation(BaseModel):
 
     valid: bool
     reason: Literal[
-        "valid", "owner_unavailable", "conversation_history_disabled",
-        "privacy_changed", "snapshot_count_changed", "record_changed",
-        "citation_unavailable", "source_generation_changed",
+        "valid",
+        "owner_unavailable",
+        "conversation_history_disabled",
+        "privacy_changed",
+        "snapshot_count_changed",
+        "record_changed",
+        "citation_unavailable",
+        "source_generation_changed",
     ]
     observed_snapshot_count: int = Field(ge=0)
     privacy_persisted: bool
@@ -544,8 +566,9 @@ class ChatExportFenceValidation(BaseModel):
         """Require a persisted privacy row to have an aware timestamp fence."""
         if self.privacy_persisted != (self.privacy_updated_at is not None):
             raise ValueError("Chat export privacy persistence marker is inconsistent")
-        if (self.privacy_updated_at is not None
-                and (self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None)):
+        if self.privacy_updated_at is not None and (
+            self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None
+        ):
             raise ValueError("Chat export privacy timestamp must be timezone-aware")
         return self
 
@@ -570,8 +593,9 @@ class ChatMemoryExportOrigin(BaseModel):
         """Require a persisted privacy row to have an aware timestamp fence."""
         if self.privacy_persisted != (self.privacy_updated_at is not None):
             raise ValueError("Chat memory export privacy marker is inconsistent")
-        if (self.privacy_updated_at is not None
-                and (self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None)):
+        if self.privacy_updated_at is not None and (
+            self.privacy_updated_at.tzinfo is None or self.privacy_updated_at.utcoffset() is None
+        ):
             raise ValueError("Chat memory export privacy timestamp must be timezone-aware")
         return self
 
@@ -696,4 +720,3 @@ class CancelResponse(BaseModel):
 
     response_id: UUID
     status: str
-

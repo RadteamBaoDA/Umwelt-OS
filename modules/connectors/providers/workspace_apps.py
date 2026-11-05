@@ -101,11 +101,22 @@ class _Budget:
 
 def _validate_inputs(token: str, identifiers: tuple[str, ...], provider: str) -> None:
     """Reject empty credentials and malformed, duplicate, or excessive owner-selected scopes."""
-    if not isinstance(token, str) or not token or len(token) > 8192 or any(char in token for char in "\r\n"):
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > 8192
+        or any(char in token for char in "\r\n")
+    ):
         raise ValueError(f"{provider}_credential_invalid")
-    if (not isinstance(identifiers, tuple) or not identifiers or len(identifiers) > 100
-            or any(not isinstance(value, str) or not _RESOURCE_ID.fullmatch(value) for value in identifiers)
-            or len(set(identifiers)) != len(identifiers)):
+    if (
+        not isinstance(identifiers, tuple)
+        or not identifiers
+        or len(identifiers) > 100
+        or any(
+            not isinstance(value, str) or not _RESOURCE_ID.fullmatch(value) for value in identifiers
+        )
+        or len(set(identifiers)) != len(identifiers)
+    ):
         raise ValueError(f"{provider}_scope_invalid")
     if provider == "slack" and any(not _SLACK_CHANNEL_ID.fullmatch(value) for value in identifiers):
         raise ValueError("slack_scope_invalid")
@@ -122,8 +133,11 @@ def _notion_plain_text(value: object) -> str:
     """Extract bounded Notion rich-text literals without downloading linked/file payloads."""
     if not isinstance(value, list):
         return ""
-    parts = [item["plain_text"] for item in value
-             if isinstance(item, dict) and isinstance(item.get("plain_text"), str)]
+    parts = [
+        item["plain_text"]
+        for item in value
+        if isinstance(item, dict) and isinstance(item.get("plain_text"), str)
+    ]
     text = "".join(parts)
     if len(text) > MAX_TEXT_CHARS:
         raise rest.CollectionIncomplete
@@ -196,9 +210,12 @@ async def _notion_children(
             budget.block_count += 1
             if budget.block_count > MAX_BLOCKS:
                 raise rest.CollectionIncomplete
-            if (not isinstance(block, dict) or not isinstance(block.get("id"), str)
-                    or not _RESOURCE_ID.fullmatch(block["id"])
-                    or not isinstance(block.get("has_children", False), bool)):
+            if (
+                not isinstance(block, dict)
+                or not isinstance(block.get("id"), str)
+                or not _RESOURCE_ID.fullmatch(block["id"])
+                or not isinstance(block.get("has_children", False), bool)
+            ):
                 raise ValueError("notion_block_invalid")
             text = _notion_block_text(block)
             if text:
@@ -210,8 +227,12 @@ async def _notion_children(
                 raise ValueError("notion_cursor_invalid")
             return lines
         next_cursor = payload.get("next_cursor")
-        if (not isinstance(next_cursor, str) or not next_cursor or len(next_cursor) > 4096
-                or next_cursor in seen_cursors):
+        if (
+            not isinstance(next_cursor, str)
+            or not next_cursor
+            or len(next_cursor) > 4096
+            or next_cursor in seen_cursors
+        ):
             raise ValueError("notion_cursor_invalid")
         seen_cursors.add(next_cursor)
         cursor = next_cursor
@@ -261,9 +282,15 @@ async def collect_notion_pages(
         url = page.get("url")
         parsed_url = urlsplit(url) if isinstance(url, str) and len(url) <= 2048 else None
         canonical_url = (
-            url if isinstance(url, str) and parsed_url is not None
-            and parsed_url.scheme == "https" and parsed_url.hostname
-            and parsed_url.username is None and parsed_url.password is None and "\x00" not in url else None
+            url
+            if isinstance(url, str)
+            and parsed_url is not None
+            and parsed_url.scheme == "https"
+            and parsed_url.hostname
+            and parsed_url.username is None
+            and parsed_url.password is None
+            and "\x00" not in url
+            else None
         )
         provider_record = {
             "provider": "notion",
@@ -274,7 +301,8 @@ async def collect_notion_pages(
             "content_truncated": False,
             "provider_modified_at": edited.isoformat(),
             "source_fields": {"title": title[:500], "canonical_url": canonical_url}
-            if canonical_url else {"title": title[:500]},
+            if canonical_url
+            else {"title": title[:500]},
         }
         metadata = {
             "provider_record": provider_record,
@@ -331,23 +359,35 @@ def _require_slack_channel(info: dict[str, Any], channel_id: str) -> None:
         ValueError: ``slack_channel_invalid`` or ``slack_channel_unavailable``.
     """
     channel = info.get("channel")
-    if info.get("ok") is not True or not isinstance(channel, dict) or channel.get("id") != channel_id:
+    if (
+        info.get("ok") is not True
+        or not isinstance(channel, dict)
+        or channel.get("id") != channel_id
+    ):
         raise ValueError("slack_channel_invalid")
     is_im, is_mpim = channel.get("is_im"), channel.get("is_mpim")
     is_private = channel.get("is_private")
     is_channel, is_group = channel.get("is_channel"), channel.get("is_group")
-    is_supported_channel = (
-        (is_private is False and is_channel is True)
-        or (is_private is True and (is_channel is True or is_group is True))
+    is_supported_channel = (is_private is False and is_channel is True) or (
+        is_private is True and (is_channel is True or is_group is True)
     )
-    if (is_im is not False or is_mpim is not False or not isinstance(is_private, bool)
-            or not is_supported_channel
-            or channel.get("is_member") is not True or channel.get("is_archived") is not False):
+    if (
+        is_im is not False
+        or is_mpim is not False
+        or not isinstance(is_private, bool)
+        or not is_supported_channel
+        or channel.get("is_member") is not True
+        or channel.get("is_archived") is not False
+    ):
         raise ValueError("slack_channel_unavailable")
 
 
 def _slack_message_record(
-    message: object, channel_id: str, collected: datetime, record_count: int, seen_messages: set[str],
+    message: object,
+    channel_id: str,
+    collected: datetime,
+    record_count: int,
+    seen_messages: set[str],
 ) -> IngestionRecord | None:
     """Validate one history message and map it to a record, or ``None`` for replies and duplicates.
 
@@ -443,9 +483,15 @@ def _slack_next_cursor(payload: dict[str, Any], more: bool, seen_cursors: set[st
             raise ValueError("slack_cursor_invalid")
         return None
     response_metadata = payload.get("response_metadata")
-    next_cursor = response_metadata.get("next_cursor") if isinstance(response_metadata, dict) else None
-    if (not isinstance(next_cursor, str) or not next_cursor or len(next_cursor) > 4096
-            or next_cursor in seen_cursors):
+    next_cursor = (
+        response_metadata.get("next_cursor") if isinstance(response_metadata, dict) else None
+    )
+    if (
+        not isinstance(next_cursor, str)
+        or not next_cursor
+        or len(next_cursor) > 4096
+        or next_cursor in seen_cursors
+    ):
         raise ValueError("slack_cursor_invalid")
     seen_cursors.add(next_cursor)
     return next_cursor
@@ -472,7 +518,11 @@ async def collect_slack_channel_messages(
         raise ValueError("slack_scope_invalid")
     _validate_inputs(token, scope.channel_ids, "slack")
     collected = _aware_utc(collected_at or datetime.now(UTC), "slack")
-    oldest = _aware_utc(scope.oldest, "slack") if scope.oldest is not None else collected - timedelta(days=30)
+    oldest = (
+        _aware_utc(scope.oldest, "slack")
+        if scope.oldest is not None
+        else collected - timedelta(days=30)
+    )
     if oldest > collected:
         raise ValueError("slack_time_invalid")
     budget = _Budget(token, fetch_bytes, "slack")
@@ -488,8 +538,10 @@ async def collect_slack_channel_messages(
         seen_cursors: set[str] = set()
         for _page in range(MAX_PAGES):
             params = {
-                "channel": channel_id, "oldest": _slack_oldest(oldest),
-                "inclusive": "true", "limit": "200",
+                "channel": channel_id,
+                "oldest": _slack_oldest(oldest),
+                "inclusive": "true",
+                "limit": "200",
             }
             if cursor:
                 params["cursor"] = cursor
@@ -498,7 +550,9 @@ async def collect_slack_channel_messages(
             if not isinstance(messages, list) or not isinstance(more, bool):
                 raise ValueError("slack_history_invalid")
             for message in messages:
-                record = _slack_message_record(message, channel_id, collected, len(records), seen_messages)
+                record = _slack_message_record(
+                    message, channel_id, collected, len(records), seen_messages
+                )
                 if record is None:
                     continue
                 record_bytes = len(record.model_dump_json().encode("utf-8"))

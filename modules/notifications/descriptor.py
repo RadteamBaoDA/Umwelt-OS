@@ -24,9 +24,7 @@ class NotificationsDescriptor(ModuleDescriptor):
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
-    routers: tuple[RouterSpec, ...] = (
-        RouterSpec("modules.notifications.routes", 370),
-    )
+    routers: tuple[RouterSpec, ...] = (RouterSpec("modules.notifications.routes", 370),)
     erasure_module: str | None = "modules.notifications.erasure"
     erasure_order: int = 150
 

@@ -56,7 +56,9 @@ from modules.ingestion.public import (
 def _page_result(page: Any, collected_at: datetime) -> CollectedPage:
     """Wrap a provider page (``records``/``coverage``/``next_eligible_at``) for generic acceptance."""
     return CollectedPage(
-        records=list(page.records), coverage=page.coverage, collected_at=collected_at,
+        records=list(page.records),
+        coverage=page.coverage,
+        collected_at=collected_at,
         next_eligible_at=page.next_eligible_at,
     )
 
@@ -70,7 +72,8 @@ class FeedCollector(BaseProviderCollector):
 
         collected_at = datetime.now(UTC)
         page = await collect_provider_feed(
-            ctx.source, collected_at=collected_at,
+            ctx.source,
+            collected_at=collected_at,
             session_factory=ctx.request.app.state.session_factory,
             before_request=ctx.send_fence,
         )
@@ -86,7 +89,9 @@ class HuggingFaceCollector(BaseProviderCollector):
 
         collected_at = datetime.now(UTC)
         page = await collect_huggingface_models(
-            ctx.source, collected_at=collected_at, before_request=ctx.send_fence,
+            ctx.source,
+            collected_at=collected_at,
+            before_request=ctx.send_fence,
         )
         return _page_result(page, collected_at)
 
@@ -100,7 +105,9 @@ class GithubReleasesCollector(BaseProviderCollector):
 
         collected_at = datetime.now(UTC)
         page = await collect_github_releases(
-            ctx.source, collected_at=collected_at, before_request=ctx.send_fence,
+            ctx.source,
+            collected_at=collected_at,
+            before_request=ctx.send_fence,
         )
         return _page_result(page, collected_at)
 
@@ -139,12 +146,15 @@ class WorldDataCollector(BaseProviderCollector):
             await ctx.send_fence(world_operation_id=capture.operation_id)
 
         page = await collect_world_data(
-            ctx.source, collected_at=collected_at,
+            ctx.source,
+            collected_at=collected_at,
             settings=ctx.request.app.state.settings,
             session=ctx.session,
             redis=ctx.request.app.state.redis,
-            scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
-            access_fence=ctx.access_fence, source_fence=ctx.source_fence,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            access_fence=ctx.access_fence,
+            source_fence=ctx.source_fence,
             before_request=before_world_request,
         )
         result = _page_result(page, collected_at)
@@ -153,8 +163,11 @@ class WorldDataCollector(BaseProviderCollector):
 
             async def verify_capture() -> None:
                 """Require the page's credential operation to equal the captured one, then fence again."""
-                if (not capture.seen or capture.operation_id is None
-                        or page.credential_operation_id != capture.operation_id):
+                if (
+                    not capture.seen
+                    or capture.operation_id is None
+                    or page.credential_operation_id != capture.operation_id
+                ):
                     raise ConflictError("Alpha credential capture changed during collection")
                 await ctx.send_fence(world_operation_id=capture.operation_id)
 
@@ -172,14 +185,19 @@ class GithubCollector(BaseProviderCollector):
         """
         ctx.prepared = await await_with_github_segment_deadline(
             connectors_public.claim_github_hint(
-                ctx.session, source_id=ctx.source.id, source_generation=ctx.payload.source_generation,
+                ctx.session,
+                source_id=ctx.source.id,
+                source_generation=ctx.payload.source_generation,
                 connector_revision=ctx.payload.connector_revision,
-                multi_workspace_enabled=ctx.multi_workspace_enabled, scope=ctx.scope,
+                multi_workspace_enabled=ctx.multi_workspace_enabled,
+                scope=ctx.scope,
             ),
             deadline=ctx.segment_deadline,
         )
 
-    async def _open_grant(self, ctx: FetchContext) -> tuple[GitHubBindingFence, tuple[UUID, int], str, Any]:
+    async def _open_grant(
+        self, ctx: FetchContext
+    ) -> tuple[GitHubBindingFence, tuple[UUID, int], str, Any]:
         """Lock the connector and grant, decrypt the access token, and release SQL.
 
         Lock order: connector, GitHub binding fence, then the grant row (``FOR UPDATE``). Returns
@@ -189,33 +207,49 @@ class GithubCollector(BaseProviderCollector):
         """
         source, payload = ctx.source, ctx.payload
         await provisioning.lock_connector(
-            ctx.session, source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=ctx.scope,
+            ctx.session,
+            source.id,
+            provisioning._ALL_CREDENTIAL_SLOTS,
+            scope=ctx.scope,
             multi_workspace_enabled=ctx.multi_workspace_enabled,
             expected_access_fence=ctx.access_fence,
         )
         fence = await connectors_public.lock_github_binding_fence_in_uow(
-            ctx.session, source.id, source_generation=payload.source_generation,
+            ctx.session,
+            source.id,
+            source_generation=payload.source_generation,
             connector_revision=payload.connector_revision,
-            scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
-            access_fence=ctx.access_fence, source_fence=ctx.source_fence,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            access_fence=ctx.access_fence,
+            source_fence=ctx.source_fence,
         )
         if fence is None:
             raise ConflictError(GITHUB_RECONNECT_DETAIL)
         grant = await ctx.session.scalar(
-            select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source.id).with_for_update()
+            select(GithubOAuthGrant)
+            .where(GithubOAuthGrant.source_id == source.id)
+            .with_for_update()
         )
         if (
-            grant is None or grant.state != "ready" or grant.encrypted_tokens is None
+            grant is None
+            or grant.state != "ready"
+            or grant.encrypted_tokens is None
             or grant.source_generation != source.generation
             or grant.configuration_revision != payload.connector_revision
-            or grant.expires_at is None or grant.expires_at <= datetime.now(UTC)
+            or grant.expires_at is None
+            or grant.expires_at <= datetime.now(UTC)
         ):
             raise ConflictError(GITHUB_RECONNECT_DETAIL)
         binding = (grant.operation_id, grant.token_revision)
         key = ctx.request.app.state.settings.connector_credential_encryption_key.get_secret_value()
         token_pair = github_oauth._open_token_cipher(
-            key, grant.encrypted_tokens, source.id, grant.operation_id,
-            grant.source_generation, grant.configuration_revision,
+            key,
+            grant.encrypted_tokens,
+            source.id,
+            grant.operation_id,
+            grant.source_generation,
+            grant.configuration_revision,
         )
         access_token = token_pair.get("access_token")
         if not isinstance(access_token, str) or not access_token:
@@ -247,16 +281,24 @@ class GithubCollector(BaseProviderCollector):
                 raise ProviderAdmissionBusy("GitHub provider slot is busy")
 
         proof = await collect_github_segment(
-            config, access_token, fence=fence,
-            cursor_before=ctx.lease.cursor_before, collected_at=collected_at,
+            config,
+            access_token,
+            fence=fence,
+            cursor_before=ctx.lease.cursor_before,
+            collected_at=collected_at,
             before_request=before_github_request,
             hint_claim=(
                 GitHubHintClaimProof.model_validate(hint_claim.model_dump(mode="python"))
-                if hint_claim is not None else None
+                if hint_claim is not None
+                else None
             ),
         )
         validated = validate_github_segment(
-            fence, config, ctx.lease.cursor_before, proof, collected_at=collected_at,
+            fence,
+            config,
+            ctx.lease.cursor_before,
+            proof,
+            collected_at=collected_at,
         )
 
         async def reprove_binding() -> None:
@@ -264,8 +306,12 @@ class GithubCollector(BaseProviderCollector):
             await ctx.send_fence(github_fence=fence, github_binding=binding)
 
         return CollectedPage(
-            records=list(validated.records), coverage=validated.coverage, collected_at=collected_at,
-            github_segment=proof, cursor_after=validated.cursor_after, has_cursor_after=True,
+            records=list(validated.records),
+            coverage=validated.coverage,
+            collected_at=collected_at,
+            github_segment=proof,
+            cursor_after=validated.cursor_after,
+            has_cursor_after=True,
             pre_accept=reprove_binding,
         )
 
@@ -308,20 +354,33 @@ class _TelegramRun:
 
         ctx = self.ctx
         await provisioning.lock_connector(
-            ctx.session, ctx.source.id, provisioning._ALL_CREDENTIAL_SLOTS, scope=ctx.scope,
-            multi_workspace_enabled=ctx.multi_workspace_enabled, expected_access_fence=ctx.access_fence,
+            ctx.session,
+            ctx.source.id,
+            provisioning._ALL_CREDENTIAL_SLOTS,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            expected_access_fence=ctx.access_fence,
         )
         snapshot = await get_native_credential_snapshot(
-            ctx.session, ctx.source.id, source_generation=self.lease.source_generation,
+            ctx.session,
+            ctx.source.id,
+            source_generation=self.lease.source_generation,
             connector_revision=self.lease.connector_revision,
-            multi_workspace_enabled=ctx.multi_workspace_enabled, scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            scope=ctx.scope,
         )
-        if snapshot is None or snapshot.state != "ready" or not snapshot.encrypted_token or not snapshot.verified_bot_id:
+        if (
+            snapshot is None
+            or snapshot.state != "ready"
+            or not snapshot.encrypted_token
+            or not snapshot.verified_bot_id
+        ):
             await ctx.session.rollback()
             raise ConflictError("Native Telegram credential is not ready")
         try:
             self.token = decrypt_native_token(
-                ctx.request.app.state.settings.connector_credential_encryption_key.get_secret_value(), snapshot
+                ctx.request.app.state.settings.connector_credential_encryption_key.get_secret_value(),
+                snapshot,
             )
         except Exception as exc:
             await ctx.session.rollback()
@@ -340,19 +399,28 @@ class _TelegramRun:
         try:
             await ctx.send_fence(lease=self.lease, native_snapshot=self.snapshot)
             return await fetch_telegram_updates(
-                self.token, offset=self.offset,
+                self.token,
+                offset=self.offset,
                 remaining_bytes=min(10 * 1024 * 1024, remaining_bytes),
                 # Invoked within this iteration before ``self.lease`` is rebound.
-                before_request=lambda: ctx.send_fence(lease=self.lease, native_snapshot=self.snapshot),
+                before_request=lambda: ctx.send_fence(
+                    lease=self.lease, native_snapshot=self.snapshot
+                ),
             )
         except ProviderRateLimited as exc:
-            deadline = await extend_provider_cooldown(ctx.request, ctx.source.provider or "telegram", exc.next_eligible_at)
+            deadline = await extend_provider_cooldown(
+                ctx.request, ctx.source.provider or "telegram", exc.next_eligible_at
+            )
             await ingestion.release_connector_collection(
-                ctx.session, self.lease, error_code="provider_rate_limited",
-                multi_workspace_enabled=ctx.multi_workspace_enabled, scope=ctx.scope,
+                ctx.session,
+                self.lease,
+                error_code="provider_rate_limited",
+                multi_workspace_enabled=ctx.multi_workspace_enabled,
+                scope=ctx.scope,
             )
             return AcceptedCollection(
-                rate_limited=rate_limited_read(ctx.scope, "pending_updates_only", deadline), eligible=deadline,
+                rate_limited=rate_limited_read(ctx.scope, "pending_updates_only", deadline),
+                eligible=deadline,
             )
 
     def _account(self, page: Any, remaining_bytes: int) -> None:
@@ -374,22 +442,37 @@ class _TelegramRun:
         ctx = self.ctx
         lease = self.lease
         await ingestion.release_connector_collection(
-            ctx.session, lease, error_code=None,
-            multi_workspace_enabled=ctx.multi_workspace_enabled, scope=ctx.scope,
+            ctx.session,
+            lease,
+            error_code=None,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            scope=ctx.scope,
         )
         cursor = self.cursor
         if page_number == 4 or cursor is None or cursor.last_update_id >= 2**63 - 1:
-            return AcceptedCollection(receipt=NativeCollectionReceipt(
-                workspace_id=lease.workspace_id, actor_user_id=lease.actor_user_id,
-                membership_revision=lease.membership_revision,
-                batch_id=None, run_id=None, status="succeeded", received_update_count=0,
-                record_count=0, coverage="pending_updates_only", cursor_after=lease.cursor_before,
-            ))
+            return AcceptedCollection(
+                receipt=NativeCollectionReceipt(
+                    workspace_id=lease.workspace_id,
+                    actor_user_id=lease.actor_user_id,
+                    membership_revision=lease.membership_revision,
+                    batch_id=None,
+                    run_id=None,
+                    status="succeeded",
+                    received_update_count=0,
+                    record_count=0,
+                    coverage="pending_updates_only",
+                    cursor_after=lease.cursor_before,
+                )
+            )
         self.lease = await ingestion.acquire_connector_collection(
-            ctx.session, source_id=ctx.source.id, source_generation=lease.source_generation,
-            connector_revision=lease.connector_revision, collector_token=ctx.collector_token,
+            ctx.session,
+            source_id=ctx.source.id,
+            source_generation=lease.source_generation,
+            connector_revision=lease.connector_revision,
+            collector_token=ctx.collector_token,
             request_ref=ctx.request_ref,
-            multi_workspace_enabled=ctx.multi_workspace_enabled, scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            scope=ctx.scope,
         )
         if self.lease.configuration_revision != ctx.access_fence.configuration_revision:
             raise ConflictError("Original Telegram access changed")
@@ -397,7 +480,9 @@ class _TelegramRun:
         self.offset = cursor.last_update_id + 1
         return None
 
-    async def _accept_page(self, page: Any, classification: Any, replay_ids: set[int]) -> AcceptedCollection:
+    async def _accept_page(
+        self, page: Any, classification: Any, replay_ids: set[int]
+    ) -> AcceptedCollection:
         """Map non-replayed deliveries, re-fence, and have Ingestion accept the page.
 
         The acceptance settles the admission; a further page needs a new request.
@@ -408,29 +493,47 @@ class _TelegramRun:
         proof_by_id = {proof.update_id: proof for proof in classification.delivery_proofs}
         allowed = frozenset(cast("list[str]", ctx.source.configuration["telegram_chat_ids"]))
         records = [
-            record for delivery in page.deliveries if delivery.update_id not in replay_ids
-            if (record := map_telegram_update(
-                delivery.update, allowed_chat_ids=allowed,
-                proof=proof_by_id[delivery.update_id], collected_at=page.collected_at,
-            )) is not None
+            record
+            for delivery in page.deliveries
+            if delivery.update_id not in replay_ids
+            if (
+                record := map_telegram_update(
+                    delivery.update,
+                    allowed_chat_ids=allowed,
+                    proof=proof_by_id[delivery.update_id],
+                    collected_at=page.collected_at,
+                )
+            )
+            is not None
         ]
         cursor_after = (
             classification.cursor_after.model_dump_json()
-            if classification.cursor_after is not None else lease.cursor_before
+            if classification.cursor_after is not None
+            else lease.cursor_before
         )
         native_batch = NativeCollectionBatch(
-            source_id=ctx.source.id, source_generation=lease.source_generation,
-            connector_revision=lease.connector_revision, lease_token=lease.token,
-            cursor_before=lease.cursor_before, cursor_after=cursor_after, records=records,
+            source_id=ctx.source.id,
+            source_generation=lease.source_generation,
+            connector_revision=lease.connector_revision,
+            lease_token=lease.token,
+            cursor_before=lease.cursor_before,
+            cursor_after=cursor_after,
+            records=records,
             telegram_deliveries=classification.delivery_proofs,
-            telegram_raw_deliveries=page.deliveries, coverage="pending_updates_only",
+            telegram_raw_deliveries=page.deliveries,
+            coverage="pending_updates_only",
             collected_at=page.collected_at,
         )
         await ctx.send_fence(lease=lease, native_snapshot=self.snapshot)
         receipt = await ingestion.accept_native_collection(
-            ctx.session, native_batch, collector_token=ctx.collector_token, lease=lease,
-            multi_workspace_enabled=ctx.multi_workspace_enabled, scope=ctx.scope,
-            expected_native_operation_id=self.snapshot.operation_id, request_ref=ctx.request_ref,
+            ctx.session,
+            native_batch,
+            collector_token=ctx.collector_token,
+            lease=lease,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            scope=ctx.scope,
+            expected_native_operation_id=self.snapshot.operation_id,
+            request_ref=ctx.request_ref,
             expected_world_credential_operation_id=None,
         )
         return AcceptedCollection(receipt=receipt)
@@ -444,7 +547,10 @@ class _TelegramRun:
         ctx = self.ctx
         await self._load_credential()
         self.cursor = await ingestion.read_telegram_collection_state(
-            ctx.session, self.lease, multi_workspace_enabled=ctx.multi_workspace_enabled, scope=ctx.scope,
+            ctx.session,
+            self.lease,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            scope=ctx.scope,
         )
         for page_number in range(5):
             remaining_bytes = 25 * 1024 * 1024 - self.total_bytes
@@ -455,7 +561,9 @@ class _TelegramRun:
                 return page
             self._account(page, remaining_bytes)
             classification = classify_telegram_probe(
-                self.cursor, page.deliveries, received_at=page.collected_at,
+                self.cursor,
+                page.deliveries,
+                received_at=page.collected_at,
                 verified_bot_id=self.snapshot.verified_bot_id,
             )
             if classification.conflict_code is not None:

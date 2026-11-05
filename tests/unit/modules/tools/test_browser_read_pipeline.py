@@ -19,8 +19,16 @@ JOB_ID = uuid4()
 OP_ID = uuid4()
 SOURCE_ID = uuid4()
 GRANT = AgentBrowserScope(
-    workspace_id=uuid4(), source_id=SOURCE_ID, source_generation=1, connector_revision=1, grant_revision=1,
-    scope_hash="s", origin="https://example.com", path_prefix="/", local_only=False, enabled=True,
+    workspace_id=uuid4(),
+    source_id=SOURCE_ID,
+    source_generation=1,
+    connector_revision=1,
+    grant_revision=1,
+    scope_hash="s",
+    origin="https://example.com",
+    path_prefix="/",
+    local_only=False,
+    enabled=True,
 )
 
 
@@ -33,9 +41,12 @@ def _plan(max_pages: int = 2) -> bp._DispatchPlan:
 def _page(raw: bytes = b"<p>hi</p>", **over: Any) -> dict[str, Any]:
     """Build one wire page that is valid by default."""
     page = {
-        "requested_url": "https://example.com/a", "final_url": "https://example.com/a",
-        "observed_at": datetime.now(UTC).isoformat(), "extracted_text": "hi",
-        "raw_content": base64.b64encode(raw).decode(), "content_digest": hashlib.sha256(raw).hexdigest(),
+        "requested_url": "https://example.com/a",
+        "final_url": "https://example.com/a",
+        "observed_at": datetime.now(UTC).isoformat(),
+        "extracted_text": "hi",
+        "raw_content": base64.b64encode(raw).decode(),
+        "content_digest": hashlib.sha256(raw).hexdigest(),
     }
     page.update(over)
     return page
@@ -44,7 +55,10 @@ def _page(raw: bytes = b"<p>hi</p>", **over: Any) -> dict[str, Any]:
 def _data(pages: list[dict[str, Any]], **over: Any) -> dict[str, object]:
     """Wrap pages in a matching service envelope."""
     data: dict[str, object] = {
-        "job_id": str(JOB_ID), "operation_id": str(OP_ID), "claim_generation": 1, "service_instance_id": "svc",
+        "job_id": str(JOB_ID),
+        "operation_id": str(OP_ID),
+        "claim_generation": 1,
+        "service_instance_id": "svc",
         "pages": pages,
     }
     data.update(over)
@@ -60,10 +74,18 @@ def test_validate_pages_accepts_and_hashes() -> None:
     assert [read.id for read in result.reads] == [row.id for row in result.rows]
 
 
-@pytest.mark.parametrize("override", [
-    {"job_id": "other"}, {"operation_id": "other"}, {"claim_generation": 2}, {"service_instance_id": "x"},
-    {"pages": []}, {"pages": [_page()] * 3}, {"pages": ["notadict"]},
-])
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"job_id": "other"},
+        {"operation_id": "other"},
+        {"claim_generation": 2},
+        {"service_instance_id": "x"},
+        {"pages": []},
+        {"pages": [_page()] * 3},
+        {"pages": ["notadict"]},
+    ],
+)
 def test_validate_pages_rejects_bad_envelope(override: dict[str, Any]) -> None:
     """Identity or bound mismatches are ValueError (invalid_result)."""
     data = _data([_page()])
@@ -75,13 +97,17 @@ def test_validate_pages_rejects_bad_envelope(override: dict[str, Any]) -> None:
 def test_validate_pages_scope_digest_and_size() -> None:
     """Out-of-scope URLs are PermissionError; digest, text, time and base64 faults are ValueError."""
     with pytest.raises(PermissionError):
-        bp._validate_service_pages(_data([_page(final_url="https://evil.example/")]), _plan(), JOB_ID, 1)
+        bp._validate_service_pages(
+            _data([_page(final_url="https://evil.example/")]), _plan(), JOB_ID, 1
+        )
     with pytest.raises(ValueError, match="digest"):
         bp._validate_service_pages(_data([_page(content_digest="0" * 64)]), _plan(), JOB_ID, 1)
     with pytest.raises(ValueError, match="bound"):
         bp._validate_service_pages(_data([_page(extracted_text="x" * 20_001)]), _plan(), JOB_ID, 1)
     with pytest.raises(ValueError, match="timezone"):
-        bp._validate_service_pages(_data([_page(observed_at="2026-01-01T00:00:00")]), _plan(), JOB_ID, 1)
+        bp._validate_service_pages(
+            _data([_page(observed_at="2026-01-01T00:00:00")]), _plan(), JOB_ID, 1
+        )
     with pytest.raises(ValueError, match=r"."):
         bp._validate_service_pages(_data([_page(raw_content="***")]), _plan(), JOB_ID, 1)
 
@@ -118,6 +144,7 @@ async def test_read_envelope_bounds_and_status() -> None:
 @pytest.mark.asyncio
 async def test_call_service_maps_transport_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     """HTTP status errors keep their code; other transport faults become status 0 with no data."""
+
     class Client:
         """AsyncClient double failing the instance probe."""
 
@@ -136,7 +163,9 @@ async def test_call_service_maps_transport_failures(monkeypatch: pytest.MonkeyPa
             raise error
 
     monkeypatch.setattr(httpx, "AsyncClient", Client)
-    error: Exception = httpx.HTTPStatusError("x", request=httpx.Request("GET", "http://x"), response=httpx.Response(403))
+    error: Exception = httpx.HTTPStatusError(
+        "x", request=httpx.Request("GET", "http://x"), response=httpx.Response(403)
+    )
     assert await bp._call_browser_service(_plan(), deadline=1e12) == (None, 403, False)
     error = httpx.ConnectError("down")
     assert await bp._call_browser_service(_plan(), deadline=1e12) == (None, 0, False)

@@ -21,7 +21,9 @@ from core.model_gateway import anthropic
 CHAT_PATH = "chat/completions"
 
 
-class UnsupportedWireOperation(Exception):  # internal signal translated to ModelGatewayError by the client
+class UnsupportedWireOperation(
+    Exception
+):  # internal signal translated to ModelGatewayError by the client
     """Raised by a protocol for an operation path it does not implement; the client maps it to a gateway error."""
 
 
@@ -58,8 +60,13 @@ class WireProtocol(Protocol):
         """Send one non-stream request and return the decoded OpenAI-shaped response (dict or SDK model)."""
         ...
 
-    async def open_stream(self, session: WireSession, model: str, messages: list[dict[str, Any]],
-                          extra: dict[str, Any]) -> Any:
+    async def open_stream(
+        self,
+        session: WireSession,
+        model: str,
+        messages: list[dict[str, Any]],
+        extra: dict[str, Any],
+    ) -> Any:
         """Open a streaming chat call and return an async iterator of OpenAI-shaped chunks (dicts or SDK models)."""
         ...
 
@@ -96,11 +103,19 @@ class OpenAICompatProtocol:
             # OpenRouter Decisions (alpha) lives beside /api/v1 at /api/alpha; same host, so the
             # pinned http client and endpoint policy already cover it.
             return await client.post(
-                re.sub(r"/v1$", "/alpha", session.base_url) + "/decisions", cast_to=dict[str, Any], body=body)
+                re.sub(r"/v1$", "/alpha", session.base_url) + "/decisions",
+                cast_to=dict[str, Any],
+                body=body,
+            )
         raise UnsupportedWireOperation(path)
 
-    async def open_stream(self, session: WireSession, model: str, messages: list[dict[str, Any]],
-                          extra: dict[str, Any]) -> Any:
+    async def open_stream(
+        self,
+        session: WireSession,
+        model: str,
+        messages: list[dict[str, Any]],
+        extra: dict[str, Any],
+    ) -> Any:
         """Open an SDK chat stream; ``extra`` (tools, tool_choice, max_tokens, reasoning_effort) is forwarded as is."""
         return await session.client.chat.completions.create(
             model=model,
@@ -130,18 +145,30 @@ class AnthropicMessagesProtocol:
     async def create(self, session: WireSession, path: str, body: dict[str, Any]) -> Any:
         """POST the translated Messages request over the pinned http client (``path`` is already checked)."""
         return await anthropic.create_message(
-            session.http, session.base_url, session.api_key, body, timeout=session.timeout)
+            session.http, session.base_url, session.api_key, body, timeout=session.timeout
+        )
 
-    async def open_stream(self, session: WireSession, model: str, messages: list[dict[str, Any]],
-                          extra: dict[str, Any]) -> Any:
+    async def open_stream(
+        self,
+        session: WireSession,
+        model: str,
+        messages: list[dict[str, Any]],
+        extra: dict[str, Any],
+    ) -> Any:
         """Open the native Messages SSE stream, yielding OpenAI-shaped chunk dicts."""
         return await anthropic.open_message_stream(
-            session.http, session.base_url, session.api_key,
-            {"model": model, "messages": messages, **extra}, timeout=session.timeout)
+            session.http,
+            session.base_url,
+            session.api_key,
+            {"model": model, "messages": messages, **extra},
+            timeout=session.timeout,
+        )
 
     async def list_models(self, session: WireSession) -> list[str]:
         """GET the native ``/models`` listing with ``x-api-key`` auth."""
-        return await anthropic.list_models(session.http, session.base_url, session.api_key, timeout=session.timeout)
+        return await anthropic.list_models(
+            session.http, session.base_url, session.api_key, timeout=session.timeout
+        )
 
 
 _DEFAULT_PROTOCOL: WireProtocol = OpenAICompatProtocol()

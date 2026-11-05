@@ -136,7 +136,13 @@ async def has_blocking_remote_heavy_work(session: AsyncSession) -> bool:
     The remote job has a hard runtime bound, so a guard past its expires_at belongs to a
     service that must have stopped or restarted; ignoring it is the recovery path.
     """
-    return bool(await session.scalar(select(RemoteHeavyGuard.operation_id).where(
-        RemoteHeavyGuard.state.in_(("active", "uncertain")),
-        RemoteHeavyGuard.expires_at > datetime.now(UTC),
-    ).limit(1)))
+    return bool(
+        await session.scalar(
+            select(RemoteHeavyGuard.operation_id)
+            .where(
+                RemoteHeavyGuard.state.in_(("active", "uncertain")),
+                RemoteHeavyGuard.expires_at > datetime.now(UTC),
+            )
+            .limit(1)
+        )
+    )

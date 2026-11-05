@@ -16,7 +16,10 @@ def test_nasa_eonet_events_use_latest_geometry():
     data = wd(fire)
     assert fire.observed_at == datetime(2026, 10, 10, 14, 58, tzinfo=UTC)
     assert data["value"] == 2000.0 and data["unit"] == "acres" and data["latitude"] == 42.337217
-    assert data["provider_fields"]["categories"] == "Wildfires" and data["provider_fields"]["closed"] is None
+    assert (
+        data["provider_fields"]["categories"] == "Wildfires"
+        and data["provider_fields"]["closed"] is None
+    )
     assert "irwin.doi.gov" in fire.content and "Wildfires" in fire.content
 
 
@@ -24,16 +27,22 @@ def test_nasa_eonet_closed_event_without_magnitude_is_missing_and_unsafe_link_dr
     ice = map_nasa_eonet(jfixture("nasa_eonet_open.json"), NOW)[1]
     data = wd(ice)
     assert data["value"] is None and data["quality"] == "missing" and data["unit"] == "event"
-    assert data["provider_fields"]["closed"] == "2026-10-11T00:00:00Z" and "javascript" not in ice.content
+    assert (
+        data["provider_fields"]["closed"] == "2026-10-11T00:00:00Z"
+        and "javascript" not in ice.content
+    )
 
 
-@pytest.mark.parametrize("mutate", [
-    lambda p: p.pop("events"),
-    lambda p: [e.update(geometry=[]) for e in p["events"]],
-    lambda p: [e["geometry"][-1].update(coordinates=[500, 1]) for e in p["events"]],
-    lambda p: p["events"].append(dict(p["events"][0])),
-    lambda p: p["events"].extend([p["events"][0]] * 51),
-])
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("events"),
+        lambda p: [e.update(geometry=[]) for e in p["events"]],
+        lambda p: [e["geometry"][-1].update(coordinates=[500, 1]) for e in p["events"]],
+        lambda p: p["events"].append(dict(p["events"][0])),
+        lambda p: p["events"].extend([p["events"][0]] * 51),
+    ],
+)
 def test_nasa_eonet_hostile_payloads_rejected(mutate):
     payload = jfixture("nasa_eonet_open.json")
     mutate(payload)
@@ -54,7 +63,9 @@ def test_nasa_eonet_full_page_is_truncated_not_snapshot():
 
 
 def test_nasa_eonet_short_page_is_snapshot():
-    assert {_cov(r) for r in map_nasa_eonet(jfixture("nasa_eonet_open.json"), NOW)} == {"returned_snapshot"}
+    assert {_cov(r) for r in map_nasa_eonet(jfixture("nasa_eonet_open.json"), NOW)} == {
+        "returned_snapshot"
+    }
 
 
 def test_nasa_eonet_one_malformed_event_is_skipped_and_batch_truncated():

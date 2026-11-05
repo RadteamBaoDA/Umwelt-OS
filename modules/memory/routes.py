@@ -122,7 +122,9 @@ async def create_memory(
         Created MemoryRead schema.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    return await svc.create_memory(payload, is_manual=True, scope=scope, multi_workspace_enabled=_flag(request))
+    return await svc.create_memory(
+        payload, is_manual=True, scope=scope, multi_workspace_enabled=_flag(request)
+    )
 
 
 @router.get("/api/v1/memories/{memory_id}", response_model=MemoryRead)
@@ -177,7 +179,9 @@ async def update_memory(
         HTTPException: 404 if memory not found or not active.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    mem = await svc.update_memory(memory_id, payload, scope=scope, multi_workspace_enabled=_flag(request))
+    mem = await svc.update_memory(
+        memory_id, payload, scope=scope, multi_workspace_enabled=_flag(request)
+    )
     if mem is None:
         raise HTTPException(status_code=404, detail="Memory not found or not active")
     return mem
@@ -205,7 +209,9 @@ async def delete_memory(
         HTTPException: 404 if memory not found.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    mem = await svc.forget_memory(memory_id, reason="Deleted by owner", scope=scope, multi_workspace_enabled=_flag(request))
+    mem = await svc.forget_memory(
+        memory_id, reason="Deleted by owner", scope=scope, multi_workspace_enabled=_flag(request)
+    )
     if mem is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return mem
@@ -235,7 +241,9 @@ async def invalidate_memory(
         HTTPException: 404 if memory not found.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    mem = await svc.invalidate_memory(memory_id, reason=payload.reason, scope=scope, multi_workspace_enabled=_flag(request))
+    mem = await svc.invalidate_memory(
+        memory_id, reason=payload.reason, scope=scope, multi_workspace_enabled=_flag(request)
+    )
     if mem is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return mem
@@ -265,7 +273,9 @@ async def supersede_memory(
         HTTPException: 404 if target memory not found.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    res = await svc.supersede_memory(memory_id, payload, scope=scope, multi_workspace_enabled=_flag(request))
+    res = await svc.supersede_memory(
+        memory_id, payload, scope=scope, multi_workspace_enabled=_flag(request)
+    )
     if res is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     _old, new_mem = res
@@ -296,7 +306,9 @@ async def forget_memory(
         HTTPException: 404 if memory not found.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    mem = await svc.forget_memory(memory_id, reason=payload.reason, scope=scope, multi_workspace_enabled=_flag(request))
+    mem = await svc.forget_memory(
+        memory_id, reason=payload.reason, scope=scope, multi_workspace_enabled=_flag(request)
+    )
     if mem is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return mem
@@ -341,7 +353,9 @@ async def update_memory_privacy(
         Updated MemoryPrivacyConfig.
     """
     svc = MemoryService(session)
-    return await svc.update_privacy_config(payload, scope=scope, multi_workspace_enabled=_flag(request))
+    return await svc.update_privacy_config(
+        payload, scope=scope, multi_workspace_enabled=_flag(request)
+    )
 
 
 @router.get("/api/v1/memories/candidates/list", response_model=MemoryCandidatePage)
@@ -367,7 +381,13 @@ async def list_candidates(
         MemoryCandidatePage.
     """
     svc = MemoryService(session)
-    return await svc.get_candidates(limit=limit, cursor=cursor, status=status, scope=scope, multi_workspace_enabled=_flag(request))
+    return await svc.get_candidates(
+        limit=limit,
+        cursor=cursor,
+        status=status,
+        scope=scope,
+        multi_workspace_enabled=_flag(request),
+    )
 
 
 @router.post("/api/v1/memories/candidates/{candidate_id}/accept", response_model=MemoryRead)
@@ -392,7 +412,9 @@ async def accept_candidate(
         HTTPException: 404 if candidate not found or not pending.
     """
     svc = MemoryService(session, redis=_get_redis(session))
-    mem = await svc.accept_candidate(candidate_id, scope=scope, multi_workspace_enabled=_flag(request))
+    mem = await svc.accept_candidate(
+        candidate_id, scope=scope, multi_workspace_enabled=_flag(request)
+    )
     if mem is None:
         raise HTTPException(status_code=404, detail="Candidate not found or not pending")
     return mem
@@ -425,7 +447,9 @@ async def reject_candidate(
         HTTPException: 404 if candidate not found.
     """
     svc = MemoryService(session)
-    cand = await svc.reject_candidate(candidate_id, reason=payload.reason, scope=scope, multi_workspace_enabled=_flag(request))
+    cand = await svc.reject_candidate(
+        candidate_id, reason=payload.reason, scope=scope, multi_workspace_enabled=_flag(request)
+    )
     if cand is None:
         raise HTTPException(status_code=404, detail="Candidate not found")
     return cand

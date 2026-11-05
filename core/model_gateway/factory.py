@@ -50,7 +50,12 @@ class ModelGatewayFactory:
 
     @classmethod
     def for_settings(
-        cls, session_factory: Any, redis: Redis, scope: Scope, cidrs: Iterable[str], **options: Any,
+        cls,
+        session_factory: Any,
+        redis: Redis,
+        scope: Scope,
+        cidrs: Iterable[str],
+        **options: Any,
     ) -> ModelGatewayFactory:
         """Normalize a settings CIDR iterable into the immutable tuple the gateway expects."""
         return cls(session_factory, redis, scope, tuple(cidrs), **options)
@@ -81,16 +86,24 @@ class ModelGatewayFactory:
         kwargs: dict[str, Any] = {}
         if with_evidence:
             provider = self.evidence_provider
-            kwargs["evidence"] = provider(self.session_factory, config) if provider is not None else None
+            kwargs["evidence"] = (
+                provider(self.session_factory, config) if provider is not None else None
+            )
         return self._new_gateway(
             redis=self.redis,
             base_url=base_url if base_url is not None else config.gateway_base_url,
             api_key=config.gateway_api_key,
-            destination_id=destination_id if destination_id is not None else (config.endpoint_destination_id or ""),
-            timeout_seconds=timeout_seconds, scope=self.scope,
-            gateway_identity=config.gateway_identity, model_identity=config.model_identity,
-            configuration_revision=config.configuration_revision, before_send=before_send,
+            destination_id=destination_id
+            if destination_id is not None
+            else (config.endpoint_destination_id or ""),
+            timeout_seconds=timeout_seconds,
+            scope=self.scope,
+            gateway_identity=config.gateway_identity,
+            model_identity=config.model_identity,
+            configuration_revision=config.configuration_revision,
+            before_send=before_send,
             approved_endpoint_cidrs=self.approved_endpoint_cidrs,
-            allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind,
+            allow_public_endpoints=config.allow_public_providers,
+            kind=config.gateway_kind,
             **kwargs,
         )

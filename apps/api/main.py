@@ -57,17 +57,24 @@ def _validated_csrf_secret(app_settings: Settings) -> str:
     app_settings.require_trusted_client_ip_source()  # API-only: workers never key on client IP
     csrf_secret = app_settings.csrf_signing_secret.get_secret_value()
     worker_counts = []
-    for name in ("WEB_CONCURRENCY", "UVICORN_WORKERS"):  # uvicorn honours both (click auto_envvar_prefix)
+    for name in (
+        "WEB_CONCURRENCY",
+        "UVICORN_WORKERS",
+    ):  # uvicorn honours both (click auto_envvar_prefix)
         workers_raw = os.getenv(name, "1").strip() or "1"
         if not workers_raw.isdigit():
             raise RuntimeError(f"{name} must be a positive integer, got {workers_raw!r}")
         worker_counts.append(int(workers_raw))
     if not csrf_secret and max(worker_counts) > 1:
-        raise RuntimeError("CSRF_SIGNING_SECRET is required when WEB_CONCURRENCY or UVICORN_WORKERS > 1 (each worker would sign with a different secret)")
+        raise RuntimeError(
+            "CSRF_SIGNING_SECRET is required when WEB_CONCURRENCY or UVICORN_WORKERS > 1 (each worker would sign with a different secret)"
+        )
     return csrf_secret
 
 
-def _make_lifespan(redis: ArqRedis, engine: AsyncEngine) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+def _make_lifespan(
+    redis: ArqRedis, engine: AsyncEngine
+) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """Build the lifespan context that runs the SDK managers and always closes shared clients.
 
     Admission is stopped before the SDK manager drains; Redis and SQLAlchemy are closed even
@@ -84,7 +91,9 @@ def _make_lifespan(redis: ArqRedis, engine: AsyncEngine) -> Callable[[FastAPI], 
         """
         configure_default_executor()
         metrics_tasks = _start_metrics_tasks(_app)
-        metrics_tasks.append(spawn_background(run_realtime_wakeup_listener(redis), "realtime-wakeup-listener"))
+        metrics_tasks.append(
+            spawn_background(run_realtime_wakeup_listener(redis), "realtime-wakeup-listener")
+        )
 
         async def wake_poller(job_name: str, defer_seconds: float = 1.0) -> None:
             """Enqueue an immediate run of a worker poller after an API commit (best-effort)."""
@@ -127,7 +136,10 @@ def _start_metrics_tasks(app: FastAPI) -> list[asyncio.Task[None]]:
     app_settings: Settings = app.state.settings
     if not metrics_enabled(app_settings):
         return []
-    samplers = build_api_samplers(app.state.redis, app.state.session_factory, (default_queue_name, MODEL_QUEUE, CHAT_QUEUE, CRON_QUEUE),
+    samplers = build_api_samplers(
+        app.state.redis,
+        app.state.session_factory,
+        (default_queue_name, MODEL_QUEUE, CHAT_QUEUE, CRON_QUEUE),
         outbox_retention_days=app_settings.outbox_retention_days,
     )
     return [
@@ -137,7 +149,10 @@ def _start_metrics_tasks(app: FastAPI) -> list[asyncio.Task[None]]:
 
 
 def _new_app(
-    app_settings: Settings, csrf_secret: str, session_factory: async_sessionmaker[AsyncSession], redis: ArqRedis,
+    app_settings: Settings,
+    csrf_secret: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    redis: ArqRedis,
     lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]],
 ) -> FastAPI:
     """Create the FastAPI instance with app state and middleware in the historical order.
@@ -194,7 +209,9 @@ def _include_descriptor_routers(app: FastAPI, registry: ModuleRegistry) -> None:
         app.include_router(spec.load())
 
 
-def _register_native_tools(tool_registry: ToolRegistry, app_settings: Settings, declared_tools: frozenset[str]) -> None:
+def _register_native_tools(
+    tool_registry: ToolRegistry, app_settings: Settings, declared_tools: frozenset[str]
+) -> None:
     """Register the native tool handlers contributed by enabled module descriptors."""
     register_builtin_tools(tool_registry, declared_tools)
     register_webhook_tool(tool_registry, app_settings)
@@ -250,7 +267,9 @@ def _mount_widgets_server(app: FastAPI, app_settings: Settings) -> None:
     widgets_server, widgets_app = create_widgets_mcp_app(app_settings)
     app.state.mcp_widgets_server = widgets_server
     # Exact `/mcp` first so clients need no trailing slash (a Mount would 307-redirect it).
-    app.router.routes.append(Route("/mcp", cast(Any, RootPath(widgets_app)), include_in_schema=False))
+    app.router.routes.append(
+        Route("/mcp", cast(Any, RootPath(widgets_app)), include_in_schema=False)
+    )
     app.mount("/mcp", widgets_app)
 
 
@@ -278,7 +297,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         statement_timeout_ms=app_settings.db_statement_timeout_ms,
     )
     tracing_on = configure_tracing(
-        app_settings.otel_exporter_otlp_endpoint, service_name="umwelt-api",
+        app_settings.otel_exporter_otlp_endpoint,
+        service_name="umwelt-api",
         sample_ratio=app_settings.otel_traces_sample_ratio,
     )
     if tracing_on:
@@ -293,7 +313,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     validate_event_contracts()  # fail fast on undeclared outbox event types / handlers
     _include_descriptor_routers(app, app.state.modules)
     tool_registry = ToolRegistry(module_registry=app.state.modules)
-    declared_tools = frozenset(name for item in app.state.modules.values() if item.enabled for name in item.tools)
+    declared_tools = frozenset(
+        name for item in app.state.modules.values() if item.enabled for name in item.tools
+    )
     if app.state.modules["tools"].enabled and declared_tools:
         _register_native_tools(tool_registry, app_settings, declared_tools)
     app.state.tool_registry = tool_registry

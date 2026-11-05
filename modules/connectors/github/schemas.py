@@ -38,12 +38,13 @@ from modules.ingestion.public import (
 MAX_GITHUB_CURSOR_BYTES = 4096
 
 
-
 class GitHubSourceConfig(BaseModel):
     """Represent one selected repository and its explicit read-only resource scope."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    github_owner: str = Field(min_length=1, max_length=39, pattern=r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$")
+    github_owner: str = Field(
+        min_length=1, max_length=39, pattern=r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"
+    )
     github_repository: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]{1,100}$")
     include_issues: bool = False
     include_pulls: bool = False
@@ -54,20 +55,22 @@ class GitHubSourceConfig(BaseModel):
     @model_validator(mode="after")
     def require_resource(self) -> "GitHubSourceConfig":
         """Reject empty read scopes and path-like or suffix-bearing repository names."""
-        if not any((self.include_issues, self.include_pulls, self.include_commits, self.include_releases)):
+        if not any(
+            (self.include_issues, self.include_pulls, self.include_commits, self.include_releases)
+        ):
             raise ValueError("At least one GitHub resource must be enabled")
-        if self.github_repository in {".", ".."} or self.github_repository.casefold().endswith(".git"):
+        if self.github_repository in {".", ".."} or self.github_repository.casefold().endswith(
+            ".git"
+        ):
             raise ValueError("GitHub repository must be a single repository name")
         return self
 
 
 def project_github_source_config(configuration: Mapping[str, object]) -> GitHubSourceConfig:
     """Project only GitHub-owned scope fields after the shared connector schema validates common settings."""
-    return GitHubSourceConfig.model_validate({
-        key: configuration[key]
-        for key in GitHubSourceConfig.model_fields
-        if key in configuration
-    })
+    return GitHubSourceConfig.model_validate(
+        {key: configuration[key] for key in GitHubSourceConfig.model_fields if key in configuration}
+    )
 
 
 class GitHubResourceCursor(BaseModel):
@@ -103,13 +106,26 @@ class GitHubResourceCursor(BaseModel):
             or (self.completed_upper is not None and self.completed_upper > self.upper)
             or self.completed_sweep_revision > self.sweep_revision
             or (self.phase == "exhausted") != (self.last_outcome == "exhausted")
-            or (self.phase == "bootstrap" and (self.sweep_revision != 1 or self.completed_sweep_revision != 0))
+            or (
+                self.phase == "bootstrap"
+                and (self.sweep_revision != 1 or self.completed_sweep_revision != 0)
+            )
             or (self.phase == "incremental" and self.resource == "release")
             or (self.phase == "reconcile" and self.resource != "release")
-            or (self.resource != "release" and self.completed_sweep_revision > 0 and self.completed_upper is None)
-            or (self.last_outcome == "continued" and self.phase not in {"bootstrap", "incremental", "reconcile"})
+            or (
+                self.resource != "release"
+                and self.completed_sweep_revision > 0
+                and self.completed_upper is None
+            )
+            or (
+                self.last_outcome == "continued"
+                and self.phase not in {"bootstrap", "incremental", "reconcile"}
+            )
             or (self.last_outcome == "complete" and self.phase not in {"incremental", "reconcile"})
-            or (self.last_outcome == "complete" and self.completed_sweep_revision != self.sweep_revision)
+            or (
+                self.last_outcome == "complete"
+                and self.completed_sweep_revision != self.sweep_revision
+            )
             or (self.last_outcome == "exhausted" and (self.page != 100 or self.next_page != 101))
             or (self.last_outcome == "continued" and (self.next_page is None or self.page >= 100))
             or (self.last_outcome in {"pending", "complete"} and self.next_page is not None)
@@ -117,7 +133,11 @@ class GitHubResourceCursor(BaseModel):
             raise ValueError("GitHub resource cursor window is invalid")
         if self.last_outcome == "continued" and self.next_page != self.page + 1:
             raise ValueError("GitHub continued cursor must retain its next page")
-        if self.last_outcome not in {"continued", "exhausted"} and self.next_page is not None and self.last_outcome != "pending":
+        if (
+            self.last_outcome not in {"continued", "exhausted"}
+            and self.next_page is not None
+            and self.last_outcome != "pending"
+        ):
             raise ValueError("GitHub terminal cursor cannot retain a page continuation")
         if self.phase == "exhausted" and self.last_outcome != "exhausted":
             raise ValueError("GitHub exhausted phase must retain its incomplete outcome")
@@ -144,9 +164,13 @@ class GitHubCursor(BaseModel):
     def validate_order_and_size(self) -> "GitHubCursor":
         """Require one ordered cursor per selected resource and the GitHub-specific UTF-8 bound."""
         names = tuple(item.resource for item in self.resources)
-        if names != tuple(item for item in GITHUB_RESOURCES if item in names) or self.turn >= len(names):
+        if names != tuple(item for item in GITHUB_RESOURCES if item in names) or self.turn >= len(
+            names
+        ):
             raise ValueError("GitHub resource cursor order or turn is invalid")
-        raw = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        raw = json.dumps(
+            self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
         if len(raw.encode("utf-8")) > MAX_GITHUB_CURSOR_BYTES:
             raise ValueError("GitHub cursor exceeds 4096 UTF-8 bytes")
         return self

@@ -28,7 +28,9 @@ async def list_chat_templates(session: Session, owner: OwnerRead) -> list[templa
 
 
 @router.post(_BASE, response_model=templates.TemplateRead, status_code=201)
-async def save_chat_template(payload: templates.TemplateIn, session: Session, owner: OwnerWrite) -> templates.TemplateRead:
+async def save_chat_template(
+    payload: templates.TemplateIn, session: Session, owner: OwnerWrite
+) -> templates.TemplateRead:
     """Create a template (or update one when ``id`` is given); 409 beyond 30; CSRF-checked write."""
     scope = await owner_default_scope(session, owner.owner_id)
     try:
@@ -55,7 +57,10 @@ async def delete_chat_template(template_id: str, session: Session, owner: OwnerW
 
 @router.put(_PENDING, response_model=templates.PendingBody)
 async def set_pending_template(
-    conversation_id: UUID, payload: templates.PendingBody, session: Session, owner: OwnerWrite,
+    conversation_id: UUID,
+    payload: templates.PendingBody,
+    session: Session,
+    owner: OwnerWrite,
 ) -> templates.PendingBody:
     """Mark a template (owned UUID or built-in seed id) as the one the model applies next; CSRF-checked write."""
     scope = await owner_default_scope(session, owner.owner_id)
@@ -69,7 +74,9 @@ async def set_pending_template(
 
 
 @router.delete(_PENDING, status_code=204)
-async def clear_pending_template(conversation_id: UUID, session: Session, owner: OwnerWrite) -> Response:
+async def clear_pending_template(
+    conversation_id: UUID, session: Session, owner: OwnerWrite
+) -> Response:
     """Clear the conversation's pending template (idempotent); CSRF-checked write."""
     scope = await owner_default_scope(session, owner.owner_id)
     try:

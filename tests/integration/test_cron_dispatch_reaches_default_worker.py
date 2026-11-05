@@ -32,18 +32,24 @@ CONSUME_TIMEOUT_SECONDS = 120
 async def _outbox_status(engine: AsyncEngine, source_id: UUID) -> str | None:
     """Return the status of the ``source.purge.requested`` outbox row for ``source_id`` (None before it exists)."""
     async with engine.connect() as connection:
-        return await connection.scalar(text(
-            "SELECT status FROM event_outbox WHERE type = 'source.purge.requested' "
-            "AND payload->>'source_id' = :id"
-        ), {"id": str(source_id)})
+        return await connection.scalar(
+            text(
+                "SELECT status FROM event_outbox WHERE type = 'source.purge.requested' "
+                "AND payload->>'source_id' = :id"
+            ),
+            {"id": str(source_id)},
+        )
 
 
 async def test_cron_dispatched_job_is_consumed_by_default_worker(
-    ready_owner_client: AsyncClient, committed_engine: AsyncEngine,
+    ready_owner_client: AsyncClient,
+    committed_engine: AsyncEngine,
 ) -> None:
     """A published outbox event is dispatched by the cron worker and delivered by the default worker."""
     client, engine = ready_owner_client, committed_engine
-    created = await client.post("/api/v1/sources", json={"type": "manual", "name": f"queue route {uuid4().hex[:8]}"})
+    created = await client.post(
+        "/api/v1/sources", json={"type": "manual", "name": f"queue route {uuid4().hex[:8]}"}
+    )
     created.raise_for_status()
     source_id = UUID(created.json()["id"])
 
@@ -66,9 +72,12 @@ async def test_cron_dispatched_job_is_consumed_by_default_worker(
     operation: str | None = None
     while time.monotonic() < deadline:
         async with engine.connect() as connection:
-            operation = (await connection.execute(text(
-                "SELECT status FROM source_purge_operations WHERE source_id = :id"
-            ), {"id": str(source_id)})).scalar_one_or_none()
+            operation = (
+                await connection.execute(
+                    text("SELECT status FROM source_purge_operations WHERE source_id = :id"),
+                    {"id": str(source_id)},
+                )
+            ).scalar_one_or_none()
         if operation == "succeeded":
             break
         await asyncio.sleep(1)

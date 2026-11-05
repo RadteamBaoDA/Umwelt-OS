@@ -22,6 +22,7 @@ PDF_PAGE_LIMIT = 500
 @dataclass(frozen=True)
 class ParsedDocument:
     """Carry extracted text, format metadata, and parser warnings."""
+
     text: str
     metadata: dict[str, object]
     warnings: list[str]
@@ -39,7 +40,10 @@ def _parse_csv(path: Path) -> str:
         return ""
     headers = rows[0]
     return "\n\n".join(
-        "\n".join(f"{headers[index] if index < len(headers) else f'column_{index + 1}'}: {value}" for index, value in enumerate(row))
+        "\n".join(
+            f"{headers[index] if index < len(headers) else f'column_{index + 1}'}: {value}"
+            for index, value in enumerate(row)
+        )
         for row in rows[1:]
     ) or ", ".join(headers)
 
@@ -53,7 +57,11 @@ def _parse_pdf(path: Path, page_limit: int) -> ParsedDocument:
         raise ValueError("PDF exceeds the configured page limit")
     text = "\n\n".join(page.extract_text() or "" for page in reader.pages).strip()
     if not text:
-        return ParsedDocument("", {"format": "pdf", "pages": len(reader.pages)}, ["No extractable text; OCR is required"])
+        return ParsedDocument(
+            "",
+            {"format": "pdf", "pages": len(reader.pages)},
+            ["No extractable text; OCR is required"],
+        )
     return ParsedDocument(text, {"format": "pdf", "pages": len(reader.pages)}, [])
 
 
@@ -68,7 +76,9 @@ def _parse_docx(path: Path, expanded_limit: int) -> str:
     document = DocxDocument(str(path))
     parts: list[str] = []
     # Traverse block-level items in document order so tables stay near their surrounding prose.
-    inner_items = list(document.iter_inner_content()) if hasattr(document, "iter_inner_content") else []
+    inner_items = (
+        list(document.iter_inner_content()) if hasattr(document, "iter_inner_content") else []
+    )
     if inner_items:
         for item in inner_items:
             if hasattr(item, "text"):
@@ -102,11 +112,15 @@ def parse_file(
         return ParsedDocument(_parse_docx(path, docx_expanded_limit), {"format": "docx"}, [])
     if mime == "application/json":
         value = json.loads(_read_utf8(path))
-        return ParsedDocument(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True), {"format": "json"}, [])
+        return ParsedDocument(
+            json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True), {"format": "json"}, []
+        )
     if mime == "text/csv":
         return ParsedDocument(_parse_csv(path), {"format": "csv"}, [])
     if mime in {"text/plain", "text/markdown"}:
-        return ParsedDocument(_read_utf8(path), {"format": "markdown" if mime == "text/markdown" else "txt"}, [])
+        return ParsedDocument(
+            _read_utf8(path), {"format": "markdown" if mime == "text/markdown" else "txt"}, []
+        )
     raise ValueError("Unsupported file type")
 
 
@@ -141,7 +155,9 @@ async def parse_file_bounded(
     not bounded by ``timeout_seconds`` itself, but the heavy slot is never released under a live thread.
     """
     try:
-        is_small_text = mime in _IN_PROCESS_TEXT_MIMES and path.stat().st_size <= _IN_PROCESS_MAX_BYTES  # noqa: ASYNC240  # single stat() of a local temp file; negligible blocking
+        is_small_text = (
+            mime in _IN_PROCESS_TEXT_MIMES and path.stat().st_size <= _IN_PROCESS_MAX_BYTES  # noqa: ASYNC240  # single stat() of a local temp file; negligible blocking
+        )
     except OSError:
         is_small_text = False
     if is_small_text:
@@ -150,7 +166,9 @@ async def parse_file_bounded(
             # thread to finish, so the heavy slot is never released while parse_file still runs.
             # Expiry still surfaces as TimeoutError (asyncio.timeout converts the CancelledError).
             async with timeout(timeout_seconds):
-                return await to_thread_joined(parse_file, path, mime, docx_expanded_limit, pdf_page_limit)
+                return await to_thread_joined(
+                    parse_file, path, mime, docx_expanded_limit, pdf_page_limit
+                )
         except TimeoutError as exc:
             raise TimeoutError("File parser exceeded its time limit") from exc
         except Exception as exc:
@@ -165,7 +183,9 @@ async def parse_file_bounded(
     process.start()
     try:
         try:
-            status, result = await wait_for(to_thread(output.get, True, timeout_seconds), timeout_seconds + 1)
+            status, result = await wait_for(
+                to_thread(output.get, True, timeout_seconds), timeout_seconds + 1
+            )
         except (TimeoutError, Empty) as exc:
             raise TimeoutError("File parser exceeded its time limit") from exc
         if status != "ok":
@@ -178,4 +198,3 @@ async def parse_file_bounded(
             process.terminate()
         await to_thread(process.join)
         output.close()
-

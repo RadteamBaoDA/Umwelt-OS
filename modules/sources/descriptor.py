@@ -28,7 +28,9 @@ class SourceDescriptor(ModuleDescriptor):
     routes: tuple[str, ...] = ("/api/v1/sources",)
     emitted_events: tuple[str, ...] = ("source.purge.requested", "source.purge.coverage")
     consumed_events: tuple[str, ...] = (
-        "source.purge.requested", "source.purge.progressed", "source.purge.coverage",
+        "source.purge.requested",
+        "source.purge.progressed",
+        "source.purge.coverage",
     )
     tools: tuple[str, ...] = ("sources.list_sources", "sources.get_source")
     navigation: tuple[dict[str, str], ...] = ({"label": "Sources", "href": "/sources"},)
@@ -40,12 +42,24 @@ class SourceDescriptor(ModuleDescriptor):
     erasure_module: str | None = "modules.sources.erasure"
     erasure_order: int = 190
     event_consumers: tuple[EventConsumerSpec, ...] = (
-        EventConsumerSpec("source.purge.requested", "process_source_purge", ("modules.sources",),
-                          "modules.ingestion.public:SourcePurgeEventHandler"),
-        EventConsumerSpec("source.purge.progressed", "process_source_purge", ("modules.knowledge.documents",),
-                          "modules.ingestion.public:SourcePurgeEventHandler"),
-        EventConsumerSpec("source.purge.coverage", "process_source_memory_coverage", ("modules.sources",),
-                          "modules.ingestion.public:SourcePurgeEventHandler"),
+        EventConsumerSpec(
+            "source.purge.requested",
+            "process_source_purge",
+            ("modules.sources",),
+            "modules.ingestion.public:SourcePurgeEventHandler",
+        ),
+        EventConsumerSpec(
+            "source.purge.progressed",
+            "process_source_purge",
+            ("modules.knowledge.documents",),
+            "modules.ingestion.public:SourcePurgeEventHandler",
+        ),
+        EventConsumerSpec(
+            "source.purge.coverage",
+            "process_source_memory_coverage",
+            ("modules.sources",),
+            "modules.ingestion.public:SourcePurgeEventHandler",
+        ),
     )
 
 

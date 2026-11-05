@@ -18,13 +18,20 @@ def test_arguments_require_exactly_one_selector_and_type_needs_since():
     """``--event-id`` xor ``--type`` (+ ``--since``); limits and owner id are bounded."""
     event_id = str(uuid4())
     assert replay.parse_args([*OWNER, "--event-id", event_id]).execute is False
-    for bad in ([*OWNER], [*OWNER, "--event-id", event_id, "--type", "x", "--since", "2026-01-01T00:00:00Z"],
-                [*OWNER, "--type", "x"], [*OWNER, "--event-id", event_id, "--limit", "0"],
-                [*OWNER, "--event-id", event_id, "--limit", "1001"], ["--owner-user-id", "0", "--event-id", event_id],
-                [*OWNER, "--type", "x", "--since", "2026-01-01T00:00:00"]):
+    for bad in (
+        [*OWNER],
+        [*OWNER, "--event-id", event_id, "--type", "x", "--since", "2026-01-01T00:00:00Z"],
+        [*OWNER, "--type", "x"],
+        [*OWNER, "--event-id", event_id, "--limit", "0"],
+        [*OWNER, "--event-id", event_id, "--limit", "1001"],
+        ["--owner-user-id", "0", "--event-id", event_id],
+        [*OWNER, "--type", "x", "--since", "2026-01-01T00:00:00"],
+    ):
         with pytest.raises(SystemExit):
             replay.parse_args(bad)
-    parsed = replay.parse_args([*OWNER, "--type", "x", "--since", "2026-01-01T00:00:00Z", "--execute"])
+    parsed = replay.parse_args(
+        [*OWNER, "--type", "x", "--since", "2026-01-01T00:00:00Z", "--execute"]
+    )
     assert parsed.since == datetime(2026, 1, 1, tzinfo=UTC) and parsed.execute is True
 
 
@@ -58,7 +65,9 @@ def _row():
 async def test_dry_run_selects_failed_owner_rows_and_writes_nothing(capsys):
     """The default mode only selects: failed status, owner principal and workspace-owner join."""
     session = FakeSession([_row()])
-    args = replay.parse_args([*OWNER, "--type", "document.version.ready", "--since", "2026-01-01T00:00:00Z"])
+    args = replay.parse_args(
+        [*OWNER, "--type", "document.version.ready", "--since", "2026-01-01T00:00:00Z"]
+    )
     assert await replay.run(args, session) == 0
     assert len(session.statements) == 1 and session.commits == 0
     sql = _sql(session.statements[0])
@@ -106,7 +115,9 @@ async def test_destructive_types_are_refused_without_the_allow_flag(event_type, 
     assert await replay.run(args, session) == 2
     assert session.commits == 0 and len(session.statements) == 1
     assert "DESTRUCTIVE" in capsys.readouterr().out
-    allowed = replay.parse_args([*OWNER, "--event-id", str(uuid4()), "--execute", "--allow-destructive"])
+    allowed = replay.parse_args(
+        [*OWNER, "--event-id", str(uuid4()), "--execute", "--allow-destructive"]
+    )
     session = FakeSession([row])
     assert await replay.run(allowed, session) == 0
     assert session.commits == 1 and "event_outbox.status = 'failed'" in _sql(session.statements[1])
@@ -116,7 +127,9 @@ async def test_destructive_types_are_refused_without_the_allow_flag(event_type, 
 async def test_destructive_dry_run_reports_type_and_status(capsys):
     """A dry run is allowed but flags destructive rows and shows type/status."""
     row = SimpleNamespace(id=uuid4(), type="source.purge.requested", created_at=datetime.now(UTC))
-    args = replay.parse_args([*OWNER, "--type", "source.purge.requested", "--since", "2026-01-01T00:00:00Z"])
+    args = replay.parse_args(
+        [*OWNER, "--type", "source.purge.requested", "--since", "2026-01-01T00:00:00Z"]
+    )
     assert await replay.run(args, FakeSession([row])) == 0
     out = capsys.readouterr().out
     assert "source.purge.requested status=failed" in out and "DESTRUCTIVE" in out
@@ -126,5 +139,9 @@ def test_stage_events_stay_replayable_without_destructive_flag() -> None:
     """Routine stage recovery must not require ``--allow-destructive``."""
     from core.events.replay import is_destructive
 
-    for event_type in ("ingestion.stage.requested", "connector.crawl.requested", "ingestion.normalize.requested"):
+    for event_type in (
+        "ingestion.stage.requested",
+        "connector.crawl.requested",
+        "ingestion.normalize.requested",
+    ):
         assert not is_destructive(event_type)

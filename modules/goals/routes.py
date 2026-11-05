@@ -25,9 +25,13 @@ from modules.goals.schemas import (
 )
 from modules.settings.public import module_dependency
 
-router = APIRouter(prefix="/api/v1/goals", tags=["goals"], dependencies=[Depends(module_dependency("goals"))])
+router = APIRouter(
+    prefix="/api/v1/goals", tags=["goals"], dependencies=[Depends(module_dependency("goals"))]
+)
 Session = Annotated[AsyncSession, Depends(get_session)]
-WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
+WorkspaceRead = Annotated[
+    WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)
+]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
@@ -42,9 +46,7 @@ async def _call[T](operation: Awaitable[T]) -> T:
         ) from exc
     except GoalConflict as exc:
         details = (
-            {"current_revision": exc.current_revision}
-            if exc.current_revision is not None
-            else {}
+            {"current_revision": exc.current_revision} if exc.current_revision is not None else {}
         )
         raise HTTPException(
             status_code=409,
@@ -71,36 +73,50 @@ async def list_goals(
     """List owner goals with optional status filtering, search, and cursor pagination."""
     _no_store(response)
     goal_filter = GoalFilter(status=goal_status, q=q, limit=limit, cursor=cursor)
-    return await _call(public.list_goals(
-        session, goal_filter, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    ))
+    return await _call(
+        public.list_goals(
+            session,
+            goal_filter,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=GoalRead)
 async def create_goal(
-    payload: GoalCreate, session: Session, scope: WorkspaceWrite,
-    request: Request, response: Response
+    payload: GoalCreate,
+    session: Session,
+    scope: WorkspaceWrite,
+    request: Request,
+    response: Response,
 ) -> GoalRead:
     """Create a new strategic goal for the authenticated owner."""
     _no_store(response)
-    return await _call(public.create_goal(
-        session, payload, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    ))
+    return await _call(
+        public.create_goal(
+            session,
+            payload,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+    )
 
 
 @router.get("/{goal_id}", response_model=GoalRead)
 async def get_goal(
-    goal_id: UUID, session: Session, scope: WorkspaceRead,
-    request: Request, response: Response
+    goal_id: UUID, session: Session, scope: WorkspaceRead, request: Request, response: Response
 ) -> GoalRead:
     """Retrieve an existing goal by identifier."""
     _no_store(response)
-    return await _call(public.get_goal(
-        session, goal_id, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    ))
+    return await _call(
+        public.get_goal(
+            session,
+            goal_id,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+    )
 
 
 @router.patch("/{goal_id}", response_model=GoalRead)
@@ -114,24 +130,37 @@ async def update_goal(
 ) -> GoalRead:
     """Update goal fields under optimistic revision control."""
     _no_store(response)
-    return await _call(public.update_goal(
-        session, goal_id, payload, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    ))
+    return await _call(
+        public.update_goal(
+            session,
+            goal_id,
+            payload,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+    )
 
 
 @router.delete("/{goal_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_goal(
-    goal_id: UUID, session: Session, scope: WorkspaceWrite,
-    request: Request, response: Response,
+    goal_id: UUID,
+    session: Session,
+    scope: WorkspaceWrite,
+    request: Request,
+    response: Response,
     expected_revision: Annotated[int, Query(ge=1, le=9_007_199_254_740_991)],
 ) -> None:
     """Delete a goal only when the caller supplies its current revision."""
     _no_store(response)
-    await _call(public.delete_goal(
-        session, goal_id, expected_revision, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    ))
+    await _call(
+        public.delete_goal(
+            session,
+            goal_id,
+            expected_revision,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+    )
 
 
 @router.post("/{goal_id}/accept-plan", response_model=PlanAcceptanceResult)
@@ -145,7 +174,12 @@ async def accept_plan(
 ) -> PlanAcceptanceResult:
     """Atomically materialize an owner-accepted plan proposal into tasks and milestones once."""
     _no_store(response)
-    return await _call(public.accept_plan(
-        session, goal_id, payload, scope=scope,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
-    ))
+    return await _call(
+        public.accept_plan(
+            session,
+            goal_id,
+            payload,
+            scope=scope,
+            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        )
+    )

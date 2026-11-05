@@ -26,28 +26,41 @@ NOW = datetime.now(UTC)
 
 def stage(key: str, status: str) -> Any:
     """Build a stage row stand-in."""
-    return SimpleNamespace(id=uuid4(), stage_key=key, status=status, attempts=3, error_code="boom",
-                           next_attempt_at=None, lease_expires_at=NOW)
+    return SimpleNamespace(
+        id=uuid4(),
+        stage_key=key,
+        status=status,
+        attempts=3,
+        error_code="boom",
+        next_attempt_at=None,
+        lease_expires_at=NOW,
+    )
 
 
-@pytest.mark.parametrize("statuses,requested,expected", [
-    ([("receive", "running")], None, None),
-    ([("receive", "succeeded"), ("normalize", "succeeded")], None, None),
-    ([("receive", "cancelled")], None, None),
-    ([("normalize", "failed"), ("receive", "failed")], None, "receive"),
-    ([("normalize", "failed"), ("receive", "failed")], "normalize", "normalize"),
-    ([("parse_file", "failed"), ("zzz", "failed")], None, "parse_file"),
-])
+@pytest.mark.parametrize(
+    "statuses,requested,expected",
+    [
+        ([("receive", "running")], None, None),
+        ([("receive", "succeeded"), ("normalize", "succeeded")], None, None),
+        ([("receive", "cancelled")], None, None),
+        ([("normalize", "failed"), ("receive", "failed")], None, "receive"),
+        ([("normalize", "failed"), ("receive", "failed")], "normalize", "normalize"),
+        ([("parse_file", "failed"), ("zzz", "failed")], None, "parse_file"),
+    ],
+)
 def test_choose_retry_stage(statuses, requested, expected):
     """The earliest failed stage in pipeline order is chosen; non-retryable runs select nothing."""
     chosen = _runs._choose_retry_stage([stage(k, s) for k, s in statuses], requested)
     assert (chosen.stage_key if chosen else None) == expected
 
 
-@pytest.mark.parametrize("statuses,requested,detail", [
-    ([("receive", "pending")], "receive", "Ingestion run still has an active stage"),
-    ([("receive", "failed")], "normalize", "Requested stage is not retryable"),
-])
+@pytest.mark.parametrize(
+    "statuses,requested,detail",
+    [
+        ([("receive", "pending")], "receive", "Ingestion run still has an active stage"),
+        ([("receive", "failed")], "normalize", "Requested stage is not retryable"),
+    ],
+)
 def test_choose_retry_stage_conflicts(statuses, requested, detail):
     """A requested retry against an active run, or of a stage that did not fail, is a 409."""
     with pytest.raises(DomainError) as exc:
@@ -58,22 +71,44 @@ def test_choose_retry_stage_conflicts(statuses, requested, detail):
 def test_reacquire_collection_lease_rules():
     """The lease moves to the run unless another live run owns it or ownership state is inconsistent."""
     run = SimpleNamespace(id=RUN_ID)
-    state = SimpleNamespace(lease_run_id=None, lease_expires_at=None, collection_lease_token=uuid4())
+    state = SimpleNamespace(
+        lease_run_id=None, lease_expires_at=None, collection_lease_token=uuid4()
+    )
     _runs._reacquire_collection_lease(state, run)
-    assert state.lease_run_id == RUN_ID and state.collection_lease_token is None and state.lease_expires_at > NOW
-    for bad in (SimpleNamespace(lease_run_id=uuid4(), lease_expires_at=None, collection_lease_token=None),
-                SimpleNamespace(lease_run_id=uuid4(), lease_expires_at=NOW + timedelta(minutes=5), collection_lease_token=None),
-                SimpleNamespace(lease_run_id=None, lease_expires_at=NOW + timedelta(minutes=5), collection_lease_token=None)):
+    assert (
+        state.lease_run_id == RUN_ID
+        and state.collection_lease_token is None
+        and state.lease_expires_at > NOW
+    )
+    for bad in (
+        SimpleNamespace(lease_run_id=uuid4(), lease_expires_at=None, collection_lease_token=None),
+        SimpleNamespace(
+            lease_run_id=uuid4(),
+            lease_expires_at=NOW + timedelta(minutes=5),
+            collection_lease_token=None,
+        ),
+        SimpleNamespace(
+            lease_run_id=None,
+            lease_expires_at=NOW + timedelta(minutes=5),
+            collection_lease_token=None,
+        ),
+    ):
         with pytest.raises(DomainError):
             _runs._reacquire_collection_lease(bad, run)
-    own = SimpleNamespace(lease_run_id=RUN_ID, lease_expires_at=NOW + timedelta(minutes=5), collection_lease_token=None)
+    own = SimpleNamespace(
+        lease_run_id=RUN_ID,
+        lease_expires_at=NOW + timedelta(minutes=5),
+        collection_lease_token=None,
+    )
     _runs._reacquire_collection_lease(own, run)  # a run may renew its own live lease
 
 
 class Session:
     """Scripted session for the retry flow."""
 
-    def __init__(self, *, state: Any, run: Any, stages: list[Any], prior: Any, failed_progress: Any = None) -> None:
+    def __init__(
+        self, *, state: Any, run: Any, stages: list[Any], prior: Any, failed_progress: Any = None
+    ) -> None:
         self.state, self.run, self.stages, self.prior = state, run, stages, prior
         self.failed_progress = failed_progress
         self.log: list[str] = []
@@ -104,7 +139,9 @@ class Session:
         self.log.append("refresh")
 
 
-async def run_retry(session: Session, requested: str | None = None, *, source_status: str = "active") -> Any:
+async def run_retry(
+    session: Session, requested: str | None = None, *, source_status: str = "active"
+) -> Any:
     """Invoke ``retry_run`` with admission, Source lock and publication replaced by recorders."""
     fence = SimpleNamespace(id=SOURCE_ID, status=source_status, generation=1)
 
@@ -120,27 +157,42 @@ async def run_retry(session: Session, requested: str | None = None, *, source_st
         session.log.append("commit_with_replay")
         session.changes = changes
 
-    with patch_ingestion("_admit_ingestion_scope", return_value=None), \
-            patch_ingestion("publish_event", publish), patch_ingestion("commit_with_replay", commit), \
-            patch_ingestion("make_ingestion_change", lambda *a, **k: ("change", a[3], a[4])):
+    with (
+        patch_ingestion("_admit_ingestion_scope", return_value=None),
+        patch_ingestion("publish_event", publish),
+        patch_ingestion("commit_with_replay", commit),
+        patch_ingestion("make_ingestion_change", lambda *a, **k: ("change", a[3], a[4])),
+    ):
         from modules.sources import public as sources
 
         original = sources.lock_source_set
         sources.lock_source_set = lock_set
         try:
-            return await ingestion.retry_run(session, RUN_ID, requested, scope=SCOPE, multi_workspace_enabled=False)
+            return await ingestion.retry_run(
+                session, RUN_ID, requested, scope=SCOPE, multi_workspace_enabled=False
+            )
         finally:
             sources.lock_source_set = original
 
 
-def make_session(stage_key: str = "receive", *, generation: Any = 1, state: Any = "default", **kw: Any) -> Session:
+def make_session(
+    stage_key: str = "receive", *, generation: Any = 1, state: Any = "default", **kw: Any
+) -> Session:
     """Build a session with one failed stage and a prior event carrying ``generation``."""
     failed = stage(stage_key, "failed")
     run = SimpleNamespace(id=RUN_ID, status="failed", error_code="x")
-    prior = SimpleNamespace(type="ingestion.stage.requested", payload={
-        "run_id": str(RUN_ID), "stage_id": str(failed.id), "source_generation": generation})
+    prior = SimpleNamespace(
+        type="ingestion.stage.requested",
+        payload={
+            "run_id": str(RUN_ID),
+            "stage_id": str(failed.id),
+            "source_generation": generation,
+        },
+    )
     if state == "default":
-        state = SimpleNamespace(lease_run_id=None, lease_expires_at=None, collection_lease_token=None)
+        state = SimpleNamespace(
+            lease_run_id=None, lease_expires_at=None, collection_lease_token=None
+        )
     return Session(state=state, run=run, stages=[failed], prior=prior, **kw)
 
 
@@ -151,12 +203,27 @@ async def test_retry_resets_the_stage_republishes_and_reacquires_the_lease():
     run = await run_retry(session)
     assert run is session.run and run.status == "queued" and run.error_code is None
     failed = session.stages[0]
-    assert (failed.status, failed.attempts, failed.error_code, failed.lease_expires_at) == ("pending", 0, None, None)
+    assert (failed.status, failed.attempts, failed.error_code, failed.lease_expires_at) == (
+        "pending",
+        0,
+        None,
+        None,
+    )
     assert session.log == [
-        "scalar:IngestionRun", "lock_source_set", "get:state", "scalar:IngestionRun", "scalars:stages",
-        "scalar:EventOutbox", "publish:ingestion.stage.requested", "commit_with_replay", "refresh",
+        "scalar:IngestionRun",
+        "lock_source_set",
+        "get:state",
+        "scalar:IngestionRun",
+        "scalars:stages",
+        "scalar:EventOutbox",
+        "publish:ingestion.stage.requested",
+        "commit_with_replay",
+        "refresh",
     ]
-    assert session.published.payload == session.prior.payload and session.published.producer == "modules.ingestion"
+    assert (
+        session.published.payload == session.prior.payload
+        and session.published.producer == "modules.ingestion"
+    )
     assert session.state.lease_run_id == RUN_ID and session.state.lease_expires_at > NOW
     assert session.changes == [("change", "receive", "pending")]
 
@@ -176,13 +243,30 @@ async def test_retry_conflicts():
     cases = [
         (make_session(generation=2), "Failed stage belongs to an obsolete source generation"),
         (make_session(generation="1"), "Failed stage belongs to an obsolete source generation"),
-        (make_session("normalize", failed_progress=uuid4()), "Invalid observations require correction before normalization retry"),
-        (make_session(state=SimpleNamespace(
-            lease_run_id=None, lease_expires_at=NOW + timedelta(minutes=5), collection_lease_token=uuid4())),
-         "Source collection is already in progress"),
-        (make_session(state=SimpleNamespace(
-            lease_run_id=uuid4(), lease_expires_at=NOW + timedelta(minutes=5), collection_lease_token=None)),
-         "Source already has an active collection run"),
+        (
+            make_session("normalize", failed_progress=uuid4()),
+            "Invalid observations require correction before normalization retry",
+        ),
+        (
+            make_session(
+                state=SimpleNamespace(
+                    lease_run_id=None,
+                    lease_expires_at=NOW + timedelta(minutes=5),
+                    collection_lease_token=uuid4(),
+                )
+            ),
+            "Source collection is already in progress",
+        ),
+        (
+            make_session(
+                state=SimpleNamespace(
+                    lease_run_id=uuid4(),
+                    lease_expires_at=NOW + timedelta(minutes=5),
+                    collection_lease_token=None,
+                )
+            ),
+            "Source already has an active collection run",
+        ),
     ]
     for session, detail in cases:
         with pytest.raises(DomainError) as exc:
@@ -213,7 +297,14 @@ async def test_retry_edge_cases():
     gone.hint = None
     assert await run_retry(gone) is None
 
-    stale = make_session(state=SimpleNamespace(
-        lease_run_id=None, lease_expires_at=NOW - timedelta(minutes=1), collection_lease_token=uuid4()))
+    stale = make_session(
+        state=SimpleNamespace(
+            lease_run_id=None,
+            lease_expires_at=NOW - timedelta(minutes=1),
+            collection_lease_token=uuid4(),
+        )
+    )
     await run_retry(stale)
-    assert stale.state.collection_lease_token is None  # an expired reservation is cleared before retrying
+    assert (
+        stale.state.collection_lease_token is None
+    )  # an expired reservation is cleared before retrying

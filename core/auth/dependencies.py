@@ -29,7 +29,9 @@ def derive_key(secret: str, purpose: str) -> bytes:
     never yields the CSRF HMAC key. Deterministic across processes, which multi-worker deployments need.
     """
     prk = hmac.new(b"umwelt-os/auth/v1", secret.encode(), hashlib.sha256).digest()  # extract
-    return hmac.new(prk, purpose.encode() + b"", hashlib.sha256).digest()  # expand: one block is 32 bytes
+    return hmac.new(
+        prk, purpose.encode() + b"", hashlib.sha256
+    ).digest()  # expand: one block is 32 bytes
 
 
 def session_middleware_secret(secret: str) -> str:
@@ -104,7 +106,9 @@ async def _current_session(
     return row
 
 
-async def _account_session(request: Request, session: AsyncSession, token: str | None) -> AuthSession:
+async def _account_session(
+    request: Request, session: AsyncSession, token: str | None
+) -> AuthSession:
     """Authenticate a live token and complete active account, subject to the rollout gate.
 
     Attach a detached account identity for scoped dependencies; no membership or data access
@@ -128,7 +132,9 @@ async def _account_session(request: Request, session: AsyncSession, token: str |
                 row.last_seen_at = now
                 await session.commit()
     account = await get_active_account(
-        session, row.owner_id, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        session,
+        row.owner_id,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     if account is None:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -149,7 +155,8 @@ async def require_owner(
 
 
 async def require_account(
-    request: Request, session: Annotated[AsyncSession, Depends(get_session)],
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AuthSession:
     """Require an active rollout-admitted account without granting legacy/operator authority."""
     return await _account_session(request, session, request.cookies.get(SESSION_COOKIE))
@@ -170,10 +177,12 @@ async def require_account_write(
     if not _origin_allowed(origin, settings):
         raise HTTPException(status_code=403, detail="Origin is not allowed")
     auth_session = await require_account(request, session)
-    if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings) or not compare_digest(
-        auth_session.csrf_hash, _hash(csrf_token or "")
-    ):
-        raise HTTPException(status_code=403, detail="CSRF token is invalid", headers={"X-CSRF-Error": "invalid"})
+    if not _valid_csrf(
+        request.cookies.get(CSRF_COOKIE), csrf_token, settings
+    ) or not compare_digest(auth_session.csrf_hash, _hash(csrf_token or "")):
+        raise HTTPException(
+            status_code=403, detail="CSRF token is invalid", headers={"X-CSRF-Error": "invalid"}
+        )
     return auth_session
 
 
@@ -198,9 +207,9 @@ async def _authorize_owner_write(
     if not _origin_allowed(origin, settings):
         raise HTTPException(status_code=403, detail="Origin is not allowed")
     auth_session = await require_owner(request, session)
-    if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings) or not compare_digest(
-        auth_session.csrf_hash, _hash(csrf_token or "")
-    ):
+    if not _valid_csrf(
+        request.cookies.get(CSRF_COOKIE), csrf_token, settings
+    ) or not compare_digest(auth_session.csrf_hash, _hash(csrf_token or "")):
         raise HTTPException(
             status_code=403,
             detail="CSRF token is invalid",

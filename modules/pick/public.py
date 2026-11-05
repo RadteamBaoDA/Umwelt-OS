@@ -16,9 +16,18 @@ OPTION_COUNT = 3
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{22}$")  # token_urlsafe(16) = 128 random bits
 # The phone can only ever choose one of these by index; the text never comes from the client.
 PROMPT_POOL: tuple[str, ...] = (
-    "Solar System", "DNA Helix", "Revenue Dashboard", "Microservices Architecture",
-    "Ocean Waves", "Neural Network", "Force-Directed Graph", "Audio Visualizer",
-    "3D Terrain", "Atom Model", "Fractal Tree", "Rocket Launch",
+    "Solar System",
+    "DNA Helix",
+    "Revenue Dashboard",
+    "Microservices Architecture",
+    "Ocean Waves",
+    "Neural Network",
+    "Force-Directed Graph",
+    "Audio Visualizer",
+    "3D Terrain",
+    "Atom Model",
+    "Fractal Tree",
+    "Rocket Launch",
 )
 State = Literal["waiting", "scanned", "picked"]
 
@@ -67,7 +76,9 @@ async def _store(redis: PickRedis, session_id: str, doc: dict[str, Any]) -> None
 async def create_session(redis: PickRedis) -> str:
     """Create a ``waiting`` session for an already-authenticated desktop caller and return its id."""
     session_id = secrets.token_urlsafe(16)
-    await _store(redis, session_id, {"state": "waiting", "expires_at": time.time() + PICK_TTL_SECONDS})
+    await _store(
+        redis, session_id, {"state": "waiting", "expires_at": time.time() + PICK_TTL_SECONDS}
+    )
     return session_id
 
 

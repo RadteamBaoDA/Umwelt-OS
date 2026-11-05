@@ -273,11 +273,15 @@ class TemporalGraph:
                 self.state = GraphState.READY
             except asyncio.CancelledError:
                 self.state = GraphState.UNAVAILABLE
-                await self._dispose_failed_driver("Graph initialization cleanup incomplete category=%s")
+                await self._dispose_failed_driver(
+                    "Graph initialization cleanup incomplete category=%s"
+                )
                 raise
             except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
                 logger.warning("Graph initialization unavailable category=%s", type(exc).__name__)
-                await self._dispose_failed_driver("Graph initialization cleanup incomplete category=%s")
+                await self._dispose_failed_driver(
+                    "Graph initialization cleanup incomplete category=%s"
+                )
                 self.state = GraphState.UNAVAILABLE
             return self.state
 
@@ -307,7 +311,10 @@ class TemporalGraph:
         def construct() -> Any:
             """Build the bounded, non-retrying Neo4j client off-loop (no network I/O happens here)."""
             return driver_type(
-                f"bolt://{config.host}:{config.port}", config.username, config.password, config.database,
+                f"bolt://{config.host}:{config.port}",
+                config.username,
+                config.password,
+                config.database,
             )
 
         loop = asyncio.get_running_loop()
@@ -392,7 +399,10 @@ class TemporalGraph:
                         await self._close_owned_driver(failed_driver)
                         self._graphiti_type = None
                     except Exception as cleanup_exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
-                        logger.warning("Graph health cleanup incomplete category=%s", type(cleanup_exc).__name__)
+                        logger.warning(
+                            "Graph health cleanup incomplete category=%s",
+                            type(cleanup_exc).__name__,
+                        )
                 return self.state
 
     async def close(self) -> None:
@@ -406,25 +416,34 @@ class TemporalGraph:
         async with self._lock:
             driver = self._driver
             self._graphiti_type = None
-            self.state = GraphState.UNCONFIGURED if self.configuration.enabled else GraphState.DISABLED
+            self.state = (
+                GraphState.UNCONFIGURED if self.configuration.enabled else GraphState.DISABLED
+            )
             if driver is not None:
                 try:
                     await self._close_owned_driver(driver)
                 except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
                     logger.warning("Graph close incomplete category=%s", type(exc).__name__)
 
-    def _graphiti(self, context: OperationAuthorization, gateway: ModelGateway, driver: Any | None = None) -> Any:
+    def _graphiti(
+        self, context: OperationAuthorization, gateway: ModelGateway, driver: Any | None = None
+    ) -> Any:
         """Inject controlled clients and an operation driver so Graphiti cannot use provider defaults."""
         if self.state != GraphState.READY or self._driver is None or self._graphiti_type is None:
             raise GraphOperationError("graph_unavailable")
         llm, embedder, cross_encoder = _make_clients(context, gateway)
         return self._graphiti_type(
-            graph_driver=driver or self._driver, llm_client=llm, embedder=embedder,
-            cross_encoder=cross_encoder, max_coroutines=1,
+            graph_driver=driver or self._driver,
+            llm_client=llm,
+            embedder=embedder,
+            cross_encoder=cross_encoder,
+            max_coroutines=1,
         )
 
     @asynccontextmanager
-    async def dispatch_session(self, context: OperationAuthorization) -> AsyncIterator[DispatchOwnership]:
+    async def dispatch_session(
+        self, context: OperationAuthorization
+    ) -> AsyncIterator[DispatchOwnership]:
         """Journal a unique dispatch token before all operation graph transactions.
 
         The owner callback must commit exact identity under its live operation
@@ -438,9 +457,12 @@ class TemporalGraph:
         Completion callback runs only after normal fully replied scope closure,
         updating this exact dispatch rather than any earlier unknown one.
         """
-        if (self.state != GraphState.READY or self._driver is None
-                or context.record_dispatch_ownership is None
-                or _dispatch_scope.get() is not None):
+        if (
+            self.state != GraphState.READY
+            or self._driver is None
+            or context.record_dispatch_ownership is None
+            or _dispatch_scope.get() is not None
+        ):
             raise GraphOperationError("graph_dispatch_ownership_required")
         context_token = None
         scope: _DispatchScope | None = None
@@ -448,14 +470,18 @@ class TemporalGraph:
         try:
             async with asyncio.timeout(QUERY_SECONDS):
                 rows = await self._driver.control_query(
-                    "SHOW SETTINGS YIELD name, value WHERE name = 'db.transaction.timeout'", {}, read=True,
+                    "SHOW SETTINGS YIELD name, value WHERE name = 'db.transaction.timeout'",
+                    {},
+                    read=True,
                 )
                 if len(rows) != 1 or not _positive_server_duration(rows[0].get("value")):
                     raise GraphOperationError("graph_write_timeout_unconfigured")
                 # Neo4j exposes no comparable server/client identity; mint an unguessable one.
                 ownership = DispatchOwnership(
-                    context.operation_id, context.group_id,
-                    secrets.token_hex(20), secrets.randbelow(2**63 - 2) + 1,
+                    context.operation_id,
+                    context.group_id,
+                    secrets.token_hex(20),
+                    secrets.randbelow(2**63 - 2) + 1,
                 )
                 await context.record_dispatch_ownership(ownership)
             scope = _DispatchScope(ownership)
@@ -478,7 +504,9 @@ class TemporalGraph:
                 await context.record_dispatch_completion(ownership)
 
     async def verify_dispatch_cessation(
-        self, ownership: DispatchOwnership, context: OperationAuthorization,
+        self,
+        ownership: DispatchOwnership,
+        context: OperationAuthorization,
     ) -> bool:
         """Terminate exactly an owner-journaled dispatch's transactions and prove cessation.
 
@@ -491,14 +519,19 @@ class TemporalGraph:
         No graph/model context is loaded; this says nothing about success,
         requiring exact-ID reconciliation.
         """
-        if (self.state != GraphState.READY or self._driver is None
-                or ownership.group_id != context.group_id
-                or ownership.operation_id != context.operation_id
-                or context.authorize_dispatch_cessation is None):
+        if (
+            self.state != GraphState.READY
+            or self._driver is None
+            or ownership.group_id != context.group_id
+            or ownership.operation_id != context.operation_id
+            or context.authorize_dispatch_cessation is None
+        ):
             raise GraphOperationError("graph_dispatch_cessation_denied")
         await context.authorize_dispatch_cessation(ownership)
-        show = ("SHOW TRANSACTIONS YIELD transactionId, metaData "
-                "WHERE metaData.umwelt_dispatch = $token RETURN transactionId")
+        show = (
+            "SHOW TRANSACTIONS YIELD transactionId, metaData "
+            "WHERE metaData.umwelt_dispatch = $token RETURN transactionId"
+        )
         token = _DispatchScope(ownership).token
         driver = self._driver
         try:
@@ -519,7 +552,8 @@ class TemporalGraph:
             raise _safe_error(exc) from None
 
     async def _partition_driver(
-        self, group_id: str,
+        self,
+        group_id: str,
         write_intent_hook: Callable[..., Awaitable[None]] | None = None,
     ) -> Any:
         """Return a per-operation driver copy only inside a journaled dispatch scope.
@@ -538,10 +572,17 @@ class TemporalGraph:
         return driver
 
     async def _record_bulk_write_intent(
-        self, request: EpisodeRequest, context: OperationAuthorization,
-        shell_receipt: GraphWriteReceipt, latest_receipt: list[GraphWriteReceipt | None],
-        episodes: Sequence[Any], mentions: Sequence[Any], nodes: Sequence[Any],
-        facts: Sequence[Any], driver: Any, *,
+        self,
+        request: EpisodeRequest,
+        context: OperationAuthorization,
+        shell_receipt: GraphWriteReceipt,
+        latest_receipt: list[GraphWriteReceipt | None],
+        episodes: Sequence[Any],
+        mentions: Sequence[Any],
+        nodes: Sequence[Any],
+        facts: Sequence[Any],
+        driver: Any,
+        *,
         final_node_payloads: Sequence[dict[str, Any]] | None = None,
     ) -> None:
         """Journal IDs first, then final hydrated node state before any captured bulk write dispatch.
@@ -556,17 +597,30 @@ class TemporalGraph:
         entity_ids, _, fact_ids = ids
         prior_entity_states = await _prior_entity_states(driver, request, context, entity_ids)
         previous_receipt = latest_receipt[0]
-        if (final_node_payloads is not None and previous_receipt is not None
-                and previous_receipt.phase == "bulk_ids_intent"
-                and previous_receipt.prior_entity_state_fingerprints != prior_entity_states):
+        if (
+            final_node_payloads is not None
+            and previous_receipt is not None
+            and previous_receipt.phase == "bulk_ids_intent"
+            and previous_receipt.prior_entity_state_fingerprints != prior_entity_states
+        ):
             raise GraphOperationError("graph_write_intent_prior_state_changed")
         intended_entity_states: tuple[tuple[str, str | None], ...] = ()
         if final_node_payloads is not None:
-            intended_entity_states = _intended_entity_states(context, entity_ids, final_node_payloads)
+            intended_entity_states = _intended_entity_states(
+                context, entity_ids, final_node_payloads
+            )
         states, support = await _fact_states_and_support(driver, request, context, facts, fact_ids)
         receipt = _bulk_receipt(
-            request, context, shell_receipt, episodes, ids, prior_entity_states,
-            intended_entity_states, states, support, final_node_payloads is not None,
+            request,
+            context,
+            shell_receipt,
+            episodes,
+            ids,
+            prior_entity_states,
+            intended_entity_states,
+            states,
+            support,
+            final_node_payloads is not None,
         )
         try:
             await context.validate_partition("upsert", str(request.episode_id))
@@ -579,8 +633,10 @@ class TemporalGraph:
             await context.validate_partition("upsert", str(request.episode_id))
 
     async def _validate_partition(
-        self, context: OperationAuthorization,
-        operation: Literal["search", "upsert", "delete", "reconcile"], episode_id: str | None = None,
+        self,
+        context: OperationAuthorization,
+        operation: Literal["search", "upsert", "delete", "reconcile"],
+        episode_id: str | None = None,
     ) -> None:
         """Prove owner readiness and inventory, allowing only this authorized target to be absent."""
         # Owner validation checks full canonical support and cleanup state, not recent history.
@@ -609,8 +665,12 @@ class TemporalGraph:
             raise GraphOperationError("graph_partition_inventory_mismatch")
 
     async def _ensure_canonical_nodes(
-        self, request: EpisodeRequest, context: OperationAuthorization, driver: Any,
-        write_started: list[bool], latest_receipt: list[GraphWriteReceipt | None],
+        self,
+        request: EpisodeRequest,
+        context: OperationAuthorization,
+        driver: Any,
+        write_started: list[bool],
+        latest_receipt: list[GraphWriteReceipt | None],
     ) -> tuple[str, ...]:
         """Journal and materialize source-proved canonical seeds, then verify each exact UUID."""
         from graphiti_core.nodes import EntityNode
@@ -627,14 +687,19 @@ class TemporalGraph:
                 if current.group_id != request.group_id:
                     raise GraphOperationError("graph_canonical_entity_partition_mismatch")
                 await current.load_name_embedding(driver)
-                if (binding.prior_node_state_fingerprint is None
-                        or _entity_state_fingerprint(current, context.embedding.dimensions)
-                        != binding.prior_node_state_fingerprint):
+                if (
+                    binding.prior_node_state_fingerprint is None
+                    or _entity_state_fingerprint(current, context.embedding.dimensions)
+                    != binding.prior_node_state_fingerprint
+                ):
                     raise GraphOperationError("graph_canonical_entity_state_changed")
                 verified.append(binding.graph_entity_uuid)
                 continue
-            if (binding.node_name is None or not binding.node_name.strip()
-                    or not any(field == "name" for field, _, _ in binding.field_support)):
+            if (
+                binding.node_name is None
+                or not binding.node_name.strip()
+                or not any(field == "name" for field, _, _ in binding.field_support)
+            ):
                 raise GraphOperationError("graph_canonical_entity_seed_unavailable")
             entity = EntityNode(
                 uuid=binding.graph_entity_uuid,
@@ -645,7 +710,9 @@ class TemporalGraph:
                 labels=["Entity"],
             )
             intended = _entity_state_fingerprint(
-                entity, context.embedding.dimensions, writer_intended=True,
+                entity,
+                context.embedding.dimensions,
+                writer_intended=True,
             )
             receipt = GraphWriteReceipt(
                 operation_id=context.operation_id,
@@ -671,17 +738,28 @@ class TemporalGraph:
                 saved = await EntityNode.get_by_uuid(driver, binding.graph_entity_uuid)
                 await saved.load_name_embedding(driver)
             except (TimeoutError, asyncio.CancelledError):
-                raise GraphOperationUnknown("graph_canonical_entity_outcome_unknown", receipt) from None
+                raise GraphOperationUnknown(
+                    "graph_canonical_entity_outcome_unknown", receipt
+                ) from None
             except Exception:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
-                raise GraphOperationUnknown("graph_canonical_entity_outcome_unknown", receipt) from None
-            if (saved.group_id != request.group_id
-                    or _entity_state_fingerprint(saved, context.embedding.dimensions) != intended):
-                raise GraphOperationUnknown("graph_canonical_entity_outcome_unknown", receipt) from None
+                raise GraphOperationUnknown(
+                    "graph_canonical_entity_outcome_unknown", receipt
+                ) from None
+            if (
+                saved.group_id != request.group_id
+                or _entity_state_fingerprint(saved, context.embedding.dimensions) != intended
+            ):
+                raise GraphOperationUnknown(
+                    "graph_canonical_entity_outcome_unknown", receipt
+                ) from None
             verified.append(binding.graph_entity_uuid)
         return tuple(verified)
 
     async def upsert_episode(
-        self, request: EpisodeRequest, context: OperationAuthorization, gateway: ModelGateway,
+        self,
+        request: EpisodeRequest,
+        context: OperationAuthorization,
+        gateway: ModelGateway,
     ) -> dict[str, Any]:
         """Upsert a stable episode under its full source/evidence fence and durable write receipts.
 
@@ -689,9 +767,11 @@ class TemporalGraph:
         transaction span multiple non-atomic statements; a timeout returns unknown and must be reconciled
         by exact UUID before retrying.
         """
-        if (request.group_id != context.group_id
-                or str(request.episode_id) not in context.partition_episode_ids
-                or not set(request.evidence) <= set(context.evidence)):
+        if (
+            request.group_id != context.group_id
+            or str(request.episode_id) not in context.partition_episode_ids
+            or not set(request.evidence) <= set(context.evidence)
+        ):
             raise GraphOperationError("graph_episode_outside_authorized_support")
         graph_write_started = [False]
         latest_receipt: list[GraphWriteReceipt | None] = [None]
@@ -705,7 +785,11 @@ class TemporalGraph:
 
                     driver = await self._partition_driver(request.group_id)
                     verified_binding_ids = await self._ensure_canonical_nodes(
-                        request, context, driver, graph_write_started, latest_receipt,
+                        request,
+                        context,
+                        driver,
+                        graph_write_started,
+                        latest_receipt,
                     )
 
                     try:
@@ -717,13 +801,19 @@ class TemporalGraph:
                         if existing.group_id != request.group_id:
                             raise GraphOperationError("graph_episode_id_partition_conflict")
                         # Graphiti writes several non-atomic statements; never re-extract an existing ID.
-                        raise GraphOperationUnknown("graph_episode_existing_requires_reconciliation")
+                        raise GraphOperationUnknown(
+                            "graph_episode_existing_requires_reconciliation"
+                        )
                     episode = EpisodicNode(
-                        uuid=str(request.episode_id), name=request.name, group_id=request.group_id,
+                        uuid=str(request.episode_id),
+                        name=request.name,
+                        group_id=request.group_id,
                         source=EpisodeType.text,
                         source_description="BBD-OS evidence-backed temporal episode",
-                        content=request.content, valid_at=request.reference_time.astimezone(UTC),
-                        created_at=datetime.now(UTC), entity_edges=[],
+                        content=request.content,
+                        valid_at=request.reference_time.astimezone(UTC),
+                        created_at=datetime.now(UTC),
+                        entity_edges=[],
                     )
                     # Stable-ID shell exists before Graphiti extraction so partial writes remain identifiable.
                     shell_receipt = GraphWriteReceipt(
@@ -743,37 +833,55 @@ class TemporalGraph:
                         raise GraphOperationError("graph_write_intent_unavailable") from None
                     latest_receipt[0] = shell_receipt
                     driver._write_intent_hook = partial(
-                        self._record_bulk_write_intent, request, context, shell_receipt, latest_receipt,
+                        self._record_bulk_write_intent,
+                        request,
+                        context,
+                        shell_receipt,
+                        latest_receipt,
                     )
                     graphiti = self._graphiti(context, gateway, driver)
                     graph_write_started[0] = True
                     await episode.save(driver)
                     result = await graphiti.add_episode(
-                        name=request.name, episode_body=request.content, source=EpisodeType.text,
+                        name=request.name,
+                        episode_body=request.content,
+                        source=EpisodeType.text,
                         source_description="BBD-OS evidence-backed temporal episode",
                         reference_time=request.reference_time.astimezone(UTC),
-                        group_id=request.group_id, uuid=str(request.episode_id),
+                        group_id=request.group_id,
+                        uuid=str(request.episode_id),
                         previous_episode_uuids=list(context.history_episode_ids),
                     )
                     return {
-                        "episode_id": str(request.episode_id), "mapping_revision": request.mapping_revision,
+                        "episode_id": str(request.episode_id),
+                        "mapping_revision": request.mapping_revision,
                         "canonical_entity_ids": request.canonical_entity_ids,
                         "verified_canonical_bindings": tuple(
-                            (item.canonical_entity_id, item.graph_entity_uuid,
-                             item.canonical_revision, item.mapping_revision)
+                            (
+                                item.canonical_entity_id,
+                                item.graph_entity_uuid,
+                                item.canonical_revision,
+                                item.mapping_revision,
+                            )
                             for item in request.canonical_bindings
                         ),
                         "verified_canonical_graph_entity_ids": verified_binding_ids,
-                        "graph_entity_ids": tuple(node.uuid for node in getattr(result, "nodes", [])),
+                        "graph_entity_ids": tuple(
+                            node.uuid for node in getattr(result, "nodes", [])
+                        ),
                         "outcome": "succeeded",
                     }
             except (TimeoutError, asyncio.CancelledError):
-                raise GraphOperationUnknown("graph_episode_outcome_unknown", latest_receipt[0]) from None
+                raise GraphOperationUnknown(
+                    "graph_episode_outcome_unknown", latest_receipt[0]
+                ) from None
             except GraphOperationUnknown as exc:
                 raise GraphOperationUnknown(str(exc), exc.receipt or latest_receipt[0]) from None
             except GraphOperationError:
                 if graph_write_started[0]:
-                    raise GraphOperationUnknown("graph_episode_outcome_unknown", latest_receipt[0]) from None
+                    raise GraphOperationUnknown(
+                        "graph_episode_outcome_unknown", latest_receipt[0]
+                    ) from None
                 raise
             except Exception as exc:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
                 error = _safe_error(exc)
@@ -782,12 +890,21 @@ class TemporalGraph:
                 raise error from None
 
     async def search_at(
-        self, query: str, valid_at: datetime, context: OperationAuthorization,
-        gateway: ModelGateway, *, limit: int = MAX_RESULTS,
+        self,
+        query: str,
+        valid_at: datetime,
+        context: OperationAuthorization,
+        gateway: ModelGateway,
+        *,
+        limit: int = MAX_RESULTS,
     ) -> list[TemporalSearchResult]:
         """Search one source-generation partition and canonicalize every graph result."""
-        if (not query.strip() or len(query.encode()) > MAX_QUERY_BYTES or valid_at.tzinfo is None
-                or not 1 <= limit <= MAX_RESULTS):
+        if (
+            not query.strip()
+            or len(query.encode()) > MAX_QUERY_BYTES
+            or valid_at.tzinfo is None
+            or not 1 <= limit <= MAX_RESULTS
+        ):
             raise ValueError("Temporal graph search is invalid or exceeds its bounds")
         async with context.fence():
             try:
@@ -807,32 +924,39 @@ class TemporalGraph:
                     instant = valid_at.astimezone(UTC)
 
                     raw = await graphiti.search(
-                        query, group_ids=[context.group_id], num_results=limit,
+                        query,
+                        group_ids=[context.group_id],
+                        num_results=limit,
                         search_filter=SearchFilters(
-                            valid_at=[[
-                                DateFilter(
-                                    date=instant,
-                                    comparison_operator=ComparisonOperator.less_than_equal,
-                                ),
-                            ]],
-                            invalid_at=[[
-                                DateFilter(
-                                    date=instant,
-                                    comparison_operator=ComparisonOperator.greater_than,
-                                ),
-                            ], [
-                                DateFilter(comparison_operator=ComparisonOperator.is_null),
-                            ]],
+                            valid_at=[
+                                [
+                                    DateFilter(
+                                        date=instant,
+                                        comparison_operator=ComparisonOperator.less_than_equal,
+                                    ),
+                                ]
+                            ],
+                            invalid_at=[
+                                [
+                                    DateFilter(
+                                        date=instant,
+                                        comparison_operator=ComparisonOperator.greater_than,
+                                    ),
+                                ],
+                                [
+                                    DateFilter(comparison_operator=ComparisonOperator.is_null),
+                                ],
+                            ],
                         ),
                     )
                     if len(raw) > MAX_CANDIDATES:
                         raise GraphOperationError("graph_search_candidate_limit")
                     canonical = await context.canonicalize(raw)
                     allowed_episode_ids = set(context.partition_episode_ids)
-                    if (len(canonical) > limit or any(
+                    if len(canonical) > limit or any(
                         not item.episode_ids or not set(item.episode_ids) <= allowed_episode_ids
                         for item in canonical
-                    )):
+                    ):
                         raise GraphOperationError("graph_result_outside_authorized_partition")
                     return canonical
             except (TimeoutError, asyncio.CancelledError):
@@ -843,7 +967,8 @@ class TemporalGraph:
                 raise _safe_error(exc) from None
 
     async def inspect_write_receipt(
-        self, receipt: GraphWriteReceipt | tuple[GraphWriteReceipt, ...],
+        self,
+        receipt: GraphWriteReceipt | tuple[GraphWriteReceipt, ...],
         context: OperationAuthorization,
         actions: tuple[CanonicalNodeRecoveryAction, ...] = (),
     ) -> GraphReceiptInspection:
@@ -862,7 +987,9 @@ class TemporalGraph:
                     await _authorize_receipt_witnesses(context, scope.receipts, "node")
                     if scope.node_recovery:
                         if context.authorize_node_recovery is None:
-                            raise RuntimeError("invariant violated: context.authorize_node_recovery must not be None")
+                            raise RuntimeError(
+                                "invariant violated: context.authorize_node_recovery must not be None"
+                            )
                         await context.authorize_node_recovery(scope.receipts, actions)
                     await self._validate_partition(context, "reconcile", scope.episode_id)
                     driver = await self._partition_driver(context.group_id)
@@ -875,8 +1002,10 @@ class TemporalGraph:
                 raise _safe_error(exc) from None
 
     async def reconcile_canonical_nodes(
-        self, receipts: tuple[GraphWriteReceipt, ...],
-        actions: tuple[CanonicalNodeRecoveryAction, ...], context: OperationAuthorization,
+        self,
+        receipts: tuple[GraphWriteReceipt, ...],
+        actions: tuple[CanonicalNodeRecoveryAction, ...],
+        context: OperationAuthorization,
     ) -> CanonicalNodeRecoveryOutcome:
         """Apply owner-authorized node recovery after exact inventory and fingerprint checks.
 
@@ -890,8 +1019,11 @@ class TemporalGraph:
         for owner-callback ``GraphOperationError``; timeouts and other failures
         return a not-converged outcome with every action marked unresolved.
         """
-        if (self.state != GraphState.READY or self._driver is None
-                or _node_recovery_unavailable(context, receipts, actions)):
+        if (
+            self.state != GraphState.READY
+            or self._driver is None
+            or _node_recovery_unavailable(context, receipts, actions)
+        ):
             raise GraphOperationError("graph_node_recovery_unavailable")
         episode_id = _validate_node_request(context, receipts, actions)
         action_ids = {item.graph_entity_uuid for item in actions}
@@ -899,34 +1031,47 @@ class TemporalGraph:
         async with context.fence():
             try:
                 async with asyncio.timeout(OPERATION_SECONDS):
-                    return await self._reconcile_nodes_fenced(receipts, actions, context, episode_id, state)
+                    return await self._reconcile_nodes_fenced(
+                        receipts, actions, context, episode_id, state
+                    )
             except GraphOperationError:
                 raise
             except (TimeoutError, asyncio.CancelledError):
                 return state.unknown_outcome(action_ids)
             except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
-                logger.warning("Graph canonical-node recovery incomplete category=%s", type(exc).__name__)
+                logger.warning(
+                    "Graph canonical-node recovery incomplete category=%s", type(exc).__name__
+                )
                 return state.unknown_outcome(action_ids)
 
     async def _reconcile_nodes_fenced(
-        self, receipts: tuple[GraphWriteReceipt, ...],
-        actions: tuple[CanonicalNodeRecoveryAction, ...], context: OperationAuthorization,
-        episode_id: str, state: _NodeReconcileState,
+        self,
+        receipts: tuple[GraphWriteReceipt, ...],
+        actions: tuple[CanonicalNodeRecoveryAction, ...],
+        context: OperationAuthorization,
+        episode_id: str,
+        state: _NodeReconcileState,
     ) -> CanonicalNodeRecoveryOutcome:
         """Authorize, validate the partition and reconcile each node action inside the fence and timeout."""
         await _authorize_receipt_witnesses(context, receipts, "node")
         if context.authorize_node_recovery is None:
-            raise RuntimeError("invariant violated: context.authorize_node_recovery must not be None")
+            raise RuntimeError(
+                "invariant violated: context.authorize_node_recovery must not be None"
+            )
         await context.authorize_node_recovery(receipts, actions)
         await self._validate_partition(context, "reconcile", episode_id)
         driver = await self._partition_driver(context.group_id)
         for action in actions:
-            await _reconcile_node_action(driver, context, receipts, actions, action, episode_id, state)
+            await _reconcile_node_action(
+                driver, context, receipts, actions, action, episode_id, state
+            )
         return state.final_outcome()
 
     async def reconcile_fact_recovery(
-        self, receipts: tuple[GraphWriteReceipt, ...],
-        actions: tuple[ExactFactRecoveryAction, ...], context: OperationAuthorization,
+        self,
+        receipts: tuple[GraphWriteReceipt, ...],
+        actions: tuple[ExactFactRecoveryAction, ...],
+        context: OperationAuthorization,
     ) -> ExactFactRecoveryOutcome:
         """Apply fresh owner-authorized fact corrections with exact vector-aware pre/post fences.
 
@@ -940,8 +1085,11 @@ class TemporalGraph:
         owner-callback ``GraphOperationError``; timeouts and other failures return
         a not-converged outcome with every action marked unresolved.
         """
-        if (self.state != GraphState.READY or self._driver is None
-                or _fact_recovery_unavailable(context, receipts, actions)):
+        if (
+            self.state != GraphState.READY
+            or self._driver is None
+            or _fact_recovery_unavailable(context, receipts, actions)
+        ):
             raise GraphOperationError("graph_fact_recovery_unavailable")
         episode_id = _validate_fact_request(context, receipts, actions)
         action_ids = {item.fact_id for item in actions}
@@ -949,7 +1097,9 @@ class TemporalGraph:
         async with context.fence():
             try:
                 async with asyncio.timeout(OPERATION_SECONDS):
-                    return await self._reconcile_facts_fenced(receipts, actions, context, episode_id, state)
+                    return await self._reconcile_facts_fenced(
+                        receipts, actions, context, episode_id, state
+                    )
             except GraphOperationError:
                 raise
             except (TimeoutError, asyncio.CancelledError):
@@ -959,24 +1109,34 @@ class TemporalGraph:
                 return state.unknown_outcome(action_ids)
 
     async def _reconcile_facts_fenced(
-        self, receipts: tuple[GraphWriteReceipt, ...],
-        actions: tuple[ExactFactRecoveryAction, ...], context: OperationAuthorization,
-        episode_id: str, state: _FactReconcileState,
+        self,
+        receipts: tuple[GraphWriteReceipt, ...],
+        actions: tuple[ExactFactRecoveryAction, ...],
+        context: OperationAuthorization,
+        episode_id: str,
+        state: _FactReconcileState,
     ) -> ExactFactRecoveryOutcome:
         """Authorize, validate the partition and reconcile each fact action inside the fence and timeout."""
         await _authorize_receipt_witnesses(context, receipts, "fact")
         if context.authorize_fact_recovery is None:
-            raise RuntimeError("invariant violated: context.authorize_fact_recovery must not be None")
+            raise RuntimeError(
+                "invariant violated: context.authorize_fact_recovery must not be None"
+            )
         await context.authorize_fact_recovery(receipts, actions)
         await self._validate_partition(context, "reconcile", episode_id)
         driver = await self._partition_driver(context.group_id)
         for action in actions:
-            await _reconcile_fact_action(driver, context, receipts, actions, action, episode_id, state)
+            await _reconcile_fact_action(
+                driver, context, receipts, actions, action, episode_id, state
+            )
         return state.final_outcome()
 
     async def delete_episode(
-        self, episode_id: UUID, context: OperationAuthorization,
-        known_owned: bool, tombstone_recorded: bool,
+        self,
+        episode_id: UUID,
+        context: OperationAuthorization,
+        known_owned: bool,
+        tombstone_recorded: bool,
     ) -> DeleteOutcome:
         """Remove a tombstoned episode and prove current authorized recovery or return exact pending IDs.
 
@@ -993,9 +1153,13 @@ class TemporalGraph:
         window) returns a partial ``unknown`` outcome carrying the ids gathered so
         far through ``_DeleteProgress``.
         """
-        if (not known_owned or not tombstone_recorded or not _UUID.fullmatch(str(episode_id))
-                or not context.partition_episode_ids
-                or str(episode_id) not in context.partition_episode_ids):
+        if (
+            not known_owned
+            or not tombstone_recorded
+            or not _UUID.fullmatch(str(episode_id))
+            or not context.partition_episode_ids
+            or str(episode_id) not in context.partition_episode_ids
+        ):
             raise GraphOperationError("graph_delete_requires_owned_tombstone")
         if self.state != GraphState.READY or self._driver is None:
             return DeleteOutcome(str(episode_id), False, (), (), "unknown")
@@ -1011,7 +1175,10 @@ class TemporalGraph:
             return progress.partial_outcome(episode_id)
 
     async def _delete_episode_fenced(
-        self, episode_id: UUID, context: OperationAuthorization, progress: _DeleteProgress,
+        self,
+        episode_id: UUID,
+        context: OperationAuthorization,
+        progress: _DeleteProgress,
     ) -> DeleteOutcome:
         """Run the ordered delete steps inside the caller's fence and timeout.
 
@@ -1034,32 +1201,52 @@ class TemporalGraph:
         pending_fact_ids = set(plan.shared_ids)
         pending_fact_ids.update(item.fact_id for item in view.fact_actions)
         pending_node_ids = set(view.known_entity_ids)
-        receipts = await _record_cleanup_intent(context, episode_id, view, inventory, plan, validate)
+        receipts = await _record_cleanup_intent(
+            context, episode_id, view, inventory, plan, validate
+        )
         if receipts is None:
             return progress.partial_outcome(episode_id)
         await _apply_support_writes(driver, context, plan, validate)
         verification = await _delete_and_verify_episode(
-            driver, context, episode_id, inventory.episode, receipts, view.known_mention_ids, validate,
+            driver,
+            context,
+            episode_id,
+            inventory.episode,
+            receipts,
+            view.known_mention_ids,
+            validate,
         )
         await validate()
         await _authorize_recoveries(context, receipts, view.node_actions, view.fact_actions)
         pending_node_ids.difference_update(
             await _recover_nodes(driver, context, episode_id, view, receipts),
         )
-        final = await _verify_final_fact_inventory(driver, context, episode_id, view, receipts, inventory)
-        pending_fact_ids.difference_update(_recover_facts(context, episode_id, view.fact_actions, final))
+        final = await _verify_final_fact_inventory(
+            driver, context, episode_id, view, receipts, inventory
+        )
+        pending_fact_ids.difference_update(
+            _recover_facts(context, episode_id, view.fact_actions, final)
+        )
         episode_cleanup_verified = (
-            verification.episode_absent and not verification.remaining_mentions
-            and not verification.reverse_support and final.matches
+            verification.episode_absent
+            and not verification.remaining_mentions
+            and not verification.reverse_support
+            and final.matches
         )
         progress.recovery_ids = tuple(sorted(pending_node_ids))
         progress.stale_ids = tuple(sorted(pending_fact_ids & plan.stale))
         progress.shared_ids = tuple(sorted(pending_fact_ids))
         outcome: Literal["succeeded", "unknown"] = (
-            "succeeded" if episode_cleanup_verified and not pending_fact_ids and not pending_node_ids
+            "succeeded"
+            if episode_cleanup_verified and not pending_fact_ids and not pending_node_ids
             else "unknown"
         )
         return DeleteOutcome(
-            str(episode_id), episode_cleanup_verified, progress.affected_ids, progress.shared_ids,
-            outcome, progress.stale_ids, progress.recovery_ids,
+            str(episode_id),
+            episode_cleanup_verified,
+            progress.affected_ids,
+            progress.shared_ids,
+            outcome,
+            progress.stale_ids,
+            progress.recovery_ids,
         )

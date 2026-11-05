@@ -32,11 +32,28 @@ class TestRegisterModules:
 
         # Verify all canonical module IDs are present
         expected_modules = {
-            "agents", "automations", "chat", "connectors", "dashboard", "export",
-            "goals", "ingestion", "knowledge.documents", "knowledge.entities",
-            "knowledge.observations", "knowledge.relationships", "knowledge.temporal",
-            "knowledge.timeline", "memory", "news", "notifications", "observability",
-            "search", "sources", "tasks", "tools",
+            "agents",
+            "automations",
+            "chat",
+            "connectors",
+            "dashboard",
+            "export",
+            "goals",
+            "ingestion",
+            "knowledge.documents",
+            "knowledge.entities",
+            "knowledge.observations",
+            "knowledge.relationships",
+            "knowledge.temporal",
+            "knowledge.timeline",
+            "memory",
+            "news",
+            "notifications",
+            "observability",
+            "search",
+            "sources",
+            "tasks",
+            "tools",
         }
         assert set(registry.keys()) == expected_modules
 
@@ -116,12 +133,22 @@ def test_every_route_module_gate_id_is_registered() -> None:
     from core.config import Settings
 
     registry = register_modules()
-    app = create_app(Settings(public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"))
+    app = create_app(
+        Settings(
+            public_origin="http://localhost:3000", csrf_signing_secret="test-csrf-signing-secret"
+        )
+    )
     found: set[str] = set()
 
     def record(call) -> None:
         if getattr(call, "__name__", "") == "require_enabled_module":
-            cells = dict(zip(call.__code__.co_freevars, (c.cell_contents for c in call.__closure__), strict=True))
+            cells = dict(
+                zip(
+                    call.__code__.co_freevars,
+                    (c.cell_contents for c in call.__closure__),
+                    strict=True,
+                )
+            )
             found.add(cells["module_id"])
 
     def walk_dependant(dependant) -> None:

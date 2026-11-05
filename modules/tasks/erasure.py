@@ -9,8 +9,6 @@ from core.erasure_sql import AccountErasureOwner
 
 from . import models as _models  # noqa: F401 - register this owner's tables
 
-ERASURE_TABLES: tuple[str, ...] = (
-    "tasks",
-)
+ERASURE_TABLES: tuple[str, ...] = ("tasks",)
 
 ERASURE_OWNER = AccountErasureOwner(ERASURE_TABLES)

@@ -32,6 +32,7 @@ MAX_LOOKBACK_DAYS = 3660
 Revision = Annotated[StrictInt, Field(ge=1, le=9_007_199_254_740_991)]
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 
+
 class StrictConfiguration(BaseModel):
     """Reject undeclared fields while individual numeric and boolean fields enforce strict types."""
 
@@ -54,10 +55,21 @@ class GadgetScope(StrictConfiguration):
     map_layer_ids: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(
         default_factory=list, max_length=32
     )
-    live_map_providers: list[Literal[
-        "usgs", "eonet", "firms", "hackernews", "lobsters", "cisa_kev", "nvd",
-        "business", "fed", "github_releases", "sec",
-    ]] = Field(default_factory=list, max_length=11)
+    live_map_providers: list[
+        Literal[
+            "usgs",
+            "eonet",
+            "firms",
+            "hackernews",
+            "lobsters",
+            "cisa_kev",
+            "nvd",
+            "business",
+            "fed",
+            "github_releases",
+            "sec",
+        ]
+    ] = Field(default_factory=list, max_length=11)
     live_map_country: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None = None
     live_map_github_owner: Annotated[str, Field(pattern=r"^[A-Za-z0-9-]{1,39}$")] | None = None
     live_map_github_repo: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]{1,100}$")] | None = None
@@ -65,7 +77,9 @@ class GadgetScope(StrictConfiguration):
     cii_country_codes: list[Annotated[str, Field(pattern=r"^[A-Z]{2}$")]] = Field(
         default_factory=list, max_length=31
     )
-    metrics: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(default_factory=list, max_length=32)
+    metrics: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(
+        default_factory=list, max_length=32
+    )
     lookback_days: StrictInt | None = Field(default=None, ge=1, le=MAX_LOOKBACK_DAYS)
 
     @model_validator(mode="after")
@@ -112,7 +126,9 @@ class HighlightRule(StrictConfiguration):
     notify: StrictBool
     topic_ids: list[UUID] = Field(default_factory=list, max_length=MAX_TOPICS_PER_RULE)
     source_ids: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCES_PER_DEFINITION)
-    exclude_source_ids: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCES_PER_DEFINITION)
+    exclude_source_ids: list[UUID] = Field(
+        default_factory=list, max_length=MAX_SOURCES_PER_DEFINITION
+    )
     # Delivery (T6b). Defaults are dropped by exclude_defaults so legacy fingerprints stay stable.
     cooldown_minutes: int = Field(default=0, ge=0, le=MAX_COOLDOWN_MINUTES)
     expires_at: AwareDatetime | None = None
@@ -240,7 +256,10 @@ class InstanceCreate(StrictConfiguration):
     expected_revision: Revision
     group_id: UUID | None = None
     definition_id: UUID
-    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)] | None = None
+    title: (
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+        | None
+    ) = None
     position: Annotated[StrictInt, Field(ge=0, le=2_147_483_647)] = 0
 
 
@@ -249,7 +268,10 @@ class InstancePatch(StrictConfiguration):
 
     expected_revision: Revision
     group_id: UUID | None = None
-    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)] | None = None
+    title: (
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+        | None
+    ) = None
     position: Annotated[StrictInt, Field(ge=0, le=2_147_483_647)] | None = None
 
 
@@ -305,13 +327,29 @@ class PresetApplyRequest(PresetPreviewRequest):
         Append is non-destructive, so it needs the target and revision but never the replace confirmation.
         """
         if self.mode == "create":
-            if self.target_dashboard_id is not None or self.expected_revision is not None or self.replace_confirmed:
+            if (
+                self.target_dashboard_id is not None
+                or self.expected_revision is not None
+                or self.replace_confirmed
+            ):
                 raise ValueError("create mode cannot include replacement fields")
         elif self.mode == "append":
-            if self.target_dashboard_id is None or self.expected_revision is None or self.replace_confirmed:
-                raise ValueError("append mode requires target and expected_revision, without replace_confirmed")
-        elif self.target_dashboard_id is None or self.expected_revision is None or not self.replace_confirmed:
-            raise ValueError("replace mode requires target, expected_revision, and replace_confirmed")
+            if (
+                self.target_dashboard_id is None
+                or self.expected_revision is None
+                or self.replace_confirmed
+            ):
+                raise ValueError(
+                    "append mode requires target and expected_revision, without replace_confirmed"
+                )
+        elif (
+            self.target_dashboard_id is None
+            or self.expected_revision is None
+            or not self.replace_confirmed
+        ):
+            raise ValueError(
+                "replace mode requires target, expected_revision, and replace_confirmed"
+            )
         return self
 
 
@@ -326,6 +364,7 @@ class DashboardWarning(StrictConfiguration):
 
 class DashboardHighlightRead(StrictConfiguration):
     """Expose one explainable current-version match for a configured highlight rule."""
+
     document_id: UUID
     document_version_id: UUID
     source_id: UUID
@@ -640,7 +679,9 @@ class HighlightPreviewRequest(StrictConfiguration):
     source_ids: list[UUID] = Field(min_length=1, max_length=MAX_SOURCES_PER_DEFINITION)
     rules: list[HighlightRule] = Field(min_length=1, max_length=MAX_RULES_PER_DEFINITION)
     days: Annotated[StrictInt, Field(ge=1, le=7)] = 7
-    source_item_ids: list[UUID] = Field(default_factory=list, max_length=100)  # the gadget's item scope
+    source_item_ids: list[UUID] = Field(
+        default_factory=list, max_length=100
+    )  # the gadget's item scope
 
     @model_validator(mode="after")
     def ensure_distinct(self) -> "HighlightPreviewRequest":

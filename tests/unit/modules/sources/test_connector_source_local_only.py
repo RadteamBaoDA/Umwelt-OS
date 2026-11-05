@@ -13,8 +13,16 @@ from modules.sources.schemas import ConnectorSource
 @pytest.mark.parametrize("flag", [True, False])
 def test_connector_source_projection_round_trips_local_only(flag):
     row = SimpleNamespace(
-        id=uuid4(), workspace_id=uuid4(), type="connector", status="active", generation=1,
-        configuration={}, provider="rss", local_only=flag, graph_enabled=True, rag_index_enabled=True,
+        id=uuid4(),
+        workspace_id=uuid4(),
+        type="connector",
+        status="active",
+        generation=1,
+        configuration={},
+        provider="rss",
+        local_only=flag,
+        graph_enabled=True,
+        rag_index_enabled=True,
     )
     projected = _connector_source(row)
     assert projected.local_only is flag
@@ -24,4 +32,11 @@ def test_connector_source_projection_round_trips_local_only(flag):
 
 def test_connector_source_requires_local_only():
     with pytest.raises(ValidationError):
-        ConnectorSource(id=uuid4(), workspace_id=uuid4(), type="c", status="active", generation=1, configuration={})
+        ConnectorSource(
+            id=uuid4(),
+            workspace_id=uuid4(),
+            type="c",
+            status="active",
+            generation=1,
+            configuration={},
+        )

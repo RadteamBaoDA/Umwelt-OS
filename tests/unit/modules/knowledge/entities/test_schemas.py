@@ -26,9 +26,21 @@ from modules.knowledge.entities.schemas import (
 )
 
 VALID_ENTITY_TYPES: list[str] = [
-    "person", "organization", "company", "project", "repository",
-    "place", "country", "product", "topic", "technology",
-    "asset", "device", "website", "event_subject", "other",
+    "person",
+    "organization",
+    "company",
+    "project",
+    "repository",
+    "place",
+    "country",
+    "product",
+    "topic",
+    "technology",
+    "asset",
+    "device",
+    "website",
+    "event_subject",
+    "other",
 ]
 
 

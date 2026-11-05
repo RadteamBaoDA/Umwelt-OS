@@ -26,7 +26,9 @@ from modules.ingestion.schemas import (
 def _make_telegram_update(update_id: int, message_text: str = "hello") -> tuple[dict, str]:
     """Helper to build a canonical update dict and its SHA-256 hex digest."""
     update = {"update_id": update_id, "message": {"text": message_text}}
-    encoded = json.dumps(update, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    encoded = json.dumps(update, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
     return update, sha256(encoded).hexdigest()
 
 
@@ -110,7 +112,9 @@ class TestReceiveBatchAndReceipt:
         assert batch.source_generation == 1
         assert len(batch.records) == 1
 
-    @pytest.mark.parametrize("reserved_key", ["provider_record", "_owner_telegram_proof", "_native_telegram"])
+    @pytest.mark.parametrize(
+        "reserved_key", ["provider_record", "_owner_telegram_proof", "_native_telegram"]
+    )
     def test_reserved_metadata_keys_rejected(self, reserved_key: str) -> None:
         now = datetime.now(UTC)
         rec = IngestionRecord(
@@ -331,9 +335,7 @@ class TestClassifyTelegramProbe:
         raw1 = TelegramRawDelivery(update_id=10, raw_update_sha256=d1, update=u1)
         raw2 = TelegramRawDelivery(update_id=11, raw_update_sha256=d2, update=u2)
 
-        res = classify_telegram_probe(
-            None, (raw1, raw2), received_at=now, verified_bot_id="123"
-        )
+        res = classify_telegram_probe(None, (raw1, raw2), received_at=now, verified_bot_id="123")
         assert res.conflict_code is None
         assert res.epoch == 1
         assert res.replay_update_ids == ()
@@ -357,9 +359,7 @@ class TestClassifyTelegramProbe:
         )
 
         raw1 = TelegramRawDelivery(update_id=10, raw_update_sha256=d1, update=u1)
-        res = classify_telegram_probe(
-            cursor, (raw1,), received_at=now, verified_bot_id="123"
-        )
+        res = classify_telegram_probe(cursor, (raw1,), received_at=now, verified_bot_id="123")
         assert res.conflict_code is None
         assert res.epoch == 1
         assert res.replay_update_ids == (10,)
@@ -381,9 +381,7 @@ class TestClassifyTelegramProbe:
         u2, d2 = _make_telegram_update(11, "msg2")
         raw2 = TelegramRawDelivery(update_id=11, raw_update_sha256=d2, update=u2)
 
-        res = classify_telegram_probe(
-            cursor, (raw2,), received_at=now, verified_bot_id="123"
-        )
+        res = classify_telegram_probe(cursor, (raw2,), received_at=now, verified_bot_id="123")
         assert res.conflict_code is None
         assert res.epoch == 1
         assert res.replay_update_ids == ()
@@ -400,7 +398,5 @@ class TestClassifyTelegramProbe:
         raw1 = TelegramRawDelivery(update_id=12, raw_update_sha256=d1, update=u1)
         raw2 = TelegramRawDelivery(update_id=10, raw_update_sha256=d2, update=u2)
 
-        res = classify_telegram_probe(
-            None, (raw1, raw2), received_at=now, verified_bot_id="123"
-        )
+        res = classify_telegram_probe(None, (raw1, raw2), received_at=now, verified_bot_id="123")
         assert res.conflict_code == "telegram_stream_conflict"

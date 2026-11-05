@@ -48,7 +48,9 @@ def grants(monkeypatch):
 
 
 def _sql(statement) -> str:
-    return str(statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    return str(
+        statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+    )
 
 
 @pytest.mark.asyncio
@@ -56,7 +58,12 @@ async def test_grant_predicate_precedes_order_and_limit(grants) -> None:
     session = FakeSession()
     request = SearchRequest(query="alpha", mode="hybrid")
     result = await public.search(
-        session, None, None, request, scope=MEMBER, multi_workspace_enabled=True,  # type: ignore[arg-type]
+        session,
+        None,
+        None,
+        request,
+        scope=MEMBER,
+        multi_workspace_enabled=True,  # type: ignore[arg-type]
     )
     sql = _sql(session.statements[0])
     assert "GRANT_MARKER" in sql
@@ -69,7 +76,11 @@ async def test_grant_predicate_precedes_order_and_limit(grants) -> None:
 async def test_owner_has_no_grant_predicate(grants) -> None:
     session = FakeSession()
     await public.search(
-        session, None, None, SearchRequest(query="alpha", mode="lexical"), scope=OWNER,  # type: ignore[arg-type]
+        session,
+        None,
+        None,
+        SearchRequest(query="alpha", mode="lexical"),
+        scope=OWNER,  # type: ignore[arg-type]
         multi_workspace_enabled=True,
     )
     assert "GRANT_MARKER" not in _sql(session.statements[0])
@@ -92,7 +103,11 @@ async def test_changed_fence_is_409_not_partial_page(grants, monkeypatch) -> Non
 
     with pytest.raises(DomainError) as exc:
         await public.search(
-            Session(), None, None, SearchRequest(query="alpha"), scope=MEMBER,  # type: ignore[arg-type]
+            Session(),
+            None,
+            None,
+            SearchRequest(query="alpha"),
+            scope=MEMBER,  # type: ignore[arg-type]
             multi_workspace_enabled=True,
         )
     assert exc.value.status_code == 409
@@ -104,12 +119,22 @@ async def test_member_cannot_use_remote_destination_or_index(grants) -> None:
 
     with pytest.raises(DomainError) as exc:
         await public.search(
-            FakeSession(), None, None, SearchRequest(query="a"), scope=MEMBER,  # type: ignore[arg-type]
-            multi_workspace_enabled=True, destination=ToolDestination.REMOTE, source_generation_fences={uuid4(): 1},
+            FakeSession(),
+            None,
+            None,
+            SearchRequest(query="a"),
+            scope=MEMBER,  # type: ignore[arg-type]
+            multi_workspace_enabled=True,
+            destination=ToolDestination.REMOTE,
+            source_generation_fences={uuid4(): 1},
         )
     assert exc.value.status_code == 403
     with pytest.raises(DomainError) as exc2:
         await public.index_status(
-            FakeSession(), scope=MEMBER, multi_workspace_enabled=True, settings=None, redis=None,  # type: ignore[arg-type]
+            FakeSession(),
+            scope=MEMBER,
+            multi_workspace_enabled=True,
+            settings=None,
+            redis=None,  # type: ignore[arg-type]
         )
     assert exc2.value.status_code == 403

@@ -39,17 +39,21 @@ class _Redis:
 
 
 @pytest.mark.asyncio
-async def test_listener_wakes_workspace_stream_and_reconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_listener_wakes_workspace_stream_and_reconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A worker publish wakes the matching workspace; a Redis error reconnects instead of ending the task."""
     monkeypatch.setattr(routes, "LISTENER_RETRY_SECONDS", (0,))
     workspace_id = uuid4()
     woken: list[object] = []
     monkeypatch.setattr(routes, "notify_realtime_wakeup", woken.append)
-    first = _PubSub([
-        {"channel": b"realtime:workspace:not-a-uuid"},
-        {"channel": f"realtime:workspace:{workspace_id}".encode()},
-        ConnectionError("down"),
-    ])
+    first = _PubSub(
+        [
+            {"channel": b"realtime:workspace:not-a-uuid"},
+            {"channel": f"realtime:workspace:{workspace_id}".encode()},
+            ConnectionError("down"),
+        ]
+    )
     second = _PubSub([{"channel": f"realtime:workspace:{workspace_id}"}])
     task = asyncio.create_task(run_realtime_wakeup_listener(_Redis([first, second])))
     await asyncio.sleep(0.1)

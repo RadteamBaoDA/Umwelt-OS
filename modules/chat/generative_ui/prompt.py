@@ -154,7 +154,9 @@ class SandboxedUiArgs(BaseModel):
     def forbid_inline_style_blocks(cls, value: str) -> str:
         """Enforce the streaming contract forbidding `<style>` blocks inside `html`."""
         if "<style" in value.lower():
-            raise ValueError("The html parameter must not contain <style> blocks; put styles in css")
+            raise ValueError(
+                "The html parameter must not contain <style> blocks; put styles in css"
+            )
         return value
 
     def to_ordered_dict(self) -> dict[str, Any]:

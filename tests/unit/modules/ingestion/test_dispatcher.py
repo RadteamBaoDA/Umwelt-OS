@@ -69,7 +69,9 @@ class TestDispatcherWork:
             session = AsyncMock()
             if sessions == 1:
                 listing = MagicMock()
-                listing.all.return_value = [Identity(e.id, e.status, e.dispatched_at, e.created_at) for e in events]
+                listing.all.return_value = [
+                    Identity(e.id, e.status, e.dispatched_at, e.created_at) for e in events
+                ]
                 session.execute.return_value = listing
             else:
                 session.scalar.side_effect = lambda *_a, **_k: claims.pop(0)
@@ -78,7 +80,8 @@ class TestDispatcherWork:
         factory = MagicMock()
         factory.return_value.__aenter__.side_effect = enter
         return {
-            "session_factory": factory, "redis": redis,
+            "session_factory": factory,
+            "redis": redis,
             "settings": MagicMock(multi_workspace_enabled=False),
             dispatcher.DISPATCH_SCAN_STATE: {"cursor": None, "lock": asyncio.Lock()},
         }
@@ -90,7 +93,9 @@ class TestDispatcherWork:
         ev2 = _make_outbox_event(event_type="connector.crawl.requested", status="pending")
         redis = AsyncMock()
         ctx = self._ctx([ev1, ev2], redis)
-        scope = MagicMock(workspace_id=uuid4(), actor_user_id=7, membership_revision=3, source_id=None)
+        scope = MagicMock(
+            workspace_id=uuid4(), actor_user_id=7, membership_revision=3, source_id=None
+        )
 
         with (
             patch.object(OUTBOX_RUNTIME, "resolve_scope", AsyncMock(return_value=scope)),
@@ -136,9 +141,15 @@ class TestDispatcherWork:
         session.execute.return_value = result
 
         with patch_ingestion("_admit_ingestion_scope", AsyncMock()):
-            assert await dispatcher.mark_event_delivered(
-                session, event.id, scope=SCOPE, multi_workspace_enabled=False,
-            ) is True
+            assert (
+                await dispatcher.mark_event_delivered(
+                    session,
+                    event.id,
+                    scope=SCOPE,
+                    multi_workspace_enabled=False,
+                )
+                is True
+            )
         session.commit.assert_not_awaited()  # flush-only owner seam; the caller commits
 
     @pytest.mark.asyncio
@@ -149,9 +160,15 @@ class TestDispatcherWork:
         session.execute.return_value = result
 
         with patch_ingestion("_admit_ingestion_scope", AsyncMock()):
-            assert await dispatcher.mark_event_delivered(
-                session, uuid4(), scope=SCOPE, multi_workspace_enabled=False,
-            ) is False
+            assert (
+                await dispatcher.mark_event_delivered(
+                    session,
+                    uuid4(),
+                    scope=SCOPE,
+                    multi_workspace_enabled=False,
+                )
+                is False
+            )
         session.commit.assert_not_awaited()
 
 
@@ -208,21 +225,29 @@ class TestBatchAndRunStatusTransitions:
         st1 = IngestionStage(run_id=run_id, stage_key="receive", status="succeeded")
         st2 = IngestionStage(run_id=run_id, stage_key="normalize", status="running")  # Active!
 
-        fence = SourceFence(id=source_id, workspace_id=uuid4(), status="active", generation=1, local_only=False)
+        fence = SourceFence(
+            id=source_id, workspace_id=uuid4(), status="active", generation=1, local_only=False
+        )
 
-        locked = SourceFenceSet(fences=(fence,), access_fence=AccessFence(SCOPE.workspace_id, 7, 3, 5))
+        locked = SourceFenceSet(
+            fences=(fence,), access_fence=AccessFence(SCOPE.workspace_id, 7, 3, 5)
+        )
         with (
             patch_ingestion("_admit_ingestion_scope", AsyncMock()),
             patch("modules.sources.public.lock_source_set", AsyncMock(return_value=locked)),
         ):
-            session.get.side_effect = lambda model, ident, **kwargs: run if model == IngestionRun else None
+            session.get.side_effect = lambda model, ident, **kwargs: (
+                run if model == IngestionRun else None
+            )
             session.scalar.return_value = run
             mock_stages = MagicMock()
             mock_stages.all.return_value = [st1, st2]
             session.scalars.return_value = mock_stages
 
             with pytest.raises(DomainError) as exc_info:
-                await public.retry_run(session, run_id, "normalize", scope=SCOPE, multi_workspace_enabled=False)
+                await public.retry_run(
+                    session, run_id, "normalize", scope=SCOPE, multi_workspace_enabled=False
+                )
             assert exc_info.value.status_code == 409
             assert exc_info.value.detail == "Ingestion run still has an active stage"
 
@@ -253,7 +278,9 @@ class TestRetryBackoffCalculation:
         assert _retry_after_seconds(resp_float) == 1.75
 
         # Invalid string
-        resp_invalid = httpx.Response(status_code=429, headers={"retry-after": "invalid_date_or_num"})
+        resp_invalid = httpx.Response(
+            status_code=429, headers={"retry-after": "invalid_date_or_num"}
+        )
         assert _retry_after_seconds(resp_invalid) is None
 
     def test_worker_delay_calculation_logic(self) -> None:

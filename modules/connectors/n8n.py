@@ -39,7 +39,14 @@ def n8n_service_identity(value: str) -> str:
     if not isinstance(value, str) or not value or len(value) > 2048:
         raise ValueError("Invalid n8n service identity")
     parsed = urlsplit(value)
-    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
         raise ValueError("Invalid n8n service identity")
     host = parsed.hostname.lower()
     if ":" in host:
@@ -75,9 +82,12 @@ def connector_workflow_names(source_id: UUID) -> tuple[str, str]:
 
 def alternate_workflow_name(name: str) -> str | None:
     """Swap the current and legacy brand prefix of a workflow name; None if it has neither."""
-    for prefix, other in ((_CURRENT_WORKFLOW_PREFIX, _LEGACY_WORKFLOW_PREFIX), (_LEGACY_WORKFLOW_PREFIX, _CURRENT_WORKFLOW_PREFIX)):
+    for prefix, other in (
+        (_CURRENT_WORKFLOW_PREFIX, _LEGACY_WORKFLOW_PREFIX),
+        (_LEGACY_WORKFLOW_PREFIX, _CURRENT_WORKFLOW_PREFIX),
+    ):
         if name.startswith(prefix):
-            return other + name[len(prefix):]
+            return other + name[len(prefix) :]
     return None
 
 
@@ -98,7 +108,10 @@ async def find_workflows_by_name(api: "N8nApi", name: str) -> list[dict[str, Any
 def workflow_webhook_paths(source_id: UUID, source_type: str) -> tuple[str, str]:
     """Return the (current, legacy) manual webhook paths for a supported connector type."""
     connector_type = {"api": "rest", "web": "url", "rss": "rss", "mcp": "mcp"}[source_type]
-    return (f"umwelt-collect-{connector_type}-{source_id.hex}", f"bbd-collect-{connector_type}-{source_id.hex}")
+    return (
+        f"umwelt-collect-{connector_type}-{source_id.hex}",
+        f"bbd-collect-{connector_type}-{source_id.hex}",
+    )
 
 
 def workflow_webhook_path(source_id: UUID, source_type: str) -> str:
@@ -106,18 +119,20 @@ def workflow_webhook_path(source_id: UUID, source_type: str) -> str:
     return workflow_webhook_paths(source_id, source_type)[0]
 
 
-_COLLECTOR_NODE_NAMES = frozenset({
-    "Read bounded RSS / Atom pages",
-    "Validate source",
-    "Validate source and load cursor",
-    "Collect bounded pages",
-    "Request collection admission",
-    "Submit acknowledged batch",
-    "Acknowledge no changes",
-    "Collect provider",
-    "Collect GitHub repository",
-    "Collect MCP source",
-})
+_COLLECTOR_NODE_NAMES = frozenset(
+    {
+        "Read bounded RSS / Atom pages",
+        "Validate source",
+        "Validate source and load cursor",
+        "Collect bounded pages",
+        "Request collection admission",
+        "Submit acknowledged batch",
+        "Acknowledge no changes",
+        "Collect provider",
+        "Collect GitHub repository",
+        "Collect MCP source",
+    }
+)
 
 
 def _packaged_workflow_filename(source: ConnectorSource) -> str:
@@ -130,10 +145,13 @@ def _packaged_workflow_filename(source: ConnectorSource) -> str:
     if native and source.type != PROVIDER_SOURCE_TYPES[str(source.provider)]:
         raise ValueError("Source type does not match the registered provider")
     filename = (
-        "mcp.json" if source.type == "mcp" else
-        "github.json" if source.provider == "github" else
-        "provider-fetch.json" if native else
-        {"rss": "rss.json", "web": "url.json", "api": "rest.json"}.get(source.type)
+        "mcp.json"
+        if source.type == "mcp"
+        else "github.json"
+        if source.provider == "github"
+        else "provider-fetch.json"
+        if native
+        else {"rss": "rss.json", "web": "url.json", "api": "rest.json"}.get(source.type)
     )
     if filename is None:
         raise ValueError("This source type has no packaged workflow")
@@ -161,8 +179,12 @@ def _schedule_rule(source: ConnectorSource) -> dict[str, Any]:
 
 
 def _bind_node_credentials(
-    node: dict[str, Any], source: ConnectorSource, *, collector_credential_id: str,
-    manual_credential_id: str, provider_credential_id: str | None,
+    node: dict[str, Any],
+    source: ConnectorSource,
+    *,
+    collector_credential_id: str,
+    manual_credential_id: str,
+    provider_credential_id: str | None,
 ) -> None:
     """Mutate one packaged workflow node in place with this Source's schedule or credential binding.
 
@@ -181,7 +203,12 @@ def _bind_node_credentials(
     elif name in _COLLECTOR_NODE_NAMES:
         node.setdefault("credentials", {}).setdefault("httpHeaderAuth", {})
         node["credentials"]["httpHeaderAuth"].update(
-            {"id": collector_credential_id, "name": "Umwelt-OS MCP source collector" if source.type == "mcp" else "Umwelt-OS source collector"}
+            {
+                "id": collector_credential_id,
+                "name": "Umwelt-OS MCP source collector"
+                if source.type == "mcp"
+                else "Umwelt-OS source collector",
+            }
         )
     elif name == "Fetch REST pages":
         if provider_credential_id:
@@ -233,26 +260,26 @@ def build_workflow(
     source_id = str(source.id)
     for node in workflow["nodes"]:
         _bind_node_credentials(
-            node, source, collector_credential_id=collector_credential_id,
-            manual_credential_id=manual_credential_id, provider_credential_id=provider_credential_id,
+            node,
+            source,
+            collector_credential_id=collector_credential_id,
+            manual_credential_id=manual_credential_id,
+            provider_credential_id=provider_credential_id,
         )
     workflow["name"] = workflow_name_value or workflow_name(source.id, workflow_operation_id)
-    workflow["settings"]["timezone"] = str(
-        source.configuration.get("timezone", "Asia/Ho_Chi_Minh")
+    workflow["settings"]["timezone"] = str(source.configuration.get("timezone", "Asia/Ho_Chi_Minh"))
+    bound = _bind_placeholders(
+        workflow,
+        (
+            ("{{$env.SOURCE_ID}}", source_id),
+            ("__SOURCE_ID__", source_id),
+            ("__SOURCE_GENERATION__", str(source.generation)),
+            ("__CONNECTOR_REVISION__", str(desired_revision)),
+            ("__BACKEND_REVISION__", str(backend_revision)),
+            ("__MCP_CONNECTION_ID__", str(source.configuration.get("connection_id", ""))),
+        ),
     )
-    bound = _bind_placeholders(workflow, (
-        ("{{$env.SOURCE_ID}}", source_id),
-        ("__SOURCE_ID__", source_id),
-        ("__SOURCE_GENERATION__", str(source.generation)),
-        ("__CONNECTOR_REVISION__", str(desired_revision)),
-        ("__BACKEND_REVISION__", str(backend_revision)),
-        ("__MCP_CONNECTION_ID__", str(source.configuration.get("connection_id", ""))),
-    ))
-    return {
-        key: bound[key]
-        for key in ("name", "nodes", "connections", "settings")
-        if key in bound
-    }
+    return {key: bound[key] for key in ("name", "nodes", "connections", "settings") if key in bound}
 
 
 class N8nApi:
@@ -274,6 +301,7 @@ class N8nApi:
         if self._settings is None:
             return httpx.AsyncClient(timeout=timeout, trust_env=False)
         from modules.settings.public import n8n_http_client
+
         return n8n_http_client(self._base_url, self._settings, timeout=timeout)
 
     async def find_workflows(self, name: str) -> list[dict[str, Any]]:
@@ -296,7 +324,8 @@ class N8nApi:
             if not isinstance(workflows, list):
                 raise ValueError("n8n workflow lookup returned an invalid list")
             matches.extend(
-                workflow for workflow in workflows
+                workflow
+                for workflow in workflows
                 if isinstance(workflow, dict) and workflow.get("name") == name
             )
             cursor = payload.get("nextCursor")
@@ -363,7 +392,8 @@ def workflow_matches(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
     if not isinstance(expected_nodes, list) or not isinstance(actual_nodes, list):
         return False
     nodes_by_name = {
-        node.get("name"): node for node in actual_nodes
+        node.get("name"): node
+        for node in actual_nodes
         if isinstance(node, dict) and isinstance(node.get("name"), str)
     }
     if len(nodes_by_name) != len(actual_nodes) or len(nodes_by_name) != len(expected_nodes):
@@ -423,8 +453,10 @@ def _parse_feed_time(raw_value: str) -> datetime | None:
 
 
 async def _read_rss_page_body(
-    client: httpx.AsyncClient | None, fetch: Callable[[str], Awaitable[bytes]] | None,
-    current_url: str, total_bytes: int,
+    client: httpx.AsyncClient | None,
+    fetch: Callable[[str], Awaitable[bytes]] | None,
+    current_url: str,
+    total_bytes: int,
 ) -> tuple[bytearray | None, int, str | None]:
     """Fetch one feed page body and return ``(body, total_bytes, redirect_url)``.
 
@@ -448,10 +480,13 @@ async def _read_rss_page_body(
     rss_port = rss_parts.port or (443 if rss_parts.scheme == "https" else 80)
     rss_addresses = await resolve_public(rss_parts.hostname or "", rss_port)
     send_url, send_headers, send_extensions = _pinned_request(
-        current_url, rss_addresses[0],
+        current_url,
+        rss_addresses[0],
         {"Accept": "application/atom+xml, application/rss+xml, application/xml, text/xml"},
     )
-    async with client.stream("GET", send_url, headers=send_headers, extensions=send_extensions) as response:
+    async with client.stream(
+        "GET", send_url, headers=send_headers, extensions=send_extensions
+    ) as response:
         if response.is_redirect:
             location = response.headers.get("location")
             if not location:
@@ -470,7 +505,11 @@ async def _read_rss_page_body(
 
 
 def _feed_record(
-    item: ElementTree.Element, *, current_url: str, feed_url: str, floor: datetime | None,
+    item: ElementTree.Element,
+    *,
+    current_url: str,
+    feed_url: str,
+    floor: datetime | None,
 ) -> tuple[dict[str, object] | None, str | None]:
     """Normalize one feed item into ``(record, cursor_time)``; both are None below the overlap floor.
 
@@ -488,8 +527,11 @@ def _feed_record(
     updated_at = _parse_feed_time(raw_updated)
     cursor_at = published_at or updated_at or observed_at
     link = next(
-        (str(node.attrib.get("href")) for node in item.iter()
-         if _local_tag(node) == "link" and node.attrib.get("href")),
+        (
+            str(node.attrib.get("href"))
+            for node in item.iter()
+            if _local_tag(node) == "link" and node.attrib.get("href")
+        ),
         _feed_text(item, {"link"}),
     )
     canonical_url = urljoin(current_url, link) if link else None
@@ -513,8 +555,14 @@ def _feed_record(
 
 
 def _append_page_records(
-    root: ElementTree.Element, *, current_url: str, feed_url: str, floor: datetime | None,
-    records: list[dict[str, object]], cursor_times: list[str], stats: dict[str, Any] | None,
+    root: ElementTree.Element,
+    *,
+    current_url: str,
+    feed_url: str,
+    floor: datetime | None,
+    records: list[dict[str, object]],
+    cursor_times: list[str],
+    stats: dict[str, Any] | None,
 ) -> None:
     """Append a parsed page's records in order until the 500-record cap is reached.
 
@@ -523,7 +571,9 @@ def _append_page_records(
     """
     page_items = [node for node in root.iter() if _local_tag(node) in {"item", "entry"}]
     for position, item in enumerate(page_items):
-        record, cursor_time = _feed_record(item, current_url=current_url, feed_url=feed_url, floor=floor)
+        record, cursor_time = _feed_record(
+            item, current_url=current_url, feed_url=feed_url, floor=floor
+        )
         if record is not None:
             if cursor_time is not None:
                 cursor_times.append(cursor_time)
@@ -535,7 +585,10 @@ def _append_page_records(
 
 
 async def read_rss(
-    url: str, cursor: str | None, *, fetch: Callable[[str], Awaitable[bytes]] | None = None,
+    url: str,
+    cursor: str | None,
+    *,
+    fetch: Callable[[str], Awaitable[bytes]] | None = None,
     stats: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Fetch bounded RSS/Atom pages with URL checks, overlap filtering, and normalized records.
@@ -548,43 +601,65 @@ async def read_rss(
     """
     if fetch is None:
         await validate_public_url(url)
-    floor = overlap_floor(cursor, SKEW)  # small skew margin; already-stored items are dropped by dedup
+    floor = overlap_floor(
+        cursor, SKEW
+    )  # small skew margin; already-stored items are dropped by dedup
     visited: set[str] = set()
     records: list[dict[str, object]] = []
     cursor_times: list[str] = []
     total_bytes = 0
     current_url: str | None = url
     async with contextlib.AsyncExitStack() as stack:
-        client = None if fetch is not None else await stack.enter_async_context(
-            httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False))
+        client = (
+            None
+            if fetch is not None
+            else await stack.enter_async_context(
+                httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False)
+            )
+        )
         for _ in range(_RSS_MAX_PAGES):
             if current_url is None or current_url in visited:
                 break
             if fetch is None:
                 await validate_public_url(current_url)
             visited.add(current_url)
-            body, total_bytes, redirect_url = await _read_rss_page_body(client, fetch, current_url, total_bytes)
+            body, total_bytes, redirect_url = await _read_rss_page_body(
+                client, fetch, current_url, total_bytes
+            )
             if body is None:
                 current_url = redirect_url
                 continue
             # DOCTYPE/ENTITY refused; parse of up to 25 MiB runs in a thread so the loop is not blocked.
             root = await asyncio.to_thread(safe_xml_root, bytes(body), max_bytes=_RSS_MAX_BYTES)
             _append_page_records(
-                root, current_url=current_url, feed_url=url, floor=floor,
-                records=records, cursor_times=cursor_times, stats=stats,
+                root,
+                current_url=current_url,
+                feed_url=url,
+                floor=floor,
+                records=records,
+                cursor_times=cursor_times,
+                stats=stats,
             )
             next_link = next(
-                (node.attrib.get("href") for node in root.iter() if _local_tag(node) == "link" and node.attrib.get("rel", "").lower() == "next"),
+                (
+                    node.attrib.get("href")
+                    for node in root.iter()
+                    if _local_tag(node) == "link" and node.attrib.get("rel", "").lower() == "next"
+                ),
                 None,
             )
             current_url = urljoin(current_url, next_link) if next_link else None
             if len(records) >= _RSS_MAX_RECORDS:
                 if stats is not None and current_url is not None and "truncated" not in stats:
-                    stats["resume_url"] = current_url  # record cap met exactly at a page boundary: exact continuation
+                    stats["resume_url"] = (
+                        current_url  # record cap met exactly at a page boundary: exact continuation
+                    )
                 break
         else:
             if stats is not None and current_url is not None and current_url not in visited:
-                stats["resume_url"] = current_url  # ten-page cap reached at a boundary with a link left
+                stats["resume_url"] = (
+                    current_url  # ten-page cap reached at a boundary with a link left
+                )
     return {
         "cursor_before": cursor,
         "cursor_after": max(cursor_times, default=cursor),

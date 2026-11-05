@@ -113,7 +113,8 @@ MAX_HIGHLIGHT_NOTIFICATIONS_PER_TRANSACTION = 100
 # A document can match every configured rule; keep a whole page below the insertion cap so advancing
 # its cursor never drops an eligible rule/version notification.
 HIGHLIGHT_SCAN_PAGE_LIMIT = max(
-    1, MAX_HIGHLIGHT_NOTIFICATIONS_PER_TRANSACTION // MAX_RULES_PER_DEFINITION,
+    1,
+    MAX_HIGHLIGHT_NOTIFICATIONS_PER_TRANSACTION // MAX_RULES_PER_DEFINITION,
 )
 HIGHLIGHT_MATCHES_PER_PAGE_MAX = HIGHLIGHT_SCAN_PAGE_LIMIT * MAX_RULES_PER_DEFINITION
 PREVIEW_PAGE_SIZE = 100
@@ -131,8 +132,12 @@ def _owner_tzinfo(name: str) -> tzinfo:
 
 
 async def _admit(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
-    lock: bool = False, expected: AccessFence | None = None,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    lock: bool = False,
+    expected: AccessFence | None = None,
 ) -> AccessFence:
     """Admit owner scope before reading or locking dashboard-owned data.
 
@@ -141,7 +146,11 @@ async def _admit(
     transaction and lock ordering.
     """
     return await admit_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        lock=lock,
+        expected=expected,
         admin_read_only_on_lock=True,
     )
 
@@ -167,15 +176,26 @@ class _HighlightScan:
 def _highlight_read(item: Any, match: Any) -> DashboardHighlightRead:
     """Project one projection item and rule match onto the public highlight DTO."""
     return DashboardHighlightRead(
-        document_id=item.document_id, document_version_id=item.document_version_id,
-        source_id=item.source_id, title=item.title, observed_at=item.observed_at,
-        rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
-        severity=match.severity, notify=match.notify, reason=match.reason,
+        document_id=item.document_id,
+        document_version_id=item.document_version_id,
+        source_id=item.source_id,
+        title=item.title,
+        observed_at=item.observed_at,
+        rule_id=match.rule_id,
+        matched_keywords=list(match.matched_keywords),
+        severity=match.severity,
+        notify=match.notify,
+        reason=match.reason,
     )
 
 
 async def _snapshot_highlight_scan(
-    session: AsyncSession, definition_id: UUID, owner_id: int, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    definition_id: UUID,
+    owner_id: int,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> _HighlightScan | None:
     """Snapshot the owner definition, scan position and next evidence page without any row lock.
 
@@ -188,19 +208,29 @@ async def _snapshot_highlight_scan(
     from modules.dashboard.models import GadgetHighlightProgress
     from modules.knowledge.documents import public as documents
 
-    definition = await session.scalar(select(GadgetDefinition).where(
-        GadgetDefinition.id == definition_id,
-        GadgetDefinition.workspace_id == scope.workspace_id,
-        GadgetDefinition.owner_id == owner_id,
-    ).execution_options(populate_existing=True))
+    definition = await session.scalar(
+        select(GadgetDefinition)
+        .where(
+            GadgetDefinition.id == definition_id,
+            GadgetDefinition.workspace_id == scope.workspace_id,
+            GadgetDefinition.owner_id == owner_id,
+        )
+        .execution_options(populate_existing=True)
+    )
     if definition is None:
         raise DashboardMissing
     definition_revision = definition.revision
     source_ids = tuple(UUID(str(value)) for value in definition.source_ids[:32])
-    selected_sources = await sources.get_gadget_sources(
-        session, source_ids, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
-    ) if source_ids else []
+    selected_sources = (
+        await sources.get_gadget_sources(
+            session,
+            source_ids,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if source_ids
+        else []
+    )
     selected_source_snapshot = {item.id: item for item in selected_sources}
     scan_source_ids = tuple(item.id for item in selected_sources if item.status == "active")
     raw_rules = json.loads(json.dumps(definition.highlight_rules, sort_keys=True))
@@ -209,55 +239,105 @@ async def _snapshot_highlight_scan(
     if len(rules) > MAX_RULES_PER_DEFINITION:
         raise ValueError("Highlight rule count exceeds the validated definition bound")
     raw_item_scope = raw_scope.get("source_item_ids", []) if isinstance(raw_scope, dict) else []
-    item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
+    item_scope = (
+        {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
+    )
     if not scan_source_ids or not rules:
         return None
     # Read-only topic resolution happens before any definition/progress lock is taken.
-    compiled = compile_rules(rules, await _rule_topic_terms(
-        session, rules, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    ))
-    definition_snapshot = json.dumps(
-        {"revision": definition_revision, "source_ids": [str(value) for value in source_ids],
-         "scope": raw_scope, "rules": raw_rules},
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    compiled = compile_rules(
+        rules,
+        await _rule_topic_terms(
+            session,
+            rules,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        ),
     )
-    rules_fingerprint = hashlib.sha256(json.dumps(
-        {"source_ids": [str(value) for value in source_ids], "scope": sorted(item_scope),
-         "rules": [rule.model_dump(mode="json", exclude_defaults=True) for rule in rules]},
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-    ).encode("utf-8")).hexdigest()
+    definition_snapshot = json.dumps(
+        {
+            "revision": definition_revision,
+            "source_ids": [str(value) for value in source_ids],
+            "scope": raw_scope,
+            "rules": raw_rules,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    rules_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "source_ids": [str(value) for value in source_ids],
+                "scope": sorted(item_scope),
+                "rules": [rule.model_dump(mode="json", exclude_defaults=True) for rule in rules],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
-    progress_snapshot_row = await session.scalar(select(GadgetHighlightProgress).where(
-        GadgetHighlightProgress.definition_id == definition.id,
-    ).execution_options(populate_existing=True))
-    progress_snapshot = None if progress_snapshot_row is None else (
-        progress_snapshot_row.definition_revision, progress_snapshot_row.rules_fingerprint,
-        progress_snapshot_row.cursor_created_at, progress_snapshot_row.cursor_version_id,
+    progress_snapshot_row = await session.scalar(
+        select(GadgetHighlightProgress)
+        .where(
+            GadgetHighlightProgress.definition_id == definition.id,
+        )
+        .execution_options(populate_existing=True)
+    )
+    progress_snapshot = (
+        None
+        if progress_snapshot_row is None
+        else (
+            progress_snapshot_row.definition_revision,
+            progress_snapshot_row.rules_fingerprint,
+            progress_snapshot_row.cursor_created_at,
+            progress_snapshot_row.cursor_version_id,
+        )
     )
     progress_is_current = progress_snapshot is not None and (
-        progress_snapshot[0] == definition_revision
-        and progress_snapshot[1] == rules_fingerprint
+        progress_snapshot[0] == definition_revision and progress_snapshot[1] == rules_fingerprint
     )
     page = await documents.list_gadget_highlight_projection_page(
-        session, source_ids=scan_source_ids, limit=HIGHLIGHT_SCAN_PAGE_LIMIT,
-        cursor_created_at=progress_snapshot[2] if progress_snapshot and progress_is_current else None,
-        cursor_version_id=progress_snapshot[3] if progress_snapshot and progress_is_current else None,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source_ids=scan_source_ids,
+        limit=HIGHLIGHT_SCAN_PAGE_LIMIT,
+        cursor_created_at=progress_snapshot[2]
+        if progress_snapshot and progress_is_current
+        else None,
+        cursor_version_id=progress_snapshot[3]
+        if progress_snapshot and progress_is_current
+        else None,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if len(page.items) * len(rules) > HIGHLIGHT_MATCHES_PER_PAGE_MAX:
         raise RuntimeError("Highlight scan page exceeds its notification coverage bound")
     return _HighlightScan(
-        definition_revision=definition_revision, source_ids=source_ids,
-        selected_source_snapshot=selected_source_snapshot, scan_source_ids=scan_source_ids,
-        raw_scope=raw_scope, rules=rules, item_scope=item_scope, compiled=compiled,
-        definition_snapshot=definition_snapshot, rules_fingerprint=rules_fingerprint,
-        progress_snapshot=progress_snapshot, page=page,
+        definition_revision=definition_revision,
+        source_ids=source_ids,
+        selected_source_snapshot=selected_source_snapshot,
+        scan_source_ids=scan_source_ids,
+        raw_scope=raw_scope,
+        rules=rules,
+        item_scope=item_scope,
+        compiled=compiled,
+        definition_snapshot=definition_snapshot,
+        rules_fingerprint=rules_fingerprint,
+        progress_snapshot=progress_snapshot,
+        page=page,
     )
 
 
 async def _lock_highlight_scan(
-    session: AsyncSession, scan: _HighlightScan, definition_id: UUID, owner_id: int,
-    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    scan: _HighlightScan,
+    definition_id: UUID,
+    owner_id: int,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> tuple[GadgetDefinition, Any]:
     """Lock Sources, Documents, Definition then Progress (in that order) and re-verify the snapshot.
 
@@ -275,52 +355,82 @@ async def _lock_highlight_scan(
     source_fences = {}
     for source_id in sorted(scan.scan_source_ids, key=str):
         source_fences[source_id] = await sources.lock_source(
-            session, source_id, scope=scope,
+            session,
+            source_id,
+            scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
             expected_access_fence=access_fence,
         )
     if any(
-        fence is None or fence.status != "active"
+        fence is None
+        or fence.status != "active"
         or fence.generation != scan.selected_source_snapshot[source_id].generation
         or fence.local_only != scan.selected_source_snapshot[source_id].local_only
         for source_id, fence in source_fences.items()
     ):
         raise ConflictError(detail="Highlight source selection changed")
     if page.selection_fences and not await documents.validate_gadget_document_selection_fences(
-        session, tuple(page.selection_fences), lock_rows=True,
+        session,
+        tuple(page.selection_fences),
+        lock_rows=True,
         max_documents=HIGHLIGHT_SCAN_PAGE_LIMIT,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     ):
         raise ConflictError(detail="Dashboard highlight evidence changed during evaluation")
 
-    definition = await session.scalar(select(GadgetDefinition).where(
-        GadgetDefinition.id == definition_id,
-        GadgetDefinition.workspace_id == scope.workspace_id,
-        GadgetDefinition.owner_id == owner_id,
-    ).with_for_update().execution_options(populate_existing=True))
+    definition = await session.scalar(
+        select(GadgetDefinition)
+        .where(
+            GadgetDefinition.id == definition_id,
+            GadgetDefinition.workspace_id == scope.workspace_id,
+            GadgetDefinition.owner_id == owner_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if definition is None:
         raise DashboardMissing
     current_snapshot = json.dumps(
-        {"revision": definition.revision, "source_ids": definition.source_ids,
-         "scope": definition.scope, "rules": definition.highlight_rules},
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        {
+            "revision": definition.revision,
+            "source_ids": definition.source_ids,
+            "scope": definition.scope,
+            "rules": definition.highlight_rules,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
     )
     if current_snapshot != scan.definition_snapshot:
         raise ConflictError(detail="Highlight definition changed during evaluation")
 
-    progress = await session.scalar(select(GadgetHighlightProgress).where(
-        GadgetHighlightProgress.definition_id == definition.id,
-    ).with_for_update().execution_options(populate_existing=True))
-    current_progress_snapshot = None if progress is None else (
-        progress.definition_revision, progress.rules_fingerprint,
-        progress.cursor_created_at, progress.cursor_version_id,
+    progress = await session.scalar(
+        select(GadgetHighlightProgress)
+        .where(
+            GadgetHighlightProgress.definition_id == definition.id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    current_progress_snapshot = (
+        None
+        if progress is None
+        else (
+            progress.definition_revision,
+            progress.rules_fingerprint,
+            progress.cursor_created_at,
+            progress.cursor_version_id,
+        )
     )
     if current_progress_snapshot != scan.progress_snapshot:
         raise ConflictError(detail="Highlight scan progress changed during evaluation")
     if progress is None:
         progress = GadgetHighlightProgress(
-            definition_id=definition.id, definition_revision=definition.revision,
-            rules_fingerprint=scan.rules_fingerprint, rule_last_notified={},
+            definition_id=definition.id,
+            definition_revision=definition.revision,
+            rules_fingerprint=scan.rules_fingerprint,
+            rule_last_notified={},
         )
         session.add(progress)
         await session.flush()
@@ -333,17 +443,25 @@ async def _lock_highlight_scan(
         progress.cursor_created_at = None
         progress.cursor_version_id = None
         progress.rule_last_notified = {}
-        await session.execute(delete(GadgetHighlightSuppression).where(
-            GadgetHighlightSuppression.definition_id == definition.id,
-        ))
+        await session.execute(
+            delete(GadgetHighlightSuppression).where(
+                GadgetHighlightSuppression.definition_id == definition.id,
+            )
+        )
     progress.cursor_created_at = page.cursor_created_at if page.has_more else None
     progress.cursor_version_id = page.cursor_version_id if page.has_more else None
     return definition, progress
 
 
 async def _deliver_highlight_matches(
-    session: AsyncSession, scan: _HighlightScan, definition: GadgetDefinition, progress: Any,
-    *, owner_id: int, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    scan: _HighlightScan,
+    definition: GadgetDefinition,
+    progress: Any,
+    *,
+    owner_id: int,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[DashboardHighlightRead]:
     """Match the locked page, apply the delivery policy and emit notifications in the same transaction.
 
@@ -360,16 +478,24 @@ async def _deliver_highlight_matches(
     rules = scan.rules
     rules_by_id = {rule.id: rule for rule in rules}
     last_notified = {
-        key: datetime.fromisoformat(value) for key, value in progress.rule_last_notified.items()
+        key: datetime.fromisoformat(value)
+        for key, value in progress.rule_last_notified.items()
         if UUID(key) in rules_by_id
     }
     tz: tzinfo = UTC
     if any(rule.quiet_start for rule in rules):
-        tz = _owner_tzinfo((await settings_public.read_owner_preferences(
-            session, actor_user_id=owner_id, multi_workspace_enabled=multi_workspace_enabled,
-        )).timezone)
+        tz = _owner_tzinfo(
+            (
+                await settings_public.read_owner_preferences(
+                    session,
+                    actor_user_id=owner_id,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
+            ).timezone
+        )
     found = [
-        (item, match) for item in scan.page.items
+        (item, match)
+        for item in scan.page.items
         if not scan.item_scope or str(item.document_id) in scan.item_scope
         for match in match_compiled(item.excerpt, scan.compiled, source_id=item.source_id)
     ]
@@ -383,45 +509,74 @@ async def _deliver_highlight_matches(
 
     suppressed_keys: set[str] = set()
     if found:
-        suppressed_keys = set((await session.execute(
-            select(GadgetHighlightSuppression.dedupe_key).where(
-                GadgetHighlightSuppression.definition_id == definition.id,
-                GadgetHighlightSuppression.dedupe_key.in_([key_of(i, m) for i, m in found]),
-            )
-        )).scalars())
+        suppressed_keys = set(
+            (
+                await session.execute(
+                    select(GadgetHighlightSuppression.dedupe_key).where(
+                        GadgetHighlightSuppression.definition_id == definition.id,
+                        GadgetHighlightSuppression.dedupe_key.in_([key_of(i, m) for i, m in found]),
+                    )
+                )
+            ).scalars()
+        )
     matches: list[DashboardHighlightRead] = []
     for item, match in found:
         dedupe_key = key_of(item, match)
         deliver = False
         if match.notify and dedupe_key not in suppressed_keys:
             deliver = notification_allowed(
-                rules_by_id[match.rule_id], now, tz, last_notified.get(str(match.rule_id)),
+                rules_by_id[match.rule_id],
+                now,
+                tz,
+                last_notified.get(str(match.rule_id)),
             )
             expires = rules_by_id[match.rule_id].expires_at
             # ponytail: quiet/cooldown rows grow unbounded; upgrade is version-based pruning (R1 option 2).
-            if not deliver and not (expires is not None and now >= expires):  # expiry is permanent until edit
+            if not deliver and not (
+                expires is not None and now >= expires
+            ):  # expiry is permanent until edit
                 # Keyed by the locked, scoped definition.id above; the table has no workspace column.
-                await session.execute(pg_insert(GadgetHighlightSuppression).values(
-                    definition_id=definition.id, dedupe_key=dedupe_key,
-                ).on_conflict_do_nothing())
+                await session.execute(
+                    pg_insert(GadgetHighlightSuppression)
+                    .values(
+                        definition_id=definition.id,
+                        dedupe_key=dedupe_key,
+                    )
+                    .on_conflict_do_nothing()
+                )
         matches.append(_highlight_read(item, match))
-        if deliver and await emit(session, NotificationEmit(
-            dedupe_key=dedupe_key,
-            kind="dashboard_highlight", title=item.title[:300],
-            body=match.reason[:1000],
-            params={"severity": match.severity, "definition_id": str(definition.id),
-                    "definition_revision": definition.revision},
-            link="/dashboard",
-        ), evidence=NotificationEvidence(
-            document_id=item.document_id, document_version_id=item.document_version_id,
-        ), scope=scope, multi_workspace_enabled=multi_workspace_enabled):
+        if deliver and await emit(
+            session,
+            NotificationEmit(
+                dedupe_key=dedupe_key,
+                kind="dashboard_highlight",
+                title=item.title[:300],
+                body=match.reason[:1000],
+                params={
+                    "severity": match.severity,
+                    "definition_id": str(definition.id),
+                    "definition_revision": definition.revision,
+                },
+                link="/dashboard",
+            ),
+            evidence=NotificationEvidence(
+                document_id=item.document_id,
+                document_version_id=item.document_version_id,
+            ),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        ):
             last_notified[str(match.rule_id)] = now
     progress.rule_last_notified = {key: value.isoformat() for key, value in last_notified.items()}
     return matches
 
 
 async def _evaluate_highlights_read_only(
-    session: AsyncSession, definition_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    definition_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[DashboardHighlightRead]:
     """Evaluate a definition against the newest documents without locks, cursors or notifications.
 
@@ -432,8 +587,9 @@ async def _evaluate_highlights_read_only(
     from modules.dashboard.highlights import compile_rules
     from modules.knowledge.documents import public as documents
 
-    definition_read = await get_definition(session, definition_id, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
+    definition_read = await get_definition(
+        session, definition_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if definition_read is None:
         raise DashboardMissing
     if definition_read.renderer not in {"highlights", "watch_rules"}:
@@ -442,7 +598,9 @@ async def _evaluate_highlights_read_only(
     if not requested_source_ids:
         return []
     selected_sources = await sources.get_gadget_sources(
-        session, requested_source_ids, scope=scope,
+        session,
+        requested_source_ids,
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
     source_ids = tuple(item.id for item in selected_sources if item.status == "active")
@@ -451,17 +609,32 @@ async def _evaluate_highlights_read_only(
     # "Not relevant" scope: hides versions from dashboard feed gadgets and this highlights view only
     # (include_dismissed stays False). Notifications, brief, search and chat are unchanged.
     projection_page = await documents.list_gadget_document_projections(
-        session, source_ids=source_ids, limit=100, scope=scope,
+        session,
+        source_ids=source_ids,
+        limit=100,
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
     rules = [HighlightRule.model_validate(rule) for rule in definition_read.highlight_rules]
     raw_item_scope = definition_read.scope.get("source_item_ids", [])
-    item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
-    compiled = compile_rules(rules, await _rule_topic_terms(
-        session, rules, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    ))
+    item_scope = (
+        {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
+    )
+    compiled = compile_rules(
+        rules,
+        await _rule_topic_terms(
+            session,
+            rules,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        ),
+    )
     matches = []
-    scoped = [item for item in projection_page.items if not item_scope or str(item.document_id) in item_scope]
+    scoped = [
+        item
+        for item in projection_page.items
+        if not item_scope or str(item.document_id) in item_scope
+    ]
     # Regex work is CPU-bound; keep it off the API event loop.
     per_item = await asyncio.to_thread(_match_items, scoped, compiled)
     for item, item_matches in zip(scoped, per_item, strict=True):
@@ -471,7 +644,11 @@ async def _evaluate_highlights_read_only(
 
 
 async def evaluate_gadget_highlights(
-    session: AsyncSession, definition_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    definition_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
     emit_notifications: bool = False,
 ) -> list[DashboardHighlightRead]:
     """Evaluate current evidence and durably page scans with at most 96 rule/version matches.
@@ -487,43 +664,73 @@ async def evaluate_gadget_highlights(
     read-only preview-style evaluation.
     """
     access_fence = await _admit(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         lock=emit_notifications,
     )
     if not emit_notifications:
         return await _evaluate_highlights_read_only(
-            session, definition_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            definition_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     owner_id = _actor(scope)
     scan = await _snapshot_highlight_scan(
-        session, definition_id, owner_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        definition_id,
+        owner_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if scan is None:
         return []
     definition, progress = await _lock_highlight_scan(
-        session, scan, definition_id, owner_id, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        scan,
+        definition_id,
+        owner_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     matches = await _deliver_highlight_matches(
-        session, scan, definition, progress, owner_id=owner_id, scope=scope,
+        session,
+        scan,
+        definition,
+        progress,
+        owner_id=owner_id,
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
     # Progress and notifications commit together under the original access fence.
     await commit_with_replay(
-        session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        [],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence,
     )
     return matches[:100]
 
 
 async def _rule_topic_terms(
-    session: AsyncSession, rules: Sequence[HighlightRule], *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    rules: Sequence[HighlightRule],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> dict[UUID, list[str]]:
     """Resolve the actor's live, active topics referenced by rules in this workspace (read-only)."""
     from modules.news import public as news
+
     topic_ids = list(dict.fromkeys(topic for rule in rules for topic in rule.topic_ids))
     return await news.resolve_topic_terms(
-        session, topic_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        topic_ids,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
@@ -537,8 +744,12 @@ class HighlightRuleError(ValueError):
 
 
 async def validate_highlight_rules(
-    session: AsyncSession, source_ids: Sequence[UUID], rules: Sequence[HighlightRule],
-    *, scope: Scope, known_topic_ids: Collection[UUID] | None = (),
+    session: AsyncSession,
+    source_ids: Sequence[UUID],
+    rules: Sequence[HighlightRule],
+    *,
+    scope: Scope,
+    known_topic_ids: Collection[UUID] | None = (),
 ) -> None:
     """Trust-boundary check: rule sources stay inside the definition scope; new topics must be the owner's.
 
@@ -546,29 +757,43 @@ async def validate_highlight_rules(
     deleted later never blocks edits; ``None`` skips the topic check (preview reports them unresolved).
     """
     from modules.news import public as news
+
     allowed = set(source_ids)
     for rule in rules:
         if not set(rule.source_ids) <= allowed or not set(rule.exclude_source_ids) <= allowed:
-            raise HighlightRuleError("rule_sources_not_subset", "Rule sources must be a subset of the definition sources")
+            raise HighlightRuleError(
+                "rule_sources_not_subset", "Rule sources must be a subset of the definition sources"
+            )
         if allowed and allowed <= set(rule.exclude_source_ids):
-            raise HighlightRuleError("rule_excludes_all_sources", "A rule cannot exclude every definition source")
+            raise HighlightRuleError(
+                "rule_excludes_all_sources", "A rule cannot exclude every definition source"
+            )
     if known_topic_ids is None:
         return
-    topic_ids = list(dict.fromkeys(
-        topic for rule in rules for topic in rule.topic_ids if topic not in known_topic_ids
-    ))
+    topic_ids = list(
+        dict.fromkeys(
+            topic for rule in rules for topic in rule.topic_ids if topic not in known_topic_ids
+        )
+    )
     if topic_ids and set(topic_ids) - await news.live_topic_ids(session, topic_ids, scope=scope):
-        raise HighlightRuleError("rule_topic_unknown", "Rule topic_ids must reference your existing topics")
+        raise HighlightRuleError(
+            "rule_topic_unknown", "Rule topic_ids must reference your existing topics"
+        )
 
 
 def _match_items(items: Sequence[Any], compiled: Sequence[Any]) -> list[list[Any]]:
     """Match every item against pre-compiled rules (pure CPU; safe to run in a thread)."""
     from modules.dashboard.highlights import match_compiled
+
     return [match_compiled(item.excerpt, compiled, source_id=item.source_id) for item in items]
 
 
 async def preview_highlights(
-    session: AsyncSession, payload: HighlightPreviewRequest, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    payload: HighlightPreviewRequest,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> HighlightPreviewRead:
     """Dry-run draft rules over recent current evidence: read-only, bounded, no notifications, no egress.
 
@@ -577,16 +802,29 @@ async def preview_highlights(
     """
     from modules.dashboard.highlights import compile_rules
     from modules.knowledge.documents import public as documents
+
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    await validate_highlight_rules(session, payload.source_ids, payload.rules, scope=scope, known_topic_ids=None)
+    await validate_highlight_rules(
+        session, payload.source_ids, payload.rules, scope=scope, known_topic_ids=None
+    )
     since = datetime.now(UTC) - timedelta(days=payload.days)
     # Only active sources visible in this workspace are scanned; foreign or paused ids drop out.
-    selected = await sources.get_gadget_sources(
-        session, tuple(payload.source_ids), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    ) if payload.source_ids else []
+    selected = (
+        await sources.get_gadget_sources(
+            session,
+            tuple(payload.source_ids),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if payload.source_ids
+        else []
+    )
     source_ids = tuple(item.id for item in selected if item.status == "active")
     topic_terms = await _rule_topic_terms(
-        session, payload.rules, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        payload.rules,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     compiled = compile_rules(payload.rules, topic_terms)
     item_scope = {str(value) for value in payload.source_item_ids}
@@ -597,63 +835,110 @@ async def preview_highlights(
     truncated = False
     for _ in range(PREVIEW_MAX_PAGES):
         page = await documents.list_gadget_document_projections(
-            session, source_ids=source_ids, limit=PREVIEW_PAGE_SIZE,
-            cursor=cursor, since=since, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            source_ids=source_ids,
+            limit=PREVIEW_PAGE_SIZE,
+            cursor=cursor,
+            since=since,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
-        items = [item for item in page.items if not item_scope or str(item.document_id) in item_scope]
+        items = [
+            item for item in page.items if not item_scope or str(item.document_id) in item_scope
+        ]
         scanned += len(items)
         # Regex work is CPU-bound; keep it off the event loop.
         try:
             per_item = await asyncio.wait_for(
-                asyncio.to_thread(_match_items, items, compiled), PREVIEW_MATCH_TIMEOUT_SECONDS,
+                asyncio.to_thread(_match_items, items, compiled),
+                PREVIEW_MATCH_TIMEOUT_SECONDS,
             )
         except TimeoutError as exc:
             raise GatewayTimeoutError(
-                detail={"code": "preview_timeout", "message": "Preview took too long", "details": {}},
+                detail={
+                    "code": "preview_timeout",
+                    "message": "Preview took too long",
+                    "details": {},
+                },
             ) from exc
         for item, item_matches in zip(items, per_item, strict=True):
             for match in item_matches:
                 counts[match.rule_id] += 1
                 if len(matches) < PREVIEW_MAX_MATCHES:
-                    matches.append(DashboardHighlightRead(
-                        document_id=item.document_id, document_version_id=item.document_version_id,
-                        source_id=item.source_id, title=item.title, observed_at=item.observed_at,
-                        rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
-                        severity=match.severity, notify=match.notify, reason=match.reason,
-                    ))
+                    matches.append(
+                        DashboardHighlightRead(
+                            document_id=item.document_id,
+                            document_version_id=item.document_version_id,
+                            source_id=item.source_id,
+                            title=item.title,
+                            observed_at=item.observed_at,
+                            rule_id=match.rule_id,
+                            matched_keywords=list(match.matched_keywords),
+                            severity=match.severity,
+                            notify=match.notify,
+                            reason=match.reason,
+                        )
+                    )
         cursor = page.next_cursor
         if cursor is None:
             break
     else:
         truncated = True
     return HighlightPreviewRead(
-        window_days=payload.days, scanned=scanned, truncated=truncated, matches=matches,
-        rules=[HighlightPreviewRuleRead(
-            rule_id=rule.id, match_count=counts[rule.id],
-            unresolved_topic_ids=[topic for topic in rule.topic_ids if topic not in topic_terms],
-        ) for rule in payload.rules],
+        window_days=payload.days,
+        scanned=scanned,
+        truncated=truncated,
+        matches=matches,
+        rules=[
+            HighlightPreviewRuleRead(
+                rule_id=rule.id,
+                match_count=counts[rule.id],
+                unresolved_topic_ids=[
+                    topic for topic in rule.topic_ids if topic not in topic_terms
+                ],
+            )
+            for rule in payload.rules
+        ],
     )
 
 
 async def definition_usage(
-    session: AsyncSession, definition_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    definition_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> list[GadgetDefinitionUsageRead] | None:
     """List the actor's dashboards that place this definition (and so evaluate its rules)."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if await session.scalar(select(GadgetDefinition.id).where(
-        GadgetDefinition.id == definition_id, GadgetDefinition.workspace_id == scope.workspace_id,
-        GadgetDefinition.owner_id == _actor(scope),
-    )) is None:
+    if (
+        await session.scalar(
+            select(GadgetDefinition.id).where(
+                GadgetDefinition.id == definition_id,
+                GadgetDefinition.workspace_id == scope.workspace_id,
+                GadgetDefinition.owner_id == _actor(scope),
+            )
+        )
+        is None
+    ):
         return None
-    rows = (await session.execute(
-        select(Dashboard.id, Dashboard.name, func.count(GadgetInstance.id))
-        .join(GadgetInstance, GadgetInstance.dashboard_id == Dashboard.id)
-        .where(GadgetInstance.definition_id == definition_id, Dashboard.workspace_id == scope.workspace_id,
-               Dashboard.owner_id == _actor(scope))
-        .group_by(Dashboard.id, Dashboard.name)
-        .order_by(Dashboard.name, Dashboard.id).limit(MAX_DASHBOARDS_PER_OWNER)
-    )).all()
-    return [GadgetDefinitionUsageRead(dashboard_id=r[0], name=r[1], instance_count=r[2]) for r in rows]
+    rows = (
+        await session.execute(
+            select(Dashboard.id, Dashboard.name, func.count(GadgetInstance.id))
+            .join(GadgetInstance, GadgetInstance.dashboard_id == Dashboard.id)
+            .where(
+                GadgetInstance.definition_id == definition_id,
+                Dashboard.workspace_id == scope.workspace_id,
+                Dashboard.owner_id == _actor(scope),
+            )
+            .group_by(Dashboard.id, Dashboard.name)
+            .order_by(Dashboard.name, Dashboard.id)
+            .limit(MAX_DASHBOARDS_PER_OWNER)
+        )
+    ).all()
+    return [
+        GadgetDefinitionUsageRead(dashboard_id=r[0], name=r[1], instance_count=r[2]) for r in rows
+    ]
 
 
 class DashboardConflict(Exception):
@@ -671,13 +956,19 @@ class DashboardMissing(Exception):
 
 
 async def _lock_dashboard(
-    session: AsyncSession, dashboard_id: UUID, *, scope: Scope,
+    session: AsyncSession,
+    dashboard_id: UUID,
+    *,
+    scope: Scope,
 ) -> Dashboard:
     """Lock one owner-scoped dashboard row and refresh it before revision checks."""
     row = await session.scalar(
         select(Dashboard)
-        .where(Dashboard.id == dashboard_id, Dashboard.workspace_id == scope.workspace_id,
-               Dashboard.owner_id == _actor(scope))
+        .where(
+            Dashboard.id == dashboard_id,
+            Dashboard.workspace_id == scope.workspace_id,
+            Dashboard.owner_id == _actor(scope),
+        )
         .with_for_update()
         .execution_options(populate_existing=True)
     )
@@ -687,13 +978,19 @@ async def _lock_dashboard(
 
 
 async def _lock_definition(
-    session: AsyncSession, definition_id: UUID, *, scope: Scope,
+    session: AsyncSession,
+    definition_id: UUID,
+    *,
+    scope: Scope,
 ) -> GadgetDefinition:
     """Lock one owner-scoped definition before querying dashboard references."""
     row = await session.scalar(
         select(GadgetDefinition)
-        .where(GadgetDefinition.id == definition_id, GadgetDefinition.workspace_id == scope.workspace_id,
-               GadgetDefinition.owner_id == _actor(scope))
+        .where(
+            GadgetDefinition.id == definition_id,
+            GadgetDefinition.workspace_id == scope.workspace_id,
+            GadgetDefinition.owner_id == _actor(scope),
+        )
         .with_for_update()
         .execution_options(populate_existing=True)
     )
@@ -707,13 +1004,17 @@ def _check_revision(row: Dashboard | GadgetDefinition, expected: int) -> None:
     if row.revision != expected:
         raise DashboardConflict("revision_conflict", "The resource changed", row.revision)
     if row.revision >= MAX_REVISION:
-        raise DashboardConflict("revision_exhausted", "The resource revision is exhausted", row.revision)
+        raise DashboardConflict(
+            "revision_exhausted", "The resource revision is exhausted", row.revision
+        )
 
 
 def _bump(row: Dashboard | GadgetDefinition) -> int:
     """Advance one already-locked revision exactly once and return its emitted value."""
     if row.revision >= MAX_REVISION:
-        raise DashboardConflict("revision_exhausted", "The resource revision is exhausted", row.revision)
+        raise DashboardConflict(
+            "revision_exhausted", "The resource revision is exhausted", row.revision
+        )
     row.revision += 1
     return row.revision
 
@@ -725,9 +1026,12 @@ async def _lock_owner_creation_quota(session: AsyncSession, scope: Scope) -> Non
     indexing; all creation paths acquire this before source/entity locks and
     hold it until commit. This bounds quota oversubscription without a process lock.
     """
-    await session.execute(text(
-        "SELECT pg_advisory_xact_lock(hashtextextended('dashboard.quota:' || :workspace_id, 0))"
-    ), {"workspace_id": str(scope.workspace_id)})
+    await session.execute(
+        text(
+            "SELECT pg_advisory_xact_lock(hashtextextended('dashboard.quota:' || :workspace_id, 0))"
+        ),
+        {"workspace_id": str(scope.workspace_id)},
+    )
 
 
 async def _instance_minima(
@@ -735,12 +1039,17 @@ async def _instance_minima(
 ) -> tuple[list[GadgetInstance], dict[UUID, tuple[int, int]], dict[UUID, GadgetDefinition]]:
     """Load bounded instances and their owner definitions for layout validation and projection."""
     rows = list(
-        (await session.scalars(
-            select(GadgetInstance)
-            .join(Dashboard, Dashboard.id == GadgetInstance.dashboard_id)
-            .where(GadgetInstance.dashboard_id == dashboard_id, Dashboard.workspace_id == scope.workspace_id)
-            .order_by(GadgetInstance.position, GadgetInstance.id)
-        )).all()
+        (
+            await session.scalars(
+                select(GadgetInstance)
+                .join(Dashboard, Dashboard.id == GadgetInstance.dashboard_id)
+                .where(
+                    GadgetInstance.dashboard_id == dashboard_id,
+                    Dashboard.workspace_id == scope.workspace_id,
+                )
+                .order_by(GadgetInstance.position, GadgetInstance.id)
+            )
+        ).all()
     )
     definitions = await _definitions_for_instances(session, rows, scope=scope)
     minimums = {
@@ -761,34 +1070,58 @@ async def _definitions_for_instances(
     if not identifiers:
         return {}
     result = await session.scalars(
-        select(GadgetDefinition).where(GadgetDefinition.id.in_(identifiers),
-            GadgetDefinition.workspace_id == scope.workspace_id)
+        select(GadgetDefinition).where(
+            GadgetDefinition.id.in_(identifiers),
+            GadgetDefinition.workspace_id == scope.workspace_id,
+        )
     )
     return {row.id: row for row in result.all()}
 
 
 async def _source_states(
-    session: AsyncSession, source_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool
+    session: AsyncSession,
+    source_ids: Sequence[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> dict[UUID, Any]:
     """Read the bounded owner source projection without copying connector secrets or content."""
     if not source_ids:
         return {}
-    rows = await sources.get_gadget_sources(session, tuple(dict.fromkeys(source_ids)),
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    rows = await sources.get_gadget_sources(
+        session,
+        tuple(dict.fromkeys(source_ids)),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     return {row.id: row for row in rows}
 
 
 async def _definition_source_states(
-    session: AsyncSession, definitions: Sequence[GadgetDefinition], *, scope: Scope, multi_workspace_enabled: bool
+    session: AsyncSession,
+    definitions: Sequence[GadgetDefinition],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> dict[UUID, Any]:
     """Resolve lifecycle metadata for a bounded owner definition set in 32-ID source batches."""
-    source_ids = list(dict.fromkeys(
-        UUID(str(source_id)) for definition in definitions for source_id in definition.source_ids
-    ))
+    source_ids = list(
+        dict.fromkeys(
+            UUID(str(source_id))
+            for definition in definitions
+            for source_id in definition.source_ids
+        )
+    )
     states: dict[UUID, Any] = {}
     for offset in range(0, len(source_ids), 32):
-        states.update(await _source_states(session, source_ids[offset : offset + 32],
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled))
+        states.update(
+            await _source_states(
+                session,
+                source_ids[offset : offset + 32],
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        )
     return states
 
 
@@ -810,98 +1143,193 @@ def _renderer_warnings(renderer_id: str) -> list[dict[str, str]]:
     descriptor = gadgets.renderer_descriptor(renderer_id)
     if descriptor.runtime_state == "available":
         return []
-    return [{"code": "renderer_planned"}, *[
-        {"code": "capability_unavailable", "capability": key}
-        for key in descriptor.capability_keys
-    ]]
+    return [
+        {"code": "renderer_planned"},
+        *[
+            {"code": "capability_unavailable", "capability": key}
+            for key in descriptor.capability_keys
+        ],
+    ]
 
 
 async def _dashboard_read(
-    session: AsyncSession, dashboard: Dashboard, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    dashboard: Dashboard,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> DashboardDetail:
     """Build dashboard detail with descriptor-derived renderer state and source lifecycle warnings."""
     await session.refresh(dashboard)
-    groups = list((await session.scalars(
-        select(DashboardGroup).join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
-        .where(DashboardGroup.dashboard_id == dashboard.id, Dashboard.workspace_id == scope.workspace_id)
-        .order_by(DashboardGroup.position, DashboardGroup.id)
-    )).all())
+    groups = list(
+        (
+            await session.scalars(
+                select(DashboardGroup)
+                .join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
+                .where(
+                    DashboardGroup.dashboard_id == dashboard.id,
+                    Dashboard.workspace_id == scope.workspace_id,
+                )
+                .order_by(DashboardGroup.position, DashboardGroup.id)
+            )
+        ).all()
+    )
     instances, _minimums, definitions = await _instance_minima(session, dashboard.id, scope=scope)
-    source_ids = list(dict.fromkeys(
-        UUID(str(source_id)) for definition in definitions.values() for source_id in definition.source_ids
-    ))
+    source_ids = list(
+        dict.fromkeys(
+            UUID(str(source_id))
+            for definition in definitions.values()
+            for source_id in definition.source_ids
+        )
+    )
     source_states: dict[UUID, Any] = {}
     # Each source projection stays within its owning module's 32-ID query ceiling.
     for offset in range(0, len(source_ids), 32):
-        source_states.update(await _source_states(session, source_ids[offset : offset + 32],
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled))
-    placements = list((await session.scalars(
-        select(GadgetPlacement).join(Dashboard, Dashboard.id == GadgetPlacement.dashboard_id)
-        .where(GadgetPlacement.dashboard_id == dashboard.id, Dashboard.workspace_id == scope.workspace_id)
-    )).all())
+        source_states.update(
+            await _source_states(
+                session,
+                source_ids[offset : offset + 32],
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        )
+    placements = list(
+        (
+            await session.scalars(
+                select(GadgetPlacement)
+                .join(Dashboard, Dashboard.id == GadgetPlacement.dashboard_id)
+                .where(
+                    GadgetPlacement.dashboard_id == dashboard.id,
+                    Dashboard.workspace_id == scope.workspace_id,
+                )
+            )
+        ).all()
+    )
     by_breakpoint: dict[str, list[dict[str, Any]]] = {"desktop": [], "mobile": []}
     for item in placements:
-        by_breakpoint[item.breakpoint].append({
-            "instance_id": item.instance_id, "x": item.x, "y": item.y,
-            "w": item.w, "h": item.h,
-        })
-    layout_rows = list((await session.scalars(
-        select(DashboardLayout).join(Dashboard, Dashboard.id == DashboardLayout.dashboard_id)
-        .where(DashboardLayout.dashboard_id == dashboard.id, Dashboard.workspace_id == scope.workspace_id)
-    )).all())
+        by_breakpoint[item.breakpoint].append(
+            {
+                "instance_id": item.instance_id,
+                "x": item.x,
+                "y": item.y,
+                "w": item.w,
+                "h": item.h,
+            }
+        )
+    layout_rows = list(
+        (
+            await session.scalars(
+                select(DashboardLayout)
+                .join(Dashboard, Dashboard.id == DashboardLayout.dashboard_id)
+                .where(
+                    DashboardLayout.dashboard_id == dashboard.id,
+                    Dashboard.workspace_id == scope.workspace_id,
+                )
+            )
+        ).all()
+    )
     columns = {item.breakpoint: item.columns for item in layout_rows}
     instance_payloads = []
     for instance in instances:
         definition = definitions[instance.definition_id]
-        instance_payloads.append({
-            "id": instance.id, "group_id": instance.group_id, "definition_id": definition.id,
-            "title": instance.title, "position": instance.position,
-            "definition": {
-                "id": definition.id, "name": definition.name, "revision": definition.revision,
-                "renderer": definition.renderer, "source_ids": [UUID(str(item)) for item in definition.source_ids],
-                "scope": definition.scope, "filters": definition.filters,
-                "highlight_rules": definition.highlight_rules,
-                "runtime_state": gadgets.renderer_descriptor(definition.renderer).runtime_state,
-                "warnings": _definition_warnings(definition, source_states),
+        instance_payloads.append(
+            {
+                "id": instance.id,
+                "group_id": instance.group_id,
+                "definition_id": definition.id,
+                "title": instance.title,
+                "position": instance.position,
+                "definition": {
+                    "id": definition.id,
+                    "name": definition.name,
+                    "revision": definition.revision,
+                    "renderer": definition.renderer,
+                    "source_ids": [UUID(str(item)) for item in definition.source_ids],
+                    "scope": definition.scope,
+                    "filters": definition.filters,
+                    "highlight_rules": definition.highlight_rules,
+                    "runtime_state": gadgets.renderer_descriptor(definition.renderer).runtime_state,
+                    "warnings": _definition_warnings(definition, source_states),
+                },
+            }
+        )
+    return DashboardDetail.model_validate(
+        {
+            "id": dashboard.id,
+            "name": dashboard.name,
+            "revision": dashboard.revision,
+            "created_at": dashboard.created_at,
+            "updated_at": dashboard.updated_at,
+            "groups": [
+                {
+                    "id": row.id,
+                    "dashboard_id": dashboard.id,
+                    "name": row.name,
+                    "position": row.position,
+                }
+                for row in groups
+            ],
+            "instances": instance_payloads,
+            "layouts": {
+                key: {"columns": columns.get(key, 20), "items": by_breakpoint[key]}
+                for key in ("desktop", "mobile")
             },
-        })
-    return DashboardDetail.model_validate({
-        "id": dashboard.id, "name": dashboard.name, "revision": dashboard.revision,
-        "created_at": dashboard.created_at, "updated_at": dashboard.updated_at,
-        "groups": [{"id": row.id, "dashboard_id": dashboard.id, "name": row.name, "position": row.position} for row in groups],
-        "instances": instance_payloads,
-        "layouts": {
-            key: {"columns": columns.get(key, 20), "items": by_breakpoint[key]}
-            for key in ("desktop", "mobile")
-        },
-    })
+        }
+    )
 
 
-async def list_dashboards(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> list[DashboardSummary]:
+async def list_dashboards(
+    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool
+) -> list[DashboardSummary]:
     """List the authenticated owner's bounded dashboard summaries in stable creation order."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     rows = await session.scalars(
-        select(Dashboard).where(Dashboard.workspace_id == scope.workspace_id, Dashboard.owner_id == _actor(scope))
-        .order_by(Dashboard.created_at, Dashboard.id).limit(MAX_DASHBOARDS_PER_OWNER)
+        select(Dashboard)
+        .where(Dashboard.workspace_id == scope.workspace_id, Dashboard.owner_id == _actor(scope))
+        .order_by(Dashboard.created_at, Dashboard.id)
+        .limit(MAX_DASHBOARDS_PER_OWNER)
     )
-    return [DashboardSummary(id=row.id, name=row.name, revision=row.revision,
-            created_at=row.created_at, updated_at=row.updated_at) for row in rows.all()]
+    return [
+        DashboardSummary(
+            id=row.id,
+            name=row.name,
+            revision=row.revision,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+        for row in rows.all()
+    ]
 
 
 def _encode_dashboard_export_cursor(
-    snapshot_at: datetime, created_at: datetime, identifier: UUID, access_fence: AccessFence,
+    snapshot_at: datetime,
+    created_at: datetime,
+    identifier: UUID,
+    access_fence: AccessFence,
 ) -> str:
     """Bind dashboard export position to owner scope, dataset, sort and cutoff."""
-    raw = json.dumps([
-        2, "dashboards", str(access_fence.workspace_id), access_fence.user_id,
-        access_fence.membership_revision, access_fence.configuration_revision,
-        {}, "created_at_asc_id_asc", snapshot_at.isoformat(), created_at.isoformat(), str(identifier),
-    ], separators=(",", ":")).encode()
+    raw = json.dumps(
+        [
+            2,
+            "dashboards",
+            str(access_fence.workspace_id),
+            access_fence.user_id,
+            access_fence.membership_revision,
+            access_fence.configuration_revision,
+            {},
+            "created_at_asc_id_asc",
+            snapshot_at.isoformat(),
+            created_at.isoformat(),
+            str(identifier),
+        ],
+        separators=(",", ":"),
+    ).encode()
     return b64url_encode(raw)
 
 
 def _decode_dashboard_export_cursor(
-    cursor: str, access_fence: AccessFence,
+    cursor: str,
+    access_fence: AccessFence,
 ) -> tuple[datetime, datetime, UUID]:
     """Reject legacy, cross-workspace, stale-admission, or altered dashboard cursors."""
     try:
@@ -912,19 +1340,32 @@ def _decode_dashboard_export_cursor(
             raise ValueError
         value = json.loads(raw)
         expected_scope = [
-            2, "dashboards", str(access_fence.workspace_id), access_fence.user_id,
-            access_fence.membership_revision, access_fence.configuration_revision,
-            {}, "created_at_asc_id_asc",
+            2,
+            "dashboards",
+            str(access_fence.workspace_id),
+            access_fence.user_id,
+            access_fence.membership_revision,
+            access_fence.configuration_revision,
+            {},
+            "created_at_asc_id_asc",
         ]
         if not isinstance(value, list) or len(value) != 11 or value[:8] != expected_scope:
             raise ValueError
         snapshot_at, created_at = datetime.fromisoformat(value[8]), datetime.fromisoformat(value[9])
         identifier = UUID(value[10])
-        if (any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot_at, created_at))
-                or snapshot_at.isoformat() != value[8] or created_at.isoformat() != value[9]
-                or created_at > snapshot_at or snapshot_at > datetime.now(UTC)
-                or str(identifier) != value[10]
-                or _encode_dashboard_export_cursor(snapshot_at, created_at, identifier, access_fence) != cursor):
+        if (
+            any(
+                item.tzinfo is None or item.utcoffset() is None
+                for item in (snapshot_at, created_at)
+            )
+            or snapshot_at.isoformat() != value[8]
+            or created_at.isoformat() != value[9]
+            or created_at > snapshot_at
+            or snapshot_at > datetime.now(UTC)
+            or str(identifier) != value[10]
+            or _encode_dashboard_export_cursor(snapshot_at, created_at, identifier, access_fence)
+            != cursor
+        ):
             raise ValueError
         return snapshot_at, created_at, identifier
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
@@ -932,21 +1373,37 @@ def _decode_dashboard_export_cursor(
 
 
 def _encode_owner_export_cursor(
-    record_kind: str, snapshot_at: datetime, position_at: datetime, identifier: UUID,
+    record_kind: str,
+    snapshot_at: datetime,
+    position_at: datetime,
+    identifier: UUID,
     access_fence: AccessFence,
 ) -> str:
     """Bind a portable owner keyset position to its dataset and admitted scope."""
     sort = "generated_at_asc_id_asc" if record_kind == "daily_briefs" else "created_at_asc_id_asc"
-    raw = json.dumps([
-        2, record_kind, str(access_fence.workspace_id), access_fence.user_id,
-        access_fence.membership_revision, access_fence.configuration_revision,
-        {}, sort, snapshot_at.isoformat(), position_at.isoformat(), str(identifier),
-    ], separators=(",", ":")).encode("utf-8")
+    raw = json.dumps(
+        [
+            2,
+            record_kind,
+            str(access_fence.workspace_id),
+            access_fence.user_id,
+            access_fence.membership_revision,
+            access_fence.configuration_revision,
+            {},
+            sort,
+            snapshot_at.isoformat(),
+            position_at.isoformat(),
+            str(identifier),
+        ],
+        separators=(",", ":"),
+    ).encode("utf-8")
     return b64url_encode(raw)
 
 
 def _decode_owner_export_cursor(
-    cursor: str, record_kind: str, access_fence: AccessFence,
+    cursor: str,
+    record_kind: str,
+    access_fence: AccessFence,
 ) -> tuple[datetime, datetime, UUID]:
     """Reject legacy, cross-workspace, stale-admission, or altered owner cursors."""
     try:
@@ -955,37 +1412,63 @@ def _decode_owner_export_cursor(
         raw = b64url_decode(cursor)
         if b64url_encode(raw) != cursor:
             raise ValueError
-        sort = "generated_at_asc_id_asc" if record_kind == "daily_briefs" else "created_at_asc_id_asc"
+        sort = (
+            "generated_at_asc_id_asc" if record_kind == "daily_briefs" else "created_at_asc_id_asc"
+        )
         expected_scope = [
-            2, record_kind, str(access_fence.workspace_id), access_fence.user_id,
-            access_fence.membership_revision, access_fence.configuration_revision,
-            {}, sort,
+            2,
+            record_kind,
+            str(access_fence.workspace_id),
+            access_fence.user_id,
+            access_fence.membership_revision,
+            access_fence.configuration_revision,
+            {},
+            sort,
         ]
         value = json.loads(raw)
         if not isinstance(value, list) or len(value) != 11 or value[:8] != expected_scope:
             raise ValueError
-        snapshot_at, position_at = datetime.fromisoformat(value[8]), datetime.fromisoformat(value[9])
+        snapshot_at, position_at = (
+            datetime.fromisoformat(value[8]),
+            datetime.fromisoformat(value[9]),
+        )
         identifier = UUID(value[10])
-        if (any(item.tzinfo is None or item.utcoffset() is None for item in (snapshot_at, position_at))
-                or snapshot_at.isoformat() != value[8] or position_at.isoformat() != value[9]
-                or position_at > snapshot_at or snapshot_at > datetime.now(UTC)
-                or str(identifier) != value[10]
-                or _encode_owner_export_cursor(record_kind, snapshot_at, position_at, identifier, access_fence) != cursor):
+        if (
+            any(
+                item.tzinfo is None or item.utcoffset() is None
+                for item in (snapshot_at, position_at)
+            )
+            or snapshot_at.isoformat() != value[8]
+            or position_at.isoformat() != value[9]
+            or position_at > snapshot_at
+            or snapshot_at > datetime.now(UTC)
+            or str(identifier) != value[10]
+            or _encode_owner_export_cursor(
+                record_kind, snapshot_at, position_at, identifier, access_fence
+            )
+            != cursor
+        ):
             raise ValueError
         return snapshot_at, position_at, identifier
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
         raise ValidationFailedError(detail="Owner export cursor is invalid") from exc
 
 
-def _dashboard_export_scope(owner_id: int, snapshot_at: datetime, workspace_id: UUID) -> tuple[ColumnElement[bool], ...]:
+def _dashboard_export_scope(
+    owner_id: int, snapshot_at: datetime, workspace_id: UUID
+) -> tuple[ColumnElement[bool], ...]:
     """Select workspace-local parent dashboard revisions that existed unchanged at the cutoff."""
     return (
-        Dashboard.workspace_id == workspace_id, Dashboard.owner_id == owner_id,
-        Dashboard.created_at <= snapshot_at, Dashboard.updated_at <= snapshot_at,
+        Dashboard.workspace_id == workspace_id,
+        Dashboard.owner_id == owner_id,
+        Dashboard.created_at <= snapshot_at,
+        Dashboard.updated_at <= snapshot_at,
     )
 
 
-def _definition_export_scope(owner_id: int, snapshot_at: datetime, workspace_id: UUID) -> tuple[ColumnElement[bool], ...]:
+def _definition_export_scope(
+    owner_id: int, snapshot_at: datetime, workspace_id: UUID
+) -> tuple[ColumnElement[bool], ...]:
     """Select the complete set of saved owner definitions created by the cutoff."""
     return (
         GadgetDefinition.workspace_id == workspace_id,
@@ -997,118 +1480,202 @@ def _definition_export_scope(owner_id: int, snapshot_at: datetime, workspace_id:
 def _definition_export_read(row: GadgetDefinition) -> GadgetDefinitionExport:
     """Project persisted selectors only, excluding placements, live warnings and renderer output."""
     return GadgetDefinitionExport(
-        id=row.id, name=row.name, revision=row.revision, renderer=row.renderer,
+        id=row.id,
+        name=row.name,
+        revision=row.revision,
+        renderer=row.renderer,
         source_ids=[UUID(str(item)) for item in row.source_ids],
-        scope=GadgetScope.model_validate(row.scope), filters=GadgetFilters.model_validate(row.filters),
+        scope=GadgetScope.model_validate(row.scope),
+        filters=GadgetFilters.model_validate(row.filters),
         highlight_rules=[HighlightRule.model_validate(item) for item in row.highlight_rules],
-        created_at=row.created_at, updated_at=row.updated_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
 def _definition_export_row_digest(row: GadgetDefinition) -> str:
     """Hash the exact persisted selector fields and both revision timestamps for final fencing."""
     value = {
-        "id": str(row.id), "name": row.name, "revision": row.revision, "renderer": row.renderer,
-        "source_ids": row.source_ids, "scope": row.scope, "filters": row.filters,
-        "highlight_rules": row.highlight_rules, "created_at": row.created_at.isoformat(),
+        "id": str(row.id),
+        "name": row.name,
+        "revision": row.revision,
+        "renderer": row.renderer,
+        "source_ids": row.source_ids,
+        "scope": row.scope,
+        "filters": row.filters,
+        "highlight_rules": row.highlight_rules,
+        "created_at": row.created_at.isoformat(),
         "updated_at": row.updated_at.isoformat(),
     }
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
-                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 async def _definition_export_page(
-    session: AsyncSession, *, owner_id: int, limit: int, cursor: str | None,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    limit: int,
+    cursor: str | None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> GadgetDefinitionExportPage:
     """Page all definitions, including unplaced; omit changed-after-cutoff configs and fence them."""
-    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    access_fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if owner_id != _actor(scope) or not 1 <= limit <= 100:
         raise ValueError("Gadget definition export owner or page limit is invalid")
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
-        snapshot_at, position_at, position_id = _decode_owner_export_cursor(cursor, "gadget_definitions", access_fence)
+        snapshot_at, position_at, position_id = _decode_owner_export_cursor(
+            cursor, "gadget_definitions", access_fence
+        )
         position = (position_at, position_id)
     predicates = _definition_export_scope(owner_id, snapshot_at, scope.workspace_id)
-    snapshot_count = int(await session.scalar(
-        select(func.count()).select_from(GadgetDefinition).where(*predicates)
-    ) or 0)
+    snapshot_count = int(
+        await session.scalar(select(func.count()).select_from(GadgetDefinition).where(*predicates))
+        or 0
+    )
     statement = select(GadgetDefinition).where(*predicates)
     if position is not None:
         from sqlalchemy import tuple_
-        statement = statement.where(tuple_(GadgetDefinition.created_at, GadgetDefinition.id) > position)
-    rows = list((await session.scalars(
-        statement.order_by(GadgetDefinition.created_at, GadgetDefinition.id).limit(limit + 1)
-        .execution_options(populate_existing=True)
-    )).all())
+
+        statement = statement.where(
+            tuple_(GadgetDefinition.created_at, GadgetDefinition.id) > position
+        )
+    rows = list(
+        (
+            await session.scalars(
+                statement.order_by(GadgetDefinition.created_at, GadgetDefinition.id)
+                .limit(limit + 1)
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
     has_more, rows = len(rows) > limit, rows[:limit]
     eligible_rows = [row for row in rows if row.updated_at <= snapshot_at]
     items = [_definition_export_read(row) for row in eligible_rows]
     _encoded, payload_bytes = serialize_bounded_page(items, label="Gadget definition")
-    fences = [GadgetDefinitionExportFence(
-        id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
-        content_digest=_definition_export_row_digest(row), eligible=row.updated_at <= snapshot_at,
-    ) for row in rows]
+    fences = [
+        GadgetDefinitionExportFence(
+            id=row.id,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            revision=row.revision,
+            content_digest=_definition_export_row_digest(row),
+            eligible=row.updated_at <= snapshot_at,
+        )
+        for row in rows
+    ]
     return GadgetDefinitionExportPage(
-        owner_id=owner_id, record_kind="gadget_definitions", snapshot_at=snapshot_at,
-        snapshot_count=snapshot_count, omitted_count=len(rows) - len(eligible_rows),
-        items=items, fences=fences, payload_bytes=payload_bytes, available=True,
-        next_cursor=_encode_owner_export_cursor("gadget_definitions", snapshot_at, rows[-1].created_at, rows[-1].id, access_fence)
-        if has_more and rows else None,
-        omission_reason="definition_changed_after_snapshot" if len(rows) != len(eligible_rows) else None,
+        owner_id=owner_id,
+        record_kind="gadget_definitions",
+        snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count,
+        omitted_count=len(rows) - len(eligible_rows),
+        items=items,
+        fences=fences,
+        payload_bytes=payload_bytes,
+        available=True,
+        next_cursor=_encode_owner_export_cursor(
+            "gadget_definitions", snapshot_at, rows[-1].created_at, rows[-1].id, access_fence
+        )
+        if has_more and rows
+        else None,
+        omission_reason="definition_changed_after_snapshot"
+        if len(rows) != len(eligible_rows)
+        else None,
     )
 
 
 async def _definition_export_validation(
-    session: AsyncSession, *, owner_id: int, snapshot_at: datetime,
-    expected_snapshot_count: int, fences: list[GadgetDefinitionExportFence],
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    snapshot_at: datetime,
+    expected_snapshot_count: int,
+    fences: list[GadgetDefinitionExportFence],
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> GadgetDefinitionExportValidation:
     """Recheck the definition cutoff inventory and exact saved-selector digest before publication."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if owner_id != _actor(scope) or len(fences) > 100:
         raise ValueError("Gadget definition export validation input is invalid")
     predicates = _definition_export_scope(owner_id, snapshot_at, scope.workspace_id)
-    observed = int(await session.scalar(
-        select(func.count()).select_from(GadgetDefinition).where(*predicates)
-    ) or 0)
+    observed = int(
+        await session.scalar(select(func.count()).select_from(GadgetDefinition).where(*predicates))
+        or 0
+    )
     if observed != expected_snapshot_count:
         return GadgetDefinitionExportValidation(
-            valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed,
+            valid=False,
+            reason="snapshot_count_changed",
+            observed_snapshot_count=observed,
         )
     for fence in fences:
-        row = await session.scalar(select(GadgetDefinition).where(
-            GadgetDefinition.id == fence.id, *predicates,
-        ).execution_options(populate_existing=True))
+        row = await session.scalar(
+            select(GadgetDefinition)
+            .where(
+                GadgetDefinition.id == fence.id,
+                *predicates,
+            )
+            .execution_options(populate_existing=True)
+        )
         if row is None:
             return GadgetDefinitionExportValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed,
+                valid=False,
+                reason="record_changed",
+                observed_snapshot_count=observed,
             )
         eligible = row.updated_at <= snapshot_at
-        if (row.created_at != fence.created_at or row.updated_at != fence.updated_at
-                or row.revision != fence.revision or eligible != fence.eligible
-                or _definition_export_row_digest(row) != fence.content_digest):
+        if (
+            row.created_at != fence.created_at
+            or row.updated_at != fence.updated_at
+            or row.revision != fence.revision
+            or eligible != fence.eligible
+            or _definition_export_row_digest(row) != fence.content_digest
+        ):
             return GadgetDefinitionExportValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed,
+                valid=False,
+                reason="record_changed",
+                observed_snapshot_count=observed,
             )
-    return GadgetDefinitionExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
+    return GadgetDefinitionExportValidation(
+        valid=True, reason="valid", observed_snapshot_count=observed
+    )
 
 
-def _newer_export_definition_exists(owner_id: int, snapshot_at: datetime, workspace_id: UUID) -> Exists:
+def _newer_export_definition_exists(
+    owner_id: int, snapshot_at: datetime, workspace_id: UUID
+) -> Exists:
     """Find child definitions updated after the cutoff but used by a retained dashboard."""
-    return select(GadgetInstance.id).join(
-        GadgetDefinition, GadgetDefinition.id == GadgetInstance.definition_id,
-    ).where(
-        GadgetInstance.dashboard_id == Dashboard.id,
-        GadgetDefinition.workspace_id == workspace_id,
-        GadgetDefinition.owner_id == owner_id,
-        GadgetDefinition.updated_at > snapshot_at,
-    ).correlate(Dashboard).exists()
+    return (
+        select(GadgetInstance.id)
+        .join(
+            GadgetDefinition,
+            GadgetDefinition.id == GadgetInstance.definition_id,
+        )
+        .where(
+            GadgetInstance.dashboard_id == Dashboard.id,
+            GadgetDefinition.workspace_id == workspace_id,
+            GadgetDefinition.owner_id == owner_id,
+            GadgetDefinition.updated_at > snapshot_at,
+        )
+        .correlate(Dashboard)
+        .exists()
+    )
 
 
 async def _brief_export_eligibility(
-    session: AsyncSession, row: DailyBrief, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    row: DailyBrief,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Allow export only when captured prompt lineage remains structurally and currently valid.
 
@@ -1119,8 +1686,9 @@ async def _brief_export_eligibility(
     return bool(
         citations is not None
         and row.status == "current"
-        and await briefs._captured_inputs_match(session, row, lock=False, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled)
+        and await briefs._captured_inputs_match(
+            session, row, lock=False, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
     )
 
 
@@ -1136,60 +1704,95 @@ def _brief_export_citations(row: DailyBrief) -> list[dict[str, Any]] | None:
             return None
         reference, kind, identifier = citation["ref"], citation["kind"], citation["id"]
         title, source_ids = citation["title"], citation["source_ids"]
-        if (type(reference) is not int or not 1 <= reference <= 40 or reference in seen_references
-                or not isinstance(kind, str) or not isinstance(identifier, str)
-                or not isinstance(title, str) or not isinstance(source_ids, list)
-                or any(not isinstance(value, str) for value in source_ids)):
+        if (
+            type(reference) is not int
+            or not 1 <= reference <= 40
+            or reference in seen_references
+            or not isinstance(kind, str)
+            or not isinstance(identifier, str)
+            or not isinstance(title, str)
+            or not isinstance(source_ids, list)
+            or any(not isinstance(value, str) for value in source_ids)
+        ):
             return None
         seen_references.add(reference)
-        citations.append({
-            "ref": reference, "kind": kind, "id": identifier,
-            "title": title, "source_ids": list(source_ids),
-        })
+        citations.append(
+            {
+                "ref": reference,
+                "kind": kind,
+                "id": identifier,
+                "title": title,
+                "source_ids": list(source_ids),
+            }
+        )
     return citations
 
 
 def _brief_export_row_digest(row: DailyBrief) -> str:
     """Hash only persisted brief fields intentionally eligible for portable projection."""
     value = {
-        "id": str(row.id), "brief_date": row.brief_date.isoformat(), "timezone": row.timezone,
-        "revision": row.revision, "status": row.status, "content": row.content,
-        "citations": row.citations, "model_alias": row.model_alias,
+        "id": str(row.id),
+        "brief_date": row.brief_date.isoformat(),
+        "timezone": row.timezone,
+        "revision": row.revision,
+        "status": row.status,
+        "content": row.content,
+        "citations": row.citations,
+        "model_alias": row.model_alias,
         "generated_at": row.generated_at.isoformat(),
         "evidence_capture_version": row.evidence_capture_version,
         "evidence_capture_status": row.evidence_capture_status,
         "evidence_fact_count": row.evidence_fact_count,
     }
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
-                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 async def _brief_export_page(
-    session: AsyncSession, *, owner_id: int, limit: int, cursor: str | None,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    limit: int,
+    cursor: str | None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> BriefExportPage:
     """Page every saved revision at one cutoff and omit text whose exact live citation set fails."""
-    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    access_fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if owner_id != _actor(scope) or not 1 <= limit <= 100:
         raise ValueError("Daily brief export owner or page limit is invalid")
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
-        snapshot_at, position_at, position_id = _decode_owner_export_cursor(cursor, "daily_briefs", access_fence)
+        snapshot_at, position_at, position_id = _decode_owner_export_cursor(
+            cursor, "daily_briefs", access_fence
+        )
         position = (position_at, position_id)
-    predicates = (DailyBrief.workspace_id == scope.workspace_id, DailyBrief.owner_id == owner_id,
-        DailyBrief.generated_at <= snapshot_at)
-    snapshot_count = int(await session.scalar(
-        select(func.count()).select_from(DailyBrief).where(*predicates)
-    ) or 0)
+    predicates = (
+        DailyBrief.workspace_id == scope.workspace_id,
+        DailyBrief.owner_id == owner_id,
+        DailyBrief.generated_at <= snapshot_at,
+    )
+    snapshot_count = int(
+        await session.scalar(select(func.count()).select_from(DailyBrief).where(*predicates)) or 0
+    )
     statement = select(DailyBrief).where(*predicates)
     if position is not None:
         from sqlalchemy import tuple_
+
         statement = statement.where(tuple_(DailyBrief.generated_at, DailyBrief.id) > position)
-    rows = list((await session.scalars(
-        statement.order_by(DailyBrief.generated_at, DailyBrief.id).limit(limit + 1)
-        .execution_options(populate_existing=True)
-    )).all())
+    rows = list(
+        (
+            await session.scalars(
+                statement.order_by(DailyBrief.generated_at, DailyBrief.id)
+                .limit(limit + 1)
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
     has_more, rows = len(rows) > limit, rows[:limit]
     items: list[DailyBriefExport] = []
     fences: list[BriefExportFence] = []
@@ -1197,60 +1800,107 @@ async def _brief_export_page(
     # Lock-free eligibility: export spans many pages in one transaction, so it must not accumulate
     # locks; `_brief_export_validation` rejects anything that changed after this scan.
     for row in rows:
-        eligible = await _brief_export_eligibility(session, row, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled)
-        fences.append(BriefExportFence(
-            id=row.id, generated_at=row.generated_at, revision=row.revision,
-            content_digest=_brief_export_row_digest(row), eligible=eligible,
-        ))
+        eligible = await _brief_export_eligibility(
+            session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        fences.append(
+            BriefExportFence(
+                id=row.id,
+                generated_at=row.generated_at,
+                revision=row.revision,
+                content_digest=_brief_export_row_digest(row),
+                eligible=eligible,
+            )
+        )
         if not eligible:
             omitted_count += 1
             continue
         citations = _brief_export_citations(row)
         if citations is None:
             raise ConflictError(detail="Daily brief changed during export; retry the download")
-        items.append(DailyBriefExport(
-            id=row.id, brief_date=row.brief_date, timezone=row.timezone, revision=row.revision,
-            status="current", content=row.content, citations=citations,
-            model_alias=row.model_alias,
-            generated_at=row.generated_at,
-        ))
+        items.append(
+            DailyBriefExport(
+                id=row.id,
+                brief_date=row.brief_date,
+                timezone=row.timezone,
+                revision=row.revision,
+                status="current",
+                content=row.content,
+                citations=citations,
+                model_alias=row.model_alias,
+                generated_at=row.generated_at,
+            )
+        )
     _encoded, payload_bytes = serialize_bounded_page(items, label="Daily brief")
     return BriefExportPage(
-        owner_id=owner_id, record_kind="daily_briefs", snapshot_at=snapshot_at,
-        snapshot_count=snapshot_count, omitted_count=omitted_count, items=items, fences=fences,
+        owner_id=owner_id,
+        record_kind="daily_briefs",
+        snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count,
+        omitted_count=omitted_count,
+        items=items,
+        fences=fences,
         payload_bytes=payload_bytes,
-        next_cursor=_encode_owner_export_cursor("daily_briefs", snapshot_at, rows[-1].generated_at, rows[-1].id, access_fence)
-        if has_more and rows else None,
+        next_cursor=_encode_owner_export_cursor(
+            "daily_briefs", snapshot_at, rows[-1].generated_at, rows[-1].id, access_fence
+        )
+        if has_more and rows
+        else None,
         omission_reason="unsupported_or_deleted_citation" if omitted_count else None,
     )
 
 
 async def _brief_export_validation(
-    session: AsyncSession, *, owner_id: int, snapshot_at: datetime,
-    expected_snapshot_count: int, fences: list[BriefExportFence],
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    snapshot_at: datetime,
+    expected_snapshot_count: int,
+    fences: list[BriefExportFence],
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> BriefExportValidation:
     """Recheck all scanned revisions, including omitted rows, so deletion or support changes abort."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if owner_id != _actor(scope) or len(fences) > 100:
         raise ValueError("Daily brief export validation input is invalid")
-    predicates = (DailyBrief.workspace_id == scope.workspace_id, DailyBrief.owner_id == owner_id,
-        DailyBrief.generated_at <= snapshot_at)
-    observed = int(await session.scalar(select(func.count()).select_from(DailyBrief).where(*predicates)) or 0)
+    predicates = (
+        DailyBrief.workspace_id == scope.workspace_id,
+        DailyBrief.owner_id == owner_id,
+        DailyBrief.generated_at <= snapshot_at,
+    )
+    observed = int(
+        await session.scalar(select(func.count()).select_from(DailyBrief).where(*predicates)) or 0
+    )
     if observed != expected_snapshot_count:
-        return BriefExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
+        return BriefExportValidation(
+            valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed
+        )
     for fence in fences:
-        row = await session.scalar(select(DailyBrief).where(
-            DailyBrief.id == fence.id, *predicates,
-        ).execution_options(populate_existing=True))
+        row = await session.scalar(
+            select(DailyBrief)
+            .where(
+                DailyBrief.id == fence.id,
+                *predicates,
+            )
+            .execution_options(populate_existing=True)
+        )
         if row is None:
-            return BriefExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        eligible = await _brief_export_eligibility(session, row, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled)
-        if (row.generated_at != fence.generated_at or row.revision != fence.revision
-                or eligible != fence.eligible or _brief_export_row_digest(row) != fence.content_digest):
-            return BriefExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+            return BriefExportValidation(
+                valid=False, reason="record_changed", observed_snapshot_count=observed
+            )
+        eligible = await _brief_export_eligibility(
+            session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        if (
+            row.generated_at != fence.generated_at
+            or row.revision != fence.revision
+            or eligible != fence.eligible
+            or _brief_export_row_digest(row) != fence.content_digest
+        ):
+            return BriefExportValidation(
+                valid=False, reason="record_changed", observed_snapshot_count=observed
+            )
     return BriefExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
 
@@ -1264,48 +1914,78 @@ def _brief_schedule_export_fence(row: BriefScheduleRow | None) -> BriefScheduleE
     """Digest the safe schedule projection together with its persisted-row identity and timestamp."""
     value = _brief_schedule_export_value(row)
     updated_at = row.updated_at if row is not None else None
-    data = {"persisted": row is not None, "updated_at": updated_at.isoformat() if updated_at else None,
-            "schedule": value.model_dump(mode="json")}
+    data = {
+        "persisted": row is not None,
+        "updated_at": updated_at.isoformat() if updated_at else None,
+        "schedule": value.model_dump(mode="json"),
+    }
     return BriefScheduleExportFence(
-        persisted=row is not None, updated_at=updated_at,
-        content_digest=hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        persisted=row is not None,
+        updated_at=updated_at,
+        content_digest=hashlib.sha256(
+            json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
     )
 
 
 async def _brief_schedule_export_page(
-    session: AsyncSession, *, owner_id: int, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> BriefScheduleExportPage:
     """Return the default or persisted owner schedule and reject updates racing the cutoff."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if owner_id != _actor(scope):
         raise ValueError("Brief schedule export owner is invalid")
     snapshot_at = datetime.now(UTC)
-    row = await session.scalar(select(BriefScheduleRow).where(
-        BriefScheduleRow.workspace_id == scope.workspace_id, BriefScheduleRow.owner_id == owner_id,
-    ))
+    row = await session.scalar(
+        select(BriefScheduleRow).where(
+            BriefScheduleRow.workspace_id == scope.workspace_id,
+            BriefScheduleRow.owner_id == owner_id,
+        )
+    )
     if row is not None and row.updated_at > snapshot_at:
         raise ConflictError(detail="Brief schedule changed during export; retry the download")
     item = _brief_schedule_export_value(row)
     payload_bytes = 2 + len(item.model_dump_json().encode("utf-8"))
     return BriefScheduleExportPage(
-        owner_id=owner_id, record_kind="brief_schedule", snapshot_at=snapshot_at,
-        snapshot_count=1, items=[item], fences=[_brief_schedule_export_fence(row)],
-        payload_bytes=payload_bytes, next_cursor=None, available=True, omission_reason=None,
+        owner_id=owner_id,
+        record_kind="brief_schedule",
+        snapshot_at=snapshot_at,
+        snapshot_count=1,
+        items=[item],
+        fences=[_brief_schedule_export_fence(row)],
+        payload_bytes=payload_bytes,
+        next_cursor=None,
+        available=True,
+        omission_reason=None,
     )
 
 
 async def _brief_schedule_export_validation(
-    session: AsyncSession, *, owner_id: int, snapshot_at: datetime,
-    expected_snapshot_count: int, fences: list[BriefScheduleExportFence],
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    snapshot_at: datetime,
+    expected_snapshot_count: int,
+    fences: list[BriefScheduleExportFence],
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> BriefScheduleExportValidation:
     """Compare persisted/default schedule state immediately before the aggregate download is returned."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if owner_id != _actor(scope) or expected_snapshot_count != 1 or len(fences) != 1:
         raise ValueError("Brief schedule export validation input is invalid")
-    row = await session.scalar(select(BriefScheduleRow).where(
-        BriefScheduleRow.workspace_id == scope.workspace_id, BriefScheduleRow.owner_id == owner_id,
-    ).execution_options(populate_existing=True))
+    row = await session.scalar(
+        select(BriefScheduleRow)
+        .where(
+            BriefScheduleRow.workspace_id == scope.workspace_id,
+            BriefScheduleRow.owner_id == owner_id,
+        )
+        .execution_options(populate_existing=True)
+    )
     observed = 1
     current = _brief_schedule_export_fence(row)
     expected = fences[0]
@@ -1316,13 +1996,21 @@ async def _brief_schedule_export_validation(
         and current.content_digest == expected.content_digest
     )
     return BriefScheduleExportValidation(
-        valid=valid, reason="valid" if valid else "record_changed", observed_snapshot_count=observed,
+        valid=valid,
+        reason="valid" if valid else "record_changed",
+        observed_snapshot_count=observed,
     )
 
 
 async def export_page(
-    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50, cursor: str | None = None,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    record_kind: str,
+    limit: int = 50,
+    cursor: str | None = None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> DashboardExportPage | GadgetDefinitionExportPage | BriefExportPage | BriefScheduleExportPage:
     """Return one cutoff-bound dashboard, definition, retained-brief or schedule page.
 
@@ -1331,68 +2019,136 @@ async def export_page(
     when every actual fact kind/ID/title/source citation remains currently eligible; schedule output
     excludes automation ownership identifiers. The aggregate caller must revalidate returned fences.
     """
-    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    access_fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if owner_id != _actor(scope):
         raise ValueError("Dashboard export actor does not match the admitted workspace")
     if record_kind == "gadget_definitions":
-        return await _definition_export_page(session, owner_id=owner_id, limit=limit, cursor=cursor,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        return await _definition_export_page(
+            session,
+            owner_id=owner_id,
+            limit=limit,
+            cursor=cursor,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     if record_kind == "daily_briefs":
-        return await _brief_export_page(session, owner_id=owner_id, limit=limit, cursor=cursor,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        return await _brief_export_page(
+            session,
+            owner_id=owner_id,
+            limit=limit,
+            cursor=cursor,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     if record_kind == "brief_schedule":
         if cursor is not None:
             raise ValueError("Brief schedule export does not accept a cursor")
-        return await _brief_schedule_export_page(session, owner_id=owner_id, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled)
+        return await _brief_schedule_export_page(
+            session, owner_id=owner_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
     if record_kind != "dashboards" or not 1 <= limit <= 100:
         raise ValueError("Dashboard export owner, kind or page limit is invalid")
     if cursor is None:
         snapshot_at, position = datetime.now(UTC), None
     else:
-        snapshot_at, position_at, position_id = _decode_dashboard_export_cursor(cursor, access_fence)
+        snapshot_at, position_at, position_id = _decode_dashboard_export_cursor(
+            cursor, access_fence
+        )
         position = (position_at, position_id)
     predicates = _dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id)
-    snapshot_count = int(await session.scalar(select(func.count()).select_from(Dashboard).where(*predicates)) or 0)
+    snapshot_count = int(
+        await session.scalar(select(func.count()).select_from(Dashboard).where(*predicates)) or 0
+    )
     # Gadget definitions have independent revisions. If one changed after the owner cutoff,
     # omit the whole dataset because the prior definition version is not retained here.
-    if await session.scalar(select(Dashboard.id).where(*predicates,
-            _newer_export_definition_exists(owner_id, snapshot_at, scope.workspace_id)).limit(1)) is not None:
+    if (
+        await session.scalar(
+            select(Dashboard.id)
+            .where(
+                *predicates,
+                _newer_export_definition_exists(owner_id, snapshot_at, scope.workspace_id),
+            )
+            .limit(1)
+        )
+        is not None
+    ):
         return DashboardExportPage(
-            owner_id=owner_id, record_kind="dashboards", snapshot_at=snapshot_at,
-            snapshot_count=snapshot_count, items=[], fences=[], payload_bytes=2,
-            available=False, omission_reason="definition_changed_after_snapshot",
+            owner_id=owner_id,
+            record_kind="dashboards",
+            snapshot_at=snapshot_at,
+            snapshot_count=snapshot_count,
+            items=[],
+            fences=[],
+            payload_bytes=2,
+            available=False,
+            omission_reason="definition_changed_after_snapshot",
         )
     statement = select(Dashboard).where(*predicates)
     if position is not None:
         from sqlalchemy import tuple_
+
         statement = statement.where(tuple_(Dashboard.created_at, Dashboard.id) > position)
-    rows = list((await session.scalars(
-        statement.order_by(Dashboard.created_at, Dashboard.id).limit(limit + 1)
-        .execution_options(populate_existing=True)
-    )).all())
+    rows = list(
+        (
+            await session.scalars(
+                statement.order_by(Dashboard.created_at, Dashboard.id)
+                .limit(limit + 1)
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
     has_more, rows = len(rows) > limit, rows[:limit]
-    items = [await _dashboard_read(session, row, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled) for row in rows]
+    items = [
+        await _dashboard_read(
+            session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        for row in rows
+    ]
     encoded, payload_bytes = serialize_bounded_page(items, label="Dashboard")
-    fences = [DashboardExportFence(
-        id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
-        content_digest=hashlib.sha256(raw).hexdigest(),
-    ) for row, raw in zip(rows, encoded, strict=True)]
+    fences = [
+        DashboardExportFence(
+            id=row.id,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            revision=row.revision,
+            content_digest=hashlib.sha256(raw).hexdigest(),
+        )
+        for row, raw in zip(rows, encoded, strict=True)
+    ]
     return DashboardExportPage(
-        owner_id=owner_id, record_kind="dashboards", snapshot_at=snapshot_at,
-        snapshot_count=snapshot_count, items=items, fences=fences, payload_bytes=payload_bytes,
-        next_cursor=_encode_dashboard_export_cursor(snapshot_at, rows[-1].created_at, rows[-1].id, access_fence)
-        if has_more and rows else None,
+        owner_id=owner_id,
+        record_kind="dashboards",
+        snapshot_at=snapshot_at,
+        snapshot_count=snapshot_count,
+        items=items,
+        fences=fences,
+        payload_bytes=payload_bytes,
+        next_cursor=_encode_dashboard_export_cursor(
+            snapshot_at, rows[-1].created_at, rows[-1].id, access_fence
+        )
+        if has_more and rows
+        else None,
     )
 
 
 async def validate_export_fences(
-    session: AsyncSession, *, owner_id: int, record_kind: str, snapshot_at: datetime,
-    expected_snapshot_count: int, fences: list[DashboardExportFence],
-    scope: Scope, multi_workspace_enabled: bool,
-) -> (DashboardExportValidation | GadgetDefinitionExportValidation | BriefExportValidation
-      | BriefScheduleExportValidation):
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    record_kind: str,
+    snapshot_at: datetime,
+    expected_snapshot_count: int,
+    fences: list[DashboardExportFence],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> (
+    DashboardExportValidation
+    | GadgetDefinitionExportValidation
+    | BriefExportValidation
+    | BriefScheduleExportValidation
+):
     """Recheck the cutoff inventory and exact public projection/evidence fences for one dataset.
 
     The export aggregator calls this only after rendering, immediately before constructing the
@@ -1403,140 +2159,308 @@ async def validate_export_fences(
         raise ValueError("Dashboard export actor does not match the admitted workspace")
     if record_kind == "gadget_definitions":
         return await _definition_export_validation(
-            session, owner_id=owner_id, snapshot_at=snapshot_at,
+            session,
+            owner_id=owner_id,
+            snapshot_at=snapshot_at,
             expected_snapshot_count=expected_snapshot_count,
             fences=fences,  # type: ignore[arg-type]
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     if record_kind == "daily_briefs":
         return await _brief_export_validation(
-            session, owner_id=owner_id, snapshot_at=snapshot_at,
+            session,
+            owner_id=owner_id,
+            snapshot_at=snapshot_at,
             expected_snapshot_count=expected_snapshot_count,
             fences=fences,  # type: ignore[arg-type]
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     if record_kind == "brief_schedule":
         return await _brief_schedule_export_validation(
-            session, owner_id=owner_id, snapshot_at=snapshot_at,
+            session,
+            owner_id=owner_id,
+            snapshot_at=snapshot_at,
             expected_snapshot_count=expected_snapshot_count,
             fences=fences,  # type: ignore[arg-type]
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     if record_kind != "dashboards" or len(fences) > 100:
         raise ValueError("Dashboard export validation input is invalid")
-    observed = int(await session.scalar(
-        select(func.count()).select_from(Dashboard).where(*_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id))
-    ) or 0)
+    observed = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Dashboard)
+            .where(*_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id))
+        )
+        or 0
+    )
     if observed != expected_snapshot_count:
-        return DashboardExportValidation(valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed)
-    if fences and await session.scalar(select(Dashboard.id).where(
-        *_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id),
-        _newer_export_definition_exists(owner_id, snapshot_at, scope.workspace_id),
-    ).limit(1)) is not None:
-        return DashboardExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+        return DashboardExportValidation(
+            valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed
+        )
+    if (
+        fences
+        and await session.scalar(
+            select(Dashboard.id)
+            .where(
+                *_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id),
+                _newer_export_definition_exists(owner_id, snapshot_at, scope.workspace_id),
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        return DashboardExportValidation(
+            valid=False, reason="record_changed", observed_snapshot_count=observed
+        )
     for fence in fences:
-        row = await session.scalar(select(Dashboard).where(
-            Dashboard.id == fence.id, *_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id),
-        ).execution_options(populate_existing=True))
+        row = await session.scalar(
+            select(Dashboard)
+            .where(
+                Dashboard.id == fence.id,
+                *_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id),
+            )
+            .execution_options(populate_existing=True)
+        )
         if row is None:
-            return DashboardExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
-        item = await _dashboard_read(session, row, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled)
-        if (item.created_at != fence.created_at or item.updated_at != fence.updated_at
-                or item.revision != fence.revision
-                or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest):
-            return DashboardExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
+            return DashboardExportValidation(
+                valid=False, reason="record_changed", observed_snapshot_count=observed
+            )
+        item = await _dashboard_read(
+            session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        if (
+            item.created_at != fence.created_at
+            or item.updated_at != fence.updated_at
+            or item.revision != fence.revision
+            or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest()
+            != fence.content_digest
+        ):
+            return DashboardExportValidation(
+                valid=False, reason="record_changed", observed_snapshot_count=observed
+            )
     return DashboardExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
 
-async def get_dashboard(session: AsyncSession, dashboard_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> DashboardDetail | None:
+async def get_dashboard(
+    session: AsyncSession, dashboard_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+) -> DashboardDetail | None:
     """Return a detached owner-only dashboard configuration, without renderer payload data."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    dashboard = await session.scalar(select(Dashboard).where(
-        Dashboard.id == dashboard_id, Dashboard.workspace_id == scope.workspace_id, Dashboard.owner_id == _actor(scope)
-    ))
-    return await _dashboard_read(session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled) if dashboard else None
+    dashboard = await session.scalar(
+        select(Dashboard).where(
+            Dashboard.id == dashboard_id,
+            Dashboard.workspace_id == scope.workspace_id,
+            Dashboard.owner_id == _actor(scope),
+        )
+    )
+    return (
+        await _dashboard_read(
+            session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        if dashboard
+        else None
+    )
 
 
-async def create_dashboard(session: AsyncSession, payload: DashboardCreate, *, scope: Scope, multi_workspace_enabled: bool) -> DashboardDetail:
+async def create_dashboard(
+    session: AsyncSession, payload: DashboardCreate, *, scope: Scope, multi_workspace_enabled: bool
+) -> DashboardDetail:
     """Create a dashboard with empty desktop/mobile layouts and publish revision one atomically."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     owner_id = _actor(scope)
     await _lock_owner_creation_quota(session, scope)
-    count = await session.scalar(select(func.count()).select_from(Dashboard).where(Dashboard.workspace_id == scope.workspace_id, Dashboard.owner_id == owner_id)) or 0
+    count = (
+        await session.scalar(
+            select(func.count())
+            .select_from(Dashboard)
+            .where(Dashboard.workspace_id == scope.workspace_id, Dashboard.owner_id == owner_id)
+        )
+        or 0
+    )
     if count >= MAX_DASHBOARDS_PER_OWNER:
         raise DashboardConflict("dashboard_limit", "Dashboard limit reached")
     dashboard = Dashboard(workspace_id=scope.workspace_id, owner_id=owner_id, name=payload.name)
     session.add(dashboard)
     await session.flush()
-    session.add_all([
-        DashboardLayout(dashboard_id=dashboard.id, breakpoint=key, columns=20)
-        for key in ("desktop", "mobile")
-    ])
-    await commit_with_replay(session, [make_dashboard_change("dashboard", dashboard.id, dashboard.revision, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-    return await _dashboard_read(session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    session.add_all(
+        [
+            DashboardLayout(dashboard_id=dashboard.id, breakpoint=key, columns=20)
+            for key in ("desktop", "mobile")
+        ]
+    )
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("dashboard", dashboard.id, dashboard.revision, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    return await _dashboard_read(
+        session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
 
 
 async def patch_dashboard(
-    session: AsyncSession, dashboard_id: UUID, payload: DashboardPatch, *, scope: Scope, multi_workspace_enabled: bool
+    session: AsyncSession,
+    dashboard_id: UUID,
+    payload: DashboardPatch,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> DashboardDetail:
     """Rename an owned dashboard under its shared revision and publish one committed change."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     dashboard = await _lock_dashboard(session, dashboard_id, scope=scope)
     _check_revision(dashboard, payload.expected_revision)
     dashboard.name = payload.name
     revision = _bump(dashboard)
-    await commit_with_replay(session, [make_dashboard_change("dashboard", dashboard.id, revision, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-    return await _dashboard_read(session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("dashboard", dashboard.id, revision, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    return await _dashboard_read(
+        session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
 
 
-async def delete_dashboard(session: AsyncSession, dashboard_id: UUID, expected_revision: int, *, scope: Scope, multi_workspace_enabled: bool) -> None:
+async def delete_dashboard(
+    session: AsyncSession,
+    dashboard_id: UUID,
+    expected_revision: int,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
     """Delete one dashboard tree while preserving reusable definitions and emitting its terminal revision."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     dashboard = await _lock_dashboard(session, dashboard_id, scope=scope)
     _check_revision(dashboard, expected_revision)
     revision = _bump(dashboard)
     await session.delete(dashboard)
-    await commit_with_replay(session, [make_dashboard_change("dashboard", dashboard_id, revision, deleted=True, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("dashboard", dashboard_id, revision, deleted=True, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
 
 
-async def list_groups(session: AsyncSession, dashboard_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> list[DashboardGroupRead] | None:
+async def list_groups(
+    session: AsyncSession, dashboard_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+) -> list[DashboardGroupRead] | None:
     """List ordered groups only when the parent dashboard belongs to the authenticated owner."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if await session.scalar(select(Dashboard.id).where(Dashboard.id == dashboard_id,
-            Dashboard.workspace_id == scope.workspace_id, Dashboard.owner_id == _actor(scope))) is None:
+    if (
+        await session.scalar(
+            select(Dashboard.id).where(
+                Dashboard.id == dashboard_id,
+                Dashboard.workspace_id == scope.workspace_id,
+                Dashboard.owner_id == _actor(scope),
+            )
+        )
+        is None
+    ):
         return None
-    rows = await session.scalars(select(DashboardGroup).join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
-        .where(DashboardGroup.dashboard_id == dashboard_id, Dashboard.workspace_id == scope.workspace_id)
-        .order_by(DashboardGroup.position, DashboardGroup.id))
-    return [DashboardGroupRead(id=row.id, dashboard_id=row.dashboard_id, name=row.name, position=row.position) for row in rows.all()]
+    rows = await session.scalars(
+        select(DashboardGroup)
+        .join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
+        .where(
+            DashboardGroup.dashboard_id == dashboard_id,
+            Dashboard.workspace_id == scope.workspace_id,
+        )
+        .order_by(DashboardGroup.position, DashboardGroup.id)
+    )
+    return [
+        DashboardGroupRead(
+            id=row.id, dashboard_id=row.dashboard_id, name=row.name, position=row.position
+        )
+        for row in rows.all()
+    ]
 
 
-async def create_group(session: AsyncSession, dashboard_id: UUID, payload: GroupCreate, *, scope: Scope, multi_workspace_enabled: bool) -> DashboardGroupRead:
+async def create_group(
+    session: AsyncSession,
+    dashboard_id: UUID,
+    payload: GroupCreate,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> DashboardGroupRead:
     """Add a group under dashboard revision lock and publish the resulting dashboard revision."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     dashboard = await _lock_dashboard(session, dashboard_id, scope=scope)
     _check_revision(dashboard, payload.expected_revision)
-    count = await session.scalar(select(func.count()).select_from(DashboardGroup).join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
-        .where(DashboardGroup.dashboard_id == dashboard_id, Dashboard.workspace_id == scope.workspace_id)) or 0
+    count = (
+        await session.scalar(
+            select(func.count())
+            .select_from(DashboardGroup)
+            .join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
+            .where(
+                DashboardGroup.dashboard_id == dashboard_id,
+                Dashboard.workspace_id == scope.workspace_id,
+            )
+        )
+        or 0
+    )
     if count >= MAX_GROUPS_PER_DASHBOARD:
         raise DashboardConflict("group_limit", "Group limit reached", dashboard.revision)
     group = DashboardGroup(dashboard_id=dashboard_id, name=payload.name, position=payload.position)
     session.add(group)
     revision = _bump(dashboard)
     await session.flush()
-    await commit_with_replay(session, [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-    return DashboardGroupRead(id=group.id, dashboard_id=dashboard_id, name=group.name, position=group.position)
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    return DashboardGroupRead(
+        id=group.id, dashboard_id=dashboard_id, name=group.name, position=group.position
+    )
 
 
-async def patch_group(session: AsyncSession, dashboard_id: UUID, group_id: UUID, payload: GroupPatch, *, scope: Scope, multi_workspace_enabled: bool) -> DashboardGroupRead:
+async def patch_group(
+    session: AsyncSession,
+    dashboard_id: UUID,
+    group_id: UUID,
+    payload: GroupPatch,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> DashboardGroupRead:
     """Update an owned group with explicit nullable-field semantics and one dashboard revision."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     dashboard = await _lock_dashboard(session, dashboard_id, scope=scope)
     _check_revision(dashboard, payload.expected_revision)
-    group = await session.scalar(select(DashboardGroup).join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
-        .where(DashboardGroup.id == group_id, DashboardGroup.dashboard_id == dashboard_id,
-               Dashboard.workspace_id == scope.workspace_id).with_for_update())
+    group = await session.scalar(
+        select(DashboardGroup)
+        .join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
+        .where(
+            DashboardGroup.id == group_id,
+            DashboardGroup.dashboard_id == dashboard_id,
+            Dashboard.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
     if group is None:
         raise DashboardMissing
     if not payload.model_fields_set - {"expected_revision"}:
@@ -1550,39 +2474,90 @@ async def patch_group(session: AsyncSession, dashboard_id: UUID, group_id: UUID,
             raise ValueError("position cannot be cleared")
         group.position = payload.position
     revision = _bump(dashboard)
-    await commit_with_replay(session, [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-    return DashboardGroupRead(id=group.id, dashboard_id=dashboard_id, name=group.name, position=group.position)
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    return DashboardGroupRead(
+        id=group.id, dashboard_id=dashboard_id, name=group.name, position=group.position
+    )
 
 
-async def delete_group(session: AsyncSession, dashboard_id: UUID, group_id: UUID, expected_revision: int, *, scope: Scope, multi_workspace_enabled: bool) -> None:
+async def delete_group(
+    session: AsyncSession,
+    dashboard_id: UUID,
+    group_id: UUID,
+    expected_revision: int,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
     """Delete an empty group only; instances must be moved or explicitly removed first."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     dashboard = await _lock_dashboard(session, dashboard_id, scope=scope)
     _check_revision(dashboard, expected_revision)
-    group = await session.scalar(select(DashboardGroup).join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
-        .where(DashboardGroup.id == group_id, DashboardGroup.dashboard_id == dashboard_id,
-               Dashboard.workspace_id == scope.workspace_id).with_for_update())
+    group = await session.scalar(
+        select(DashboardGroup)
+        .join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
+        .where(
+            DashboardGroup.id == group_id,
+            DashboardGroup.dashboard_id == dashboard_id,
+            Dashboard.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
     if group is None:
         raise DashboardMissing
-    if await session.scalar(select(GadgetInstance.id).join(Dashboard, Dashboard.id == GadgetInstance.dashboard_id)
-            .where(GadgetInstance.group_id == group_id, Dashboard.workspace_id == scope.workspace_id).limit(1)) is not None:
-        raise DashboardConflict("group_not_empty", "Move or delete group instances first", dashboard.revision)
+    if (
+        await session.scalar(
+            select(GadgetInstance.id)
+            .join(Dashboard, Dashboard.id == GadgetInstance.dashboard_id)
+            .where(
+                GadgetInstance.group_id == group_id, Dashboard.workspace_id == scope.workspace_id
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        raise DashboardConflict(
+            "group_not_empty", "Move or delete group instances first", dashboard.revision
+        )
     await session.delete(group)
     revision = _bump(dashboard)
-    await commit_with_replay(session, [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
 
 
-async def list_definitions(session: AsyncSession, limit: int = 200, *, scope: Scope, multi_workspace_enabled: bool) -> list[GadgetDefinitionRead]:
+async def list_definitions(
+    session: AsyncSession, limit: int = 200, *, scope: Scope, multi_workspace_enabled: bool
+) -> list[GadgetDefinitionRead]:
     """List a bounded owner library page of reusable configuration definitions."""
     if not 1 <= limit <= MAX_DEFINITIONS_PER_OWNER:
         raise ValueError("Definition page limit must be between 1 and 200")
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    rows = await session.scalars(select(GadgetDefinition).where(
-        GadgetDefinition.workspace_id == scope.workspace_id, GadgetDefinition.owner_id == _actor(scope),
-    ).order_by(GadgetDefinition.created_at, GadgetDefinition.id).limit(limit))
+    rows = await session.scalars(
+        select(GadgetDefinition)
+        .where(
+            GadgetDefinition.workspace_id == scope.workspace_id,
+            GadgetDefinition.owner_id == _actor(scope),
+        )
+        .order_by(GadgetDefinition.created_at, GadgetDefinition.id)
+        .limit(limit)
+    )
     definitions = list(rows.all())
-    source_states = await _definition_source_states(session, definitions, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
+    source_states = await _definition_source_states(
+        session, definitions, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     return [_definition_read(row, source_states) for row in definitions]
 
 
@@ -1590,118 +2565,252 @@ def _definition_read(
     row: GadgetDefinition, source_states: Mapping[UUID, Any]
 ) -> GadgetDefinitionRead:
     """Project config, descriptor-derived adapter state and current source warnings, never content."""
-    return GadgetDefinitionRead.model_validate({"id": row.id, "name": row.name, "revision": row.revision, "renderer": row.renderer,
-            "source_ids": [UUID(str(item)) for item in row.source_ids], "scope": row.scope,
-            "filters": row.filters, "highlight_rules": row.highlight_rules,
-            "config_version": 1, "runtime_state": gadgets.renderer_descriptor(row.renderer).runtime_state,
-            "warnings": _definition_warnings(row, source_states)})
+    return GadgetDefinitionRead.model_validate(
+        {
+            "id": row.id,
+            "name": row.name,
+            "revision": row.revision,
+            "renderer": row.renderer,
+            "source_ids": [UUID(str(item)) for item in row.source_ids],
+            "scope": row.scope,
+            "filters": row.filters,
+            "highlight_rules": row.highlight_rules,
+            "config_version": 1,
+            "runtime_state": gadgets.renderer_descriptor(row.renderer).runtime_state,
+            "warnings": _definition_warnings(row, source_states),
+        }
+    )
 
 
-async def get_definition(session: AsyncSession, definition_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> GadgetDefinitionRead | None:
+async def get_definition(
+    session: AsyncSession, definition_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+) -> GadgetDefinitionRead | None:
     """Return one owner-only reusable definition or no result for foreign identifiers."""
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    row = await session.scalar(select(GadgetDefinition).where(GadgetDefinition.id == definition_id,
-        GadgetDefinition.workspace_id == scope.workspace_id, GadgetDefinition.owner_id == _actor(scope)))
+    row = await session.scalar(
+        select(GadgetDefinition).where(
+            GadgetDefinition.id == definition_id,
+            GadgetDefinition.workspace_id == scope.workspace_id,
+            GadgetDefinition.owner_id == _actor(scope),
+        )
+    )
     if row is None:
         return None
-    return _definition_read(row, await _definition_source_states(session, [row], scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled))
+    return _definition_read(
+        row,
+        await _definition_source_states(
+            session, [row], scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        ),
+    )
 
 
-async def create_definition(session: AsyncSession, payload: GadgetDefinitionCreate, *, scope: Scope, multi_workspace_enabled: bool) -> GadgetDefinitionRead:
+async def create_definition(
+    session: AsyncSession,
+    payload: GadgetDefinitionCreate,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> GadgetDefinitionRead:
     """Validate a planned renderer configuration, enforce source lifecycle and quota, then publish it."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     owner_id = _actor(scope)
     await _lock_owner_creation_quota(session, scope)
     descriptor = gadgets.renderer_descriptor(payload.renderer)
     configuration = gadgets.validate_renderer_configuration(
         payload.renderer,
-        GadgetConfiguration(scope=payload.scope, filters=payload.filters, highlight_rules=payload.highlight_rules),
+        GadgetConfiguration(
+            scope=payload.scope, filters=payload.filters, highlight_rules=payload.highlight_rules
+        ),
     )
-    await _lock_selected_sources(session, payload.source_ids, require_active=True, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-    await _validate_selected_sources(session, payload.renderer, payload.source_ids, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, gadget_scope=configuration.scope)
-    await validate_highlight_rules(session, payload.source_ids, configuration.highlight_rules, scope=scope)
-    count = await session.scalar(select(func.count()).select_from(GadgetDefinition).where(
-        GadgetDefinition.workspace_id == scope.workspace_id, GadgetDefinition.owner_id == owner_id)) or 0
+    await _lock_selected_sources(
+        session,
+        payload.source_ids,
+        require_active=True,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    await _validate_selected_sources(
+        session,
+        payload.renderer,
+        payload.source_ids,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        gadget_scope=configuration.scope,
+    )
+    await validate_highlight_rules(
+        session, payload.source_ids, configuration.highlight_rules, scope=scope
+    )
+    count = (
+        await session.scalar(
+            select(func.count())
+            .select_from(GadgetDefinition)
+            .where(
+                GadgetDefinition.workspace_id == scope.workspace_id,
+                GadgetDefinition.owner_id == owner_id,
+            )
+        )
+        or 0
+    )
     if count >= MAX_DEFINITIONS_PER_OWNER:
         raise DashboardConflict("definition_limit", "Definition limit reached")
-    row = GadgetDefinition(workspace_id=scope.workspace_id, owner_id=owner_id, name=payload.name, renderer=descriptor.id,
-        source_ids=[str(item) for item in payload.source_ids], scope=configuration.scope.model_dump(mode="json"),
-        filters=configuration.filters.model_dump(mode="json"), highlight_rules=[item.model_dump(mode="json") for item in configuration.highlight_rules])
+    row = GadgetDefinition(
+        workspace_id=scope.workspace_id,
+        owner_id=owner_id,
+        name=payload.name,
+        renderer=descriptor.id,
+        source_ids=[str(item) for item in payload.source_ids],
+        scope=configuration.scope.model_dump(mode="json"),
+        filters=configuration.filters.model_dump(mode="json"),
+        highlight_rules=[item.model_dump(mode="json") for item in configuration.highlight_rules],
+    )
     session.add(row)
     await session.flush()
-    await commit_with_replay(session, [make_dashboard_change("definition", row.id, row.revision, scope=scope)],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-    return _definition_read(row, await _definition_source_states(session, [row], scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled))
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("definition", row.id, row.revision, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    return _definition_read(
+        row,
+        await _definition_source_states(
+            session, [row], scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        ),
+    )
 
 
 async def _lock_selected_sources(
-    session: AsyncSession, source_ids: Sequence[UUID], *, require_active: bool,
-    scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    source_ids: Sequence[UUID],
+    *,
+    require_active: bool,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> None:
     """Lock selected sources in UUID order before definitions or dashboards, then re-read lifecycle."""
     for source_id in sorted(set(source_ids), key=str):
-        fence = await sources.lock_source(session, source_id, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
+        fence = await sources.lock_source(
+            session,
+            source_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
+        )
         if fence is None or (require_active and fence.status != "active"):
             raise DashboardConflict("source_changed", "A selected source is unavailable")
 
 
-async def patch_definition(session: AsyncSession, definition_id: UUID, payload: GadgetDefinitionPatch, *, scope: Scope, multi_workspace_enabled: bool) -> GadgetDefinitionRead:
+async def patch_definition(
+    session: AsyncSession,
+    definition_id: UUID,
+    payload: GadgetDefinitionPatch,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> GadgetDefinitionRead:
     """Patch reusable configuration before locking consuming dashboards, preserving renderer minima."""
     # Source locks precede definition and dashboard locks, so acquire candidate IDs first.
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     if "source_ids" in payload.model_fields_set and payload.source_ids is not None:
-        await _lock_selected_sources(session, payload.source_ids, require_active=True, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+        await _lock_selected_sources(
+            session,
+            payload.source_ids,
+            require_active=True,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
     row = await _lock_definition(session, definition_id, scope=scope)
     _check_revision(row, payload.expected_revision)
     if payload.model_fields_set <= {"expected_revision"}:
         raise ValueError("At least one definition field is required")
-    if any(getattr(payload, name) is None for name in payload.model_fields_set - {"expected_revision"}):
+    if any(
+        getattr(payload, name) is None for name in payload.model_fields_set - {"expected_revision"}
+    ):
         raise ValueError("Definition fields cannot be cleared")
-    references = list((await session.scalars(select(GadgetInstance.dashboard_id).join(Dashboard, Dashboard.id == GadgetInstance.dashboard_id)
-        .where(GadgetInstance.definition_id == definition_id, Dashboard.workspace_id == scope.workspace_id).distinct())).all())
+    references = list(
+        (
+            await session.scalars(
+                select(GadgetInstance.dashboard_id)
+                .join(Dashboard, Dashboard.id == GadgetInstance.dashboard_id)
+                .where(
+                    GadgetInstance.definition_id == definition_id,
+                    Dashboard.workspace_id == scope.workspace_id,
+                )
+                .distinct()
+            )
+        ).all()
+    )
     for dashboard_id in sorted(set(references), key=str):
         await _lock_dashboard(session, dashboard_id, scope=scope)
     if "renderer" in payload.model_fields_set and payload.renderer != row.renderer and references:
-        raise DashboardConflict("renderer_in_use", "Renderer cannot change while referenced", row.revision)
+        raise DashboardConflict(
+            "renderer_in_use", "Renderer cannot change while referenced", row.revision
+        )
     candidate: dict[str, Any] = {
         "name": payload.name if payload.name is not None else row.name,
         "renderer": payload.renderer if payload.renderer is not None else row.renderer,
-        "source_ids": payload.source_ids if payload.source_ids is not None else [UUID(str(item)) for item in row.source_ids],
+        "source_ids": payload.source_ids
+        if payload.source_ids is not None
+        else [UUID(str(item)) for item in row.source_ids],
         "scope": payload.scope if "scope" in payload.model_fields_set else None,
         "filters": payload.filters if "filters" in payload.model_fields_set else None,
-        "highlight_rules": payload.highlight_rules if "highlight_rules" in payload.model_fields_set else None,
+        "highlight_rules": payload.highlight_rules
+        if "highlight_rules" in payload.model_fields_set
+        else None,
     }
     config = GadgetConfiguration(
-        scope=candidate["scope"] if candidate["scope"] is not None else GadgetScope.model_validate(row.scope),
-        filters=candidate["filters"] if candidate["filters"] is not None else GadgetFilters.model_validate(row.filters),
-        highlight_rules=candidate["highlight_rules"] if candidate["highlight_rules"] is not None else [HighlightRule.model_validate(item) for item in row.highlight_rules],
+        scope=candidate["scope"]
+        if candidate["scope"] is not None
+        else GadgetScope.model_validate(row.scope),
+        filters=candidate["filters"]
+        if candidate["filters"] is not None
+        else GadgetFilters.model_validate(row.filters),
+        highlight_rules=candidate["highlight_rules"]
+        if candidate["highlight_rules"] is not None
+        else [HighlightRule.model_validate(item) for item in row.highlight_rules],
     )
     gadgets.validate_renderer_configuration(candidate["renderer"], config)
     # Only re-check datasource compatibility when the binding changes, so older saved definitions keep saving.
     # Measurement scope is re-checked only when metrics/symbols or the binding changed, so legacy rows still rename.
     # Compare values, not field presence: the editor resends unchanged source_ids/scope on every save.
-    binding_changed = (
-        {str(item) for item in candidate["source_ids"]} != {str(item) for item in row.source_ids}
-        or candidate["renderer"] != row.renderer
-    )
+    binding_changed = {str(item) for item in candidate["source_ids"]} != {
+        str(item) for item in row.source_ids
+    } or candidate["renderer"] != row.renderer
     # Only metrics/symbols/regions feed the measurement catalog rule; lookback and other selectors may differ
     # (the editor resends lookback_days) without re-validating a legacy row.
     stored_scope = GadgetScope.model_validate(row.scope)
-    scope_changed = (config.scope.metrics != stored_scope.metrics or config.scope.symbols != stored_scope.symbols
-                     or config.scope.regions != stored_scope.regions)
+    scope_changed = (
+        config.scope.metrics != stored_scope.metrics
+        or config.scope.symbols != stored_scope.symbols
+        or config.scope.regions != stored_scope.regions
+    )
     if binding_changed or scope_changed:
-        await _validate_selected_sources(session, candidate["renderer"], candidate["source_ids"], scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, gadget_scope=config.scope,
-            check_binding=binding_changed)
-    stored_topics = {UUID(str(topic)) for item in row.highlight_rules for topic in item.get("topic_ids", [])}
+        await _validate_selected_sources(
+            session,
+            candidate["renderer"],
+            candidate["source_ids"],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            gadget_scope=config.scope,
+            check_binding=binding_changed,
+        )
+    stored_topics = {
+        UUID(str(topic)) for item in row.highlight_rules for topic in item.get("topic_ids", [])
+    }
     await validate_highlight_rules(
-        session, candidate["source_ids"], config.highlight_rules, scope=scope, known_topic_ids=stored_topics,
+        session,
+        candidate["source_ids"],
+        config.highlight_rules,
+        scope=scope,
+        known_topic_ids=stored_topics,
     )
     row.name = candidate["name"]
     row.renderer = candidate["renderer"]
@@ -1710,28 +2819,67 @@ async def patch_definition(session: AsyncSession, definition_id: UUID, payload: 
     row.filters = config.filters.model_dump(mode="json")
     row.highlight_rules = [item.model_dump(mode="json") for item in config.highlight_rules]
     revision = _bump(row)
-    await commit_with_replay(session, [make_dashboard_change("definition", definition_id, revision, scope=scope)],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-    return _definition_read(row, await _definition_source_states(session, [row], scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled))
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("definition", definition_id, revision, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    return _definition_read(
+        row,
+        await _definition_source_states(
+            session, [row], scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        ),
+    )
 
 
-async def delete_definition(session: AsyncSession, definition_id: UUID, expected_revision: int, *, scope: Scope, multi_workspace_enabled: bool) -> None:
+async def delete_definition(
+    session: AsyncSession,
+    definition_id: UUID,
+    expected_revision: int,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
     """Delete an unused definition under its lock; preserve references by rejecting in-use deletes."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     row = await _lock_definition(session, definition_id, scope=scope)
     _check_revision(row, expected_revision)
-    if await session.scalar(select(GadgetInstance.id).join(Dashboard, Dashboard.id == GadgetInstance.dashboard_id)
-            .where(GadgetInstance.definition_id == definition_id, Dashboard.workspace_id == scope.workspace_id).limit(1)) is not None:
-        raise DashboardConflict("definition_in_use", "Definition is used by a dashboard", row.revision)
+    if (
+        await session.scalar(
+            select(GadgetInstance.id)
+            .join(Dashboard, Dashboard.id == GadgetInstance.dashboard_id)
+            .where(
+                GadgetInstance.definition_id == definition_id,
+                Dashboard.workspace_id == scope.workspace_id,
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        raise DashboardConflict(
+            "definition_in_use", "Definition is used by a dashboard", row.revision
+        )
     revision = _bump(row)
     await session.delete(row)
-    await commit_with_replay(session, [make_dashboard_change("definition", definition_id, revision, deleted=True, scope=scope)],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("definition", definition_id, revision, deleted=True, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
 
 
 async def _resolve_instance_group(
-    session: AsyncSession, dashboard: Dashboard, group_id: UUID | None, *, scope: Scope,
+    session: AsyncSession,
+    dashboard: Dashboard,
+    group_id: UUID | None,
+    *,
+    scope: Scope,
 ) -> DashboardGroup:
     """Return the target group for a new instance under the caller's dashboard lock.
 
@@ -1740,14 +2888,22 @@ async def _resolve_instance_group(
     "General" group at position 0 added to the session. The caller owns the single revision bump
     and commit, so creating the group here adds no extra revision.
     """
-    query = select(DashboardGroup).join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id).where(
-        DashboardGroup.dashboard_id == dashboard.id, Dashboard.workspace_id == scope.workspace_id)
+    query = (
+        select(DashboardGroup)
+        .join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
+        .where(
+            DashboardGroup.dashboard_id == dashboard.id,
+            Dashboard.workspace_id == scope.workspace_id,
+        )
+    )
     if group_id is not None:
         group = await session.scalar(query.where(DashboardGroup.id == group_id))
         if group is None:
             raise DashboardMissing
         return group
-    group = await session.scalar(query.order_by(DashboardGroup.position, DashboardGroup.id).limit(1))
+    group = await session.scalar(
+        query.order_by(DashboardGroup.position, DashboardGroup.id).limit(1)
+    )
     if group is None:
         group = DashboardGroup(dashboard_id=dashboard.id, name="General", position=0)
         session.add(group)
@@ -1755,76 +2911,182 @@ async def _resolve_instance_group(
     return group
 
 
-async def create_instance(session: AsyncSession, dashboard_id: UUID, payload: InstanceCreate, *, scope: Scope, multi_workspace_enabled: bool) -> DashboardDetail:
+async def create_instance(
+    session: AsyncSession,
+    dashboard_id: UUID,
+    payload: InstanceCreate,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> DashboardDetail:
     """Create a cross-checked instance and both default placements under definition-before-dashboard locks.
 
     An omitted ``group_id`` falls back to the dashboard's first group, creating "General" if none exists.
     """
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     definition = await _lock_definition(session, payload.definition_id, scope=scope)
     dashboard = await _lock_dashboard(session, dashboard_id, scope=scope)
     _check_revision(dashboard, payload.expected_revision)
     group = await _resolve_instance_group(session, dashboard, payload.group_id, scope=scope)
-    count = await session.scalar(select(func.count()).select_from(GadgetInstance).join(
-        Dashboard, Dashboard.id == GadgetInstance.dashboard_id,
-    ).where(GadgetInstance.dashboard_id == dashboard_id, Dashboard.workspace_id == scope.workspace_id)) or 0
+    count = (
+        await session.scalar(
+            select(func.count())
+            .select_from(GadgetInstance)
+            .join(
+                Dashboard,
+                Dashboard.id == GadgetInstance.dashboard_id,
+            )
+            .where(
+                GadgetInstance.dashboard_id == dashboard_id,
+                Dashboard.workspace_id == scope.workspace_id,
+            )
+        )
+        or 0
+    )
     if count >= MAX_INSTANCES_PER_DASHBOARD:
         raise DashboardConflict("instance_limit", "Instance limit reached", dashboard.revision)
-    instance = GadgetInstance(dashboard_id=dashboard_id, group_id=group.id, definition_id=definition.id, title=payload.title, position=payload.position)
+    instance = GadgetInstance(
+        dashboard_id=dashboard_id,
+        group_id=group.id,
+        definition_id=definition.id,
+        title=payload.title,
+        position=payload.position,
+    )
     session.add(instance)
     await session.flush()
     descriptor = gadgets.renderer_descriptor(definition.renderer)
-    existing = list((await session.scalars(select(GadgetPlacement).join(
-        Dashboard, Dashboard.id == GadgetPlacement.dashboard_id,
-    ).where(GadgetPlacement.dashboard_id == dashboard_id, Dashboard.workspace_id == scope.workspace_id))).all())
+    existing = list(
+        (
+            await session.scalars(
+                select(GadgetPlacement)
+                .join(
+                    Dashboard,
+                    Dashboard.id == GadgetPlacement.dashboard_id,
+                )
+                .where(
+                    GadgetPlacement.dashboard_id == dashboard_id,
+                    Dashboard.workspace_id == scope.workspace_id,
+                )
+            )
+        ).all()
+    )
     for breakpoint in ("desktop", "mobile"):
-        layout_row = await session.scalar(select(DashboardLayout).join(
-            Dashboard, Dashboard.id == DashboardLayout.dashboard_id,
-        ).where(DashboardLayout.dashboard_id == dashboard_id, DashboardLayout.breakpoint == breakpoint,
-            Dashboard.workspace_id == scope.workspace_id).with_for_update())
+        layout_row = await session.scalar(
+            select(DashboardLayout)
+            .join(
+                Dashboard,
+                Dashboard.id == DashboardLayout.dashboard_id,
+            )
+            .where(
+                DashboardLayout.dashboard_id == dashboard_id,
+                DashboardLayout.breakpoint == breakpoint,
+                Dashboard.workspace_id == scope.workspace_id,
+            )
+            .with_for_update()
+        )
         if layout_row is None:
-            layout_row = DashboardLayout(dashboard_id=dashboard_id, breakpoint=breakpoint, columns=20)
+            layout_row = DashboardLayout(
+                dashboard_id=dashboard_id, breakpoint=breakpoint, columns=20
+            )
             session.add(layout_row)
-        current = sorted((item for item in existing if item.breakpoint == breakpoint), key=lambda item: (item.y, item.x, str(item.instance_id)))
+        current = sorted(
+            (item for item in existing if item.breakpoint == breakpoint),
+            key=lambda item: (item.y, item.x, str(item.instance_id)),
+        )
         if descriptor.minimum_width > layout_row.columns:
             raise ValueError("Renderer minimum does not fit the configured layout columns")
         default_width, default_height = gadgets.renderer_default_size(definition.renderer)
         occupied = [(item.x, item.y, item.w, item.h) for item in current]
         if breakpoint == "desktop":
             # Prefer the roomy default; fall back to the true minimum when only that fits.
-            candidates = [(min(default_width, layout_row.columns), default_height),
-                          (descriptor.minimum_width, descriptor.minimum_height)]
+            candidates = [
+                (min(default_width, layout_row.columns), default_height),
+                (descriptor.minimum_width, descriptor.minimum_height),
+            ]
         else:
             candidates = [(layout_row.columns, default_height)]
-        found = next(((size, pos) for size in candidates
-                      if (pos := layouts.find_free_position(occupied, layout_row.columns, *size)) is not None), None)
+        found = next(
+            (
+                (size, pos)
+                for size in candidates
+                if (pos := layouts.find_free_position(occupied, layout_row.columns, *size))
+                is not None
+            ),
+            None,
+        )
         if found is None:
             raise ValueError("No free layout position remains")
         (width, height), position = found
         x, y = position
-        session.add(GadgetPlacement(dashboard_id=dashboard_id, breakpoint=breakpoint, instance_id=instance.id, x=x, y=y, w=width, h=height))
+        session.add(
+            GadgetPlacement(
+                dashboard_id=dashboard_id,
+                breakpoint=breakpoint,
+                instance_id=instance.id,
+                x=x,
+                y=y,
+                w=width,
+                h=height,
+            )
+        )
     revision = _bump(dashboard)
-    await commit_with_replay(session, [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-    return await _dashboard_read(session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    return await _dashboard_read(
+        session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
 
 
-async def patch_instance(session: AsyncSession, dashboard_id: UUID, instance_id: UUID, payload: InstancePatch, *, scope: Scope, multi_workspace_enabled: bool) -> DashboardDetail:
+async def patch_instance(
+    session: AsyncSession,
+    dashboard_id: UUID,
+    instance_id: UUID,
+    payload: InstancePatch,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> DashboardDetail:
     """Edit local title/group/order under the dashboard revision while preserving layout geometry."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
-    instance_ref = await session.scalar(select(GadgetInstance.definition_id).join(
-        Dashboard, Dashboard.id == GadgetInstance.dashboard_id,
-    ).where(GadgetInstance.id == instance_id, GadgetInstance.dashboard_id == dashboard_id,
-        Dashboard.workspace_id == scope.workspace_id))
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
+    instance_ref = await session.scalar(
+        select(GadgetInstance.definition_id)
+        .join(
+            Dashboard,
+            Dashboard.id == GadgetInstance.dashboard_id,
+        )
+        .where(
+            GadgetInstance.id == instance_id,
+            GadgetInstance.dashboard_id == dashboard_id,
+            Dashboard.workspace_id == scope.workspace_id,
+        )
+    )
     if instance_ref is None:
         raise DashboardMissing
     await _lock_definition(session, instance_ref, scope=scope)
     dashboard = await _lock_dashboard(session, dashboard_id, scope=scope)
     _check_revision(dashboard, payload.expected_revision)
-    instance = await session.scalar(select(GadgetInstance).join(
-        Dashboard, Dashboard.id == GadgetInstance.dashboard_id,
-    ).where(GadgetInstance.id == instance_id, GadgetInstance.dashboard_id == dashboard_id,
-        Dashboard.workspace_id == scope.workspace_id).with_for_update())
+    instance = await session.scalar(
+        select(GadgetInstance)
+        .join(
+            Dashboard,
+            Dashboard.id == GadgetInstance.dashboard_id,
+        )
+        .where(
+            GadgetInstance.id == instance_id,
+            GadgetInstance.dashboard_id == dashboard_id,
+            Dashboard.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
     if instance is None:
         raise DashboardMissing
     if not payload.model_fields_set - {"expected_revision"}:
@@ -1834,10 +3096,18 @@ async def patch_instance(session: AsyncSession, dashboard_id: UUID, instance_id:
     if "group_id" in payload.model_fields_set:
         if payload.group_id is None:
             raise ValueError("group_id cannot be cleared")
-        if await session.scalar(select(DashboardGroup.id).join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id).where(
-            DashboardGroup.id == payload.group_id, DashboardGroup.dashboard_id == dashboard_id,
-            Dashboard.workspace_id == scope.workspace_id,
-        )) is None:
+        if (
+            await session.scalar(
+                select(DashboardGroup.id)
+                .join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
+                .where(
+                    DashboardGroup.id == payload.group_id,
+                    DashboardGroup.dashboard_id == dashboard_id,
+                    Dashboard.workspace_id == scope.workspace_id,
+                )
+            )
+            is None
+        ):
             raise DashboardMissing
         instance.group_id = payload.group_id
     if "position" in payload.model_fields_set:
@@ -1845,43 +3115,97 @@ async def patch_instance(session: AsyncSession, dashboard_id: UUID, instance_id:
             raise ValueError("position cannot be cleared")
         instance.position = payload.position
     revision = _bump(dashboard)
-    await commit_with_replay(session, [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-    return await _dashboard_read(session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    return await _dashboard_read(
+        session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
 
 
-async def delete_instance(session: AsyncSession, dashboard_id: UUID, instance_id: UUID, expected_revision: int, *, scope: Scope, multi_workspace_enabled: bool) -> DashboardDetail:
+async def delete_instance(
+    session: AsyncSession,
+    dashboard_id: UUID,
+    instance_id: UUID,
+    expected_revision: int,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> DashboardDetail:
     """Remove an instance and both placements while retaining its reusable definition."""
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
-    definition_id = await session.scalar(select(GadgetInstance.definition_id).join(
-        Dashboard, Dashboard.id == GadgetInstance.dashboard_id,
-    ).where(GadgetInstance.id == instance_id, GadgetInstance.dashboard_id == dashboard_id,
-        Dashboard.workspace_id == scope.workspace_id))
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
+    definition_id = await session.scalar(
+        select(GadgetInstance.definition_id)
+        .join(
+            Dashboard,
+            Dashboard.id == GadgetInstance.dashboard_id,
+        )
+        .where(
+            GadgetInstance.id == instance_id,
+            GadgetInstance.dashboard_id == dashboard_id,
+            Dashboard.workspace_id == scope.workspace_id,
+        )
+    )
     if definition_id is None:
         raise DashboardMissing
     await _lock_definition(session, definition_id, scope=scope)
     dashboard = await _lock_dashboard(session, dashboard_id, scope=scope)
     _check_revision(dashboard, expected_revision)
-    await session.execute(delete(GadgetPlacement).where(GadgetPlacement.dashboard_id == dashboard_id, GadgetPlacement.instance_id == instance_id))
-    instance = await session.scalar(select(GadgetInstance).join(
-        Dashboard, Dashboard.id == GadgetInstance.dashboard_id,
-    ).where(GadgetInstance.id == instance_id, GadgetInstance.dashboard_id == dashboard_id,
-        Dashboard.workspace_id == scope.workspace_id).with_for_update())
+    await session.execute(
+        delete(GadgetPlacement).where(
+            GadgetPlacement.dashboard_id == dashboard_id, GadgetPlacement.instance_id == instance_id
+        )
+    )
+    instance = await session.scalar(
+        select(GadgetInstance)
+        .join(
+            Dashboard,
+            Dashboard.id == GadgetInstance.dashboard_id,
+        )
+        .where(
+            GadgetInstance.id == instance_id,
+            GadgetInstance.dashboard_id == dashboard_id,
+            Dashboard.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
     if instance is None:
         raise DashboardMissing
     await session.delete(instance)
     revision = _bump(dashboard)
-    await commit_with_replay(session, [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-    return await _dashboard_read(session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    return await _dashboard_read(
+        session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
 
 
-async def replace_layout(session: AsyncSession, dashboard_id: UUID, payload: LayoutReplace, *, scope: Scope, multi_workspace_enabled: bool) -> DashboardDetail:
+async def replace_layout(
+    session: AsyncSession,
+    dashboard_id: UUID,
+    payload: LayoutReplace,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> DashboardDetail:
     """Replace only the selected breakpoint after exact membership, minima, bounds, and overlap checks.
 
     An exact geometry/column resave returns current detail without revision or replay changes.
     """
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     dashboard = await _lock_dashboard(session, dashboard_id, scope=scope)
     _check_revision(dashboard, payload.expected_revision)
     _instances, minimums, _ = await _instance_minima(session, dashboard_id, scope=scope)
@@ -1889,36 +3213,98 @@ async def replace_layout(session: AsyncSession, dashboard_id: UUID, payload: Lay
     if item_ids != set(minimums):
         raise ValueError("Layout must include every dashboard instance exactly once")
     layouts.validate_layout(payload.items, payload.columns, minimums)
-    layout_row = await session.scalar(select(DashboardLayout).join(
-        Dashboard, Dashboard.id == DashboardLayout.dashboard_id,
-    ).where(DashboardLayout.dashboard_id == dashboard_id, DashboardLayout.breakpoint == payload.breakpoint,
-        Dashboard.workspace_id == scope.workspace_id).with_for_update())
+    layout_row = await session.scalar(
+        select(DashboardLayout)
+        .join(
+            Dashboard,
+            Dashboard.id == DashboardLayout.dashboard_id,
+        )
+        .where(
+            DashboardLayout.dashboard_id == dashboard_id,
+            DashboardLayout.breakpoint == payload.breakpoint,
+            Dashboard.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
     if layout_row is None:
-        layout_row = DashboardLayout(dashboard_id=dashboard_id, breakpoint=payload.breakpoint, columns=payload.columns)
+        layout_row = DashboardLayout(
+            dashboard_id=dashboard_id, breakpoint=payload.breakpoint, columns=payload.columns
+        )
         session.add(layout_row)
     unchanged = layout_row.columns == payload.columns
     if unchanged:
-        current = list((await session.scalars(select(GadgetPlacement).where(GadgetPlacement.dashboard_id == dashboard_id, GadgetPlacement.breakpoint == payload.breakpoint))).all())
+        current = list(
+            (
+                await session.scalars(
+                    select(GadgetPlacement).where(
+                        GadgetPlacement.dashboard_id == dashboard_id,
+                        GadgetPlacement.breakpoint == payload.breakpoint,
+                    )
+                )
+            ).all()
+        )
         current_by_id = {row.instance_id: (row.x, row.y, row.w, row.h) for row in current}
-        unchanged = current_by_id == {item.instance_id: (item.x, item.y, item.w, item.h) for item in payload.items}
+        unchanged = current_by_id == {
+            item.instance_id: (item.x, item.y, item.w, item.h) for item in payload.items
+        }
     if unchanged:
-        return await _dashboard_read(session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        return await _dashboard_read(
+            session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
     layout_row.columns = payload.columns
-    await session.execute(delete(GadgetPlacement).where(GadgetPlacement.dashboard_id == dashboard_id, GadgetPlacement.breakpoint == payload.breakpoint))
-    session.add_all([GadgetPlacement(dashboard_id=dashboard_id, breakpoint=payload.breakpoint, instance_id=item.instance_id, x=item.x, y=item.y, w=item.w, h=item.h) for item in payload.items])
+    await session.execute(
+        delete(GadgetPlacement).where(
+            GadgetPlacement.dashboard_id == dashboard_id,
+            GadgetPlacement.breakpoint == payload.breakpoint,
+        )
+    )
+    session.add_all(
+        [
+            GadgetPlacement(
+                dashboard_id=dashboard_id,
+                breakpoint=payload.breakpoint,
+                instance_id=item.instance_id,
+                x=item.x,
+                y=item.y,
+                w=item.w,
+                h=item.h,
+            )
+            for item in payload.items
+        ]
+    )
     revision = _bump(dashboard)
-    await commit_with_replay(session, [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-    return await _dashboard_read(session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await commit_with_replay(
+        session,
+        [make_dashboard_change("dashboard", dashboard_id, revision, scope=scope)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    return await _dashboard_read(
+        session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
 
 
 def renderer_reads() -> list[RendererRead]:
     """Project static renderer state and geometry without asserting runtime/provider acceptance."""
-    return [RendererRead.model_validate({"id": row.id, "config_version": row.config_version, "minimum_width": row.minimum_width,
-             "minimum_height": row.minimum_height, "runtime_state": row.runtime_state,
-             "capability_keys": list(row.capability_keys), "source_mode": row.source_mode,
-             "max_sources": row.max_sources, "accepted_shapes": sorted(row.accepted_shapes) if row.accepted_shapes is not None else None})
-            for row in gadgets.RENDERERS]
+    return [
+        RendererRead.model_validate(
+            {
+                "id": row.id,
+                "config_version": row.config_version,
+                "minimum_width": row.minimum_width,
+                "minimum_height": row.minimum_height,
+                "runtime_state": row.runtime_state,
+                "capability_keys": list(row.capability_keys),
+                "source_mode": row.source_mode,
+                "max_sources": row.max_sources,
+                "accepted_shapes": sorted(row.accepted_shapes)
+                if row.accepted_shapes is not None
+                else None,
+            }
+        )
+        for row in gadgets.RENDERERS
+    ]
 
 
 def list_templates() -> list[GadgetTemplateRead]:
@@ -1926,17 +3312,32 @@ def list_templates() -> list[GadgetTemplateRead]:
     templates = []
     for row in gadgets.TEMPLATES:
         renderer = gadgets.renderer_descriptor(row.renderer)
-        templates.append(GadgetTemplateRead.model_validate({
-            "id": row.id, "renderer": row.renderer,
-            "accepted_shapes": sorted(renderer.accepted_shapes) if renderer.accepted_shapes is not None else None,
-            "scope": row.scope, "filters": row.filters, "source_mode": renderer.source_mode,
-        }))
+        templates.append(
+            GadgetTemplateRead.model_validate(
+                {
+                    "id": row.id,
+                    "renderer": row.renderer,
+                    "accepted_shapes": sorted(renderer.accepted_shapes)
+                    if renderer.accepted_shapes is not None
+                    else None,
+                    "scope": row.scope,
+                    "filters": row.filters,
+                    "source_mode": renderer.source_mode,
+                }
+            )
+        )
     return templates
 
 
 async def _validate_selected_sources(
-    session: AsyncSession, renderer: str, source_ids: Sequence[UUID], *, scope: Scope, multi_workspace_enabled: bool,
-    gadget_scope: GadgetScope | None = None, check_binding: bool = True,
+    session: AsyncSession,
+    renderer: str,
+    source_ids: Sequence[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    gadget_scope: GadgetScope | None = None,
+    check_binding: bool = True,
 ) -> None:
     """Check selected sources' providers against the renderer's datasource rule (ValueError on mismatch).
 
@@ -1946,30 +3347,51 @@ async def _validate_selected_sources(
     Missing/foreign IDs are skipped here; lifecycle checks in ``_lock_selected_sources`` own those errors.
     """
     rows = await sources.get_gadget_sources(
-        session, tuple(dict.fromkeys(source_ids)), scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        session,
+        tuple(dict.fromkeys(source_ids)),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     if check_binding:
         gadgets.validate_renderer_sources(renderer, [(row.provider, row.type) for row in rows])
-    if gadget_scope is not None:  # measurement scope is checked against each bound provider's catalog
+    if (
+        gadget_scope is not None
+    ):  # measurement scope is checked against each bound provider's catalog
         gadgets.validate_measurement_scopes(renderer, [row.provider for row in rows], gadget_scope)
 
 
 async def list_gadget_sources(
-    session: AsyncSession, limit: int, cursor: str | None, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    limit: int,
+    cursor: str | None,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> GadgetSourceOptionPage:
     """Return the source owner's bounded metadata-only page, adding data shapes computed here.
 
     Shapes are derived in the dashboard (connectors already imports sources; no reverse import).
     """
-    page = await sources.list_gadget_sources(session, limit, cursor, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled)
+    page = await sources.list_gadget_sources(
+        session, limit, cursor, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     return GadgetSourceOptionPage(
-        items=[GadgetSourceOption(**item.model_dump(), data_shapes=sorted(source_data_shapes(item.provider, item.type)))
-               for item in page.items],
-        next_cursor=page.next_cursor)
+        items=[
+            GadgetSourceOption(
+                **item.model_dump(),
+                data_shapes=sorted(source_data_shapes(item.provider, item.type)),
+            )
+            for item in page.items
+        ],
+        next_cursor=page.next_cursor,
+    )
 
 
 async def compatible_source_counts(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> dict[str, int]:
     """Count active in-scope sources compatible with each source-binding renderer.
 
@@ -1977,11 +3399,15 @@ async def compatible_source_counts(
     ``source_mode="none"`` are omitted and unconstrained renderers count all active sources.
     """
     kinds = await sources.list_active_source_kinds(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     shapes = [source_data_shapes(provider, kind) for _id, provider, kind in kinds]
     return {
-        row.id: len(shapes) if row.accepted_shapes is None else sum(1 for item in shapes if item & row.accepted_shapes)
-        for row in gadgets.RENDERERS if row.source_mode != "none"
+        row.id: len(shapes)
+        if row.accepted_shapes is None
+        else sum(1 for item in shapes if item & row.accepted_shapes)
+        for row in gadgets.RENDERERS
+        if row.source_mode != "none"
     }
 
 
@@ -1992,11 +3418,23 @@ def metric_catalog_read() -> dict[str, dict[str, Any]]:
 
 # English display names matching the en-us gadget template names (web ``templateTypes``).
 _RENDERER_DISPLAY_NAMES = {
-    "news_feed": "Feed", "telegram_feed": "Message list", "text_panel": "Text", "table_panel": "Table",
-    "video_panel": "Video", "finance_chart": "Chart", "map": "Map", "intelligence_panel": "Related signals",
-    "highlights": "Highlights", "watch_rules": "Watchlist", "tasks": "Tasks", "goals": "Goals",
-    "daily_brief": "Daily brief", "weather": "Weather", "provider_observation": "Metric",
-    "github_project": "Activity", "job_list": "Jobs",
+    "news_feed": "Feed",
+    "telegram_feed": "Message list",
+    "text_panel": "Text",
+    "table_panel": "Table",
+    "video_panel": "Video",
+    "finance_chart": "Chart",
+    "map": "Map",
+    "intelligence_panel": "Related signals",
+    "highlights": "Highlights",
+    "watch_rules": "Watchlist",
+    "tasks": "Tasks",
+    "goals": "Goals",
+    "daily_brief": "Daily brief",
+    "weather": "Weather",
+    "provider_observation": "Metric",
+    "github_project": "Activity",
+    "job_list": "Jobs",
 }
 
 
@@ -2011,12 +3449,25 @@ def preset_definition_name(renderer_id: str) -> str:
 
 def preset_catalog() -> list[DashboardPresetRead]:
     """Expose the canonical source-free preset identities and renderer slots (aliases excluded)."""
-    return [DashboardPresetRead.model_validate({"id": item.id, "label": item.label, "family": item.family,
-             "slots": [{"slot_id": slot.slot_id, "renderer": slot.renderer, "label": slot.label} for slot in item.slots]})
-            for item in gadgets.PRESETS]
+    return [
+        DashboardPresetRead.model_validate(
+            {
+                "id": item.id,
+                "label": item.label,
+                "family": item.family,
+                "slots": [
+                    {"slot_id": slot.slot_id, "renderer": slot.renderer, "label": slot.label}
+                    for slot in item.slots
+                ],
+            }
+        )
+        for item in gadgets.PRESETS
+    ]
 
 
-def _preview_preset_slot(slot: Any, source_ids: list[UUID], states: dict[UUID, Any]) -> dict[str, Any]:
+def _preview_preset_slot(
+    slot: Any, source_ids: list[UUID], states: dict[UUID, Any]
+) -> dict[str, Any]:
     """Build one slot of a preset preview from its resolved source states. Pure (no I/O).
 
     Adds ``source_unavailable``/``source_incompatible``/``missing_source``/``scope_required`` setup
@@ -2030,39 +3481,74 @@ def _preview_preset_slot(slot: Any, source_ids: list[UUID], states: dict[UUID, A
     for source_id in source_ids:
         source = states.get(source_id)
         if source is None or source.status != "active":
-            warnings.append({"code": "source_unavailable", "source_id": str(source_id), "setup_group": "data_sources"})
-        resolved.append({"id": source_id, "generation": source.generation if source else None, "status": source.status if source else "missing"})
+            warnings.append(
+                {
+                    "code": "source_unavailable",
+                    "source_id": str(source_id),
+                    "setup_group": "data_sources",
+                }
+            )
+        resolved.append(
+            {
+                "id": source_id,
+                "generation": source.generation if source else None,
+                "status": source.status if source else "missing",
+            }
+        )
     known = [states[source_id] for source_id in source_ids if source_id in states]
     if known:
         try:
-            gadgets.validate_renderer_sources(slot.renderer, [(row.provider, row.type) for row in known])
+            gadgets.validate_renderer_sources(
+                slot.renderer, [(row.provider, row.type) for row in known]
+            )
         except gadgets.GadgetConfigError:
             warnings.append({"code": "source_incompatible", "setup_group": "data_sources"})
     elif not source_ids and descriptor.source_mode != "none" and not live:
         # Nothing was chosen and nothing compatible could be proposed: the owner must add a source.
         warnings.append({"code": "missing_source", "setup_group": "data_sources"})
     # A single bound measurement source seeds the chart scope; otherwise the gadget shows its setup message.
-    slot_scope = (gadgets.preset_slot_scope(slot.renderer, known[0].provider)
-                  if len(source_ids) == 1 and len(known) == 1 and not any(w["code"] == "source_incompatible" for w in warnings)
-                  else {})
-    bound_catalog = provider_metrics(known[0].provider) if len(known) == 1 and len(source_ids) == 1 else None
-    if (not slot_scope and bound_catalog is not None and slot.renderer == "finance_chart"
-            and (bound_catalog.symbol_keyed or bound_catalog.region_keyed)
-            and not any(w["code"] == "source_incompatible" for w in warnings)):
+    slot_scope = (
+        gadgets.preset_slot_scope(slot.renderer, known[0].provider)
+        if len(source_ids) == 1
+        and len(known) == 1
+        and not any(w["code"] == "source_incompatible" for w in warnings)
+        else {}
+    )
+    bound_catalog = (
+        provider_metrics(known[0].provider) if len(known) == 1 and len(source_ids) == 1 else None
+    )
+    if (
+        not slot_scope
+        and bound_catalog is not None
+        and slot.renderer == "finance_chart"
+        and (bound_catalog.symbol_keyed or bound_catalog.region_keyed)
+        and not any(w["code"] == "source_incompatible" for w in warnings)
+    ):
         # Seeding found no suggested symbol/region: the chart cannot draw until one is chosen after apply.
         warnings.append({"code": "scope_required", "setup_group": "data_sources"})
     slot_filters: dict[str, Any] = {"keywords": [], "exclude_keywords": [], "limit": 25}
     if live:  # live maps are provider-seeded, never source-bound
         slot_scope = {"live_map_providers": list(gadgets.LIVE_MAP_DEFAULT_PROVIDERS)}
         slot_filters["map_mode"] = "live"
-    return {"slot_id": slot.slot_id, "renderer": slot.renderer, "source_ids": source_ids,
-            "scope": slot_scope, "filters": slot_filters,
-            "highlight_rules": [], "sources": resolved, "warnings": warnings}
+    return {
+        "slot_id": slot.slot_id,
+        "renderer": slot.renderer,
+        "source_ids": source_ids,
+        "scope": slot_scope,
+        "filters": slot_filters,
+        "highlight_rules": [],
+        "sources": resolved,
+        "warnings": warnings,
+    }
 
 
 async def preview_preset(
-    session: AsyncSession, preset_id: str, payload: PresetPreviewRequest, *,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    preset_id: str,
+    payload: PresetPreviewRequest,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> PresetPreviewRead:
     """Resolve owner source choices into a canonical, nonpersistent preview.
 
@@ -2078,61 +3564,121 @@ async def preview_preset(
     gadgets.validate_preset_slot_sources(preset_id, payload.slot_sources)
     # Explicit payload choices stay authoritative; slots left without any get the best active sources proposed.
     active_kinds: tuple[tuple[UUID, str | None, str], ...] = ()
-    if any(not payload.slot_sources.get(slot.slot_id) and gadgets.renderer_descriptor(slot.renderer).source_mode != "none"
-           and not gadgets.preset_slot_is_live(slot) for slot in preset.slots):
+    if any(
+        not payload.slot_sources.get(slot.slot_id)
+        and gadgets.renderer_descriptor(slot.renderer).source_mode != "none"
+        and not gadgets.preset_slot_is_live(slot)
+        for slot in preset.slots
+    ):
         active_kinds = await sources.list_active_source_kinds(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
     slot_source_ids: dict[str, list[UUID]] = {
-        slot.slot_id: [] if gadgets.preset_slot_is_live(slot) else list(
+        slot.slot_id: []
+        if gadgets.preset_slot_is_live(slot)
+        else list(
             payload.slot_sources.get(slot.slot_id)
-            or gadgets.propose_slot_sources(slot.renderer, active_kinds, providers=slot.providers))
+            or gadgets.propose_slot_sources(slot.renderer, active_kinds, providers=slot.providers)
+        )
         for slot in preset.slots
     }
-    selected = sorted({source_id for values in slot_source_ids.values() for source_id in values}, key=str)
+    selected = sorted(
+        {source_id for values in slot_source_ids.values() for source_id in values}, key=str
+    )
     states: dict[UUID, Any] = {}
     for offset in range(0, len(selected), 32):
-        states.update(await _source_states(session, selected[offset : offset + 32], scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled))
+        states.update(
+            await _source_states(
+                session,
+                selected[offset : offset + 32],
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        )
     target_revision = None
     if payload.target_dashboard_id:
-        target = await session.scalar(select(Dashboard).where(
-            Dashboard.id == payload.target_dashboard_id, Dashboard.workspace_id == scope.workspace_id,
-            Dashboard.owner_id == _actor(scope),
-        ))
+        target = await session.scalar(
+            select(Dashboard).where(
+                Dashboard.id == payload.target_dashboard_id,
+                Dashboard.workspace_id == scope.workspace_id,
+                Dashboard.owner_id == _actor(scope),
+            )
+        )
         if target is None:
             raise DashboardMissing
         target_revision = target.revision
     slots = [
-        _preview_preset_slot(slot, slot_source_ids[slot.slot_id], states)
-        for slot in preset.slots
+        _preview_preset_slot(slot, slot_source_ids[slot.slot_id], states) for slot in preset.slots
     ]
     minimums = {
-        uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"):
-        (gadgets.renderer_descriptor(slot["renderer"]).minimum_width,
-         gadgets.renderer_descriptor(slot["renderer"]).minimum_height)
+        uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"): (
+            gadgets.renderer_descriptor(slot["renderer"]).minimum_width,
+            gadgets.renderer_descriptor(slot["renderer"]).minimum_height,
+        )
         for slot in slots
     }
-    defaults = {key: gadgets.preset_slot_size(slot) for key, slot in zip(minimums, preset.slots, strict=True)}
+    defaults = {
+        key: gadgets.preset_slot_size(slot)
+        for key, slot in zip(minimums, preset.slots, strict=True)
+    }
     desktop = layouts.default_desktop_layout(defaults, minimum_sizes=minimums)
     mobile = layouts.default_mobile_layout(defaults, minimum_sizes=minimums)
     slot_ids_by_uuid = {
-        uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"): slot["slot_id"]
+        uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"): slot[
+            "slot_id"
+        ]
         for slot in slots
     }
-    proposed = {"template_version": 1, "preset_id": preset_id, "name": preset.label,
-                "slots": slots, "target_dashboard_id": payload.target_dashboard_id,
-                "target_revision": target_revision,
-                "layouts": {
-                    "desktop": {"columns": 20, "items": [{"slot_id": slot_ids_by_uuid[item.instance_id], "x": item.x, "y": item.y, "w": item.w, "h": item.h} for item in desktop]},
-                    "mobile": {"columns": 20, "items": [{"slot_id": slot_ids_by_uuid[item.instance_id], "x": item.x, "y": item.y, "w": item.w, "h": item.h} for item in mobile]},
-                }}
+    proposed = {
+        "template_version": 1,
+        "preset_id": preset_id,
+        "name": preset.label,
+        "slots": slots,
+        "target_dashboard_id": payload.target_dashboard_id,
+        "target_revision": target_revision,
+        "layouts": {
+            "desktop": {
+                "columns": 20,
+                "items": [
+                    {
+                        "slot_id": slot_ids_by_uuid[item.instance_id],
+                        "x": item.x,
+                        "y": item.y,
+                        "w": item.w,
+                        "h": item.h,
+                    }
+                    for item in desktop
+                ],
+            },
+            "mobile": {
+                "columns": 20,
+                "items": [
+                    {
+                        "slot_id": slot_ids_by_uuid[item.instance_id],
+                        "x": item.x,
+                        "y": item.y,
+                        "w": item.w,
+                        "h": item.h,
+                    }
+                    for item in mobile
+                ],
+            },
+        },
+    }
     canonical = json.dumps(proposed, sort_keys=True, separators=(",", ":"), default=str).encode()
-    return PresetPreviewRead.model_validate({**proposed, "preview_fingerprint": hashlib.sha256(canonical).hexdigest()})
+    return PresetPreviewRead.model_validate(
+        {**proposed, "preview_fingerprint": hashlib.sha256(canonical).hexdigest()}
+    )
 
 
 async def _prepare_apply_target(
-    session: AsyncSession, payload: PresetApplyRequest, current: dict[str, Any],
-    dashboard: Dashboard | None, *, owner_id: int, scope: Scope,
+    session: AsyncSession,
+    payload: PresetApplyRequest,
+    current: dict[str, Any],
+    dashboard: Dashboard | None,
+    *,
+    owner_id: int,
+    scope: Scope,
 ) -> tuple[Dashboard, int, list[int]]:
     """Create, extend or reset the target dashboard for ``apply_preset``; return its new revision.
 
@@ -2144,25 +3690,53 @@ async def _prepare_apply_target(
     """
     group_positions: list[int] = []
     if payload.mode == "create":
-        count = await session.scalar(select(func.count()).select_from(Dashboard).where(
-            Dashboard.workspace_id == scope.workspace_id, Dashboard.owner_id == owner_id,
-        )) or 0
+        count = (
+            await session.scalar(
+                select(func.count())
+                .select_from(Dashboard)
+                .where(
+                    Dashboard.workspace_id == scope.workspace_id,
+                    Dashboard.owner_id == owner_id,
+                )
+            )
+            or 0
+        )
         if count >= MAX_DASHBOARDS_PER_OWNER:
             raise DashboardConflict("dashboard_limit", "Dashboard limit reached")
-        dashboard = Dashboard(workspace_id=scope.workspace_id, owner_id=owner_id, name=payload.name or current["name"])
+        dashboard = Dashboard(
+            workspace_id=scope.workspace_id, owner_id=owner_id, name=payload.name or current["name"]
+        )
         session.add(dashboard)
         await session.flush()
         dashboard_revision = dashboard.revision
-        session.add_all([DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20) for bp in ("desktop", "mobile")])
+        session.add_all(
+            [
+                DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20)
+                for bp in ("desktop", "mobile")
+            ]
+        )
     elif payload.mode == "append":
         if dashboard is None:
             raise RuntimeError("invariant violated: dashboard must not be None")
-        instance_count = await session.scalar(select(func.count()).select_from(GadgetInstance).where(
-            GadgetInstance.dashboard_id == dashboard.id)) or 0
+        instance_count = (
+            await session.scalar(
+                select(func.count())
+                .select_from(GadgetInstance)
+                .where(GadgetInstance.dashboard_id == dashboard.id)
+            )
+            or 0
+        )
         if instance_count + len(current["slots"]) > MAX_INSTANCES_PER_DASHBOARD:
             raise DashboardConflict("instance_limit", "Instance limit reached", dashboard.revision)
-        group_positions = list((await session.scalars(select(DashboardGroup.position).where(
-            DashboardGroup.dashboard_id == dashboard.id))).all())
+        group_positions = list(
+            (
+                await session.scalars(
+                    select(DashboardGroup.position).where(
+                        DashboardGroup.dashboard_id == dashboard.id
+                    )
+                )
+            ).all()
+        )
         if len(group_positions) >= MAX_GROUPS_PER_DASHBOARD:
             raise DashboardConflict("group_limit", "Group limit reached", dashboard.revision)
         dashboard_revision = _bump(dashboard)
@@ -2172,49 +3746,99 @@ async def _prepare_apply_target(
         dashboard_revision = _bump(dashboard)
         if payload.name is not None:
             dashboard.name = payload.name
-        await session.execute(delete(DashboardGroup).where(DashboardGroup.dashboard_id == dashboard.id))
-        await session.execute(delete(DashboardLayout).where(DashboardLayout.dashboard_id == dashboard.id))
-        session.add_all([DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20) for bp in ("desktop", "mobile")])
+        await session.execute(
+            delete(DashboardGroup).where(DashboardGroup.dashboard_id == dashboard.id)
+        )
+        await session.execute(
+            delete(DashboardLayout).where(DashboardLayout.dashboard_id == dashboard.id)
+        )
+        session.add_all(
+            [
+                DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20)
+                for bp in ("desktop", "mobile")
+            ]
+        )
     if dashboard is None:
         raise RuntimeError("invariant violated: dashboard must not be None")
     return dashboard, dashboard_revision, group_positions
 
 
 async def _place_applied_instances(
-    session: AsyncSession, dashboard: Dashboard, created_instances: list[tuple[GadgetInstance, GadgetDefinition, Any]],
-    preset_slots: Any, *, append: bool,
+    session: AsyncSession,
+    dashboard: Dashboard,
+    created_instances: list[tuple[GadgetInstance, GadgetDefinition, Any]],
+    preset_slots: Any,
+    *,
+    append: bool,
 ) -> None:
     """Insert desktop and mobile placements for the instances a preset created (flush-free ``add_all``).
 
     Appended blocks keep the target's column count and start below its lowest placement, so nothing
     overlaps; create/replace start from an empty layout at offset 0 with 20 columns.
     """
-    minimums = {instance.id: (descriptor.minimum_width, descriptor.minimum_height) for instance, _, descriptor in created_instances}
-    defaults = {instance.id: gadgets.preset_slot_size(preset_slot)
-                for (instance, _, _), preset_slot in zip(created_instances, preset_slots, strict=True)}
+    minimums = {
+        instance.id: (descriptor.minimum_width, descriptor.minimum_height)
+        for instance, _, descriptor in created_instances
+    }
+    defaults = {
+        instance.id: gadgets.preset_slot_size(preset_slot)
+        for (instance, _, _), preset_slot in zip(created_instances, preset_slots, strict=True)
+    }
     offsets = {"desktop": 0, "mobile": 0}
     columns = {"desktop": 20, "mobile": 20}
     if append:
         for breakpoint in offsets:
-            offsets[breakpoint] = await session.scalar(select(func.max(GadgetPlacement.y + GadgetPlacement.h)).where(
-                GadgetPlacement.dashboard_id == dashboard.id, GadgetPlacement.breakpoint == breakpoint)) or 0
-            columns[breakpoint] = await session.scalar(select(DashboardLayout.columns).where(
-                DashboardLayout.dashboard_id == dashboard.id, DashboardLayout.breakpoint == breakpoint)) or 20
+            offsets[breakpoint] = (
+                await session.scalar(
+                    select(func.max(GadgetPlacement.y + GadgetPlacement.h)).where(
+                        GadgetPlacement.dashboard_id == dashboard.id,
+                        GadgetPlacement.breakpoint == breakpoint,
+                    )
+                )
+                or 0
+            )
+            columns[breakpoint] = (
+                await session.scalar(
+                    select(DashboardLayout.columns).where(
+                        DashboardLayout.dashboard_id == dashboard.id,
+                        DashboardLayout.breakpoint == breakpoint,
+                    )
+                )
+                or 20
+            )
     desktop = layouts.default_desktop_layout(
-        {key: (min(width, columns["desktop"]), height) for key, (width, height) in defaults.items()},
-        columns["desktop"], minimum_sizes=minimums)
+        {
+            key: (min(width, columns["desktop"]), height)
+            for key, (width, height) in defaults.items()
+        },
+        columns["desktop"],
+        minimum_sizes=minimums,
+    )
     mobile = layouts.default_mobile_layout(defaults, columns["mobile"], minimum_sizes=minimums)
     for breakpoint, items in (("desktop", desktop), ("mobile", mobile)):
-        session.add_all([
-            GadgetPlacement(dashboard_id=dashboard.id, breakpoint=breakpoint, instance_id=item.instance_id,
-                            x=item.x, y=item.y + offsets[breakpoint], w=item.w, h=item.h)
-            for item in items
-        ])
+        session.add_all(
+            [
+                GadgetPlacement(
+                    dashboard_id=dashboard.id,
+                    breakpoint=breakpoint,
+                    instance_id=item.instance_id,
+                    x=item.x,
+                    y=item.y + offsets[breakpoint],
+                    w=item.w,
+                    h=item.h,
+                )
+                for item in items
+            ]
+        )
 
 
 async def apply_preset(
-    session: AsyncSession, preset_id: str, payload: PresetApplyRequest, *,
-    scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    preset_id: str,
+    payload: PresetApplyRequest,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> DashboardDetail:
     """Recompute and fingerprint preset state under ordered source/dashboard locks before atomic apply.
 
@@ -2222,51 +3846,112 @@ async def apply_preset(
     keeps everything on the target and adds the preset as one new group placed below the existing gadgets
     (subject to the per-dashboard instance and group limits). Replace and append both check the revision.
     """
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     owner_id = _actor(scope)
     await _lock_owner_creation_quota(session, scope)
     gadgets.dashboard_preset(preset_id)
-    await _lock_selected_sources(session, [source_id for values in payload.slot_sources.values() for source_id in values],
-        require_active=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+    await _lock_selected_sources(
+        session,
+        [source_id for values in payload.slot_sources.values() for source_id in values],
+        require_active=True,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
     # Slot sources must satisfy each slot renderer's datasource rule, like direct definition creation.
     for slot in gadgets.dashboard_preset(preset_id).slots:
-        await _validate_selected_sources(session, slot.renderer, payload.slot_sources.get(slot.slot_id, ()), scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled)
+        await _validate_selected_sources(
+            session,
+            slot.renderer,
+            payload.slot_sources.get(slot.slot_id, ()),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     target_dashboard_id = payload.target_dashboard_id
     if payload.mode in ("replace", "append"):
         # both modes require them
         if target_dashboard_id is None or payload.expected_revision is None:
-            raise RuntimeError("invariant violated: target_dashboard_id and payload.expected_revision must not be None")
+            raise RuntimeError(
+                "invariant violated: target_dashboard_id and payload.expected_revision must not be None"
+            )
         dashboard = await _lock_dashboard(session, target_dashboard_id, scope=scope)
         _check_revision(dashboard, payload.expected_revision)
     else:
         dashboard = None
-    current = (await preview_preset(session, preset_id, PresetPreviewRequest(
-        slot_sources=payload.slot_sources, target_dashboard_id=target_dashboard_id
-    ), scope=scope, multi_workspace_enabled=multi_workspace_enabled)).model_dump(mode="python")
+    current = (
+        await preview_preset(
+            session,
+            preset_id,
+            PresetPreviewRequest(
+                slot_sources=payload.slot_sources, target_dashboard_id=target_dashboard_id
+            ),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    ).model_dump(mode="python")
     if current["preview_fingerprint"] != payload.preview_fingerprint:
-        raise DashboardConflict("preview_changed", "Preset preview changed; review it again", dashboard.revision if dashboard else None)
+        raise DashboardConflict(
+            "preview_changed",
+            "Preset preview changed; review it again",
+            dashboard.revision if dashboard else None,
+        )
     # Proposed (not payload-supplied) sources get the same lock and datasource-rule checks as explicit ones.
-    proposed_ids = [sid for slot in current["slots"] for sid in slot["source_ids"]
-                    if sid not in {x for values in payload.slot_sources.values() for x in values}]
+    proposed_ids = [
+        sid
+        for slot in current["slots"]
+        for sid in slot["source_ids"]
+        if sid not in {x for values in payload.slot_sources.values() for x in values}
+    ]
     if proposed_ids:
-        await _lock_selected_sources(session, proposed_ids, require_active=True, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
+        await _lock_selected_sources(
+            session,
+            proposed_ids,
+            require_active=True,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        )
         for slot in current["slots"]:
-            await _validate_selected_sources(session, slot["renderer"], slot["source_ids"], scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled)
+            await _validate_selected_sources(
+                session,
+                slot["renderer"],
+                slot["source_ids"],
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
     # Seeded measurement scopes must satisfy the bound provider's catalog before they are persisted.
     for slot in current["slots"]:
         if slot["scope"]:
-            await _validate_selected_sources(session, slot["renderer"], slot["source_ids"], scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled, gadget_scope=GadgetScope(**slot["scope"]),
-                check_binding=False)
+            await _validate_selected_sources(
+                session,
+                slot["renderer"],
+                slot["source_ids"],
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                gadget_scope=GadgetScope(**slot["scope"]),
+                check_binding=False,
+            )
     dashboard, dashboard_revision, group_positions = await _prepare_apply_target(
-        session, payload, current, dashboard, owner_id=owner_id, scope=scope,
+        session,
+        payload,
+        current,
+        dashboard,
+        owner_id=owner_id,
+        scope=scope,
     )
-    definition_count = await session.scalar(select(func.count()).select_from(GadgetDefinition).where(
-        GadgetDefinition.workspace_id == scope.workspace_id, GadgetDefinition.owner_id == owner_id,
-    )) or 0
+    definition_count = (
+        await session.scalar(
+            select(func.count())
+            .select_from(GadgetDefinition)
+            .where(
+                GadgetDefinition.workspace_id == scope.workspace_id,
+                GadgetDefinition.owner_id == owner_id,
+            )
+        )
+        or 0
+    )
     if definition_count + len(current["slots"]) > MAX_DEFINITIONS_PER_OWNER:
         raise DashboardConflict("definition_limit", "Definition limit reached", dashboard_revision)
     if dashboard is None:
@@ -2280,26 +3965,52 @@ async def apply_preset(
     preset_slots = gadgets.dashboard_preset(preset_id).slots
     for index, (slot, preset_slot) in enumerate(zip(current["slots"], preset_slots, strict=True)):
         descriptor = gadgets.renderer_descriptor(slot["renderer"])
-        definition = GadgetDefinition(workspace_id=scope.workspace_id, owner_id=owner_id,
-            name=preset_slot.label or preset_definition_name(slot["renderer"]), renderer=slot["renderer"],
-            source_ids=[str(item) for item in slot["source_ids"]], scope=slot["scope"], filters=slot["filters"], highlight_rules=[])
+        definition = GadgetDefinition(
+            workspace_id=scope.workspace_id,
+            owner_id=owner_id,
+            name=preset_slot.label or preset_definition_name(slot["renderer"]),
+            renderer=slot["renderer"],
+            source_ids=[str(item) for item in slot["source_ids"]],
+            scope=slot["scope"],
+            filters=slot["filters"],
+            highlight_rules=[],
+        )
         session.add(definition)
         await session.flush()
         if dashboard is None:
             raise RuntimeError("invariant violated: dashboard must not be None")
-        instance = GadgetInstance(dashboard_id=dashboard.id, group_id=group.id, definition_id=definition.id, title=None, position=index)
+        instance = GadgetInstance(
+            dashboard_id=dashboard.id,
+            group_id=group.id,
+            definition_id=definition.id,
+            title=None,
+            position=index,
+        )
         session.add(instance)
         await session.flush()
         created_instances.append((instance, definition, descriptor))
     await _place_applied_instances(
-        session, dashboard, created_instances, preset_slots, append=payload.mode == "append",
+        session,
+        dashboard,
+        created_instances,
+        preset_slots,
+        append=payload.mode == "append",
     )
     drafts = [make_dashboard_change("dashboard", dashboard.id, dashboard_revision, scope=scope)]
-    drafts.extend(make_dashboard_change("definition", definition.id, definition.revision, scope=scope)
-        for _, definition, _descriptor in created_instances)
-    await commit_with_replay(session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=fence)
-    return await _dashboard_read(session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    drafts.extend(
+        make_dashboard_change("definition", definition.id, definition.revision, scope=scope)
+        for _, definition, _descriptor in created_instances
+    )
+    await commit_with_replay(
+        session,
+        drafts,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
+    )
+    return await _dashboard_read(
+        session, dashboard, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
 
 
 # Stable seams for P10 automation: daily context and briefs are consumed through this module only.
@@ -2334,18 +4045,26 @@ from modules.dashboard.daily_schemas import (  # noqa: E402  # deliberate late i
 
 
 async def count_source_gadgets(
-    session: AsyncSession, source_id: UUID, *, scope: Scope, cap: int = 1000,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    scope: Scope,
+    cap: int = 1000,
 ) -> tuple[int, int]:
     """Return workspace-scoped (definition, distinct instance) counts that select a source, saturating at ``cap``."""
     selects = GadgetDefinition.source_ids.contains([str(source_id)])
     definitions = (
         select(GadgetDefinition.id)
-        .where(GadgetDefinition.workspace_id == scope.workspace_id, selects).limit(cap).subquery()
+        .where(GadgetDefinition.workspace_id == scope.workspace_id, selects)
+        .limit(cap)
+        .subquery()
     )
     placements = (
         select(GadgetInstance.id)
         .join(GadgetDefinition, GadgetDefinition.id == GadgetInstance.definition_id)
-        .where(GadgetDefinition.workspace_id == scope.workspace_id, selects).limit(cap).subquery()
+        .where(GadgetDefinition.workspace_id == scope.workspace_id, selects)
+        .limit(cap)
+        .subquery()
     )
     return (
         int(await session.scalar(select(func.count()).select_from(definitions)) or 0),
@@ -2378,4 +4097,3 @@ __all__ = [
     "read_slot_owner",
     "release_brief_slot",
 ]
-

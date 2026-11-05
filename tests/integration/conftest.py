@@ -32,9 +32,7 @@ async def owner_client() -> AsyncIterator[AsyncClient]:
             json={"password": "test-owner-password-42"},
         )
         login.raise_for_status()
-        client.headers.update(
-            {"Origin": origin, "X-CSRF-Token": login.json()["csrfToken"]}
-        )
+        client.headers.update({"Origin": origin, "X-CSRF-Token": login.json()["csrfToken"]})
         yield client
 
 
@@ -54,7 +52,9 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 
     engine = create_async_engine(database_url, pool_size=1, max_overflow=0)
     async with engine.connect() as connection:
-        database, user = (await connection.execute(text("SELECT current_database(), current_user"))).one()
+        database, user = (
+            await connection.execute(text("SELECT current_database(), current_user"))
+        ).one()
         if database != "bbd_test" or user != "bbd_test":
             pytest.fail("Refusing database fixture connection outside bbd_test/bbd_test")
         await connection.rollback()

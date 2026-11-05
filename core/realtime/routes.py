@@ -46,7 +46,9 @@ HEARTBEAT_INTERVAL_SECONDS = 15
 DB_READ_TIMEOUT_SECONDS = 3
 SEND_TIMEOUT_SECONDS = 2
 CLEANUP_TIMEOUT_SECONDS = 2
-MAX_STREAMS_PER_API_PROCESS = 32  # D3: gated on a T8 rerun (no pool exhaustion / idle-in-transaction growth)
+MAX_STREAMS_PER_API_PROCESS = (
+    32  # D3: gated on a T8 rerun (no pool exhaustion / idle-in-transaction growth)
+)
 _PRIVATE_HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie, X-Workspace-ID"}
 _WORKSPACE_WAKEUPS: dict[UUID, asyncio.Event] = {}
 
@@ -63,7 +65,9 @@ def notify_realtime_wakeup(workspace_id: UUID) -> None:
 
 
 async def _wait_for_realtime_wakeup(
-    request: Request, workspace_id: UUID, timeout_seconds: float,
+    request: Request,
+    workspace_id: UUID,
+    timeout_seconds: float,
 ) -> None:
     """Wait up to ``timeout_seconds`` for a workspace wakeup signal before the next replay poll.
 
@@ -124,7 +128,9 @@ async def run_realtime_wakeup_listener(redis: Any) -> None:
         except asyncio.CancelledError:
             raise
         except Exception:  # boundary: Redis outage degrades to SQL polling
-            logging.getLogger(__name__).warning("realtime wake-up listener disconnected", exc_info=True)
+            logging.getLogger(__name__).warning(
+                "realtime wake-up listener disconnected", exc_info=True
+            )
         finally:
             with contextlib.suppress(Exception):
                 await asyncio.shield(pubsub.aclose())
@@ -134,6 +140,7 @@ async def run_realtime_wakeup_listener(redis: Any) -> None:
 
 class SnapshotRead(BaseModel):
     """Current principal cursor and retention floor; no foreign sequence or identity metadata."""
+
     model_config = ConfigDict(frozen=True)
 
     cursor: str
@@ -193,8 +200,13 @@ class _RealtimeResponse(Response):
     """
 
     def __init__(
-        self, response: Response, *, request: Request, workspace: WorkspaceContext,
-        access_fence: AccessFence, auth_session: AccountSessionRef,
+        self,
+        response: Response,
+        *,
+        request: Request,
+        workspace: WorkspaceContext,
+        access_fence: AccessFence,
+        auth_session: AccountSessionRef,
         stream_semaphore: asyncio.Semaphore | None = None,
     ) -> None:
         """Capture original typed owner context/fence/session; assume ownership of supplied permit."""
@@ -244,7 +256,9 @@ class _RealtimeResponse(Response):
                     session = factory()
                     async with asyncio.timeout(DB_READ_TIMEOUT_SECONDS):
                         await workspaces.lock_access_fence(
-                            session, scope=self.workspace, expected=self.access_fence,
+                            session,
+                            scope=self.workspace,
+                            expected=self.access_fence,
                             multi_workspace_enabled=self.request.app.state.settings.multi_workspace_enabled,
                             auth_sessions=(self.auth_session,),
                         )
@@ -261,7 +275,9 @@ class _RealtimeResponse(Response):
                 raise _RealtimeSendDenied(exc) from exc
             except (TimeoutError, SQLAlchemyError) as exc:
                 send_uncertain = send_attempted
-                failure = HTTPException(status_code=503, detail="Realtime stream is temporarily unavailable")
+                failure = HTTPException(
+                    status_code=503, detail="Realtime stream is temporarily unavailable"
+                )
                 raise _RealtimeSendDenied(failure) from exc
             finally:
                 if session is not None:
@@ -278,8 +294,13 @@ class _RealtimeResponse(Response):
                 if denial is None:
                     raise
                 await self._finish_denied(
-                    denial, scope, receive, send,
-                    start_attempted=start_attempted, started=started, finished=finished,
+                    denial,
+                    scope,
+                    receive,
+                    send,
+                    start_attempted=start_attempted,
+                    started=started,
+                    finished=finished,
                     send_uncertain=send_uncertain,
                 )
         finally:
@@ -349,7 +370,10 @@ def _parse_workspace_selection(value: str | None) -> UUID | None:
 
 
 async def _select_realtime_workspace(
-    session: AsyncSession, request: Request, workspace_id: str | None, workspace_header: str | None,
+    session: AsyncSession,
+    request: Request,
+    workspace_id: str | None,
+    workspace_header: str | None,
 ) -> WorkspaceContext:
     """Resolve genuine selected owner membership through public APIs and actual rollout gate.
 
@@ -360,8 +384,11 @@ async def _select_realtime_workspace(
     account = getattr(request.state, "account", None)
     if not isinstance(account, AccountRead):
         raise HTTPException(status_code=401, detail="Authentication required")
-    current = await get_active_account(session, account.id,
-        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+    current = await get_active_account(
+        session,
+        account.id,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+    )
     if current is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     selected = _parse_workspace_selection(workspace_id)
@@ -379,7 +406,10 @@ async def _select_realtime_workspace(
 
 
 async def _prepare_realtime(
-    session: AsyncSession, request: Request, workspace_id: str | None, workspace_header: str | None,
+    session: AsyncSession,
+    request: Request,
+    workspace_id: str | None,
+    workspace_header: str | None,
 ) -> tuple[WorkspaceContext, AccessFence, AccountSessionRef, ReplayState]:
     """Detach original admitted owner/session/head and release request SQL before response lifetime.
 
@@ -390,35 +420,59 @@ async def _prepare_realtime(
     try:
         async with asyncio.timeout(DB_READ_TIMEOUT_SECONDS):
             auth_session = authenticated_session_ref(request)
-            workspace = await _select_realtime_workspace(session, request, workspace_id, workspace_header)
-            fence = await workspaces.read_access_fence(session, scope=workspace,
-                multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
-            head = await current_head(session, scope=workspace, access_fence=fence,
-                multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
+            workspace = await _select_realtime_workspace(
+                session, request, workspace_id, workspace_header
+            )
+            fence = await workspaces.read_access_fence(
+                session,
+                scope=workspace,
+                multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+            )
+            head = await current_head(
+                session,
+                scope=workspace,
+                access_fence=fence,
+                multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+            )
             return workspace, fence, auth_session, head
     except (TimeoutError, SQLAlchemyError) as exc:
-        raise HTTPException(status_code=503, detail="Realtime stream is temporarily unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Realtime stream is temporarily unavailable"
+        ) from exc
     finally:
         await _cleanup_session(session)
 
 
 @router.get("/snapshot", response_model=SnapshotRead)
 async def get_snapshot(
-    session: Session, request: Request, auth_admission: AccountAdmission,
+    session: Session,
+    request: Request,
+    auth_admission: AccountAdmission,
     workspace_id: Annotated[str | None, Query()] = None,
     workspace_header: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
 ) -> Response:
     """Return existing snapshot wire fields only through the actual start/body publication gate."""
-    workspace, fence, auth_session, head = await _prepare_realtime(session, request, workspace_id, workspace_header)
-    snapshot = SnapshotRead(cursor=ReplayCursor(epoch=head.epoch, sequence=head.sequence).encode(),
-                            floor_sequence=str(head.floor_sequence))
-    return _RealtimeResponse(JSONResponse(snapshot.model_dump(mode="json"), headers=_PRIVATE_HEADERS),
-        request=request, workspace=workspace, access_fence=fence, auth_session=auth_session)
+    workspace, fence, auth_session, head = await _prepare_realtime(
+        session, request, workspace_id, workspace_header
+    )
+    snapshot = SnapshotRead(
+        cursor=ReplayCursor(epoch=head.epoch, sequence=head.sequence).encode(),
+        floor_sequence=str(head.floor_sequence),
+    )
+    return _RealtimeResponse(
+        JSONResponse(snapshot.model_dump(mode="json"), headers=_PRIVATE_HEADERS),
+        request=request,
+        workspace=workspace,
+        access_fence=fence,
+        auth_session=auth_session,
+    )
 
 
 def _resync(reason: str, cursor: str) -> str:
     """Format only a same-principal resnapshot cursor/reason; actual send still revalidates original fence."""
-    payload = json.dumps({"reason": reason, "snapshot_cursor": cursor}, separators=(",", ":"), ensure_ascii=False)
+    payload = json.dumps(
+        {"reason": reason, "snapshot_cursor": cursor}, separators=(",", ":"), ensure_ascii=False
+    )
     return f"event: resync_required\ndata: {payload}\n\n"
 
 
@@ -432,6 +486,7 @@ def _sse_record(record: ReplayRecord) -> str:
 @dataclass(frozen=True, slots=True)
 class _RealtimePage:
     """Bounded detached page/messages; never retains ORM or a SQL transaction across yields."""
+
     head: ReplayState
     messages: tuple[tuple[ReplayCursor, str], ...]
     reason: str | None
@@ -460,7 +515,13 @@ class _PollingStreamingResponse(StreamingResponse):
 class _PermitResponse(_PollingStreamingResponse):
     """Streaming response that frees the stream permit if the generator never started (failed send, early error)."""
 
-    def __init__(self, content: AsyncIterator[str], started: asyncio.Event, semaphore: asyncio.Semaphore, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        content: AsyncIterator[str],
+        started: asyncio.Event,
+        semaphore: asyncio.Semaphore,
+        **kwargs: Any,
+    ) -> None:
         """Remember the start flag and permit semaphore for the early-failure release in ``__call__``."""
         super().__init__(content, **kwargs)
         self._started = started
@@ -483,8 +544,12 @@ class _PermitResponse(_PollingStreamingResponse):
 
 
 async def _read_replay_page(
-    request: Request, *, workspace: WorkspaceContext, fence: AccessFence,
-    auth_session: AccountSessionRef, position: ReplayCursor,
+    request: Request,
+    *,
+    workspace: WorkspaceContext,
+    fence: AccessFence,
+    auth_session: AccountSessionRef,
+    position: ReplayCursor,
 ) -> _RealtimePage:
     """Revalidate original exact session/fence and query principal/epoch before ORDER/LIMIT100.
 
@@ -496,28 +561,72 @@ async def _read_replay_page(
     session = factory()
     try:
         async with asyncio.timeout(DB_READ_TIMEOUT_SECONDS):
-            await workspaces.lock_access_fence(session, scope=workspace, expected=fence,
-                multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled, auth_sessions=(auth_session,))
-            head = await current_head(session, scope=workspace, access_fence=fence,
-                multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled)
-            reason = ("epoch_changed" if position.epoch != head.epoch
-                      else "cursor_expired" if position.sequence < head.floor_sequence - 1 else None)
+            await workspaces.lock_access_fence(
+                session,
+                scope=workspace,
+                expected=fence,
+                multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+                auth_sessions=(auth_session,),
+            )
+            head = await current_head(
+                session,
+                scope=workspace,
+                access_fence=fence,
+                multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+            )
+            reason = (
+                "epoch_changed"
+                if position.epoch != head.epoch
+                else "cursor_expired"
+                if position.sequence < head.floor_sequence - 1
+                else None
+            )
             if position.epoch == head.epoch and position.sequence > head.sequence:
-                raise HTTPException(status_code=400, detail="Replay cursor is ahead of the current stream")
-            records = [] if reason or getattr(workspace, "role", "owner") != "owner" else list((await session.scalars(select(ReplayRecord).where(
-                ReplayRecord.workspace_id == workspace.workspace_id, ReplayRecord.user_id == workspace.user_id,
-                ReplayRecord.epoch == head.epoch, ReplayRecord.sequence > position.sequence,
-                ReplayRecord.sequence <= head.sequence,
-            ).order_by(ReplayRecord.sequence).limit(MAX_REPLAY_BATCH))).all())
+                raise HTTPException(
+                    status_code=400, detail="Replay cursor is ahead of the current stream"
+                )
+            records = (
+                []
+                if reason or getattr(workspace, "role", "owner") != "owner"
+                else list(
+                    (
+                        await session.scalars(
+                            select(ReplayRecord)
+                            .where(
+                                ReplayRecord.workspace_id == workspace.workspace_id,
+                                ReplayRecord.user_id == workspace.user_id,
+                                ReplayRecord.epoch == head.epoch,
+                                ReplayRecord.sequence > position.sequence,
+                                ReplayRecord.sequence <= head.sequence,
+                            )
+                            .order_by(ReplayRecord.sequence)
+                            .limit(MAX_REPLAY_BATCH)
+                        )
+                    ).all()
+                )
+            )
             expected = position.sequence + 1
-            if not reason and (any(record.sequence != expected + index for index, record in enumerate(records))
-                    or (not records and head.sequence > position.sequence)
-                    or (records and len(records) < MAX_REPLAY_BATCH and records[-1].sequence != head.sequence)):
+            if not reason and (
+                any(record.sequence != expected + index for index, record in enumerate(records))
+                or (not records and head.sequence > position.sequence)
+                or (
+                    records
+                    and len(records) < MAX_REPLAY_BATCH
+                    and records[-1].sequence != head.sequence
+                )
+            ):
                 reason = "replay_gap"
             # One chunk per page: the stream does one guarded (fence-locked) send for the whole batch.
-            messages = (() if reason or not records else
-                        ((ReplayCursor(epoch=records[-1].epoch, sequence=records[-1].sequence),
-                          "".join(_sse_record(row) for row in records)),))
+            messages = (
+                ()
+                if reason or not records
+                else (
+                    (
+                        ReplayCursor(epoch=records[-1].epoch, sequence=records[-1].sequence),
+                        "".join(_sse_record(row) for row in records),
+                    ),
+                )
+            )
             return _RealtimePage(head=head, messages=messages, reason=reason)
     finally:
         await _cleanup_session(session)
@@ -525,11 +634,15 @@ async def _read_replay_page(
 
 @router.get("/events")
 async def stream_events(
-    session: Session, request: Request, auth_admission: AccountAdmission,
+    session: Session,
+    request: Request,
+    auth_admission: AccountAdmission,
     workspace_id: Annotated[str | None, Query()] = None,
     workspace_header: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
     cursor: Annotated[str | None, Query(max_length=MAX_CURSOR_LENGTH)] = None,
-    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID", max_length=MAX_CURSOR_LENGTH)] = None,
+    last_event_id: Annotated[
+        str | None, Header(alias="Last-Event-ID", max_length=MAX_CURSOR_LENGTH)
+    ] = None,
 ) -> Response:
     """Prepare owner replay, bound transport slots, and transfer permit to actual-send wrapper.
 
@@ -537,7 +650,9 @@ async def stream_events(
     connection. Original principal/session/fence applies throughout; revocation closes the
     stream rather than emitting new protected control content. Members await W3 fanout.
     """
-    workspace, fence, auth_session, head = await _prepare_realtime(session, request, workspace_id, workspace_header)
+    workspace, fence, auth_session, head = await _prepare_realtime(
+        session, request, workspace_id, workspace_header
+    )
     selected = last_event_id if last_event_id else cursor
     try:
         parsed = parse_cursor(selected) if selected else None
@@ -546,9 +661,13 @@ async def stream_events(
     initial = parsed or ReplayCursor(epoch=head.epoch, sequence=head.sequence)
     if initial.epoch == head.epoch and initial.sequence > head.sequence:
         raise HTTPException(status_code=400, detail="Replay cursor is ahead of the current stream")
-    initial_reason = ("epoch_changed" if initial.epoch != head.epoch
-                      else "cursor_expired" if initial.sequence < head.floor_sequence - 1 else None)
-
+    initial_reason = (
+        "epoch_changed"
+        if initial.epoch != head.epoch
+        else "cursor_expired"
+        if initial.sequence < head.floor_sequence - 1
+        else None
+    )
 
     async def body() -> AsyncIterator[str]:
         """Yield an immediate retry preamble, then detached same-stream events/resync or 15s heartbeat.
@@ -557,7 +676,9 @@ async def stream_events(
         """
         position = initial
         if initial_reason:
-            yield _resync(initial_reason, ReplayCursor(epoch=head.epoch, sequence=head.sequence).encode())
+            yield _resync(
+                initial_reason, ReplayCursor(epoch=head.epoch, sequence=head.sequence).encode()
+            )
             return
         # The Next /api rewrite proxy holds response headers until the first body byte, so without an
         # immediate chunk EventSource.onopen would not fire until the first heartbeat (UI stuck "Connecting").
@@ -565,12 +686,20 @@ async def stream_events(
         last_heartbeat = asyncio.get_running_loop().time()
         while not await request.is_disconnected():
             try:
-                page = await _read_replay_page(request, workspace=workspace, fence=fence,
-                                               auth_session=auth_session, position=position)
+                page = await _read_replay_page(
+                    request,
+                    workspace=workspace,
+                    fence=fence,
+                    auth_session=auth_session,
+                    position=position,
+                )
             except (HTTPException, TimeoutError, SQLAlchemyError):
                 return
             if page.reason:
-                yield _resync(page.reason, ReplayCursor(epoch=page.head.epoch, sequence=page.head.sequence).encode())
+                yield _resync(
+                    page.reason,
+                    ReplayCursor(epoch=page.head.epoch, sequence=page.head.sequence).encode(),
+                )
                 return
             if page.messages:
                 for event_position, message in page.messages:
@@ -598,12 +727,26 @@ async def stream_events(
                 await semaphore.acquire()
                 acquired = True
         except TimeoutError as exc:
-            raise HTTPException(status_code=503, detail="Realtime connection limit reached") from exc
-        response = _RealtimeResponse(_PollingStreamingResponse(body(), media_type="text/event-stream", headers={
-            **_PRIVATE_HEADERS, "Cache-Control": "private, no-store, no-transform",
-            "X-Accel-Buffering": "no", "Connection": "keep-alive",
-        }), request=request, workspace=workspace, access_fence=fence, auth_session=auth_session,
-            stream_semaphore=semaphore)
+            raise HTTPException(
+                status_code=503, detail="Realtime connection limit reached"
+            ) from exc
+        response = _RealtimeResponse(
+            _PollingStreamingResponse(
+                body(),
+                media_type="text/event-stream",
+                headers={
+                    **_PRIVATE_HEADERS,
+                    "Cache-Control": "private, no-store, no-transform",
+                    "X-Accel-Buffering": "no",
+                    "Connection": "keep-alive",
+                },
+            ),
+            request=request,
+            workspace=workspace,
+            access_fence=fence,
+            auth_session=auth_session,
+            stream_semaphore=semaphore,
+        )
         acquired = False
         return response
     finally:

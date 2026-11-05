@@ -30,8 +30,12 @@ def test_cisa_kev_newest_first_one_record_per_cve():
     records = map_cisa_kev(fixture("cisa_kev.json"), NOW)
     assert [r.provider_id for r in records] == ["CVE-2016-3081", "CVE-2015-5477"]
     first = records[0]
-    assert first.observed_at.isoformat() == "2026-10-07T00:00:00+00:00" and first.collected_at == NOW
-    assert "Apache Struts Command Injection" in first.content and "Apply mitigations" in first.content
+    assert (
+        first.observed_at.isoformat() == "2026-10-07T00:00:00+00:00" and first.collected_at == NOW
+    )
+    assert (
+        "Apache Struts Command Injection" in first.content and "Apply mitigations" in first.content
+    )
     fields = wd(first)["provider_fields"]
     assert fields["vendorProject"] == "Apache" and fields["knownRansomwareCampaignUse"] == "Known"
     assert fields["dueDate"] == "2026-10-28" and fields["dateAdded"] == "2026-10-07"
@@ -60,16 +64,23 @@ def _mutated(fn):
     return _body(payload)
 
 
-@pytest.mark.parametrize("body", [
-    b"", b"<html>", b"[]", b"{}", _body({"vulnerabilities": {}}),
-    _mutated(lambda p: p.update(count=5)),
-    _mutated(lambda p: p["vulnerabilities"][0].update(cveID="not-a-cve")),
-    _mutated(lambda p: p["vulnerabilities"][1].update(cveID="CVE-2015-5477")),
-    _mutated(lambda p: p["vulnerabilities"][0].update(dateAdded="yesterday")),
-    _mutated(lambda p: p["vulnerabilities"][0].update(dateAdded="2099-01-01")),
-    _mutated(lambda p: p["vulnerabilities"][0].update(vulnerabilityName="")),
-    _mutated(lambda p: p["vulnerabilities"][0].update(dueDate="soon")),
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"",
+        b"<html>",
+        b"[]",
+        b"{}",
+        _body({"vulnerabilities": {}}),
+        _mutated(lambda p: p.update(count=5)),
+        _mutated(lambda p: p["vulnerabilities"][0].update(cveID="not-a-cve")),
+        _mutated(lambda p: p["vulnerabilities"][1].update(cveID="CVE-2015-5477")),
+        _mutated(lambda p: p["vulnerabilities"][0].update(dateAdded="yesterday")),
+        _mutated(lambda p: p["vulnerabilities"][0].update(dateAdded="2099-01-01")),
+        _mutated(lambda p: p["vulnerabilities"][0].update(vulnerabilityName="")),
+        _mutated(lambda p: p["vulnerabilities"][0].update(dueDate="soon")),
+    ],
+)
 def test_cisa_kev_hostile_payloads_raise(body):
     with pytest.raises(ProviderPayloadError):
         map_cisa_kev(body, NOW)

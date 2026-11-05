@@ -141,25 +141,54 @@ class TestBrowserNavigationGuards:
 
     def test_target_in_scope_rejects_http(self) -> None:
         """Verify insecure HTTP target is rejected."""
-        assert _target_in_scope("http://docs.example.com/api", "https://docs.example.com", "/") is False
+        assert (
+            _target_in_scope("http://docs.example.com/api", "https://docs.example.com", "/")
+            is False
+        )
 
     def test_target_in_scope_rejects_non_standard_port(self) -> None:
         """Verify targets on ports other than 443 are rejected."""
-        assert _target_in_scope("https://docs.example.com:8443/api", "https://docs.example.com", "/") is False
+        assert (
+            _target_in_scope("https://docs.example.com:8443/api", "https://docs.example.com", "/")
+            is False
+        )
 
     def test_target_in_scope_rejects_credentials(self) -> None:
         """Verify target URLs with user or password are rejected."""
-        assert _target_in_scope("https://user:pass@docs.example.com/api", "https://docs.example.com", "/") is False
+        assert (
+            _target_in_scope(
+                "https://user:pass@docs.example.com/api", "https://docs.example.com", "/"
+            )
+            is False
+        )
 
     def test_target_in_scope_rejects_traversal(self) -> None:
         """Verify target URLs with path traversal segments are rejected."""
-        assert _target_in_scope("https://docs.example.com/api/../secret", "https://docs.example.com", "/") is False
-        assert _target_in_scope("https://docs.example.com/api/./here", "https://docs.example.com", "/") is False
+        assert (
+            _target_in_scope(
+                "https://docs.example.com/api/../secret", "https://docs.example.com", "/"
+            )
+            is False
+        )
+        assert (
+            _target_in_scope("https://docs.example.com/api/./here", "https://docs.example.com", "/")
+            is False
+        )
 
     def test_target_in_scope_rejects_encoded_slashes(self) -> None:
         """Verify target URLs with %2f or %5c encoded characters are rejected."""
-        assert _target_in_scope("https://docs.example.com/api%2fsecret", "https://docs.example.com", "/") is False
-        assert _target_in_scope("https://docs.example.com/api%5csecret", "https://docs.example.com", "/") is False
+        assert (
+            _target_in_scope(
+                "https://docs.example.com/api%2fsecret", "https://docs.example.com", "/"
+            )
+            is False
+        )
+        assert (
+            _target_in_scope(
+                "https://docs.example.com/api%5csecret", "https://docs.example.com", "/"
+            )
+            is False
+        )
 
     def test_target_in_scope_rejects_outside_prefix(self) -> None:
         """Verify target URL outside path prefix is rejected."""
@@ -264,7 +293,9 @@ class TestBrowserJobSubmissionAndCancellation:
                 grant=mock_browser_scope,
                 args=args,
                 budget=budget,
-                scope=WorkspaceContext(user_id=2, workspace_id=WS, role="owner", membership_revision=1),
+                scope=WorkspaceContext(
+                    user_id=2, workspace_id=WS, role="owner", membership_revision=1
+                ),
                 multi_workspace_enabled=False,
                 access_fence=FENCE,
             )
@@ -300,9 +331,7 @@ class TestBrowserJobSubmissionAndCancellation:
             )
 
     @pytest.mark.asyncio
-    async def test_submit_browser_read_success(
-        self, mock_agent_auth, mock_browser_scope
-    ) -> None:
+    async def test_submit_browser_read_success(self, mock_agent_auth, mock_browser_scope) -> None:
         """Verify submit_browser_read_in_uow successfully adds BrowserReadJob row."""
         session = AsyncMock()
         session.scalar.return_value = None  # No existing job
@@ -378,7 +407,10 @@ class TestBrowserJobSubmissionAndCancellation:
         session.execute.return_value = MagicMock(rowcount=0)
 
         result = await cancel_browser_job_in_uow(
-            session, mock_job.id, scope=OWNER_SCOPE, multi_workspace_enabled=False,
+            session,
+            mock_job.id,
+            scope=OWNER_SCOPE,
+            multi_workspace_enabled=False,
         )
 
         assert result.status == "cancel_requested"

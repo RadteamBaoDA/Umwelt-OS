@@ -44,7 +44,10 @@ def test_noaa_kp_rejects_out_of_range_index():
 def test_open_er_api_maps_fixed_quotes_and_flags_quota_error():
     records = map_open_er_api(jfixture("open_er_api.json"), NOW)
     assert {wd(r)["currency"] for r in records} == {"VND", "EUR", "JPY", "GBP", "CNY"}
-    assert all(wd(r)["quality"] == "reference" and r.provider_id.startswith("open_er_api:USD:") for r in records)
+    assert all(
+        wd(r)["quality"] == "reference" and r.provider_id.startswith("open_er_api:USD:")
+        for r in records
+    )
     with pytest.raises(ProviderPayloadError) as err:
         map_open_er_api({"result": "error", "error-type": "quota-reached"}, NOW)
     assert err.value.kind == "rate_limited"
@@ -55,7 +58,13 @@ def test_oecd_cli_sdmx_one_record_per_area_and_shape_change_fails():
     records = map_oecd_cli(payload, NOW)
     assert {wd(r)["region"] for r in records} == {"JPN", "USA", "CHN", "DEU", "GBR"}
     assert all(r.provider_id.endswith(":2026-09") and wd(r)["unit"] == "index" for r in records)
-    assert {r.metadata["provider_record"]["world_data"]["symbol"] for r in records} == {"JPN", "USA", "CHN", "DEU", "GBR"}
+    assert {r.metadata["provider_record"]["world_data"]["symbol"] for r in records} == {
+        "JPN",
+        "USA",
+        "CHN",
+        "DEU",
+        "GBR",
+    }
     broken = copy.deepcopy(payload)
     broken["data"]["dataSets"][0]["observations"]["9:9:9"] = [1.0]
     with pytest.raises(ProviderPayloadError, match="oecd_cli_response_invalid"):
@@ -68,10 +77,16 @@ def test_oecd_cli_version_includes_symbol_so_legacy_symbolless_rows_are_refreshe
     """Rows collected before ``symbol=area`` was written keep the old version; the new version must differ."""
     from modules.connectors.providers.macro import content_version
 
-    record = next(r for r in map_oecd_cli(jfixture("oecd_cli.json"), NOW) if wd(r)["region"] == "USA")
-    legacy = content_version("oecd_cli", "USA", "2026-09", record.metadata["provider_record"]["world_data"]["value"])
+    record = next(
+        r for r in map_oecd_cli(jfixture("oecd_cli.json"), NOW) if wd(r)["region"] == "USA"
+    )
+    legacy = content_version(
+        "oecd_cli", "USA", "2026-09", record.metadata["provider_record"]["world_data"]["value"]
+    )
     assert record.version != legacy
-    assert record.version == content_version("oecd_cli", "USA", "USA", "2026-09", wd(record)["value"])
+    assert record.version == content_version(
+        "oecd_cli", "USA", "USA", "2026-09", wd(record)["value"]
+    )
 
 
 def test_iss_position_typed_coordinates_and_units_guard():
@@ -93,7 +108,9 @@ def test_disease_sh_without_provider_update_instant_is_rejected_not_clock_stampe
 
 def test_disease_sh_one_record_per_metric_and_provider_update():
     records = map_disease_sh(jfixture("disease_sh.json"), NOW)
-    assert [r.provider_id for r in records] == [f"disease_sh:global:{m}" for m in ("cases", "deaths", "recovered", "active")]
+    assert [r.provider_id for r in records] == [
+        f"disease_sh:global:{m}" for m in ("cases", "deaths", "recovered", "active")
+    ]
     with pytest.raises(ProviderPayloadError, match="disease_sh_value_invalid"):
         map_disease_sh({**jfixture("disease_sh.json"), "cases": -1}, NOW)
 
@@ -115,11 +132,21 @@ def test_nvd_maps_scored_and_unscored_cves_and_truncation():
     payload = jfixture("nvd_cves.json")
     records = map_nvd(payload, NOW)
     assert len(records) == 3 and all(r.provider_id.startswith("CVE-") for r in records)
-    assert all(r.metadata["provider_record"]["coverage"] == "truncated" for r in records)  # totalResults > page
+    assert all(
+        r.metadata["provider_record"]["coverage"] == "truncated" for r in records
+    )  # totalResults > page
     assert json.dumps(wd(records[0])["provider_fields"])  # bounded, JSON-safe
     assert "pubStartDate=" in nvd_request().url
 
 
 def test_all_registered_as_pure_adapters():
-    for provider in ("noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd"):
+    for provider in (
+        "noaa_kp",
+        "open_er_api",
+        "oecd_cli",
+        "iss_position",
+        "disease_sh",
+        "ioda",
+        "nvd",
+    ):
         assert provider in PURE_ADAPTERS

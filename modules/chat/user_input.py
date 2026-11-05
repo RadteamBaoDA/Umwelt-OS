@@ -90,7 +90,12 @@ def build_tool_result(request: dict[str, Any]) -> str:
     if answer.get("value") == INPUT_DECLINE:
         return json.dumps({"status": "declined", "kind": request["kind"]})
     return json.dumps(
-        {"status": "answered", "kind": request["kind"], "answer": answer.get("value"), "label": answer.get("label")},
+        {
+            "status": "answered",
+            "kind": request["kind"],
+            "answer": answer.get("value"),
+            "label": answer.get("label"),
+        },
         ensure_ascii=False,
     )
 
@@ -112,7 +117,10 @@ def validate_answer(request: dict[str, Any], answer: str) -> dict[str, str]:
     if kind == "time_slots":
         for slot in request.get("slots", []):
             if slot["id"] == answer and slot.get("available", True):
-                return {"value": answer, "label": f"{slot['label']} ({slot['date']} {slot['start_time']}-{slot['end_time']})"}
+                return {
+                    "value": answer,
+                    "label": f"{slot['label']} ({slot['date']} {slot['start_time']}-{slot['end_time']})",
+                }
     else:
         for option in request.get("options", []):
             if option["id"] == answer:
@@ -125,13 +133,23 @@ def _expired(request: dict[str, Any], now: datetime) -> bool:
     return datetime.fromisoformat(request["expires_at"]) <= now
 
 
-async def _append_event(session: AsyncSession, run_id: UUID, event_type: str, data: dict[str, Any]) -> None:
+async def _append_event(
+    session: AsyncSession, run_id: UUID, event_type: str, data: dict[str, Any]
+) -> None:
     """Append one event with ``seq = max(persisted)+1``; the caller holds the run row lock."""
-    latest = await session.scalar(select(func.coalesce(func.max(StreamEvent.seq), 0)).where(StreamEvent.response_id == run_id))
+    latest = await session.scalar(
+        select(func.coalesce(func.max(StreamEvent.seq), 0)).where(StreamEvent.response_id == run_id)
+    )
     seq = (latest or 0) + 1
-    session.add(StreamEvent(
-        response_id=run_id, seq=seq, event_type=event_type, event_id=make_event_id(run_id, seq), data=data,
-    ))
+    session.add(
+        StreamEvent(
+            response_id=run_id,
+            seq=seq,
+            event_type=event_type,
+            event_id=make_event_id(run_id, seq),
+            data=data,
+        )
+    )
 
 
 async def _lock_run(session: AsyncSession, response_id: UUID) -> ResponseRun | None:
@@ -139,17 +157,31 @@ async def _lock_run(session: AsyncSession, response_id: UUID) -> ResponseRun | N
     hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
     if hint is None:
         return None
-    await session.scalar(select(Conversation).where(
-        Conversation.id == hint.conversation_id,
-    ).with_for_update().execution_options(populate_existing=True))
-    return await session.scalar(select(ResponseRun).where(
-        ResponseRun.id == response_id,
-    ).with_for_update().execution_options(populate_existing=True))
+    await session.scalar(
+        select(Conversation)
+        .where(
+            Conversation.id == hint.conversation_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return await session.scalar(
+        select(ResponseRun)
+        .where(
+            ResponseRun.id == response_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
 
 
 async def create_input_request(
-    session: AsyncSession, run: ResponseRun, args: RequestUserInputArgs, *,
-    ttl: timedelta, now: datetime | None = None,
+    session: AsyncSession,
+    run: ResponseRun,
+    args: RequestUserInputArgs,
+    *,
+    ttl: timedelta,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Park ``run`` on a new request and publish ``message.input.request``.
 
@@ -186,8 +218,14 @@ async def create_input_request(
 
 
 async def submit_input(
-    session: AsyncSession, *, response_id: UUID, request_id: str, answer: str,
-    workspace_id: UUID, actor_user_id: int, now: datetime | None = None,
+    session: AsyncSession,
+    *,
+    response_id: UUID,
+    request_id: str,
+    answer: str,
+    workspace_id: UUID,
+    actor_user_id: int,
+    now: datetime | None = None,
 ) -> str:
     """Record the owner's answer, resume the run and return the tool-result string.
 
@@ -213,10 +251,16 @@ async def submit_input(
     resolved = validate_answer(request, answer)
     run.input_request = {**request, "state": "answered", "answer": resolved}
     run.status = "streaming"  # never leaves the active set, so 409 "run active" has no gap
-    await _append_event(session, run.id, EVENT_INPUT_RESOLVED, {
-        "request_id": request_id, "outcome": "declined" if resolved["value"] == INPUT_DECLINE else "answered",
-        "label": resolved["label"],
-    })
+    await _append_event(
+        session,
+        run.id,
+        EVENT_INPUT_RESOLVED,
+        {
+            "request_id": request_id,
+            "outcome": "declined" if resolved["value"] == INPUT_DECLINE else "answered",
+            "label": resolved["label"],
+        },
+    )
     return build_tool_result(run.input_request)
 
 
@@ -232,28 +276,41 @@ async def expire_locked(session: AsyncSession, run: ResponseRun) -> bool:
     run.input_request = {**request, "state": "expired"}
     run.status = "cancelled"
     run.completed_at = func.now()
-    await _append_event(session, run.id, EVENT_INPUT_RESOLVED, {"request_id": request.get("request_id"), "outcome": "expired"})
+    await _append_event(
+        session,
+        run.id,
+        EVENT_INPUT_RESOLVED,
+        {"request_id": request.get("request_id"), "outcome": "expired"},
+    )
     await _append_event(session, run.id, "status", {"status": "cancelled"})
     return True
 
 
-async def expire_stale_requests(session: AsyncSession, *, now: datetime | None = None, limit: int = 50) -> int:
+async def expire_stale_requests(
+    session: AsyncSession, *, now: datetime | None = None, limit: int = 50
+) -> int:
     """Cancel expired requests and fail parked runs whose worker stopped heartbeating; returns runs changed.
 
     Lock order privacy -> conversation -> run. Meant for the periodic recovery job; safe to run concurrently
     with submit/cancel because each run is re-checked under its row lock.
     """
     now = now or datetime.now(UTC)
-    candidates = (await session.execute(
-        select(ResponseRun.id, ResponseRun.workspace_id).where(ResponseRun.status == "awaiting_input")
-        .order_by(ResponseRun.updated_at).limit(limit)
-    )).all()
+    candidates = (
+        await session.execute(
+            select(ResponseRun.id, ResponseRun.workspace_id)
+            .where(ResponseRun.status == "awaiting_input")
+            .order_by(ResponseRun.updated_at)
+            .limit(limit)
+        )
+    ).all()
     if not candidates:
         return 0
     ids = [run_id for run_id, _workspace_id in candidates]
     # Reader: the sweep fails/expires parked runs under consent; it spans workspaces, so every
     # affected workspace key is taken in sorted order (deadlock-free) before any run row lock.
-    await lock_export_privacy_workspaces(session, {workspace_id for _run_id, workspace_id in candidates}, shared=True)
+    await lock_export_privacy_workspaces(
+        session, {workspace_id for _run_id, workspace_id in candidates}, shared=True
+    )
     changed = 0
     for run_id in ids:
         run = await _lock_run(session, run_id)
@@ -268,15 +325,21 @@ async def expire_stale_requests(session: AsyncSession, *, now: datetime | None =
             run.error_code = "WorkerLost"
             run.error_message = "worker stopped while waiting for user input"
             run.completed_at = func.now()
-            await _append_event(session, run.id, "status", {"status": "failed", "error": run.error_message})
+            await _append_event(
+                session, run.id, "status", {"status": "failed", "error": run.error_message}
+            )
             changed += 1
     await session.commit()
     return changed
 
 
 async def await_user_input(
-    session_factory: async_sessionmaker[AsyncSession], response_id: UUID, request_id: str, *,
-    poll_interval: float = POLL_INTERVAL, heartbeat_interval: float = HEARTBEAT_INTERVAL,
+    session_factory: async_sessionmaker[AsyncSession],
+    response_id: UUID,
+    request_id: str,
+    *,
+    poll_interval: float = POLL_INTERVAL,
+    heartbeat_interval: float = HEARTBEAT_INTERVAL,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> InputOutcome:
@@ -299,7 +362,11 @@ async def await_user_input(
                 return InputOutcome("cancelled", json.dumps({"status": "cancelled"}))
             state = request.get("state")
             if state == "answered":
-                outcome: Outcome = "declined" if (request.get("answer") or {}).get("value") == INPUT_DECLINE else "answered"
+                outcome: Outcome = (
+                    "declined"
+                    if (request.get("answer") or {}).get("value") == INPUT_DECLINE
+                    else "answered"
+                )
                 return InputOutcome(outcome, build_tool_result(request))
             if state == "expired":
                 return InputOutcome("expired", json.dumps({"status": "expired"}))
@@ -314,9 +381,14 @@ async def await_user_input(
                 await session.rollback()
                 continue  # lost a race to submit/cancel: re-read the new state
             if elapsed >= heartbeat_interval:
-                await session.execute(update(ResponseRun).where(
-                    ResponseRun.id == response_id, ResponseRun.status == "awaiting_input",
-                ).values(updated_at=func.now()))
+                await session.execute(
+                    update(ResponseRun)
+                    .where(
+                        ResponseRun.id == response_id,
+                        ResponseRun.status == "awaiting_input",
+                    )
+                    .values(updated_at=func.now())
+                )
                 await session.commit()
                 elapsed = 0.0
         await sleep(poll_interval)

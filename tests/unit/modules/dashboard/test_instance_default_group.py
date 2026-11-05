@@ -39,7 +39,9 @@ def test_instance_create_accepts_missing_group_id() -> None:
 @pytest.mark.asyncio
 async def test_default_group_created_when_dashboard_has_none() -> None:
     session = _Session(None)
-    group = await public._resolve_instance_group(session, SimpleNamespace(id=uuid4()), None, scope=_SCOPE)  # type: ignore[arg-type]
+    group = await public._resolve_instance_group(
+        session, SimpleNamespace(id=uuid4()), None, scope=_SCOPE
+    )  # type: ignore[arg-type]
     assert (group.name, group.position) == ("General", 0)
     assert session.added == [group]
 
@@ -48,11 +50,18 @@ async def test_default_group_created_when_dashboard_has_none() -> None:
 async def test_default_group_reuses_existing() -> None:
     existing = object()
     session = _Session(existing)
-    assert await public._resolve_instance_group(session, SimpleNamespace(id=uuid4()), None, scope=_SCOPE) is existing  # type: ignore[arg-type]
+    assert (
+        await public._resolve_instance_group(
+            session, SimpleNamespace(id=uuid4()), None, scope=_SCOPE
+        )
+        is existing
+    )  # type: ignore[arg-type]
     assert session.added == []
 
 
 @pytest.mark.asyncio
 async def test_explicit_foreign_group_is_missing() -> None:
     with pytest.raises(public.DashboardMissing):
-        await public._resolve_instance_group(_Session(None), SimpleNamespace(id=uuid4()), uuid4(), scope=_SCOPE)  # type: ignore[arg-type]
+        await public._resolve_instance_group(
+            _Session(None), SimpleNamespace(id=uuid4()), uuid4(), scope=_SCOPE
+        )  # type: ignore[arg-type]

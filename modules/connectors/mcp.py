@@ -69,8 +69,14 @@ CONTRACT = McpCollectionContract(
         "because MCP carries no item timestamp. Content is capped at 1,000,000 characters and 500 records."
     ),
     provenance=(
-        "connection_id", "grant_id", "grant_revision", "connection_revision", "capability_kind",
-        "remote_capability_key", "descriptor_hash", "arguments_digest",
+        "connection_id",
+        "grant_id",
+        "grant_revision",
+        "connection_revision",
+        "capability_kind",
+        "remote_capability_key",
+        "descriptor_hash",
+        "arguments_digest",
     ),
     pagination=(
         "Exactly one request per configured call per run. Provider cursors and next-page links are "
@@ -159,7 +165,9 @@ def _digest(value: str, length: int = 64) -> str:
 
 
 def normalize(
-    read: tools.McpCollectionRead, arguments: dict[str, Any], observed_at: datetime,
+    read: tools.McpCollectionRead,
+    arguments: dict[str, Any],
+    observed_at: datetime,
 ) -> list[dict[str, Any]]:
     """Convert one bounded MCP payload into ingestion records following ``CONTRACT``.
 
@@ -172,8 +180,14 @@ def normalize(
     candidates: list[tuple[str, str]] = []
     payload = read.payload
     if read.kind == "resource":
-        for block in payload.get("contents", []) if isinstance(payload.get("contents"), list) else []:
-            if isinstance(block, dict) and isinstance(block.get("text"), str) and isinstance(block.get("uri"), str):
+        for block in (
+            payload.get("contents", []) if isinstance(payload.get("contents"), list) else []
+        ):
+            if (
+                isinstance(block, dict)
+                and isinstance(block.get("text"), str)
+                and isinstance(block.get("uri"), str)
+            ):
                 candidates.append((block["uri"], block["text"]))
     else:
         structured = payload.get("structuredContent")
@@ -182,17 +196,32 @@ def normalize(
             for index, item in enumerate(items):
                 if isinstance(item, dict):
                     ident = item.get("id")
-                    key = f"id:{ident}" if isinstance(ident, (str, int)) and not isinstance(ident, bool) else f"index:{index}"
+                    key = (
+                        f"id:{ident}"
+                        if isinstance(ident, (str, int)) and not isinstance(ident, bool)
+                        else f"index:{index}"
+                    )
                     candidates.append((key, _canonical(item)))
         else:
-            for index, block in enumerate(payload.get("content", []) if isinstance(payload.get("content"), list) else []):
-                if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+            for index, block in enumerate(
+                payload.get("content", []) if isinstance(payload.get("content"), list) else []
+            ):
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "text"
+                    and isinstance(block.get("text"), str)
+                ):
                     candidates.append((f"block:{index}", block["text"]))
     provenance = {
-        "adapter": PROVIDER_ID, "connection_id": str(read.connection_id), "grant_id": str(read.grant_id),
-        "grant_revision": read.grant_revision, "connection_revision": read.connection_revision,
-        "capability_kind": read.kind, "remote_capability_key": read.remote_key[:512],
-        "descriptor_hash": read.descriptor_hash, "arguments_digest": arguments_digest,
+        "adapter": PROVIDER_ID,
+        "connection_id": str(read.connection_id),
+        "grant_id": str(read.grant_id),
+        "grant_revision": read.grant_revision,
+        "connection_revision": read.connection_revision,
+        "capability_kind": read.kind,
+        "remote_capability_key": read.remote_key[:512],
+        "descriptor_hash": read.descriptor_hash,
+        "arguments_digest": arguments_digest,
     }
     records: list[dict[str, Any]] = []
     for identity, content in candidates:
@@ -202,10 +231,15 @@ def normalize(
         provider_id = prefix + identity
         if len(provider_id) > MAX_PROVIDER_ID:
             provider_id = prefix + "h:" + _digest(identity)
-        records.append({
-            "provider_id": provider_id, "content": content, "observed_at": observed_at.isoformat(),
-            "version": _digest(content, 32), "metadata": dict(provenance),
-        })
+        records.append(
+            {
+                "provider_id": provider_id,
+                "content": content,
+                "observed_at": observed_at.isoformat(),
+                "version": _digest(content, 32),
+                "metadata": dict(provenance),
+            }
+        )
     return records
 
 
@@ -249,59 +283,113 @@ async def collect(
     ):
         raise McpCollectionError("mcp_source_stale")
     source, config, fence, cursor_before = await _load_collection_target(
-        session_factory, source_id, expected_connector_revision, expected_generation,
-        expected_connection_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session_factory,
+        source_id,
+        expected_connector_revision,
+        expected_generation,
+        expected_connection_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     collected_at = datetime.now(UTC)
 
     collector_current = _make_collector_current(
-        session_factory, source_id, expected_generation, expected_connector_revision, fence,
-        collector_token=collector_token, request_ref=request_ref, scope=scope,
+        session_factory,
+        source_id,
+        expected_generation,
+        expected_connector_revision,
+        fence,
+        collector_token=collector_token,
+        request_ref=request_ref,
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
 
     records, failed = await _run_calls(
-        runtime, source, config, collector_current, collected_at, collector_token=collector_token,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        runtime,
+        source,
+        config,
+        collector_current,
+        collected_at,
+        collector_token=collector_token,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if len(failed) == len(config.calls):
         if not await _fence_current(
-            session_factory, source_id, expected_generation, expected_connector_revision,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence,
+            session_factory,
+            source_id,
+            expected_generation,
+            expected_connector_revision,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=fence,
         ):
             raise McpCollectionError("mcp_source_stale")
         await _record_result(
-            session_factory, source, "mcp_collection_failed",
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence,
+            session_factory,
+            source,
+            "mcp_collection_failed",
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=fence,
         )
         raise McpCollectionError("mcp_collection_failed")
     if not records:
         if not await _fence_current(
-            session_factory, source_id, expected_generation, expected_connector_revision,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence,
+            session_factory,
+            source_id,
+            expected_generation,
+            expected_connector_revision,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=fence,
         ):
             raise McpCollectionError("mcp_source_stale")
         await _settle_no_changes(
-            session_factory, source, expected_generation, expected_connector_revision, request_ref, fence,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session_factory,
+            source,
+            expected_generation,
+            expected_connector_revision,
+            request_ref,
+            fence,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         return {"status": "no_changes", "run_id": None, "batch_id": None, "failed_calls": failed}
     batch = _build_batch(
-        source, records[:MAX_RECORDS], expected_connector_revision, request_ref, cursor_before, collected_at,
+        source,
+        records[:MAX_RECORDS],
+        expected_connector_revision,
+        request_ref,
+        cursor_before,
+        collected_at,
     )
     receipt = await _submit_batch(
-        session_factory, batch, expected_generation, expected_connector_revision, request_ref, fence,
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session_factory,
+        batch,
+        expected_generation,
+        expected_connector_revision,
+        request_ref,
+        fence,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     return {
-        "status": receipt.status, "run_id": receipt.run_id, "batch_id": receipt.batch_id,
+        "status": receipt.status,
+        "run_id": receipt.run_id,
+        "batch_id": receipt.batch_id,
         "failed_calls": failed,
     }
 
 
 def _build_batch(
-    source: ConnectorSource, records: list[dict[str, Any]], connector_revision: int,
-    request_ref: CollectionRequestRef | None, cursor_before: str | None, collected_at: datetime,
+    source: ConnectorSource,
+    records: list[dict[str, Any]],
+    connector_revision: int,
+    request_ref: CollectionRequestRef | None,
+    cursor_before: str | None,
+    collected_at: datetime,
 ) -> ReceiveBatch:
     """Build the ingestion batch for already-capped ``records``.
 
@@ -309,21 +397,30 @@ def _build_batch(
     otherwise the key digests source, generation and collection time. Pure.
     """
     return ReceiveBatch(
-        source_id=source.id, source_generation=source.generation,
+        source_id=source.id,
+        source_generation=source.generation,
         connector_revision=connector_revision,
         batch_key=(
-            f"connector-request:{request_ref.request_id}" if request_ref is not None
+            f"connector-request:{request_ref.request_id}"
+            if request_ref is not None
             else "mcp:" + _digest(f"{source.id}:{source.generation}:{collected_at.isoformat()}")
         ),
-        cursor_before=cursor_before, cursor_after="mcp:" + collected_at.isoformat(),
+        cursor_before=cursor_before,
+        cursor_after="mcp:" + collected_at.isoformat(),
         records=records,
     )
 
 
 def _make_collector_current(
-    session_factory: async_sessionmaker[AsyncSession], source_id: UUID, expected_generation: int,
-    expected_connector_revision: int, fence: AccessFence,
-    *, collector_token: str | None, request_ref: CollectionRequestRef | None, scope: InternalJobScope,
+    session_factory: async_sessionmaker[AsyncSession],
+    source_id: UUID,
+    expected_generation: int,
+    expected_connector_revision: int,
+    fence: AccessFence,
+    *,
+    collector_token: str | None,
+    request_ref: CollectionRequestRef | None,
+    scope: InternalJobScope,
     multi_workspace_enabled: bool,
 ) -> Callable[[], Awaitable[bool]]:
     """Return the per-request authority check used at every MCP request/result fence.
@@ -333,13 +430,18 @@ def _make_collector_current(
     admission stops all further outbound requests) and re-runs ``_collection_fence`` against
     the access fence captured at admission. Denied statuses read as "not current".
     """
+
     async def collector_current() -> bool:
         """Recheck provisioning and optional n8n authority at every MCP request/result fence."""
         async with session_factory() as session:
             try:
                 if collector_token is not None and not await ingestion.collector_can_ingest(
-                    session, source_id, collector_token, credential_scope="mcp:collect",
-                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    session,
+                    source_id,
+                    collector_token,
+                    credential_scope="mcp:collect",
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                 ):
                     return False
             except (HTTPException, DomainError) as exc:
@@ -348,23 +450,37 @@ def _make_collector_current(
                 return False
             # An expired or replaced admission must stop every further outbound request.
             if request_ref is not None and not await scheduler.renew_admission(
-                session, request_ref.request_id, request_ref.admission_token,
+                session,
+                request_ref.request_id,
+                request_ref.admission_token,
                 multi_workspace_enabled=multi_workspace_enabled,
             ):
                 return False
-            return await _collection_fence(
-                session, source_id, expected_generation, expected_connector_revision,
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                expected_access_fence=fence,
-            ) is not None
+            return (
+                await _collection_fence(
+                    session,
+                    source_id,
+                    expected_generation,
+                    expected_connector_revision,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                    expected_access_fence=fence,
+                )
+                is not None
+            )
 
     return collector_current
 
 
 async def _load_collection_target(
-    session_factory: async_sessionmaker[AsyncSession], source_id: UUID, expected_connector_revision: int,
-    expected_generation: int, expected_connection_id: UUID | None,
-    *, scope: InternalJobScope, multi_workspace_enabled: bool,
+    session_factory: async_sessionmaker[AsyncSession],
+    source_id: UUID,
+    expected_connector_revision: int,
+    expected_generation: int,
+    expected_connection_id: UUID | None,
+    *,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
 ) -> tuple[ConnectorSource, McpCollectionConfig, AccessFence, str | None]:
     """Read and fence the Source in one short session; no lock outlives it.
 
@@ -375,7 +491,10 @@ async def _load_collection_target(
     async with session_factory() as session:
         try:
             source = await sources.get_connector_source(
-                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                source_id,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
         except (HTTPException, DomainError) as exc:
             if exc.status_code not in _DENIED:
@@ -392,21 +511,34 @@ async def _load_collection_target(
         if expected_connection_id is not None and config.connection_id != expected_connection_id:
             raise McpCollectionError("mcp_connection_stale")
         fence = await _collection_fence(
-            session, source_id, expected_generation, expected_connector_revision,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            source_id,
+            expected_generation,
+            expected_connector_revision,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         if fence is None:
             raise McpCollectionError("mcp_source_stale")
         cursor_before = await ingestion.get_source_cursor(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            source_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
     return source, config, fence, cursor_before
 
 
 async def _run_calls(
-    runtime: tools.McpRuntime, source: ConnectorSource, config: McpCollectionConfig,
-    collector_current: Callable[[], Awaitable[bool]], collected_at: datetime,
-    *, collector_token: str | None, scope: InternalJobScope, multi_workspace_enabled: bool,
+    runtime: tools.McpRuntime,
+    source: ConnectorSource,
+    config: McpCollectionConfig,
+    collector_current: Callable[[], Awaitable[bool]],
+    collected_at: datetime,
+    *,
+    collector_token: str | None,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Execute each allowlisted call once; a failed call never blocks the others.
 
@@ -421,9 +553,15 @@ async def _run_calls(
     for call in config.calls:
         try:
             read = await tools.read_collection_capability(
-                runtime, connection_id=config.connection_id, grant_id=call.grant_id,
-                source_id=source.id, source_generation=source.generation, arguments=call.arguments,
-                authorize_extra=collector_current, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                runtime,
+                connection_id=config.connection_id,
+                grant_id=call.grant_id,
+                source_id=source.id,
+                source_generation=source.generation,
+                arguments=call.arguments,
+                authorize_extra=collector_current,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
             records.extend(normalize(read, call.arguments, collected_at))
         except McpCollectionError:
@@ -440,30 +578,51 @@ async def _run_calls(
 
 
 async def _settle_no_changes(
-    session_factory: async_sessionmaker[AsyncSession], source: ConnectorSource, expected_generation: int,
-    expected_connector_revision: int, request_ref: CollectionRequestRef | None, fence: AccessFence,
-    *, scope: InternalJobScope, multi_workspace_enabled: bool,
+    session_factory: async_sessionmaker[AsyncSession],
+    source: ConnectorSource,
+    expected_generation: int,
+    expected_connector_revision: int,
+    request_ref: CollectionRequestRef | None,
+    fence: AccessFence,
+    *,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Record a no-change outcome: the admitted request settles itself, else the Source records it."""
     if request_ref is not None:
         # The admitted request settles itself with the no-change proof (health, receipt, slot).
         async with session_factory() as session:
             await ingestion.accept_collection_no_changes(
-                session, source_id=source.id, source_generation=expected_generation,
-                connector_revision=expected_connector_revision, request_ref=request_ref,
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                source_id=source.id,
+                source_generation=expected_generation,
+                connector_revision=expected_connector_revision,
+                request_ref=request_ref,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             )
     else:
         await _record_result(
-            session_factory, source, None, no_changes=True,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=fence,
+            session_factory,
+            source,
+            None,
+            no_changes=True,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=fence,
         )
 
 
 async def _submit_batch(
-    session_factory: async_sessionmaker[AsyncSession], batch: ReceiveBatch, expected_generation: int,
-    expected_connector_revision: int, request_ref: CollectionRequestRef | None, fence: AccessFence,
-    *, scope: InternalJobScope, multi_workspace_enabled: bool,
+    session_factory: async_sessionmaker[AsyncSession],
+    batch: ReceiveBatch,
+    expected_generation: int,
+    expected_connector_revision: int,
+    request_ref: CollectionRequestRef | None,
+    fence: AccessFence,
+    *,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
 ) -> Receipt:
     """Re-fence, then submit the batch with exactly one proof (request ref or a minted credential).
 
@@ -474,26 +633,43 @@ async def _submit_batch(
     token: str | None = None
     try:
         async with session_factory() as session:
-            if await _collection_fence(
-                session, source_id, expected_generation, expected_connector_revision,
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                expected_access_fence=fence,
-            ) is None:
+            if (
+                await _collection_fence(
+                    session,
+                    source_id,
+                    expected_generation,
+                    expected_connector_revision,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                    expected_access_fence=fence,
+                )
+                is None
+            ):
                 raise McpCollectionError("mcp_source_stale")
             if request_ref is None:
                 token = await ingestion.create_collector_credential(
-                    session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    session,
+                    source_id,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                 )
             # Exactly one proof: the request ref, or the minted credential, never both.
             receipt: Receipt = await ingestion.receive_connector_batch(
-                session, batch, token, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                batch,
+                token,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
                 request_ref=request_ref,
             )
     finally:
         if token is not None:
             async with session_factory() as session:
                 await ingestion.revoke_collector_credential(
-                    session, token, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    session,
+                    token,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                 )
                 await session.commit()
     return receipt
@@ -504,7 +680,8 @@ async def _collection_fence(
     source_id: UUID,
     source_generation: int,
     connector_revision: int,
-    *, scope: InternalJobScope,
+    *,
+    scope: InternalJobScope,
     multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> AccessFence | None:
@@ -521,26 +698,46 @@ async def _collection_fence(
 
     try:
         access_fence = await lock_access_fence(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
             expected=expected_access_fence,
         )
-        if await sources.lock_source(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            expected_access_fence=access_fence,
-        ) is None:
+        if (
+            await sources.lock_source(
+                session,
+                source_id,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                expected_access_fence=access_fence,
+            )
+            is None
+        ):
             return None
         source = await sources.get_connector_source(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            source_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
-        current = (source is not None
-                and await module_is_enabled(
-                    session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-                and await module_is_enabled(
-                    session, "tools", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-                and await provisioning.require_collection_fence(
-                    session, source, source_generation, connector_revision, lock=True,
-                    scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                ))
+        current = (
+            source is not None
+            and await module_is_enabled(
+                session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            )
+            and await module_is_enabled(
+                session, "tools", scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            )
+            and await provisioning.require_collection_fence(
+                session,
+                source,
+                source_generation,
+                connector_revision,
+                lock=True,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        )
         return access_fence if current else None
     except (HTTPException, DomainError) as exc:
         if exc.status_code not in _DENIED:
@@ -553,23 +750,35 @@ async def _fence_current(
     source_id: UUID,
     source_generation: int,
     connector_revision: int,
-    *, scope: InternalJobScope,
+    *,
+    scope: InternalJobScope,
     multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> bool:
     """Check the current source generation and applied provisioning fence in a fresh session."""
     async with session_factory() as session:
-        return await _collection_fence(
-            session, source_id, source_generation, connector_revision,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            expected_access_fence=expected_access_fence,
-        ) is not None
+        return (
+            await _collection_fence(
+                session,
+                source_id,
+                source_generation,
+                connector_revision,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                expected_access_fence=expected_access_fence,
+            )
+            is not None
+        )
 
 
 async def _record_result(
-    session_factory: async_sessionmaker[AsyncSession], source: ConnectorSource,
-    error_code: str | None, *, no_changes: bool = False,
-    scope: InternalJobScope, multi_workspace_enabled: bool,
+    session_factory: async_sessionmaker[AsyncSession],
+    source: ConnectorSource,
+    error_code: str | None,
+    *,
+    no_changes: bool = False,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
     expected_access_fence: AccessFence | None = None,
 ) -> None:
     """Persist a collection outcome on the source when its generation is still current.
@@ -580,23 +789,46 @@ async def _record_result(
     async with session_factory() as session:
         try:
             access_fence = await lock_access_fence(
-                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
                 expected=expected_access_fence,
             )
             if await sources.record_collection_result(
-                session, source.id, source.generation, datetime.now(UTC), error_code,
-                no_changes=no_changes, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                source.id,
+                source.generation,
+                datetime.now(UTC),
+                error_code,
+                no_changes=no_changes,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
                 expected_access_fence=access_fence,
             ):
                 current = await sources.lock_source(
-                    session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    session,
+                    source.id,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                     expected_access_fence=access_fence,
                 )
-                drafts = [make_source_change(
-                    current.id, current.generation, current.status, scope=scope,
-                )] if current else []
+                drafts = (
+                    [
+                        make_source_change(
+                            current.id,
+                            current.generation,
+                            current.status,
+                            scope=scope,
+                        )
+                    ]
+                    if current
+                    else []
+                )
                 await commit_with_replay(
-                    session, drafts, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                    session,
+                    drafts,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
                     access_fence=access_fence,
                 )
         except (HTTPException, DomainError) as exc:

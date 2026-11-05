@@ -54,10 +54,19 @@ REENQUEUE_AFTER = timedelta(minutes=5)  # lost Redis job: the durable row is enq
 TICK_WORKSPACES = 50
 # Failures that need owner action: never auto-retried, they gate the source's schedule.
 # The value is the blocked dimension; clear_collection_block re-opens it once that dimension moves.
-ACTION_REQUIRED = {"invalid_credential": "credential", "credential_missing": "credential", "schema_changed": "config", "terms_not_accepted": "terms"}
+ACTION_REQUIRED = {
+    "invalid_credential": "credential",
+    "credential_missing": "credential",
+    "schema_changed": "config",
+    "terms_not_accepted": "terms",
+}
 _FREE_SLOT = {
-    "occupied_request_id": None, "workspace_id": None, "admission_token": None,
-    "lease_kind": None, "source_owner_id": None, "expires_at": None,
+    "occupied_request_id": None,
+    "workspace_id": None,
+    "admission_token": None,
+    "lease_kind": None,
+    "source_owner_id": None,
+    "expires_at": None,
 }
 Outcome = Literal["succeeded", "no_changes", "failed", "cancelled", "deferred"]
 
@@ -78,8 +87,11 @@ def next_due_after(now: datetime, due: datetime, interval_minutes: int) -> datet
 def _read(request: ConnectorCollectionRequest) -> CollectionRequestRead:
     """Project a request row to its public DTO."""
     return CollectionRequestRead(
-        request_id=request.id, source_id=request.source_id, status=request.status,
-        ingestion_run_id=request.ingestion_run_id, error_code=request.error_code,
+        request_id=request.id,
+        source_id=request.source_id,
+        status=request.status,
+        ingestion_run_id=request.ingestion_run_id,
+        error_code=request.error_code,
     )
 
 
@@ -91,14 +103,21 @@ def denial_code(exc: HTTPException | DomainError) -> str:
 def _request_scope(request: ConnectorCollectionRequest) -> InternalJobScope:
     """Rebuild the worker subject from the durable request, never from queued arguments."""
     return InternalJobScope(
-        workspace_id=request.workspace_id, actor_user_id=request.actor_user_id,
+        workspace_id=request.workspace_id,
+        actor_user_id=request.actor_user_id,
         membership_revision=request.membership_revision,
-        source_id=request.source_id, source_generation=request.source_generation,
+        source_id=request.source_id,
+        source_generation=request.source_generation,
     )
 
 
 async def upsert_schedule(
-    session: AsyncSession, *, workspace_id: UUID, source_id: UUID, interval_minutes: int, enabled: bool,
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    source_id: UUID,
+    interval_minutes: int,
+    enabled: bool,
 ) -> None:
     """Create or update a source schedule; activation owners call it, the caller commits.
 
@@ -107,10 +126,15 @@ async def upsert_schedule(
     now = datetime.now(UTC)
     row = await session.get(ConnectorSchedule, source_id, with_for_update=True)
     if row is None:
-        session.add(ConnectorSchedule(
-            source_id=source_id, workspace_id=workspace_id, enabled=enabled,
-            interval_minutes=interval_minutes, next_due_at=now,
-        ))
+        session.add(
+            ConnectorSchedule(
+                source_id=source_id,
+                workspace_id=workspace_id,
+                enabled=enabled,
+                interval_minutes=interval_minutes,
+                next_due_at=now,
+            )
+        )
     else:
         row.enabled = enabled
         row.interval_minutes = interval_minutes
@@ -118,8 +142,14 @@ async def upsert_schedule(
 
 
 async def _open_request(
-    session: AsyncSession, scope: Scope, source_id: UUID, trigger: CollectionTrigger,
-    expected_revision: int | None, *, multi_workspace_enabled: bool, existing_first: bool = False,
+    session: AsyncSession,
+    scope: Scope,
+    source_id: UUID,
+    trigger: CollectionTrigger,
+    expected_revision: int | None,
+    *,
+    multi_workspace_enabled: bool,
+    existing_first: bool = False,
 ) -> ConnectorCollectionRequest:
     """Validate fences under Source/provisioning locks and return the coalesced active request.
 
@@ -131,45 +161,72 @@ async def _open_request(
     """
     from modules.sources import public as sources
 
-    await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    await connectors._connector_access(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     source_fence, row, _ = await provisioning.lock_connector(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     source = await sources.get_connector_source(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if source_fence is None or source is None:
         raise NotFoundError("Source not found")
     if (
-        source.status != "active" or row is None or row.state != "active"
-        or row.source_generation != source.generation or row.applied_revision != row.desired_revision
+        source.status != "active"
+        or row is None
+        or row.state != "active"
+        or row.source_generation != source.generation
+        or row.applied_revision != row.desired_revision
     ):
         raise ConflictError("Enable this source from connector settings before collecting")
     if expected_revision is not None and expected_revision != row.desired_revision:
         raise ConflictError("Connector revision changed")
     if not await connectors.require_collection_fence(
-        session, source, connectors.CollectionFence(
-            source_generation=source.generation, connector_revision=row.desired_revision,
-            backend_revision=row.backend_revision),
-        lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source,
+        connectors.CollectionFence(
+            source_generation=source.generation,
+            connector_revision=row.desired_revision,
+            backend_revision=row.backend_revision,
+        ),
+        lock=True,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     ):
         raise ConflictError("Connector collection fence is stale")
 
     now = datetime.now(UTC)
     active = await session.scalar(
-        select(ConnectorCollectionRequest).where(
+        select(ConnectorCollectionRequest)
+        .where(
             ConnectorCollectionRequest.source_id == source_id,
             ConnectorCollectionRequest.status.in_(("queued", "running")),
-        ).with_for_update().execution_options(populate_existing=True))
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     schedule = await session.scalar(
-        select(ConnectorSchedule).where(ConnectorSchedule.source_id == source_id)
-        .with_for_update().execution_options(populate_existing=True))
+        select(ConnectorSchedule)
+        .where(ConnectorSchedule.source_id == source_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if schedule is not None and schedule.blocked_error_code is not None:
         raise ConflictError(f"Action required: {schedule.blocked_error_code}")
     # Terms/eligibility gate for manual, scheduled and retry alike, before any queueing or network.
     terms_revision = await provider_terms.require_terms_eligible(session, source)
-    if active is not None and active.status == "queued" and (
-        active.terms_revision != terms_revision or active.credential_revision != row.credential_revision
-        or active.source_generation != source.generation or active.connector_revision != row.desired_revision
-        or active.backend_revision != row.backend_revision or active.captured_backend != row.execution_backend
+    if (
+        active is not None
+        and active.status == "queued"
+        and (
+            active.terms_revision != terms_revision
+            or active.credential_revision != row.credential_revision
+            or active.source_generation != source.generation
+            or active.connector_revision != row.desired_revision
+            or active.backend_revision != row.backend_revision
+            or active.captured_backend != row.execution_backend
+        )
     ):
         active.status, active.error_code = "cancelled", "revision_changed"
         await session.flush()  # free the partial-unique slot before the replacement insert
@@ -177,23 +234,39 @@ async def _open_request(
     if active is not None and existing_first:
         return active
     if trigger == "scheduled":
-        if schedule is None or not schedule.enabled or schedule.next_due_at > now or (
-            schedule.next_eligible_at is not None and schedule.next_eligible_at > now
+        if (
+            schedule is None
+            or not schedule.enabled
+            or schedule.next_due_at > now
+            or (schedule.next_eligible_at is not None and schedule.next_eligible_at > now)
         ):
             raise ConflictError("Collection is not due")
         schedule.next_due_at = next_due_after(now, schedule.next_due_at, schedule.interval_minutes)
         schedule.last_dispatch_at = now
     if active is not None:
         return active
-    if schedule is not None and schedule.next_eligible_at is not None and schedule.next_eligible_at > now:
+    if (
+        schedule is not None
+        and schedule.next_eligible_at is not None
+        and schedule.next_eligible_at > now
+    ):
         raise RateLimitedError("Provider asked to retry later")
     request = ConnectorCollectionRequest(
-        id=uuid7(), workspace_id=scope.workspace_id,
-        source_id=source_id, actor_user_id=connectors._connector_actor(scope),
-        membership_revision=scope.membership_revision, trigger=trigger,
-        source_generation=source.generation, connector_revision=row.desired_revision,
-        backend_revision=row.backend_revision, captured_backend=row.execution_backend,
-        status="queued", attempt=0, available_at=now, enqueue_next_at=now, terms_revision=terms_revision,
+        id=uuid7(),
+        workspace_id=scope.workspace_id,
+        source_id=source_id,
+        actor_user_id=connectors._connector_actor(scope),
+        membership_revision=scope.membership_revision,
+        trigger=trigger,
+        source_generation=source.generation,
+        connector_revision=row.desired_revision,
+        backend_revision=row.backend_revision,
+        captured_backend=row.execution_backend,
+        status="queued",
+        attempt=0,
+        available_at=now,
+        enqueue_next_at=now,
+        terms_revision=terms_revision,
         credential_revision=row.credential_revision,
     )
     session.add(request)
@@ -202,14 +275,24 @@ async def _open_request(
 
 
 async def request_collection(
-    session: AsyncSession, scope: Scope, source_id: UUID, trigger: CollectionTrigger,
-    expected_revision: int, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    scope: Scope,
+    source_id: UUID,
+    trigger: CollectionTrigger,
+    expected_revision: int,
+    *,
+    multi_workspace_enabled: bool,
 ) -> CollectionRequestRead:
     """Persist (or coalesce into) one durable request for an owner; the worker picks it up later."""
     try:
         request = await _open_request(
-            session, scope, source_id, trigger, expected_revision,
-            multi_workspace_enabled=multi_workspace_enabled)
+            session,
+            scope,
+            source_id,
+            trigger,
+            expected_revision,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
         result = _read(request)
         await session.commit()
     except BaseException:
@@ -219,17 +302,26 @@ async def request_collection(
 
 
 async def get_collection_request(
-    session: AsyncSession, scope: Scope, source_id: UUID, request_id: UUID, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    scope: Scope,
+    source_id: UUID,
+    request_id: UUID,
+    *,
+    multi_workspace_enabled: bool,
 ) -> CollectionRequestRead:
     """Read a request after proving owner access to its source; no row locks."""
     source = await connectors._read_scoped_source(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     request = await session.scalar(
-        select(ConnectorCollectionRequest).where(
+        select(ConnectorCollectionRequest)
+        .where(
             ConnectorCollectionRequest.id == request_id,
             ConnectorCollectionRequest.source_id == source_id,
             ConnectorCollectionRequest.workspace_id == scope.workspace_id,
-        ).execution_options(populate_existing=True))
+        )
+        .execution_options(populate_existing=True)
+    )
     if source is None or request is None:
         raise NotFoundError("Collection request not found")
     return _read(request)
@@ -240,8 +332,12 @@ async def _defer(session: AsyncSession, request_id: UUID, delay: timedelta) -> N
     when = datetime.now(UTC) + delay
     await session.execute(
         update(ConnectorCollectionRequest)
-        .where(ConnectorCollectionRequest.id == request_id, ConnectorCollectionRequest.status == "queued")
-        .values(available_at=when, enqueue_next_at=when))
+        .where(
+            ConnectorCollectionRequest.id == request_id,
+            ConnectorCollectionRequest.status == "queued",
+        )
+        .values(available_at=when, enqueue_next_at=when)
+    )
     await session.commit()
 
 
@@ -253,13 +349,22 @@ def _penalize(schedule: ConnectorSchedule | None, until: datetime | None) -> Non
 
 
 async def _stale_reason(
-    session: AsyncSession, request: ConnectorCollectionRequest, scope: InternalJobScope,
-    source_fence: object, source: object, row: ConnectorProvisioning | None, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    request: ConnectorCollectionRequest,
+    scope: InternalJobScope,
+    source_fence: object,
+    source: object,
+    row: ConnectorProvisioning | None,
+    *,
+    multi_workspace_enabled: bool,
 ) -> str | None:
     """Return why a request may no longer send (source_inactive/revision_changed), or None if current."""
     if (
-        source_fence is None or source is None or getattr(source, "status", None) != "active"
-        or row is None or row.state != "active"
+        source_fence is None
+        or source is None
+        or getattr(source, "status", None) != "active"
+        or row is None
+        or row.state != "active"
     ):
         return "source_inactive"
     if not (
@@ -269,18 +374,29 @@ async def _stale_reason(
         and row.execution_backend == request.captured_backend
         and row.backend_revision == request.backend_revision
         and await connectors.require_collection_fence(
-            session, source, connectors.CollectionFence(  # type: ignore[arg-type]
-                source_generation=request.source_generation, connector_revision=request.connector_revision,
-                backend_revision=request.backend_revision),
-            lock=True, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            session,
+            source,  # type: ignore[arg-type]
+            connectors.CollectionFence(
+                source_generation=request.source_generation,
+                connector_revision=request.connector_revision,
+                backend_revision=request.backend_revision,
+            ),
+            lock=True,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     ):
         return "revision_changed"
     return None
 
 
 async def _lock_admission_rows(
-    session: AsyncSession, request_id: UUID, source_id: UUID, scope: InternalJobScope,
-    *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    request_id: UUID,
+    source_id: UUID,
+    scope: InternalJobScope,
+    *,
+    multi_workspace_enabled: bool,
 ) -> tuple[tuple[Any, Any, Any, ConnectorCollectionRequest | None] | None, str | None]:
     """Re-admit the request's recorded principal and lock Source, provisioning and request rows.
 
@@ -294,19 +410,29 @@ async def _lock_admission_rows(
 
     for resolve in (1, 2):  # a 409 is re-resolved once, then becomes terminal stale_scope
         try:
-            await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            await connectors._connector_access(
+                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            )
             if not await module_is_enabled(
-                session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+                session,
+                "connectors",
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
             ):
                 await session.rollback()
                 return None, None
             source_fence, row, _ = await provisioning.lock_connector(
-                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            )
             source = await sources.get_connector_source(
-                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+                session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+            )
             request = await session.scalar(
-                select(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id == request_id)
-                .with_for_update().execution_options(populate_existing=True))
+                select(ConnectorCollectionRequest)
+                .where(ConnectorCollectionRequest.id == request_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
             return (source_fence, row, source, request), None
         except (DomainError, HTTPException) as exc:
             await session.rollback()
@@ -317,7 +443,9 @@ async def _lock_admission_rows(
 
 
 async def _select_admission_slot(
-    session: AsyncSession, request: ConnectorCollectionRequest, now: datetime,
+    session: AsyncSession,
+    request: ConnectorCollectionRequest,
+    now: datetime,
 ) -> ConnectorAdmissionSlot | None:
     """Pick a free global admission slot for the request, or None when it must be deferred.
 
@@ -328,21 +456,41 @@ async def _select_admission_slot(
     from modules.ingestion.public import SourceIngestionStateReadProjection as SourceIngestionState
 
     state = await session.scalar(
-        select(SourceIngestionState).where(SourceIngestionState.source_id == request.source_id)
-        .execution_options(populate_existing=True))
+        select(SourceIngestionState)
+        .where(SourceIngestionState.source_id == request.source_id)
+        .execution_options(populate_existing=True)
+    )
     workspace_busy = await session.scalar(
-        select(ConnectorAdmissionSlot.slot_id).where(ConnectorAdmissionSlot.workspace_id == request.workspace_id))
-    slot = None if (
-        workspace_busy is not None
-        or (state is not None and state.lease_expires_at is not None and state.lease_expires_at > now)
-    ) else await session.scalar(
-        select(ConnectorAdmissionSlot).where(ConnectorAdmissionSlot.occupied_request_id.is_(None))
-        .order_by(ConnectorAdmissionSlot.slot_id).limit(1).with_for_update(skip_locked=True))
+        select(ConnectorAdmissionSlot.slot_id).where(
+            ConnectorAdmissionSlot.workspace_id == request.workspace_id
+        )
+    )
+    slot = (
+        None
+        if (
+            workspace_busy is not None
+            or (
+                state is not None
+                and state.lease_expires_at is not None
+                and state.lease_expires_at > now
+            )
+        )
+        else await session.scalar(
+            select(ConnectorAdmissionSlot)
+            .where(ConnectorAdmissionSlot.occupied_request_id.is_(None))
+            .order_by(ConnectorAdmissionSlot.slot_id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+    )
     return slot
 
 
 async def admit_collection_request(
-    session: AsyncSession, request_id: UUID, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    request_id: UUID,
+    *,
+    multi_workspace_enabled: bool,
 ) -> CollectionAdmissionRead | None:
     """Claim a global slot and move one queued request to running, or return None.
 
@@ -357,15 +505,20 @@ async def admit_collection_request(
     source_id = peek.source_id
     await session.rollback()
     rows, denied = await _lock_admission_rows(
-        session, request_id, source_id, scope, multi_workspace_enabled=multi_workspace_enabled)
+        session, request_id, source_id, scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if rows is None and denied is None:
         return None  # module disabled: the durable request is untouched until it is re-enabled
     if denied is not None:
         # Lost permission or stale scope: terminal, no retry, no data exposed.
         await session.execute(
             update(ConnectorCollectionRequest)
-            .where(ConnectorCollectionRequest.id == request_id, ConnectorCollectionRequest.status == "queued")
-            .values(status="cancelled", error_code=denied))
+            .where(
+                ConnectorCollectionRequest.id == request_id,
+                ConnectorCollectionRequest.status == "queued",
+            )
+            .values(status="cancelled", error_code=denied)
+        )
         await session.commit()
         return None
     if rows is None:
@@ -376,12 +529,22 @@ async def admit_collection_request(
         await session.rollback()
         return None
     stale = await _stale_reason(
-        session, request, scope, source_fence, source, row, multi_workspace_enabled=multi_workspace_enabled)
+        session,
+        request,
+        scope,
+        source_fence,
+        source,
+        row,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     if stale is not None or request.attempt >= MAX_ATTEMPTS:
         request.status = "cancelled" if stale else "failed"
         request.error_code = stale or "attempts_exhausted"
         if stale is None:
-            _penalize(await session.get(ConnectorSchedule, source_id, with_for_update=True), request.provider_deadline)
+            _penalize(
+                await session.get(ConnectorSchedule, source_id, with_for_update=True),
+                request.provider_deadline,
+            )
         await session.commit()
         return None
     slot = await _select_admission_slot(session, request, now)
@@ -393,7 +556,8 @@ async def admit_collection_request(
             if get_realtime_tier(
                 getattr(source, "provider", None),
                 getattr(source, "configuration", None),
-            ) == "realtime"
+            )
+            == "realtime"
             else BUSY_DEFER
         )
         await session.rollback()
@@ -417,14 +581,21 @@ async def admit_collection_request(
         await _defer(session, request_id, BUSY_DEFER)
         return None
     result = CollectionAdmissionRead(
-        request_id=request.id, source_id=source_id, admission_token=token, attempt=request.attempt)
+        request_id=request.id, source_id=source_id, admission_token=token, attempt=request.attempt
+    )
     await session.commit()
     return result
 
 
 async def lock_running_request_in_uow(
-    session: AsyncSession, request_id: UUID, admission_token: UUID, *, source_id: UUID,
-    source_generation: int, connector_revision: int, workspace_id: UUID,
+    session: AsyncSession,
+    request_id: UUID,
+    admission_token: UUID,
+    *,
+    source_id: UUID,
+    source_generation: int,
+    connector_revision: int,
+    workspace_id: UUID,
 ) -> bool:
     """Lock the request row and prove this exact attempt may still publish; no commit.
 
@@ -433,24 +604,37 @@ async def lock_running_request_in_uow(
     False, so an old worker can never publish results or advance a cursor.
     """
     request = await session.scalar(
-        select(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id == request_id)
-        .with_for_update().execution_options(populate_existing=True))
+        select(ConnectorCollectionRequest)
+        .where(ConnectorCollectionRequest.id == request_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if (
-        request is None or request.status != "running" or request.active_admission_token != admission_token
-        or request.source_id != source_id or request.workspace_id != workspace_id
-        or request.source_generation != source_generation or request.connector_revision != connector_revision
+        request is None
+        or request.status != "running"
+        or request.active_admission_token != admission_token
+        or request.source_id != source_id
+        or request.workspace_id != workspace_id
+        or request.source_generation != source_generation
+        or request.connector_revision != connector_revision
     ):
         return False
     slot = await session.scalar(
         select(ConnectorAdmissionSlot.slot_id).where(
             ConnectorAdmissionSlot.occupied_request_id == request_id,
             ConnectorAdmissionSlot.admission_token == admission_token,
-            ConnectorAdmissionSlot.expires_at > datetime.now(UTC)))
+            ConnectorAdmissionSlot.expires_at > datetime.now(UTC),
+        )
+    )
     return slot is not None
 
 
 async def renew_admission(
-    session: AsyncSession, request_id: UUID, admission_token: UUID, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    request_id: UUID,
+    admission_token: UUID,
+    *,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Extend a still-valid, still-current slot to now+120 s; never resurrect expired occupancy.
 
@@ -470,24 +654,44 @@ async def renew_admission(
     await session.rollback()
     reason: str | None = None
     try:
-        await connectors._connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        await connectors._connector_access(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
         source_fence, row, _ = await provisioning.lock_connector(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
         source = await sources.get_connector_source(
-            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+            session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
         request = await session.scalar(
-            select(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id == request_id)
-            .with_for_update().execution_options(populate_existing=True))
-        if request is None or request.status != "running" or request.active_admission_token != admission_token:
+            select(ConnectorCollectionRequest)
+            .where(ConnectorCollectionRequest.id == request_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if (
+            request is None
+            or request.status != "running"
+            or request.active_admission_token != admission_token
+        ):
             await session.rollback()
             return False
         reason = await _stale_reason(
-            session, request, scope, source_fence, source, row, multi_workspace_enabled=multi_workspace_enabled)
+            session,
+            request,
+            scope,
+            source_fence,
+            source,
+            row,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
     except (DomainError, HTTPException) as exc:
         reason = denial_code(exc)
     if reason is not None:
         await session.rollback()
-        await settle_admission(session, request_id, admission_token, outcome="cancelled", error_code=reason)
+        await settle_admission(
+            session, request_id, admission_token, outcome="cancelled", error_code=reason
+        )
         return False
     now = datetime.now(UTC)
     result = await session.execute(
@@ -495,16 +699,24 @@ async def renew_admission(
         .where(
             ConnectorAdmissionSlot.occupied_request_id == request_id,
             ConnectorAdmissionSlot.admission_token == admission_token,
-            ConnectorAdmissionSlot.expires_at > now)
-        .values(expires_at=now + SLOT_TTL))
+            ConnectorAdmissionSlot.expires_at > now,
+        )
+        .values(expires_at=now + SLOT_TTL)
+    )
     await session.commit()
     return bool(getattr(result, "rowcount", 0))
 
 
 async def settle_admission_in_uow(
-    session: AsyncSession, request_id: UUID, admission_token: UUID, *, outcome: Outcome,
-    error_code: str | None = None, ingestion_run_id: UUID | None = None,
-    retryable: bool = False, provider_deadline: datetime | None = None,
+    session: AsyncSession,
+    request_id: UUID,
+    admission_token: UUID,
+    *,
+    outcome: Outcome,
+    error_code: str | None = None,
+    ingestion_run_id: UUID | None = None,
+    retryable: bool = False,
+    provider_deadline: datetime | None = None,
     accepted_receipt_id: UUID | None = None,
 ) -> bool:
     """Flush a request outcome and free its slot if the token is still current; no commit.
@@ -514,24 +726,41 @@ async def settle_admission_in_uow(
     schedule instead of retrying; deferral refunds the attempt.
     """
     request = await session.scalar(
-        select(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id == request_id)
-        .with_for_update().execution_options(populate_existing=True))
-    if request is None or request.status != "running" or request.active_admission_token != admission_token:
+        select(ConnectorCollectionRequest)
+        .where(ConnectorCollectionRequest.id == request_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        request is None
+        or request.status != "running"
+        or request.active_admission_token != admission_token
+    ):
         return False
     await session.execute(
         update(ConnectorAdmissionSlot)
-        .where(ConnectorAdmissionSlot.occupied_request_id == request_id,
-               ConnectorAdmissionSlot.admission_token == admission_token)
-        .values(**_FREE_SLOT))
+        .where(
+            ConnectorAdmissionSlot.occupied_request_id == request_id,
+            ConnectorAdmissionSlot.admission_token == admission_token,
+        )
+        .values(**_FREE_SLOT)
+    )
     schedule = await session.scalar(
-        select(ConnectorSchedule).where(ConnectorSchedule.source_id == request.source_id)
-        .with_for_update().execution_options(populate_existing=True))
+        select(ConnectorSchedule)
+        .where(ConnectorSchedule.source_id == request.source_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     now = datetime.now(UTC)
     request.active_admission_token = None
     if provider_deadline is not None:
         request.provider_deadline = provider_deadline
     if outcome in ("succeeded", "no_changes"):
-        request.status, request.error_code, request.ingestion_run_id = outcome, None, ingestion_run_id
+        request.status, request.error_code, request.ingestion_run_id = (
+            outcome,
+            None,
+            ingestion_run_id,
+        )
         request.accepted_receipt_id = accepted_receipt_id
         if schedule is not None:
             schedule.failure_count, schedule.next_eligible_at = 0, None
@@ -539,7 +768,9 @@ async def settle_admission_in_uow(
         request.status, request.error_code = "cancelled", error_code
     elif outcome == "deferred":
         request.status, request.attempt = "queued", max(request.attempt - 1, 0)
-        request.available_at = request.enqueue_next_at = max(now + BUSY_DEFER, request.provider_deadline or now)
+        request.available_at = request.enqueue_next_at = max(
+            now + BUSY_DEFER, request.provider_deadline or now
+        )
     elif error_code in ACTION_REQUIRED:
         request.status, request.error_code = "failed", error_code
         if schedule is not None:
@@ -550,7 +781,9 @@ async def settle_admission_in_uow(
             schedule.blocked_terms_revision = request.terms_revision
     elif retryable and request.attempt < MAX_ATTEMPTS:
         request.status, request.error_code = "queued", error_code
-        request.available_at = request.enqueue_next_at = retry_at(now, request.attempt, request.provider_deadline)
+        request.available_at = request.enqueue_next_at = retry_at(
+            now, request.attempt, request.provider_deadline
+        )
     else:
         request.status, request.error_code = "failed", error_code or "failed"
         _penalize(schedule, request.provider_deadline)
@@ -565,7 +798,9 @@ async def recoverable_request_ids(session: AsyncSession, request_ids: list[UUID]
     rows = await session.scalars(
         select(ConnectorCollectionRequest.id).where(
             ConnectorCollectionRequest.id.in_(request_ids),
-            ConnectorCollectionRequest.status.in_(("queued", "running"))))
+            ConnectorCollectionRequest.status.in_(("queued", "running")),
+        )
+    )
     return set(rows)
 
 
@@ -574,7 +809,9 @@ SEND_RETENTION = timedelta(days=7)
 QUOTA_WINDOW_RETENTION = timedelta(days=1)
 
 
-async def purge_collection_history(session: AsyncSession, *, now: datetime | None = None, limit: int = 1000) -> int:
+async def purge_collection_history(
+    session: AsyncSession, *, now: datetime | None = None, limit: int = 1000
+) -> int:
     """Delete one bounded slice of finished collection bookkeeping; the caller commits.
 
     Every poll leaves one request plus one to three provider sends and debits, so these grow forever.
@@ -586,12 +823,21 @@ async def purge_collection_history(session: AsyncSession, *, now: datetime | Non
     this pass can go in the same pass. Returns the total rows deleted, debits excluded.
     """
     now = now or datetime.now(UTC)
-    req = select(ConnectorCollectionRequest.id).where(
-        ConnectorCollectionRequest.status.in_(("succeeded", "no_changes", "failed", "cancelled")),
-        ConnectorCollectionRequest.updated_at < now - REQUEST_RETENTION,
-    ).limit(limit)
-    sends = select(ConnectorProviderSend.send_id).where(
-        ConnectorProviderSend.created_at < now - SEND_RETENTION).limit(limit)
+    req = (
+        select(ConnectorCollectionRequest.id)
+        .where(
+            ConnectorCollectionRequest.status.in_(
+                ("succeeded", "no_changes", "failed", "cancelled")
+            ),
+            ConnectorCollectionRequest.updated_at < now - REQUEST_RETENTION,
+        )
+        .limit(limit)
+    )
+    sends = (
+        select(ConnectorProviderSend.send_id)
+        .where(ConnectorProviderSend.created_at < now - SEND_RETENTION)
+        .limit(limit)
+    )
     deleted = 0
     for statement in (
         delete(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id.in_(req)),
@@ -605,23 +851,34 @@ async def purge_collection_history(session: AsyncSession, *, now: datetime | Non
         ConnectorQuotaDebit.policy_key == ConnectorQuotaWindow.policy_key,
         ConnectorQuotaDebit.window_start == ConnectorQuotaWindow.window_start,
     )
-    keys = select(
-        ConnectorQuotaWindow.provider_id, ConnectorQuotaWindow.budget_kind, ConnectorQuotaWindow.subject_hash,
-        ConnectorQuotaWindow.policy_key, ConnectorQuotaWindow.window_start,
-    ).where(ConnectorQuotaWindow.window_end < now - QUOTA_WINDOW_RETENTION, ~debited).limit(limit)
+    keys = (
+        select(
+            ConnectorQuotaWindow.provider_id,
+            ConnectorQuotaWindow.budget_kind,
+            ConnectorQuotaWindow.subject_hash,
+            ConnectorQuotaWindow.policy_key,
+            ConnectorQuotaWindow.window_start,
+        )
+        .where(ConnectorQuotaWindow.window_end < now - QUOTA_WINDOW_RETENTION, ~debited)
+        .limit(limit)
+    )
     doomed = (await session.execute(keys)).all()
     for row in doomed:  # composite PK: delete by key tuples, at most ``limit`` of them
-        await session.execute(delete(ConnectorQuotaWindow).where(
-            ConnectorQuotaWindow.provider_id == row.provider_id,
-            ConnectorQuotaWindow.budget_kind == row.budget_kind,
-            ConnectorQuotaWindow.subject_hash == row.subject_hash,
-            ConnectorQuotaWindow.policy_key == row.policy_key,
-            ConnectorQuotaWindow.window_start == row.window_start,
-        ))
+        await session.execute(
+            delete(ConnectorQuotaWindow).where(
+                ConnectorQuotaWindow.provider_id == row.provider_id,
+                ConnectorQuotaWindow.budget_kind == row.budget_kind,
+                ConnectorQuotaWindow.subject_hash == row.subject_hash,
+                ConnectorQuotaWindow.policy_key == row.policy_key,
+                ConnectorQuotaWindow.window_start == row.window_start,
+            )
+        )
     return deleted + len(doomed)
 
 
-async def settle_admission(session: AsyncSession, request_id: UUID, admission_token: UUID, **kwargs: object) -> bool:
+async def settle_admission(
+    session: AsyncSession, request_id: UUID, admission_token: UUID, **kwargs: object
+) -> bool:
     """Settle and commit; used where no ingestion transaction composes the outcome."""
     try:
         settled = await settle_admission_in_uow(session, request_id, admission_token, **kwargs)  # type: ignore[arg-type]
@@ -633,8 +890,12 @@ async def settle_admission(session: AsyncSession, request_id: UUID, admission_to
 
 
 async def clear_collection_block(
-    session: AsyncSession, source_id: UUID, *, connector_revision: int | None = None,
-    credential_revision: int | None = None, terms_revision: int | None = None,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    connector_revision: int | None = None,
+    credential_revision: int | None = None,
+    terms_revision: int | None = None,
     workspace_id: UUID | None = None,
 ) -> bool:
     """Lift an action-required gate; flush only, the caller commits (C4/P1 call this).
@@ -649,9 +910,14 @@ async def clear_collection_block(
         return False
     if workspace_id is not None and schedule.workspace_id != workspace_id:
         return False
-    now_revision = {"config": connector_revision, "credential": credential_revision, "terms": terms_revision}
+    now_revision = {
+        "config": connector_revision,
+        "credential": credential_revision,
+        "terms": terms_revision,
+    }
     failed_at = {
-        "config": schedule.blocked_connector_revision, "credential": schedule.blocked_credential_revision,
+        "config": schedule.blocked_connector_revision,
+        "credential": schedule.blocked_credential_revision,
         "terms": schedule.blocked_terms_revision,
     }
     for dimension in schedule.blocked_dimensions or ():
@@ -661,14 +927,21 @@ async def clear_collection_block(
             return False
     schedule.blocked_error_code = None
     schedule.blocked_dimensions = None
-    schedule.blocked_connector_revision = schedule.blocked_credential_revision = schedule.blocked_terms_revision = None
+    schedule.blocked_connector_revision = schedule.blocked_credential_revision = (
+        schedule.blocked_terms_revision
+    ) = None
     await session.flush()
     return True
 
 
 async def admit_managed_collection(
-    session: AsyncSession, scope: Scope, source_id: UUID, fence: CollectionAdmissionRequest,
-    *, trigger: Literal["manual", "scheduled"] = "scheduled", multi_workspace_enabled: bool,
+    session: AsyncSession,
+    scope: Scope,
+    source_id: UUID,
+    fence: CollectionAdmissionRequest,
+    *,
+    trigger: Literal["manual", "scheduled"] = "scheduled",
+    multi_workspace_enabled: bool,
 ) -> CollectionAdmissionRead:
     """Admit a managed n8n run: an existing current request first, else a new one, else 409.
 
@@ -679,10 +952,17 @@ async def admit_managed_collection(
     """
     try:
         request = await _open_request(
-            session, scope, source_id, trigger, None, multi_workspace_enabled=multi_workspace_enabled,
-            existing_first=True)
+            session,
+            scope,
+            source_id,
+            trigger,
+            None,
+            multi_workspace_enabled=multi_workspace_enabled,
+            existing_first=True,
+        )
         if (
-            request.captured_backend != "n8n" or request.source_generation != fence.source_generation
+            request.captured_backend != "n8n"
+            or request.source_generation != fence.source_generation
             or request.connector_revision != fence.connector_revision
             or request.backend_revision != fence.backend_revision
         ):
@@ -693,7 +973,8 @@ async def admit_managed_collection(
         await session.rollback()
         raise
     admission = await admit_collection_request(
-        session, request_id, multi_workspace_enabled=multi_workspace_enabled)
+        session, request_id, multi_workspace_enabled=multi_workspace_enabled
+    )
     if admission is None:
         raise ConflictError("Collection is busy")
     return admission
@@ -705,25 +986,42 @@ async def _recover_expired_slots(factory: async_sessionmaker[AsyncSession], now:
     An expired slot does not free the source lease: the next admission still waits for it.
     """
     async with factory() as session:
-        expired = (await session.execute(
-            select(ConnectorAdmissionSlot.slot_id, ConnectorAdmissionSlot.occupied_request_id,
-                   ConnectorAdmissionSlot.admission_token)
-            .where(ConnectorAdmissionSlot.expires_at <= now).order_by(ConnectorAdmissionSlot.slot_id)
-        )).all()
+        expired = (
+            await session.execute(
+                select(
+                    ConnectorAdmissionSlot.slot_id,
+                    ConnectorAdmissionSlot.occupied_request_id,
+                    ConnectorAdmissionSlot.admission_token,
+                )
+                .where(ConnectorAdmissionSlot.expires_at <= now)
+                .order_by(ConnectorAdmissionSlot.slot_id)
+            )
+        ).all()
     for slot_id, request_id, token in expired:
         async with factory() as session:
             if not await settle_admission_in_uow(
-                session, cast(UUID, request_id), cast(UUID, token), outcome="failed", error_code="admission_expired", retryable=True,
+                session,
+                cast(UUID, request_id),
+                cast(UUID, token),
+                outcome="failed",
+                error_code="admission_expired",
+                retryable=True,
             ):
                 await session.execute(
                     update(ConnectorAdmissionSlot)
-                    .where(ConnectorAdmissionSlot.slot_id == slot_id, ConnectorAdmissionSlot.admission_token == token)
-                    .values(**_FREE_SLOT))
+                    .where(
+                        ConnectorAdmissionSlot.slot_id == slot_id,
+                        ConnectorAdmissionSlot.admission_token == token,
+                    )
+                    .values(**_FREE_SLOT)
+                )
             await session.commit()
     return len(expired)
 
 
-async def _create_due_requests(factory: async_sessionmaker[AsyncSession], now: datetime, multi: bool) -> int:
+async def _create_due_requests(
+    factory: async_sessionmaker[AsyncSession], now: datetime, multi: bool
+) -> int:
     """Create at most one scheduled request per workspace for up to 50 workspaces.
 
     Fair turns: workspaces and sources are ordered by persisted last_considered_at, and
@@ -732,7 +1030,10 @@ async def _create_due_requests(factory: async_sessionmaker[AsyncSession], now: d
     from modules.settings.public import module_is_enabled
 
     async with factory() as session:
-        picked = list((await session.execute(text("""
+        picked = list(
+            (
+                await session.execute(
+                    text("""
             SELECT t.source_id, t.workspace_id FROM (
               SELECT s.source_id, s.workspace_id, row_number() OVER (
                 PARTITION BY s.workspace_id
@@ -743,47 +1044,72 @@ async def _create_due_requests(factory: async_sessionmaker[AsyncSession], now: d
                 AND p.execution_backend = 'native' AND p.state = 'active' AND p.desired_enabled
             ) t LEFT JOIN connector_workspace_dispatch d ON d.workspace_id = t.workspace_id
             WHERE t.rn = 1 ORDER BY d.last_considered_at NULLS FIRST, t.workspace_id LIMIT :limit
-        """), {"now": now, "limit": TICK_WORKSPACES})).all())
+        """),
+                    {"now": now, "limit": TICK_WORKSPACES},
+                )
+            ).all()
+        )
         if not picked:
             return 0
         await session.execute(
-            update(ConnectorSchedule).where(ConnectorSchedule.source_id.in_([row[0] for row in picked]))
-            .values(last_considered_at=now))
+            update(ConnectorSchedule)
+            .where(ConnectorSchedule.source_id.in_([row[0] for row in picked]))
+            .values(last_considered_at=now)
+        )
         await session.execute(
-            pg_insert(ConnectorWorkspaceDispatch).values([{"workspace_id": row[1], "last_considered_at": now} for row in picked])
+            pg_insert(ConnectorWorkspaceDispatch)
+            .values([{"workspace_id": row[1], "last_considered_at": now} for row in picked])
             .on_conflict_do_update(
-                index_elements=["workspace_id"], set_={"last_considered_at": now}))
+                index_elements=["workspace_id"], set_={"last_considered_at": now}
+            )
+        )
         await session.commit()
     created = 0
     for source_id, workspace_id in cast("list[tuple[UUID, UUID]]", picked):
         async with factory() as session:
             owner = await session.scalar(
                 select(WorkspaceMembership).where(
-                    WorkspaceMembership.workspace_id == workspace_id, WorkspaceMembership.role == "owner"))
+                    WorkspaceMembership.workspace_id == workspace_id,
+                    WorkspaceMembership.role == "owner",
+                )
+            )
             row = await session.get(ConnectorProvisioning, source_id)
             if owner is None or row is None:
                 continue
             scope = InternalJobScope(
-                workspace_id=workspace_id, actor_user_id=owner.user_id, membership_revision=owner.revision,
-                source_id=source_id, source_generation=row.source_generation)
+                workspace_id=workspace_id,
+                actor_user_id=owner.user_id,
+                membership_revision=owner.revision,
+                source_id=source_id,
+                source_generation=row.source_generation,
+            )
             await session.rollback()
-            if not await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi):
+            if not await module_is_enabled(
+                session, "connectors", scope=scope, multi_workspace_enabled=multi
+            ):
                 await session.rollback()
                 continue
             try:
                 request = await _open_request(
-                    session, scope, source_id, "scheduled", None, multi_workspace_enabled=multi)
+                    session, scope, source_id, "scheduled", None, multi_workspace_enabled=multi
+                )
                 created += request.status == "queued"
                 await session.execute(
-                    pg_insert(ConnectorWorkspaceDispatch).values(workspace_id=workspace_id, last_dispatched_at=now)
-                    .on_conflict_do_update(index_elements=["workspace_id"], set_={"last_dispatched_at": now}))
+                    pg_insert(ConnectorWorkspaceDispatch)
+                    .values(workspace_id=workspace_id, last_dispatched_at=now)
+                    .on_conflict_do_update(
+                        index_elements=["workspace_id"], set_={"last_dispatched_at": now}
+                    )
+                )
                 await session.commit()
             except (DomainError, HTTPException):
                 await session.rollback()
     return created
 
 
-async def _enqueue_queued(ctx: dict[str, object], factory: async_sessionmaker[AsyncSession], now: datetime) -> int:
+async def _enqueue_queued(
+    ctx: dict[str, object], factory: async_sessionmaker[AsyncSession], now: datetime
+) -> int:
     """Claim due native requests with an expiring token, then enqueue only their UUIDs.
 
     A failed or lost enqueue leaves the durable queued row; its claim expires and enqueue_next_at
@@ -798,22 +1124,39 @@ async def _enqueue_queued(ctx: dict[str, object], factory: async_sessionmaker[As
                 ConnectorCollectionRequest.captured_backend == "native",
                 ConnectorCollectionRequest.available_at <= now,
                 ConnectorCollectionRequest.enqueue_next_at <= now,
-                or_(ConnectorCollectionRequest.enqueue_claim_expires_at.is_(None),
-                    ConnectorCollectionRequest.enqueue_claim_expires_at <= now))
-            .order_by(ConnectorCollectionRequest.enqueue_next_at).limit(TICK_WORKSPACES)
-            .with_for_update(skip_locked=True))
-        ids = list((await session.scalars(
-            update(ConnectorCollectionRequest).where(ConnectorCollectionRequest.id.in_(due))
-            .values(enqueue_claim_token=claim, enqueue_claim_expires_at=now + ENQUEUE_CLAIM,
-                    enqueue_next_at=now + REENQUEUE_AFTER)
-            .returning(ConnectorCollectionRequest.id))).all())
+                or_(
+                    ConnectorCollectionRequest.enqueue_claim_expires_at.is_(None),
+                    ConnectorCollectionRequest.enqueue_claim_expires_at <= now,
+                ),
+            )
+            .order_by(ConnectorCollectionRequest.enqueue_next_at)
+            .limit(TICK_WORKSPACES)
+            .with_for_update(skip_locked=True)
+        )
+        ids = list(
+            (
+                await session.scalars(
+                    update(ConnectorCollectionRequest)
+                    .where(ConnectorCollectionRequest.id.in_(due))
+                    .values(
+                        enqueue_claim_token=claim,
+                        enqueue_claim_expires_at=now + ENQUEUE_CLAIM,
+                        enqueue_next_at=now + REENQUEUE_AFTER,
+                    )
+                    .returning(ConnectorCollectionRequest.id)
+                )
+            ).all()
+        )
         await session.commit()
     enqueued = 0
     redis = ctx["redis"]
     for request_id in ids:
         try:
             job = await redis.enqueue_job(  # type: ignore[attr-defined]
-                "process_collection_request", str(request_id), _job_id=f"collection:{claim}:{request_id}")
+                "process_collection_request",
+                str(request_id),
+                _job_id=f"collection:{claim}:{request_id}",
+            )
         except Exception:  # noqa: BLE001, S112  # best-effort enqueue: a failed id stays claimed and is retried after the claim expires
             continue
         enqueued += job is not None
@@ -837,19 +1180,33 @@ async def dispatch_due_collections(ctx: dict[str, object]) -> int:
     return enqueued
 
 
-async def _emit_metrics(factory: async_sessionmaker[AsyncSession], now: datetime, stale_leases: int) -> None:
+async def _emit_metrics(
+    factory: async_sessionmaker[AsyncSession], now: datetime, stale_leases: int
+) -> None:
     """Sample bounded-label tick metrics; per-tick samples, never IDs. Telemetry faults never fail the tick."""
     from modules.sources.public import SourceReadProjection as Source
 
     try:
         async with factory() as session:
-            rows = (await session.execute(
-                select(Source.provider, Source.type, ConnectorCollectionRequest.captured_backend,
-                       ConnectorCollectionRequest.status, ConnectorCollectionRequest.attempt,
-                       ConnectorCollectionRequest.available_at, ConnectorCollectionRequest.attempt_deadline_at)
-                .join(Source, (Source.id == ConnectorCollectionRequest.source_id)
-                      & (Source.workspace_id == ConnectorCollectionRequest.workspace_id))
-                .where(ConnectorCollectionRequest.status.in_(("queued", "running"))))).all()
+            rows = (
+                await session.execute(
+                    select(
+                        Source.provider,
+                        Source.type,
+                        ConnectorCollectionRequest.captured_backend,
+                        ConnectorCollectionRequest.status,
+                        ConnectorCollectionRequest.attempt,
+                        ConnectorCollectionRequest.available_at,
+                        ConnectorCollectionRequest.attempt_deadline_at,
+                    )
+                    .join(
+                        Source,
+                        (Source.id == ConnectorCollectionRequest.source_id)
+                        & (Source.workspace_id == ConnectorCollectionRequest.workspace_id),
+                    )
+                    .where(ConnectorCollectionRequest.status.in_(("queued", "running")))
+                )
+            ).all()
             await session.rollback()
         # Labels are bounded vocabularies only (provider/source type, backend); never workspace or source ids.
         for provider, source_type, backend, status, attempt, available_at, deadline in rows:
@@ -859,19 +1216,30 @@ async def _emit_metrics(factory: async_sessionmaker[AsyncSession], now: datetime
                 if deadline is not None and deadline < now:
                     telemetry.count("collection_unresolved_transitions", **lb, outcome="overdue")
             elif available_at > now:
-                telemetry.count("collection_retry_after", **lb, outcome="waiting" if attempt else "scheduled")
+                telemetry.count(
+                    "collection_retry_after", **lb, outcome="waiting" if attempt else "scheduled"
+                )
             else:
                 telemetry.count("collection_pending", **lb, outcome="queued")
-                telemetry.registry.observe("collection_due_lag_ms", (now - available_at).total_seconds() * 1000, **lb)
+                telemetry.registry.observe(
+                    "collection_due_lag_ms", (now - available_at).total_seconds() * 1000, **lb
+                )
         if stale_leases:
-            telemetry.count("collection_stale_leases", stale_leases, provider="all", backend="all", outcome="expired")
+            telemetry.count(
+                "collection_stale_leases",
+                stale_leases,
+                provider="all",
+                backend="all",
+                outcome="expired",
+            )
     except Exception:  # noqa: BLE001 - telemetry must not affect scheduling
         return
 
 
-
 async def collection_timing(
-    session: AsyncSession, workspace_id: UUID, source_ids: list[UUID],
+    session: AsyncSession,
+    workspace_id: UUID,
+    source_ids: list[UUID],
 ) -> dict[UUID, tuple[datetime | None, datetime | None]]:
     """Return (next_due_at, retry_at) per source for the workspace; read-only, no admission.
 
@@ -882,16 +1250,36 @@ async def collection_timing(
         return {}
     now = datetime.now(UTC)
     out: dict[UUID, tuple[datetime | None, datetime | None]] = {}
-    schedules = (await session.execute(
-        select(ConnectorSchedule.source_id, ConnectorSchedule.enabled, ConnectorSchedule.next_due_at,
-               ConnectorSchedule.next_eligible_at)
-        .where(ConnectorSchedule.workspace_id == workspace_id, ConnectorSchedule.source_id.in_(source_ids)))).all()
-    retries = dict((await session.execute(
-        select(ConnectorCollectionRequest.source_id, func.min(ConnectorCollectionRequest.available_at))
-        .where(ConnectorCollectionRequest.workspace_id == workspace_id,
-               ConnectorCollectionRequest.source_id.in_(source_ids),
-               ConnectorCollectionRequest.status == "queued", ConnectorCollectionRequest.attempt > 0)
-        .group_by(ConnectorCollectionRequest.source_id))).all())
+    schedules = (
+        await session.execute(
+            select(
+                ConnectorSchedule.source_id,
+                ConnectorSchedule.enabled,
+                ConnectorSchedule.next_due_at,
+                ConnectorSchedule.next_eligible_at,
+            ).where(
+                ConnectorSchedule.workspace_id == workspace_id,
+                ConnectorSchedule.source_id.in_(source_ids),
+            )
+        )
+    ).all()
+    retries = dict(
+        (
+            await session.execute(
+                select(
+                    ConnectorCollectionRequest.source_id,
+                    func.min(ConnectorCollectionRequest.available_at),
+                )
+                .where(
+                    ConnectorCollectionRequest.workspace_id == workspace_id,
+                    ConnectorCollectionRequest.source_id.in_(source_ids),
+                    ConnectorCollectionRequest.status == "queued",
+                    ConnectorCollectionRequest.attempt > 0,
+                )
+                .group_by(ConnectorCollectionRequest.source_id)
+            )
+        ).all()
+    )
     for source_id, enabled, due, eligible in schedules:
         candidates = [t for t in (eligible, retries.get(source_id)) if t is not None and t > now]
         out[source_id] = (due if enabled else None, max(candidates) if candidates else None)

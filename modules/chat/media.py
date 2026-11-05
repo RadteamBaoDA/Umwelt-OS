@@ -92,8 +92,15 @@ def check_upstream_url(url: str) -> str:
         port = parts.port
     except ValueError:
         raise MediaError("host_denied") from None
-    if (parts.scheme != "https" or parts.hostname not in PROXY_HOSTS or parts.username or parts.password
-            or port not in (None, 443) or parts.fragment or _CTRL.search(url)):
+    if (
+        parts.scheme != "https"
+        or parts.hostname not in PROXY_HOSTS
+        or parts.username
+        or parts.password
+        or port not in (None, 443)
+        or parts.fragment
+        or _CTRL.search(url)
+    ):
         raise MediaError("host_denied")
     return url
 
@@ -105,17 +112,23 @@ def sign_media_url(secret: str, url: str, *, now: float | None = None, subject: 
     token cannot be replayed by another account.
     """
     check_upstream_url(url)
-    body = json.dumps({"u": url, "e": int((now or time.time()) + TOKEN_TTL_SECONDS), "s": subject},
-                      separators=(",", ":"))
+    body = json.dumps(
+        {"u": url, "e": int((now or time.time()) + TOKEN_TTL_SECONDS), "s": subject},
+        separators=(",", ":"),
+    )
     payload = b64url_encode(body.encode())
     sig = hmac.new(_key(secret), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 
 
-def verify_media_token(secret: str, token: str, *, now: float | None = None, subject: str = "") -> str:
+def verify_media_token(
+    secret: str, token: str, *, now: float | None = None, subject: str = ""
+) -> str:
     """Return the bound upstream URL for a valid, unexpired token issued for ``subject``; raise MediaError otherwise."""
     payload, _, sig = token.partition(".")
-    if not hmac.compare_digest(hmac.new(_key(secret), payload.encode(), hashlib.sha256).hexdigest(), sig):
+    if not hmac.compare_digest(
+        hmac.new(_key(secret), payload.encode(), hashlib.sha256).hexdigest(), sig
+    ):
         raise MediaError("bad_token")
     try:
         data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
@@ -144,9 +157,15 @@ async def _stream(url: str, factory: TransportFactory, limit: int, kind: str) ->
     host = urlsplit(url).hostname or ""
     body = bytearray()
     accept = "image/*" if kind == "image" else "application/json"
-    async with httpx.AsyncClient(transport=factory(host), timeout=httpx.Timeout(LOOKUP_TIMEOUT_SECONDS),
-                                 follow_redirects=False, trust_env=False) as client:
-        request = client.build_request("GET", url, headers={"User-Agent": USER_AGENT, "Accept": accept})
+    async with httpx.AsyncClient(
+        transport=factory(host),
+        timeout=httpx.Timeout(LOOKUP_TIMEOUT_SECONDS),
+        follow_redirects=False,
+        trust_env=False,
+    ) as client:
+        request = client.build_request(
+            "GET", url, headers={"User-Agent": USER_AGENT, "Accept": accept}
+        )
         response = await client.send(request, stream=True)
         try:
             content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -168,7 +187,9 @@ async def _stream(url: str, factory: TransportFactory, limit: int, kind: str) ->
     return bytes(body), content_type
 
 
-async def fetch_media(url: str, factory: TransportFactory = default_transport_factory) -> tuple[bytes, str]:
+async def fetch_media(
+    url: str, factory: TransportFactory = default_transport_factory
+) -> tuple[bytes, str]:
     """Fetch an allowlisted image (<= 5 MB, non-SVG ``image/*``, no redirects); returns (bytes, content-type)."""
     try:
         return await _stream(check_upstream_url(url), factory, MAX_MEDIA_BYTES, "image")
@@ -189,8 +210,14 @@ def _commons_name(image_url: str) -> str:
     """File name on Commons from an upload.wikimedia.org ``/wikipedia/commons/...`` (thumb or original) URL."""
     parts = urlsplit(image_url)
     segments = parts.path.split("/")
-    if parts.hostname != "upload.wikimedia.org" or len(segments) < 5 or segments[1:3] != ["wikipedia", "commons"]:
-        raise MediaError("not_commons")  # local en.wikipedia files carry no machine-checked licence here
+    if (
+        parts.hostname != "upload.wikimedia.org"
+        or len(segments) < 5
+        or segments[1:3] != ["wikipedia", "commons"]
+    ):
+        raise MediaError(
+            "not_commons"
+        )  # local en.wikipedia files carry no machine-checked licence here
     name = segments[-2] if segments[3] == "thumb" else segments[-1]
     return unquote(name)
 
@@ -201,7 +228,9 @@ def _clean(value: Any) -> str:
     return " ".join(_TAGS.sub(" ", str(raw or "")).split())[:200]
 
 
-async def _lookup(title: str, secret: str, factory: TransportFactory, subject: str = "") -> dict[str, str]:
+async def _lookup(
+    title: str, secret: str, factory: TransportFactory, subject: str = ""
+) -> dict[str, str]:
     """Resolve one article title to a licensed, credited, proxied image; raises MediaError when unusable."""
     summary = await _json(WIKI_SUMMARY + quote(title.replace(" ", "_"), safe=""), factory)
     if not isinstance(summary, dict):
@@ -212,8 +241,10 @@ async def _lookup(title: str, secret: str, factory: TransportFactory, subject: s
         raise MediaError("no_image")
     check_upstream_url(source)
     name = _commons_name(source)
-    query = (f"{COMMONS_API}?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=extmetadata%7Curl"
-             "&titles=" + quote("File:" + name, safe=""))
+    query = (
+        f"{COMMONS_API}?action=query&format=json&formatversion=2&prop=imageinfo&iiprop=extmetadata%7Curl"
+        "&titles=" + quote("File:" + name, safe="")
+    )
     result = await _json(query, factory)
     pages = result.get("query", {}).get("pages", []) if isinstance(result, dict) else []
     info = (pages[0].get("imageinfo") or [{}])[0] if pages and isinstance(pages[0], dict) else {}
@@ -225,12 +256,22 @@ async def _lookup(title: str, secret: str, factory: TransportFactory, subject: s
     article = ((summary.get("content_urls") or {}).get("desktop") or {}).get("page")
     if not (isinstance(article, str) and urlsplit(article).hostname == "en.wikipedia.org"):
         article = "https://en.wikipedia.org/wiki/" + quote(title.replace(" ", "_"), safe="")
-    return {"title": title, "status": "ok", "image_url": f"{PROXY_PATH}?token={sign_media_url(secret, source, subject=subject)}",
-            "credit": credit, "license": licence, "article_url": article}
+    return {
+        "title": title,
+        "status": "ok",
+        "image_url": f"{PROXY_PATH}?token={sign_media_url(secret, source, subject=subject)}",
+        "credit": credit,
+        "license": licence,
+        "article_url": article,
+    }
 
 
 async def get_trip_stop_images(
-    titles: list[str], *, secret: str, factory: TransportFactory = default_transport_factory, subject: str = "",
+    titles: list[str],
+    *,
+    secret: str,
+    factory: TransportFactory = default_transport_factory,
+    subject: str = "",
 ) -> list[dict[str, str]]:
     """Look up 1-8 English Wikipedia titles concurrently (4 workers, 12 s each, no redirects).
 
@@ -253,8 +294,13 @@ async def get_trip_stop_images(
 
 
 async def run_trip_images_tool(
-    raw_arguments: str, *, config: AIExecutionConfig, local_only: bool, secret: str,
-    factory: TransportFactory = default_transport_factory, subject: str = "",
+    raw_arguments: str,
+    *,
+    config: AIExecutionConfig,
+    local_only: bool,
+    secret: str,
+    factory: TransportFactory = default_transport_factory,
+    subject: str = "",
 ) -> str:
     """Execute the ``get_trip_stop_images`` tool call and return the JSON string for the tool message.
 
@@ -269,4 +315,10 @@ async def run_trip_images_tool(
             raise ValueError("titles")
     except ValueError:
         return json.dumps({"error": "invalid_arguments"})
-    return json.dumps({"stops": await get_trip_stop_images(args.titles, secret=secret, factory=factory, subject=subject)})
+    return json.dumps(
+        {
+            "stops": await get_trip_stop_images(
+                args.titles, secret=secret, factory=factory, subject=subject
+            )
+        }
+    )

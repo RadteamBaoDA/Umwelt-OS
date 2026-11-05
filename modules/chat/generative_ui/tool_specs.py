@@ -20,7 +20,10 @@ from modules.chat.templates import (
 from modules.chat.todos import TodoReplace, run_todo_tool
 from modules.chat.ui_theme import SetThemeArgs
 
-__all__ = ["run_template_tool", "run_todo_tool"]  # re-exported so the worker imports every tool runner from here
+__all__ = [
+    "run_template_tool",
+    "run_todo_tool",
+]  # re-exported so the worker imports every tool runner from here
 
 TOOL_SANDBOXED_UI = "render_sandboxed_ui"
 TOOL_TABLE = "render_table"
@@ -29,25 +32,36 @@ TOOL_PLAN = "render_plan"
 TOOL_TIME_PICKER = "render_time_picker"
 TOOL_FORM = "render_form"
 TOOL_READ_SKILL = "read_skill"
-TOOL_MANAGE_TODOS = "manage_todos"  # non-terminal; conversation todos, offered only when the worker opts in
+TOOL_MANAGE_TODOS = (
+    "manage_todos"  # non-terminal; conversation todos, offered only when the worker opts in
+)
 TOOL_GET_TODOS = "get_todos"
 TODO_TOOLS: frozenset[str] = frozenset({TOOL_MANAGE_TODOS, TOOL_GET_TODOS})
 # No model-callable save: a prompt-injected model must not persist widget HTML; owners save via POST /api/v1/chat/templates.
 TOOL_LIST_TEMPLATES = "list_templates"
 TOOL_APPLY_TEMPLATE = "apply_template"
 TOOL_CLEAR_PENDING_TEMPLATE = "clear_pending_template"
-TEMPLATE_TOOLS: frozenset[str] = frozenset({
-    TOOL_LIST_TEMPLATES, TOOL_APPLY_TEMPLATE, TOOL_CLEAR_PENDING_TEMPLATE,
-})
+TEMPLATE_TOOLS: frozenset[str] = frozenset(
+    {
+        TOOL_LIST_TEMPLATES,
+        TOOL_APPLY_TEMPLATE,
+        TOOL_CLEAR_PENDING_TEMPLATE,
+    }
+)
 TOOL_SET_THEME = "set_theme"  # non-terminal; emits a transient `ui.theme` event, offered only when the worker opts in
-LOCAL_DATA_TOOLS: frozenset[str] = TODO_TOOLS | TEMPLATE_TOOLS | {TOOL_SET_THEME}  # run under the worker's live-run fence
-TOOL_REQUEST_USER_INPUT = "request_user_input"  # non-terminal HITL tool: parks the run until the user answers
-TOOL_TRIP_IMAGES = "get_trip_stop_images"  # non-terminal data tool; offered only with allow_widget_remote_media
+LOCAL_DATA_TOOLS: frozenset[str] = (
+    TODO_TOOLS | TEMPLATE_TOOLS | {TOOL_SET_THEME}
+)  # run under the worker's live-run fence
+TOOL_REQUEST_USER_INPUT = (
+    "request_user_input"  # non-terminal HITL tool: parks the run until the user answers
+)
+TOOL_TRIP_IMAGES = (
+    "get_trip_stop_images"  # non-terminal data tool; offered only with allow_widget_remote_media
+)
 
 TERMINAL_UI_TOOLS: frozenset[str] = frozenset(
     {TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART, TOOL_PLAN, TOOL_TIME_PICKER, TOOL_FORM}
 )
-
 
 
 SAMPLE_SOURCE = "Illustrative sample dataset"  # same label tools/query.py uses for is_sample data
@@ -56,7 +70,8 @@ SAMPLE_SOURCE = "Illustrative sample dataset"  # same label tools/query.py uses 
 def _citation_numbers() -> Any:
     """Field for citation numbers [n] shown to the model in the grounded context (resolved server-side)."""
     return Field(
-        default_factory=list, max_length=100,
+        default_factory=list,
+        max_length=100,
         description="Citation numbers [n] from the context that support this widget. Integers only, never IDs.",
     )
 
@@ -199,7 +214,8 @@ class TripStopImagesToolArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     titles: list[str] = Field(
-        min_length=1, max_length=8,
+        min_length=1,
+        max_length=8,
         description="English Wikipedia article titles of the trip stops (landmarks, cities), 1-8.",
     )
 
@@ -212,7 +228,10 @@ _UI_MODELS: dict[str, tuple[type[BaseModel], str]] = {
             "Emit parameters in the documented order. Terminal: the turn ends after the widget calls."
         ),
     ),
-    TOOL_TABLE: (TableToolArgs, "Render a table of exact values. Terminal: the turn ends after the widget calls."),
+    TOOL_TABLE: (
+        TableToolArgs,
+        "Render a table of exact values. Terminal: the turn ends after the widget calls.",
+    ),
     TOOL_CHART: (ChartToolArgs, "Render a bar/pie/line/scatter/distribution chart. Terminal."),
     TOOL_PLAN: (PlanToolArgs, "Render a step-by-step plan or checklist. Terminal."),
     TOOL_TIME_PICKER: (TimePickerToolArgs, "Render selectable time slots. Terminal."),
@@ -229,14 +248,22 @@ def _sandbox_schema() -> dict[str, Any]:
     prop = schema["properties"]["jsExpressions"]
     schema["properties"]["jsExpressions"] = {
         **{k: v for k, v in prop.items() if k not in {"type", "maxLength"}},
-        "anyOf": [{"type": "string", "maxLength": 64_000}, {"type": "array", "items": {"type": "string"}}],
+        "anyOf": [
+            {"type": "string", "maxLength": 64_000},
+            {"type": "array", "items": {"type": "string"}},
+        ],
     }
     return schema
 
 
 def build_chat_tool_specs(
-    *, include_read_skill: bool, include_trip_images: bool = False, include_todos: bool = False,
-    include_user_input: bool = False, include_templates: bool = False, include_theme: bool = False,
+    *,
+    include_read_skill: bool,
+    include_trip_images: bool = False,
+    include_todos: bool = False,
+    include_user_input: bool = False,
+    include_templates: bool = False,
+    include_theme: bool = False,
     include_db_query: bool = False,
 ) -> list[dict[str, Any]]:
     """Build the OpenAI-format `tools` list for a generative-UI chat turn.
@@ -256,65 +283,121 @@ def build_chat_tool_specs(
     specs: list[dict[str, Any]] = []
     for name, (model, description) in _UI_MODELS.items():
         schema = _sandbox_schema() if model is SandboxedUiArgs else model.model_json_schema()
-        specs.append({"type": "function", "function": {"name": name, "description": description, "parameters": schema}})
+        specs.append(
+            {
+                "type": "function",
+                "function": {"name": name, "description": description, "parameters": schema},
+            }
+        )
     if include_read_skill:
-        specs.append({"type": "function", "function": {
-            "name": TOOL_READ_SKILL,
-            "description": "Load a bundled guidance document by name before building a widget. Not terminal.",
-            "parameters": ReadSkillArgs.model_json_schema(),
-        }})
+        specs.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": TOOL_READ_SKILL,
+                    "description": "Load a bundled guidance document by name before building a widget. Not terminal.",
+                    "parameters": ReadSkillArgs.model_json_schema(),
+                },
+            }
+        )
     if include_user_input:
-        specs.append({"type": "function", "function": {
-            "name": TOOL_REQUEST_USER_INPUT,
-            "description": (
-                "Pause and ask the user to pick a time slot, choose an option, or type a short answer; the "
-                "result is their answer (or expired/cancelled). Use for a decision only the user can make. Not terminal."
-            ),
-            "parameters": RequestUserInputArgs.model_json_schema(),
-        }})
+        specs.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": TOOL_REQUEST_USER_INPUT,
+                    "description": (
+                        "Pause and ask the user to pick a time slot, choose an option, or type a short answer; the "
+                        "result is their answer (or expired/cancelled). Use for a decision only the user can make. Not terminal."
+                    ),
+                    "parameters": RequestUserInputArgs.model_json_schema(),
+                },
+            }
+        )
     if include_trip_images:
-        specs.append({"type": "function", "function": {
-            "name": TOOL_TRIP_IMAGES,
-            "description": (
-                "Fetch licensed Wikipedia/Commons photos with credit for trip stops; returns same-origin image_url, "
-                "credit, license and article_url per stop, or status 'unavailable'. Not terminal."
-            ),
-            "parameters": TripStopImagesToolArgs.model_json_schema(),
-        }})
+        specs.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": TOOL_TRIP_IMAGES,
+                    "description": (
+                        "Fetch licensed Wikipedia/Commons photos with credit for trip stops; returns same-origin image_url, "
+                        "credit, license and article_url per stop, or status 'unavailable'. Not terminal."
+                    ),
+                    "parameters": TripStopImagesToolArgs.model_json_schema(),
+                },
+            }
+        )
     if include_todos:
-        specs.append({"type": "function", "function": {
-            "name": TOOL_MANAGE_TODOS,
-            "description": (
-                "Replace the conversation's whole todo list. Send the full list every time; omit ids for new items "
-                "(existing ids are kept). Not terminal."
-            ),
-            "parameters": TodoReplace.model_json_schema(),
-        }})
-        specs.append({"type": "function", "function": {
-            "name": TOOL_GET_TODOS,
-            "description": "Read the conversation's current todo list. Not terminal.",
-            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-        }})
+        specs.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": TOOL_MANAGE_TODOS,
+                    "description": (
+                        "Replace the conversation's whole todo list. Send the full list every time; omit ids for new items "
+                        "(existing ids are kept). Not terminal."
+                    ),
+                    "parameters": TodoReplace.model_json_schema(),
+                },
+            }
+        )
+        specs.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": TOOL_GET_TODOS,
+                    "description": "Read the conversation's current todo list. Not terminal.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        )
     if include_templates:
         no_args = {"type": "object", "properties": {}, "additionalProperties": False}
         for tool, description, params in (
-            (TOOL_LIST_TEMPLATES, "List built-in and saved templates (no html) and the pending one. Not terminal.", no_args),
-            (TOOL_APPLY_TEMPLATE, (
-                "Get a template's html to adapt and render, by template_id or by name (most recent match). Omit both "
-                "to use the template the user selected (pending); it is cleared afterwards. Not terminal."
-            ), ApplyTemplateArgs.model_json_schema()),
-            (TOOL_CLEAR_PENDING_TEMPLATE, "Discard the user's pending template selection. Not terminal.", no_args),
-        ):
-            specs.append({"type": "function", "function": {"name": tool, "description": description, "parameters": params}})
-    if include_theme:
-        specs.append({"type": "function", "function": {
-            "name": TOOL_SET_THEME,
-            "description": (
-                "Switch the app theme (light, dark or system) for the user's current browser session; they can keep "
-                "or revert it. Use only when the user asks. Not terminal."
+            (
+                TOOL_LIST_TEMPLATES,
+                "List built-in and saved templates (no html) and the pending one. Not terminal.",
+                no_args,
             ),
-            "parameters": SetThemeArgs.model_json_schema(),
-        }})
+            (
+                TOOL_APPLY_TEMPLATE,
+                (
+                    "Get a template's html to adapt and render, by template_id or by name (most recent match). Omit both "
+                    "to use the template the user selected (pending); it is cleared afterwards. Not terminal."
+                ),
+                ApplyTemplateArgs.model_json_schema(),
+            ),
+            (
+                TOOL_CLEAR_PENDING_TEMPLATE,
+                "Discard the user's pending template selection. Not terminal.",
+                no_args,
+            ),
+        ):
+            specs.append(
+                {
+                    "type": "function",
+                    "function": {"name": tool, "description": description, "parameters": params},
+                }
+            )
+    if include_theme:
+        specs.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": TOOL_SET_THEME,
+                    "description": (
+                        "Switch the app theme (light, dark or system) for the user's current browser session; they can keep "
+                        "or revert it. Use only when the user asks. Not terminal."
+                    ),
+                    "parameters": SetThemeArgs.model_json_schema(),
+                },
+            }
+        )
     if include_db_query:
         from modules.chat.db_query import build_db_query_tool_spec
 

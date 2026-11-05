@@ -169,7 +169,8 @@ class TestRealtimeEventConstructors:
             generation=2,
             status="active",
             connector_state="synced",
-            operation_id=op_id, scope=SCOPE
+            operation_id=op_id,
+            scope=SCOPE,
         )
 
         assert isinstance(evt, SourceChanged)
@@ -184,11 +185,7 @@ class TestRealtimeEventConstructors:
     def test_make_source_change_invalid_generation(self) -> None:
         """make_source_change rejects generation < 1."""
         with pytest.raises(ValidationError):
-            make_source_change(
-                source_id=uuid4(),
-                generation=0,
-                status="active", scope=SCOPE
-            )
+            make_source_change(source_id=uuid4(), generation=0, status="active", scope=SCOPE)
 
     def test_make_source_change_invalid_status(self) -> None:
         """make_source_change rejects unsupported status strings."""
@@ -209,7 +206,8 @@ class TestRealtimeEventConstructors:
             run_id=run_id,
             status="running",
             stage_key="parsing",
-            stage_status="pending", scope=SCOPE
+            stage_status="pending",
+            scope=SCOPE,
         )
 
         assert isinstance(evt, IngestionChanged)
@@ -235,10 +233,7 @@ class TestRealtimeEventConstructors:
         src_id = uuid4()
         doc_id = uuid4()
         evt = make_knowledge_change(
-            source_id=src_id,
-            document_id=doc_id,
-            version=1,
-            deleted=False, scope=SCOPE
+            source_id=src_id, document_id=doc_id, version=1, deleted=False, scope=SCOPE
         )
 
         assert isinstance(evt, KnowledgeChanged)
@@ -253,10 +248,7 @@ class TestRealtimeEventConstructors:
         """make_index_change creates index-scope KnowledgeChanged events."""
         gen_id = uuid4()
         evt = make_index_change(
-            generation_id=gen_id,
-            status="active",
-            indexed_items=100,
-            failed_items=2, scope=SCOPE
+            generation_id=gen_id, status="active", indexed_items=100, failed_items=2, scope=SCOPE
         )
 
         assert evt.scope == "index"
@@ -322,7 +314,9 @@ class TestRealtimeEventConstructors:
     def test_make_dashboard_change_valid(self) -> None:
         """make_dashboard_change creates validated DashboardChanged events."""
         res_id = uuid4()
-        evt = make_dashboard_change(category="dashboard", resource_id=res_id, revision=5, deleted=False, scope=SCOPE)
+        evt = make_dashboard_change(
+            category="dashboard", resource_id=res_id, revision=5, deleted=False, scope=SCOPE
+        )
         assert isinstance(evt, DashboardChanged)
         assert evt.type == "dashboard.changed"
         assert evt.scope == "dashboard"
@@ -336,4 +330,6 @@ class TestRealtimeEventConstructors:
             make_dashboard_change(category="invalid", resource_id=uuid4(), revision=1, scope=SCOPE)  # type: ignore[arg-type]
 
         with pytest.raises(ValidationError):
-            make_dashboard_change(category="dashboard", resource_id=uuid4(), revision=0, scope=SCOPE)
+            make_dashboard_change(
+                category="dashboard", resource_id=uuid4(), revision=0, scope=SCOPE
+            )

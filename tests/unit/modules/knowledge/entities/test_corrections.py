@@ -141,6 +141,7 @@ def _admitted() -> object:
     ):
         yield
 
+
 class TestCorrectionConflictAndClosures:
     """Tests for CorrectionConflictError and closure data containers."""
 
@@ -239,13 +240,25 @@ class TestValidateMergeRequest:
         """Verify conflict when source or target entity is missing from closure."""
         src_id = uuid4()
         tgt_id = uuid4()
-        payload = EntityMergeRequest(into_id=tgt_id, expected_revision=1, expected_into_revision=1, reason="test")
+        payload = EntityMergeRequest(
+            into_id=tgt_id, expected_revision=1, expected_into_revision=1, reason="test"
+        )
 
         closure = _Closure(
-            entity_rows=[], memberships=[], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[], evidence_pairs=[],
-            source_ids=[], document_ids=[], membership_ids=[], timeline_event_ids=[],
+            entity_rows=[],
+            memberships=[],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[],
+            evidence_pairs=[],
+            source_ids=[],
+            document_ids=[],
+            membership_ids=[],
+            timeline_event_ids=[],
         )
 
         with pytest.raises(CorrectionConflictError) as exc_info:
@@ -257,13 +270,25 @@ class TestValidateMergeRequest:
         """Verify conflict when revision in payload does not match entity revision."""
         src = _make_sample_entity(revision=2)
         tgt = _make_sample_entity(revision=1)
-        payload = EntityMergeRequest(into_id=tgt.id, expected_revision=1, expected_into_revision=1, reason="test")
+        payload = EntityMergeRequest(
+            into_id=tgt.id, expected_revision=1, expected_into_revision=1, reason="test"
+        )
 
         closure = _Closure(
-            entity_rows=[src, tgt], memberships=[], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[src.id, tgt.id], evidence_pairs=[],
-            source_ids=[], document_ids=[], membership_ids=[], timeline_event_ids=[],
+            entity_rows=[src, tgt],
+            memberships=[],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[src.id, tgt.id],
+            evidence_pairs=[],
+            source_ids=[],
+            document_ids=[],
+            membership_ids=[],
+            timeline_event_ids=[],
         )
 
         with pytest.raises(CorrectionConflictError) as exc_info:
@@ -275,13 +300,25 @@ class TestValidateMergeRequest:
         """Verify conflict when source and target have differing entity types."""
         src = _make_sample_entity(type_="person", revision=1)
         tgt = _make_sample_entity(type_="organization", revision=1)
-        payload = EntityMergeRequest(into_id=tgt.id, expected_revision=1, expected_into_revision=1, reason="test")
+        payload = EntityMergeRequest(
+            into_id=tgt.id, expected_revision=1, expected_into_revision=1, reason="test"
+        )
 
         closure = _Closure(
-            entity_rows=[src, tgt], memberships=[], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[src.id, tgt.id], evidence_pairs=[],
-            source_ids=[], document_ids=[], membership_ids=[], timeline_event_ids=[],
+            entity_rows=[src, tgt],
+            memberships=[],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[src.id, tgt.id],
+            evidence_pairs=[],
+            source_ids=[],
+            document_ids=[],
+            membership_ids=[],
+            timeline_event_ids=[],
         )
 
         with pytest.raises(CorrectionConflictError) as exc_info:
@@ -293,13 +330,25 @@ class TestValidateMergeRequest:
         """Verify conflict when both entities have different owner-authored field values."""
         src = _make_sample_entity(name="Name A", name_origin="owner", revision=1)
         tgt = _make_sample_entity(name="Name B", name_origin="owner", revision=1)
-        payload = EntityMergeRequest(into_id=tgt.id, expected_revision=1, expected_into_revision=1, reason="test")
+        payload = EntityMergeRequest(
+            into_id=tgt.id, expected_revision=1, expected_into_revision=1, reason="test"
+        )
 
         closure = _Closure(
-            entity_rows=[src, tgt], memberships=[], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[src.id, tgt.id], evidence_pairs=[],
-            source_ids=[], document_ids=[], membership_ids=[], timeline_event_ids=[],
+            entity_rows=[src, tgt],
+            memberships=[],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[src.id, tgt.id],
+            evidence_pairs=[],
+            source_ids=[],
+            document_ids=[],
+            membership_ids=[],
+            timeline_event_ids=[],
         )
 
         with pytest.raises(CorrectionConflictError) as exc_info:
@@ -312,16 +361,30 @@ class TestValidateMergeRequest:
         src = _make_sample_entity(name="Derived A", name_origin="derived", revision=1)
         tgt = _make_sample_entity(name="Owner B", name_origin="owner", revision=1)
         mem = _make_sample_membership(entity_id=src.id)
-        payload = EntityMergeRequest(into_id=tgt.id, expected_revision=1, expected_into_revision=1, reason="test")
-
-        closure = _Closure(
-            entity_rows=[src, tgt], memberships=[mem], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[src.id, tgt.id], evidence_pairs=[],
-            source_ids=[], document_ids=[], membership_ids=[mem.id], timeline_event_ids=[],
+        payload = EntityMergeRequest(
+            into_id=tgt.id, expected_revision=1, expected_into_revision=1, reason="test"
         )
 
-        s, t, memberships, _target_aliases, _source_aliases = await _validate_merge_request(src.id, payload, closure)
+        closure = _Closure(
+            entity_rows=[src, tgt],
+            memberships=[mem],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[src.id, tgt.id],
+            evidence_pairs=[],
+            source_ids=[],
+            document_ids=[],
+            membership_ids=[mem.id],
+            timeline_event_ids=[],
+        )
+
+        s, t, memberships, _target_aliases, _source_aliases = await _validate_merge_request(
+            src.id, payload, closure
+        )
         assert s.id == src.id
         assert t.id == tgt.id
         assert memberships == [mem]
@@ -334,15 +397,30 @@ class TestValidateSplitRequest:
     async def test_validate_split_entity_missing(self) -> None:
         """Verify conflict when entity to split is not found."""
         ent_id = uuid4()
-        new_ent = EntityCreate(type="topic", name="New Node", description=None, aliases=[], metadata={})
+        new_ent = EntityCreate(
+            type="topic", name="New Node", description=None, aliases=[], metadata={}
+        )
         payload = EntitySplitRequest(
-            expected_revision=1, evidence_ids=[uuid4()], new_entity=new_ent, reason="split",
+            expected_revision=1,
+            evidence_ids=[uuid4()],
+            new_entity=new_ent,
+            reason="split",
         )
         closure = _Closure(
-            entity_rows=[], memberships=[], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[], evidence_pairs=[],
-            source_ids=[], document_ids=[], membership_ids=[], timeline_event_ids=[],
+            entity_rows=[],
+            memberships=[],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[],
+            evidence_pairs=[],
+            source_ids=[],
+            document_ids=[],
+            membership_ids=[],
+            timeline_event_ids=[],
         )
 
         with pytest.raises(CorrectionConflictError) as exc_info:
@@ -354,16 +432,30 @@ class TestValidateSplitRequest:
         """Verify split entity must preserve the original entity type."""
         src = _make_sample_entity(type_="person", revision=1)
         mem = _make_sample_membership(entity_id=src.id)
-        new_ent = EntityCreate(type="organization", name="New Node", description=None, aliases=[], metadata={})
+        new_ent = EntityCreate(
+            type="organization", name="New Node", description=None, aliases=[], metadata={}
+        )
         payload = EntitySplitRequest(
-            expected_revision=1, evidence_ids=[mem.id], new_entity=new_ent, reason="split",
+            expected_revision=1,
+            evidence_ids=[mem.id],
+            new_entity=new_ent,
+            reason="split",
         )
         closure = _Closure(
-            entity_rows=[src], memberships=[mem], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[src.id], evidence_pairs=[],
-            source_ids=[mem.source_id], document_ids=[mem.document_id],
-            membership_ids=[mem.id], timeline_event_ids=[],
+            entity_rows=[src],
+            memberships=[mem],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[src.id],
+            evidence_pairs=[],
+            source_ids=[mem.source_id],
+            document_ids=[mem.document_id],
+            membership_ids=[mem.id],
+            timeline_event_ids=[],
         )
 
         with pytest.raises(CorrectionConflictError) as exc_info:
@@ -375,16 +467,30 @@ class TestValidateSplitRequest:
         """Verify split entity must have a distinct canonical name."""
         src = _make_sample_entity(type_="topic", name="Acme Topic", revision=1)
         mem = _make_sample_membership(entity_id=src.id)
-        new_ent = EntityCreate(type="topic", name="acme topic", description=None, aliases=[], metadata={})
+        new_ent = EntityCreate(
+            type="topic", name="acme topic", description=None, aliases=[], metadata={}
+        )
         payload = EntitySplitRequest(
-            expected_revision=1, evidence_ids=[mem.id], new_entity=new_ent, reason="split",
+            expected_revision=1,
+            evidence_ids=[mem.id],
+            new_entity=new_ent,
+            reason="split",
         )
         closure = _Closure(
-            entity_rows=[src], memberships=[mem], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[src.id], evidence_pairs=[],
-            source_ids=[mem.source_id], document_ids=[mem.document_id],
-            membership_ids=[mem.id], timeline_event_ids=[],
+            entity_rows=[src],
+            memberships=[mem],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[src.id],
+            evidence_pairs=[],
+            source_ids=[mem.source_id],
+            document_ids=[mem.document_id],
+            membership_ids=[mem.id],
+            timeline_event_ids=[],
         )
 
         with pytest.raises(CorrectionConflictError) as exc_info:
@@ -396,18 +502,36 @@ class TestValidateSplitRequest:
         """Verify conflict when relationships attached to entity fail split validation."""
         src = _make_sample_entity(type_="topic", revision=1)
         mem = _make_sample_membership(entity_id=src.id)
-        new_ent = EntityCreate(type="topic", name="Distinct Name", description=None, aliases=[], metadata={})
+        new_ent = EntityCreate(
+            type="topic", name="Distinct Name", description=None, aliases=[], metadata={}
+        )
         payload = EntitySplitRequest(
-            expected_revision=1, evidence_ids=[mem.id], new_entity=new_ent, reason="split",
+            expected_revision=1,
+            evidence_ids=[mem.id],
+            new_entity=new_ent,
+            reason="split",
         )
         closure = _Closure(
-            entity_rows=[src], memberships=[mem], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[src.id], evidence_pairs=[],
-            source_ids=[], document_ids=[], membership_ids=[mem.id], timeline_event_ids=[],
+            entity_rows=[src],
+            memberships=[mem],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[src.id],
+            evidence_pairs=[],
+            source_ids=[],
+            document_ids=[],
+            membership_ids=[mem.id],
+            timeline_event_ids=[],
         )
 
-        with patch("modules.knowledge.relationships.public.validate_entity_split_plan", side_effect=ValueError("Split conflict")):
+        with patch(
+            "modules.knowledge.relationships.public.validate_entity_split_plan",
+            side_effect=ValueError("Split conflict"),
+        ):
             with pytest.raises(CorrectionConflictError) as exc_info:
                 await _validate_split_request(src.id, payload, closure)
         assert exc_info.value.conflict.code == "relationship_split_conflict"
@@ -418,15 +542,30 @@ class TestValidateSplitRequest:
         src = _make_sample_entity(type_="topic", revision=1)
         mem1 = _make_sample_membership(entity_id=src.id)
         mem2 = _make_sample_membership(entity_id=src.id)
-        new_ent = EntityCreate(type="topic", name="Distinct Name", description=None, aliases=[], metadata={})
+        new_ent = EntityCreate(
+            type="topic", name="Distinct Name", description=None, aliases=[], metadata={}
+        )
         payload = EntitySplitRequest(
-            expected_revision=1, evidence_ids=[mem1.id], new_entity=new_ent, reason="split",
+            expected_revision=1,
+            evidence_ids=[mem1.id],
+            new_entity=new_ent,
+            reason="split",
         )
         closure = _Closure(
-            entity_rows=[src], memberships=[mem1, mem2], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[src.id], evidence_pairs=[],
-            source_ids=[], document_ids=[], membership_ids=[mem1.id, mem2.id], timeline_event_ids=[],
+            entity_rows=[src],
+            memberships=[mem1, mem2],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[src.id],
+            evidence_pairs=[],
+            source_ids=[],
+            document_ids=[],
+            membership_ids=[mem1.id, mem2.id],
+            timeline_event_ids=[],
         )
 
         source, selected = await _validate_split_request(src.id, payload, closure)
@@ -443,7 +582,9 @@ class TestPreviewsAndExecution:
         """Verify preview_merge detects self_merge and returns conflict preview without raising."""
         session = AsyncMock()
         same_id = uuid4()
-        payload = EntityMergeRequest(into_id=same_id, expected_revision=1, expected_into_revision=1, reason="test")
+        payload = EntityMergeRequest(
+            into_id=same_id, expected_revision=1, expected_into_revision=1, reason="test"
+        )
 
         preview = await preview_merge(session, same_id, payload, **KW)
         assert isinstance(preview, EntityCorrectionPreview)
@@ -458,12 +599,18 @@ class TestPreviewsAndExecution:
         ent_id = uuid4()
         new_ent = EntityCreate(type="topic", name="Name", description=None, aliases=[], metadata={})
         payload = EntitySplitRequest(
-            expected_revision=1, evidence_ids=[uuid4()], new_entity=new_ent, reason="split",
+            expected_revision=1,
+            evidence_ids=[uuid4()],
+            new_entity=new_ent,
+            reason="split",
         )
 
         with (
             patch_entity_attr("resolve_canonical_entity_id", AsyncMock(return_value=ent_id)),
-            patch("modules.knowledge.entities.corrections._discover", side_effect=_conflict("mock_err", "Mock error")),
+            patch(
+                "modules.knowledge.entities.corrections._discover",
+                side_effect=_conflict("mock_err", "Mock error"),
+            ),
         ):
             preview = await preview_split(session, ent_id, payload, **KW)
 
@@ -476,7 +623,9 @@ class TestPreviewsAndExecution:
         """Verify merge_entity rejects self-merges with CorrectionConflictError."""
         session = AsyncMock()
         same_id = uuid4()
-        payload = EntityMergeRequest(into_id=same_id, expected_revision=1, expected_into_revision=1, reason="test")
+        payload = EntityMergeRequest(
+            into_id=same_id, expected_revision=1, expected_into_revision=1, reason="test"
+        )
 
         with pytest.raises(CorrectionConflictError) as exc_info:
             await merge_entity(session, same_id, payload, **KW)
@@ -488,9 +637,13 @@ class TestPreviewsAndExecution:
         session = AsyncMock()
         src_id = uuid4()
         tgt_id = uuid4()
-        payload = EntityMergeRequest(into_id=tgt_id, expected_revision=1, expected_into_revision=1, reason="test")
+        payload = EntityMergeRequest(
+            into_id=tgt_id, expected_revision=1, expected_into_revision=1, reason="test"
+        )
 
-        with patch_entity_attr("resolve_canonical_entity_id", AsyncMock(side_effect=[uuid4(), tgt_id])):
+        with patch_entity_attr(
+            "resolve_canonical_entity_id", AsyncMock(side_effect=[uuid4(), tgt_id])
+        ):
             with pytest.raises(CorrectionConflictError) as exc_info:
                 await merge_entity(session, src_id, payload, **KW)
             assert exc_info.value.conflict.code == "redirected_entity"
@@ -509,19 +662,38 @@ class TestPreviewsAndExecution:
         src = _make_sample_entity(name="Source Node", name_origin="derived", revision=1)
         tgt = _make_sample_entity(name="Target Node", name_origin="owner", revision=2)
         mem = _make_sample_membership(entity_id=src.id)
-        payload = EntityMergeRequest(into_id=tgt.id, expected_revision=1, expected_into_revision=2, reason="Merge duplicate")
+        payload = EntityMergeRequest(
+            into_id=tgt.id, expected_revision=1, expected_into_revision=2, reason="Merge duplicate"
+        )
 
         closure = _Closure(
-            entity_rows=[src, tgt], memberships=[mem], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[src.id, tgt.id], evidence_pairs=[],
-            source_ids=[mem.source_id], document_ids=[mem.document_id], membership_ids=[mem.id], timeline_event_ids=[],
+            entity_rows=[src, tgt],
+            memberships=[mem],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[src.id, tgt.id],
+            evidence_pairs=[],
+            source_ids=[mem.source_id],
+            document_ids=[mem.document_id],
+            membership_ids=[mem.id],
+            timeline_event_ids=[],
         )
 
         with (
-            patch_entity_attr("resolve_canonical_entity_id", AsyncMock(side_effect=[src.id, tgt.id])),
-            patch("modules.knowledge.entities.corrections._locked_closure", AsyncMock(return_value=closure)),
-            patch("modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()),
+            patch_entity_attr(
+                "resolve_canonical_entity_id", AsyncMock(side_effect=[src.id, tgt.id])
+            ),
+            patch(
+                "modules.knowledge.entities.corrections._locked_closure",
+                AsyncMock(return_value=closure),
+            ),
+            patch(
+                "modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()
+            ),
             patch("modules.knowledge.entities.corrections._temporal_correction", AsyncMock()),
             patch("modules.knowledge.entities.corrections.commit_with_replay", AsyncMock()),
             patch("modules.timeline.public.apply_entity_merge", AsyncMock(return_value=[])),
@@ -549,28 +721,50 @@ class TestPreviewsAndExecution:
         src = _make_sample_entity(type_="topic", revision=1)
         mem1 = _make_sample_membership(entity_id=src.id)
         mem2 = _make_sample_membership(entity_id=src.id)
-        new_ent = EntityCreate(type="topic", name="Split Node", description="New description", aliases=[], metadata={})
+        new_ent = EntityCreate(
+            type="topic", name="Split Node", description="New description", aliases=[], metadata={}
+        )
         payload = EntitySplitRequest(
-            expected_revision=1, evidence_ids=[mem1.id], new_entity=new_ent, reason="Split out concept",
+            expected_revision=1,
+            evidence_ids=[mem1.id],
+            new_entity=new_ent,
+            reason="Split out concept",
         )
 
         closure = _Closure(
-            entity_rows=[src], memberships=[mem1, mem2], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[src.id], evidence_pairs=[],
-            source_ids=[mem1.source_id], document_ids=[mem1.document_id],
-            membership_ids=[mem1.id, mem2.id], timeline_event_ids=[],
+            entity_rows=[src],
+            memberships=[mem1, mem2],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[src.id],
+            evidence_pairs=[],
+            source_ids=[mem1.source_id],
+            document_ids=[mem1.document_id],
+            membership_ids=[mem1.id, mem2.id],
+            timeline_event_ids=[],
         )
 
         with (
             patch_entity_attr("resolve_canonical_entity_id", AsyncMock(return_value=src.id)),
-            patch("modules.knowledge.entities.corrections._locked_closure", AsyncMock(return_value=closure)),
-            patch("modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()),
+            patch(
+                "modules.knowledge.entities.corrections._locked_closure",
+                AsyncMock(return_value=closure),
+            ),
+            patch(
+                "modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()
+            ),
             patch("modules.knowledge.entities.corrections._temporal_correction", AsyncMock()),
             patch("modules.knowledge.entities.corrections.commit_with_replay", AsyncMock()),
             patch("modules.timeline.public.apply_entity_split", AsyncMock(return_value=[])),
             patch("modules.timeline.public.revise_corrected_events", AsyncMock(return_value=[])),
-            patch("modules.knowledge.relationships.public.apply_entity_split", AsyncMock(return_value=[])),
+            patch(
+                "modules.knowledge.relationships.public.apply_entity_split",
+                AsyncMock(return_value=[]),
+            ),
         ):
             result = await split_entity(session, src.id, payload, **KW)
 
@@ -596,25 +790,44 @@ class TestPreviewsAndExecution:
         ent = _make_sample_entity(revision=1)
         mem = _make_sample_membership(entity_id=ent.id)
         payload = EntitySuppressionRequest(
-            expected_revision=1, evidence_ids=[mem.id], reason="Suppress false positive",
+            expected_revision=1,
+            evidence_ids=[mem.id],
+            reason="Suppress false positive",
         )
 
         closure = _Closure(
-            entity_rows=[ent], memberships=[mem], aliases=[], alias_supports=[],
-            field_supports=[], relationship_refs=[], redirect_rows=[],
-            relationship_entity_ids=[], entity_ids=[ent.id], evidence_pairs=[],
-            source_ids=[mem.source_id], document_ids=[mem.document_id],
-            membership_ids=[mem.id], timeline_event_ids=[],
+            entity_rows=[ent],
+            memberships=[mem],
+            aliases=[],
+            alias_supports=[],
+            field_supports=[],
+            relationship_refs=[],
+            redirect_rows=[],
+            relationship_entity_ids=[],
+            entity_ids=[ent.id],
+            evidence_pairs=[],
+            source_ids=[mem.source_id],
+            document_ids=[mem.document_id],
+            membership_ids=[mem.id],
+            timeline_event_ids=[],
         )
 
         with (
             patch_entity_attr("resolve_canonical_entity_id", AsyncMock(return_value=ent.id)),
-            patch("modules.knowledge.entities.corrections._locked_closure", AsyncMock(return_value=closure)),
-            patch("modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()),
+            patch(
+                "modules.knowledge.entities.corrections._locked_closure",
+                AsyncMock(return_value=closure),
+            ),
+            patch(
+                "modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()
+            ),
             patch("modules.knowledge.entities.corrections._temporal_correction", AsyncMock()),
             patch("modules.knowledge.entities.corrections.commit_with_replay", AsyncMock()),
             patch_entity_attr("record_owner_action", AsyncMock()),
-            patch("modules.knowledge.relationships.public.remove_entity_closure", AsyncMock(return_value=[])),
+            patch(
+                "modules.knowledge.relationships.public.remove_entity_closure",
+                AsyncMock(return_value=[]),
+            ),
         ):
             result = await suppress_candidates(session, ent.id, payload, **KW)
 
@@ -622,7 +835,11 @@ class TestPreviewsAndExecution:
         assert result.operation == "suppress"
         assert result.entity_id == ent.id
         # Check that EntityCorrectionDecision was added
-        added_decisions = [call[0][0] for call in session.add.call_args_list if isinstance(call[0][0], EntityCorrectionDecision)]
+        added_decisions = [
+            call[0][0]
+            for call in session.add.call_args_list
+            if isinstance(call[0][0], EntityCorrectionDecision)
+        ]
         assert len(added_decisions) >= 1
         assert added_decisions[0].decision == "suppress"
         assert added_decisions[0].reason == "Suppress false positive"

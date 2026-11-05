@@ -49,12 +49,21 @@ def _validated_next(value: str, owner: str, repository: str) -> tuple[str, int]:
     query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
     # GitHub's Link header names the repository by numeric id (/repositories/<id>/releases) rather than owner/name.
     # Only the page number is taken from it; the returned URL is rebuilt from the configured owner/repository.
-    path_ok = parsed.path.casefold() == expected_path.casefold() or re.fullmatch(r"/repositories/\d+/releases", parsed.path) is not None
+    path_ok = (
+        parsed.path.casefold() == expected_path.casefold()
+        or re.fullmatch(r"/repositories/\d+/releases", parsed.path) is not None
+    )
     if (
-        parsed.scheme != "https" or parsed.netloc != "api.github.com" or parsed.username
-        or parsed.password or parsed.fragment or not path_ok
-        or set(query) != {"per_page", "page"} or query["per_page"] != ["100"]
-        or len(query["page"]) != 1 or not query["page"][0].isdigit()
+        parsed.scheme != "https"
+        or parsed.netloc != "api.github.com"
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+        or not path_ok
+        or set(query) != {"per_page", "page"}
+        or query["per_page"] != ["100"]
+        or len(query["page"]) != 1
+        or not query["page"][0].isdigit()
     ):
         raise ValueError("github_pagination_invalid")
     page = int(query["page"][0])
@@ -72,18 +81,32 @@ def _release_canonical(
     parsed = urlsplit(value)
     prefix = f"/{owner}/{repository}/releases"
     path = parsed.path
-    tag_path = path[len(prefix) + len("/tag/"):] if path.casefold().startswith(prefix.casefold() + "/tag/") else None
+    tag_path = (
+        path[len(prefix) + len("/tag/") :]
+        if path.casefold().startswith(prefix.casefold() + "/tag/")
+        else None
+    )
     if (
-        parsed.scheme == "https" and parsed.netloc == "github.com" and not parsed.username
-        and not parsed.password and not parsed.query and not parsed.fragment and len(value) <= 2048
-        and tag_name is not None and tag_path is not None and unquote(tag_path) == tag_name
+        parsed.scheme == "https"
+        and parsed.netloc == "github.com"
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+        and len(value) <= 2048
+        and tag_name is not None
+        and tag_path is not None
+        and unquote(tag_path) == tag_name
     ):
         return value
     return None
 
 
 async def _get_page(
-    url: str, byte_limit: int, timeout_seconds: float, before_request: Callable[[], Awaitable[None]],
+    url: str,
+    byte_limit: int,
+    timeout_seconds: float,
+    before_request: Callable[[], Awaitable[None]],
 ) -> tuple[list[object], str | None, int]:
     """Fetch one public releases page without following redirects or reading unbounded JSON.
 
@@ -92,16 +115,25 @@ async def _get_page(
     try:
         async with asyncio.timeout(timeout_seconds):
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(timeout_seconds), trust_env=False, follow_redirects=False, verify=True
+                timeout=httpx.Timeout(timeout_seconds),
+                trust_env=False,
+                follow_redirects=False,
+                verify=True,
             ) as client:
                 await before_request()
                 async with client.stream(
-                    "GET", url, headers=_API_HEADERS, extensions={"trace": send_fence_trace(before_request)},
+                    "GET",
+                    url,
+                    headers=_API_HEADERS,
+                    extensions={"trace": send_fence_trace(before_request)},
                 ) as response:
                     now = datetime.now(UTC)
                     if response.status_code == 429 or (
                         response.status_code == 403
-                        and (response.headers.get("x-ratelimit-remaining") == "0" or response.headers.get("retry-after"))
+                        and (
+                            response.headers.get("x-ratelimit-remaining") == "0"
+                            or response.headers.get("retry-after")
+                        )
                     ):
                         raise ProviderRateLimited(_retry_deadline(response.headers, now))
                     if response.status_code >= 400 or 300 <= response.status_code < 400:
@@ -122,9 +154,20 @@ async def _get_page(
 
 
 def _release_source_fields(
-    *, draft: bool, prerelease: bool, node_id: str | None, name_value: str | None, name: str,
-    body_value: str | None, body_text: str, html_url: str | None, tag_value: str | None, tag: str,
-    author: object, created_at: str | None, published_at: str | None,
+    *,
+    draft: bool,
+    prerelease: bool,
+    node_id: str | None,
+    name_value: str | None,
+    name: str,
+    body_value: str | None,
+    body_text: str,
+    html_url: str | None,
+    tag_value: str | None,
+    tag: str,
+    author: object,
+    created_at: str | None,
+    published_at: str | None,
 ) -> tuple[dict[str, object], bool]:
     """Build the bounded provenance ``source_fields`` of a release and whether any field was truncated.
 
@@ -135,7 +178,9 @@ def _release_source_fields(
         "prerelease": prerelease,
     }
     source_fields_truncated = (
-        len(name) > 500 or len(body_text) > 4000 or len(tag) > 255
+        len(name) > 500
+        or len(body_text) > 4000
+        or len(tag) > 255
         or (node_id is not None and len(node_id) > 256)
     )
     if isinstance(node_id, str):
@@ -160,7 +205,10 @@ def _release_source_fields(
 
 
 def _release_record(
-    release: object, owner: str, repository: str, collected_at: datetime,
+    release: object,
+    owner: str,
+    repository: str,
+    collected_at: datetime,
 ) -> IngestionRecord | None:
     """Validate one REST release object and map it to a bounded ingestion record.
 
@@ -190,7 +238,9 @@ def _release_record(
     tag_candidate = release.get("tag_name") if isinstance(release.get("tag_name"), str) else None
     canonical_url = _release_canonical(html_url, owner, repository, tag_candidate)
     created_at = release.get("created_at") if isinstance(release.get("created_at"), str) else None
-    published_at = release.get("published_at") if isinstance(release.get("published_at"), str) else None
+    published_at = (
+        release.get("published_at") if isinstance(release.get("published_at"), str) else None
+    )
     if (
         (created_at is not None and len(created_at) > 64)
         or (published_at is not None and len(published_at) > 64)
@@ -219,9 +269,19 @@ def _release_record(
         raise ValueError("github_response_invalid")
     title = name or tag or f"Release {release_id}"
     source_fields, source_fields_truncated = _release_source_fields(
-        draft=draft, prerelease=prerelease, node_id=node_id, name_value=name_value, name=name,
-        body_value=body_value, body_text=body_text, html_url=html_url, tag_value=tag_value, tag=tag,
-        author=author, created_at=created_at, published_at=published_at,
+        draft=draft,
+        prerelease=prerelease,
+        node_id=node_id,
+        name_value=name_value,
+        name=name,
+        body_value=body_value,
+        body_text=body_text,
+        html_url=html_url,
+        tag_value=tag_value,
+        tag=tag,
+        author=author,
+        created_at=created_at,
+        published_at=published_at,
     )
     content_truncated = len(content) > 4000 or source_fields_truncated
     provider_record = ProviderRecordMetadata(
@@ -275,7 +335,12 @@ def _mark_records_truncated(records: list[IngestionRecord]) -> None:
 
 
 def _next_release_page(
-    link: str | None, page: int, record_count: int, owner: str, repository: str, seen_pages: set[int],
+    link: str | None,
+    page: int,
+    record_count: int,
+    owner: str,
+    repository: str,
+    seen_pages: set[int],
 ) -> tuple[str | None, bool]:
     """Decide the next page URL from the ``Link`` header and whether a cap truncated the sweep.
 
@@ -296,7 +361,10 @@ def _next_release_page(
 
 
 async def collect_github_releases(
-    source: ConnectorSource, *, collected_at: datetime, before_request: Callable[[], Awaitable[None]],
+    source: ConnectorSource,
+    *,
+    collected_at: datetime,
+    before_request: Callable[[], Awaitable[None]],
 ) -> ProviderCollectionPage:
     """Collect at most five validated REST pages of public releases, preserving only metadata and body text."""
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
@@ -304,7 +372,10 @@ async def collect_github_releases(
     config = ConnectorConfig.model_validate(source.configuration)
     owner, repository = config.github_owner, config.github_repository
     if (
-        source.provider != "github_releases" or source.type != "api" or not owner or not repository
+        source.provider != "github_releases"
+        or source.type != "api"
+        or not owner
+        or not repository
         or config.history_mode != "returned_snapshot"
     ):
         raise ValueError("provider_scope_invalid")
@@ -342,7 +413,9 @@ async def collect_github_releases(
             records.append(record)
             if len(records) >= 500:
                 break
-        next_url, capped = _next_release_page(link, page, len(records), owner, repository, seen_pages)
+        next_url, capped = _next_release_page(
+            link, page, len(records), owner, repository, seen_pages
+        )
         truncated = truncated or capped
     if truncated:
         _mark_records_truncated(records)

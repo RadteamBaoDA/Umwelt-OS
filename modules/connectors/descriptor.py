@@ -12,7 +12,9 @@ class ConnectorsDescriptor(ModuleDescriptor):
     id: str = "connectors"
     name: str = "Connectors"
     version: str = "1.0.0"
-    description: str = "Manage configured connector credentials, collection, and provider synchronization."
+    description: str = (
+        "Manage configured connector credentials, collection, and provider synchronization."
+    )
     enabled: bool = True
     dependencies: tuple[str, ...] = ("sources", "ingestion")
     optional_dependencies: tuple[str, ...] = (

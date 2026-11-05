@@ -12,12 +12,14 @@ from core.mcp_endpoint import normalize_mcp_url
 
 class McpTransport(str, Enum):  # noqa: UP042  # str+Enum kept: StrEnum changes str()/format() behavior
     """Supported server transport names; stdio authority is an admin deployment profile only."""
+
     STREAMABLE_HTTP = "streamable_http"
     STDIO = "stdio"
 
 
 class McpRisk(str, Enum):  # noqa: UP042  # str+Enum kept: StrEnum changes str()/format() behavior
     """Explicit owner review classification for a selected immutable capability."""
+
     READ_ONLY = "READ_ONLY"
     INTERNAL_WRITE = "INTERNAL_WRITE"
     EXTERNAL_WRITE = "EXTERNAL_WRITE"
@@ -26,11 +28,13 @@ class McpRisk(str, Enum):  # noqa: UP042  # str+Enum kept: StrEnum changes str()
 
 class McpStrictModel(BaseModel):
     """Reject unknown fields and attribute rebinding; nested JSON remains mutable and projections copy it."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class CredentialUpdate(McpStrictModel):
     """Write-only credential operation; retain/remove carry no value, replace requires one."""
+
     action: str
     value: SecretStr | None = None
 
@@ -48,12 +52,15 @@ class CredentialUpdate(McpStrictModel):
 
 class ConnectionDraft(McpStrictModel):
     """Bounded HTTP endpoint or admin profile selector; it contains no actor, launch strings, or approval authority."""
+
     name: str = Field(min_length=1, max_length=120)
     transport: McpTransport
     endpoint: str | None = Field(default=None, max_length=2048)
     deployment_profile_id: str | None = Field(default=None, min_length=1, max_length=80)
     auth_method: str = Field(default="none", pattern="^(none|bearer)$")
-    credential_update: CredentialUpdate = Field(default_factory=lambda: CredentialUpdate(action="retain"))
+    credential_update: CredentialUpdate = Field(
+        default_factory=lambda: CredentialUpdate(action="retain")
+    )
     timeout_seconds: int = Field(default=30, ge=1, le=60)
 
     @model_validator(mode="after")
@@ -67,7 +74,9 @@ class ConnectionDraft(McpStrictModel):
         if self.transport == McpTransport.STDIO and (
             self.auth_method != "none" or self.credential_update.action == "replace"
         ):
-            raise ValueError("stdio profiles cannot use bearer authentication or supplied credentials")
+            raise ValueError(
+                "stdio profiles cannot use bearer authentication or supplied credentials"
+            )
         if self.endpoint is not None:
             scheme, _host, _port, _path = normalize_mcp_url(self.endpoint)
             if scheme == "http" and self.auth_method != "none":
@@ -81,12 +90,14 @@ class ConnectionDraft(McpStrictModel):
 
 class ConnectionSave(McpStrictModel):
     """Optimistic connection edit request tied to the expected durable revision."""
+
     expected_revision: int = Field(ge=0)
     draft: ConnectionDraft
 
 
 class ConnectionRead(McpStrictModel):
     """Credential-free snapshot exposing a stdio review hash but no manifest launch inputs."""
+
     id: UUID
     name: str
     transport: McpTransport
@@ -105,6 +116,7 @@ class ConnectionRead(McpStrictModel):
 
 class CapabilityDescriptor(McpStrictModel):
     """Server-returned descriptor after bounds and JSON shape validation; never caller authority."""
+
     kind: str
     remote_key: str = Field(min_length=1, max_length=2048)
     descriptor: dict[str, Any]
@@ -115,13 +127,18 @@ class CapabilityDescriptor(McpStrictModel):
     def enforce_descriptor_size(cls, value: dict[str, Any]) -> dict[str, Any]:
         """Reject oversized descriptor JSON before storing immutable discovery content."""
         import json
-        if len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 65_536:
+
+        if (
+            len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+            > 65_536
+        ):
             raise ValueError("Descriptor exceeds 64 KiB")
         return value
 
 
 class DiscoveryPersist(McpStrictModel):
     """Internal server-owned discovery payload carrying the connection's captured profile hash."""
+
     connection_revision: int = Field(ge=1)
     deployment_profile_hash: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
     protocol: str = Field(min_length=1, max_length=40)
@@ -133,8 +150,13 @@ class DiscoveryPersist(McpStrictModel):
     def validate_aggregate(self) -> "DiscoveryPersist":
         """Require unique capability keys and bound the complete snapshot before it is committed atomically."""
         import json
+
         keys = [(item.kind, item.remote_key) for item in self.capabilities]
-        total = len(json.dumps([item.model_dump(mode="json") for item in self.capabilities], separators=(",", ":")).encode())
+        total = len(
+            json.dumps(
+                [item.model_dump(mode="json") for item in self.capabilities], separators=(",", ":")
+            ).encode()
+        )
         if len(set(keys)) != len(keys) or total > 1_000_000:
             raise ValueError("Discovery descriptors must be unique and fit within 1 MiB")
         if len(json.dumps(self.server_info, separators=(",", ":")).encode()) > 8_192:
@@ -144,6 +166,7 @@ class DiscoveryPersist(McpStrictModel):
 
 class CapabilityRead(McpStrictModel):
     """Detached descriptor projection; nested JSON is a copied payload, not a deeply immutable authority object."""
+
     id: UUID
     kind: str
     remote_key: str
@@ -153,6 +176,7 @@ class CapabilityRead(McpStrictModel):
 
 class DiscoveryRead(McpStrictModel):
     """Detached discovery snapshot exposing its deployment review identity and descriptor data."""
+
     id: UUID
     connection_id: UUID
     connection_revision: int
@@ -165,6 +189,7 @@ class DiscoveryRead(McpStrictModel):
 
 class GrantChoice(McpStrictModel):
     """Exact capability selection and scoped owner review; wildcards are impossible."""
+
     capability_id: UUID
     descriptor_hash: str = Field(pattern="^[0-9a-f]{64}$")
     purpose: str
@@ -179,6 +204,7 @@ class GrantChoice(McpStrictModel):
         """Preserve no-expiry grants; supplied expiries must be future timezone-aware values normalized to UTC."""
         from datetime import UTC
         from datetime import datetime as dt
+
         if value is None:
             return None
         if value.tzinfo is None or value.utcoffset() is None:
@@ -195,10 +221,14 @@ class GrantChoice(McpStrictModel):
             raise ValueError("Grant purpose and destinations must be explicit")
         if self.purpose == "collection" and self.risk != McpRisk.READ_ONLY:
             raise ValueError("Collection grants must be reviewed as read-only")
-        if len(set(self.source_ids)) != len(self.source_ids) or len(set(self.destinations)) != len(self.destinations):
+        if len(set(self.source_ids)) != len(self.source_ids) or len(set(self.destinations)) != len(
+            self.destinations
+        ):
             raise ValueError("Grant scopes must not contain duplicates")
         if any(not value or len(value) > 255 for value in self.destinations):
-            raise ValueError("Grant destinations must be nonempty strings of at most 255 characters")
+            raise ValueError(
+                "Grant destinations must be nonempty strings of at most 255 characters"
+            )
         if sum(len(value.encode("utf-8")) for value in self.destinations) > 1_024:
             raise ValueError("Grant destination scope exceeds its aggregate size limit")
         return self
@@ -206,6 +236,7 @@ class GrantChoice(McpStrictModel):
 
 class GrantSelection(McpStrictModel):
     """Atomic replacement request anchored to one current connection and discovery revision."""
+
     expected_connection_revision: int = Field(ge=1)
     discovery_id: UUID
     selections: tuple[GrantChoice, ...] = Field(max_length=200)
@@ -213,6 +244,7 @@ class GrantSelection(McpStrictModel):
 
 class GrantRead(McpStrictModel):
     """Detached grant scope and copied profile identity without launch or authentication material."""
+
     id: UUID
     connection_id: UUID
     capability_id: UUID
@@ -230,6 +262,7 @@ class GrantRead(McpStrictModel):
 
 class ExecutionFence(McpStrictModel):
     """Server-derived detached pre-dispatch authority including the exact profile hash, never launch material."""
+
     connection_id: UUID
     connection_revision: int
     deployment_profile_hash: str | None = Field(default=None, pattern="^[0-9a-f]{64}$")
@@ -247,6 +280,7 @@ class ExecutionFence(McpStrictModel):
 
 class InboundBinding(McpStrictModel):
     """Exact native registered tool contract authorized for one inbound client."""
+
     name: str = Field(min_length=1, max_length=160)
     version: str = Field(min_length=1, max_length=40)
     schema_fingerprint: str = Field(pattern="^[0-9a-f]{64}$")
@@ -254,6 +288,7 @@ class InboundBinding(McpStrictModel):
 
 class InboundClientCreate(McpStrictModel):
     """Create a separately scoped external identity with explicit audience, tools, sources, and expiry."""
+
     name: str = Field(min_length=1, max_length=120)
     audience: str = Field(min_length=1, max_length=255)
     tool_bindings: tuple[InboundBinding, ...] = Field(min_length=1, max_length=50)
@@ -266,15 +301,22 @@ class InboundClientCreate(McpStrictModel):
         """Require bounded nonempty scope labels, a future aware expiry, and unique exact tool contracts."""
         from datetime import UTC
         from datetime import datetime as dt
+
         if self.expires_at.tzinfo is None or self.expires_at.utcoffset() is None:
             raise ValueError("Inbound client expiry must include a timezone")
         object.__setattr__(self, "expires_at", self.expires_at.astimezone(UTC))
-        if self.expires_at <= dt.now(UTC) or len({(b.name, b.version, b.schema_fingerprint) for b in self.tool_bindings}) != len(self.tool_bindings):
+        if self.expires_at <= dt.now(UTC) or len(
+            {(b.name, b.version, b.schema_fingerprint) for b in self.tool_bindings}
+        ) != len(self.tool_bindings):
             raise ValueError("Inbound client needs unique bindings and a future expiry")
-        if len(set(self.source_ids)) != len(self.source_ids) or len(set(self.capabilities)) != len(self.capabilities):
+        if len(set(self.source_ids)) != len(self.source_ids) or len(set(self.capabilities)) != len(
+            self.capabilities
+        ):
             raise ValueError("Inbound client scopes must be unique")
         if any(not value or len(value) > 80 for value in self.capabilities):
-            raise ValueError("Inbound capability labels must be nonempty strings of at most 80 characters")
+            raise ValueError(
+                "Inbound capability labels must be nonempty strings of at most 80 characters"
+            )
         if sum(len(value.encode("utf-8")) for value in self.capabilities) > 1_024:
             raise ValueError("Inbound capability scope exceeds its aggregate size limit")
         return self
@@ -282,6 +324,7 @@ class InboundClientCreate(McpStrictModel):
 
 class InboundClientRead(McpStrictModel):
     """Inbound client metadata with no raw bearer token."""
+
     id: UUID
     name: str
     token_prefix: str
@@ -296,12 +339,14 @@ class InboundClientRead(McpStrictModel):
 
 class InboundClientIssued(McpStrictModel):
     """One-time token issuance response; clients are never able to retrieve this token later."""
+
     client: InboundClientRead
     token: SecretStr
 
 
 class InboundPrincipal(McpStrictModel):
     """Verified detached inbound identity used to derive a non-owner execution principal."""
+
     client_id: UUID
     workspace_id: UUID
     owner_id: int

@@ -28,7 +28,9 @@ from modules.dashboard.live_credentials import read_live_credentials, require_li
 
 router = APIRouter(prefix="/api/v1/live-map", tags=["live-map"])
 Session = Annotated[AsyncSession, Depends(get_session)]
-Workspace = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
+Workspace = Annotated[
+    WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)
+]
 _cache: dict[tuple[Any, ...], tuple[float, dict[str, Any]]] = {}
 _tiles: dict[tuple[Any, ...], tuple[float, bytes]] = {}
 _next_send: dict[str, float] = {}
@@ -40,6 +42,7 @@ _HEADERS = {"Cache-Control": "private, no-store", "Vary": "Cookie, X-Workspace-I
 
 async def _while_connected[T](request: Request, operation: Coroutine[Any, Any, T]) -> T:
     """Cancel and drain final revalidation if this client's request disconnects."""
+
     async def watch() -> None:
         """Watch only this request while its final database work is pending."""
         while not await request.is_disconnected():  # noqa: ASYNC110  # polls the ASGI disconnect state; there is no event to await
@@ -62,6 +65,7 @@ async def _while_connected[T](request: Request, operation: Coroutine[Any, Any, T
 @dataclass(eq=False, slots=True)
 class _Observer:
     """One independently authorized client waiting for a shared transient fetch."""
+
     request: Request
     workspace: WorkspaceContext | AdminWorkspaceReadContext
     fence: Any
@@ -71,6 +75,7 @@ class _Observer:
 @dataclass(slots=True)
 class _SharedJob:
     """In-memory provider task with a bounded set of interested client sessions."""
+
     observers: set[_Observer] = field(default_factory=set)
     task: asyncio.Task[Any] | None = None
 
@@ -88,7 +93,9 @@ async def _shared_before_send(job: _SharedJob, provider: str) -> None:
         if observer not in job.observers or await observer.request.is_disconnected():
             continue
         try:
-            await _before_send(observer.request, observer.workspace, observer.fence, observer.revision, provider)
+            await _before_send(
+                observer.request, observer.workspace, observer.fence, observer.revision, provider
+            )
             # A cancelled waiter may leave while its database fence is being checked.
             if observer in job.observers and not await observer.request.is_disconnected():
                 return
@@ -103,8 +110,11 @@ async def _shared_before_send(job: _SharedJob, provider: str) -> None:
 
 
 @asynccontextmanager
-async def _join_shared[T](key: tuple[Any, ...], observer: _Observer,
-                          factory: Callable[[_SharedJob], Coroutine[Any, Any, T]]) -> AsyncIterator[T]:
+async def _join_shared[T](
+    key: tuple[Any, ...],
+    observer: _Observer,
+    factory: Callable[[_SharedJob], Coroutine[Any, Any, T]],
+) -> AsyncIterator[T]:
     """Share one fetch; disconnecting or cancelling a waiter never cancels its peers' work.
 
     No await occurs while registering/removing an observer, so one event loop serializes
@@ -160,7 +170,9 @@ class LiveMapHeadersMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Set headers at response start, including framework validation failures."""
-        if scope["type"] != "http" or not (scope["path"] == "/api/v1/live-map" or scope["path"].startswith("/api/v1/live-map/")):
+        if scope["type"] != "http" or not (
+            scope["path"] == "/api/v1/live-map" or scope["path"].startswith("/api/v1/live-map/")
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -173,7 +185,9 @@ class LiveMapHeadersMiddleware:
                 started = True
                 headers = MutableHeaders(scope=message)
                 headers["Cache-Control"] = "private, no-store"
-                vary = [value.strip() for value in headers.get("Vary", "").split(",") if value.strip()]
+                vary = [
+                    value.strip() for value in headers.get("Vary", "").split(",") if value.strip()
+                ]
                 if "*" not in vary:
                     for name in ("Cookie", "X-Workspace-ID"):
                         if name.lower() not in {value.lower() for value in vary}:
@@ -187,7 +201,16 @@ class LiveMapHeadersMiddleware:
             if started:
                 raise
             # Unexpected provider/parser errors must not echo or log upstream content.
-            await JSONResponse({"error": {"code": "LIVE_MAP_UNAVAILABLE", "message": "Live map unavailable", "details": {}}}, status_code=503)(scope, receive, send_private)
+            await JSONResponse(
+                {
+                    "error": {
+                        "code": "LIVE_MAP_UNAVAILABLE",
+                        "message": "Live map unavailable",
+                        "details": {},
+                    }
+                },
+                status_code=503,
+            )(scope, receive, send_private)
 
 
 async def _admit(provider: str) -> None:
@@ -204,22 +227,38 @@ async def _admit(provider: str) -> None:
         recent.append(now)
 
 
-async def _before_send(request: Request, workspace: WorkspaceContext | AdminWorkspaceReadContext, fence: Any, revision: int, provider: str) -> None:
+async def _before_send(
+    request: Request,
+    workspace: WorkspaceContext | AdminWorkspaceReadContext,
+    fence: Any,
+    revision: int,
+    provider: str,
+) -> None:
     """Stop disconnected requests and revalidate the exact session and workspace before I/O."""
     if await request.is_disconnected():
         raise HTTPException(499, "client_disconnected", headers=_HEADERS)
     settings = request.app.state.settings
     async with request.app.state.session_factory() as session:
         await lock_access_fence(
-            session, scope=workspace, expected=fence, multi_workspace_enabled=settings.multi_workspace_enabled,
+            session,
+            scope=workspace,
+            expected=fence,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
             auth_sessions=(authenticated_session_ref(request),),
         )
-        current = await read_live_credentials(session, scope=workspace, settings=settings, multi_workspace_enabled=settings.multi_workspace_enabled)
+        current = await read_live_credentials(
+            session,
+            scope=workspace,
+            settings=settings,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
+        )
         if current.revision != revision:
             raise HTTPException(409, "live_map_configuration_changed", headers=_HEADERS)
         require_live_terms(current, provider)
         try:
-            await live_map.debit_live_send(session, provider=provider, workspace_id=workspace.workspace_id)
+            await live_map.debit_live_send(
+                session, provider=provider, workspace_id=workspace.workspace_id
+            )
         except live_map.QuotaDeferred:
             raise HTTPException(429, "provider_rate_limited", headers=_HEADERS) from None
         except ValueError:
@@ -239,8 +278,11 @@ async def _backoff(request: Request, provider: str, until: datetime) -> None:
 
 @router.get("/events")
 async def events(
-    provider: Annotated[str, Query(max_length=32)], request: Request, response: Response,
-    session: Session, workspace: Workspace,
+    provider: Annotated[str, Query(max_length=32)],
+    request: Request,
+    response: Response,
+    session: Session,
+    workspace: Workspace,
     country: Annotated[str | None, Query(max_length=3)] = None,
     owner: Annotated[str | None, Query(max_length=39)] = None,
     repo: Annotated[str | None, Query(max_length=100)] = None,
@@ -248,20 +290,27 @@ async def events(
 ) -> dict[str, Any]:
     """Fetch bounded provider records on demand and publish only after workspace/session revalidation."""
     response.headers.update(_HEADERS)
-    if not isinstance(workspace, AdminWorkspaceReadContext) and (not isinstance(workspace, WorkspaceContext) or workspace.role != "owner"):
+    if not isinstance(workspace, AdminWorkspaceReadContext) and (
+        not isinstance(workspace, WorkspaceContext) or workspace.role != "owner"
+    ):
         raise HTTPException(404, "Workspace not found", headers=_HEADERS)
     if provider not in live_map.PROVIDERS:
         raise HTTPException(422, "provider_invalid", headers=_HEADERS)
     settings = request.app.state.settings
     gate = settings.multi_workspace_enabled
     fence = await read_access_fence(session, scope=workspace, multi_workspace_enabled=gate)
-    credentials = await read_live_credentials(session, scope=workspace, settings=settings, multi_workspace_enabled=gate)
+    credentials = await read_live_credentials(
+        session, scope=workspace, settings=settings, multi_workspace_enabled=gate
+    )
     require_live_terms(credentials, provider)
     await session.rollback()
     key = (workspace.workspace_id, credentials.revision, provider, country, owner, repo, cik)
+
     async def publish(result: dict[str, Any], *, fetched: bool) -> dict[str, Any]:
         """Revalidate this client's access and cache only results matching the captured revision."""
-        current = await read_live_credentials(session, scope=workspace, settings=settings, multi_workspace_enabled=gate)
+        current = await read_live_credentials(
+            session, scope=workspace, settings=settings, multi_workspace_enabled=gate
+        )
         if current.revision != credentials.revision:
             raise HTTPException(409, "live_map_configuration_changed", headers=_HEADERS)
         require_live_terms(current, provider)
@@ -273,8 +322,15 @@ async def events(
                 if key not in _cache and len(_cache) >= 128:
                     _cache.pop(next(iter(_cache)))
                 _cache[key] = (time.monotonic() + live_map.live_cache_seconds(provider), result)
-        require_publication_gate(request, PublicationFence(scope=workspace, access_fence=fence,
-                                 auth_session=authenticated_session_ref(request), grants=()))
+        require_publication_gate(
+            request,
+            PublicationFence(
+                scope=workspace,
+                access_fence=fence,
+                auth_session=authenticated_session_ref(request),
+                grants=(),
+            ),
+        )
         return result
 
     cached = _cache.get(key)
@@ -283,44 +339,84 @@ async def events(
 
     async def collect(job: _SharedJob) -> dict[str, Any]:
         """Fetch bounded events on behalf of a currently authorized observer."""
+
         async def before_send() -> None:
             """Authorize a connected observer immediately before each physical send."""
             await _shared_before_send(job, provider)
 
         async with _parallel:
             items, truncated = await live_map.fetch_events(
-                provider, country=country, owner=owner, repo=repo, cik=cik,
+                provider,
+                country=country,
+                owner=owner,
+                repo=repo,
+                cik=cik,
                 secret=credentials.firms_key if provider == "firms" else None,
-                contact=credentials.sec_contact_email, before_send=before_send,
+                contact=credentials.sec_contact_email,
+                before_send=before_send,
             )
         return {"items": items, "fetched_at": datetime.now(UTC).isoformat(), "truncated": truncated}
 
     try:
-        async with _join_shared(("events", *key), _Observer(request, workspace, fence, credentials.revision), collect) as result:
+        async with _join_shared(
+            ("events", *key), _Observer(request, workspace, fence, credentials.revision), collect
+        ) as result:
             return await _while_connected(request, publish(result, fetched=True))
     except ProviderRateLimited as exc:
         await _backoff(request, provider, exc.next_eligible_at)
         async with _lock:
-            _next_send[provider] = time.monotonic() + min(3600, max(1, (exc.next_eligible_at - datetime.now(UTC)).total_seconds()))
+            _next_send[provider] = time.monotonic() + min(
+                3600, max(1, (exc.next_eligible_at - datetime.now(UTC)).total_seconds())
+            )
         raise HTTPException(429, "provider_rate_limited", headers=_HEADERS) from None
     except ValueError as exc:
-        detail = str(exc) if str(exc) in {"provider_scope_invalid", "provider_temporarily_unavailable", "contact_required"} else "provider_response_invalid"
-        raise HTTPException(422 if detail in {"provider_scope_invalid", "contact_required"} else 503, detail, headers=_HEADERS) from None
-    except (httpx.HTTPError, OSError, TimeoutError, KeyError, IndexError, TypeError, live_map.CollectionIncomplete, live_map.UnsafeDestination, live_map.ProviderHttpError):
+        detail = (
+            str(exc)
+            if str(exc)
+            in {"provider_scope_invalid", "provider_temporarily_unavailable", "contact_required"}
+            else "provider_response_invalid"
+        )
+        raise HTTPException(
+            422 if detail in {"provider_scope_invalid", "contact_required"} else 503,
+            detail,
+            headers=_HEADERS,
+        ) from None
+    except (
+        httpx.HTTPError,
+        OSError,
+        TimeoutError,
+        KeyError,
+        IndexError,
+        TypeError,
+        live_map.CollectionIncomplete,
+        live_map.UnsafeDestination,
+        live_map.ProviderHttpError,
+    ):
         raise HTTPException(503, "provider_unavailable", headers=_HEADERS) from None
 
 
 @router.get("/weather/{layer}/{z}/{x}/{y}")
-async def weather(layer: str, z: int, x: int, y: int, request: Request, session: Session, workspace: Workspace) -> Response:
+async def weather(
+    layer: str, z: int, x: int, y: int, request: Request, session: Session, workspace: Workspace
+) -> Response:
     """Proxy a bounded weather tile under the same workspace and revision fences as events."""
-    if not isinstance(workspace, AdminWorkspaceReadContext) and (not isinstance(workspace, WorkspaceContext) or workspace.role != "owner"):
+    if not isinstance(workspace, AdminWorkspaceReadContext) and (
+        not isinstance(workspace, WorkspaceContext) or workspace.role != "owner"
+    ):
         raise HTTPException(404, "Workspace not found", headers=_HEADERS)
-    if layer not in {"temperature", "precipitation", "wind", "clouds"} or not 0 <= z <= 18 or not 0 <= x < 2**z or not 0 <= y < 2**z:
+    if (
+        layer not in {"temperature", "precipitation", "wind", "clouds"}
+        or not 0 <= z <= 18
+        or not 0 <= x < 2**z
+        or not 0 <= y < 2**z
+    ):
         raise HTTPException(422, "weather_tile_invalid", headers=_HEADERS)
     settings = request.app.state.settings
     gate = settings.multi_workspace_enabled
     fence = await read_access_fence(session, scope=workspace, multi_workspace_enabled=gate)
-    credentials = await read_live_credentials(session, scope=workspace, settings=settings, multi_workspace_enabled=gate)
+    credentials = await read_live_credentials(
+        session, scope=workspace, settings=settings, multi_workspace_enabled=gate
+    )
     require_live_terms(credentials, "openweather")
     await session.rollback()
     openweather_key = credentials.openweather_key
@@ -331,7 +427,9 @@ async def weather(layer: str, z: int, x: int, y: int, request: Request, session:
 
     async def publish(body: bytes, *, fetched: bool) -> Response:
         """Revalidate this client and cache the tile only under the captured settings revision."""
-        current = await read_live_credentials(session, scope=workspace, settings=settings, multi_workspace_enabled=gate)
+        current = await read_live_credentials(
+            session, scope=workspace, settings=settings, multi_workspace_enabled=gate
+        )
         if current.revision != credentials.revision:
             raise HTTPException(409, "live_map_configuration_changed", headers=_HEADERS)
         require_live_terms(current, "openweather")
@@ -343,8 +441,15 @@ async def weather(layer: str, z: int, x: int, y: int, request: Request, session:
                 if key not in _tiles and len(_tiles) >= 32:
                     _tiles.pop(next(iter(_tiles)))
                 _tiles[key] = (time.monotonic() + live_map.live_cache_seconds("openweather"), body)
-        require_publication_gate(request, PublicationFence(scope=workspace, access_fence=fence,
-                                 auth_session=authenticated_session_ref(request), grants=()))
+        require_publication_gate(
+            request,
+            PublicationFence(
+                scope=workspace,
+                access_fence=fence,
+                auth_session=authenticated_session_ref(request),
+                grants=(),
+            ),
+        )
         return Response(body, media_type="image/png", headers=_HEADERS)
 
     cached = _tiles.get(key)
@@ -353,20 +458,35 @@ async def weather(layer: str, z: int, x: int, y: int, request: Request, session:
 
     async def collect(job: _SharedJob) -> bytes:
         """Fetch one bounded weather tile on behalf of a currently authorized observer."""
+
         async def before_send() -> None:
             """Authorize a connected observer immediately before the tile request."""
             await _shared_before_send(job, "openweather")
 
         async with _parallel:
-            return await live_map.fetch_weather(layer, z, x, y, openweather_key, before_send=before_send)
+            return await live_map.fetch_weather(
+                layer, z, x, y, openweather_key, before_send=before_send
+            )
 
     try:
-        async with _join_shared(("weather", *key), _Observer(request, workspace, fence, credentials.revision), collect) as body:
+        async with _join_shared(
+            ("weather", *key), _Observer(request, workspace, fence, credentials.revision), collect
+        ) as body:
             return await _while_connected(request, publish(body, fetched=True))
     except ProviderRateLimited as exc:
         await _backoff(request, "openweather", exc.next_eligible_at)
         async with _lock:
-            _next_send["openweather"] = time.monotonic() + min(3600, max(1, (exc.next_eligible_at - datetime.now(UTC)).total_seconds()))
+            _next_send["openweather"] = time.monotonic() + min(
+                3600, max(1, (exc.next_eligible_at - datetime.now(UTC)).total_seconds())
+            )
         raise HTTPException(429, "provider_rate_limited", headers=_HEADERS) from None
-    except (ValueError, httpx.HTTPError, OSError, TimeoutError, live_map.CollectionIncomplete, live_map.UnsafeDestination, live_map.ProviderHttpError):
+    except (
+        ValueError,
+        httpx.HTTPError,
+        OSError,
+        TimeoutError,
+        live_map.CollectionIncomplete,
+        live_map.UnsafeDestination,
+        live_map.ProviderHttpError,
+    ):
         raise HTTPException(503, "weather_unavailable", headers=_HEADERS) from None

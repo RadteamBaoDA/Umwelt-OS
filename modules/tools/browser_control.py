@@ -76,19 +76,27 @@ def _target_in_scope(value: str | None, origin: str, path_prefix: str) -> bool:
     path = unquote(target.path or "/")
     prefix = unquote(path_prefix or "/")
     return bool(
-        target.scheme == "https" and target.username is None and target.password is None
-        and not target.fragment and target.query == ""
+        target.scheme == "https"
+        and target.username is None
+        and target.password is None
+        and not target.fragment
+        and target.query == ""
         and f"https://{host}" == origin
         and (port is None or port == 443)
         and not any(segment in {".", ".."} for segment in path.split("/"))
-        and "%2f" not in target.path.lower() and "%5c" not in target.path.lower()
-        and "%25" not in target.path.lower() and "\\" not in path
+        and "%2f" not in target.path.lower()
+        and "%5c" not in target.path.lower()
+        and "%25" not in target.path.lower()
+        and "\\" not in path
         and (path == prefix or prefix == "/" or path.startswith(prefix.rstrip("/") + "/"))
     )
 
 
 async def _current_authority(
-    session: AsyncSession, job: BrowserReadJob, *, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    job: BrowserReadJob,
+    *,
+    multi_workspace_enabled: bool,
 ) -> tuple[bool, connectors.AgentBrowserScope | None, InternalJobScope | None, AccessFence | None]:
     """Check original run/session/profile/Chat and source grant in this short callback transaction.
 
@@ -103,34 +111,65 @@ async def _current_authority(
         return False, None, None, None
     job_scope, fence = authority
     source = await sources.lock_source(
-        session, job.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        job.source_id,
+        scope=job_scope,
+        multi_workspace_enabled=multi_workspace_enabled,
         expected_access_fence=fence,
     )
     source_view = await sources.get_connector_source(
-        session, job.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        job.source_id,
+        scope=job_scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     grant = await connectors.resolve_agent_browser_scope(
-        session, job.owner_id, job.source_id, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        job.owner_id,
+        job.source_id,
+        scope=job_scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
 
     authorization = BrowserRunAuthorization(
-        job.owner_id, job.run_id, job.tool_slot, job.arguments_hash,
-        job.auth_session_hash, job.conversation_id, job.profile_id,
-        job.profile_revision_hash, frozenset(UUID(item) for item in job.authorized_source_ids),
-        job.claim_generation, 0, 0, 0, 1,
+        job.owner_id,
+        job.run_id,
+        job.tool_slot,
+        job.arguments_hash,
+        job.auth_session_hash,
+        job.conversation_id,
+        job.profile_id,
+        job.profile_revision_hash,
+        frozenset(UUID(item) for item in job.authorized_source_ids),
+        job.claim_generation,
+        0,
+        0,
+        0,
+        1,
     )
     session_valid = await revalidate_account_session(
-        session, job.auth_session_hash, job.owner_id, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        job.auth_session_hash,
+        job.owner_id,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     run_valid = await revalidate_browser_run_authority(
-        session, authorization, scope=job_scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        authorization,
+        scope=job_scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if (
-        not session_valid or not run_valid or job.source_id not in authorization.source_ids
-        or source is None or source.status != "active"
+        not session_valid
+        or not run_valid
+        or job.source_id not in authorization.source_ids
+        or source is None
+        or source.status != "active"
         or source.generation != job.source_generation
         or source_view is None
-        or grant is None or not grant.enabled or grant.scope_hash != job.scope_hash
+        or grant is None
+        or not grant.enabled
+        or grant.scope_hash != job.scope_hash
         or grant.source_generation != job.source_generation
         or grant.connector_revision != job.connector_revision
         or grant.grant_revision != job.grant_revision
@@ -158,7 +197,10 @@ class _ControlState:
             await self.session.commit()  # authority already revoked: no fence is held
         else:
             await commit_with_replay(
-                self.session, [], scope=self.job_scope, multi_workspace_enabled=self.flag,
+                self.session,
+                [],
+                scope=self.job_scope,
+                multi_workspace_enabled=self.flag,
                 access_fence=self.fence,
             )
 
@@ -176,9 +218,13 @@ async def _event_register(state: _ControlState, guard: Any) -> dict[str, object]
     """
     job, payload = state.job, state.payload
     if (
-        job.cancel_requested or job.status != "queued" or job.service_instance_id is not None
-        or payload.request_ordinal != 0 or payload.target_url is not None
-        or payload.actual_pages != 0 or payload.actual_bytes != 0
+        job.cancel_requested
+        or job.status != "queued"
+        or job.service_instance_id is not None
+        or payload.request_ordinal != 0
+        or payload.target_url is not None
+        or payload.actual_pages != 0
+        or payload.actual_bytes != 0
         or payload.result_hash is not None
     ):
         raise HTTPException(status_code=409, detail="Browser job was already claimed")
@@ -189,8 +235,11 @@ async def _event_register(state: _ControlState, guard: Any) -> dict[str, object]
         await state.commit()
         raise HTTPException(status_code=403, detail="Browser job authority was revoked")
     await register_remote_heavy_in_uow(
-        state.session, job.operation_id, payload.service_instance_id,
-        job.id, job.service_token_hash,
+        state.session,
+        job.operation_id,
+        payload.service_instance_id,
+        job.id,
+        job.service_token_hash,
         # Just past the 45 s hard job bound: a guard orphaned by a dead service
         # stops blocking heavy work instead of wedging it until job expiry.
         min(job.expires_at, datetime.now(UTC) + timedelta(seconds=REMOTE_GUARD_SECONDS)),
@@ -217,10 +266,12 @@ async def _event_authorize(state: _ControlState, guard: Any) -> dict[str, object
     if (
         # The API enforces the guard bound: no new permits after expiry.
         guard.expires_at <= datetime.now(UTC)
-        or not state.valid or grant is None
+        or not state.valid
+        or grant is None
         or payload.request_ordinal != job.request_ordinal + 1
         or payload.request_ordinal > 6
-        or payload.actual_pages != 0 or payload.actual_bytes != 0
+        or payload.actual_pages != 0
+        or payload.actual_bytes != 0
         or payload.result_hash is not None
         or not _target_in_scope(payload.target_url, grant.origin, grant.path_prefix)
     ):
@@ -291,7 +342,8 @@ def _guard_accepts(guard: Any, job: BrowserReadJob, payload: BrowserControlEvent
         or guard.state != ("active" if payload.event == "authorize" else guard.state)
         or guard.state not in {"active", "uncertain"}
         or guard.service_instance_id != payload.service_instance_id
-        or guard.remote_job_id != job.id or guard.nonce_hash != job.service_token_hash
+        or guard.remote_job_id != job.id
+        or guard.nonce_hash != job.service_token_hash
         or job.service_instance_id != payload.service_instance_id
     )
 
@@ -307,7 +359,8 @@ async def _dispatch_control_event(state: _ControlState) -> dict[str, object]:
         return await _event_register(state, None)
     guard = await get_remote_heavy_guard(state.session, job.operation_id)
     if (
-        guard is not None and guard.state == "cleared"
+        guard is not None
+        and guard.state == "cleared"
         and guard.service_instance_id == payload.service_instance_id
         and guard.remote_job_id == job.id
         and job.service_instance_id == payload.service_instance_id
@@ -341,32 +394,51 @@ async def browser_control_event(
     async with factory() as session:
         # The isolated browser service callback updates durable owner job state under its
         # Sources -> Agents -> Tools row-lock sequence.
-        candidate = await session.scalar(select(BrowserReadJob).where(
-            BrowserReadJob.id == job_id,
-        ))
+        candidate = await session.scalar(
+            select(BrowserReadJob).where(
+                BrowserReadJob.id == job_id,
+            )
+        )
         if candidate is None:
             raise HTTPException(status_code=409, detail="Browser job authority is stale")
         expected_identity = (
-            candidate.operation_id, candidate.claim_generation, candidate.service_token_hash,
-            candidate.source_id, candidate.run_id,
+            candidate.operation_id,
+            candidate.claim_generation,
+            candidate.service_token_hash,
+            candidate.source_id,
+            candidate.run_id,
         )
         # Cross-module row locks follow Sources -> Agents -> Tools. The job is
         # reread under lock only after both current authorities have been checked.
         flag = settings.multi_workspace_enabled
         valid, grant, job_scope, fence = await _current_authority(
-            session, candidate, multi_workspace_enabled=flag,
+            session,
+            candidate,
+            multi_workspace_enabled=flag,
         )
-        job = await session.scalar(select(BrowserReadJob).where(
-            BrowserReadJob.id == job_id,
-        ).with_for_update().execution_options(populate_existing=True))
+        job = await session.scalar(
+            select(BrowserReadJob)
+            .where(
+                BrowserReadJob.id == job_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if (
-            job is None or expected_identity != (
-                job.operation_id, job.claim_generation, job.service_token_hash,
-                job.source_id, job.run_id,
+            job is None
+            or expected_identity
+            != (
+                job.operation_id,
+                job.claim_generation,
+                job.service_token_hash,
+                job.source_id,
+                job.run_id,
             )
             or payload.operation_id != job.operation_id
             or payload.claim_generation != job.claim_generation
-            or not hmac.compare_digest(sha256(job_token.encode("ascii")).hexdigest(), job.service_token_hash)
+            or not hmac.compare_digest(
+                sha256(job_token.encode("ascii")).hexdigest(), job.service_token_hash
+            )
             or (job.expires_at <= datetime.now(UTC) and payload.event in {"register", "authorize"})
         ):
             raise HTTPException(status_code=409, detail="Browser job authority is stale")

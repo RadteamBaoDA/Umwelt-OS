@@ -18,7 +18,9 @@ from modules.knowledge.relationships.schemas import RelationshipCreate
 from modules.knowledge.relationships.seed import ensure_demo_relationships
 
 OWNER = WorkspaceContext(user_id=7, workspace_id=uuid4(), role="owner", membership_revision=1)
-MEMBER = WorkspaceContext(user_id=8, workspace_id=OWNER.workspace_id, role="member", membership_revision=1)
+MEMBER = WorkspaceContext(
+    user_id=8, workspace_id=OWNER.workspace_id, role="member", membership_revision=1
+)
 KW = {"scope": OWNER, "multi_workspace_enabled": False}
 MKW = {"scope": MEMBER, "multi_workspace_enabled": False}
 
@@ -31,14 +33,19 @@ def _sql(statement: object) -> tuple[str, list[object]]:
 
 def _admitted() -> object:
     """Skip the workspace fence lookup; the owner-role gate is tested separately."""
-    return patch("modules.knowledge.relationships.public.workspaces.read_access_fence", AsyncMock(return_value=MagicMock()))
+    return patch(
+        "modules.knowledge.relationships.public.workspaces.read_access_fence",
+        AsyncMock(return_value=MagicMock()),
+    )
 
 
 @pytest.mark.asyncio
 async def test_member_without_share_sees_nothing() -> None:
     """Every public entry point rejects a member before reading or locking any row."""
     session = AsyncMock()
-    payload = RelationshipCreate(source_entity_id=uuid4(), target_entity_id=uuid4(), type="KNOWS", origin="owner")
+    payload = RelationshipCreate(
+        source_entity_id=uuid4(), target_entity_id=uuid4(), type="KNOWS", origin="owner"
+    )
     calls = [
         public.list_relationships(session, 10, None, **MKW),
         public.get_neighbors(session, uuid4(), 10, None, **MKW),
@@ -84,7 +91,10 @@ async def test_foreign_relationship_evidence_is_absent() -> None:
     session = AsyncMock()
     session.scalar = AsyncMock(return_value=None)
     with _admitted():
-        assert await public.list_relationship_evidence(session, uuid4(), 10, None, **KW) == (None, None)
+        assert await public.list_relationship_evidence(session, uuid4(), 10, None, **KW) == (
+            None,
+            None,
+        )
     text, params = _sql(session.scalar.call_args.args[0])
     assert "relationships.workspace_id" in text
     assert OWNER.workspace_id in params
@@ -95,8 +105,10 @@ async def test_remove_foreign_relationship_returns_false_under_lock() -> None:
     """Deleting a foreign id locks the workspace fence first and then finds nothing."""
     session = AsyncMock()
     session.scalar = AsyncMock(return_value=None)
-    with patch("modules.knowledge.relationships.public.workspaces.lock_access_fence",
-               AsyncMock(return_value=MagicMock())) as locked:
+    with patch(
+        "modules.knowledge.relationships.public.workspaces.lock_access_fence",
+        AsyncMock(return_value=MagicMock()),
+    ) as locked:
         assert await public.remove_relationship(session, uuid4(), **KW) is False
     locked.assert_awaited_once()
     _text, params = _sql(session.scalar.call_args.args[0])
@@ -111,14 +123,24 @@ async def test_export_rejects_other_actor() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scope", [OWNER, InternalJobScope(workspace_id=OWNER.workspace_id, actor_user_id=7, membership_revision=1)])
-async def test_demo_seed_is_workspace_local_and_links_seeded_entities(scope: WorkspaceContext | InternalJobScope) -> None:
+@pytest.mark.parametrize(
+    "scope",
+    [
+        OWNER,
+        InternalJobScope(workspace_id=OWNER.workspace_id, actor_user_id=7, membership_revision=1),
+    ],
+)
+async def test_demo_seed_is_workspace_local_and_links_seeded_entities(
+    scope: WorkspaceContext | InternalJobScope,
+) -> None:
     """The seeded relationship carries the workspace and joins exactly the entities the entity seed creates."""
     session = AsyncMock()
     session.scalar = AsyncMock(return_value=None)
     session.add = MagicMock()
-    with patch("modules.knowledge.entities.seed.workspaces.read_access_fence", AsyncMock()), \
-            patch("modules.knowledge.relationships.seed.workspaces.read_access_fence", AsyncMock()):
+    with (
+        patch("modules.knowledge.entities.seed.workspaces.read_access_fence", AsyncMock()),
+        patch("modules.knowledge.relationships.seed.workspaces.read_access_fence", AsyncMock()),
+    ):
         await ensure_demo_entities(session, scope=scope, multi_workspace_enabled=False)
         await ensure_demo_relationships(session, scope=scope, multi_workspace_enabled=False)
     added = [call.args[0] for call in session.add.call_args_list]
@@ -131,6 +153,7 @@ async def test_demo_seed_is_workspace_local_and_links_seeded_entities(scope: Wor
 def test_export_cursor_is_bound_to_workspace() -> None:
     """A cursor minted in one workspace is rejected in another even for the same owner."""
     from datetime import UTC, datetime, timedelta
+
     at = datetime.now(UTC) - timedelta(minutes=1)
     cursor = public._encode_relationship_export_cursor(7, OWNER.workspace_id, at, at, uuid4())
     public._decode_relationship_export_cursor(cursor, 7, OWNER.workspace_id)

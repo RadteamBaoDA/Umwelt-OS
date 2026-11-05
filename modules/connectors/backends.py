@@ -5,82 +5,212 @@ from typing import Any, Literal, TypeGuard
 
 CollectionBackend = Literal["native", "n8n"]
 
-PROVIDER_SOURCE_TYPES = MappingProxyType({
-    "youtube": "rss", "arxiv": "rss", "huggingface": "api",
-    "bluesky": "api",
-    "reddit": "api", "mastodon": "api", "x": "api",
-    "github_releases": "api", "github": "api", "telegram": "api",
-    "alpha_vantage": "api", "open_meteo": "api",
-    # P2/P3 fixed-endpoint providers: no owner-supplied scope, one catalog request per run.
-    "bbc_world": "rss", "vnexpress_business": "rss", "dantri_news": "rss", "thanhnien_news": "rss", "tuoitre_news": "rss", "hn_top": "api", "gdelt_economy": "api",
-    "world_bank": "api", "frankfurter": "api", "ecb": "api", "binance": "api", "vn_stock": "api", "vietnamworks_jobs": "api",
-    "itviec_jobs": "api",
-    "alternative_me": "api", "usgs": "api", "coinpaprika": "api", "nasa_eonet": "api", "cisa_kev": "api",
-    "coingecko": "api",  # owner-selected assets; Demo key lives in connector_rest_credentials
-    "google_news": "rss",  # scoped free preset: URL is built server-side from validated query/site/locale
-    "google_mail": "email", "google_calendar": "calendar", "google_drive": "api",
-    "health": "api", "home_assistant": "api",
-    "notion": "api", "slack": "api",
-    "sec_edgar": "api",  # scoped free preset: URL is built server-side from a validated 10-digit CIK
-    "openalex": "api",  # scoped free preset: URL is built server-side from a validated scholarly_query
-    **dict.fromkeys((  # built-in RSS/Atom feeds (providers/news.py FEED_URLS)
-        "aljazeera_world", "npr_news", "fed_press", "gdacs_rss", "lobsters", "github_trending", "wwr_jobs", "us_travel_advisories",
-        "noaa_tsunami", "jma_eqvol",
-    ), "rss"),
-    **dict.fromkeys((  # built-in JSON feeds (providers/json_feed.py)
-        "gdacs_events", "nws_alerts", "emsc_quakes", "launch_library", "wikipedia_mostread", "wikipedia_top_views", "bmkg_quakes", "satnogs_observations",
-    ), "api"),
-    **dict.fromkeys((  # keyed free-tier presets (providers/keyed.py); the owner key lives in connector_rest_credentials
-        "finnhub_news", "newsapi", "fred", "openweathermap", "openaq", "nasa_firms",
-    ), "api"),
-    **dict.fromkeys((  # bespoke keyless mappers
-        "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",
-    ), "api"),
-})
-FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset({
-    "youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x", "github_releases", "github", "telegram", "alpha_vantage", "open_meteo", "google_news", "sec_edgar",
-    "google_mail", "google_calendar", "google_drive", "health", "home_assistant", "notion", "slack", "openalex", "fred", "openweathermap", "openaq", "nasa_firms", "coingecko",
-})
+PROVIDER_SOURCE_TYPES = MappingProxyType(
+    {
+        "youtube": "rss",
+        "arxiv": "rss",
+        "huggingface": "api",
+        "bluesky": "api",
+        "reddit": "api",
+        "mastodon": "api",
+        "x": "api",
+        "github_releases": "api",
+        "github": "api",
+        "telegram": "api",
+        "alpha_vantage": "api",
+        "open_meteo": "api",
+        # P2/P3 fixed-endpoint providers: no owner-supplied scope, one catalog request per run.
+        "bbc_world": "rss",
+        "vnexpress_business": "rss",
+        "dantri_news": "rss",
+        "thanhnien_news": "rss",
+        "tuoitre_news": "rss",
+        "hn_top": "api",
+        "gdelt_economy": "api",
+        "world_bank": "api",
+        "frankfurter": "api",
+        "ecb": "api",
+        "binance": "api",
+        "vn_stock": "api",
+        "vietnamworks_jobs": "api",
+        "itviec_jobs": "api",
+        "alternative_me": "api",
+        "usgs": "api",
+        "coinpaprika": "api",
+        "nasa_eonet": "api",
+        "cisa_kev": "api",
+        "coingecko": "api",  # owner-selected assets; Demo key lives in connector_rest_credentials
+        "google_news": "rss",  # scoped free preset: URL is built server-side from validated query/site/locale
+        "google_mail": "email",
+        "google_calendar": "calendar",
+        "google_drive": "api",
+        "health": "api",
+        "home_assistant": "api",
+        "notion": "api",
+        "slack": "api",
+        "sec_edgar": "api",  # scoped free preset: URL is built server-side from a validated 10-digit CIK
+        "openalex": "api",  # scoped free preset: URL is built server-side from a validated scholarly_query
+        **dict.fromkeys(
+            (  # built-in RSS/Atom feeds (providers/news.py FEED_URLS)
+                "aljazeera_world",
+                "npr_news",
+                "fed_press",
+                "gdacs_rss",
+                "lobsters",
+                "github_trending",
+                "wwr_jobs",
+                "us_travel_advisories",
+                "noaa_tsunami",
+                "jma_eqvol",
+            ),
+            "rss",
+        ),
+        **dict.fromkeys(
+            (  # built-in JSON feeds (providers/json_feed.py)
+                "gdacs_events",
+                "nws_alerts",
+                "emsc_quakes",
+                "launch_library",
+                "wikipedia_mostread",
+                "wikipedia_top_views",
+                "bmkg_quakes",
+                "satnogs_observations",
+            ),
+            "api",
+        ),
+        **dict.fromkeys(
+            (  # keyed free-tier presets (providers/keyed.py); the owner key lives in connector_rest_credentials
+                "finnhub_news",
+                "newsapi",
+                "fred",
+                "openweathermap",
+                "openaq",
+                "nasa_firms",
+            ),
+            "api",
+        ),
+        **dict.fromkeys(
+            (  # bespoke keyless mappers
+                "noaa_kp",
+                "open_er_api",
+                "oecd_cli",
+                "iss_position",
+                "disease_sh",
+                "ioda",
+                "nvd",
+            ),
+            "api",
+        ),
+    }
+)
+FIXED_SCOPE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES) - frozenset(
+    {
+        "youtube",
+        "arxiv",
+        "huggingface",
+        "bluesky",
+        "reddit",
+        "mastodon",
+        "x",
+        "github_releases",
+        "github",
+        "telegram",
+        "alpha_vantage",
+        "open_meteo",
+        "google_news",
+        "sec_edgar",
+        "google_mail",
+        "google_calendar",
+        "google_drive",
+        "health",
+        "home_assistant",
+        "notion",
+        "slack",
+        "openalex",
+        "fred",
+        "openweathermap",
+        "openaq",
+        "nasa_firms",
+        "coingecko",
+    }
+)
 # Free presets collected only by the gated shared executor (fixed-endpoint presets plus the scoped Google News preset).
 GATED_EXECUTOR_PROVIDERS = FIXED_SCOPE_PROVIDERS | {
-    "bluesky", "reddit", "mastodon", "x", "google_news", "google_mail", "google_calendar", "google_drive", "health", "home_assistant", "notion", "slack", "sec_edgar", "openalex", "fred", "openweathermap", "openaq", "nasa_firms", "coingecko",
+    "bluesky",
+    "reddit",
+    "mastodon",
+    "x",
+    "google_news",
+    "google_mail",
+    "google_calendar",
+    "google_drive",
+    "health",
+    "home_assistant",
+    "notion",
+    "slack",
+    "sec_edgar",
+    "openalex",
+    "fred",
+    "openweathermap",
+    "openaq",
+    "nasa_firms",
+    "coingecko",
 }
-PROVIDER_SCOPE_FIELDS = MappingProxyType({
-    "youtube": frozenset({"youtube_channel_id"}), "arxiv": frozenset({"arxiv_category"}),
-    "huggingface": frozenset({"huggingface_author"}),
-    "bluesky": frozenset({"bluesky_actor"}),
-    "reddit": frozenset({"reddit_subreddit"}),
-    "mastodon": frozenset({"mastodon_instance_url", "mastodon_account", "mastodon_hashtag"}),
-    "x": frozenset({"x_account", "x_query"}),
-    "github_releases": frozenset({"github_owner", "github_repository"}),
-    "github": frozenset({
-        "github_owner", "github_repository", "include_issues", "include_pulls", "include_commits",
-        "include_releases", "github_history_days",
-    }),
-    "telegram": frozenset({"telegram_chat_ids"}),
-    "alpha_vantage": frozenset({"market_symbols", "market_currency", "market_exchange_timezone"}),
-    "coingecko": frozenset({"coingecko_assets"}),
-    "open_meteo": frozenset({"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"}),
-    "google_news": frozenset({"news_query", "news_site", "news_locale"}),
-    "sec_edgar": frozenset({"sec_cik", "sec_contact_email"}),
-    "openalex": frozenset({"scholarly_query"}),
-    "fred": frozenset({"fred_series_id"}),
-    "openweathermap": frozenset({"owm_latitude", "owm_longitude"}),
-    "openaq": frozenset({"openaq_location_id"}),
-    "nasa_firms": frozenset({"firms_country"}),
-    "google_mail": frozenset({"google_mail_label_ids", "google_mail_history_days"}),
-    "google_calendar": frozenset({"google_calendar_ids"}),
-    "google_drive": frozenset({"google_drive_ids"}),
-    "health": frozenset({"fhir_base_url", "fhir_patient_id"}),
-    "home_assistant": frozenset({"ha_base_url", "ha_entity_ids"}),
-    "notion": frozenset({"notion_page_ids"}),
-    "slack": frozenset({"slack_channel_ids"}),
-    **dict.fromkeys(FIXED_SCOPE_PROVIDERS, frozenset[str]()),
-})
+PROVIDER_SCOPE_FIELDS = MappingProxyType(
+    {
+        "youtube": frozenset({"youtube_channel_id"}),
+        "arxiv": frozenset({"arxiv_category"}),
+        "huggingface": frozenset({"huggingface_author"}),
+        "bluesky": frozenset({"bluesky_actor"}),
+        "reddit": frozenset({"reddit_subreddit"}),
+        "mastodon": frozenset({"mastodon_instance_url", "mastodon_account", "mastodon_hashtag"}),
+        "x": frozenset({"x_account", "x_query"}),
+        "github_releases": frozenset({"github_owner", "github_repository"}),
+        "github": frozenset(
+            {
+                "github_owner",
+                "github_repository",
+                "include_issues",
+                "include_pulls",
+                "include_commits",
+                "include_releases",
+                "github_history_days",
+            }
+        ),
+        "telegram": frozenset({"telegram_chat_ids"}),
+        "alpha_vantage": frozenset(
+            {"market_symbols", "market_currency", "market_exchange_timezone"}
+        ),
+        "coingecko": frozenset({"coingecko_assets"}),
+        "open_meteo": frozenset(
+            {"weather_latitude", "weather_longitude", "weather_timezone", "weather_metrics"}
+        ),
+        "google_news": frozenset({"news_query", "news_site", "news_locale"}),
+        "sec_edgar": frozenset({"sec_cik", "sec_contact_email"}),
+        "openalex": frozenset({"scholarly_query"}),
+        "fred": frozenset({"fred_series_id"}),
+        "openweathermap": frozenset({"owm_latitude", "owm_longitude"}),
+        "openaq": frozenset({"openaq_location_id"}),
+        "nasa_firms": frozenset({"firms_country"}),
+        "google_mail": frozenset({"google_mail_label_ids", "google_mail_history_days"}),
+        "google_calendar": frozenset({"google_calendar_ids"}),
+        "google_drive": frozenset({"google_drive_ids"}),
+        "health": frozenset({"fhir_base_url", "fhir_patient_id"}),
+        "home_assistant": frozenset({"ha_base_url", "ha_entity_ids"}),
+        "notion": frozenset({"notion_page_ids"}),
+        "slack": frozenset({"slack_channel_ids"}),
+        **dict.fromkeys(FIXED_SCOPE_PROVIDERS, frozenset[str]()),
+    }
+)
 NATIVE_PROVIDERS = frozenset(PROVIDER_SOURCE_TYPES)
-GENERIC_CATALOG_SOURCE_TYPES = MappingProxyType({
-    "rss": "rss", "web": "web", "rest": "api", "mcp": "mcp",
-})
+GENERIC_CATALOG_SOURCE_TYPES = MappingProxyType(
+    {
+        "rss": "rss",
+        "web": "web",
+        "rest": "api",
+        "mcp": "mcp",
+    }
+)
 GENERIC_SOURCE_TYPES = frozenset(GENERIC_CATALOG_SOURCE_TYPES.values())
 
 
@@ -109,7 +239,13 @@ def native_dispatch_supported(source_type: str, provider: str | None) -> bool:
 # C4: backend/template revision protocol. Bump the template revision whenever a packaged n8n
 # workflow changes its fences; rows installed with an older template fail closed until upgraded.
 CURRENT_TEMPLATE_REVISION = 1
-TRANSITION_PHASES = ("idle", "draining", "deactivating_old", "activating_new", "reconciliation_required")
+TRANSITION_PHASES = (
+    "idle",
+    "draining",
+    "deactivating_old",
+    "activating_new",
+    "reconciliation_required",
+)
 
 
 def backend_admits(row: Any) -> bool:

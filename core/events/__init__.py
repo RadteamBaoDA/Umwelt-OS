@@ -26,7 +26,11 @@ _LAZY = {
 }
 
 __all__ = [
-    "DomainEvent", "EventOutbox", "dispatch_pending_work", "get_event_registry", "publish_event",
+    "DomainEvent",
+    "EventOutbox",
+    "dispatch_pending_work",
+    "get_event_registry",
+    "publish_event",
     "validate_event_contracts",
 ]
 

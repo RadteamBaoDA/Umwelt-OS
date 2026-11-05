@@ -38,7 +38,9 @@ class Turn(NamedTuple):
     assistant: Message
 
 
-def select_turns(messages: Sequence[Message], runs: Iterable[ResponseRun], limit: int = HISTORY_MAX_TURNS) -> list[Turn]:
+def select_turns(
+    messages: Sequence[Message], runs: Iterable[ResponseRun], limit: int = HISTORY_MAX_TURNS
+) -> list[Turn]:
     """Complete, non-superseded turns, newest ``limit`` of them, oldest first."""
     by_id = {m.id: m for m in messages}
     run_for_user: dict[UUID, ResponseRun] = {}
@@ -52,13 +54,19 @@ def select_turns(messages: Sequence[Message], runs: Iterable[ResponseRun], limit
             continue
         turn_run = run_for_user.get(user.id)
         # failed / cancelled / pending / answer-less runs never become model history
-        if turn_run is None or turn_run.status != "completed" or turn_run.assistant_message_id is None:
+        if (
+            turn_run is None
+            or turn_run.status != "completed"
+            or turn_run.assistant_message_id is None
+        ):
             continue
         assistant = by_id.get(turn_run.assistant_message_id)
         if assistant is not None and assistant.role == "assistant":
             complete.append(Turn(user, assistant))
     superseded = {
-        target for t in complete for target in (t.user.revision_of_message_id, t.assistant.revision_of_message_id)
+        target
+        for t in complete
+        for target in (t.user.revision_of_message_id, t.assistant.revision_of_message_id)
         if target is not None
     }
     live = [t for t in complete if t.user.id not in superseded and t.assistant.id not in superseded]
@@ -90,7 +98,10 @@ def widget_summary(raw: Any, *, max_chars: int = WIDGET_SUMMARY_MAX_CHARS) -> st
     widget = parse_generative_ui(raw)
     if widget is None or widget.status != "completed":
         return ""
-    slot = next((v for v in (widget.table, widget.chart, widget.plan, widget.form, widget.sandbox) if v), None)
+    slot = next(
+        (v for v in (widget.table, widget.chart, widget.plan, widget.form, widget.sandbox) if v),
+        None,
+    )
     if slot is None:
         return ""
     body = {k: v for k, v in slot.items() if k not in ("records", "citations")}
@@ -144,7 +155,9 @@ def _citation_refs(citations: Any) -> list[tuple[UUID, UUID, UUID, UUID]] | None
     return refs
 
 
-async def revoked_assistant_ids(session: AsyncSession, turns: Sequence[Turn], scope: Scope) -> set[UUID]:
+async def revoked_assistant_ids(
+    session: AsyncSession, turns: Sequence[Turn], scope: Scope
+) -> set[UUID]:
     """Assistant ids whose cited evidence is gone, inactive, local-only or outside the job scope.
 
     Reuses the Documents evidence lock/read used for publication; key-share locks last until the caller
@@ -152,7 +165,11 @@ async def revoked_assistant_ids(session: AsyncSession, turns: Sequence[Turn], sc
     """
     from modules.knowledge.documents import public as documents_public
 
-    parsed = {t.assistant.id: _citation_refs(t.assistant.citations) for t in turns if t.assistant.citations}
+    parsed = {
+        t.assistant.id: _citation_refs(t.assistant.citations)
+        for t in turns
+        if t.assistant.citations
+    }
     unique = sorted({(v, c) for refs in parsed.values() for _s, _d, v, c in refs or []}, key=str)
     if not unique:
         return {aid for aid, refs in parsed.items() if refs is None}
@@ -160,12 +177,16 @@ async def revoked_assistant_ids(session: AsyncSession, turns: Sequence[Turn], sc
     try:
         for start in range(0, len(unique), _EVIDENCE_BATCH):
             for item in await documents_public.lock_chat_evidence_chunks(
-                session, unique[start:start + _EVIDENCE_BATCH],
-                scope=scope, multi_workspace_enabled=multi_workspace_enabled(),
+                session,
+                unique[start : start + _EVIDENCE_BATCH],
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled(),
             ):
                 current[(item.document_version_id, item.chunk_id)] = item
     except ValueError:
-        return set(parsed)  # evidence set changed under us: drop every cited answer rather than guess
+        return set(
+            parsed
+        )  # evidence set changed under us: drop every cited answer rather than guess
     revoked: set[UUID] = set()
     for aid, refs in parsed.items():
         if refs is None:
@@ -173,35 +194,55 @@ async def revoked_assistant_ids(session: AsyncSession, turns: Sequence[Turn], sc
             continue
         for source_id, document_id, version_id, chunk_id in refs:
             cur = current.get((version_id, chunk_id))
-            if cur is None or cur.local_only or cur.source_id != source_id or cur.document_id != document_id:
+            if (
+                cur is None
+                or cur.local_only
+                or cur.source_id != source_id
+                or cur.document_id != document_id
+            ):
                 revoked.add(aid)
                 break
     return revoked
 
 
 async def load_effective_history(
-    session: AsyncSession, conversation_id: UUID, cutoff: datetime, scope: Scope,
+    session: AsyncSession,
+    conversation_id: UUID,
+    cutoff: datetime,
+    scope: Scope,
 ) -> list[dict[str, str]]:
     """Model-facing prior messages for a run whose branch starts at ``cutoff`` (exclusive)."""
-    messages = list((await session.scalars(
-        select(Message)
-        .join(Conversation, Conversation.id == Message.conversation_id)
-        .where(
-            Message.conversation_id == conversation_id,
-            Conversation.workspace_id == scope.workspace_id,
-            Message.created_at < cutoff,
-        )
-        .order_by(Message.created_at.desc(), Message.id.desc())
-        .limit(HISTORY_SCAN_MESSAGES)
-    )).all())
+    messages = list(
+        (
+            await session.scalars(
+                select(Message)
+                .join(Conversation, Conversation.id == Message.conversation_id)
+                .where(
+                    Message.conversation_id == conversation_id,
+                    Conversation.workspace_id == scope.workspace_id,
+                    Message.created_at < cutoff,
+                )
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(HISTORY_SCAN_MESSAGES)
+            )
+        ).all()
+    )
     user_ids = [m.id for m in messages if m.role == "user"]
-    runs = list((await session.scalars(
-        select(ResponseRun).where(
-            ResponseRun.conversation_id == conversation_id,
-            ResponseRun.workspace_id == scope.workspace_id,
-            ResponseRun.user_message_id.in_(user_ids),
+    runs = (
+        list(
+            (
+                await session.scalars(
+                    select(ResponseRun).where(
+                        ResponseRun.conversation_id == conversation_id,
+                        ResponseRun.workspace_id == scope.workspace_id,
+                        ResponseRun.user_message_id.in_(user_ids),
+                    )
+                )
+            ).all()
         )
-    )).all()) if user_ids else []
+        if user_ids
+        else []
+    )
     turns = select_turns(messages, runs)
     if turns:
         revoked = await revoked_assistant_ids(session, turns, scope)

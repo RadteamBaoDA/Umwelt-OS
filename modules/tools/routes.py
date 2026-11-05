@@ -31,7 +31,9 @@ from modules.tools.browser_public import (
 )
 from modules.tools.models import BrowserReadJob
 
-router = APIRouter(prefix="/api/v1/tools", tags=["tools"], dependencies=[Depends(module_dependency("tools"))])
+router = APIRouter(
+    prefix="/api/v1/tools", tags=["tools"], dependencies=[Depends(module_dependency("tools"))]
+)
 browser_jobs_router = APIRouter(prefix="/api/v1/agent-browser-jobs", tags=["agent-browser-jobs"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 # Account-level auth (the workspace dependencies below add scope); only system routes stay operator-only.
@@ -43,21 +45,28 @@ WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 class ToolInvocation(BaseModel):
     """Carry only the registered tool identity and arguments; authorization stays server-side."""
+
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=160)
     version: str = Field(min_length=1, max_length=40)
     arguments: dict[str, Any]
 
 
-async def _workspace_tools(request: Request, session: AsyncSession, scope: WorkspaceContext) -> list[Any]:
+async def _workspace_tools(
+    request: Request, session: AsyncSession, scope: WorkspaceContext
+) -> list[Any]:
     """Visible tools with this workspace's persisted module disables applied (P3-6)."""
     modules = await read_workspace_modules(
-        session, scope=scope, multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+        session,
+        scope=scope,
+        multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
     )
     return _visible_tools(request, scope.workspace_id, modules)
 
 
-def _visible_tools(request: Request, workspace_id: UUID, modules: Mapping[str, Any] | None = None) -> list[Any]:
+def _visible_tools(
+    request: Request, workspace_id: UUID, modules: Mapping[str, Any] | None = None
+) -> list[Any]:
     """Registry is process-global; drop other workspaces' MCP descriptors and apply per-call module state."""
     runtime = getattr(request.app.state, "mcp_runtime", None)
     items = request.app.state.tool_registry.list_tools(modules=modules)
@@ -67,16 +76,26 @@ def _visible_tools(request: Request, workspace_id: UUID, modules: Mapping[str, A
 
 
 @router.get("")
-async def list_tools(request: Request, _owner: OwnerRead, _scope: WorkspaceRead, session: Session) -> dict[str, Any]:
+async def list_tools(
+    request: Request, _owner: OwnerRead, _scope: WorkspaceRead, session: Session
+) -> dict[str, Any]:
     """Return enabled registered tool contracts to the workspace owner (members get 403)."""
     if _scope.role != "owner":
         raise HTTPException(status_code=403, detail="Workspace owner required")
-    return {"items": [item.model_dump(mode="json") for item in await _workspace_tools(request, session, _scope)]}
+    return {
+        "items": [
+            item.model_dump(mode="json")
+            for item in await _workspace_tools(request, session, _scope)
+        ]
+    }
 
 
 @router.post("/invoke")
 async def invoke_tool(
-    request: Request, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
+    request: Request,
+    session: Session,
+    owner: OwnerWrite,
+    scope: WorkspaceWrite,
 ) -> dict[str, Any]:
     """Invoke one owner-authorized registered tool with fresh auth and output-fence checks.
 
@@ -95,11 +114,15 @@ async def invoke_tool(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid request length") from exc
         if declared_length < 0 or declared_length > 64_000:
-            raise HTTPException(status_code=413, detail="Tool invocation exceeds the request size limit")
+            raise HTTPException(
+                status_code=413, detail="Tool invocation exceeds the request size limit"
+            )
     body = bytearray()
     async for chunk in request.stream():
         if len(body) + len(chunk) > 64_000:
-            raise HTTPException(status_code=413, detail="Tool invocation exceeds the request size limit")
+            raise HTTPException(
+                status_code=413, detail="Tool invocation exceeds the request size limit"
+            )
         body.extend(chunk)
     try:
         payload = ToolInvocation.model_validate_json(bytes(body))
@@ -111,19 +134,30 @@ async def invoke_tool(
     allowed = frozenset(item.name for item in await _workspace_tools(request, session, scope))
     owner_id, owner_token_hash = owner.owner_id, owner.token_hash
     principal = ToolExecutionPrincipal(
-        actor_id=f"owner:{scope.user_id}", scope=scope, is_owner=True, allowed_tools=allowed,
-        source_ids=frozenset(), owner_all_sources=True, destinations=frozenset({"local"}),
+        actor_id=f"owner:{scope.user_id}",
+        scope=scope,
+        is_owner=True,
+        allowed_tools=allowed,
+        source_ids=frozenset(),
+        owner_all_sources=True,
+        destinations=frozenset({"local"}),
         capabilities=frozenset({"source.read"}),
     )
 
     async def revalidate_owner(current: ToolExecutionPrincipal) -> bool:
         """Recheck the same owner session in a fresh short transaction after async tool work."""
-        if current.actor_id != f"owner:{scope.user_id}" or not current.is_owner or current.scope != scope:
+        if (
+            current.actor_id != f"owner:{scope.user_id}"
+            or not current.is_owner
+            or current.scope != scope
+        ):
             return False
         try:
             async with request.app.state.session_factory() as fresh_session:
                 return await revalidate_account_session(
-                    fresh_session, owner_token_hash, owner_id,
+                    fresh_session,
+                    owner_token_hash,
+                    owner_id,
                     multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
                 )
         except Exception:  # noqa: BLE001  # fail-closed boundary: any failure denies/degrades
@@ -131,38 +165,61 @@ async def invoke_tool(
 
     await session.rollback()
     result = await registry.invoke_tool(
-        name, payload.arguments, principal, version=payload.version,
-        context={"session_factory": request.app.state.session_factory,
-                 "redis": request.app.state.redis,
-                 "settings": request.app.state.settings,
-                 "destination_id": "local", "destination_kind": "local",
-                 "principal_revalidator": revalidate_owner},
+        name,
+        payload.arguments,
+        principal,
+        version=payload.version,
+        context={
+            "session_factory": request.app.state.session_factory,
+            "redis": request.app.state.redis,
+            "settings": request.app.state.settings,
+            "destination_id": "local",
+            "destination_kind": "local",
+            "principal_revalidator": revalidate_owner,
+        },
     )
     if result.success and not await revalidate_owner(principal):
         raise HTTPException(status_code=401, detail="Authentication required")
     if not result.success:
-        raise HTTPException(status_code=403 if result.error_code == "forbidden" else 422,
-                            detail={"code": result.error_code, "message": "Tool invocation failed"})
+        raise HTTPException(
+            status_code=403 if result.error_code == "forbidden" else 422,
+            detail={"code": result.error_code, "message": "Tool invocation failed"},
+        )
     return cast("dict[str, Any]", result.model_dump(mode="json"))
 
 
 @browser_jobs_router.get("/{job_id}")
 async def read_browser_job_route(
-    job_id: UUID, request: Request, session: Session, owner: OwnerRead, scope: WorkspaceRead,
+    job_id: UUID,
+    request: Request,
+    session: Session,
+    owner: OwnerRead,
+    scope: WorkspaceRead,
 ) -> dict[str, Any]:
     """Read bounded job metadata and current evidence for its original owner session only."""
     flag = request.app.state.settings.multi_workspace_enabled
     await _admit(session, scope=scope, multi_workspace_enabled=flag)
-    row = await session.scalar(select(BrowserReadJob).where(
-        BrowserReadJob.id == job_id, BrowserReadJob.workspace_id == scope.workspace_id,
-        BrowserReadJob.owner_id == scope.user_id,
-    ))
+    row = await session.scalar(
+        select(BrowserReadJob).where(
+            BrowserReadJob.id == job_id,
+            BrowserReadJob.workspace_id == scope.workspace_id,
+            BrowserReadJob.owner_id == scope.user_id,
+        )
+    )
     if row is None or row.auth_session_hash != owner.token_hash:
         raise HTTPException(status_code=404, detail="Browser job not found")
-    result = await read_browser_result(
-        session, owner.token_hash, job_id, request.app.state.session_factory,
-        scope=scope, multi_workspace_enabled=flag,
-    ) if row.status == "succeeded" else None
+    result = (
+        await read_browser_result(
+            session,
+            owner.token_hash,
+            job_id,
+            request.app.state.session_factory,
+            scope=scope,
+            multi_workspace_enabled=flag,
+        )
+        if row.status == "succeeded"
+        else None
+    )
     return {
         "job": read_browser_job(row).model_dump(mode="json"),
         "result": result.model_dump(mode="json") if result is not None else None,
@@ -171,35 +228,52 @@ async def read_browser_job_route(
 
 @browser_jobs_router.post("/{job_id}/cancel")
 async def cancel_browser_job_route(
-    job_id: UUID, request: Request, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
+    job_id: UUID,
+    request: Request,
+    session: Session,
+    owner: OwnerWrite,
+    scope: WorkspaceWrite,
 ) -> dict[str, Any]:
     """Commit local erasure and cancellation intent before requesting isolated service cleanup."""
     flag = request.app.state.settings.multi_workspace_enabled
     fence = await _admit(session, scope=scope, multi_workspace_enabled=flag, lock=True)
-    row = await session.scalar(select(BrowserReadJob).where(
-        BrowserReadJob.id == job_id, BrowserReadJob.workspace_id == scope.workspace_id,
-        BrowserReadJob.owner_id == scope.user_id,
-    ).with_for_update())
+    row = await session.scalar(
+        select(BrowserReadJob)
+        .where(
+            BrowserReadJob.id == job_id,
+            BrowserReadJob.workspace_id == scope.workspace_id,
+            BrowserReadJob.owner_id == scope.user_id,
+        )
+        .with_for_update()
+    )
     if row is None or row.auth_session_hash != owner.token_hash:
         raise HTTPException(status_code=404, detail="Browser job not found")
     operation_id = row.operation_id
     instance_id = row.service_instance_id
     claim_generation = row.claim_generation
-    job = await cancel_browser_job_in_uow(session, job_id, scope=scope, multi_workspace_enabled=flag)
-    await commit_with_replay(session, [], scope=scope, multi_workspace_enabled=flag, access_fence=fence)
+    job = await cancel_browser_job_in_uow(
+        session, job_id, scope=scope, multi_workspace_enabled=flag
+    )
+    await commit_with_replay(
+        session, [], scope=scope, multi_workspace_enabled=flag, access_fence=fence
+    )
     cleanup_acknowledged = False
     if instance_id is not None:
         settings = request.app.state.settings
         shared = settings.browser_shared_token.get_secret_value()
         job_token = derive_browser_job_token(shared, row.operation_id, row.claim_generation)
         try:
-            async with httpx.AsyncClient(timeout=3, trust_env=False, follow_redirects=False) as client:
+            async with httpx.AsyncClient(
+                timeout=3, trust_env=False, follow_redirects=False
+            ) as client:
                 response = await client.post(
                     f"{str(settings.browser_service_url).rstrip('/')}/agent-reads/{job_id}/cancel",
                     json={
-                        "job_id": str(job_id), "operation_id": str(operation_id),
+                        "job_id": str(job_id),
+                        "operation_id": str(operation_id),
                         "claim_generation": claim_generation,
-                        "service_instance_id": instance_id, "job_token": job_token,
+                        "service_instance_id": instance_id,
+                        "job_token": job_token,
                     },
                     headers={
                         "Authorization": f"Bearer {shared}",
@@ -215,7 +289,7 @@ async def cancel_browser_job_route(
             pass
     return {
         "job": job.model_dump(mode="json"),
-        "cleanup": "acknowledged" if cleanup_acknowledged else (
-            "pending" if instance_id else "not_started"
-        ),
+        "cleanup": "acknowledged"
+        if cleanup_acknowledged
+        else ("pending" if instance_id else "not_started"),
     }

@@ -70,7 +70,7 @@ class TestTemporalOrdering:
         events = [
             {"id": id_low, "started_at": t1},
             {"id": id_high, "started_at": t1},  # same time, higher UUID
-            {"id": id_low, "started_at": t2},   # later time
+            {"id": id_low, "started_at": t2},  # later time
         ]
         # Sort descending by (started_at, id)
         sorted_events = sorted(events, key=lambda e: (e["started_at"], e["id"]), reverse=True)
@@ -178,10 +178,7 @@ class TestSourceEntityLinkageAndEvidence:
             {"id": uuid4(), "origin": "derived", "has_evidence": False},
         ]
         # Retention rule: manual participants survive; derived survive only if has_evidence
-        surviving = [
-            p for p in participants
-            if p["origin"] == "manual" or p["has_evidence"]
-        ]
+        surviving = [p for p in participants if p["origin"] == "manual" or p["has_evidence"]]
         assert len(surviving) == 2
         assert surviving[0]["origin"] == "manual"
         assert surviving[1]["origin"] == "derived" and surviving[1]["has_evidence"] is True

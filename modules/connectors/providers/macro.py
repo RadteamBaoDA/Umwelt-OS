@@ -30,8 +30,11 @@ class ProviderPayloadError(ValueError):
     """A provider body that must not become records; ``kind`` tells the controller how to react."""
 
     def __init__(
-        self, code: str,
-        kind: Literal["invalid", "rate_limited", "credential", "entitlement", "incomplete"] = "invalid",
+        self,
+        code: str,
+        kind: Literal[
+            "invalid", "rate_limited", "credential", "entitlement", "incomplete"
+        ] = "invalid",
     ) -> None:
         """Store the stable error code and its failure class (invalid, rate_limited, credential, entitlement, incomplete)."""
         super().__init__(code)
@@ -45,6 +48,7 @@ class ProviderRequest:
 
     ``body`` is an optional pre-serialised JSON search query (POST), used only by read-only search APIs.
     """
+
     method: str
     url: str
     headers: dict[str, str] = field(default_factory=dict, repr=False)
@@ -91,7 +95,11 @@ def decode_json(body: bytes) -> object:
 
     try:
         return json.loads(body, parse_float=Decimal, parse_constant=_reject)
-    except (ValueError, UnicodeDecodeError, RecursionError) as exc:  # HTML/plain-text 200s land here
+    except (
+        ValueError,
+        UnicodeDecodeError,
+        RecursionError,
+    ) as exc:  # HTML/plain-text 200s land here
         raise ProviderPayloadError("provider_response_not_json") from exc
 
 
@@ -110,7 +118,9 @@ def parse_iso_date(raw: object) -> date:
         raise ProviderPayloadError("provider_date_invalid") from exc
 
 
-def provider_instant(raw: object, collected_at: datetime, *, unit: Literal["s", "ms", "iso"]) -> datetime:
+def provider_instant(
+    raw: object, collected_at: datetime, *, unit: Literal["s", "ms", "iso"]
+) -> datetime:
     """Strict aware provider instant (Unix s/ms ints or tz-aware ISO text); future beyond 10 min skew is invalid."""
     try:
         if unit == "iso":
@@ -120,7 +130,9 @@ def provider_instant(raw: object, collected_at: datetime, *, unit: Literal["s", 
             if moment.tzinfo is None or moment.utcoffset() is None:
                 raise ValueError
         else:
-            if type(raw) is not int and not (isinstance(raw, str) and raw.isdigit() and len(raw) <= 16):
+            if type(raw) is not int and not (
+                isinstance(raw, str) and raw.isdigit() and len(raw) <= 16
+            ):
                 raise ValueError
             moment = datetime.fromtimestamp(int(raw) / (1000 if unit == "ms" else 1), UTC)
     except (ValueError, OverflowError, OSError) as exc:
@@ -154,14 +166,31 @@ def day_start(day: date) -> datetime:
 
 
 def build_record(
-    *, provider: str, identity: str, content: str, title: str, observed_at: datetime,
-    collected_at: datetime, version: str, metric: str, value: Decimal | None, unit: str,
+    *,
+    provider: str,
+    identity: str,
+    content: str,
+    title: str,
+    observed_at: datetime,
+    collected_at: datetime,
+    version: str,
+    metric: str,
+    value: Decimal | None,
+    unit: str,
     quality: Literal["provider_reported", "forecast", "reference"],
-    provider_fields: dict[str, str | float | int | None], decimal_key: str | None = "decimal_value",
-    currency: str | None = None, symbol: str | None = None, region: str | None = None,
-    latitude: float | None = None, longitude: float | None = None,
-    timestamp_basis: Literal["provider_modified", "provider_published", "collection"] = "collection",
-    coverage: Literal["returned_snapshot", "pending_updates_only", "truncated"] = "returned_snapshot",
+    provider_fields: dict[str, str | float | int | None],
+    decimal_key: str | None = "decimal_value",
+    currency: str | None = None,
+    symbol: str | None = None,
+    region: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    timestamp_basis: Literal[
+        "provider_modified", "provider_published", "collection"
+    ] = "collection",
+    coverage: Literal[
+        "returned_snapshot", "pending_updates_only", "truncated"
+    ] = "returned_snapshot",
     modified_at: datetime | None = None,
 ) -> IngestionRecord:
     """Build the trusted typed envelope; ``value`` None becomes explicit provider_null missing."""
@@ -178,25 +207,46 @@ def build_record(
         if decimal_key:
             fields[decimal_key] = decimal_text(value)
     measurement = WorldDataMeasurement(
-        provider=provider, metric=metric, value=as_float, unit=unit, currency=currency,
-        timezone=None, symbol=symbol, region=region, latitude=latitude, longitude=longitude,
-        published_at=None, quality="missing" if value is None else quality,
-        missing_reason="provider_null" if value is None else None, provider_fields=fields,
+        provider=provider,
+        metric=metric,
+        value=as_float,
+        unit=unit,
+        currency=currency,
+        timezone=None,
+        symbol=symbol,
+        region=region,
+        latitude=latitude,
+        longitude=longitude,
+        published_at=None,
+        quality="missing" if value is None else quality,
+        missing_reason="provider_null" if value is None else None,
+        provider_fields=fields,
     )
     envelope = ProviderRecordMetadata(
-        provider=provider, identity=identity, provider_version=version,
-        timestamp_basis=timestamp_basis, coverage=coverage, content_truncated=False,
-        provider_modified_at=modified_at, world_data=measurement,
+        provider=provider,
+        identity=identity,
+        provider_version=version,
+        timestamp_basis=timestamp_basis,
+        coverage=coverage,
+        content_truncated=False,
+        provider_modified_at=modified_at,
+        world_data=measurement,
     )
     return IngestionRecord(
-        provider_id=identity, content=content, observed_at=observed_at, collected_at=collected_at,
-        version=version, metadata={"title": title, "provider_record": envelope.model_dump(mode="json")},
+        provider_id=identity,
+        content=content,
+        observed_at=observed_at,
+        collected_at=collected_at,
+        version=version,
+        metadata={"title": title, "provider_record": envelope.model_dump(mode="json")},
     )
 
 
 # --------------------------------------------------------------------------- World Bank
 
-WORLD_BANK_URL = "https://api.worldbank.org/v2/country/VN/indicator/NY.GDP.MKTP.CD?format=json&per_page=3"
+WORLD_BANK_URL = (
+    "https://api.worldbank.org/v2/country/VN/indicator/NY.GDP.MKTP.CD?format=json&per_page=3"
+)
 WORLD_BANK_INDICATORS: tuple[tuple[str, str, str], ...] = (
     ("VN", "NY.GDP.MKTP.CD", "gdp_current_usd"),
 )
@@ -220,8 +270,11 @@ _WB_ISO2_META: dict[str, tuple[str, str]] = {
 
 # Units per curated World Bank indicator; anything else (the original GDP row included) is "current US$".
 WB_INDICATOR_UNITS = {
-    "NY.GDP.MKTP.KD.ZG": "annual %", "FP.CPI.TOTL.ZG": "annual %", "SL.UEM.TOTL.ZS": "% of labor force",
-    "SP.POP.TOTL": "persons", "BX.KLT.DINV.WD.GD.ZS": "% of GDP",
+    "NY.GDP.MKTP.KD.ZG": "annual %",
+    "FP.CPI.TOTL.ZG": "annual %",
+    "SL.UEM.TOTL.ZS": "% of labor force",
+    "SP.POP.TOTL": "persons",
+    "BX.KLT.DINV.WD.GD.ZS": "% of GDP",
 }
 
 
@@ -237,7 +290,9 @@ def world_bank_request(
     target_indicator = indicator
     if indicators != WORLD_BANK_INDICATORS and indicators:
         target_country, target_indicator, _ = indicators[0]
-    if not _WB_COUNTRY_RE.fullmatch(target_country) or not _WB_INDICATOR_RE.fullmatch(target_indicator):
+    if not _WB_COUNTRY_RE.fullmatch(target_country) or not _WB_INDICATOR_RE.fullmatch(
+        target_indicator
+    ):
         raise ProviderPayloadError("world_bank_scope_mismatch")
     if per_page < 1 or per_page > _WB_MAX_ROWS:
         raise ProviderPayloadError("world_bank_paging_invalid")
@@ -256,25 +311,44 @@ def _wb_rows(payload: object) -> tuple[list[Any], Literal["returned_snapshot", "
     Raises:
         ProviderPayloadError: error payload, malformed envelope/paging, incomplete page or no rows.
     """
-    if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict) and "message" in payload[0]:
+    if (
+        isinstance(payload, list)
+        and len(payload) == 1
+        and isinstance(payload[0], dict)
+        and "message" in payload[0]
+    ):
         raise ProviderPayloadError("world_bank_error_payload")
-    if not isinstance(payload, list) or len(payload) != 2 or not isinstance(payload[0], dict) or not isinstance(payload[1], list):
+    if (
+        not isinstance(payload, list)
+        or len(payload) != 2
+        or not isinstance(payload[0], dict)
+        or not isinstance(payload[1], list)
+    ):
         raise ProviderPayloadError("world_bank_response_invalid")
     meta, rows = payload
     raw_paging = [meta.get(k) for k in ("page", "pages", "per_page", "total")]
     if any(type(v) is not int and not (isinstance(v, str) and v.isdigit()) for v in raw_paging):
         raise ProviderPayloadError("world_bank_paging_invalid")
     page, pages, per_page, total = (int(v) for v in raw_paging)
-    if page != 1 or pages < 1 or per_page < 1 or len(rows) > _WB_MAX_ROWS or len(rows) != min(per_page, total):
+    if (
+        page != 1
+        or pages < 1
+        or per_page < 1
+        or len(rows) > _WB_MAX_ROWS
+        or len(rows) != min(per_page, total)
+    ):
         raise ProviderPayloadError("world_bank_incomplete_page", "incomplete")
     if not rows:
         raise ProviderPayloadError("world_bank_no_rows", "incomplete")
-    coverage: Literal["returned_snapshot", "truncated"] = "truncated" if pages > 1 else "returned_snapshot"
+    coverage: Literal["returned_snapshot", "truncated"] = (
+        "truncated" if pages > 1 else "returned_snapshot"
+    )
     return rows, coverage
 
 
 def _wb_row_scope(
-    row: dict[str, Any], allowed_indicators: dict[tuple[str, str], str],
+    row: dict[str, Any],
+    allowed_indicators: dict[tuple[str, str], str],
 ) -> tuple[str, str, str, str]:
     """Check a row's country/indicator against the configured scope; return ids, metric and region name.
 
@@ -301,7 +375,11 @@ def _wb_row_scope(
         if not isinstance(iso3_code, str) or not re.fullmatch(r"[A-Z]{3}", iso3_code):
             raise ProviderPayloadError("world_bank_scope_mismatch")
         country_value = country.get("value")
-        region_name = country_value if isinstance(country_value, str) and country_value.strip() else country_id
+        region_name = (
+            country_value
+            if isinstance(country_value, str) and country_value.strip()
+            else country_id
+        )
     return country_id, indicator_id, metric_name, region_name
 
 
@@ -326,7 +404,11 @@ def map_world_bank(
             raise ProviderPayloadError("world_bank_row_invalid")
         country_id, indicator_id, metric_name, region_name = _wb_row_scope(row, allowed_indicators)
         period = row.get("date")
-        if not isinstance(period, str) or not re.fullmatch(r"[0-9]{4}", period) or (country_id, indicator_id, period) in seen:
+        if (
+            not isinstance(period, str)
+            or not re.fullmatch(r"[0-9]{4}", period)
+            or (country_id, indicator_id, period) in seen
+        ):
             raise ProviderPayloadError("world_bank_period_invalid")
         seen.add((country_id, indicator_id, period))
         observed_at = datetime(int(period), 1, 1, tzinfo=UTC)
@@ -351,15 +433,30 @@ def map_world_bank(
                 f"{'not reported' if value is None else shown}"
             )
             title = f"{region_name} {indicator_id} {period}"
-        records.append(build_record(
-            provider="world_bank", identity=f"world_bank:{country_id}:{indicator_id}:{period}",
-            content=content,
-            title=title, observed_at=observed_at, collected_at=collected_at,
-            version=content_version("world_bank", country_id, indicator_id, period, text),
-            metric=metric_name, value=value, unit=unit, currency="USD" if usd else None, region=region_name,
-            quality="provider_reported", coverage=coverage,
-            provider_fields={"country": country_id, "indicator": indicator_id, "period": period, "unit": unit},
-        ))
+        records.append(
+            build_record(
+                provider="world_bank",
+                identity=f"world_bank:{country_id}:{indicator_id}:{period}",
+                content=content,
+                title=title,
+                observed_at=observed_at,
+                collected_at=collected_at,
+                version=content_version("world_bank", country_id, indicator_id, period, text),
+                metric=metric_name,
+                value=value,
+                unit=unit,
+                currency="USD" if usd else None,
+                region=region_name,
+                quality="provider_reported",
+                coverage=coverage,
+                provider_fields={
+                    "country": country_id,
+                    "indicator": indicator_id,
+                    "period": period,
+                    "unit": unit,
+                },
+            )
+        )
     return records
 
 
@@ -424,20 +521,22 @@ def map_fred_series(
         except ValueError as exc:
             raise ProviderPayloadError("fred_value_invalid") from exc
         text = "null" if value is None else decimal_text(value)
-        records.append(build_record(
-            provider="fred",
-            identity=f"fred:{series_id}:{iso}",
-            content=f"FRED {series_id} ({metric_name}) {iso}: {'not reported' if value is None else text + ' ' + unit_name}",
-            title=f"FRED {series_id} {iso}",
-            observed_at=observed_at,
-            collected_at=collected_at,
-            version=content_version("fred", series_id, iso, text),
-            metric=metric_name,
-            value=value,
-            unit=unit_name,
-            quality="provider_reported",
-            provider_fields={"series_id": series_id, "date": iso, "unit": unit_name},
-        ))
+        records.append(
+            build_record(
+                provider="fred",
+                identity=f"fred:{series_id}:{iso}",
+                content=f"FRED {series_id} ({metric_name}) {iso}: {'not reported' if value is None else text + ' ' + unit_name}",
+                title=f"FRED {series_id} {iso}",
+                observed_at=observed_at,
+                collected_at=collected_at,
+                version=content_version("fred", series_id, iso, text),
+                metric=metric_name,
+                value=value,
+                unit=unit_name,
+                quality="provider_reported",
+                provider_fields={"series_id": series_id, "date": iso, "unit": unit_name},
+            )
+        )
     return records
 
 
@@ -452,7 +551,11 @@ def frankfurter_request() -> ProviderRequest:
 
 
 def map_frankfurter(
-    payload: object, collected_at: datetime, *, base: str = "USD", quotes: tuple[str, ...] = ("VND",),
+    payload: object,
+    collected_at: datetime,
+    *,
+    base: str = "USD",
+    quotes: tuple[str, ...] = ("VND",),
 ) -> list[IngestionRecord]:
     """Map blended reference rates for ``base`` against each of ``quotes`` (default USD/VND).
 
@@ -464,13 +567,18 @@ def map_frankfurter(
     if not rows or len(rows) > len(quotes) or not all(isinstance(r, dict) for r in rows):
         raise ProviderPayloadError("frankfurter_response_invalid")
     records = [_map_frankfurter_row(row, collected_at, base, quotes) for row in rows]
-    if sorted(r.metadata["provider_record"]["world_data"]["symbol"] for r in records) != sorted(f"{base}/{q}" for q in quotes):
+    if sorted(r.metadata["provider_record"]["world_data"]["symbol"] for r in records) != sorted(
+        f"{base}/{q}" for q in quotes
+    ):
         raise ProviderPayloadError("frankfurter_scope_mismatch")
     return records
 
 
 def _map_frankfurter_row(
-    payload: dict[str, Any], collected_at: datetime, base: str, quotes: tuple[str, ...],
+    payload: dict[str, Any],
+    collected_at: datetime,
+    base: str,
+    quotes: tuple[str, ...],
 ) -> IngestionRecord:
     """Map one Frankfurter pair object; the base and quote must be in the requested scope."""
     if "message" in payload or "error" in payload:
@@ -485,7 +593,9 @@ def _map_frankfurter_row(
         raise ProviderPayloadError("frankfurter_rate_invalid") from exc
     providers = payload.get("providers")
     providers_text = None  # absent or unsupported shape: never invented
-    if isinstance(providers, list) and all(isinstance(p, str) and re.fullmatch(r"[A-Za-z0-9 ._-]{1,40}", p) for p in providers):
+    if isinstance(providers, list) and all(
+        isinstance(p, str) and re.fullmatch(r"[A-Za-z0-9 ._-]{1,40}", p) for p in providers
+    ):
         providers_text = ",".join(providers)[:200] or None
     iso = day.isoformat()
     fields: dict[str, str | float | int | None] = {"date": iso, "base": base, "quote": quote}
@@ -493,11 +603,19 @@ def _map_frankfurter_row(
         fields["providers"] = providers_text
     text = decimal_text(rate)
     return build_record(
-        provider="frankfurter", identity=f"frankfurter:{base}:{quote}:{iso}:blended",
+        provider="frankfurter",
+        identity=f"frankfurter:{base}:{quote}:{iso}:blended",
         content=f"{base}/{quote} blended reference rate {iso}: {text} {quote} per {base}",
-        title=f"{base}/{quote} reference rate", observed_at=day_start(day), collected_at=collected_at,
-        version=content_version("frankfurter", base, quote, iso, text), metric="fx_reference_rate",
-        value=rate, unit=f"{quote} per {base}", currency=quote, symbol=f"{base}/{quote}", quality="reference",
+        title=f"{base}/{quote} reference rate",
+        observed_at=day_start(day),
+        collected_at=collected_at,
+        version=content_version("frankfurter", base, quote, iso, text),
+        metric="fx_reference_rate",
+        value=rate,
+        unit=f"{quote} per {base}",
+        currency=quote,
+        symbol=f"{base}/{quote}",
+        quality="reference",
         provider_fields=fields,
     )
 
@@ -534,7 +652,9 @@ def map_ecb(xml: bytes, collected_at: datetime) -> list[IngestionRecord]:
     if "<!doctype" in lowered or "<!entity" in lowered:
         raise ProviderPayloadError("ecb_forbidden_xml_construct")
     try:
-        root = ET.fromstring(bytes(xml))  # hostile constructs rejected above  # noqa: S314  # DOCTYPE/ENTITY rejected before parsing; defusedxml not installed
+        root = ET.fromstring(  # noqa: S314  # DOCTYPE/ENTITY rejected before parsing; defusedxml not installed
+            bytes(xml)
+        )  # hostile constructs rejected above
     except ET.ParseError as exc:
         raise ProviderPayloadError("ecb_xml_malformed") from exc
     days = [el for el in root.iter() if _local(el.tag) == "Cube" and "time" in el.attrib]
@@ -557,21 +677,37 @@ def map_ecb(xml: bytes, collected_at: datetime) -> list[IngestionRecord]:
         except ValueError as exc:
             raise ProviderPayloadError("ecb_rate_invalid") from exc
         text = decimal_text(rate)
-        records.append(build_record(
-            provider="ecb", identity=f"ecb:EUR:{quote}:{iso}",
-            content=f"ECB euro reference rate {iso}: 1 EUR = {text} {quote}",
-            title=f"EUR/{quote} reference rate", observed_at=day_start(day), collected_at=collected_at,
-            version=content_version("ecb", "EUR", quote, iso, text), metric="fx_reference_rate",
-            value=rate, unit=f"{quote} per EUR", currency=quote, symbol=f"EUR/{quote}", quality="reference",
-            provider_fields={"date": iso, "base": "EUR", "quote": quote},
-        ))
+        records.append(
+            build_record(
+                provider="ecb",
+                identity=f"ecb:EUR:{quote}:{iso}",
+                content=f"ECB euro reference rate {iso}: 1 EUR = {text} {quote}",
+                title=f"EUR/{quote} reference rate",
+                observed_at=day_start(day),
+                collected_at=collected_at,
+                version=content_version("ecb", "EUR", quote, iso, text),
+                metric="fx_reference_rate",
+                value=rate,
+                unit=f"{quote} per EUR",
+                currency=quote,
+                symbol=f"EUR/{quote}",
+                quality="reference",
+                provider_fields={"date": iso, "base": "EUR", "quote": quote},
+            )
+        )
     return records
 
 
 # --------------------------------------------------------------------------- Open ER API (daily FX)
 
 OPEN_ER_API_URL = "https://open.er-api.com/v6/latest/USD"
-OPEN_ER_QUOTES = ("VND", "EUR", "JPY", "GBP", "CNY")  # fixed quote set: one request, a handful of records
+OPEN_ER_QUOTES = (
+    "VND",
+    "EUR",
+    "JPY",
+    "GBP",
+    "CNY",
+)  # fixed quote set: one request, a handful of records
 
 
 def open_er_api_request() -> ProviderRequest:
@@ -579,7 +715,9 @@ def open_er_api_request() -> ProviderRequest:
     return ProviderRequest("GET", OPEN_ER_API_URL)
 
 
-def map_open_er_api(payload: object, collected_at: datetime, *, base: str = "USD") -> list[IngestionRecord]:
+def map_open_er_api(
+    payload: object, collected_at: datetime, *, base: str = "USD"
+) -> list[IngestionRecord]:
     """Map ``base`` daily rates; one record per quote and provider update day.
 
     Quotes are ``OPEN_ER_QUOTES`` for the USD base; another base gets the same set with USD added in place of
@@ -599,22 +737,35 @@ def map_open_er_api(payload: object, collected_at: datetime, *, base: str = "USD
     updated = provider_instant(payload.get("time_last_update_unix"), collected_at, unit="s")
     iso = updated.date().isoformat()
     records = []
-    quote_set = OPEN_ER_QUOTES if base == "USD" else tuple(q for q in ("USD", *OPEN_ER_QUOTES) if q != base)
+    quote_set = (
+        OPEN_ER_QUOTES if base == "USD" else tuple(q for q in ("USD", *OPEN_ER_QUOTES) if q != base)
+    )
     for quote in quote_set:
         try:
             rate = positive_decimal(rates.get(quote))
         except ValueError as exc:
             raise ProviderPayloadError("open_er_api_rate_invalid") from exc
         text = decimal_text(rate)
-        records.append(build_record(
-            provider="open_er_api", identity=f"open_er_api:{base}:{quote}:{iso}",
-            content=f"Open ER API daily rate {iso}: 1 {base} = {text} {quote}",
-            title=f"{base}/{quote} daily rate", observed_at=updated, collected_at=collected_at,
-            version=content_version("open_er_api", quote, iso, text), metric="fx_reference_rate",
-            value=rate, unit=f"{quote} per {base}", currency=quote, symbol=f"{base}/{quote}", quality="reference",
-            timestamp_basis="provider_modified", modified_at=updated,
-            provider_fields={"date": iso, "base": base, "quote": quote},
-        ))
+        records.append(
+            build_record(
+                provider="open_er_api",
+                identity=f"open_er_api:{base}:{quote}:{iso}",
+                content=f"Open ER API daily rate {iso}: 1 {base} = {text} {quote}",
+                title=f"{base}/{quote} daily rate",
+                observed_at=updated,
+                collected_at=collected_at,
+                version=content_version("open_er_api", quote, iso, text),
+                metric="fx_reference_rate",
+                value=rate,
+                unit=f"{quote} per {base}",
+                currency=quote,
+                symbol=f"{base}/{quote}",
+                quality="reference",
+                timestamp_basis="provider_modified",
+                modified_at=updated,
+                provider_fields={"date": iso, "base": base, "quote": quote},
+            )
+        )
     return records
 
 
@@ -630,11 +781,19 @@ _PERIOD_RE = re.compile(r"^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$")
 
 def oecd_cli_request() -> ProviderRequest:
     """Return the fixed OECD composite-leading-indicator request (SDMX-JSON 2.0, last 24 monthly observations per area)."""
-    return ProviderRequest("GET", OECD_CLI_URL, {"Accept": "application/vnd.sdmx.data+json; version=2"})
+    return ProviderRequest(
+        "GET", OECD_CLI_URL, {"Accept": "application/vnd.sdmx.data+json; version=2"}
+    )
 
 
 def map_sdmx_json(
-    provider: str, payload: object, collected_at: datetime, *, metric: str, unit: str, title: str,
+    provider: str,
+    payload: object,
+    collected_at: datetime,
+    *,
+    metric: str,
+    unit: str,
+    title: str,
 ) -> list[IngestionRecord]:
     """Map an SDMX-JSON 2.0 ``AllDimensions`` data message to one record per (REF_AREA, TIME_PERIOD).
 
@@ -656,7 +815,12 @@ def map_sdmx_json(
     records = []
     for key, obs in observations.items():
         parts = key.split(":") if isinstance(key, str) else []
-        if len(parts) != len(dims) or not all(p.isdigit() for p in parts) or not isinstance(obs, list) or not obs:
+        if (
+            len(parts) != len(dims)
+            or not all(p.isdigit() for p in parts)
+            or not isinstance(obs, list)
+            or not obs
+        ):
             raise ProviderPayloadError(code)
         try:
             members = {d["id"]: d["values"][int(i)] for d, i in zip(dims, parts, strict=True)}
@@ -669,33 +833,51 @@ def map_sdmx_json(
             raise ProviderPayloadError(code)
         observed = datetime(int(match[1]), int(match[2] or 1), int(match[3] or 1), tzinfo=UTC)
         text = decimal_text(value)
-        records.append(build_record(
-            provider=provider, identity=f"{provider}:{area}:{period}",
-            content=f"{title} {area} {period}: {text} {unit}", title=f"{title} {area}",
-            observed_at=observed, collected_at=collected_at,
-            # symbol is part of the version so rows stored before ``symbol=area`` existed are re-upserted with it
-            version=content_version(provider, area, area, period, text), metric=metric, value=value, unit=unit,
-            region=area, symbol=area, quality="provider_reported",
-            provider_fields={"area": area, "period": str(period)},
-        ))
+        records.append(
+            build_record(
+                provider=provider,
+                identity=f"{provider}:{area}:{period}",
+                content=f"{title} {area} {period}: {text} {unit}",
+                title=f"{title} {area}",
+                observed_at=observed,
+                collected_at=collected_at,
+                # symbol is part of the version so rows stored before ``symbol=area`` existed are re-upserted with it
+                version=content_version(provider, area, area, period, text),
+                metric=metric,
+                value=value,
+                unit=unit,
+                region=area,
+                symbol=area,
+                quality="provider_reported",
+                provider_fields={"area": area, "period": str(period)},
+            )
+        )
     return sorted(records, key=lambda r: r.provider_id)
 
 
 def map_oecd_cli(payload: object, collected_at: datetime) -> list[IngestionRecord]:
     """OECD composite leading indicator (amplitude adjusted, index) per configured area and period."""
     return map_sdmx_json(
-        "oecd_cli", payload, collected_at, metric="composite_leading_indicator", unit="index",
+        "oecd_cli",
+        payload,
+        collected_at,
+        metric="composite_leading_indicator",
+        unit="index",
         title="OECD composite leading indicator",
     )
 
 
 # --------------------------------------------------------------------------- adapter registry
 
+
 @dataclass(frozen=True)
 class PureAdapter:
     """Request builder plus body mapper; ``binary`` bodies (XML) bypass JSON decoding."""
+
     request: Callable[..., ProviderRequest]
-    mapper: Callable[..., list[IngestionRecord]]  # (payload, collected_at, **scope options from provider_options.map_options)
+    mapper: Callable[
+        ..., list[IngestionRecord]
+    ]  # (payload, collected_at, **scope options from provider_options.map_options)
     binary: bool = False
 
 

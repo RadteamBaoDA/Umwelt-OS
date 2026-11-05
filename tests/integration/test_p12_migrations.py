@@ -27,7 +27,10 @@ def _alembic(database_url: str, *arguments: str, extra_env: dict[str, str] | Non
         [sys.executable, "-m", "alembic", *arguments],
         cwd=REPOSITORY_ROOT,
         env={**os.environ, "DATABASE_URL": database_url, **(extra_env or {})},
-        capture_output=True, text=True, check=False, timeout=600,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=600,
     )
     assert result.returncode == 0, f"alembic {' '.join(arguments)} failed:\n{result.stderr}"
     return result.stdout + result.stderr
@@ -110,10 +113,22 @@ async def test_init_upgrade_creates_seed_rows_and_v7_function(
     engine = create_async_engine(url)
     try:
         async with engine.connect() as connection:
-            assert await connection.scalar(text("SELECT count(*) FROM connector_admission_slots")) == 2
-            assert await connection.scalar(text("SELECT count(*) FROM translation_admission_slots")) == 1
-            assert await connection.scalar(text("SELECT count(*) FROM github_webhook_capacity")) == 1
-            assert await connection.scalar(text("SELECT substr(uuid_generate_v7()::text, 15, 1) = '7'")) is True
+            assert (
+                await connection.scalar(text("SELECT count(*) FROM connector_admission_slots")) == 2
+            )
+            assert (
+                await connection.scalar(text("SELECT count(*) FROM translation_admission_slots"))
+                == 1
+            )
+            assert (
+                await connection.scalar(text("SELECT count(*) FROM github_webhook_capacity")) == 1
+            )
+            assert (
+                await connection.scalar(
+                    text("SELECT substr(uuid_generate_v7()::text, 15, 1) = '7'")
+                )
+                is True
+            )
     finally:
         await engine.dispose()
 

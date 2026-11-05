@@ -23,7 +23,8 @@ def _rule(keywords: list[str]) -> HighlightRule:
 def test_matching_cost_is_bounded_and_caps_apply() -> None:
     topic = uuid4()
     rules = [
-        HighlightRule(id=uuid4(), topic_ids=[topic], severity="info", notify=False) for _ in range(32)
+        HighlightRule(id=uuid4(), topic_ids=[topic], severity="info", notify=False)
+        for _ in range(32)
     ]
     terms = {topic: [f"term{i}x" for i in range(600)]}
     compiled = compile_rules(rules, terms)
@@ -41,12 +42,34 @@ def test_matching_cost_is_bounded_and_caps_apply() -> None:
 
 
 def test_results_identical_to_legacy_per_term_matcher() -> None:
-    keywords = ["new york", "york", "Rates", "C++", "fed", "ß", "inflation", "AI", "istanbul", "İzmir", "ısparta"]
+    keywords = [
+        "new york",
+        "york",
+        "Rates",
+        "C++",
+        "fed",
+        "ß",
+        "inflation",
+        "AI",
+        "istanbul",
+        "İzmir",
+        "ısparta",
+    ]
     rule = _rule(keywords)
     legacy = [re.compile(rf"\b{re.escape(k)}\b", re.IGNORECASE) for k in keywords]
     samples = [
-        "The Fed held rates in New York.", "inflation, AI and C++ everywhere", "yorkshire is not york",
-        "STRASSE ß", "nothing here", "RATES rates Rates", "", "İSTANBUL", "ıstanbul", "IZMIR", "izmir", "ISPARTA",
+        "The Fed held rates in New York.",
+        "inflation, AI and C++ everywhere",
+        "yorkshire is not york",
+        "STRASSE ß",
+        "nothing here",
+        "RATES rates Rates",
+        "",
+        "İSTANBUL",
+        "ıstanbul",
+        "IZMIR",
+        "izmir",
+        "ISPARTA",
     ]
     (compiled,) = compile_rules([rule])
     for text in samples:

@@ -54,12 +54,18 @@ def _document_scope(scope: Scope, *, allow_member: bool = False) -> tuple[Column
     if member:
         if not isinstance(scope, WorkspaceContext):
             raise TypeError("invariant violated: unexpected type for scope")
-        predicates += (Document.id.in_(workspaces.granted_resource_ids(scope=scope, kind="document")),)
+        predicates += (
+            Document.id.in_(workspaces.granted_resource_ids(scope=scope, kind="document")),
+        )
     return predicates
 
 
 async def _admit_document_scope(
-    session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, allow_member: bool = False,
+    session: AsyncSession,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    allow_member: bool = False,
 ) -> AccessFence:
     """Revalidate actual owner/default membership with the explicit rollout gate, without locks.
 
@@ -69,16 +75,26 @@ async def _admit_document_scope(
     """
     if not (allow_member and isinstance(scope, WorkspaceContext)):
         _require_document_owner(scope)
-    return await workspaces.read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    return await workspaces.read_access_fence(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
 
 
 async def _read_document_source_id(
-    session: AsyncSession, document_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    document_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> UUID | None:
     """Locate one visible root's Source before acquiring any domain lock, without metadata.
 
     Scope/Source lineage precedes the exact ID query. Missing, foreign and data-purged
     documents return None alike; writers then lock Source and freshly reload their own root.
     """
-    await _admit_document_scope(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    return await session.scalar(select(Document.source_id).where(Document.id == document_id, *_document_scope(scope)))
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    return await session.scalar(
+        select(Document.source_id).where(Document.id == document_id, *_document_scope(scope))
+    )

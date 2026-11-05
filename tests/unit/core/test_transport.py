@@ -53,8 +53,19 @@ from modules.chat.web_search import search
         "::8.8.8.8",  # IPv4-compatible
         "192.88.99.1",  # 6to4 relay anycast
         # IANA special-purpose registry vectors
-        "0.1.2.3", "192.0.0.1", "198.18.0.1", "198.51.100.1", "203.0.113.1", "255.255.255.255",
-        "100::1", "100:0:0:1::1", "2001:db8::1", "2001:10::1", "2001:2::1", "3fff::1", "5f00::1",
+        "0.1.2.3",
+        "192.0.0.1",
+        "198.18.0.1",
+        "198.51.100.1",
+        "203.0.113.1",
+        "255.255.255.255",
+        "100::1",
+        "100:0:0:1::1",
+        "2001:db8::1",
+        "2001:10::1",
+        "2001:2::1",
+        "3fff::1",
+        "5f00::1",
     ],
 )
 def test_is_public_denies(value: str) -> None:
@@ -63,7 +74,17 @@ def test_is_public_denies(value: str) -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111", "64:ff9b::808:808", "::ffff:8.8.8.8", "2606:4700::1111", "2001:20::1", "2001:3::1", "2001:4:112::1"],
+    [
+        "8.8.8.8",
+        "1.1.1.1",
+        "2606:4700:4700::1111",
+        "64:ff9b::808:808",
+        "::ffff:8.8.8.8",
+        "2606:4700::1111",
+        "2001:20::1",
+        "2001:3::1",
+        "2001:4:112::1",
+    ],
 )
 def test_is_public_allows(value: str) -> None:
     assert _is_public(ipaddress.ip_address(value)) is True
@@ -85,16 +106,24 @@ class _Delegate(httpx.AsyncBaseTransport):
 
 
 def _global(delegate: _Delegate, cidrs: tuple[str, ...] = ()) -> ApprovedEndpointTransport:
-    return ApprovedEndpointTransport(httpx.URL("https://api.example.com"), cidrs, delegate, allow_global=True)
+    return ApprovedEndpointTransport(
+        httpx.URL("https://api.example.com"), cidrs, delegate, allow_global=True
+    )
 
 
-async def _send(transport: ApprovedEndpointTransport, *answers: list[str]) -> list[httpx.Response | Exception]:
+async def _send(
+    transport: ApprovedEndpointTransport, *answers: list[str]
+) -> list[httpx.Response | Exception]:
     resolver = AsyncMock(side_effect=[[_answer(ip) for ip in ips] for ips in answers])
     out: list[httpx.Response | Exception] = []
     with patch.object(asyncio.get_running_loop(), "getaddrinfo", resolver):
         for _ in answers:
             try:
-                out.append(await transport.handle_async_request(httpx.Request("GET", "https://api.example.com/s")))
+                out.append(
+                    await transport.handle_async_request(
+                        httpx.Request("GET", "https://api.example.com/s")
+                    )
+                )
             except EndpointNetworkPolicyError as exc:
                 out.append(exc)
     return out
@@ -102,7 +131,8 @@ async def _send(transport: ApprovedEndpointTransport, *answers: list[str]) -> li
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "ips", [["10.0.0.1"], ["169.254.169.254"], ["64:ff9b::a9fe:a9fe"], ["::1"], ["8.8.8.8", "10.0.0.1"]]
+    "ips",
+    [["10.0.0.1"], ["169.254.169.254"], ["64:ff9b::a9fe:a9fe"], ["::1"], ["8.8.8.8", "10.0.0.1"]],
 )
 async def test_allow_global_rejects_private_answer(ips: list[str]) -> None:
     delegate = _Delegate()
@@ -145,7 +175,9 @@ async def test_default_mode_unchanged() -> None:
     with pytest.raises(EndpointNetworkPolicyError, match="unavailable"):
         ApprovedEndpointTransport(httpx.URL("https://api.example.com"), (), _Delegate())
     delegate = _Delegate()
-    transport = ApprovedEndpointTransport(httpx.URL("https://api.example.com"), ("10.0.0.0/8",), delegate)
+    transport = ApprovedEndpointTransport(
+        httpx.URL("https://api.example.com"), ("10.0.0.0/8",), delegate
+    )
     denied, allowed = await _send(transport, ["8.8.8.8"], ["10.0.0.7"])
     assert isinstance(denied, EndpointNetworkPolicyError)
     assert isinstance(allowed, httpx.Response)
@@ -163,7 +195,9 @@ def test_factory_enforces_host_allowlist() -> None:
     with pytest.raises(EndpointNetworkPolicyError, match="invalid"):
         approved_web_search_transport("https://user@api.tavily.com", {"api.tavily.com"})
     assert approved_web_search_transport("https://api.tavily.com:8443", {"api.tavily.com:8443"})
-    with pytest.raises(EndpointNetworkPolicyError, match="not allowed"):  # bare entry = default port only
+    with pytest.raises(
+        EndpointNetworkPolicyError, match="not allowed"
+    ):  # bare entry = default port only
         approved_web_search_transport("https://api.tavily.com:8443", {"api.tavily.com"})
     with pytest.raises(EndpointNetworkPolicyError, match="invalid"):  # https only
         approved_web_search_transport("http://api.tavily.com", {"api.tavily.com"})
@@ -182,7 +216,10 @@ async def test_factory_transport_accepted_by_w1a_search() -> None:
     transport._delegate = delegate
     resolver = AsyncMock(return_value=[_answer("8.8.8.8")])
     with patch.object(asyncio.get_running_loop(), "getaddrinfo", resolver):
-        assert await search("tavily", "https://api.tavily.com", "k", "hello", transport=transport) == []
+        assert (
+            await search("tavily", "https://api.tavily.com", "k", "hello", transport=transport)
+            == []
+        )
     assert delegate.seen[0].url.host == "8.8.8.8"
     assert delegate.seen[0].headers["Host"] == "api.tavily.com"
 

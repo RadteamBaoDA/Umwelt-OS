@@ -35,8 +35,15 @@ def gdelt_request(max_records: int = GDELT_DEFAULT_MAX_RECORDS) -> ProviderReque
     """Fixed economy query; ``max_records`` is clamped by refusal (1..50), never silently raised."""
     if type(max_records) is not int or not 1 <= max_records <= GDELT_HARD_MAX_RECORDS:
         raise ProviderPayloadError("gdelt_max_records_invalid")
-    query = urlencode({"query": "economy", "mode": "artlist", "format": "json",
-                       "maxrecords": max_records, "timespan": "24h"})
+    query = urlencode(
+        {
+            "query": "economy",
+            "mode": "artlist",
+            "format": "json",
+            "maxrecords": max_records,
+            "timespan": "24h",
+        }
+    )
     return ProviderRequest("GET", f"{_BASE}?{query}")
 
 
@@ -52,7 +59,9 @@ def _seen(raw: object) -> datetime | None:
         return None
 
 
-def map_gdelt(payload: object, collected_at: datetime, max_records: int = GDELT_DEFAULT_MAX_RECORDS) -> list[IngestionRecord]:
+def map_gdelt(
+    payload: object, collected_at: datetime, max_records: int = GDELT_DEFAULT_MAX_RECORDS
+) -> list[IngestionRecord]:
     """Map an artlist payload; non-object bodies, error text and a missing ``articles`` key are rejected.
 
     A bare ``{}`` is classified ``rate_limited`` (retryable), not ``invalid``: GDELT soft-throttles an IP with a
@@ -82,19 +91,32 @@ def map_gdelt(payload: object, collected_at: datetime, max_records: int = GDELT_
                 fields[key] = val
         if isinstance(art.get("seendate"), str) and seen:
             fields["seendate"] = art["seendate"]
-        version = content_version("gdelt_economy", url, title, fields.get("domain"), fields.get("language"))
+        version = content_version(
+            "gdelt_economy", url, title, fields.get("domain"), fields.get("language")
+        )
         basis: Literal["collection"] = "collection"
         record = _record(
-            provider="gdelt_economy", identity=identity, title=title, summary="", observed_at=seen or collected_at,
-            collected_at=collected_at, version=version, basis=basis, modified_at=None,
-            coverage="returned_snapshot", source_fields=fields, canonical_url=url,
+            provider="gdelt_economy",
+            identity=identity,
+            title=title,
+            summary="",
+            observed_at=seen or collected_at,
+            collected_at=collected_at,
+            version=version,
+            basis=basis,
+            modified_at=None,
+            coverage="returned_snapshot",
+            source_fields=fields,
+            canonical_url=url,
         )
         old = by_id.get(identity)
         if old is None or (record.version or "") < (old.version or ""):
             by_id[identity] = record
     ranked = sorted(by_id.values(), key=lambda r: (r.observed_at, r.provider_id), reverse=True)
     if len(ranked) > max_records:
-        ranked = [r.model_copy(update={"metadata": _truncated(r.metadata)}) for r in ranked[:max_records]]
+        ranked = [
+            r.model_copy(update={"metadata": _truncated(r.metadata)}) for r in ranked[:max_records]
+        ]
     return ranked
 
 

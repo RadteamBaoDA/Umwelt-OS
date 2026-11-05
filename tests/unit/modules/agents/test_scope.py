@@ -34,7 +34,12 @@ def _where(statement_sql: str) -> str:
 
 
 def _run(**overrides: object) -> SimpleNamespace:
-    values = {"workspace_id": WS, "owner_id": 7, "membership_revision": 2, "configuration_revision": 5}
+    values = {
+        "workspace_id": WS,
+        "owner_id": 7,
+        "membership_revision": 2,
+        "configuration_revision": 5,
+    }
     values.update(overrides)
     return SimpleNamespace(**values)
 
@@ -49,11 +54,20 @@ async def test_member_is_denied_before_any_statement() -> None:
     session.scalars = AsyncMock()
     with patch.object(access.workspaces, "read_access_fence", AsyncMock()) as read:
         for call in (
-            agents.list_runs(session, session_factory=MagicMock(), scope=MEMBER, multi_workspace_enabled=False),
-            agents.get_run(session, uuid4(), MagicMock(), scope=MEMBER, multi_workspace_enabled=False),
-            agents.purge_agent_runs(session, [uuid4()], scope=MEMBER, multi_workspace_enabled=False),
+            agents.list_runs(
+                session, session_factory=MagicMock(), scope=MEMBER, multi_workspace_enabled=False
+            ),
+            agents.get_run(
+                session, uuid4(), MagicMock(), scope=MEMBER, multi_workspace_enabled=False
+            ),
+            agents.purge_agent_runs(
+                session, [uuid4()], scope=MEMBER, multi_workspace_enabled=False
+            ),
             agents.redact_expired_agent_traces(
-                session, cutoff=datetime.now(UTC), scope=MEMBER, multi_workspace_enabled=False,
+                session,
+                cutoff=datetime.now(UTC),
+                scope=MEMBER,
+                multi_workspace_enabled=False,
             ),
         ):
             with pytest.raises(DomainError) as caught:
@@ -77,26 +91,38 @@ def test_run_epoch_rebuilds_scope_from_durable_columns_only() -> None:
     assert scope == JOB and original == FENCE
 
 
-@pytest.mark.parametrize("row", [
-    _run(membership_revision=None, configuration_revision=None),
-    _run(configuration_revision=None),
-])
+@pytest.mark.parametrize(
+    "row",
+    [
+        _run(membership_revision=None, configuration_revision=None),
+        _run(configuration_revision=None),
+    ],
+)
 def test_legacy_null_epoch_is_quarantined_not_rebased(row: SimpleNamespace) -> None:
     assert access.run_epoch(row) is None
 
 
 async def test_admit_run_requires_live_fence_to_equal_original() -> None:
     moved = AccessFence(workspace_id=WS, user_id=7, membership_revision=2, configuration_revision=6)
-    with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=moved)), \
-            pytest.raises(DomainError) as caught:
+    with (
+        patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=moved)),
+        pytest.raises(DomainError) as caught,
+    ):
         await access.admit_run(MagicMock(), _run(), multi_workspace_enabled=False)
     assert caught.value.status_code == 409
     with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)):
-        assert await access.admit_run(MagicMock(), _run(), multi_workspace_enabled=False) == (JOB, FENCE)
-        assert await access.admit_run(
-            MagicMock(), _run(membership_revision=None, configuration_revision=None),
-            multi_workspace_enabled=False,
-        ) is None
+        assert await access.admit_run(MagicMock(), _run(), multi_workspace_enabled=False) == (
+            JOB,
+            FENCE,
+        )
+        assert (
+            await access.admit_run(
+                MagicMock(),
+                _run(membership_revision=None, configuration_revision=None),
+                multi_workspace_enabled=False,
+            )
+            is None
+        )
 
 
 # ----------------------------------------------------------------------------- scoped SQL
@@ -129,7 +155,9 @@ async def test_redact_expired_traces_is_workspace_bound_before_limit() -> None:
 
     session.scalars = scalars
     with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)):
-        assert await agents.redact_expired_agent_traces(session, cutoff=datetime.now(UTC), **CTX) == 0
+        assert (
+            await agents.redact_expired_agent_traces(session, cutoff=datetime.now(UTC), **CTX) == 0
+        )
     where = _where(seen[0])
     assert "agent_runs.workspace_id = " in where
     assert where.index("agent_runs.workspace_id = ") < where.index("LIMIT")
@@ -166,17 +194,23 @@ async def test_create_run_stores_workspace_actor_and_original_epoch() -> None:
     session.add = added.append
     session.refresh = AsyncMock()
     tool = SimpleNamespace(
-        name="search.query", risk=agents.ToolRisk.READ_ONLY, confirmation_required=False,
-        version="1", schema_fingerprint="f" * 64,
+        name="search.query",
+        risk=agents.ToolRisk.READ_ONLY,
+        confirmation_required=False,
+        version="1",
+        schema_fingerprint="f" * 64,
     )
     registry = MagicMock()
     registry.list_tools.return_value = [tool]
     registry.hides_tool = None
     request = agents.AgentRunStart(prompt="hi", conversation_id=None, token_budget=None)
     now = datetime.now(UTC)
-    with patch.object(access.workspaces, "lock_access_fence", AsyncMock(return_value=FENCE)) as lock, \
-            patch.object(agents, "commit_with_replay", AsyncMock()) as commit, \
-            patch.object(agents, "read_workspace_modules", AsyncMock(return_value={"m": 1})),             patch.object(agents, "_read", MagicMock(return_value="read")):
+    with (
+        patch.object(access.workspaces, "lock_access_fence", AsyncMock(return_value=FENCE)) as lock,
+        patch.object(agents, "commit_with_replay", AsyncMock()) as commit,
+        patch.object(agents, "read_workspace_modules", AsyncMock(return_value={"m": 1})),
+        patch.object(agents, "_read", MagicMock(return_value="read")),
+    ):
         assert await agents.create_run(session, "a" * 64, request, registry, **CTX) == "read"
     assert registry.list_tools.call_args.kwargs["modules"] == {"m": 1}
     lock.assert_awaited_once()
@@ -195,7 +229,8 @@ async def test_create_profile_run_locks_fence_first_and_stores_epoch() -> None:
     session.execute = AsyncMock()
     session.scalar = AsyncMock(return_value=None)
     snapshot = {
-        "revision": 0, "allowed_tools": [{"name": "search.query", "version": "1", "fingerprint": "f"}],
+        "revision": 0,
+        "allowed_tools": [{"name": "search.query", "version": "1", "fingerprint": "f"}],
         "id": "knowledge",
     }
     order: list[str] = []
@@ -210,16 +245,30 @@ async def test_create_profile_run_locks_fence_first_and_stores_epoch() -> None:
         return snapshot, "h" * 64
 
     request = agents.ProfileRunStart(
-        prompt="p", conversation_id=uuid4(), client_request_id="c1", expected_profile_revision=0,
+        prompt="p",
+        conversation_id=uuid4(),
+        client_request_id="c1",
+        expected_profile_revision=0,
         token_budget=None,
     )
-    with patch.object(access.workspaces, "lock_access_fence", lock), \
-            patch.object(agents, "resolve_profile_snapshot", resolve), \
-            patch("modules.chat.public.link_agent_run", AsyncMock()), \
-            patch.object(agents, "_read", MagicMock(return_value="read")):
-        assert await agents.create_profile_run_in_uow(
-            session, "a" * 64, "knowledge", request, MagicMock(), None, **CTX,
-        ) == "read"
+    with (
+        patch.object(access.workspaces, "lock_access_fence", lock),
+        patch.object(agents, "resolve_profile_snapshot", resolve),
+        patch("modules.chat.public.link_agent_run", AsyncMock()),
+        patch.object(agents, "_read", MagicMock(return_value="read")),
+    ):
+        assert (
+            await agents.create_profile_run_in_uow(
+                session,
+                "a" * 64,
+                "knowledge",
+                request,
+                MagicMock(),
+                None,
+                **CTX,
+            )
+            == "read"
+        )
     assert order == ["fence", "profile"]
     run = added[0]
     assert (run.workspace_id, run.membership_revision, run.configuration_revision) == (WS, 2, 5)
@@ -240,8 +289,10 @@ async def test_run_approved_write_hands_principal_scope_to_perform() -> None:
         yield MagicMock()
 
     context = {
-        "action_id": str(uuid4()), "before_internal_write": AsyncMock(return_value=True),
-        "session_factory": factory, "principal": SimpleNamespace(scope=JOB),
+        "action_id": str(uuid4()),
+        "before_internal_write": AsyncMock(return_value=True),
+        "session_factory": factory,
+        "principal": SimpleNamespace(scope=JOB),
     }
     with patch("modules.agents.approvals.mark_effect_outcome", AsyncMock()) as outcome:
         result = await internal_writes.run_approved_write({}, context, perform, ())
@@ -252,8 +303,10 @@ async def test_run_approved_write_hands_principal_scope_to_perform() -> None:
 async def test_run_approved_write_without_typed_scope_is_forbidden() -> None:
     performed = AsyncMock(return_value="x")
     context = {
-        "action_id": str(uuid4()), "before_internal_write": AsyncMock(return_value=True),
-        "session_factory": MagicMock(), "principal": SimpleNamespace(scope=1),
+        "action_id": str(uuid4()),
+        "before_internal_write": AsyncMock(return_value=True),
+        "session_factory": MagicMock(),
+        "principal": SimpleNamespace(scope=1),
     }
     result = await internal_writes.run_approved_write({}, context, performed, ())
     assert result.success is False and result.error_code == "forbidden"
@@ -274,13 +327,27 @@ def _factory(session: MagicMock):
 async def test_effect_reservation_is_denied_when_original_epoch_changed() -> None:
     session = MagicMock()
     session.scalar = AsyncMock()
-    with patch.object(access.workspaces, "lock_access_fence", AsyncMock(
-        side_effect=HTTPException(status_code=409, detail="Workspace access fence changed"),
-    )):
+    with patch.object(
+        access.workspaces,
+        "lock_access_fence",
+        AsyncMock(
+            side_effect=HTTPException(status_code=409, detail="Workspace access fence changed"),
+        ),
+    ):
         allowed = await approvals.reserve_effect_before_send(
-            _factory(session), action_id=uuid4(), run_id=uuid4(), owner_id=7, auth_session_hash="h",
-            claim_generation=1, definition=MagicMock(), arguments={}, destination_id="d",
-            destination_revision="1", scope=JOB, original_fence=FENCE, multi_workspace_enabled=False,
+            _factory(session),
+            action_id=uuid4(),
+            run_id=uuid4(),
+            owner_id=7,
+            auth_session_hash="h",
+            claim_generation=1,
+            definition=MagicMock(),
+            arguments={},
+            destination_id="d",
+            destination_revision="1",
+            scope=JOB,
+            original_fence=FENCE,
+            multi_workspace_enabled=False,
         )
     assert allowed is False
     session.scalar.assert_not_awaited()
@@ -292,9 +359,19 @@ async def test_approved_action_verification_requires_original_epoch() -> None:
     session.scalar = AsyncMock()
     with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=moved)):
         allowed = await approvals.verify_approved_action(
-            _factory(session), action_id=uuid4(), run_id=uuid4(), owner_id=7, auth_session_hash="h",
-            claim_generation=1, definition=MagicMock(), arguments={}, destination_id="d",
-            destination_revision="1", scope=JOB, original_fence=FENCE, multi_workspace_enabled=False,
+            _factory(session),
+            action_id=uuid4(),
+            run_id=uuid4(),
+            owner_id=7,
+            auth_session_hash="h",
+            claim_generation=1,
+            definition=MagicMock(),
+            arguments={},
+            destination_id="d",
+            destination_revision="1",
+            scope=JOB,
+            original_fence=FENCE,
+            multi_workspace_enabled=False,
         )
     assert allowed is False
     session.scalar.assert_not_awaited()
@@ -305,20 +382,41 @@ async def test_approved_action_verification_requires_original_epoch() -> None:
 
 def _context() -> HarnessContext:
     return HarnessContext(
-        uuid4(), JOB, FENCE, 1, MagicMock(), MagicMock(), SimpleNamespace(multi_workspace_enabled=False),
-        MagicMock(), MagicMock(), MagicMock(), 1, 0.0, frozenset(), {},
+        uuid4(),
+        JOB,
+        FENCE,
+        1,
+        MagicMock(),
+        MagicMock(),
+        SimpleNamespace(multi_workspace_enabled=False),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        1,
+        0.0,
+        frozenset(),
+        {},
     )
 
 
 async def test_harness_cancels_when_the_original_epoch_is_gone() -> None:
     context = _context()
     moved = AccessFence(workspace_id=WS, user_id=7, membership_revision=2, configuration_revision=6)
-    with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=moved)), \
-            pytest.raises(RunCancelled):
+    with (
+        patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=moved)),
+        pytest.raises(RunCancelled),
+    ):
         await context.admit_original(MagicMock())
-    with patch.object(access.workspaces, "lock_access_fence", AsyncMock(
-        side_effect=HTTPException(status_code=404, detail="Workspace not found"),
-    )), pytest.raises(RunCancelled):
+    with (
+        patch.object(
+            access.workspaces,
+            "lock_access_fence",
+            AsyncMock(
+                side_effect=HTTPException(status_code=404, detail="Workspace not found"),
+            ),
+        ),
+        pytest.raises(RunCancelled),
+    ):
         await context.admit_original(MagicMock(), lock=True)
 
 
@@ -338,16 +436,25 @@ async def test_harness_principal_carries_the_run_scope_and_rejects_foreign_scope
 async def test_worker_quarantines_a_legacy_run_without_claiming_it() -> None:
     run_id = uuid4()
     identity = SimpleNamespace(
-        workspace_id=WS, owner_id=7, membership_revision=None, configuration_revision=None, status="queued",
+        workspace_id=WS,
+        owner_id=7,
+        membership_revision=None,
+        configuration_revision=None,
+        status="queued",
     )
     session = MagicMock()
     session.execute = AsyncMock(return_value=MagicMock(one_or_none=lambda: identity))
     ctx = {
-        "settings": SimpleNamespace(multi_workspace_enabled=False), "session_factory": _factory(session),
-        "db_engine": MagicMock(), "redis": MagicMock(), "agent_tool_registry": MagicMock(),
+        "settings": SimpleNamespace(multi_workspace_enabled=False),
+        "session_factory": _factory(session),
+        "db_engine": MagicMock(),
+        "redis": MagicMock(),
+        "agent_tool_registry": MagicMock(),
     }
-    with patch.object(worker, "_terminate_unadmitted", AsyncMock()) as terminate, \
-            patch.object(worker, "_claim_run", AsyncMock()) as claim:
+    with (
+        patch.object(worker, "_terminate_unadmitted", AsyncMock()) as terminate,
+        patch.object(worker, "_claim_run", AsyncMock()) as claim,
+    ):
         await worker.process_agent_run(ctx, str(run_id), 1)
     terminate.assert_awaited_once()
     assert terminate.await_args.args[-1] == "workspace_epoch_unavailable"
@@ -356,18 +463,29 @@ async def test_worker_quarantines_a_legacy_run_without_claiming_it() -> None:
 
 async def test_worker_leaves_work_untouched_when_agents_are_disabled_for_the_workspace() -> None:
     identity = SimpleNamespace(
-        workspace_id=WS, owner_id=7, membership_revision=2, configuration_revision=5, status="queued",
+        workspace_id=WS,
+        owner_id=7,
+        membership_revision=2,
+        configuration_revision=5,
+        status="queued",
     )
     session = MagicMock()
     session.execute = AsyncMock(return_value=MagicMock(one_or_none=lambda: identity))
     ctx = {
-        "settings": SimpleNamespace(multi_workspace_enabled=False), "session_factory": _factory(session),
-        "db_engine": MagicMock(), "redis": MagicMock(), "agent_tool_registry": MagicMock(),
+        "settings": SimpleNamespace(multi_workspace_enabled=False),
+        "session_factory": _factory(session),
+        "db_engine": MagicMock(),
+        "redis": MagicMock(),
+        "agent_tool_registry": MagicMock(),
     }
-    with patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)), \
-            patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=False)) as enabled, \
-            patch.object(worker, "_terminate_unadmitted", AsyncMock()) as terminate, \
-            patch.object(worker, "_claim_run", AsyncMock()) as claim:
+    with (
+        patch.object(access.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)),
+        patch(
+            "modules.settings.public.module_is_enabled", AsyncMock(return_value=False)
+        ) as enabled,
+        patch.object(worker, "_terminate_unadmitted", AsyncMock()) as terminate,
+        patch.object(worker, "_claim_run", AsyncMock()) as claim,
+    ):
         await worker.process_agent_run(ctx, str(uuid4()), 1)
     assert enabled.await_args.kwargs["scope"] == JOB
     terminate.assert_not_awaited()
@@ -384,9 +502,12 @@ async def _noop(*_a: object, **_k: object) -> None:
 def _lifecycle(*disabled: str) -> SimpleNamespace:
     from core.modules import register_modules
 
-    return SimpleNamespace(modules=[
-        SimpleNamespace(id=module_id, explicitly_disabled=module_id in disabled) for module_id in register_modules()
-    ])
+    return SimpleNamespace(
+        modules=[
+            SimpleNamespace(id=module_id, explicitly_disabled=module_id in disabled)
+            for module_id in register_modules()
+        ]
+    )
 
 
 def _registry_with(*tools: object):
@@ -402,9 +523,14 @@ def test_disabled_module_tool_absent_from_profile_catalog() -> None:
 
     registry = _registry_with()
     definition = ToolDefinition(
-        name="search.query", description="d", input_schema={"type": "object"},
-        output_schema={"type": "object"}, risk=ToolRisk.READ_ONLY, confirmation_required=False,
-        version="1", module="search",
+        name="search.query",
+        description="d",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        risk=ToolRisk.READ_ONLY,
+        confirmation_required=False,
+        version="1",
+        module="search",
     )
     registry.register_tool(definition, _noop)
     enabled = access.effective_workspace_modules(_lifecycle())
@@ -419,10 +545,19 @@ def test_specialists_filter_hides_other_workspace_mcp_tool() -> None:
 
     registry = _registry_with()
     name = "mcp.abc.def"
-    registry.register_tool(ToolDefinition(
-        name=name, description="d", input_schema={"type": "object"}, output_schema={"type": "object"},
-        risk=ToolRisk.READ_ONLY, confirmation_required=False, version="1", module="tools",
-    ), _noop)
+    registry.register_tool(
+        ToolDefinition(
+            name=name,
+            description="d",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+            risk=ToolRisk.READ_ONLY,
+            confirmation_required=False,
+            version="1",
+            module="tools",
+        ),
+        _noop,
+    )
     other = uuid4()
     registry.hides_tool = lambda tool, workspace_id: tool == name and workspace_id != WS
     assert name in specialists._tool_contracts(registry, WS)

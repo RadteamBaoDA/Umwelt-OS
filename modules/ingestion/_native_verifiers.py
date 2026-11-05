@@ -170,7 +170,12 @@ class NativeProofVerifier(Protocol):
         ...
 
     async def settle_provider_state(
-        self, ctx: NativeAcceptance, *, batch_id: UUID, has_records: bool, changes: list[ReplayDraft],
+        self,
+        ctx: NativeAcceptance,
+        *,
+        batch_id: UUID,
+        has_records: bool,
+        changes: list[ReplayDraft],
     ) -> bool:
         """Apply provider side effects after the state mutation; return ``True`` when the Source was paused."""
         ...
@@ -192,7 +197,10 @@ class BaseNativeVerifier:
 
     def check_capture(self, ctx: NativeAcceptance) -> None:
         """Reject any credential-operation capture: this provider carries none."""
-        if ctx.params.native_operation_id is not None or ctx.params.world_credential_operation_id is not None:
+        if (
+            ctx.params.native_operation_id is not None
+            or ctx.params.world_credential_operation_id is not None
+        ):
             raise _fail(422, "Credential operation capture is not valid for this provider")
 
     async def verify_admission(self, ctx: NativeAcceptance) -> None:
@@ -224,7 +232,9 @@ class BaseNativeVerifier:
         await self._verify_oauth_proof(ctx, "reddit", owned=self.owns_reddit_proof)
 
     @staticmethod
-    async def _verify_oauth_proof(ctx: NativeAcceptance, kind: Literal["google", "reddit"], *, owned: bool) -> None:
+    async def _verify_oauth_proof(
+        ctx: NativeAcceptance, kind: Literal["google", "reddit"], *, owned: bool
+    ) -> None:
         """Require the ``kind`` proof exactly when this provider owns it and re-read its grant under lock.
 
         The grant row is locked ``FOR UPDATE`` (after the collector authorization) and must equal the
@@ -236,7 +246,9 @@ class BaseNativeVerifier:
         token_revision = getattr(payload, f"{kind}_token_revision")
         present = operation_id is not None and token_revision is not None
         label = kind.capitalize()
-        if owned != present or (not owned and (operation_id is not None or token_revision is not None)):
+        if owned != present or (
+            not owned and (operation_id is not None or token_revision is not None)
+        ):
             raise _fail(422, f"{label} credential proof does not match the provider")
         if not owned:
             return
@@ -248,19 +260,31 @@ class BaseNativeVerifier:
         )
 
         session = ctx.session
-        grant = await session.scalar(select(ConnectorOAuthGrant).where(
-            ConnectorOAuthGrant.source_id == source.id,
-        ).with_for_update())
-        credential_revision = await session.scalar(select(ConnectorProvisioning.credential_revision).where(
-            ConnectorProvisioning.source_id == source.id,
-        ))
-        if (grant is None or grant.state != "ready" or grant.encrypted_tokens is None
-                or grant.workspace_id != source.workspace_id or grant.owner_id != _actor_id(ctx.scope)
-                or grant.provider != source.provider or grant.source_generation != payload.source_generation
-                or grant.configuration_revision != payload.connector_revision
-                or grant.credential_revision != credential_revision
-                or grant.operation_id != operation_id
-                or grant.token_revision != token_revision):
+        grant = await session.scalar(
+            select(ConnectorOAuthGrant)
+            .where(
+                ConnectorOAuthGrant.source_id == source.id,
+            )
+            .with_for_update()
+        )
+        credential_revision = await session.scalar(
+            select(ConnectorProvisioning.credential_revision).where(
+                ConnectorProvisioning.source_id == source.id,
+            )
+        )
+        if (
+            grant is None
+            or grant.state != "ready"
+            or grant.encrypted_tokens is None
+            or grant.workspace_id != source.workspace_id
+            or grant.owner_id != _actor_id(ctx.scope)
+            or grant.provider != source.provider
+            or grant.source_generation != payload.source_generation
+            or grant.configuration_revision != payload.connector_revision
+            or grant.credential_revision != credential_revision
+            or grant.operation_id != operation_id
+            or grant.token_revision != token_revision
+        ):
             raise _fail(409, f"{label} grant changed during collection")
 
     async def verify_transition(self, ctx: NativeAcceptance, state: SourceIngestionState) -> None:
@@ -281,23 +305,34 @@ class BaseNativeVerifier:
     def _parse_metadata(ctx: NativeAcceptance, record: IngestionRecord) -> Any:
         """Parse and cross-check the typed provider metadata (identity, version, provider, coverage)."""
         from modules.knowledge.documents.public import ProviderRecordMetadata
+
         try:
             metadata = ProviderRecordMetadata.model_validate(record.metadata.get("provider_record"))
         except (TypeError, ValueError) as exc:
             raise _fail(422, "Native provider metadata is invalid") from exc
-        if (metadata.provider != ctx.source.provider or metadata.identity != record.provider_id
-                or metadata.provider_version != record.version):
+        if (
+            metadata.provider != ctx.source.provider
+            or metadata.identity != record.provider_id
+            or metadata.provider_version != record.version
+        ):
             raise _fail(422, "Native provider identity is invalid")
         if metadata.coverage != ctx.payload.coverage:
             raise _fail(422, "Native provider coverage is inconsistent")
         return metadata
 
-    def _verify_record(self, ctx: NativeAcceptance, record: IngestionRecord, metadata: Any) -> ProviderRecord | None:
+    def _verify_record(
+        self, ctx: NativeAcceptance, record: IngestionRecord, metadata: Any
+    ) -> ProviderRecord | None:
         """Provider hook for one record; ``None`` skips it (acknowledged replay). Generic: persist as supplied."""
         return record, record.model_dump(mode="json", exclude={"collected_at"}), None
 
     async def settle_provider_state(
-        self, ctx: NativeAcceptance, *, batch_id: UUID, has_records: bool, changes: list[ReplayDraft],
+        self,
+        ctx: NativeAcceptance,
+        *,
+        batch_id: UUID,
+        has_records: bool,
+        changes: list[ReplayDraft],
     ) -> bool:
         """No provider side effects; the Source is never paused by a generic provider."""
         return False
@@ -311,29 +346,42 @@ class TelegramVerifier(BaseNativeVerifier):
 
     def check_capture(self, ctx: NativeAcceptance) -> None:
         """Require the original native credential operation and forbid the world-credential capture."""
-        if (not isinstance(ctx.params.native_operation_id, UUID)
-                or ctx.params.world_credential_operation_id is not None):
+        if (
+            not isinstance(ctx.params.native_operation_id, UUID)
+            or ctx.params.world_credential_operation_id is not None
+        ):
             raise _fail(422, "Original Telegram credential operation is required")
 
     async def _admit_provider(self, ctx: NativeAcceptance) -> None:
         """Compare the live native credential snapshot to the captured operation and access fence."""
         payload, source, lease = ctx.payload, ctx.source, ctx.lease
         credential = await _connectors().get_native_credential_snapshot(
-            ctx.session, source.id, source_generation=payload.source_generation,
-            connector_revision=payload.connector_revision, scope=ctx.scope,
-            multi_workspace_enabled=ctx.multi_workspace_enabled)
+            ctx.session,
+            source.id,
+            source_generation=payload.source_generation,
+            connector_revision=payload.connector_revision,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+        )
         if (
-            credential is None or credential.source_generation != payload.source_generation
+            credential is None
+            or credential.source_generation != payload.source_generation
             or credential.configuration_revision != payload.connector_revision
             or credential.operation_id != ctx.params.native_operation_id
             or credential.access_fence != ctx.expected_access_fence
-            or credential.workspace_id != lease.workspace_id or credential.source_id != lease.source_id
-            or credential.state != "ready" or not credential.verified_bot_id
-            or credential.encrypted_token is None or credential.validated_at is None
+            or credential.workspace_id != lease.workspace_id
+            or credential.source_id != lease.source_id
+            or credential.state != "ready"
+            or not credential.verified_bot_id
+            or credential.encrypted_token is None
+            or credential.validated_at is None
         ):
             raise _fail(409, "Native Telegram credential is not ready")
         ctx.bot_id = credential.verified_bot_id
-        if any(item.update_id != item.update.get("update_id") for item in payload.telegram_raw_deliveries):
+        if any(
+            item.update_id != item.update.get("update_id")
+            for item in payload.telegram_raw_deliveries
+        ):
             raise _fail(422, "Telegram update identity is invalid")
 
     async def verify_transition(self, ctx: NativeAcceptance, state: SourceIngestionState) -> None:
@@ -341,35 +389,53 @@ class TelegramVerifier(BaseNativeVerifier):
         payload = ctx.payload
         current_cursor = _decode_telegram_cursor(state.cursor)
         classification: TelegramProbeClassification = classify_telegram_probe(
-            current_cursor, payload.telegram_raw_deliveries,
-            received_at=payload.collected_at, verified_bot_id=ctx.bot_id or "",
+            current_cursor,
+            payload.telegram_raw_deliveries,
+            received_at=payload.collected_at,
+            verified_bot_id=ctx.bot_id or "",
         )
         if classification.conflict_code:
             raise _fail(409, classification.conflict_code)
         if classification.delivery_proofs != tuple(payload.telegram_deliveries):
             raise _fail(409, "Telegram delivery proof is stale or invalid")
         computed_cursor = (
-            _encode_telegram_cursor(classification.cursor_after) if classification.cursor_after else state.cursor
+            _encode_telegram_cursor(classification.cursor_after)
+            if classification.cursor_after
+            else state.cursor
         )
         if computed_cursor != payload.cursor_after:
             raise _fail(409, "Telegram cursor transition is invalid")
         ctx.replay_ids = set(classification.replay_update_ids)
         ctx.accepted_proofs = {
-            proof.update_id: proof for proof in classification.delivery_proofs
+            proof.update_id: proof
+            for proof in classification.delivery_proofs
             if proof.update_id not in ctx.replay_ids
         }
         ctx.cursor_after = payload.cursor_after
 
-    def _verify_record(self, ctx: NativeAcceptance, record: IngestionRecord, metadata: Any) -> ProviderRecord | None:
+    def _verify_record(
+        self, ctx: NativeAcceptance, record: IngestionRecord, metadata: Any
+    ) -> ProviderRecord | None:
         """Bind the record to its raw delivery and proof; known exact replays are skipped, not versioned."""
         source, payload = ctx.source, ctx.payload
         detail = metadata.telegram
         proof = ctx.accepted_proofs.get(detail.update_id) if detail is not None else None
-        raw = next((item for item in payload.telegram_raw_deliveries
-                    if detail is not None and item.update_id == detail.update_id), None)
-        allowed_chats = tuple(typing_cast("Iterable[str]", source.configuration.get("telegram_chat_ids", ())))
+        raw = next(
+            (
+                item
+                for item in payload.telegram_raw_deliveries
+                if detail is not None and item.update_id == detail.update_id
+            ),
+            None,
+        )
+        allowed_chats = tuple(
+            typing_cast("Iterable[str]", source.configuration.get("telegram_chat_ids", ()))
+        )
         if (
-            detail is None or proof is None or raw is None or detail.bot_id != ctx.bot_id
+            detail is None
+            or proof is None
+            or raw is None
+            or detail.bot_id != ctx.bot_id
             or detail.channel_id not in allowed_chats
             or proof.raw_update_sha256 != raw.raw_update_sha256
             or detail.raw_update_sha256 is not None
@@ -380,15 +446,24 @@ class TelegramVerifier(BaseNativeVerifier):
                 return None
             raise _fail(422, "Telegram document proof is invalid")
         try:
-            validate_telegram_record_delivery(record, metadata, proof, raw, allowed_chat_ids=allowed_chats)
+            validate_telegram_record_delivery(
+                record, metadata, proof, raw, allowed_chat_ids=allowed_chats
+            )
         except (TypeError, ValueError) as exc:
             raise _fail(422, "Telegram document does not match its raw delivery") from exc
         ctx.seen_update_ids.add(detail.update_id)
         record_data = record.model_dump(mode="json", exclude={"collected_at"})
-        envelope: dict[str, object] = {"proof": proof.model_dump(mode="json"), "raw_update": raw.model_dump(mode="json")}
-        persisted_size = len(json.dumps(
-            {**record_data, "_native_telegram": envelope}, ensure_ascii=False, separators=(",", ":"),
-        ).encode("utf-8"))
+        envelope: dict[str, object] = {
+            "proof": proof.model_dump(mode="json"),
+            "raw_update": raw.model_dump(mode="json"),
+        }
+        persisted_size = len(
+            json.dumps(
+                {**record_data, "_native_telegram": envelope},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
         if persisted_size > TELEGRAM_OBSERVATION_MAX_BYTES:
             raise _fail(413, "Telegram observation exceeds normalization size limit")
         return record, record_data, envelope
@@ -401,19 +476,25 @@ class AlphaVantageVerifier(BaseNativeVerifier):
 
     def check_capture(self, ctx: NativeAcceptance) -> None:
         """Require the original world credential operation and forbid the native-credential capture."""
-        if (not isinstance(ctx.params.world_credential_operation_id, UUID)
-                or ctx.params.native_operation_id is not None):
+        if (
+            not isinstance(ctx.params.world_credential_operation_id, UUID)
+            or ctx.params.native_operation_id is not None
+        ):
             raise _fail(422, "Original Alpha credential operation is required")
 
     async def _admit_provider(self, ctx: NativeAcceptance) -> None:
         """Validate the captured world credential operation under the held access/Source fences."""
         payload, source = ctx.payload, ctx.source
         if not await _connectors().validate_world_credential_operation_in_uow(
-            ctx.session, source.id, source_generation=payload.source_generation,
+            ctx.session,
+            source.id,
+            source_generation=payload.source_generation,
             connector_revision=payload.connector_revision,
             expected_operation_id=ctx.params.world_credential_operation_id,
-            scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
-            access_fence=ctx.access_fence, source_fence=ctx.source_fence,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            access_fence=ctx.access_fence,
+            source_fence=ctx.source_fence,
         ):
             raise _fail(409, "Original Alpha credential operation changed")
 
@@ -456,10 +537,16 @@ class GitHubVerifier(BaseNativeVerifier):
         from modules.connectors.public import GitHubSegmentProof
 
         payload = ctx.payload
-        if payload.github_segment is None or payload.telegram_raw_deliveries or payload.telegram_deliveries:
+        if (
+            payload.github_segment is None
+            or payload.telegram_raw_deliveries
+            or payload.telegram_deliveries
+        ):
             raise _fail(422, "GitHub collection proof is required")
         try:
-            proof = GitHubSegmentProof.model_validate(payload.github_segment.model_dump(mode="python"))
+            proof = GitHubSegmentProof.model_validate(
+                payload.github_segment.model_dump(mode="python")
+            )
         except (AttributeError, TypeError, ValueError) as exc:
             raise _fail(422, "GitHub segment proof is malformed") from exc
         if proof.fence.connector_revision != payload.connector_revision:
@@ -468,8 +555,12 @@ class GitHubVerifier(BaseNativeVerifier):
         ctx.needs_visibility_fence = needs_visibility_fence(proof)
         if ctx.needs_visibility_fence:
             await sources.prepare_source_pause_for_connector_in_uow(
-                ctx.session, ctx.source.id, scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
-                access_fence=ctx.access_fence, source_fence=ctx.source_fence,
+                ctx.session,
+                ctx.source.id,
+                scope=ctx.scope,
+                multi_workspace_enabled=ctx.multi_workspace_enabled,
+                access_fence=ctx.access_fence,
+                source_fence=ctx.source_fence,
             )
 
     async def verify_grant(self, ctx: NativeAcceptance) -> None:
@@ -478,10 +569,15 @@ class GitHubVerifier(BaseNativeVerifier):
         if ctx.github_proof is None:
             raise RuntimeError("invariant violated: ctx.github_proof must not be None")
         ctx.github_fence = await _connectors().lock_github_binding_fence_in_uow(
-            ctx.session, source.id, source_generation=payload.source_generation,
-            connector_revision=payload.connector_revision, scope=ctx.scope,
+            ctx.session,
+            source.id,
+            source_generation=payload.source_generation,
+            connector_revision=payload.connector_revision,
+            scope=ctx.scope,
             multi_workspace_enabled=ctx.multi_workspace_enabled,
-            access_fence=ctx.access_fence, source_fence=ctx.source_fence)
+            access_fence=ctx.access_fence,
+            source_fence=ctx.source_fence,
+        )
         if ctx.github_fence is None or ctx.github_proof.fence != ctx.github_fence:
             raise _fail(409, "GitHub grant is unavailable or requires reconnection")
         await super().verify_grant(ctx)
@@ -492,14 +588,27 @@ class GitHubVerifier(BaseNativeVerifier):
         if ctx.github_proof is None:
             raise RuntimeError("invariant violated: ctx.github_proof must not be None")
         segment = await _connectors().validate_github_collection_segment_in_uow(
-            ctx.session, source=source, reserved_cursor_before=state.cursor,
-            proof=ctx.github_proof, binding_fence=typing_cast("GitHubBindingFence", ctx.github_fence),
-            access_fence=ctx.access_fence, source_fence=ctx.source_fence, scope=ctx.scope,
-            multi_workspace_enabled=ctx.multi_workspace_enabled)
-        supplied = [record.model_dump(mode="json", exclude={"collected_at"}) for record in payload.records]
-        validated = [record.model_dump(mode="json", exclude={"collected_at"}) for record in segment.records]
-        if (supplied != validated or payload.cursor_after != segment.cursor_after
-                or payload.coverage != segment.coverage):
+            ctx.session,
+            source=source,
+            reserved_cursor_before=state.cursor,
+            proof=ctx.github_proof,
+            binding_fence=typing_cast("GitHubBindingFence", ctx.github_fence),
+            access_fence=ctx.access_fence,
+            source_fence=ctx.source_fence,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+        )
+        supplied = [
+            record.model_dump(mode="json", exclude={"collected_at"}) for record in payload.records
+        ]
+        validated = [
+            record.model_dump(mode="json", exclude={"collected_at"}) for record in segment.records
+        ]
+        if (
+            supplied != validated
+            or payload.cursor_after != segment.cursor_after
+            or payload.coverage != segment.coverage
+        ):
             raise _fail(409, "GitHub collection transition is invalid")
         if ctx.needs_visibility_fence and (segment.records or segment.cursor_after != state.cursor):
             # A paused G receipt cannot queue records retired by this same transaction.
@@ -507,7 +616,12 @@ class GitHubVerifier(BaseNativeVerifier):
         ctx.cursor_after = segment.cursor_after
 
     async def settle_provider_state(
-        self, ctx: NativeAcceptance, *, batch_id: UUID, has_records: bool, changes: list[ReplayDraft],
+        self,
+        ctx: NativeAcceptance,
+        *,
+        batch_id: UUID,
+        has_records: bool,
+        changes: list[ReplayDraft],
     ) -> bool:
         """Acknowledge the targeted hint and, when visibility is unverified, pause the Source in this UoW.
 
@@ -527,42 +641,69 @@ class GitHubVerifier(BaseNativeVerifier):
             claim = GitHubHintClaim.model_validate(proof.hint_claim.model_dump(mode="python"))
         except (TypeError, ValueError) as exc:
             raise _fail(409, "GitHub hint claim is stale") from exc
-        deletion_unverified = proof.hint_claim.intent == "delete_candidate" and proof.target_outcome != "found"
+        deletion_unverified = (
+            proof.hint_claim.intent == "delete_candidate" and proof.target_outcome != "found"
+        )
         # A signed delete hint plus a missing/forbidden read lacks the exact current version proof for a tombstone.
         visibility_unverified = proof.target_outcome in {"not_found", "forbidden", "partial"}
         disposition: Literal["accepted_ingestion", "completed", "visibility_unverified"] = (
-            "visibility_unverified" if deletion_unverified or visibility_unverified
-            else "accepted_ingestion" if has_records else "completed"
+            "visibility_unverified"
+            if deletion_unverified or visibility_unverified
+            else "accepted_ingestion"
+            if has_records
+            else "completed"
         )
-        reconcile_next_page = proof.next_page if claim.intent == "reconcile" and proof.has_next else None
+        reconcile_next_page = (
+            proof.next_page if claim.intent == "reconcile" and proof.has_next else None
+        )
         if ctx.needs_visibility_fence:
             await connectors.lock_github_hints_for_visibility_pause_in_uow(
-                ctx.session, claim=claim, binding_fence=typing_cast("GitHubBindingFence", ctx.github_fence),
-                scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
-                access_fence=ctx.access_fence, source_fence=ctx.source_fence,
+                ctx.session,
+                claim=claim,
+                binding_fence=typing_cast("GitHubBindingFence", ctx.github_fence),
+                scope=ctx.scope,
+                multi_workspace_enabled=ctx.multi_workspace_enabled,
+                access_fence=ctx.access_fence,
+                source_fence=ctx.source_fence,
             )
             acknowledged = await connectors.acknowledge_github_hint_in_uow(
-                ctx.session, claim=claim, batch_id=batch_id, disposition=disposition,
+                ctx.session,
+                claim=claim,
+                batch_id=batch_id,
+                disposition=disposition,
                 reconcile_next_page=reconcile_next_page,
-                scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
-                access_fence=ctx.access_fence, source_fence=ctx.source_fence,
+                scope=ctx.scope,
+                multi_workspace_enabled=ctx.multi_workspace_enabled,
+                access_fence=ctx.access_fence,
+                source_fence=ctx.source_fence,
             )
         else:
             acknowledged = await connectors.acknowledge_github_hint(
-                ctx.session, claim=claim, batch_id=batch_id, disposition=disposition,
+                ctx.session,
+                claim=claim,
+                batch_id=batch_id,
+                disposition=disposition,
                 reconcile_next_page=reconcile_next_page,
-                scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
+                scope=ctx.scope,
+                multi_workspace_enabled=ctx.multi_workspace_enabled,
             )
         if not acknowledged:
             raise _fail(409, "GitHub hint claim changed during acceptance")
         if not ctx.needs_visibility_fence:
             return False
         paused = await sources.pause_source_for_connector_in_uow(
-            ctx.session, source.id, scope=ctx.scope, multi_workspace_enabled=ctx.multi_workspace_enabled,
-            access_fence=ctx.access_fence, source_fence=ctx.source_fence)
+            ctx.session,
+            source.id,
+            scope=ctx.scope,
+            multi_workspace_enabled=ctx.multi_workspace_enabled,
+            access_fence=ctx.access_fence,
+            source_fence=ctx.source_fence,
+        )
         if paused is None:
             raise _fail(409, "GitHub source changed during visibility confirmation")
-        changes[0] = make_source_change(paused.id, paused.generation, paused.status, scope=ctx.scope)
+        changes[0] = make_source_change(
+            paused.id, paused.generation, paused.status, scope=ctx.scope
+        )
         return True
 
 
@@ -613,7 +754,12 @@ def native_verifier_for(provider: str | None) -> NativeProofVerifier:
 
 
 for _verifier in (
-    TelegramVerifier(), AlphaVantageVerifier(), GitHubVerifier(), GoogleOAuthVerifier(), RedditVerifier(),
-    RevisionedRestVerifier(), OptionalRevisionRestVerifier(),
+    TelegramVerifier(),
+    AlphaVantageVerifier(),
+    GitHubVerifier(),
+    GoogleOAuthVerifier(),
+    RedditVerifier(),
+    RevisionedRestVerifier(),
+    OptionalRevisionRestVerifier(),
 ):
     register_native_verifier(_verifier)

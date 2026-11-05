@@ -182,6 +182,7 @@ class TestSaveUpload:
 
         class FaultyUpload(UploadFile):
             """Upload file that raises an I/O error on second chunk."""
+
             def __init__(self) -> None:
                 super().__init__(file=io.BytesIO(b"initial chunk"), filename="faulty.txt")
                 self.calls = 0
@@ -220,7 +221,9 @@ class TestCleanupOrphanedFiles:
     ) -> None:
         """cleanup_orphaned_files removes only unreferenced files older than the grace period."""
         root = tmp_path / "storage"
-        ids = [str(uuid4()) for _ in range(3)]  # only UUID document directories are cleanup candidates
+        ids = [
+            str(uuid4()) for _ in range(3)
+        ]  # only UUID document directories are cleanup candidates
         doc_dir_1 = root / "documents" / ids[0]
         doc_dir_2 = root / "documents" / ids[1]
         doc_dir_3 = root / "documents" / ids[2]

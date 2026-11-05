@@ -1,4 +1,5 @@
 """Durable account erasure recovery, independent of login or best-effort queue delivery."""
+
 import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -14,7 +15,9 @@ from core.auth.models import AuthSession, GoogleIdentity, Owner
 from core.database import direct_engine
 
 
-async def finalize_account_erasure(session: AsyncSession, operation: AccountDeletionOperation) -> None:
+async def finalize_account_erasure(
+    session: AsyncSession, operation: AccountDeletionOperation
+) -> None:
     """Remove identity only after all required cleanup; retain disabled bootstrap tombstone.
 
     Caller owns the per-operation advisory lock and transaction. Clear the composite default
@@ -23,7 +26,9 @@ async def finalize_account_erasure(session: AsyncSession, operation: AccountDele
     from core.workspaces.erasure import finalize_account_workspace_erasure
 
     if operation.account_id is None or operation.workspace_id is None:
-        raise RuntimeError("invariant violated: operation.account_id and operation.workspace_id must not be None")
+        raise RuntimeError(
+            "invariant violated: operation.account_id and operation.workspace_id must not be None"
+        )
     scope = AccountErasureScope(operation.id, operation.account_id, operation.workspace_id)
     await authorize_account_erasure(session, scope)
     owner = await session.get(Owner, scope.account_id)
@@ -80,8 +85,12 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
                 if operation is None or operation.status == "succeeded":
                     return False
                 if operation.account_id is None or operation.workspace_id is None:
-                    raise RuntimeError("invariant violated: operation.account_id and operation.workspace_id must not be None")
-                scope = AccountErasureScope(operation.id, operation.account_id, operation.workspace_id)
+                    raise RuntimeError(
+                        "invariant violated: operation.account_id and operation.workspace_id must not be None"
+                    )
+                scope = AccountErasureScope(
+                    operation.id, operation.account_id, operation.workspace_id
+                )
                 phase, cursor = operation.phase, dict(operation.cursor)
                 await authorize_account_erasure(session, scope)
                 operation.status = "running"
@@ -94,10 +103,19 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
                 raise RuntimeError("Account deletion lock connection changed")
             await connection.commit()
             async with factory() as session:
-                operation = await session.scalar(select(AccountDeletionOperation).where(
-                    AccountDeletionOperation.id == operation_id,
-                ).with_for_update())
-                if operation is None or operation.phase != phase or operation.cursor != cursor or operation.status != "running":
+                operation = await session.scalar(
+                    select(AccountDeletionOperation)
+                    .where(
+                        AccountDeletionOperation.id == operation_id,
+                    )
+                    .with_for_update()
+                )
+                if (
+                    operation is None
+                    or operation.phase != phase
+                    or operation.cursor != cursor
+                    or operation.status != "running"
+                ):
                     raise RuntimeError("Account deletion checkpoint changed during cleanup")
                 if progress.complete:
                     await finalize_account_erasure(session, operation)
@@ -109,21 +127,36 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
         except Exception as exc:  # noqa: BLE001 - any failure is recorded on the operation and retried
             async with factory() as session:
                 operation = await session.get(AccountDeletionOperation, operation_id)
-                if (operation is not None and operation.status in {"queued", "running"}
-                        and operation.phase == phase and operation.cursor == cursor):
+                if (
+                    operation is not None
+                    and operation.status in {"queued", "running"}
+                    and operation.phase == phase
+                    and operation.cursor == cursor
+                ):
                     operation.status = "failed"
                     safe_code = getattr(exc, "safe_code", None)
-                    operation.error_code = safe_code if safe_code in {
-                        "auxiliary_cleanup_failed", "remote_cleanup_failed", "graph_cleanup_failed",
-                        "storage_cleanup_failed", "shared_cleanup_failed", "data_cleanup_failed",
-                    } else "cleanup_retry_required"
+                    operation.error_code = (
+                        safe_code
+                        if safe_code
+                        in {
+                            "auxiliary_cleanup_failed",
+                            "remote_cleanup_failed",
+                            "graph_cleanup_failed",
+                            "storage_cleanup_failed",
+                            "shared_cleanup_failed",
+                            "data_cleanup_failed",
+                        }
+                        else "cleanup_retry_required"
+                    )
                     operation.next_attempt_at = datetime.now(UTC) + timedelta(minutes=1)
                     await session.commit()
             return False
         finally:
             # Never return a pooled connection carrying a session-level lock.
             try:
-                await asyncio.shield(connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key}))
+                await asyncio.shield(
+                    connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
+                )
                 await connection.commit()
             except BaseException:
                 await connection.invalidate()
@@ -138,13 +171,30 @@ async def recover_account_deletions(ctx: dict[str, Any]) -> int:
     """
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     async with factory() as session:
-        expired = select(AccountDeletionOperation.id).where(
-            AccountDeletionOperation.status == "succeeded", AccountDeletionOperation.expires_at <= datetime.now(UTC),
-        ).limit(100)
-        await session.execute(delete(AccountDeletionOperation).where(AccountDeletionOperation.id.in_(expired)))
-        ids = list((await session.scalars(select(AccountDeletionOperation.id).where(
-            AccountDeletionOperation.status != "succeeded", AccountDeletionOperation.next_attempt_at <= datetime.now(UTC),
-        ).order_by(AccountDeletionOperation.next_attempt_at).limit(4))).all())
+        expired = (
+            select(AccountDeletionOperation.id)
+            .where(
+                AccountDeletionOperation.status == "succeeded",
+                AccountDeletionOperation.expires_at <= datetime.now(UTC),
+            )
+            .limit(100)
+        )
+        await session.execute(
+            delete(AccountDeletionOperation).where(AccountDeletionOperation.id.in_(expired))
+        )
+        ids = list(
+            (
+                await session.scalars(
+                    select(AccountDeletionOperation.id)
+                    .where(
+                        AccountDeletionOperation.status != "succeeded",
+                        AccountDeletionOperation.next_attempt_at <= datetime.now(UTC),
+                    )
+                    .order_by(AccountDeletionOperation.next_attempt_at)
+                    .limit(4)
+                )
+            ).all()
+        )
         await session.commit()
     count = 0
     for operation_id in ids:

@@ -93,9 +93,9 @@ target-version = "py312"
 #   S      bandit security checks               ASYNC blocking calls inside coroutines
 #   RUF100 every `# noqa` must still suppress something
 select = ["E", "F", "W", "I", "B", "UP", "C90", "PLR0912", "PLR0915", "BLE", "S", "ASYNC", "RUF100"]
-# E501: the code base is not formatted by `ruff format`, so line wrapping is not enforced by a
-# tool; function length (scripts/check_function_length.py) and complexity gate maintainability
-# instead. Enabling it would flag ~12k pre-existing lines of docstring/prose with no quality gain.
+# E501: code is formatted by `ruff format` (gated by `ruff format --check`), but the formatter does
+# not wrap long strings, docstrings or comments, so E501 would flag ~12k prose lines with no quality
+# gain; function length (scripts/check_function_length.py) and complexity gate maintainability.
 ignore = ["E501"]
 
 [tool.ruff.lint.mccabe]

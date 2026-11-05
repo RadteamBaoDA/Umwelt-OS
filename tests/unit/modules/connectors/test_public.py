@@ -55,7 +55,14 @@ class TestConnectorRegistry:
 
     def test_is_native_provider(self) -> None:
         """Verify native provider detection against the approved NATIVE_PROVIDERS set."""
-        for provider in ("youtube", "arxiv", "huggingface", "github_releases", "github", "telegram"):
+        for provider in (
+            "youtube",
+            "arxiv",
+            "huggingface",
+            "github_releases",
+            "github",
+            "telegram",
+        ):
             assert is_native_provider(provider) is True
 
         assert is_native_provider("rss") is False
@@ -330,7 +337,18 @@ class TestPublicDiscoveryAndCatalog:
 
         # Check key providers are present
         provider_ids = set(provider_ids)
-        expected = {"rss", "web", "rest", "github", "telegram", "mcp", "youtube", "arxiv", "huggingface", "github_releases"}
+        expected = {
+            "rss",
+            "web",
+            "rest",
+            "github",
+            "telegram",
+            "mcp",
+            "youtube",
+            "arxiv",
+            "huggingface",
+            "github_releases",
+        }
         assert expected.issubset(provider_ids)
 
     def test_get_catalog_entry_lookup(self) -> None:
@@ -368,8 +386,12 @@ class TestPublicDiscoveryAndCatalog:
     def test_catalog_availability_states(self) -> None:
         """Catalog entries declare valid availability categories."""
         valid_availabilities = {
-            "implemented", "requires_credentials", "unsupported_operation",
-            "planned", "unavailable", "available",
+            "implemented",
+            "requires_credentials",
+            "unsupported_operation",
+            "planned",
+            "unavailable",
+            "available",
         }
         for entry in list_catalog():
             assert entry.availability in valid_availabilities
@@ -429,7 +451,9 @@ class TestQueryContracts:
     async def test_get_connector_configuration_contract(self) -> None:
         """get_connector_configuration returns a redact-safe ConnectorConfigurationSnapshot."""
         source_id = uuid4()
-        source_fence = SourceFence(id=source_id, workspace_id=WORKSPACE_ID, generation=1, status="active", local_only=False)
+        source_fence = SourceFence(
+            id=source_id, workspace_id=WORKSPACE_ID, generation=1, status="active", local_only=False
+        )
         source = ConnectorSource(
             workspace_id=WORKSPACE_ID,
             local_only=False,
@@ -449,9 +473,16 @@ class TestQueryContracts:
         )
         session = AsyncMock()
 
-        with patch("modules.connectors.provisioning._read_connector_rows", return_value=(source_fence, row, {})), \
-             patch("modules.sources.public.get_connector_source", return_value=source):
-            snapshot = await get_connector_configuration(session, source_id, scope=SCOPE, multi_workspace_enabled=False)
+        with (
+            patch(
+                "modules.connectors.provisioning._read_connector_rows",
+                return_value=(source_fence, row, {}),
+            ),
+            patch("modules.sources.public.get_connector_source", return_value=source),
+        ):
+            snapshot = await get_connector_configuration(
+                session, source_id, scope=SCOPE, multi_workspace_enabled=False
+            )
 
         assert snapshot is not None
         assert isinstance(snapshot, ConnectorConfigurationSnapshot)
@@ -483,10 +514,16 @@ class TestQueryContracts:
         )
         session = AsyncMock()
 
-        with patch("modules.sources.public.get_source_fence", return_value=source_fence), \
-             patch("modules.sources.public.get_connector_source", return_value=source):
+        with (
+            patch("modules.sources.public.get_source_fence", return_value=source_fence),
+            patch("modules.sources.public.get_connector_source", return_value=source),
+        ):
             scope = await get_current_provider_scope(
-                session, source_id, expected_source_generation=1, scope=SCOPE, multi_workspace_enabled=False,
+                session,
+                source_id,
+                expected_source_generation=1,
+                scope=SCOPE,
+                multi_workspace_enabled=False,
             )
 
         assert scope is not None
@@ -524,10 +561,23 @@ class TestStatusChecksAndGuards:
         session = AsyncMock()
 
         source = ConnectorSource(
-            workspace_id=WORKSPACE_ID, local_only=False, id=source_id, type="rss", status="active",
-            generation=1, configuration={},
+            workspace_id=WORKSPACE_ID,
+            local_only=False,
+            id=source_id,
+            type="rss",
+            status="active",
+            generation=1,
+            configuration={},
         )
-        with patch("modules.connectors.provisioning.require_collection_fence", new_callable=AsyncMock) as mock_fence,              patch("modules.connectors.service.config._read_scoped_source", AsyncMock(return_value=source)):
+        with (
+            patch(
+                "modules.connectors.provisioning.require_collection_fence", new_callable=AsyncMock
+            ) as mock_fence,
+            patch(
+                "modules.connectors.service.config._read_scoped_source",
+                AsyncMock(return_value=source),
+            ),
+        ):
             mock_fence.return_value = True
             allowed = await collection_allowed(
                 session,
@@ -609,16 +659,25 @@ class TestStatusChecksAndGuards:
             await validate_public_url("https://user:pass@example.com/feed")
 
         # Resolves to private IP
-        with patch("modules.connectors.service.collection_requests.getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 443))]):
+        with patch(
+            "modules.connectors.service.collection_requests.getaddrinfo",
+            return_value=[(None, None, None, None, ("127.0.0.1", 443))],
+        ):
             with pytest.raises(ValueError, match="URL resolves to a non-public address"):
                 await validate_public_url("https://localhost/feed")
 
-        with patch("modules.connectors.service.collection_requests.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.1", 443))]):
+        with patch(
+            "modules.connectors.service.collection_requests.getaddrinfo",
+            return_value=[(None, None, None, None, ("192.168.1.1", 443))],
+        ):
             with pytest.raises(ValueError, match="URL resolves to a non-public address"):
                 await validate_public_url("https://router.local/feed")
 
         # Resolves to public IP
-        with patch("modules.connectors.service.collection_requests.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 443))]):
+        with patch(
+            "modules.connectors.service.collection_requests.getaddrinfo",
+            return_value=[(None, None, None, None, ("93.184.216.34", 443))],
+        ):
             res = await validate_public_url("https://example.com/feed.xml")
             assert res == "https://example.com/feed.xml"
 
@@ -628,8 +687,13 @@ def test_public_reexports_collection_schema_dtos() -> None:
     from modules.connectors import collection_schemas, public
 
     for name in (
-        "CollectionAdmissionRead", "CollectionAdmissionRequest", "CollectionRequestRead", "CollectionRequestRef",
-        "ManagedConnectorReceipt", "ManagedCrawlRequest", "ManagedNoChanges",
+        "CollectionAdmissionRead",
+        "CollectionAdmissionRequest",
+        "CollectionRequestRead",
+        "CollectionRequestRef",
+        "ManagedConnectorReceipt",
+        "ManagedCrawlRequest",
+        "ManagedNoChanges",
     ):
         assert getattr(public, name) is getattr(collection_schemas, name)
     with pytest.raises(AttributeError):

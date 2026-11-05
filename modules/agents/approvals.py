@@ -59,47 +59,91 @@ async def create_pending_approval(
     now = datetime.now(UTC)
     async with session_factory() as session:
         fence = await admit(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            lock=True, expected=original_fence,
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            lock=True,
+            expected=original_fence,
         )
-        if not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled):
+        if not await revalidate_account_session(
+            session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled
+        ):
             raise UnauthorizedError("Owner session expired")
         from modules.chat.public import has_live_agent_run_link
+
         if not await has_live_agent_run_link(session, run_id, owner_id, auth_session_hash):
             raise ConflictError("A live Chat link is required for approval")
-        run = await session.scalar(select(AgentRun).where(
-            AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
-        ).with_for_update())
-        if (run is None or run.owner_id != owner_id or run.status != "running" or run.cancel_requested
-                or run.evidence_revoked
-                or run.claim_generation != claim_generation or run.auth_session_hash != auth_session_hash):
+        run = await session.scalar(
+            select(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.workspace_id == scope.workspace_id,
+            )
+            .with_for_update()
+        )
+        if (
+            run is None
+            or run.owner_id != owner_id
+            or run.status != "running"
+            or run.cancel_requested
+            or run.evidence_revoked
+            or run.claim_generation != claim_generation
+            or run.auth_session_hash != auth_session_hash
+        ):
             raise ConflictError("Agent action is no longer current")
-        row = await session.scalar(select(AgentApproval).where(
-            AgentApproval.run_id == run_id, AgentApproval.ordinal == ordinal,
-            AgentApproval.workspace_id == scope.workspace_id,
-        ).with_for_update())
-        if (not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled)
-                or not await has_live_agent_run_link(session, run_id, owner_id, auth_session_hash)):
+        row = await session.scalar(
+            select(AgentApproval)
+            .where(
+                AgentApproval.run_id == run_id,
+                AgentApproval.ordinal == ordinal,
+                AgentApproval.workspace_id == scope.workspace_id,
+            )
+            .with_for_update()
+        )
+        if not await revalidate_account_session(
+            session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled
+        ) or not await has_live_agent_run_link(session, run_id, owner_id, auth_session_hash):
             raise ConflictError("Owner session or Chat link is no longer live")
         if row is None:
             row = AgentApproval(
-                id=uuid7(), action_id=action_id, workspace_id=scope.workspace_id,
-                run_id=run_id, owner_id=owner_id, auth_session_hash=auth_session_hash,
-                ordinal=ordinal, tool_name=definition.name, tool_version=definition.version,
-                schema_fingerprint=definition.schema_fingerprint, arguments=arguments,
-                argument_hash=argument_hash, destination_id=destination_id,
-                destination_revision=destination_revision, source_fences=source_fences,
-                status="pending", expires_at=now + timedelta(hours=expiry_hours),
+                id=uuid7(),
+                action_id=action_id,
+                workspace_id=scope.workspace_id,
+                run_id=run_id,
+                owner_id=owner_id,
+                auth_session_hash=auth_session_hash,
+                ordinal=ordinal,
+                tool_name=definition.name,
+                tool_version=definition.version,
+                schema_fingerprint=definition.schema_fingerprint,
+                arguments=arguments,
+                argument_hash=argument_hash,
+                destination_id=destination_id,
+                destination_revision=destination_revision,
+                source_fences=source_fences,
+                status="pending",
+                expires_at=now + timedelta(hours=expiry_hours),
             )
             session.add(row)
-        elif (row.action_id != action_id or row.owner_id != owner_id or row.auth_session_hash != auth_session_hash
-              or row.tool_name != definition.name or row.tool_version != definition.version
-              or row.schema_fingerprint != definition.schema_fingerprint or row.argument_hash != argument_hash
-              or row.destination_id != destination_id or row.destination_revision != destination_revision
-              or row.source_fences != source_fences):
+        elif (
+            row.action_id != action_id
+            or row.owner_id != owner_id
+            or row.auth_session_hash != auth_session_hash
+            or row.tool_name != definition.name
+            or row.tool_version != definition.version
+            or row.schema_fingerprint != definition.schema_fingerprint
+            or row.argument_hash != argument_hash
+            or row.destination_id != destination_id
+            or row.destination_revision != destination_revision
+            or row.source_fences != source_fences
+        ):
             raise ConflictError("Tool slot no longer matches its approval")
         await commit_with_replay(
-            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            session,
+            (),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
         )
         await session.refresh(row)
         session.expunge(row)
@@ -125,43 +169,81 @@ async def verify_approved_action(
     """Re-read approved action, effect reservation, run claim, original session and workspace epoch before dispatch."""
     async with session_factory() as session:
         try:
-            if await admit(
-                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            ) != original_fence:
+            if (
+                await admit(
+                    session,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
+                != original_fence
+            ):
                 return False
         except (HTTPException, DomainError):
             return False
-        row = await session.scalar(select(AgentApproval).where(
-            AgentApproval.action_id == action_id, AgentApproval.workspace_id == scope.workspace_id,
-        ))
-        run = await session.scalar(select(AgentRun).where(
-            AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
-        ))
-        effect = await session.scalar(select(AgentEffect).where(
-            AgentEffect.action_id == action_id, AgentEffect.workspace_id == scope.workspace_id,
-        ))
-        if (row is None or run is None or effect is None or row.run_id != run_id
-                or row.owner_id != owner_id or row.auth_session_hash != auth_session_hash
-                or run.owner_id != owner_id or run.auth_session_hash != auth_session_hash
-                or run.claim_generation != claim_generation or run.status != "running" or run.cancel_requested
-                or run.evidence_revoked
-                or row.status != "approved" or row.expires_at <= datetime.now(UTC)
-                or effect.state != "reserved" or effect.payload is None
-                or row.tool_name != definition.name or row.tool_version != definition.version
-                or row.schema_fingerprint != definition.schema_fingerprint
-                or row.argument_hash != compute_argument_hash(arguments) or row.arguments != arguments
-                or row.destination_id != destination_id or row.destination_revision != destination_revision
-                or effect.payload_hash != row.argument_hash or effect.payload != row.arguments
-                or not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled)):
+        row = await session.scalar(
+            select(AgentApproval).where(
+                AgentApproval.action_id == action_id,
+                AgentApproval.workspace_id == scope.workspace_id,
+            )
+        )
+        run = await session.scalar(
+            select(AgentRun).where(
+                AgentRun.id == run_id,
+                AgentRun.workspace_id == scope.workspace_id,
+            )
+        )
+        effect = await session.scalar(
+            select(AgentEffect).where(
+                AgentEffect.action_id == action_id,
+                AgentEffect.workspace_id == scope.workspace_id,
+            )
+        )
+        if (
+            row is None
+            or run is None
+            or effect is None
+            or row.run_id != run_id
+            or row.owner_id != owner_id
+            or row.auth_session_hash != auth_session_hash
+            or run.owner_id != owner_id
+            or run.auth_session_hash != auth_session_hash
+            or run.claim_generation != claim_generation
+            or run.status != "running"
+            or run.cancel_requested
+            or run.evidence_revoked
+            or row.status != "approved"
+            or row.expires_at <= datetime.now(UTC)
+            or effect.state != "reserved"
+            or effect.payload is None
+            or row.tool_name != definition.name
+            or row.tool_version != definition.version
+            or row.schema_fingerprint != definition.schema_fingerprint
+            or row.argument_hash != compute_argument_hash(arguments)
+            or row.arguments != arguments
+            or row.destination_id != destination_id
+            or row.destination_revision != destination_revision
+            or effect.payload_hash != row.argument_hash
+            or effect.payload != row.arguments
+            or not await revalidate_account_session(
+                session,
+                auth_session_hash,
+                owner_id,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        ):
             return False
         return True
 
 
-async def approval_for_slot(session_factory: SessionFactory, run_id: UUID, ordinal: int) -> AgentApproval | None:
+async def approval_for_slot(
+    session_factory: SessionFactory, run_id: UUID, ordinal: int
+) -> AgentApproval | None:
     """Read the durable decision for one immutable run/tool ordinal without returning unrelated actions."""
     action_id = action_identity(run_id, ordinal)
     async with session_factory() as session:
-        row = await session.scalar(select(AgentApproval).where(AgentApproval.action_id == action_id))
+        row = await session.scalar(
+            select(AgentApproval).where(AgentApproval.action_id == action_id)
+        )
         if row is not None:
             session.expunge(row)
         return row
@@ -193,57 +275,105 @@ async def reserve_effect_before_send(
     async with session_factory() as session:
         try:
             fence = await admit(
-                session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                lock=True, expected=original_fence,
+                session,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                lock=True,
+                expected=original_fence,
             )
         except (HTTPException, DomainError):
             return False
         # Do the latest auth query before row locks; a second send fence occurs after DNS resolution.
-        if not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled):
+        if not await revalidate_account_session(
+            session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled
+        ):
             return False
-        run = await session.scalar(select(AgentRun).where(
-            AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
-        ).with_for_update())
-        approval = await session.scalar(select(AgentApproval).where(
-            AgentApproval.action_id == action_id, AgentApproval.workspace_id == scope.workspace_id,
-        ).with_for_update())
-        effect = await session.scalar(select(AgentEffect).where(
-            AgentEffect.action_id == action_id, AgentEffect.workspace_id == scope.workspace_id,
-        ).with_for_update())
+        run = await session.scalar(
+            select(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.workspace_id == scope.workspace_id,
+            )
+            .with_for_update()
+        )
+        approval = await session.scalar(
+            select(AgentApproval)
+            .where(
+                AgentApproval.action_id == action_id,
+                AgentApproval.workspace_id == scope.workspace_id,
+            )
+            .with_for_update()
+        )
+        effect = await session.scalar(
+            select(AgentEffect)
+            .where(
+                AgentEffect.action_id == action_id,
+                AgentEffect.workspace_id == scope.workspace_id,
+            )
+            .with_for_update()
+        )
         now = datetime.now(UTC)
-        if (run is None or approval is None or effect is None or run.owner_id != owner_id
-                or run.auth_session_hash != auth_session_hash or run.status != "running"
-                or run.cancel_requested or run.evidence_revoked or run.claim_generation != claim_generation
-                or approval.run_id != run_id or approval.owner_id != owner_id
-                or approval.auth_session_hash != auth_session_hash or approval.status != "approved"
-                or approval.expires_at <= now or effect.state != "reserved" or effect.payload is None
-                or approval.tool_name != definition.name or approval.tool_version != definition.version
-                or approval.schema_fingerprint != definition.schema_fingerprint
-                or approval.arguments != arguments or approval.argument_hash != compute_argument_hash(arguments)
-                or approval.destination_id != destination_id
-                or approval.destination_revision != destination_revision
-                or effect.payload_hash != approval.argument_hash or effect.payload != approval.arguments):
+        if (
+            run is None
+            or approval is None
+            or effect is None
+            or run.owner_id != owner_id
+            or run.auth_session_hash != auth_session_hash
+            or run.status != "running"
+            or run.cancel_requested
+            or run.evidence_revoked
+            or run.claim_generation != claim_generation
+            or approval.run_id != run_id
+            or approval.owner_id != owner_id
+            or approval.auth_session_hash != auth_session_hash
+            or approval.status != "approved"
+            or approval.expires_at <= now
+            or effect.state != "reserved"
+            or effect.payload is None
+            or approval.tool_name != definition.name
+            or approval.tool_version != definition.version
+            or approval.schema_fingerprint != definition.schema_fingerprint
+            or approval.arguments != arguments
+            or approval.argument_hash != compute_argument_hash(arguments)
+            or approval.destination_id != destination_id
+            or approval.destination_revision != destination_revision
+            or effect.payload_hash != approval.argument_hash
+            or effect.payload != approval.arguments
+        ):
             return False
         from modules.chat.public import has_live_agent_run_link
-        if (not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled)
-                or not await has_live_agent_run_link(session, run_id, owner_id, auth_session_hash)):
+
+        if not await revalidate_account_session(
+            session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled
+        ) or not await has_live_agent_run_link(session, run_id, owner_id, auth_session_hash):
             return False
         effect.state = "in_flight"
         await commit_with_replay(
-            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            session,
+            (),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
         )
         return True
 
 
 async def mark_approval_requires_review(
-    session_factory: SessionFactory, run_id: UUID, action_id: UUID,
+    session_factory: SessionFactory,
+    run_id: UUID,
+    action_id: UUID,
 ) -> None:
     """Set a fail-closed review stop without making approval or replay capable of clearing uncertainty."""
     async with session_factory() as session:
         run = await session.scalar(select(AgentRun).where(AgentRun.id == run_id).with_for_update())
-        row = await session.scalar(select(AgentApproval).where(
-            AgentApproval.action_id == action_id, AgentApproval.run_id == run_id,
-        ).with_for_update())
+        row = await session.scalar(
+            select(AgentApproval)
+            .where(
+                AgentApproval.action_id == action_id,
+                AgentApproval.run_id == run_id,
+            )
+            .with_for_update()
+        )
         if run is not None and row is not None and row.status == "approved":
             row.status = "requires_review"
             row.resolved_at = datetime.now(UTC)
@@ -263,28 +393,45 @@ async def mark_effect_outcome(
     if result_status_code is not None and not 100 <= result_status_code <= 599:
         raise ValueError("Effect response status is outside the HTTP range")
     async with session_factory() as session:
-        candidate_run_id = await session.scalar(select(AgentEffect.run_id).where(
-            AgentEffect.action_id == UUID(action_id),
-        ))
+        candidate_run_id = await session.scalar(
+            select(AgentEffect.run_id).where(
+                AgentEffect.action_id == UUID(action_id),
+            )
+        )
         if candidate_run_id is None:
             return
         # Keep the same lock order as decision/cancellation while closing a provider attempt.
-        await session.scalar(select(AgentRun).where(AgentRun.id == candidate_run_id).with_for_update())
-        approval = await session.scalar(select(AgentApproval).where(
-            AgentApproval.action_id == UUID(action_id),
-        ).with_for_update())
-        effect = await session.scalar(select(AgentEffect).where(
-            AgentEffect.action_id == UUID(action_id),
-        ).with_for_update())
+        await session.scalar(
+            select(AgentRun).where(AgentRun.id == candidate_run_id).with_for_update()
+        )
+        approval = await session.scalar(
+            select(AgentApproval)
+            .where(
+                AgentApproval.action_id == UUID(action_id),
+            )
+            .with_for_update()
+        )
+        effect = await session.scalar(
+            select(AgentEffect)
+            .where(
+                AgentEffect.action_id == UUID(action_id),
+            )
+            .with_for_update()
+        )
         if effect is None:
             return
         if effect.state == "requires_review":
             # Cancellation may win the row lock while a request already on the wire returns 2xx.
             # Record that receipt on the tombstone without restoring payload or clearing review.
-            if (state == "succeeded" and result_status_code is not None
-                    and 200 <= result_status_code < 300
-                    and (result_reference is None or
-                         (isinstance(result_reference, str) and 1 <= len(result_reference) <= 256))):
+            if (
+                state == "succeeded"
+                and result_status_code is not None
+                and 200 <= result_status_code < 300
+                and (
+                    result_reference is None
+                    or (isinstance(result_reference, str) and 1 <= len(result_reference) <= 256)
+                )
+            ):
                 effect.result_status_code = result_status_code
                 effect.result_reference = result_reference
                 effect.payload = None
@@ -305,43 +452,70 @@ async def mark_effect_outcome(
 async def get_effect_state(session_factory: SessionFactory, action_id: UUID) -> str | None:
     """Read only the durable effect state needed to decide whether checkpoint replay must stop."""
     async with session_factory() as session:
-        return await session.scalar(select(AgentEffect.state).where(AgentEffect.action_id == action_id))
+        return await session.scalar(
+            select(AgentEffect.state).where(AgentEffect.action_id == action_id)
+        )
 
 
 async def get_effect_outcome(
-    session_factory: SessionFactory, action_id: UUID,
+    session_factory: SessionFactory,
+    action_id: UUID,
 ) -> tuple[str, int | None, str | None] | None:
     """Read only persisted safe effect outcome fields needed to replay a tool result without sending."""
     async with session_factory() as session:
-        row = await session.execute(select(
-            AgentEffect.state, AgentEffect.result_status_code, AgentEffect.result_reference,
-        ).where(AgentEffect.action_id == action_id))
+        row = await session.execute(
+            select(
+                AgentEffect.state,
+                AgentEffect.result_status_code,
+                AgentEffect.result_reference,
+            ).where(AgentEffect.action_id == action_id)
+        )
         value = row.one_or_none()
         return (value[0], value[1], value[2]) if value is not None else None
 
 
 async def _load_decision_candidate(
-    session: AsyncSession, *, approval_id: UUID, auth_session_hash: str, owner_id: int, scope: Scope,
+    session: AsyncSession,
+    *,
+    approval_id: UUID,
+    auth_session_hash: str,
+    owner_id: int,
+    scope: Scope,
 ) -> AgentApproval:
     """Read the approval unlocked and require this owner, session and a live Chat link.
 
     Every mismatch is an indistinguishable 404 so approval IDs cannot be probed. No lock is taken.
     """
-    candidate = await session.scalar(select(AgentApproval).where(
-        AgentApproval.id == approval_id, AgentApproval.workspace_id == scope.workspace_id,
-    ))
-    if candidate is None or candidate.owner_id != owner_id or candidate.auth_session_hash != auth_session_hash:
+    candidate = await session.scalar(
+        select(AgentApproval).where(
+            AgentApproval.id == approval_id,
+            AgentApproval.workspace_id == scope.workspace_id,
+        )
+    )
+    if (
+        candidate is None
+        or candidate.owner_id != owner_id
+        or candidate.auth_session_hash != auth_session_hash
+    ):
         raise NotFoundError("Approval not found")
     from modules.chat.public import has_live_agent_run_link
+
     if candidate.arguments is None or not await has_live_agent_run_link(
-        session, candidate.run_id, owner_id, auth_session_hash,
+        session,
+        candidate.run_id,
+        owner_id,
+        auth_session_hash,
     ):
         raise NotFoundError("Approval not found")
     return candidate
 
 
 async def _decision_fences_current(
-    session_factory: SessionFactory, candidate: AgentApproval, *, owner_id: int, scope: Scope,
+    session_factory: SessionFactory,
+    candidate: AgentApproval,
+    *,
+    owner_id: int,
+    scope: Scope,
     multi_workspace_enabled: bool,
 ) -> bool:
     """Revalidate the approval's frozen source fences; a corrupt snapshot counts as not current."""
@@ -349,48 +523,86 @@ async def _decision_fences_current(
     from modules.tools.public import revalidate_native_output_fences
 
     principal = ToolExecutionPrincipal(
-        actor_id=f"owner:{owner_id}", scope=scope, is_owner=True,
+        actor_id=f"owner:{owner_id}",
+        scope=scope,
+        is_owner=True,
         allowed_tools=frozenset({candidate.tool_name}),
-        owner_all_sources=True, destinations=frozenset(), capabilities=frozenset({"source.read"}),
+        owner_all_sources=True,
+        destinations=frozenset(),
+        capabilities=frozenset({"source.read"}),
     )
     try:
         restored: dict[str, Any] | None = _restore_fences(candidate.source_fences)
     except (TypeError, ValueError, KeyError):
         restored = None
     return restored is not None and await revalidate_native_output_fences(
-        session_factory, restored, principal, destination_kind="remote",
+        session_factory,
+        restored,
+        principal,
+        destination_kind="remote",
         multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
 async def _lock_decision_rows(
-    session: AsyncSession, candidate: AgentApproval, *, approve: bool, scope: Scope,
+    session: AsyncSession,
+    candidate: AgentApproval,
+    *,
+    approve: bool,
+    scope: Scope,
 ) -> tuple[AgentRun | None, AgentApproval | None, AgentEffect | None]:
     """Lock run, then approval, then (only when approving) the effect row, in that order."""
-    run = await session.scalar(select(AgentRun).where(
-        AgentRun.id == candidate.run_id, AgentRun.workspace_id == scope.workspace_id,
-    ).with_for_update())
-    row = await session.scalar(select(AgentApproval).where(
-        AgentApproval.id == candidate.id, AgentApproval.workspace_id == scope.workspace_id,
-    ).with_for_update())
+    run = await session.scalar(
+        select(AgentRun)
+        .where(
+            AgentRun.id == candidate.run_id,
+            AgentRun.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
+    row = await session.scalar(
+        select(AgentApproval)
+        .where(
+            AgentApproval.id == candidate.id,
+            AgentApproval.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
     effect = None
     if approve:
-        effect = await session.scalar(select(AgentEffect).where(
-            AgentEffect.action_id == candidate.action_id, AgentEffect.workspace_id == scope.workspace_id,
-        ).with_for_update())
+        effect = await session.scalar(
+            select(AgentEffect)
+            .where(
+                AgentEffect.action_id == candidate.action_id,
+                AgentEffect.workspace_id == scope.workspace_id,
+            )
+            .with_for_update()
+        )
     return run, row, effect
 
 
 async def _validate_decision_state(
-    session: AsyncSession, run: AgentRun | None, row: AgentApproval | None, *, approve: bool,
-    owner_id: int, auth_session_hash: str, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    run: AgentRun | None,
+    row: AgentApproval | None,
+    *,
+    approve: bool,
+    owner_id: int,
+    auth_session_hash: str,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Check the locked rows can take this decision; return True for an idempotent repeat.
 
     Raises 409 for an inactive run, the opposite earlier decision, a non-pending approval, changed
     authorization, or a dead owner session/Chat link.
     """
-    if run is None or row is None or run.cancel_requested or run.evidence_revoked or run.status == "cancelled":
+    if (
+        run is None
+        or row is None
+        or run.cancel_requested
+        or run.evidence_revoked
+        or run.status == "cancelled"
+    ):
         raise ConflictError("Agent run is no longer active")
     if row.status in {"approved", "denied"}:
         if row.status == ("approved" if approve else "denied"):
@@ -398,19 +610,32 @@ async def _validate_decision_state(
         raise ConflictError("Approval already has the opposite decision")
     if row.status != "pending" or run.status != "waiting_approval":
         raise ConflictError("Approval is not awaiting a decision")
-    if (run.owner_id != owner_id or run.auth_session_hash != auth_session_hash
-            or row.run_id != run.id or row.owner_id != owner_id):
+    if (
+        run.owner_id != owner_id
+        or run.auth_session_hash != auth_session_hash
+        or row.run_id != run.id
+        or row.owner_id != owner_id
+    ):
         raise ConflictError("Approval authorization changed")
     from modules.chat.public import has_live_agent_run_link
-    if (not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled)
-            or not await has_live_agent_run_link(session, run.id, owner_id, auth_session_hash)):
+
+    if not await revalidate_account_session(
+        session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled
+    ) or not await has_live_agent_run_link(session, run.id, owner_id, auth_session_hash):
         raise ConflictError("Owner session or Chat link is no longer live")
     return False
 
 
 async def _close_decision_as_denied(
-    session: AsyncSession, run: AgentRun, row: AgentApproval, *, status: str, code: str,
-    scope: Scope, multi_workspace_enabled: bool, fence: AccessFence,
+    session: AsyncSession,
+    run: AgentRun,
+    row: AgentApproval,
+    *,
+    status: str,
+    code: str,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    fence: AccessFence,
 ) -> tuple[AgentApproval, AgentRun]:
     """Terminate ``row`` (expired or cancelled), publish the denial to the model slot and requeue the run."""
     row.status = status
@@ -419,7 +644,11 @@ async def _close_decision_as_denied(
     run.status, run.dispatch_generation = "queued", run.dispatch_generation + 1
     run.updated_at = datetime.now(UTC)
     await commit_with_replay(
-        session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        session,
+        (),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
     )
     await session.refresh(row)
     await session.refresh(run)
@@ -427,8 +656,15 @@ async def _close_decision_as_denied(
 
 
 async def _reserve_approved_effect(
-    session: AsyncSession, run: AgentRun, row: AgentApproval, effect: AgentEffect | None, *,
-    owner_id: int, scope: Scope, multi_workspace_enabled: bool, fence: AccessFence,
+    session: AsyncSession,
+    run: AgentRun,
+    row: AgentApproval,
+    effect: AgentEffect | None,
+    *,
+    owner_id: int,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    fence: AccessFence,
 ) -> bool:
     """Reserve (or verify) the single effect row for an approval; False means it needs review.
 
@@ -436,17 +672,28 @@ async def _reserve_approved_effect(
     ``requires_review`` and commits immediately; the caller must then return without queueing.
     """
     if effect is None:
-        session.add(AgentEffect(
-            workspace_id=scope.workspace_id, actor_user_id=owner_id,
-            action_id=row.action_id, run_id=run.id, provider_key=str(row.action_id),
-            profile_alias=row.destination_id, profile_revision=row.destination_revision,
-            payload=row.arguments, payload_hash=row.argument_hash, state="reserved",
-        ))
+        session.add(
+            AgentEffect(
+                workspace_id=scope.workspace_id,
+                actor_user_id=owner_id,
+                action_id=row.action_id,
+                run_id=run.id,
+                provider_key=str(row.action_id),
+                profile_alias=row.destination_id,
+                profile_revision=row.destination_revision,
+                payload=row.arguments,
+                payload_hash=row.argument_hash,
+                state="reserved",
+            )
+        )
     elif effect.state != "reserved" or effect.payload_hash != row.argument_hash:
         row.status = "requires_review"
         row.resolved_at = datetime.now(UTC)
         await commit_with_replay(
-            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            (),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
             access_fence=fence,
         )
         return False
@@ -471,48 +718,94 @@ async def decision(
     The workspace access fence is locked before every other lock and validates each commit; members
     are denied before any query. The approval, run and effect must belong to ``scope``'s workspace.
     """
-    fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    fence = await admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
     owner_id = actor(scope)
-    if not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled):
+    if not await revalidate_account_session(
+        session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled
+    ):
         raise UnauthorizedError("Owner session expired")
     candidate = await _load_decision_candidate(
-        session, approval_id=approval_id, auth_session_hash=auth_session_hash, owner_id=owner_id, scope=scope,
+        session,
+        approval_id=approval_id,
+        auth_session_hash=auth_session_hash,
+        owner_id=owner_id,
+        scope=scope,
     )
     if not await _decision_fences_current(
-        session_factory, candidate, owner_id=owner_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session_factory,
+        candidate,
+        owner_id=owner_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     ):
         return await _cancel_stale_action(
-            session, candidate, "source_permissions_changed",
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            session,
+            candidate,
+            "source_permissions_changed",
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
         )
     if candidate.destination_revision != destination_revision:
         return await _cancel_stale_action(
-            session, candidate, "webhook_profile_changed",
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            session,
+            candidate,
+            "webhook_profile_changed",
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
         )
     run, row, effect = await _lock_decision_rows(session, candidate, approve=approve, scope=scope)
     if await _validate_decision_state(
-        session, run, row, approve=approve, owner_id=owner_id, auth_session_hash=auth_session_hash,
+        session,
+        run,
+        row,
+        approve=approve,
+        owner_id=owner_id,
+        auth_session_hash=auth_session_hash,
         multi_workspace_enabled=multi_workspace_enabled,
     ):
         return cast(AgentApproval, row), cast(AgentRun, run)
     run, row = cast(AgentRun, run), cast(AgentApproval, row)
     if row.expires_at <= datetime.now(UTC):
         return await _close_decision_as_denied(
-            session, run, row, status="expired", code="approval_expired",
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, fence=fence,
+            session,
+            run,
+            row,
+            status="expired",
+            code="approval_expired",
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            fence=fence,
         )
-    if approve and (definition is None or definition.name != row.tool_name
-                    or definition.version != row.tool_version
-                    or definition.schema_fingerprint != row.schema_fingerprint):
+    if approve and (
+        definition is None
+        or definition.name != row.tool_name
+        or definition.version != row.tool_version
+        or definition.schema_fingerprint != row.schema_fingerprint
+    ):
         return await _close_decision_as_denied(
-            session, run, row, status="cancelled", code="tool_contract_changed",
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled, fence=fence,
+            session,
+            run,
+            row,
+            status="cancelled",
+            code="tool_contract_changed",
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            fence=fence,
         )
     if approve:
         if not await _reserve_approved_effect(
-            session, run, row, effect, owner_id=owner_id, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled, fence=fence,
+            session,
+            run,
+            row,
+            effect,
+            owner_id=owner_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            fence=fence,
         ):
             return row, run
         row.status = "approved"
@@ -524,44 +817,89 @@ async def decision(
     run.status = "queued"
     run.dispatch_generation += 1
     run.updated_at = datetime.now(UTC)
-    run.activities = [*run.activities[-63:], {
-        "kind": "status", "status": "queued", "created_at": datetime.now(UTC).isoformat(),
-    }]
+    run.activities = [
+        *run.activities[-63:],
+        {
+            "kind": "status",
+            "status": "queued",
+            "created_at": datetime.now(UTC).isoformat(),
+        },
+    ]
     await commit_with_replay(
-        session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+        session,
+        (),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=fence,
     )
     await session.refresh(row)
     await session.refresh(run)
     return row, run
 
 
-async def _resume_denied(session: AsyncSession, run: AgentRun, row: AgentApproval, code: str) -> None:
+async def _resume_denied(
+    session: AsyncSession, run: AgentRun, row: AgentApproval, code: str
+) -> None:
     """Publish a bounded denial into the reserved tool slot so the model continues without an effect."""
-    call = await session.scalar(select(AgentToolCall).where(
-        AgentToolCall.run_id == run.id, AgentToolCall.ordinal == row.ordinal,
-    ).with_for_update())
+    call = await session.scalar(
+        select(AgentToolCall)
+        .where(
+            AgentToolCall.run_id == run.id,
+            AgentToolCall.ordinal == row.ordinal,
+        )
+        .with_for_update()
+    )
     if call is not None:
         call.status, call.error_code, call.completed_at = "denied", code, datetime.now(UTC)
 
 
 async def _cancel_stale_action(
-    session: AsyncSession, candidate: AgentApproval, code: str,
-    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+    session: AsyncSession,
+    candidate: AgentApproval,
+    code: str,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
 ) -> tuple[AgentApproval, AgentRun]:
     """Resolve a stale pending action as a bounded denial while preserving its immutable audit hash."""
-    run = await session.scalar(select(AgentRun).where(
-        AgentRun.id == candidate.run_id, AgentRun.workspace_id == scope.workspace_id,
-    ).with_for_update())
-    row = await session.scalar(select(AgentApproval).where(
-        AgentApproval.id == candidate.id, AgentApproval.workspace_id == scope.workspace_id,
-    ).with_for_update())
+    run = await session.scalar(
+        select(AgentRun)
+        .where(
+            AgentRun.id == candidate.run_id,
+            AgentRun.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
+    row = await session.scalar(
+        select(AgentApproval)
+        .where(
+            AgentApproval.id == candidate.id,
+            AgentApproval.workspace_id == scope.workspace_id,
+        )
+        .with_for_update()
+    )
     from modules.chat.public import has_live_agent_run_link
-    if (not await revalidate_account_session(session, candidate.auth_session_hash, candidate.owner_id, multi_workspace_enabled=multi_workspace_enabled)
-            or not await has_live_agent_run_link(
-                session, candidate.run_id, candidate.owner_id, candidate.auth_session_hash,
-            )):
+
+    if not await revalidate_account_session(
+        session,
+        candidate.auth_session_hash,
+        candidate.owner_id,
+        multi_workspace_enabled=multi_workspace_enabled,
+    ) or not await has_live_agent_run_link(
+        session,
+        candidate.run_id,
+        candidate.owner_id,
+        candidate.auth_session_hash,
+    ):
         raise NotFoundError("Approval not found")
-    if run is None or row is None or run.cancel_requested or run.evidence_revoked or run.status == "cancelled":
+    if (
+        run is None
+        or row is None
+        or run.cancel_requested
+        or run.evidence_revoked
+        or run.status == "cancelled"
+    ):
         raise ConflictError("Agent run is no longer active")
     if row.status != "pending" or run.status != "waiting_approval":
         raise ConflictError("Approval is no longer awaiting a decision")
@@ -572,7 +910,11 @@ async def _cancel_stale_action(
     run.dispatch_generation += 1
     run.updated_at = datetime.now(UTC)
     await commit_with_replay(
-        session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        session,
+        (),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
     await session.refresh(row)
     await session.refresh(run)
@@ -586,23 +928,55 @@ async def expire_pending_approvals(session_factory: SessionFactory, limit: int =
     admission and stays possible after access is revoked; each row's own workspace binds its locks.
     """
     async with session_factory() as session:
-        candidates = list((await session.execute(select(
-            AgentApproval.id, AgentApproval.run_id, AgentApproval.workspace_id,
-        ).where(AgentApproval.status == "pending", AgentApproval.expires_at <= datetime.now(UTC))
-          .order_by(AgentApproval.expires_at).limit(limit))).all())
+        candidates = list(
+            (
+                await session.execute(
+                    select(
+                        AgentApproval.id,
+                        AgentApproval.run_id,
+                        AgentApproval.workspace_id,
+                    )
+                    .where(
+                        AgentApproval.status == "pending",
+                        AgentApproval.expires_at <= datetime.now(UTC),
+                    )
+                    .order_by(AgentApproval.expires_at)
+                    .limit(limit)
+                )
+            ).all()
+        )
         expired = 0
         for approval_id, run_id, workspace_id in candidates:
-            run = await session.scalar(select(AgentRun).where(
-                AgentRun.id == run_id, AgentRun.workspace_id == workspace_id,
-            ).with_for_update())
-            row = await session.scalar(select(AgentApproval).where(
-                AgentApproval.id == approval_id, AgentApproval.workspace_id == workspace_id,
-            ).with_for_update())
-            if run is None or row is None or row.status != "pending" or row.expires_at > datetime.now(UTC):
+            run = await session.scalar(
+                select(AgentRun)
+                .where(
+                    AgentRun.id == run_id,
+                    AgentRun.workspace_id == workspace_id,
+                )
+                .with_for_update()
+            )
+            row = await session.scalar(
+                select(AgentApproval)
+                .where(
+                    AgentApproval.id == approval_id,
+                    AgentApproval.workspace_id == workspace_id,
+                )
+                .with_for_update()
+            )
+            if (
+                run is None
+                or row is None
+                or row.status != "pending"
+                or row.expires_at > datetime.now(UTC)
+            ):
                 continue
             row.status, row.resolved_at = "expired", datetime.now(UTC)
             await _resume_denied(session, run, row, "approval_expired")
-            if run.status == "waiting_approval" and not run.cancel_requested and not run.evidence_revoked:
+            if (
+                run.status == "waiting_approval"
+                and not run.cancel_requested
+                and not run.evidence_revoked
+            ):
                 run.status, run.dispatch_generation = "queued", run.dispatch_generation + 1
                 run.updated_at = datetime.now(UTC)
             expired += 1

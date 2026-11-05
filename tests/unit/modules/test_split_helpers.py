@@ -24,7 +24,9 @@ from modules.tasks.schemas import TaskFilter
 
 
 def _sql(statement: Any) -> str:
-    return str(statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    return str(
+        statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+    )
 
 
 # --- notifications: highlight row classification --------------------------------------------------
@@ -35,7 +37,9 @@ FINGERPRINT = "a" * 64
 
 def _row(**overrides: Any) -> SimpleNamespace:
     values: dict[str, Any] = {
-        "kind": "dashboard_highlight", "copied_evidence_revoked": False, "document_id": None,
+        "kind": "dashboard_highlight",
+        "copied_evidence_revoked": False,
+        "document_id": None,
         "document_version_id": None,
         "dedupe_key": f"highlight:{DEFINITION}:1:{FINGERPRINT}:{RULE}:{VERSION}",
         "params": {"definition_id": str(DEFINITION), "definition_revision": 1, "severity": "high"},
@@ -44,9 +48,16 @@ def _row(**overrides: Any) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
-async def _classify(row: SimpleNamespace, known: set[UUID] | None = None) -> tuple[str, UUID | None]:
+async def _classify(
+    row: SimpleNamespace, known: set[UUID] | None = None
+) -> tuple[str, UUID | None]:
     return await notifications._classify_highlight_row(
-        None, row, DOC, known or set(), scope=None, multi_workspace_enabled=False,  # type: ignore[arg-type]
+        None,
+        row,
+        DOC,
+        known or set(),
+        scope=None,
+        multi_workspace_enabled=False,  # type: ignore[arg-type]
     )
 
 
@@ -59,26 +70,42 @@ async def test_classify_skips_other_kinds_revoked_and_foreign_documents() -> Non
 async def test_classify_exact_sidecar_scrubs_and_flags_contradictions() -> None:
     assert await _classify(_row(document_id=DOC, document_version_id=VERSION)) == ("scrub", VERSION)
     other = uuid4()
-    assert await _classify(_row(document_id=DOC, document_version_id=other)) == ("undecidable", None)
+    assert await _classify(_row(document_id=DOC, document_version_id=other)) == (
+        "undecidable",
+        None,
+    )
 
 
 async def test_classify_legacy_row_needs_a_known_version_receipt() -> None:
     assert await _classify(_row(), known={VERSION}) == ("scrub", VERSION)
-    assert await _classify(_row(document_version_id=uuid4()), known={VERSION}) == ("undecidable", None)
+    assert await _classify(_row(document_version_id=uuid4()), known={VERSION}) == (
+        "undecidable",
+        None,
+    )
 
 
 async def test_classify_unparseable_legacy_rows() -> None:
     # A legacy row with no sidecar and an unparseable key is genuinely undecidable.
     assert await _classify(_row(dedupe_key="highlight:garbage")) == ("undecidable", None)
-    assert await _classify(_row(dedupe_key="highlight:garbage", document_id=DOC)) == ("undecidable", None)
+    assert await _classify(_row(dedupe_key="highlight:garbage", document_id=DOC)) == (
+        "undecidable",
+        None,
+    )
 
 
 # --- dashboard briefs: manifest validation ---------------------------------------------------------
 
+
 def _evidence(ref: int, index: int, **overrides: Any) -> SimpleNamespace:
     values: dict[str, Any] = {
-        "fact_ref": ref, "support_index": index, "fact_kind": "stories", "fact_id": str(uuid4()),
-        "fact_hash": "b" * 64, "document_id": uuid4(), "document_version_id": uuid4(), "chunk_id": uuid4(),
+        "fact_ref": ref,
+        "support_index": index,
+        "fact_kind": "stories",
+        "fact_id": str(uuid4()),
+        "fact_hash": "b" * 64,
+        "document_id": uuid4(),
+        "document_version_id": uuid4(),
+        "chunk_id": uuid4(),
         "source_id": uuid4(),
     }
     values.update(overrides)
@@ -96,27 +123,42 @@ def test_fact_group_accumulates_sources_and_documents() -> None:
     assert documents == {first.document_id, second.document_id}
 
 
-@pytest.mark.parametrize("build", [
-    lambda: [_evidence(1, 0, fact_kind="widgets")],
-    lambda: [_evidence(1, 0, fact_hash="XYZ")],
-    lambda: [_evidence(1, 1)],  # support indexes must start at 0
-    lambda: [_evidence(1, 0, fact_id="not-a-uuid")],
-    lambda: [_evidence(1, 0, document_id=None, document_version_id=None, chunk_id=None, source_id=None)],  # story without support
-    lambda: [_evidence(1, 0, document_version_id=None)],  # partial tuple
-])
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: [_evidence(1, 0, fact_kind="widgets")],
+        lambda: [_evidence(1, 0, fact_hash="XYZ")],
+        lambda: [_evidence(1, 1)],  # support indexes must start at 0
+        lambda: [_evidence(1, 0, fact_id="not-a-uuid")],
+        lambda: [
+            _evidence(
+                1, 0, document_id=None, document_version_id=None, chunk_id=None, source_id=None
+            )
+        ],  # story without support
+        lambda: [_evidence(1, 0, document_version_id=None)],  # partial tuple
+    ],
+)
 def test_fact_group_rejects_malformed_groups(build: Any) -> None:
     assert not dashboard_briefs._validate_fact_group(build(), set(), set(), set())
 
 
 def test_independent_marker_is_valid_for_tasks_only() -> None:
     marker = {"document_id": None, "document_version_id": None, "chunk_id": None, "source_id": None}
-    assert dashboard_briefs._validate_fact_group([_evidence(1, 0, fact_kind="tasks", **marker)], set(), set(), set())
+    assert dashboard_briefs._validate_fact_group(
+        [_evidence(1, 0, fact_kind="tasks", **marker)], set(), set(), set()
+    )
 
 
 def test_citations_must_match_captured_facts() -> None:
     fact = _evidence(1, 0)
     grouped = {1: [fact]}
-    citation = {"ref": 1, "kind": "stories", "id": fact.fact_id, "title": "T", "source_ids": [str(fact.source_id)]}
+    citation = {
+        "ref": 1,
+        "kind": "stories",
+        "id": fact.fact_id,
+        "title": "T",
+        "source_ids": [str(fact.source_id)],
+    }
     row = SimpleNamespace(citations=[citation])
     assert dashboard_briefs._validate_citations(row, grouped) == {1: citation}  # type: ignore[arg-type]
     for bad in (
@@ -125,19 +167,43 @@ def test_citations_must_match_captured_facts() -> None:
         {**citation, "extra": 1},
         {**citation, "ref": 2},
     ):
-        assert dashboard_briefs._validate_citations(SimpleNamespace(citations=[bad]), grouped) is None  # type: ignore[arg-type]
+        assert (
+            dashboard_briefs._validate_citations(SimpleNamespace(citations=[bad]), grouped) is None
+        )  # type: ignore[arg-type]
     assert dashboard_briefs._validate_citations(SimpleNamespace(citations=[]), grouped) is None  # type: ignore[arg-type]
-    assert dashboard_briefs._validate_citations(SimpleNamespace(citations=[citation, citation]), grouped) is None  # type: ignore[arg-type]
+    assert (
+        dashboard_briefs._validate_citations(
+            SimpleNamespace(citations=[citation, citation]), grouped
+        )
+        is None
+    )  # type: ignore[arg-type]
 
 
 def test_evidence_rows_one_marker_or_one_per_support() -> None:
     brief_id = uuid4()
-    independent = {"kind": "tasks", "id": str(uuid4()), "_fact_hash": "c" * 64, "_lineage_status": "independent"}
+    independent = {
+        "kind": "tasks",
+        "id": str(uuid4()),
+        "_fact_hash": "c" * 64,
+        "_lineage_status": "independent",
+    }
     rows = dashboard_briefs._evidence_rows_for_fact(brief_id, 3, independent)
     assert [(r.fact_ref, r.support_index, r.document_id) for r in rows] == [(3, 0, None)]
-    supports = [{"document_id": str(uuid4()), "document_version_id": str(uuid4()),
-                 "chunk_id": str(uuid4()), "source_id": str(uuid4())} for _ in range(2)]
-    supported = {**independent, "kind": "stories", "_lineage_status": "captured", "_supports": supports}
+    supports = [
+        {
+            "document_id": str(uuid4()),
+            "document_version_id": str(uuid4()),
+            "chunk_id": str(uuid4()),
+            "source_id": str(uuid4()),
+        }
+        for _ in range(2)
+    ]
+    supported = {
+        **independent,
+        "kind": "stories",
+        "_lineage_status": "captured",
+        "_supports": supports,
+    }
     rows = dashboard_briefs._evidence_rows_for_fact(brief_id, 1, supported)
     assert [r.support_index for r in rows] == [0, 1]
     assert str(rows[1].chunk_id) == supports[1]["chunk_id"]
@@ -145,8 +211,14 @@ def test_evidence_rows_one_marker_or_one_per_support() -> None:
 
 # --- goals: proposal bounds ---------------------------------------------------------------------
 
+
 def _proposal(**overrides: Any) -> PlanProposal:
-    data: dict[str, Any] = {"proposal_id": "p1", "expected_revision": 1, "milestones": [], "tasks": []}
+    data: dict[str, Any] = {
+        "proposal_id": "p1",
+        "expected_revision": 1,
+        "milestones": [],
+        "tasks": [],
+    }
     data.update(overrides)
     return PlanProposal.model_validate(data)
 
@@ -168,7 +240,9 @@ def test_plan_bounds_reject_existing_milestone_and_bad_task_index() -> None:
     assert caught.value.code == "milestone_id_conflict" and caught.value.current_revision == 4
     empty = SimpleNamespace(id=goal_id, revision=1, milestones=[], entity_ids=[])
     with pytest.raises(ValueError, match="task_index"):
-        goals._check_plan_bounds(empty, _proposal(milestones=[{"title": "m", "order": 0, "task_index": 0}]), [])  # type: ignore[arg-type]
+        goals._check_plan_bounds(
+            empty, _proposal(milestones=[{"title": "m", "order": 0, "task_index": 0}]), []
+        )  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="1000"):
         goals._check_plan_bounds(empty, _proposal(), [{}] * 1000)  # type: ignore[arg-type]
 
@@ -177,12 +251,18 @@ async def test_replay_rejects_changed_content_for_same_proposal_id() -> None:
     goal = SimpleNamespace(id=uuid4(), revision=2)
     with pytest.raises(goals.GoalConflict) as caught:
         await goals._replay_accepted_plan(
-            None, goal, {"content_hash": "old"}, "new", scope=None, multi_workspace_enabled=False,  # type: ignore[arg-type]
+            None,
+            goal,
+            {"content_hash": "old"},
+            "new",
+            scope=None,
+            multi_workspace_enabled=False,  # type: ignore[arg-type]
         )
     assert caught.value.code == "idempotency_key_reused"
 
 
 # --- tasks: view and filter composition -------------------------------------------------------------
+
 
 def test_task_views_compose_expected_predicates() -> None:
     from datetime import UTC, datetime
@@ -191,12 +271,19 @@ def test_task_views_compose_expected_predicates() -> None:
 
     start, end = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 2, tzinfo=UTC)
     base = select(tasks.Task)
-    sql = {view: _sql(tasks._apply_task_view(base, view, date(2026, 1, 1), start, end))
-           for view in ("inbox", "today", "upcoming", "blocked", "completed", None)}
+    sql = {
+        view: _sql(tasks._apply_task_view(base, view, date(2026, 1, 1), start, end))
+        for view in ("inbox", "today", "upcoming", "blocked", "completed", None)
+    }
     assert "tasks.status = 'inbox'" in sql["inbox"]
-    assert "NOT IN ('done', 'cancelled')" in sql["today"] and "tasks.due_date = '2026-01-01'" in sql["today"]
+    assert (
+        "NOT IN ('done', 'cancelled')" in sql["today"]
+        and "tasks.due_date = '2026-01-01'" in sql["today"]
+    )
     assert "tasks.due_date > '2026-01-01'" in sql["upcoming"]
-    assert "tasks.status = 'blocked'" in sql["blocked"] and "tasks.status = 'done'" in sql["completed"]
+    assert (
+        "tasks.status = 'blocked'" in sql["blocked"] and "tasks.status = 'done'" in sql["completed"]
+    )
     assert "WHERE" not in sql[None]
 
 
@@ -205,30 +292,66 @@ def test_task_filters_ignore_blank_text_and_apply_ranges() -> None:
 
     base = select(tasks.Task)
     assert "WHERE" not in _sql(tasks._apply_task_filters(base, TaskFilter(q="   ")))
-    sql = _sql(tasks._apply_task_filters(base, TaskFilter(status="todo", due_date_from=date(2026, 1, 1), q=" x ")))
-    assert "tasks.status = 'todo'" in sql and "tasks.due_date >= '2026-01-01'" in sql and "%x%" in sql
+    sql = _sql(
+        tasks._apply_task_filters(
+            base, TaskFilter(status="todo", due_date_from=date(2026, 1, 1), q=" x ")
+        )
+    )
+    assert (
+        "tasks.status = 'todo'" in sql and "tasks.due_date >= '2026-01-01'" in sql and "%x%" in sql
+    )
 
 
 def test_task_patch_sets_completion_only_for_done() -> None:
     from datetime import UTC, datetime
 
-    task = SimpleNamespace(title="a", description=None, status="todo", goal_id=None, entity_ids=[],
-                           due_date=None, due_at=None, completed_at=None)
+    task = SimpleNamespace(
+        title="a",
+        description=None,
+        status="todo",
+        goal_id=None,
+        entity_ids=[],
+        due_date=None,
+        due_at=None,
+        completed_at=None,
+    )
     payload = SimpleNamespace(model_fields_set={"title"}, title="b", completed_at=None)
-    tasks._apply_task_patch(task, payload, next_status="done", next_goal_id=None, next_entity_ids=None,  # type: ignore[arg-type]
-                            next_due_date=None, next_due_at=None)
+    tasks._apply_task_patch(
+        task,
+        payload,
+        next_status="done",
+        next_goal_id=None,
+        next_entity_ids=None,  # type: ignore[arg-type]
+        next_due_date=None,
+        next_due_at=None,
+    )
     assert task.title == "b" and task.status == "done" and task.completed_at is not None
     stamp = task.completed_at
-    tasks._apply_task_patch(task, payload, next_status="done", next_goal_id=None, next_entity_ids=None,  # type: ignore[arg-type]
-                            next_due_date=None, next_due_at=None)
+    tasks._apply_task_patch(
+        task,
+        payload,
+        next_status="done",
+        next_goal_id=None,
+        next_entity_ids=None,  # type: ignore[arg-type]
+        next_due_date=None,
+        next_due_at=None,
+    )
     assert task.completed_at == stamp  # an existing completion time is kept
-    tasks._apply_task_patch(task, payload, next_status="todo", next_goal_id=None, next_entity_ids=None,  # type: ignore[arg-type]
-                            next_due_date=None, next_due_at=None)
+    tasks._apply_task_patch(
+        task,
+        payload,
+        next_status="todo",
+        next_goal_id=None,
+        next_entity_ids=None,  # type: ignore[arg-type]
+        next_due_date=None,
+        next_due_at=None,
+    )
     assert task.completed_at is None
     assert isinstance(stamp, datetime) and stamp.tzinfo is UTC
 
 
 # --- model gateway: capability probe dispatch ---------------------------------------------------
+
 
 class _FakeClient:
     """Records which gateway method the probe dispatched to."""
@@ -258,16 +381,27 @@ class _FakeClient:
 
     async def stream(self, *args: Any, **kwargs: Any) -> Any:
         self.calls.append("stream")
-        for line in ('data: {"choices":[{"delta":{"content":"he"}}]}', "data: nope",
-                     'data: {"choices":[{"delta":{"content":"llo"}}]}', "data: [DONE]",
-                     'data: {"choices":[{"delta":{"content":"IGNORED"}}]}'):
+        for line in (
+            'data: {"choices":[{"delta":{"content":"he"}}]}',
+            "data: nope",
+            'data: {"choices":[{"delta":{"content":"llo"}}]}',
+            "data: [DONE]",
+            'data: {"choices":[{"delta":{"content":"IGNORED"}}]}',
+        ):
             yield line
 
 
-@pytest.mark.parametrize(("capability", "expected"), [
-    ("embeddings", "embed"), ("reranking", "rerank"), ("structured", "structured"), ("tools", "tools"),
-    ("chat", "chat"), ("anything-else", "chat"),
-])
+@pytest.mark.parametrize(
+    ("capability", "expected"),
+    [
+        ("embeddings", "embed"),
+        ("reranking", "rerank"),
+        ("structured", "structured"),
+        ("tools", "tools"),
+        ("chat", "chat"),
+        ("anything-else", "chat"),
+    ],
+)
 async def test_probe_dispatches_each_capability(capability: str, expected: str) -> None:
     client = _FakeClient()
     await gateway_routes._run_capability_probe(client, capability, "chat", None, None)  # type: ignore[arg-type]
@@ -282,7 +416,10 @@ async def test_probe_streaming_collects_deltas_until_done() -> None:
 
 # --- search: orchestration of the split indexing run -----------------------------------------------
 
-async def test_index_generation_loop_stops_on_claim_or_process_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+
+async def test_index_generation_loop_stops_on_claim_or_process_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from modules.search import indexing
 
     ctx = object()
@@ -306,7 +443,9 @@ async def test_index_generation_loop_stops_on_claim_or_process_stop(monkeypatch:
     assert await indexing._index_generation(None, None, None, uuid4(), uuid4()) == 2  # type: ignore[arg-type]
 
 
-async def test_index_generation_returns_early_value_and_idle_none(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_index_generation_returns_early_value_and_idle_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from modules.search import indexing
 
     async def failed(*args: Any) -> tuple[None, int]:
@@ -330,8 +469,14 @@ async def test_process_claimed_chunk_maps_outcomes(monkeypatch: pytest.MonkeyPat
     from modules.search import indexing
 
     state = indexing._RunState()
-    ctx = SimpleNamespace(factory=None, scope=None, settings=None, original=None, generation_id=uuid4(),
-                          workspace_id=uuid4())
+    ctx = SimpleNamespace(
+        factory=None,
+        scope=None,
+        settings=None,
+        original=None,
+        generation_id=uuid4(),
+        workspace_id=uuid4(),
+    )
     claimed = indexing._ClaimedChunk(uuid4(), "c", uuid4(), uuid4(), 3)
     failed: list[str] = []
 
@@ -343,11 +488,16 @@ async def test_process_claimed_chunk_maps_outcomes(monkeypatch: pytest.MonkeyPat
     def embedding_raises(exc: BaseException) -> Any:
         async def raiser(*args: Any, **kwargs: Any) -> Any:
             raise exc
+
         return raiser
 
-    monkeypatch.setattr(indexing, "_embed_claimed_chunk", embedding_raises(indexing._AuthorityChanged()))
+    monkeypatch.setattr(
+        indexing, "_embed_claimed_chunk", embedding_raises(indexing._AuthorityChanged())
+    )
     assert await indexing._process_claimed_chunk(ctx, state, claimed) is False  # type: ignore[arg-type]
-    monkeypatch.setattr(indexing, "_embed_claimed_chunk", embedding_raises(ConflictError(detail="x")))
+    monkeypatch.setattr(
+        indexing, "_embed_claimed_chunk", embedding_raises(ConflictError(detail="x"))
+    )
     assert await indexing._process_claimed_chunk(ctx, state, claimed) is False  # type: ignore[arg-type]
     monkeypatch.setattr(indexing, "_embed_claimed_chunk", embedding_raises(ValueError("dims")))
     assert await indexing._process_claimed_chunk(ctx, state, claimed) is True  # type: ignore[arg-type]
@@ -358,10 +508,13 @@ async def test_process_claimed_chunk_maps_outcomes(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(indexing, "_embed_claimed_chunk", nothing)
     assert await indexing._process_claimed_chunk(ctx, state, claimed) is True  # type: ignore[arg-type]
-    assert hashlib.sha256(b"").hexdigest()  # keep hashlib import exercised for the digest tests above
+    assert hashlib.sha256(
+        b""
+    ).hexdigest()  # keep hashlib import exercised for the digest tests above
 
 
 # --- search: cursor wire compatibility with the shared pagination helpers -----------------------------
+
 
 def test_search_cursor_matches_pre_extraction_encoding() -> None:
     import base64

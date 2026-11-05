@@ -27,7 +27,9 @@ from modules.sources import public as sources
 from modules.sources.public import ConnectorSource, SourceFence
 
 
-async def clear_retired_source_credentials(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool) -> None:
+async def clear_retired_source_credentials(
+    session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+) -> None:
     """Acquire native then GitHub grant and retire archived Source credentials, flush only.
 
     Legacy acquiring continuation requires caller-held admission/Source/provisioning and
@@ -35,26 +37,41 @@ async def clear_retired_source_credentials(session: AsyncSession, source_id: UUI
     native and later-held grant to the private held mutation below. Peer retirement retains
     the exact archived anchor and pending last-source provider liability; no network I/O.
     """
-    source = await _read_scoped_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    source = await _read_scoped_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if source is None:
         raise NotFoundError("Source not found")
     native = await session.scalar(
-        select(ConnectorNativeCredential).where(ConnectorNativeCredential.source_id == source_id)
-        .with_for_update().execution_options(populate_existing=True)
+        select(ConnectorNativeCredential)
+        .where(ConnectorNativeCredential.source_id == source_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     grant = await session.scalar(
-        select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_id)
-        .with_for_update().execution_options(populate_existing=True)
+        select(GithubOAuthGrant)
+        .where(GithubOAuthGrant.source_id == source_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     await _clear_retired_source_credentials_held(
-        session, source_id, native=native, grant=grant, scope=scope,
+        session,
+        source_id,
+        native=native,
+        grant=grant,
+        scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
 
 
 async def _clear_retired_source_credentials_held(
-    session: AsyncSession, source_id: UUID, *, native: ConnectorNativeCredential | None,
-    grant: GithubOAuthGrant | None, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    native: ConnectorNativeCredential | None,
+    grant: GithubOAuthGrant | None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> None:
     """Retire already-held native/grant rows without acquiring earlier lifecycle locks.
 
@@ -77,7 +94,10 @@ async def _clear_retired_source_credentials_held(
         native.verified_bot_id = None
     if grant is not None and grant.encrypted_tokens is not None:
         has_peer = await github_grant_has_active_peer(
-            session, grant, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            session,
+            grant,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
         grant.state = "revoked"
         grant.refresh_operation_id = None
@@ -92,7 +112,9 @@ async def _clear_retired_source_credentials_held(
     await session.flush()
 
 
-async def github_grant_has_active_peer(session: AsyncSession, grant: Any, *, scope: Scope, multi_workspace_enabled: bool) -> bool:
+async def github_grant_has_active_peer(
+    session: AsyncSession, grant: Any, *, scope: Scope, multi_workspace_enabled: bool
+) -> bool:
     """Check token-bearing nonarchived peers of an exactly proved archived GitHub anchor.
 
     Caller holds ordered admission/anchor Source/provisioning/grant locks and preserves
@@ -103,40 +125,82 @@ async def github_grant_has_active_peer(session: AsyncSession, grant: Any, *, sco
     """
     from modules.connectors.models import GithubOAuthGrant
 
-    identity_fields = ("source_id", "operation_id", "token_revision", "github_user_id",
-                       "source_generation", "configuration_revision", "binding_revision")
+    identity_fields = (
+        "source_id",
+        "operation_id",
+        "token_revision",
+        "github_user_id",
+        "source_generation",
+        "configuration_revision",
+        "binding_revision",
+    )
     observed = tuple(getattr(grant, field, None) for field in identity_fields)
     source_id = observed[0]
     if not isinstance(source_id, UUID) or not isinstance(observed[1], UUID):
         raise ConflictError("GitHub retirement grant changed")
-    access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    source = await _read_scoped_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
-    source_fence = await sources.get_source_fence(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    access_fence = await _connector_access(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    source = await _read_scoped_source(
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
+    source_fence = await sources.get_source_fence(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if source is None or source_fence is None:
         raise ConflictError("GitHub retirement Source changed")
-    current = await session.scalar(select(GithubOAuthGrant).where(
-        GithubOAuthGrant.source_id == source_id,
-    ).execution_options(populate_existing=True))
+    current = await session.scalar(
+        select(GithubOAuthGrant)
+        .where(
+            GithubOAuthGrant.source_id == source_id,
+        )
+        .execution_options(populate_existing=True)
+    )
     if current is None or tuple(getattr(current, field) for field in identity_fields) != observed:
         raise ConflictError("GitHub retirement grant changed")
-    projection = (await sources.github_retirement_peer_projection_in_uow(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        access_fence=access_fence, source_fence=source_fence,
-    )).subquery()
-    peer_ids = list(await session.scalars(select(GithubOAuthGrant.source_id).join(
-        projection, projection.c.id == GithubOAuthGrant.source_id,
-    ).where(
-        GithubOAuthGrant.github_user_id == current.github_user_id,
-        GithubOAuthGrant.source_id != source_id,
-        GithubOAuthGrant.encrypted_tokens.is_not(None),
-    ).order_by(GithubOAuthGrant.source_id).limit(101)))
+    projection = (
+        await sources.github_retirement_peer_projection_in_uow(
+            session,
+            source_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+            source_fence=source_fence,
+        )
+    ).subquery()
+    peer_ids = list(
+        await session.scalars(
+            select(GithubOAuthGrant.source_id)
+            .join(
+                projection,
+                projection.c.id == GithubOAuthGrant.source_id,
+            )
+            .where(
+                GithubOAuthGrant.github_user_id == current.github_user_id,
+                GithubOAuthGrant.source_id != source_id,
+                GithubOAuthGrant.encrypted_tokens.is_not(None),
+            )
+            .order_by(GithubOAuthGrant.source_id)
+            .limit(101)
+        )
+    )
     return bool(peer_ids)
 
 
 async def finish_deleted_source_grant_revoke(
-    session: AsyncSession, source_id: UUID, outcome_code: str,
-    *, scope: Scope, multi_workspace_enabled: bool,
-    access_fence: AccessFence, grant_operation_id: UUID, token_revision: int,
+    session: AsyncSession,
+    source_id: UUID,
+    outcome_code: str,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    grant_operation_id: UUID,
+    token_revision: int,
 ) -> None:
     """Clear the retained ciphertext of a deleted source's grant and record the revoke outcome.
 
@@ -145,22 +209,39 @@ async def finish_deleted_source_grant_revoke(
     """
     from modules.connectors.models import GithubOAuthGrant
 
-    source = await _read_scoped_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
+    source = await _read_scoped_source(
+        session,
+        source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
     if source is None:
         raise NotFoundError("Source not found")
     grant = await session.scalar(
-        select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_id)
-        .with_for_update().execution_options(populate_existing=True)
+        select(GithubOAuthGrant)
+        .where(GithubOAuthGrant.source_id == source_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
-    if grant is not None and grant.operation_id == grant_operation_id and grant.token_revision == token_revision:
+    if (
+        grant is not None
+        and grant.operation_id == grant_operation_id
+        and grant.token_revision == token_revision
+    ):
         grant.encrypted_tokens = None
         grant.error_code = outcome_code
         await session.flush()
 
 
 async def _apply_collection_fence(
-    session: AsyncSession, source: SourceFence, row: ConnectorProvisioning,
-    slots: dict[str, ConnectorManagedCredential], *, scope: Scope, access_fence: AccessFence,
+    session: AsyncSession,
+    source: SourceFence,
+    row: ConnectorProvisioning,
+    slots: dict[str, ConnectorManagedCredential],
+    *,
+    scope: Scope,
+    access_fence: AccessFence,
 ) -> bool:
     """Apply complete provisioning/activation/workflow cleanup to already-prepared rows.
 
@@ -178,9 +259,8 @@ async def _apply_collection_fence(
             for slot_name in required:
                 credential = slots.get(str(slot_name))
                 envelope = credential.operation_envelope if credential is not None else None
-                if (
-                    isinstance(envelope, dict)
-                    and envelope.get("activation_id") == activation.get("id")
+                if isinstance(envelope, dict) and envelope.get("activation_id") == activation.get(
+                    "id"
                 ):
                     if envelope.get("state") == "prepared":
                         if credential is None:
@@ -208,7 +288,9 @@ async def _apply_collection_fence(
             row.error_code = "workflow_operation_pending"
             await session.flush()
             return True
-    new_operation = _new_deactivation(row, source.generation, scope=scope, access_fence=access_fence)
+    new_operation = _new_deactivation(
+        row, source.generation, scope=scope, access_fence=access_fence
+    )
     if new_operation is not None:
         row.workflow_operation = new_operation
         row.error_code = "deactivation_pending"
@@ -219,22 +301,34 @@ async def _apply_collection_fence(
 
 
 async def fence_source_collection(
-    session: AsyncSession, source: SourceFence,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    session: AsyncSession,
+    source: SourceFence,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Disable connector collection at the source generation and schedule cleanup."""
     current_source, row, slots = await _lock_connector_rows(
-        session, source.id, ("collector", "manual_trigger", "provider"),
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        session,
+        source.id,
+        ("collector", "manual_trigger", "provider"),
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
     if current_source != source:
         raise ConflictError("Source lifecycle fence changed")
     if row is None:
         return False
     if source.status == "archived":
-        await clear_retired_source_credentials(session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    return await _apply_collection_fence(session, source, row, slots, scope=scope, access_fence=access_fence)
+        await clear_retired_source_credentials(
+            session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+    access_fence = await _connector_access(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    return await _apply_collection_fence(
+        session, source, row, slots, scope=scope, access_fence=access_fence
+    )
 
 
 async def require_collection_fence(
@@ -245,7 +339,8 @@ async def require_collection_fence(
     *,
     lock: bool = False,
     backend_revision: int | None = None,
-    scope: Scope, multi_workspace_enabled: bool,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Continue caller-held admission/Source into exact provisioning collection proof.
 
@@ -254,7 +349,9 @@ async def require_collection_fence(
     own backend must be ready (idle transition, applied backend revision, n8n workflow/template).
     A supplied ``backend_revision`` (every current n8n envelope carries it) must equal the row's.
     """
-    current_source = await sources.get_source_fence(session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    current_source = await sources.get_source_fence(
+        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if (
         current_source is None
         or current_source.workspace_id != source.workspace_id
@@ -262,9 +359,7 @@ async def require_collection_fence(
         or current_source.generation != source.generation
     ):
         return False
-    statement = select(ConnectorProvisioning).where(
-        ConnectorProvisioning.source_id == source.id
-    )
+    statement = select(ConnectorProvisioning).where(ConnectorProvisioning.source_id == source.id)
     if lock:
         statement = statement.with_for_update().execution_options(populate_existing=True)
     else:
@@ -284,7 +379,9 @@ async def require_collection_fence(
     )
 
 
-async def require_n8n_backend(session: AsyncSession, source_id: UUID, *, n8n_enabled: bool = True) -> None:
+async def require_n8n_backend(
+    session: AsyncSession, source_id: UUID, *, n8n_enabled: bool = True
+) -> None:
     """Reject packaged-workflow (bearer) calls unless the row is an idle n8n source.
 
     ``n8n_enabled`` False (owner kill switch, resolved once by the caller) rejects every call with
@@ -296,8 +393,10 @@ async def require_n8n_backend(session: AsyncSession, source_id: UUID, *, n8n_ena
     if not n8n_enabled:
         raise ConflictError("n8n_disabled")
     row = await session.scalar(
-        select(ConnectorProvisioning).where(ConnectorProvisioning.source_id == source_id)
-        .execution_options(populate_existing=True))
+        select(ConnectorProvisioning)
+        .where(ConnectorProvisioning.source_id == source_id)
+        .execution_options(populate_existing=True)
+    )
     if row is not None and (row.execution_backend != "n8n" or row.transition_phase != "idle"):
         raise ConflictError("backend_inactive")
 
@@ -307,7 +406,9 @@ async def require_validation_fence(
     source: ConnectorSource,
     source_generation: int,
     revision: int,
-    *, scope: Scope, multi_workspace_enabled: bool,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
 ) -> bool:
     """Lock only provisioning under caller-held access/Source, including initial revision zero.
 
@@ -315,9 +416,12 @@ async def require_validation_fence(
     recheck the same authority after a network validation without holding locks
     across that request.
     """
-    current_source = await sources.get_source_fence(session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    current_source = await sources.get_source_fence(
+        session, source.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     if (
-        current_source is None or current_source.status != "active"
+        current_source is None
+        or current_source.status != "active"
         or current_source.workspace_id != source.workspace_id
         or current_source.status != source.status
         or current_source.generation != source_generation

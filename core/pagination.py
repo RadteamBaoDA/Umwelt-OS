@@ -21,14 +21,14 @@ def decode_cursor(cursor: str) -> tuple[datetime, UUID]:
     try:
         if "=" in cursor:
             raise ValueError("Cursor must be unpadded")
-        raw = base64.b64decode(
-            cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True
-        )
+        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
         if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
             raise ValueError("Cursor is not canonical URL-safe base64")
         value = json.loads(raw)
-        if not isinstance(value, list) or len(value) != 2 or not all(
-            isinstance(item, str) for item in value
+        if (
+            not isinstance(value, list)
+            or len(value) != 2
+            or not all(isinstance(item, str) for item in value)
         ):
             raise ValueError("Cursor must contain a timestamp and UUID")
         timestamp, identifier = value
@@ -56,7 +56,9 @@ _COMPACT_SEPARATORS = (",", ":")
 
 
 def fingerprint_payload(
-    payload: Mapping[str, Any], *, length: int | None = None,
+    payload: Mapping[str, Any],
+    *,
+    length: int | None = None,
     separators: tuple[str, str] = _COMPACT_SEPARATORS,
 ) -> str:
     """Return the SHA-256 hex digest of ``payload`` serialised as sorted-key JSON.
@@ -67,7 +69,9 @@ def fingerprint_payload(
         separators: JSON separators. Search historically used the ``json.dumps`` defaults
             ``(", ", ": ")``; pass them to keep previously issued cursors valid.
     """
-    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=separators).encode()).hexdigest()
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=separators).encode()
+    ).hexdigest()
     return digest if length is None else digest[:length]
 
 
@@ -88,13 +92,18 @@ def b64url_decode(cursor: str) -> bytes:
 def encode_fingerprinted_cursor(fingerprint: str, stamp: datetime, identifier: UUID) -> str:
     """Encode ``[fingerprint, UTC ISO timestamp, UUID]`` as a compact unpadded cursor."""
     payload = json.dumps(
-        [fingerprint, stamp.astimezone(UTC).isoformat(), str(identifier)], separators=_COMPACT_SEPARATORS,
+        [fingerprint, stamp.astimezone(UTC).isoformat(), str(identifier)],
+        separators=_COMPACT_SEPARATORS,
     )
     return b64url_encode(payload.encode())
 
 
 def decode_fingerprinted_cursor(
-    cursor: str, fingerprint: str, *, detail: str = "Invalid cursor", max_length: int = 2048,
+    cursor: str,
+    fingerprint: str,
+    *,
+    detail: str = "Invalid cursor",
+    max_length: int = 2048,
 ) -> tuple[datetime, UUID]:
     """Decode a cursor and reject malformed input or reuse under a different fingerprint.
 
@@ -122,7 +131,9 @@ def encode_scoped_offset(scope: str, offset: int) -> str:
     return b64url_encode(f"{scope}:{offset}".encode())
 
 
-def decode_scoped_offset(cursor: str, scope: str, *, max_offset: int, detail: str = "Invalid cursor") -> int:
+def decode_scoped_offset(
+    cursor: str, scope: str, *, max_offset: int, detail: str = "Invalid cursor"
+) -> int:
     """Decode a scoped ranked offset, requiring the exact scope, bounds and canonical encoding.
 
     Raises:
@@ -133,7 +144,12 @@ def decode_scoped_offset(cursor: str, scope: str, *, max_offset: int, detail: st
         raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
         found, position = raw.split(":", 1)
         offset = int(position)
-        if found != scope or offset < 0 or offset > max_offset or encode_scoped_offset(scope, offset) != cursor:
+        if (
+            found != scope
+            or offset < 0
+            or offset > max_offset
+            or encode_scoped_offset(scope, offset) != cursor
+        ):
             raise ValueError("Cursor does not match this query")
         return offset
     except (ValueError, UnicodeDecodeError, IndexError, binascii.Error) as exc:

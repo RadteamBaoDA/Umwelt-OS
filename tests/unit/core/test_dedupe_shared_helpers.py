@@ -26,15 +26,17 @@ from core.workspaces.admission import actor_id, require_workspace_owner
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 
 # Cursors recorded from the pre-consolidation implementations (hard-coded on purpose).
-RECORDED_FINGERPRINTED = (
-    "WyJhYmMxMjMiLCIyMDI2LTAxLTAyVDAzOjA0OjA1KzAwOjAwIiwiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAxIl0"
+RECORDED_FINGERPRINTED = "WyJhYmMxMjMiLCIyMDI2LTAxLTAyVDAzOjA0OjA1KzAwOjAwIiwiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAxIl0"
+RECORDED_PLAIN = (
+    "WyIyMDI2LTAxLTAyVDAzOjA0OjA1KzAwOjAwIiwiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAxIl0"
 )
-RECORDED_PLAIN = "WyIyMDI2LTAxLTAyVDAzOjA0OjA1KzAwOjAwIiwiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAxIl0"
 RECORDED_OFFSET = "ZnA6NDA"
 STAMP = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 ROW = UUID("00000000-0000-0000-0000-000000000001")
 OWNER = WorkspaceContext(user_id=7, workspace_id=uuid4(), role="owner", membership_revision=1)
-MEMBER = WorkspaceContext(user_id=8, workspace_id=OWNER.workspace_id, role="member", membership_revision=1)
+MEMBER = WorkspaceContext(
+    user_id=8, workspace_id=OWNER.workspace_id, role="member", membership_revision=1
+)
 JOB = InternalJobScope(workspace_id=OWNER.workspace_id, actor_user_id=7, membership_revision=1)
 
 
@@ -53,7 +55,8 @@ def test_b64url_helpers_match_legacy_inline_expressions() -> None:
         legacy = base64.urlsafe_b64encode(raw).decode().rstrip("=")
         assert b64url_encode(raw) == legacy
         assert b64url_decode(legacy) == base64.b64decode(
-            legacy + "=" * (-len(legacy) % 4), altchars=b"-_", validate=True)
+            legacy + "=" * (-len(legacy) % 4), altchars=b"-_", validate=True
+        )
     with pytest.raises(ValueError):
         b64url_decode("not base64!")
 
@@ -74,7 +77,10 @@ def test_worker_context_accessors() -> None:
     """Worker ctx helpers read the session factory and require a real boolean flag."""
     marker = object()
     assert worker_session_factory({"session_factory": marker}) is marker
-    assert worker_multi_workspace_flag({"settings": SimpleNamespace(multi_workspace_enabled=True)}) is True
+    assert (
+        worker_multi_workspace_flag({"settings": SimpleNamespace(multi_workspace_enabled=True)})
+        is True
+    )
     with pytest.raises(TypeError, match="Actual workspace rollout flag required"):
         worker_multi_workspace_flag({"settings": SimpleNamespace(multi_workspace_enabled=1)})
 
@@ -90,16 +96,27 @@ def test_gateway_factory_builds_expected_arguments() -> None:
     """The shared factory maps config fields exactly like the removed twelve-argument call sites."""
     seen: dict[str, Any] = {}
     config: Any = SimpleNamespace(
-        gateway_base_url="http://gw", gateway_api_key="k", endpoint_destination_id=None,
-        gateway_identity="gid", model_identity="mid", configuration_revision=3,
-        allow_public_providers=False, gateway_kind="openai",
+        gateway_base_url="http://gw",
+        gateway_api_key="k",
+        endpoint_destination_id=None,
+        gateway_identity="gid",
+        model_identity="mid",
+        configuration_revision=3,
+        allow_public_providers=False,
+        gateway_kind="openai",
     )
     factory = ModelGatewayFactory.for_settings(
-        "sf", "redis", JOB, ["10.0.0.0/8"],  # type: ignore[arg-type]
+        "sf",
+        "redis",
+        JOB,
+        ["10.0.0.0/8"],  # type: ignore[arg-type]
         evidence_provider=lambda sf, c: ("ev", sf),
         gateway_cls=lambda **kw: seen.update(kw) or "gw",
     )
-    assert factory.create(config, timeout_seconds=5.0, before_send="hook", destination_id="remote") == "gw"  # type: ignore[arg-type]
+    assert (
+        factory.create(config, timeout_seconds=5.0, before_send="hook", destination_id="remote")
+        == "gw"
+    )  # type: ignore[arg-type]
     assert seen["evidence"] == ("ev", "sf") and seen["destination_id"] == "remote"
     assert seen["approved_endpoint_cidrs"] == ("10.0.0.0/8",) and seen["kind"] == "openai"
     seen.clear()
@@ -108,13 +125,9 @@ def test_gateway_factory_builds_expected_arguments() -> None:
 
 
 # Cursors produced by the base-commit (a28b5da3) module encoders, hard-coded on purpose.
-BASE_SOURCE_CURSOR = (
-    "WzIsImZwMTIzIiwiV3lJeU1ESTJMVEF4TFRBeVZEQXpPakEwT2pBMUt6QXdPakF3SWl3aU1EQXdNREF3TURBdE1EQXdNQzB3TURBd0xUQXdNREF0TURBd01EQXdNREF3TURBeElsMCJd"
-)
+BASE_SOURCE_CURSOR = "WzIsImZwMTIzIiwiV3lJeU1ESTJMVEF4TFRBeVZEQXpPakEwT2pBMUt6QXdPakF3SWl3aU1EQXdNREF3TURBdE1EQXdNQzB3TURBd0xUQXdNREF0TURBd01EQXdNREF3TURBeElsMCJd"
 BASE_MEMORY_CURSOR = "eyJ2IjoyLCJiaW5kaW5nIjoiYmluZDEiLCJwb3NpdGlvbiI6IlBPUyJ9"
-BASE_TOPIC_CURSOR = (
-    "WzIsInRvcGljcyIsIjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwOSIsNywxLDIseyJpc19hY3RpdmUiOnRydWV9LCJjcmVhdGVkX2F0X2FzY19pZF9hc2MiLCIyMDI2LTAxLTAyVDAzOjA0OjA1KzAwOjAwIiwiMjAyNi0wMS0wMlQwMzowNDowNSswMDowMCIsIjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSJd"
-)
+BASE_TOPIC_CURSOR = "WzIsInRvcGljcyIsIjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwOSIsNywxLDIseyJpc19hY3RpdmUiOnRydWV9LCJjcmVhdGVkX2F0X2FzY19pZF9hc2MiLCIyMDI2LTAxLTAyVDAzOjA0OjA1KzAwOjAwIiwiMjAyNi0wMS0wMlQwMzowNDowNSswMDowMCIsIjAwMDAwMDAwLTAwMDAtMDAwMC0wMDAwLTAwMDAwMDAwMDAwMSJd"
 
 
 def test_module_cursor_codecs_match_base_commit_recordings() -> None:
@@ -134,7 +147,8 @@ def test_module_cursor_codecs_match_base_commit_recordings() -> None:
         unbind_page_cursor(BASE_MEMORY_CURSOR, "other")
 
     fence: Any = SimpleNamespace(
-        workspace_id=UUID(int=9), user_id=7, membership_revision=1, configuration_revision=2)
+        workspace_id=UUID(int=9), user_id=7, membership_revision=1, configuration_revision=2
+    )
     assert _decode_topic_cursor(BASE_TOPIC_CURSOR, fence, True) == (STAMP, STAMP, ROW)
     assert _encode_topic_cursor(STAMP, STAMP, ROW, fence, True) == BASE_TOPIC_CURSOR
     with pytest.raises(ValueError):
@@ -148,8 +162,18 @@ def test_gateway_factory_source_forwards_kind_and_cidrs() -> None:
     import textwrap
 
     tree = ast.parse(textwrap.dedent(inspect.getsource(ModelGatewayFactory.create)))
-    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
-             and isinstance(node.func, ast.Attribute) and node.func.attr == "_new_gateway"]
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_new_gateway"
+    ]
     assert len(calls) == 1
     keywords = {kw.arg for kw in calls[0].keywords}
-    assert {"kind", "approved_endpoint_cidrs", "allow_public_endpoints", "gateway_identity"} <= keywords
+    assert {
+        "kind",
+        "approved_endpoint_cidrs",
+        "allow_public_endpoints",
+        "gateway_identity",
+    } <= keywords

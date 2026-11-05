@@ -6,6 +6,7 @@ exactly; only the phase inside the period is derived from a stable hash of the j
 wrapped by ``core.cron.single_flight`` so overlapping runs and multiple worker replicas never execute
 the same cron concurrently.
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
@@ -65,7 +66,9 @@ def fire_times(spec: CronSpec) -> dict[str, Any]:
     raise ValueError(f"unsupported cron period for {name}: {period}")
 
 
-def guarded_function(spec: CronSpec, gate: Callable[[Callable[..., Any]], Callable[..., Any]]) -> Callable[..., Any]:
+def guarded_function(
+    spec: CronSpec, gate: Callable[[Callable[..., Any]], Callable[..., Any]]
+) -> Callable[..., Any]:
     """The lease-guarded coroutine for a spec: ``gate`` (module availability) inside, ``single_flight`` outside.
 
     Scheduled ticks, wake-ups and catch-up runs all call this same wrapper, so they share one lease.
@@ -73,15 +76,21 @@ def guarded_function(spec: CronSpec, gate: Callable[[Callable[..., Any]], Callab
     return single_flight(gate(spec.function), name=spec.name, period_seconds=spec.period_seconds)
 
 
-CRON_MAX_TRIES = 5  # arq attempts per cron/wake invocation when a job raises ``Retry`` (heavy-slot contention)
+CRON_MAX_TRIES = (
+    5  # arq attempts per cron/wake invocation when a job raises ``Retry`` (heavy-slot contention)
+)
 
 
 def build_cron(spec: CronSpec, gate: Callable[[Callable[..., Any]], Callable[..., Any]]) -> CronJob:
     """Build the arq CronJob around ``guarded_function`` with the spec's hashed fire times."""
     # max_tries > 1 lets a heavy-slot ``Retry`` (index_pending_chunks while ingestion holds the slot) re-run
     # within the tick instead of failing as "max 1 retries exceeded"; plain exceptions are never retried by arq.
-    return _cron(guarded_function(spec, gate), run_at_startup=spec.run_at_startup, max_tries=CRON_MAX_TRIES,
-                 **fire_times(spec))
+    return _cron(
+        guarded_function(spec, gate),
+        run_at_startup=spec.run_at_startup,
+        max_tries=CRON_MAX_TRIES,
+        **fire_times(spec),
+    )
 
 
 def second_load(specs: Iterable[CronSpec]) -> dict[int, int]:
@@ -92,6 +101,6 @@ def second_load(specs: Iterable[CronSpec]) -> dict[int, int]:
     load: dict[int, int] = {}
     for spec in specs:
         times = fire_times(spec)["second"]
-        for second in ([times] if isinstance(times, int) else times):
+        for second in [times] if isinstance(times, int) else times:
             load[second] = load.get(second, 0) + 1
     return load

@@ -9,15 +9,22 @@ from fastapi import HTTPException, Response
 from modules.dashboard import local_weather as lw
 from modules.dashboard import routes
 
-CURRENT = {"current": {
-    "temperature_2m": 21.4, "weather_code": 3, "relative_humidity_2m": 55, "wind_speed_10m": 6.1,
-    "precipitation_probability": 5, "is_day": 1,
-}, "hourly": {
-    "time": [1_793_000_000 + 3600 * i for i in range(30)],
-    "temperature_2m": [20 + i for i in range(30)],
-    "precipitation_probability": [10, None],
-    "wind_speed_10m": "bad",
-}}
+CURRENT = {
+    "current": {
+        "temperature_2m": 21.4,
+        "weather_code": 3,
+        "relative_humidity_2m": 55,
+        "wind_speed_10m": 6.1,
+        "precipitation_probability": 5,
+        "is_day": 1,
+    },
+    "hourly": {
+        "time": [1_793_000_000 + 3600 * i for i in range(30)],
+        "temperature_2m": [20 + i for i in range(30)],
+        "precipitation_probability": [10, None],
+        "wind_speed_10m": "bad",
+    },
+}
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +33,9 @@ def _clear() -> None:
     lw._CACHE.clear()
 
 
-def _patch(monkeypatch: pytest.MonkeyPatch, *, place_fails: bool = False, weather_fails: bool = False) -> list[dict[str, Any]]:
+def _patch(
+    monkeypatch: pytest.MonkeyPatch, *, place_fails: bool = False, weather_fails: bool = False
+) -> list[dict[str, Any]]:
     """Replace the HTTP fetch, recording each call's params."""
     calls: list[dict[str, Any]] = []
 
@@ -52,10 +61,19 @@ async def test_rounds_and_caches(monkeypatch: pytest.MonkeyPatch) -> None:
     assert first is again and len(calls) == 2
     assert calls[0]["latitude"] == 15.88 and calls[0]["longitude"] == 108.33
     assert first.place == "Hội An, Quảng Nam" and first.temperature_c == 21.4
-    assert (first.humidity_pct, first.wind_kmh, first.precipitation_probability_pct, first.is_day) == (55, 6.1, 5, True)
+    assert (
+        first.humidity_pct,
+        first.wind_kmh,
+        first.precipitation_probability_pct,
+        first.is_day,
+    ) == (55, 6.1, 5, True)
     assert len(first.hourly) == 24 and calls[0]["forecast_hours"] == 24
-    assert first.hourly[1].temperature_c == 21 and first.hourly[0].precipitation_probability_pct == 10
-    assert first.hourly[1].precipitation_probability_pct is None and first.hourly[0].wind_kmh is None
+    assert (
+        first.hourly[1].temperature_c == 21 and first.hourly[0].precipitation_probability_pct == 10
+    )
+    assert (
+        first.hourly[1].precipitation_probability_pct is None and first.hourly[0].wind_kmh is None
+    )
 
 
 async def test_place_failure_keeps_weather(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,7 +93,9 @@ async def test_missing_extras_are_none(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.place == "Hà Nội"
 
 
-async def _minimal_fetch(client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> dict[str, Any]:
+async def _minimal_fetch(
+    client: httpx.AsyncClient, url: str, params: dict[str, Any]
+) -> dict[str, Any]:
     """Weather with only mandatory fields; a city whose region repeats its own name."""
     if url == lw._FORECAST_URL:
         return {"current": {"temperature_2m": 20, "weather_code": 0}}
@@ -109,5 +129,9 @@ def test_route_bounds_declared() -> None:
     app.include_router(router)
     app.dependency_overrides[routes.require_workspace_observer_read] = lambda: object()
     client = TestClient(app)
-    for params in ({"lat": 91, "lon": 0}, {"lat": 0, "lon": 181}, {"lat": 0, "lon": 0, "locale": "fr"}):
+    for params in (
+        {"lat": 91, "lon": 0},
+        {"lat": 0, "lon": 181},
+        {"lat": 0, "lon": 0, "locale": "fr"},
+    ):
         assert client.get("/w", params=params).status_code == 422

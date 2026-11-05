@@ -23,22 +23,47 @@ RAW = f"workspaces/{uuid4()}/documents/{DOC_ID}/a.pdf"
 class Env:
     """Fakes for the loader, Documents owner, storage and parser, with an ordered call log."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, stage_status: str = "pending", extraction: bool = True,
-                 saved: Any = DOC_ID) -> None:
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        stage_status: str = "pending",
+        extraction: bool = True,
+        saved: Any = DOC_ID,
+    ) -> None:
         self.log: list[Any] = []
         self.stage = SimpleNamespace(
-            id=STAGE_ID, status=stage_status, attempts=0, lease_expires_at=None, error_code=None, result_count=0,
+            id=STAGE_ID,
+            status=stage_status,
+            attempts=0,
+            lease_expires_at=None,
+            error_code=None,
+            result_count=0,
         )
         self.run = SimpleNamespace(id=RUN_ID, status="queued", error_code=None)
-        self.event = SimpleNamespace(status="pending", payload={
-            "document_id": str(DOC_ID), "raw_uri": RAW, "mime_type": "application/pdf"})
-        scope = InternalJobScope(
-            workspace_id=uuid4(), actor_user_id=7, membership_revision=3, source_id=SOURCE_ID, source_generation=1)
-        self.work = SimpleNamespace(
-            scope=scope, access_fence="fence", source=SimpleNamespace(id=SOURCE_ID, generation=1, status="active"),
-            run=self.run, stage=self.stage, event=self.event, batch=SimpleNamespace(id=uuid4()),
+        self.event = SimpleNamespace(
+            status="pending",
+            payload={"document_id": str(DOC_ID), "raw_uri": RAW, "mime_type": "application/pdf"},
         )
-        self.parse: Any = lambda: ParsedDocument(text="hello world", metadata={"pages": 1}, warnings=[])
+        scope = InternalJobScope(
+            workspace_id=uuid4(),
+            actor_user_id=7,
+            membership_revision=3,
+            source_id=SOURCE_ID,
+            source_generation=1,
+        )
+        self.work = SimpleNamespace(
+            scope=scope,
+            access_fence="fence",
+            source=SimpleNamespace(id=SOURCE_ID, generation=1, status="active"),
+            run=self.run,
+            stage=self.stage,
+            event=self.event,
+            batch=SimpleNamespace(id=uuid4()),
+        )
+        self.parse: Any = lambda: ParsedDocument(
+            text="hello world", metadata={"pages": 1}, warnings=[]
+        )
         env = self
 
         async def lock(session, identifier, **kw):
@@ -55,7 +80,9 @@ class Env:
             env.log.append(("extraction_status", status))
             return extraction
 
-        async def save(session, document_id, source_id, text, chunks, status, metadata, warnings, version, **kw):
+        async def save(
+            session, document_id, source_id, text, chunks, status, metadata, warnings, version, **kw
+        ):
             env.log.append(("save_extraction", status, len(chunks)))
             return saved
 
@@ -89,7 +116,9 @@ class Env:
         monkeypatch.setattr(worker, "parse_file_bounded", parse)
         monkeypatch.setattr(worker, "to_thread_joined", joined)
         monkeypatch.setattr(worker, "get_storage_backend", lambda settings: Storage())
-        monkeypatch.setattr(worker, "count", lambda name, **labels: env.log.append(("count", labels["outcome"])))
+        monkeypatch.setattr(
+            worker, "count", lambda name, **labels: env.log.append(("count", labels["outcome"]))
+        )
         monkeypatch.setattr(worker.documents, "set_extraction_status", set_status)
         monkeypatch.setattr(worker.documents, "save_extraction", save)
         monkeypatch.setattr(worker.ingestion_api, "mark_event_delivered", delivered)
@@ -108,11 +137,16 @@ class Env:
             yield Session()
 
         settings = SimpleNamespace(
-            multi_workspace_enabled=False, parser_timeout_seconds=30, docx_expanded_max_bytes=1, pdf_page_max=1,
+            multi_workspace_enabled=False,
+            parser_timeout_seconds=30,
+            docx_expanded_max_bytes=1,
+            pdf_page_max=1,
             parsed_text_max_chars=100,
         )
         # Bypass the heavy-work slot decorator (it needs a real database); the body is what is characterized.
-        await inspect.unwrap(worker.process_uploaded_file)({"session_factory": factory, "settings": settings}, str(uuid4()))
+        await inspect.unwrap(worker.process_uploaded_file)(
+            {"session_factory": factory, "settings": settings}, str(uuid4())
+        )
 
 
 @pytest.mark.asyncio
@@ -121,11 +155,23 @@ async def test_success_claims_parses_outside_sql_then_publishes(monkeypatch):
     env = Env(monkeypatch)
     await env.run_event()
     assert env.log == [
-        ("lock", False), ("extraction_status", "processing"), ("commit", "running", "running", 1),
-        ("download", RAW), ("parse", "application/pdf"), ("lock", True), ("save_extraction", "succeeded", 1),
-        "delivered", ("processing_result", None), ("commit", "succeeded", "succeeded", 2), ("count", "processed"),
+        ("lock", False),
+        ("extraction_status", "processing"),
+        ("commit", "running", "running", 1),
+        ("download", RAW),
+        ("parse", "application/pdf"),
+        ("lock", True),
+        ("save_extraction", "succeeded", 1),
+        "delivered",
+        ("processing_result", None),
+        ("commit", "succeeded", "succeeded", 2),
+        ("count", "processed"),
     ]
-    assert env.stage.attempts == 1 and env.stage.result_count == 1 and env.stage.lease_expires_at is None
+    assert (
+        env.stage.attempts == 1
+        and env.stage.result_count == 1
+        and env.stage.lease_expires_at is None
+    )
 
 
 @pytest.mark.asyncio
@@ -147,7 +193,9 @@ async def test_claim_phase_early_exits(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error,code", [(TimeoutError(), "parser_timeout"), (ValueError("bad pdf"), "parse_failed")])
+@pytest.mark.parametrize(
+    "error,code", [(TimeoutError(), "parser_timeout"), (ValueError("bad pdf"), "parse_failed")]
+)
 async def test_parse_failure_is_recorded_as_a_failed_stage(monkeypatch, error, code):
     """Any parse error fails stage, run and event, marks the document failed and counts a failed document."""
     env = Env(monkeypatch)
@@ -158,14 +206,19 @@ async def test_parse_failure_is_recorded_as_a_failed_stage(monkeypatch, error, c
     env.parse = boom
     await env.run_event()
     assert env.log[-5:] == [
-        ("lock", True), ("extraction_status", "failed"), ("processing_result", code),
-        ("commit", "failed", "failed", 2), ("count", "failed"),
+        ("lock", True),
+        ("extraction_status", "failed"),
+        ("processing_result", code),
+        ("commit", "failed", "failed", 2),
+        ("count", "failed"),
     ]
     assert (env.stage.error_code, env.run.error_code, env.event.status) == (code, code, "failed")
 
 
 @pytest.mark.asyncio
-async def test_publication_for_another_document_is_dropped_and_extraction_text_is_bounded(monkeypatch):
+async def test_publication_for_another_document_is_dropped_and_extraction_text_is_bounded(
+    monkeypatch,
+):
     """If Documents saved a different document nothing is settled; oversized text is capped with a warning."""
     env = Env(monkeypatch, saved=uuid4())
     await env.run_event()

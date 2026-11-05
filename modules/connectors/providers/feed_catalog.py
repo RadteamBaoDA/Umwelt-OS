@@ -68,8 +68,13 @@ def _plain_text(value: str) -> str:
 
 
 def _provider_record(
-    *, provider: str, identity: str, version: str | None, timestamp_basis: str,
-    modified_at: datetime | None, content_truncated: bool,
+    *,
+    provider: str,
+    identity: str,
+    version: str | None,
+    timestamp_basis: str,
+    modified_at: datetime | None,
+    content_truncated: bool,
     coverage: str = "returned_snapshot",
     source_fields: dict[str, object] | None = None,
 ) -> dict[str, object]:
@@ -119,12 +124,16 @@ def _parse_time(value: str | None) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def send_fence_trace(before_request: Callable[[], Awaitable[None]]) -> Callable[[str, dict[str, object]], Awaitable[None]]:
+def send_fence_trace(
+    before_request: Callable[[], Awaitable[None]],
+) -> Callable[[str, dict[str, object]], Awaitable[None]]:
     """Build an httpx trace hook that reruns the native fence right before request headers hit the wire."""
+
     async def final_send_fence(event_name: str, info: dict[str, object]) -> None:
         """Recheck original authority after connection admission, before headers send."""
         if event_name.endswith("send_request_headers.started"):
             await before_request()
+
     return final_send_fence
 
 
@@ -145,7 +154,9 @@ async def _read_feed(url: str, before_request: Callable[[], Awaitable[None]]) ->
         ) as client:
             await before_request()
             async with client.stream(
-                "GET", url, headers={"Accept": "application/atom+xml, application/xml, text/xml"},
+                "GET",
+                url,
+                headers={"Accept": "application/atom+xml, application/xml, text/xml"},
                 extensions={"trace": send_fence_trace(before_request)},
             ) as response:
                 if response.status_code == 429:
@@ -284,15 +295,22 @@ def _feed_canonical(entry: ElementTree.Element, provider: str, identity: str) ->
     if not href:
         return None
     parsed = urlsplit(href)
-    if parsed.scheme not in {"https", "http"} or parsed.username or parsed.password or parsed.fragment:
+    if (
+        parsed.scheme not in {"https", "http"}
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
         return None
     if provider == "youtube":
         if parsed.scheme != "https":
             return None
         query = parse_qs(parsed.query)
         if (
-            parsed.netloc == "www.youtube.com" and parsed.path == "/watch"
-            and set(query) == {"v"} and query["v"] == [identity.rsplit(":", 1)[-1]]
+            parsed.netloc == "www.youtube.com"
+            and parsed.path == "/watch"
+            and set(query) == {"v"}
+            and query["v"] == [identity.rsplit(":", 1)[-1]]
         ):
             return href
     elif provider == "arxiv":
@@ -308,6 +326,7 @@ def _same_youtube_channel(feed_id: str | None, configured: str | None) -> bool:
     sometimes the bare 22-char form. Only a leading ``UC`` on a 24-char id is
     stripped, so distinct channels never compare equal.
     """
+
     def bare(value: str | None) -> str | None:
         """Strip the ``UC`` prefix from a 24-char channel id; leave other values untouched."""
         return value[2:] if value and len(value) == 24 and value.startswith("UC") else value
@@ -345,7 +364,11 @@ def _timestamp_basis(modified: datetime | None, published: datetime | None) -> s
 
 
 def _youtube_entry(
-    entry: ElementTree.Element, scope: str | None, title: str, summary: str, collected_at: datetime,
+    entry: ElementTree.Element,
+    scope: str | None,
+    title: str,
+    summary: str,
+    collected_at: datetime,
 ) -> _FeedEntry | None:
     """Map one YouTube Atom entry, or ``None`` when its channel/video identity is out of scope."""
     channel_id = entry.findtext(f"{{{_YT}}}channelId")
@@ -361,8 +384,12 @@ def _youtube_entry(
     category_nodes = entry.findall(f"{{{_ATOM}}}category")
     tags = [node.attrib["term"] for node in category_nodes if node.attrib.get("term")]
     selected: dict[str, object] = {
-        "title": title, "summary": summary, "author": author,
-        "published": published_raw, "updated": modified_raw, "tags": tags,
+        "title": title,
+        "summary": summary,
+        "author": author,
+        "published": published_raw,
+        "updated": modified_raw,
+        "tags": tags,
     }
     source_fields: dict[str, object] = {
         "title": title[:500],
@@ -376,23 +403,38 @@ def _youtube_entry(
     if modified_raw is not None:
         source_fields["provider_updated_at"] = modified_raw[:64]
     source_fields_truncated = (
-        len(title) > 500 or len(summary) > 4000 or len(author) > 1000
-        or len(tags) > 100 or any(len(value) > 255 for value in tags)
+        len(title) > 500
+        or len(summary) > 4000
+        or len(author) > 1000
+        or len(tags) > 100
+        or any(len(value) > 255 for value in tags)
         or (published_raw is not None and len(published_raw) > 64)
         or (modified_raw is not None and len(modified_raw) > 64)
     )
     return _FeedEntry(
-        provider_id=identity, title=title, author=author, tags=tags,
-        text_value=title + (f"\n\n{summary}" if summary else ""), selected=selected,
-        source_fields=source_fields, source_fields_truncated=source_fields_truncated,
-        basis=_timestamp_basis(modified, published), observed=modified or published or collected_at,
-        modified=modified, published_raw=published_raw, modified_raw=modified_raw,
+        provider_id=identity,
+        title=title,
+        author=author,
+        tags=tags,
+        text_value=title + (f"\n\n{summary}" if summary else ""),
+        selected=selected,
+        source_fields=source_fields,
+        source_fields_truncated=source_fields_truncated,
+        basis=_timestamp_basis(modified, published),
+        observed=modified or published or collected_at,
+        modified=modified,
+        published_raw=published_raw,
+        modified_raw=modified_raw,
         canonical_url=_feed_canonical(entry, "youtube", identity),
     )
 
 
 def _arxiv_entry(
-    entry: ElementTree.Element, scope: str | None, title: str, summary: str, collected_at: datetime,
+    entry: ElementTree.Element,
+    scope: str | None,
+    title: str,
+    summary: str,
+    collected_at: datetime,
 ) -> _FeedEntry | None:
     """Map one arXiv Atom entry, or ``None`` when it has no usable identifier."""
     arxiv_id = entry.findtext(f"{{{_ATOM}}}id")
@@ -403,16 +445,9 @@ def _arxiv_entry(
     published = _parse_time(published_raw)
     modified = _parse_time(modified_raw)
     author_nodes = entry.findall(f"{{{_ATOM}}}author")
-    author_names = [
-        _plain_text(node.findtext(f"{{{_ATOM}}}name") or "")
-        for node in author_nodes
-    ]
+    author_names = [_plain_text(node.findtext(f"{{{_ATOM}}}name") or "") for node in author_nodes]
     category_nodes = entry.findall("{http://www.w3.org/2005/Atom}category")
-    categories = [
-        node.attrib.get("term", "")
-        for node in category_nodes
-        if node.attrib.get("term")
-    ]
+    categories = [node.attrib.get("term", "") for node in category_nodes if node.attrib.get("term")]
     author = ", ".join(author_names)
     source_fields: dict[str, object] = {
         "title": title[:500],
@@ -428,22 +463,37 @@ def _arxiv_entry(
     if modified_raw is not None:
         source_fields["provider_updated_at"] = modified_raw[:64]
     source_fields_truncated = (
-        len(title) > 500 or len(summary) > 4000 or len(author) > 1000
-        or len(author_nodes) > 100 or len(category_nodes) > 100
+        len(title) > 500
+        or len(summary) > 4000
+        or len(author) > 1000
+        or len(author_nodes) > 100
+        or len(category_nodes) > 100
         or any(len(value) > 255 for value in [*author_names, *categories])
         or (published_raw is not None and len(published_raw) > 64)
         or (modified_raw is not None and len(modified_raw) > 64)
     )
     selected: dict[str, object] = {
-        "title": title, "summary": summary, "authors": author_names, "categories": categories,
-        "published": published_raw, "updated": modified_raw,
+        "title": title,
+        "summary": summary,
+        "authors": author_names,
+        "categories": categories,
+        "published": published_raw,
+        "updated": modified_raw,
     }
     return _FeedEntry(
-        provider_id=arxiv_id, title=title, author=author, tags=categories,
-        text_value=title + (f"\n\n{summary}" if summary else ""), selected=selected,
-        source_fields=source_fields, source_fields_truncated=source_fields_truncated,
-        basis=_timestamp_basis(modified, published), observed=modified or published or collected_at,
-        modified=modified, published_raw=published_raw, modified_raw=modified_raw,
+        provider_id=arxiv_id,
+        title=title,
+        author=author,
+        tags=categories,
+        text_value=title + (f"\n\n{summary}" if summary else ""),
+        selected=selected,
+        source_fields=source_fields,
+        source_fields_truncated=source_fields_truncated,
+        basis=_timestamp_basis(modified, published),
+        observed=modified or published or collected_at,
+        modified=modified,
+        published_raw=published_raw,
+        modified_raw=modified_raw,
         canonical_url=_feed_canonical(entry, "arxiv", arxiv_id),
     )
 
@@ -452,13 +502,17 @@ def _arxiv_entry(
 _ENTRY_MAPPERS: dict[str, _EntryMapper] = {"youtube": _youtube_entry, "arxiv": _arxiv_entry}
 
 
-def _feed_record(provider: str, mapped: _FeedEntry, truncated: bool, collected_at: datetime) -> IngestionRecord:
+def _feed_record(
+    provider: str, mapped: _FeedEntry, truncated: bool, collected_at: datetime
+) -> IngestionRecord:
     """Assemble the ingestion record (version hash, provenance, bounded metadata) for a mapped entry.
 
     ``truncated`` is the page truncation state at this point of the sweep (it feeds coverage).
     """
     digest = _selected_hash(mapped.selected)
-    raw_version = f"{mapped.modified.isoformat()}:{digest}" if mapped.modified is not None else digest
+    raw_version = (
+        f"{mapped.modified.isoformat()}:{digest}" if mapped.modified is not None else digest
+    )
     version = raw_version[:255]
     content_truncated = len(mapped.text_value) > 4000 or mapped.source_fields_truncated
     record_metadata: dict[str, object] = {
@@ -499,9 +553,7 @@ def _mark_truncated(records: list[IngestionRecord]) -> None:
         provider_record = ProviderRecordMetadata.model_validate(
             metadata["provider_record"]
         ).model_copy(update={"coverage": "truncated"})
-        metadata["provider_record"] = provider_record.model_dump(
-            mode="json", exclude_none=True
-        )
+        metadata["provider_record"] = provider_record.model_dump(mode="json", exclude_none=True)
         records[index] = record.model_copy(update={"metadata": metadata})
 
 
@@ -524,7 +576,9 @@ def _records_from_feed(
     scope = config.youtube_channel_id if source.provider == "youtube" else config.arxiv_category
     for entry in entries[:500]:
         title = _plain_text(entry.findtext(f"{{{_ATOM}}}title") or "")
-        summary = _plain_text(entry.findtext(f"{{{_ATOM}}}summary") or entry.findtext(f"{{{_ATOM}}}content") or "")
+        summary = _plain_text(
+            entry.findtext(f"{{{_ATOM}}}summary") or entry.findtext(f"{{{_ATOM}}}content") or ""
+        )
         provider = source.provider
         mapper = _ENTRY_MAPPERS.get(provider) if provider is not None else None
         if provider is None or mapper is None:
@@ -568,7 +622,9 @@ async def collect_provider_feed(
             async with asyncio.timeout(30):
                 body = await _read_feed(url, before_request)
         except ProviderRateLimited as exc:
-            return ProviderCollectionPage(records=(), coverage="returned_snapshot", next_eligible_at=exc.next_eligible_at)
+            return ProviderCollectionPage(
+                records=(), coverage="returned_snapshot", next_eligible_at=exc.next_eligible_at
+            )
         return await asyncio.to_thread(_records_from_feed, source, body, collected_at)
     if source.provider != "arxiv":
         raise ValueError("provider_scope_invalid")
@@ -581,7 +637,8 @@ async def collect_provider_feed(
                 )
                 if not locked:
                     return ProviderCollectionPage(
-                        records=(), coverage="returned_snapshot",
+                        records=(),
+                        coverage="returned_snapshot",
                         next_eligible_at=datetime.now(UTC) + timedelta(seconds=3),
                     )
                 spacing_started = time.monotonic()
@@ -590,5 +647,9 @@ async def collect_provider_feed(
                 try:
                     body = await _read_feed(url, before_request)
                 except ProviderRateLimited as exc:
-                    return ProviderCollectionPage(records=(), coverage="returned_snapshot", next_eligible_at=exc.next_eligible_at)
+                    return ProviderCollectionPage(
+                        records=(),
+                        coverage="returned_snapshot",
+                        next_eligible_at=exc.next_eligible_at,
+                    )
         return await asyncio.to_thread(_records_from_feed, source, body, collected_at)

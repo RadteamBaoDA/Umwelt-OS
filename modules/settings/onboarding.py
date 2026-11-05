@@ -23,9 +23,13 @@ def _read(row: OnboardingStateRecord | None) -> OnboardingStateRead:
     )
 
 
-async def read_onboarding_state(session: AsyncSession, *, actor_user_id: int, multi_workspace_enabled: bool) -> OnboardingStateRead:
+async def read_onboarding_state(
+    session: AsyncSession, *, actor_user_id: int, multi_workspace_enabled: bool
+) -> OnboardingStateRead:
     """Read only active actor progress without selected workspace; absent row means not started."""
-    await require_preferences_account(session, actor_user_id=actor_user_id, multi_workspace_enabled=multi_workspace_enabled)
+    await require_preferences_account(
+        session, actor_user_id=actor_user_id, multi_workspace_enabled=multi_workspace_enabled
+    )
     row = await session.scalar(
         select(OnboardingStateRecord)
         .where(OnboardingStateRecord.owner_id == actor_user_id)
@@ -35,16 +39,25 @@ async def read_onboarding_state(session: AsyncSession, *, actor_user_id: int, mu
 
 
 async def save_onboarding_state(
-    session: AsyncSession, update: OnboardingStateUpdate,
-    *, actor_user_id: int, multi_workspace_enabled: bool, auth_sessions: tuple[AccountSessionRef, ...] = (),
+    session: AsyncSession,
+    update: OnboardingStateUpdate,
+    *,
+    actor_user_id: int,
+    multi_workspace_enabled: bool,
+    auth_sessions: tuple[AccountSessionRef, ...] = (),
 ) -> OnboardingStateRead:
     """Persist actor progress after auth locks with CAS; caller completes transaction.
 
     Account preferences never borrow bootstrap onboarding, selected workspace or translation
     settings. Existing ordered steps/data-choice/completion invariants remain unchanged.
     """
-    await require_preferences_account(session, actor_user_id=actor_user_id, multi_workspace_enabled=multi_workspace_enabled,
-                                      locked=True, auth_sessions=auth_sessions)
+    await require_preferences_account(
+        session,
+        actor_user_id=actor_user_id,
+        multi_workspace_enabled=multi_workspace_enabled,
+        locked=True,
+        auth_sessions=auth_sessions,
+    )
     await session.execute(
         insert(OnboardingStateRecord)
         .values(owner_id=actor_user_id)
@@ -53,7 +66,8 @@ async def save_onboarding_state(
     row = await session.scalar(
         select(OnboardingStateRecord)
         .where(OnboardingStateRecord.owner_id == actor_user_id)
-        .with_for_update().execution_options(populate_existing=True)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if row is None:
         raise RuntimeError("Onboarding state singleton could not be initialized")
@@ -68,7 +82,11 @@ async def save_onboarding_state(
         row.data_choice = update.data_choice
     elif update.data_choice is not None and update.data_choice != row.data_choice:
         raise ConflictError(detail="Choose sample data or personal import on its onboarding step")
-    if update.current_step == "indexing" and row.current_step == "sample_or_import" and row.data_choice is None:
+    if (
+        update.current_step == "indexing"
+        and row.current_step == "sample_or_import"
+        and row.data_choice is None
+    ):
         raise ConflictError(detail="Choose sample data or personal import before indexing")
     if update.current_step == "complete" and (
         row.current_step != "indexing" or row.data_choice is None

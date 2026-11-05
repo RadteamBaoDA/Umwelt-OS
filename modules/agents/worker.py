@@ -79,7 +79,9 @@ def _advisory_key(run_id: UUID) -> int:
 
 
 @asynccontextmanager
-async def _run_lease(engine: AsyncEngine, run_id: UUID) -> AsyncIterator[tuple[AsyncConnection, int] | None]:
+async def _run_lease(
+    engine: AsyncEngine, run_id: UUID
+) -> AsyncIterator[tuple[AsyncConnection, int] | None]:
     """Hold one session-level PostgreSQL advisory lock for the whole execution segment.
 
     A second worker never TTL-steals this lease while its original backend can still issue
@@ -90,7 +92,9 @@ async def _run_lease(engine: AsyncEngine, run_id: UUID) -> AsyncIterator[tuple[A
     connection = await direct_engine(engine).connect()
     acquired = False
     try:
-        acquired = bool(await connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key}))
+        acquired = bool(
+            await connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key})
+        )
         await connection.commit()
         if not acquired:
             yield None
@@ -103,12 +107,18 @@ async def _run_lease(engine: AsyncEngine, run_id: UUID) -> AsyncIterator[tuple[A
                 await connection.commit()
             except Exception:  # best-effort unlock: closing the connection releases the lock anyway
                 # Closing a lost connection releases its PostgreSQL session lock.
-                logger.debug("Agent run lease unlock failed; closing the connection releases it", exc_info=True)
+                logger.debug(
+                    "Agent run lease unlock failed; closing the connection releases it",
+                    exc_info=True,
+                )
         await connection.close()
 
 
 async def _terminate_unadmitted(
-    session_factory: async_sessionmaker[AsyncSession], run_id: UUID, workspace_id: UUID, code: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    run_id: UUID,
+    workspace_id: UUID,
+    code: str,
 ) -> None:
     """Terminally fail a queued run whose original workspace epoch can no longer be proven.
 
@@ -117,9 +127,14 @@ async def _terminate_unadmitted(
     terminal state (no payload read, no effect). Running or finished rows are left to their own paths.
     """
     async with session_factory() as session:
-        row = await session.scalar(select(AgentRun).where(
-            AgentRun.id == run_id, AgentRun.workspace_id == workspace_id,
-        ).with_for_update())
+        row = await session.scalar(
+            select(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.workspace_id == workspace_id,
+            )
+            .with_for_update()
+        )
         if row is None or row.status != "queued":
             return
         now = datetime.now(UTC)
@@ -130,8 +145,13 @@ async def _terminate_unadmitted(
 
 
 async def _claim_run(
-    session_factory: async_sessionmaker[AsyncSession], run_id: UUID, dispatch_generation: int,
-    *, scope: InternalJobScope, original_fence: AccessFence, multi_workspace_enabled: bool,
+    session_factory: async_sessionmaker[AsyncSession],
+    run_id: UUID,
+    dispatch_generation: int,
+    *,
+    scope: InternalJobScope,
+    original_fence: AccessFence,
+    multi_workspace_enabled: bool,
 ) -> AgentRun | None:
     """Claim the matching queued generation and attempt bounded linked-chat status delivery.
 
@@ -140,14 +160,25 @@ async def _claim_run(
     """
     async with session_factory() as session:
         fence = await admit(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            lock=True, expected=original_fence,
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            lock=True,
+            expected=original_fence,
         )
-        row = await session.scalar(select(AgentRun).where(
-            AgentRun.id == run_id, AgentRun.workspace_id == scope.workspace_id,
-        ).with_for_update())
+        row = await session.scalar(
+            select(AgentRun)
+            .where(
+                AgentRun.id == run_id,
+                AgentRun.workspace_id == scope.workspace_id,
+            )
+            .with_for_update()
+        )
         if (
-            row is None or row.status != "queued" or row.cancel_requested or row.evidence_revoked
+            row is None
+            or row.status != "queued"
+            or row.cancel_requested
+            or row.evidence_revoked
             or row.dispatch_generation != dispatch_generation
         ):
             return None
@@ -155,31 +186,51 @@ async def _claim_run(
         row.claim_generation += 1
         row.claim_started_at = datetime.now(UTC)
         row.updated_at = datetime.now(UTC)
-        row.activities = [*row.activities[-63:], {
-            "kind": "status", "status": "running", "created_at": datetime.now(UTC).isoformat(),
-        }]
+        row.activities = [
+            *row.activities[-63:],
+            {
+                "kind": "status",
+                "status": "running",
+                "created_at": datetime.now(UTC).isoformat(),
+            },
+        ]
         await commit_with_replay(
-            session, (), scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence,
+            session,
+            (),
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
         )
         await session.refresh(row)
         session.expunge(row)
         claimed = row
     await publish_agent_activity_safely(
-        session_factory, run_id=claimed.id, owner_id=claimed.owner_id,
-        auth_session_hash=claimed.auth_session_hash, status="running",
+        session_factory,
+        run_id=claimed.id,
+        owner_id=claimed.owner_id,
+        auth_session_hash=claimed.auth_session_hash,
+        status="running",
     )
     return claimed
 
 
 def _append_status_activity(row: AgentRun, status: str) -> None:
     """Append one bounded status entry (keeping the newest 64) to the run's activity log."""
-    row.activities = [*row.activities[-63:], {
-        "kind": "status", "status": status, "created_at": datetime.now(UTC).isoformat(),
-    }]
+    row.activities = [
+        *row.activities[-63:],
+        {
+            "kind": "status",
+            "status": status,
+            "created_at": datetime.now(UTC).isoformat(),
+        },
+    ]
 
 
 def _apply_segment_usage(
-    row: AgentRun, context: HarnessContext, state: dict[str, Any] | None, elapsed: int,
+    row: AgentRun,
+    context: HarnessContext,
+    state: dict[str, Any] | None,
+    elapsed: int,
 ) -> None:
     """Fold this segment's active seconds, token usage and source fences into the locked run row.
 
@@ -193,7 +244,8 @@ def _apply_segment_usage(
         if state.get("token_usage") is not None:
             row.token_usage = state["token_usage"]
         row.token_usage_unknown = (
-            row.token_usage_unknown or bool(state.get("token_usage_unknown", False))
+            row.token_usage_unknown
+            or bool(state.get("token_usage_unknown", False))
             or context.unobservable_model_usage
         )
         fences = state.get("source_fences")
@@ -202,22 +254,43 @@ def _apply_segment_usage(
     row.token_usage_unknown = row.token_usage_unknown or context.unobservable_model_usage
 
 
-async def _settle_uncertain_effects(session: AsyncSession, context: HarnessContext) -> list[AgentApproval]:
+async def _settle_uncertain_effects(
+    session: AsyncSession, context: HarnessContext
+) -> list[AgentApproval]:
     """Close effects left in flight as review-only and fail still-started tool calls.
 
     Lock order: approvals by ID, then in-flight effects by action ID (run lock already held by the
     caller). An in-flight effect loses its payload and its approval becomes ``requires_review``.
     Returns the locked approvals for the status decision that follows.
     """
-    approvals = list((await session.scalars(select(AgentApproval).where(
-        AgentApproval.run_id == context.run_id,
-        AgentApproval.workspace_id == context.scope.workspace_id,
-    ).order_by(AgentApproval.id).with_for_update())).all())
+    approvals = list(
+        (
+            await session.scalars(
+                select(AgentApproval)
+                .where(
+                    AgentApproval.run_id == context.run_id,
+                    AgentApproval.workspace_id == context.scope.workspace_id,
+                )
+                .order_by(AgentApproval.id)
+                .with_for_update()
+            )
+        ).all()
+    )
     approvals_by_action = {approval.action_id: approval for approval in approvals}
-    uncertain = list((await session.scalars(select(AgentEffect).where(
-        AgentEffect.run_id == context.run_id, AgentEffect.state == "in_flight",
-        AgentEffect.workspace_id == context.scope.workspace_id,
-    ).order_by(AgentEffect.action_id).with_for_update())).all())
+    uncertain = list(
+        (
+            await session.scalars(
+                select(AgentEffect)
+                .where(
+                    AgentEffect.run_id == context.run_id,
+                    AgentEffect.state == "in_flight",
+                    AgentEffect.workspace_id == context.scope.workspace_id,
+                )
+                .order_by(AgentEffect.action_id)
+                .with_for_update()
+            )
+        ).all()
+    )
     for effect in uncertain:
         effect.state = "requires_review"
         effect.payload = None
@@ -234,7 +307,10 @@ async def _settle_uncertain_effects(session: AsyncSession, context: HarnessConte
 
 
 async def _pause_or_cancel_waiting_run(
-    session: AsyncSession, context: HarnessContext, row: AgentRun, approvals: list[AgentApproval],
+    session: AsyncSession,
+    context: HarnessContext,
+    row: AgentRun,
+    approvals: list[AgentApproval],
 ) -> None:
     """Park a run for approval after repeating ephemeral authorization at the pause boundary.
 
@@ -244,12 +320,17 @@ async def _pause_or_cancel_waiting_run(
     from core.auth.public import revalidate_account_session
     from modules.chat.public import has_live_agent_run_link
 
-    if (await revalidate_account_session(
-        session, row.auth_session_hash, row.owner_id, multi_workspace_enabled=context.multi_workspace_enabled,
-    )
-            and await has_live_agent_run_link(
-                session, row.id, row.owner_id, row.auth_session_hash,
-            )):
+    if await revalidate_account_session(
+        session,
+        row.auth_session_hash,
+        row.owner_id,
+        multi_workspace_enabled=context.multi_workspace_enabled,
+    ) and await has_live_agent_run_link(
+        session,
+        row.id,
+        row.owner_id,
+        row.auth_session_hash,
+    ):
         row.status = "waiting_approval"
         _append_status_activity(row, "waiting_approval")
         return
@@ -265,8 +346,12 @@ async def _pause_or_cancel_waiting_run(
 
 
 async def _decide_segment_status(
-    session: AsyncSession, context: HarnessContext, row: AgentRun, state: dict[str, Any] | None,
-    outcome: str, approvals: list[AgentApproval],
+    session: AsyncSession,
+    context: HarnessContext,
+    row: AgentRun,
+    state: dict[str, Any] | None,
+    outcome: str,
+    approvals: list[AgentApproval],
 ) -> None:
     """Choose the run's next lifecycle status after a segment: cancel, wait, requeue or fail.
 
@@ -298,16 +383,28 @@ async def _decide_segment_status(
 
 
 async def _account_segment(
-    session_factory: async_sessionmaker[AsyncSession], context: HarnessContext,
-    *, state: dict[str, Any] | None, outcome: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    context: HarnessContext,
+    *,
+    state: dict[str, Any] | None,
+    outcome: str,
 ) -> None:
     """Persist bounded segment accounting and continuation state after rechecking authorization at approval pauses."""
     elapsed = max(0, math.ceil(context.elapsed()))
     async with session_factory() as session:
-        row = await session.scalar(select(AgentRun).where(
-            AgentRun.id == context.run_id, AgentRun.workspace_id == context.scope.workspace_id,
-        ).with_for_update())
-        if row is None or row.claim_generation != context.claim_generation or row.status != "running":
+        row = await session.scalar(
+            select(AgentRun)
+            .where(
+                AgentRun.id == context.run_id,
+                AgentRun.workspace_id == context.scope.workspace_id,
+            )
+            .with_for_update()
+        )
+        if (
+            row is None
+            or row.claim_generation != context.claim_generation
+            or row.status != "running"
+        ):
             return
         _apply_segment_usage(row, context, state, elapsed)
         approvals = await _settle_uncertain_effects(session, context)
@@ -315,18 +412,29 @@ async def _account_segment(
         await session.commit()
         published = (row.owner_id, row.auth_session_hash, row.status)
     await publish_agent_activity_safely(
-        session_factory, run_id=context.run_id, owner_id=published[0],
-        auth_session_hash=published[1], status=published[2],
+        session_factory,
+        run_id=context.run_id,
+        owner_id=published[0],
+        auth_session_hash=published[1],
+        status=published[2],
     )
 
 
 async def _finish_run(
-    session_factory: async_sessionmaker[AsyncSession], context: HarnessContext,
-    *, state: dict[str, Any] | None, status: str, error_code: str | None,
+    session_factory: async_sessionmaker[AsyncSession],
+    context: HarnessContext,
+    *,
+    state: dict[str, Any] | None,
+    status: str,
+    error_code: str | None,
 ) -> None:
     """Persist the fenced terminal result and publish its safe linked chat status."""
     if status == "succeeded":
-        if state is None or not isinstance(state.get("answer"), str) or len(state["answer"].encode()) > 32_000:
+        if (
+            state is None
+            or not isinstance(state.get("answer"), str)
+            or len(state["answer"].encode()) > 32_000
+        ):
             status, error_code = "failed", "invalid_output"
         else:
             try:
@@ -334,17 +442,26 @@ async def _finish_run(
             except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                 status, error_code = "failed", "source_or_policy_fence_changed"
     async with session_factory() as session:
-        row = await session.scalar(select(AgentRun).where(
-            AgentRun.id == context.run_id, AgentRun.workspace_id == context.scope.workspace_id,
-        ).with_for_update())
+        row = await session.scalar(
+            select(AgentRun)
+            .where(
+                AgentRun.id == context.run_id,
+                AgentRun.workspace_id == context.scope.workspace_id,
+            )
+            .with_for_update()
+        )
         if row is None or row.claim_generation != context.claim_generation:
             return
         now = datetime.now(UTC)
-        row.active_seconds = min(MAX_ACTIVE_SECONDS, row.active_seconds + max(0, math.ceil(context.elapsed())))
+        row.active_seconds = min(
+            MAX_ACTIVE_SECONDS, row.active_seconds + max(0, math.ceil(context.elapsed()))
+        )
         if state is not None:
             if state.get("token_usage") is not None:
                 row.token_usage = state["token_usage"]
-            row.token_usage_unknown = row.token_usage_unknown or bool(state.get("token_usage_unknown", False))
+            row.token_usage_unknown = row.token_usage_unknown or bool(
+                state.get("token_usage_unknown", False)
+            )
         row.token_usage_unknown = row.token_usage_unknown or context.unobservable_model_usage
         if row.cancel_requested or row.evidence_revoked or status == "cancelled":
             row.status, row.error_code = "cancelled", None
@@ -356,36 +473,51 @@ async def _finish_run(
         row.claim_started_at = None
         row.completed_at = now
         row.updated_at = now
-        row.activities = [*row.activities[-63:], {
-            "kind": "status", "status": row.status, "created_at": now.isoformat(),
-        }]
+        row.activities = [
+            *row.activities[-63:],
+            {
+                "kind": "status",
+                "status": row.status,
+                "created_at": now.isoformat(),
+            },
+        ]
         await _delete_checkpoints(session, row.checkpoint_thread_id)
         publication = (row.owner_id, row.auth_session_hash, row.status)
         await session.commit()
         final_status = row.status
     await publish_agent_activity_safely(
-        session_factory, run_id=context.run_id, owner_id=publication[0],
-        auth_session_hash=publication[1], status=final_status,
+        session_factory,
+        run_id=context.run_id,
+        owner_id=publication[0],
+        auth_session_hash=publication[1],
+        status=final_status,
     )
 
 
 async def _delete_checkpoints(session: AsyncSession, thread_id: str) -> None:
     """Delete every pinned saver row for a terminal run before its private evidence can linger."""
     for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
-        await session.execute(text(f"DELETE FROM {table} WHERE thread_id = :thread_id"), {"thread_id": thread_id})  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
+        await session.execute(
+            text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
+            {"thread_id": thread_id},
+        )
 
 
 async def _enqueue_generation(redis: ArqRedis, run_id: UUID, generation: int) -> bool:
     """Enqueue one deterministic ARQ job ID while PostgreSQL remains the dispatch source of truth."""
     result = await redis.enqueue_job(
-        "process_agent_run", str(run_id), generation,
+        "process_agent_run",
+        str(run_id),
+        generation,
         _job_id=f"agent-run:{run_id}:{generation}",
     )
     return result is not None
 
 
 async def _recover_abandoned(
-    session_factory: async_sessionmaker[AsyncSession], engine: AsyncEngine, row_id: UUID,
+    session_factory: async_sessionmaker[AsyncSession],
+    engine: AsyncEngine,
+    row_id: UUID,
     workspace_id: UUID,
 ) -> bool:
     """Recover stale rows only after lease release, then attempt bounded linked-status delivery.
@@ -399,33 +531,57 @@ async def _recover_abandoned(
         _, key = lease
         async with session_factory() as session:
             row = await session.scalar(
-                select(AgentRun).where(
+                select(AgentRun)
+                .where(
                     AgentRun.id == row_id,
                     AgentRun.workspace_id == workspace_id,
                     AgentRun.status == "running",
                     AgentRun.claim_started_at < func.now() - text("interval '150 seconds'"),
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             if row is None:
                 return False
             row.active_seconds = min(
                 MAX_ACTIVE_SECONDS,
-                row.active_seconds + min(
+                row.active_seconds
+                + min(
                     RECOVERY_ACCOUNTING_SECONDS,
                     max(0, math.ceil((datetime.now(UTC) - row.claim_started_at).total_seconds()))
-                    if row.claim_started_at else RECOVERY_ACCOUNTING_SECONDS,
+                    if row.claim_started_at
+                    else RECOVERY_ACCOUNTING_SECONDS,
                 ),
             )
             row.token_usage_unknown = True
             row.claim_started_at = None
-            approvals = list((await session.scalars(select(AgentApproval).where(
-                AgentApproval.run_id == row_id, AgentApproval.workspace_id == workspace_id,
-            ).order_by(AgentApproval.id).with_for_update())).all())
+            approvals = list(
+                (
+                    await session.scalars(
+                        select(AgentApproval)
+                        .where(
+                            AgentApproval.run_id == row_id,
+                            AgentApproval.workspace_id == workspace_id,
+                        )
+                        .order_by(AgentApproval.id)
+                        .with_for_update()
+                    )
+                ).all()
+            )
             approvals_by_action = {approval.action_id: approval for approval in approvals}
-            uncertain = list((await session.scalars(select(AgentEffect).where(
-                AgentEffect.run_id == row_id, AgentEffect.state == "in_flight",
-                AgentEffect.workspace_id == workspace_id,
-            ).order_by(AgentEffect.action_id).with_for_update())).all())
+            uncertain = list(
+                (
+                    await session.scalars(
+                        select(AgentEffect)
+                        .where(
+                            AgentEffect.run_id == row_id,
+                            AgentEffect.state == "in_flight",
+                            AgentEffect.workspace_id == workspace_id,
+                        )
+                        .order_by(AgentEffect.action_id)
+                        .with_for_update()
+                    )
+                ).all()
+            )
             for effect in uncertain:
                 effect.state = "requires_review"
                 effect.payload = None
@@ -437,7 +593,11 @@ async def _recover_abandoned(
                 row.status, row.completed_at = "cancelled", datetime.now(UTC)
                 await _delete_checkpoints(session, row.checkpoint_thread_id)
             elif row.active_seconds >= MAX_ACTIVE_SECONDS:
-                row.status, row.error_code, row.completed_at = "failed", "active_time_limit", datetime.now(UTC)
+                row.status, row.error_code, row.completed_at = (
+                    "failed",
+                    "active_time_limit",
+                    datetime.now(UTC),
+                )
                 await _delete_checkpoints(session, row.checkpoint_thread_id)
             else:
                 row.status = "queued"
@@ -446,25 +606,35 @@ async def _recover_abandoned(
             await session.execute(
                 update(AgentToolCall)
                 .where(AgentToolCall.run_id == row_id, AgentToolCall.status == "started")
-                .values(status="failed", error_code="worker_interrupted", completed_at=datetime.now(UTC))
+                .values(
+                    status="failed", error_code="worker_interrupted", completed_at=datetime.now(UTC)
+                )
             )
             await session.commit()
             publication = (row.owner_id, row.auth_session_hash, row.status)
         await publish_agent_activity_safely(
-            session_factory, run_id=row_id, owner_id=publication[0],
-            auth_session_hash=publication[1], status=publication[2],
+            session_factory,
+            run_id=row_id,
+            owner_id=publication[0],
+            auth_session_hash=publication[1],
+            status=publication[2],
         )
         try:
             await lease[0].scalar(text("SELECT pg_advisory_unlock(:key)"), {"key": key})
             await lease[0].commit()
         except Exception:  # best-effort unlock: closing the backend releases the lock anyway
-            logger.debug("Agent run lease unlock failed; the context manager retries it", exc_info=True)
+            logger.debug(
+                "Agent run lease unlock failed; the context manager retries it", exc_info=True
+            )
         # The context manager retries this unlock; closing the backend also releases its session lock.
         return True
 
 
 async def _refresh_stale_mcp_tools(
-    ctx: dict[str, object], registry: ToolRegistry, row: Any, scope: InternalJobScope,
+    ctx: dict[str, object],
+    registry: ToolRegistry,
+    row: Any,
+    scope: InternalJobScope,
 ) -> None:
     """Re-project only this run's MCP connections whose worker registration is missing or drifted.
 
@@ -483,21 +653,28 @@ async def _refresh_stale_mcp_tools(
             continue
         expected = (row.tool_contracts or {}).get(name, {})
         current = registry.get_tool(name)
-        if (current is None or current.version != expected.get("version")
-                or current.schema_fingerprint != expected.get("fingerprint")):
+        if (
+            current is None
+            or current.version != expected.get("version")
+            or current.schema_fingerprint != expected.get("fingerprint")
+        ):
             parts = name.split(".")
             if len(parts) == 3:
                 stale.add(parts[1])
     for connection_hex in stale:
         try:
             await runtime.refresh_connection(scope, UUID(hex=connection_hex))
-        except Exception:  # best-effort refresh: a stale MCP registration is retried on the next run
+        except (
+            Exception
+        ):  # best-effort refresh: a stale MCP registration is retried on the next run
             logger.debug("MCP connection refresh skipped for a stale tool", exc_info=True)
             continue
 
 
 async def _admit_queued_run(
-    session_factory: async_sessionmaker[AsyncSession], parsed_id: UUID, flag: bool,
+    session_factory: async_sessionmaker[AsyncSession],
+    parsed_id: UUID,
+    flag: bool,
 ) -> tuple[InternalJobScope, AccessFence, Mapping[str, Any]] | None:
     """Rebuild a queued run's scope and original fence from its durable row and admit it.
 
@@ -507,16 +684,26 @@ async def _admit_queued_run(
     scope, fence and the workspace-effective module map, or ``None`` when the job must not run.
     """
     async with session_factory() as identity_session:
-        identity = (await identity_session.execute(select(
-            AgentRun.workspace_id, AgentRun.owner_id, AgentRun.membership_revision,
-            AgentRun.configuration_revision, AgentRun.status,
-        ).where(AgentRun.id == parsed_id))).one_or_none()
+        identity = (
+            await identity_session.execute(
+                select(
+                    AgentRun.workspace_id,
+                    AgentRun.owner_id,
+                    AgentRun.membership_revision,
+                    AgentRun.configuration_revision,
+                    AgentRun.status,
+                ).where(AgentRun.id == parsed_id)
+            )
+        ).one_or_none()
         if identity is None or identity.status != "queued":
             return None
         epoch = run_epoch(identity)
         if epoch is None:
             await _terminate_unadmitted(
-                session_factory, parsed_id, identity.workspace_id, "workspace_epoch_unavailable",
+                session_factory,
+                parsed_id,
+                identity.workspace_id,
+                "workspace_epoch_unavailable",
             )
             return None
         scope, original_fence = epoch
@@ -525,16 +712,23 @@ async def _admit_queued_run(
         except (HTTPException, DomainError):
             await identity_session.rollback()
             await _terminate_unadmitted(
-                session_factory, parsed_id, identity.workspace_id, "workspace_access_changed",
+                session_factory,
+                parsed_id,
+                identity.workspace_id,
+                "workspace_access_changed",
             )
             return None
         from modules.settings.public import module_is_enabled, read_module_availability
 
         # A workspace with Agents disabled leaves its durable work untouched (not acknowledged).
-        if not await module_is_enabled(identity_session, "agents", scope=scope, multi_workspace_enabled=flag):
+        if not await module_is_enabled(
+            identity_session, "agents", scope=scope, multi_workspace_enabled=flag
+        ):
             return None
         availability = await read_module_availability(
-            identity_session, scope=scope, multi_workspace_enabled=flag,
+            identity_session,
+            scope=scope,
+            multi_workspace_enabled=flag,
         )
         # Worker process state can outlive owner updates made through another API process.
         from core.modules import effective_modules, register_modules
@@ -554,13 +748,18 @@ def _run_version_compatible(row: AgentRun, profile_snapshot: dict[str, Any] | No
         (APPROVAL_WORKFLOW_VERSION, APPROVAL_PROMPT_VERSION),
     }
     legacy_compatible = (
-        row.agent_id == "assistant" and (row.workflow_version, row.prompt_version) in supported_versions
-        and row.checkpoint_schema_version == CHECKPOINT_SCHEMA_VERSION and row.profile_snapshot is None
+        row.agent_id == "assistant"
+        and (row.workflow_version, row.prompt_version) in supported_versions
+        and row.checkpoint_schema_version == CHECKPOINT_SCHEMA_VERSION
+        and row.profile_snapshot is None
     )
     specialist_compatible = (
-        profile_snapshot is not None and profile_snapshot.get("id") == row.agent_id
-        and (row.workflow_version, row.prompt_version) == (
-            SPECIALIST_WORKFLOW_VERSION, SPECIALIST_PROMPT_VERSION,
+        profile_snapshot is not None
+        and profile_snapshot.get("id") == row.agent_id
+        and (row.workflow_version, row.prompt_version)
+        == (
+            SPECIALIST_WORKFLOW_VERSION,
+            SPECIALIST_PROMPT_VERSION,
         )
         and row.checkpoint_schema_version == SPECIALIST_CHECKPOINT_SCHEMA_VERSION
     )
@@ -568,7 +767,10 @@ def _run_version_compatible(row: AgentRun, profile_snapshot: dict[str, Any] | No
 
 
 def _segment_initial_state(
-    context: HarnessContext, row: AgentRun, checkpoint: Any, profile_snapshot: dict[str, Any] | None,
+    context: HarnessContext,
+    row: AgentRun,
+    checkpoint: Any,
+    profile_snapshot: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Build the graph input for this segment from the row (fresh) or the checkpoint (resume).
 
@@ -578,18 +780,26 @@ def _segment_initial_state(
     """
     if checkpoint is None:
         initial: dict[str, Any] = {
-            "prompt": row.prompt, "messages": [], "pending_tool_calls": [],
-            "tool_slots": [], "tool_index": 0,
+            "prompt": row.prompt,
+            "messages": [],
+            "pending_tool_calls": [],
+            "tool_slots": [],
+            "tool_index": 0,
             "source_fences": {"records": [], "source_generations": {}},
-            "answer": None, "segment_steps": 0, "segment_done": False,
-            "token_usage": row.token_usage, "token_usage_unknown": row.token_usage_unknown,
+            "answer": None,
+            "segment_steps": 0,
+            "segment_done": False,
+            "token_usage": row.token_usage,
+            "token_usage_unknown": row.token_usage_unknown,
         }
         if profile_snapshot is not None:
-            initial.update({
-                "profile_id": row.agent_id,
-                "profile_revision_hash": row.profile_revision_hash or "",
-                "owner_record_state": "authorized",
-            })
+            initial.update(
+                {
+                    "profile_id": row.agent_id,
+                    "profile_revision_hash": row.profile_revision_hash or "",
+                    "owner_record_state": "authorized",
+                }
+            )
         return initial
     initial = {"segment_steps": 0, "segment_done": False}
     values = checkpoint.checkpoint.get("channel_values", {})
@@ -604,7 +814,10 @@ def _segment_initial_state(
 
 
 async def _run_graph_segment(
-    context: HarnessContext, row: AgentRun, settings: Settings, profile_snapshot: dict[str, Any] | None,
+    context: HarnessContext,
+    row: AgentRun,
+    settings: Settings,
+    profile_snapshot: dict[str, Any] | None,
 ) -> Any:
     """Run the workflow graph for at most one segment under the remaining active-time budget.
 
@@ -620,9 +833,12 @@ async def _run_graph_segment(
         # The saver prepares every statement by name (psycopg prepare_threshold=0) and holds the connection for
         # the whole segment, so it always uses the direct URL, never a transaction-pooled alias.
         database_url: URL = make_url(settings.admin_database_url)
-        checkpoint_url = database_url.set(drivername="postgresql").render_as_string(hide_password=False)
+        checkpoint_url = database_url.set(drivername="postgresql").render_as_string(
+            hide_password=False
+        )
         async with AsyncPostgresSaver.from_conn_string(
-            checkpoint_url, serde=StrictJsonSerializer(),
+            checkpoint_url,
+            serde=StrictJsonSerializer(),
         ) as saver:
             graph = build_workflow(context, saver)
             graph_config: RunnableConfig = {
@@ -635,7 +851,9 @@ async def _run_graph_segment(
 
 
 async def _finish_segment_state(
-    session_factory: async_sessionmaker[AsyncSession], context: HarnessContext, state: Any,
+    session_factory: async_sessionmaker[AsyncSession],
+    context: HarnessContext,
+    state: Any,
 ) -> None:
     """Validate the graph's final state and publish success or schedule the next segment.
 
@@ -647,7 +865,9 @@ async def _finish_segment_state(
     context.assert_profile_checkpoint(cast(HarnessState, state))
     await context._run_snapshot()
     if state.get("answer") is not None and not state.get("segment_done"):
-        await _finish_run(session_factory, context, state=state, status="succeeded", error_code=None)
+        await _finish_run(
+            session_factory, context, state=state, status="succeeded", error_code=None
+        )
         return
     if state.get("segment_done"):
         await _account_segment(session_factory, context, state=state, outcome="continue")
@@ -683,25 +903,50 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
         connection, key = lease
         try:
             row = await _claim_run(
-                session_factory, parsed_id, dispatch_generation,
-                scope=scope, original_fence=original_fence, multi_workspace_enabled=flag,
+                session_factory,
+                parsed_id,
+                dispatch_generation,
+                scope=scope,
+                original_fence=original_fence,
+                multi_workspace_enabled=flag,
             )
         except (HTTPException, DomainError):
-            await _terminate_unadmitted(session_factory, parsed_id, scope.workspace_id, "workspace_access_changed")
+            await _terminate_unadmitted(
+                session_factory, parsed_id, scope.workspace_id, "workspace_access_changed"
+            )
             return
         if row is None:
             return
         profile_snapshot = row.profile_snapshot if isinstance(row.profile_snapshot, dict) else None
         context = HarnessContext(
-            parsed_id, scope, original_fence, row.claim_generation, session_factory, engine, settings,
-            redis, registry,
-            connection, key, asyncio.get_running_loop().time(), frozenset(row.allowed_tools),
-            dict(row.tool_contracts), row.active_seconds,
-            workflow_version=row.workflow_version, prompt_version=row.prompt_version,
-            profile_snapshot=profile_snapshot, modules=modules,
+            parsed_id,
+            scope,
+            original_fence,
+            row.claim_generation,
+            session_factory,
+            engine,
+            settings,
+            redis,
+            registry,
+            connection,
+            key,
+            asyncio.get_running_loop().time(),
+            frozenset(row.allowed_tools),
+            dict(row.tool_contracts),
+            row.active_seconds,
+            workflow_version=row.workflow_version,
+            prompt_version=row.prompt_version,
+            profile_snapshot=profile_snapshot,
+            modules=modules,
         )
         if not _run_version_compatible(row, profile_snapshot):
-            await _finish_run(session_factory, context, state=None, status="failed", error_code="incompatible_run_version")
+            await _finish_run(
+                session_factory,
+                context,
+                state=None,
+                status="failed",
+                error_code="incompatible_run_version",
+            )
             return
         await _refresh_stale_mcp_tools(ctx, registry, row, scope)
         state: dict[str, Any] | None = None
@@ -713,15 +958,33 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
         except TimeoutError:
             outcome = "segment_timeout"
         except RunCancelled:
-            await _finish_run(session_factory, context, state=state, status="cancelled", error_code=None)
+            await _finish_run(
+                session_factory, context, state=state, status="cancelled", error_code=None
+            )
             return
         except RunLimitReached as exc:
-            outcome = "token_budget_unavailable" if "token_budget_unavailable" in str(exc) else "run_limit_exceeded"
+            outcome = (
+                "token_budget_unavailable"
+                if "token_budget_unavailable" in str(exc)
+                else "run_limit_exceeded"
+            )
         except RunIncompatible:
-            await _finish_run(session_factory, context, state=state, status="failed", error_code="incompatible_tool_contract")
+            await _finish_run(
+                session_factory,
+                context,
+                state=state,
+                status="failed",
+                error_code="incompatible_tool_contract",
+            )
             return
         except PermissionError:
-            await _finish_run(session_factory, context, state=state, status="failed", error_code="model_policy_denied")
+            await _finish_run(
+                session_factory,
+                context,
+                state=state,
+                status="failed",
+                error_code="model_policy_denied",
+            )
             return
         except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
             logger.warning("Agent run %s stopped after %s", parsed_id, type(exc).__name__)
@@ -729,7 +992,8 @@ async def process_agent_run(ctx: dict[str, object], run_id: str, dispatch_genera
 
 
 async def _load_dispatchable_runs(
-    session_factory: async_sessionmaker[AsyncSession], flag: bool,
+    session_factory: async_sessionmaker[AsyncSession],
+    flag: bool,
 ) -> list[Any]:
     """Page the oldest queued runs whose workspace still has Agents enabled.
 
@@ -747,20 +1011,29 @@ async def _load_dispatchable_runs(
         disabled_workspaces: set[UUID] = set()
         for _page in range(RECONCILE_MAX_PAGES):
             queue_stmt = select(
-                AgentRun.id, AgentRun.dispatch_generation, AgentRun.workspace_id, AgentRun.owner_id,
+                AgentRun.id,
+                AgentRun.dispatch_generation,
+                AgentRun.workspace_id,
+                AgentRun.owner_id,
             ).where(AgentRun.status == "queued", AgentRun.cancel_requested.is_(False))
             if disabled_workspaces:
                 queue_stmt = queue_stmt.where(AgentRun.workspace_id.not_in(disabled_workspaces))
-            page = list((await session.execute(
-                queue_stmt.order_by(AgentRun.created_at).limit(MAX_RECONCILE_ROWS)
-            )).all())
+            page = list(
+                (
+                    await session.execute(
+                        queue_stmt.order_by(AgentRun.created_at).limit(MAX_RECONCILE_ROWS)
+                    )
+                ).all()
+            )
             new_disabled = False
             queued = []
             for row in page:
                 _run_id, _generation, workspace_id, owner_id = row
                 if (workspace_id, owner_id) not in enabled:
                     owner = await workspaces.resolve_workspace_owner_context(
-                        session, workspace_id, multi_workspace_enabled=flag,
+                        session,
+                        workspace_id,
+                        multi_workspace_enabled=flag,
                     )
                     if owner is None or owner.user_id != owner_id:
                         enabled[(workspace_id, owner_id)] = True
@@ -768,11 +1041,15 @@ async def _load_dispatchable_runs(
                         from modules.settings.public import module_is_enabled
 
                         job_scope = InternalJobScope(
-                            workspace_id=workspace_id, actor_user_id=owner.user_id,
+                            workspace_id=workspace_id,
+                            actor_user_id=owner.user_id,
                             membership_revision=owner.membership_revision,
                         )
                         enabled[(workspace_id, owner_id)] = await module_is_enabled(
-                            session, "agents", scope=job_scope, multi_workspace_enabled=flag,
+                            session,
+                            "agents",
+                            scope=job_scope,
+                            multi_workspace_enabled=flag,
                         )
                         if not enabled[(workspace_id, owner_id)]:
                             disabled_workspaces.add(workspace_id)
@@ -801,33 +1078,54 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
     flag = cast(Settings, ctx["settings"]).multi_workspace_enabled
     await expire_pending_approvals(session_factory, MAX_RECONCILE_ROWS)
     async with session_factory() as session:
-        stale_ids = list((await session.execute(
-            select(AgentRun.id, AgentRun.workspace_id).where(
-                AgentRun.status == "running",
-                AgentRun.claim_started_at < func.now() - text("interval '150 seconds'"),
-            ).order_by(AgentRun.claim_started_at).limit(MAX_RECONCILE_ROWS)
-        )).all())
+        stale_ids = list(
+            (
+                await session.execute(
+                    select(AgentRun.id, AgentRun.workspace_id)
+                    .where(
+                        AgentRun.status == "running",
+                        AgentRun.claim_started_at < func.now() - text("interval '150 seconds'"),
+                    )
+                    .order_by(AgentRun.claim_started_at)
+                    .limit(MAX_RECONCILE_ROWS)
+                )
+            ).all()
+        )
     for run_id, run_workspace_id in stale_ids:
         await _recover_abandoned(session_factory, engine, run_id, run_workspace_id)
     status_query = select(
-        AgentRun.id, AgentRun.dispatch_generation, AgentRun.owner_id,
-        AgentRun.auth_session_hash, AgentRun.status,
-    ).where(AgentRun.status.in_({"queued", "running", "waiting_approval", "succeeded", "failed", "cancelled"}))
+        AgentRun.id,
+        AgentRun.dispatch_generation,
+        AgentRun.owner_id,
+        AgentRun.auth_session_hash,
+        AgentRun.status,
+    ).where(
+        AgentRun.status.in_(
+            {"queued", "running", "waiting_approval", "succeeded", "failed", "cancelled"}
+        )
+    )
     async with session_factory() as session:
         statement = status_query
         if _activity_reconcile_cursor is not None:
             statement = statement.where(AgentRun.id > _activity_reconcile_cursor)
-        rows = list((await session.execute(
-            statement.order_by(AgentRun.id).limit(MAX_RECONCILE_ROWS)
-        )).all())
+        rows = list(
+            (await session.execute(statement.order_by(AgentRun.id).limit(MAX_RECONCILE_ROWS))).all()
+        )
         if not rows and _activity_reconcile_cursor is not None:
-            rows = list((await session.execute(
-                status_query.order_by(AgentRun.id).limit(MAX_RECONCILE_ROWS)
-            )).all())
+            rows = list(
+                (
+                    await session.execute(
+                        status_query.order_by(AgentRun.id).limit(MAX_RECONCILE_ROWS)
+                    )
+                ).all()
+            )
     for run_id, _generation, owner_id, auth_session_hash, status in rows:
         await publish_agent_activity_safely(
-            session_factory, run_id=run_id, owner_id=owner_id,
-            auth_session_hash=auth_session_hash, status=status,
+            session_factory,
+            run_id=run_id,
+            owner_id=owner_id,
+            auth_session_hash=auth_session_hash,
+            status=status,
         )
     if rows:
         _activity_reconcile_cursor = rows[-1][0]
@@ -838,7 +1136,9 @@ async def reconcile_agent_dispatch(ctx: dict[str, object]) -> int:
             enqueued += int(await _enqueue_generation(redis, run_id, generation))
         except Exception:  # best-effort enqueue: PostgreSQL retains the queued work
             # PostgreSQL retains queued work; the next bounded reconciliation retries enqueue.
-            logger.debug("Agent run enqueue failed; the next reconciliation retries it", exc_info=True)
+            logger.debug(
+                "Agent run enqueue failed; the next reconciliation retries it", exc_info=True
+            )
             continue
     return enqueued
 
@@ -862,7 +1162,11 @@ async def compose_agent_registry(
         register_automation_tools(registry, frozenset(declared_tools))
     admission = McpAdmission(redis)
     runtime = McpRuntime(
-        registry, session_factory, redis, settings, admission,
+        registry,
+        session_factory,
+        redis,
+        settings,
+        admission,
         approved_destination_cidrs=settings.mcp_allowed_endpoint_cidrs,
     )
     if modules["tools"].enabled:

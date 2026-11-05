@@ -38,15 +38,27 @@ async def erase_account_remote_guards(session: AsyncSession, scope: AccountErasu
     after its bound. Browser jobs remain as exact ownership anchors until this stage commits.
     """
     await authorize_account_erasure(session, scope)
-    rows = (await session.execute(select(RemoteHeavyGuard.operation_id, RemoteHeavyGuard.state,
-                                        RemoteHeavyGuard.expires_at).join(
-        BrowserReadJob, BrowserReadJob.operation_id == RemoteHeavyGuard.operation_id,
-    ).where(BrowserReadJob.workspace_id == scope.workspace_id).limit(100))).all()
-    if any(state in {"active", "uncertain"} and expiry > datetime.now(UTC)
-           for _, state, expiry in rows):
+    rows = (
+        await session.execute(
+            select(
+                RemoteHeavyGuard.operation_id, RemoteHeavyGuard.state, RemoteHeavyGuard.expires_at
+            )
+            .join(
+                BrowserReadJob,
+                BrowserReadJob.operation_id == RemoteHeavyGuard.operation_id,
+            )
+            .where(BrowserReadJob.workspace_id == scope.workspace_id)
+            .limit(100)
+        )
+    ).all()
+    if any(
+        state in {"active", "uncertain"} and expiry > datetime.now(UTC) for _, state, expiry in rows
+    ):
         raise RuntimeError("Browser remote work is still within its hard runtime bound")
     if rows:
-        await session.execute(delete(RemoteHeavyGuard).where(
-            RemoteHeavyGuard.operation_id.in_(operation_id for operation_id, _, _ in rows),
-        ))
+        await session.execute(
+            delete(RemoteHeavyGuard).where(
+                RemoteHeavyGuard.operation_id.in_(operation_id for operation_id, _, _ in rows),
+            )
+        )
     return len(rows) < 100

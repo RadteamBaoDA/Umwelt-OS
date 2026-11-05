@@ -20,8 +20,13 @@ from modules.connectors.provisioning import _workflow_drive
 
 SOURCE_ID = uuid4()
 WORKSPACE_ID = uuid4()
-SCOPE = InternalJobScope(workspace_id=WORKSPACE_ID, actor_user_id=7, membership_revision=3,
-                         source_id=SOURCE_ID, source_generation=2)
+SCOPE = InternalJobScope(
+    workspace_id=WORKSPACE_ID,
+    actor_user_id=7,
+    membership_revision=3,
+    source_id=SOURCE_ID,
+    source_generation=2,
+)
 FENCE = AccessFence(WORKSPACE_ID, 7, 3, 5)
 ORIGINAL: dict[str, object] = {"id": "op"}
 
@@ -41,9 +46,15 @@ def _api(**over: Any) -> MagicMock:
     return api
 
 
-async def _drive(claims: list[Any], *, api: Any = None, allowed: list[bool] | None = None,
-                 settle: list[Any] | None = None, matches: list[dict[str, Any]] | None = None,
-                 workflow_matches: bool = True) -> tuple[bool, dict[str, Any]]:
+async def _drive(
+    claims: list[Any],
+    *,
+    api: Any = None,
+    allowed: list[bool] | None = None,
+    settle: list[Any] | None = None,
+    matches: list[dict[str, Any]] | None = None,
+    workflow_matches: bool = True,
+) -> tuple[bool, dict[str, Any]]:
     spies = {
         "claim": AsyncMock(side_effect=claims),
         "allowed": AsyncMock(side_effect=allowed if allowed is not None else [True] * 8),
@@ -52,14 +63,21 @@ async def _drive(claims: list[Any], *, api: Any = None, allowed: list[bool] | No
     }
     session = SimpleNamespace(rollback=AsyncMock())
     spies["session"] = session
-    with patch.object(_workflow_drive, "claim_workflow_step", spies["claim"]), \
-            patch.object(_workflow_drive, "_workflow_send_allowed", spies["allowed"]), \
-            patch.object(_workflow_drive, "_settle_retained_workflow_after_io", spies["settle"]), \
-            patch("modules.connectors.n8n.find_workflows_by_name", spies["find"]), \
-            patch("modules.connectors.n8n.workflow_matches", return_value=workflow_matches):
+    with (
+        patch.object(_workflow_drive, "claim_workflow_step", spies["claim"]),
+        patch.object(_workflow_drive, "_workflow_send_allowed", spies["allowed"]),
+        patch.object(_workflow_drive, "_settle_retained_workflow_after_io", spies["settle"]),
+        patch("modules.connectors.n8n.find_workflows_by_name", spies["find"]),
+        patch("modules.connectors.n8n.workflow_matches", return_value=workflow_matches),
+    ):
         result = await provisioning.drive_workflow_operation(
-            session, SOURCE_ID, api or _api(), scope=SCOPE, multi_workspace_enabled=False,  # type: ignore[arg-type]
-            original_operation=ORIGINAL, access_fence=FENCE,
+            session,
+            SOURCE_ID,
+            api or _api(),
+            scope=SCOPE,
+            multi_workspace_enabled=False,  # type: ignore[arg-type]
+            original_operation=ORIGINAL,
+            access_fence=FENCE,
         )
     return result, spies
 
@@ -96,7 +114,9 @@ async def test_create_success_settles_known_success_with_new_workflow_id() -> No
     result, spies = await _drive([_operation("create", body={"nodes": []})], api=api)
     assert result is True
     api.create_workflow.assert_awaited_once_with({"nodes": []})
-    assert _outcomes(spies)[0][0] == "known_success" and _outcomes(spies)[0][1]["remote_id"] == "wf-1"
+    assert (
+        _outcomes(spies)[0][0] == "known_success" and _outcomes(spies)[0][1]["remote_id"] == "wf-1"
+    )
 
 
 @pytest.mark.asyncio
@@ -116,7 +136,9 @@ async def test_update_activate_deactivate_call_the_matching_api() -> None:
 @pytest.mark.asyncio
 async def test_loop_chains_next_operations_and_stops_after_four_steps() -> None:
     nxt = _operation("activate", target="t")
-    result, spies = await _drive([_operation("create", body={})] + [nxt] * 3, settle=[(True, nxt)] * 8)
+    result, spies = await _drive(
+        [_operation("create", body={})] + [nxt] * 3, settle=[(True, nxt)] * 8
+    )
     assert result is False
     assert spies["claim"].await_count == 4
     assert spies["claim"].await_args_list[1].kwargs["original_operation"] is nxt
@@ -126,8 +148,10 @@ async def test_loop_chains_next_operations_and_stops_after_four_steps() -> None:
 async def test_unchanged_settlement_returns_false_and_final_none_returns_true() -> None:
     result, _ = await _drive([_operation("create", body={})], settle=[(False, None)])
     assert result is False
-    result2, _ = await _drive([_operation("create", body={}), _operation("activate", target="t")],
-                              settle=[(True, _operation("activate", target="t")), (True, None)])
+    result2, _ = await _drive(
+        [_operation("create", body={}), _operation("activate", target="t")],
+        settle=[(True, _operation("activate", target="t")), (True, None)],
+    )
     assert result2 is True
 
 
@@ -137,7 +161,12 @@ async def test_lookup_without_match_continues_with_create() -> None:
     result, spies = await _drive([_operation("lookup", body=body)], matches=[])
     assert result is True
     kwargs = spies["settle"].await_args.kwargs
-    assert (kwargs["outcome"], kwargs["next_kind"], kwargs["remote_id"], kwargs["request"]) == ("known_success", "create", None, body)
+    assert (kwargs["outcome"], kwargs["next_kind"], kwargs["remote_id"], kwargs["request"]) == (
+        "known_success",
+        "create",
+        None,
+        body,
+    )
 
 
 @pytest.mark.asyncio
@@ -149,35 +178,52 @@ async def test_lookup_single_verified_match_continues_with_update() -> None:
     api.get_workflow.assert_awaited_once_with("w9")
     kwargs = spies["settle"].await_args.kwargs
     assert (kwargs["next_kind"], kwargs["remote_id"]) == ("update", "w9")
-    assert [c.kwargs["transport_entered"] for c in spies["allowed"].await_args_list] == [False, True]
+    assert [c.kwargs["transport_entered"] for c in spies["allowed"].await_args_list] == [
+        False,
+        True,
+    ]
 
 
 @pytest.mark.asyncio
 async def test_lookup_second_fence_denial_journals_not_sent_and_stops() -> None:
-    result, spies = await _drive([_operation("lookup", body={})], allowed=[True, False], matches=[{"id": "w9"}])
+    result, spies = await _drive(
+        [_operation("lookup", body={})], allowed=[True, False], matches=[{"id": "w9"}]
+    )
     assert result is False
     assert [o[0] for o in _outcomes(spies)] == ["not_sent"]
     assert spies["settle"].await_args.kwargs["error_code"] == "original_effect_send_fenced"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("matches", "workflow_matches", "body"), [
-    ([{"id": "a"}, {"id": "b"}], True, {}),   # ambiguous
-    ([{"id": ""}], True, {}),                 # missing id
-    ([{"id": "a"}], True, None),              # invalid prepared body
-    ([{"id": "a"}], False, {}),               # mismatched identity
-])
-async def test_lookup_validation_failures_are_journaled_as_known_rejection(matches: list, workflow_matches: bool, body: object) -> None:
-    result, spies = await _drive([_operation("lookup", body=body)], matches=matches, workflow_matches=workflow_matches)
+@pytest.mark.parametrize(
+    ("matches", "workflow_matches", "body"),
+    [
+        ([{"id": "a"}, {"id": "b"}], True, {}),  # ambiguous
+        ([{"id": ""}], True, {}),  # missing id
+        ([{"id": "a"}], True, None),  # invalid prepared body
+        ([{"id": "a"}], False, {}),  # mismatched identity
+    ],
+)
+async def test_lookup_validation_failures_are_journaled_as_known_rejection(
+    matches: list, workflow_matches: bool, body: object
+) -> None:
+    result, spies = await _drive(
+        [_operation("lookup", body=body)], matches=matches, workflow_matches=workflow_matches
+    )
     assert result is False
-    assert _outcomes(spies)[0][0] == "known_rejection" and _outcomes(spies)[0][1]["error_code"] == "n8n_outcome_unknown"
+    assert (
+        _outcomes(spies)[0][0] == "known_rejection"
+        and _outcomes(spies)[0][1]["error_code"] == "n8n_outcome_unknown"
+    )
 
 
 @pytest.mark.asyncio
 async def test_transport_failures_are_classified() -> None:
     def status(code: int) -> httpx.HTTPStatusError:
         request = httpx.Request("POST", "http://n8n")
-        return httpx.HTTPStatusError("x", request=request, response=httpx.Response(code, request=request))
+        return httpx.HTTPStatusError(
+            "x", request=request, response=httpx.Response(code, request=request)
+        )
 
     for exc, outcome, code in (
         (status(400), "known_rejection", "n8n_request_rejected"),

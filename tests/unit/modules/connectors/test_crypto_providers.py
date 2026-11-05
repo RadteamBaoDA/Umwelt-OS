@@ -20,18 +20,34 @@ def test_binance_usdt_collection_basis_and_version_ignores_clock():
     data = wd(record)
     assert record.provider_id == "binance:BTCUSDT:price" and record.observed_at == NOW
     assert data["unit"] == "USDT" and data["currency"] is None and data["symbol"] == "BTCUSDT"
-    assert data["provider_fields"] == {"symbol": "BTCUSDT", "base": "BTC", "quote": "USDT", "decimal_value": "67123.45"}
+    assert data["provider_fields"] == {
+        "symbol": "BTCUSDT",
+        "base": "BTC",
+        "quote": "USDT",
+        "decimal_value": "67123.45",
+    }
     meta = record.metadata["provider_record"]
     assert meta["timestamp_basis"] == "collection" and meta["provider_modified_at"] is None
     (later,) = map_binance(jfixture("binance_btcusdt.json"), NOW.replace(hour=9))
     assert later.version == record.version and later.observed_at != record.observed_at
 
 
-@pytest.mark.parametrize("payload", [
-    [], "x", {}, {"symbol": "ETHUSDT", "price": "1"}, {"symbol": "BTCUSDT"}, {"symbol": "BTCUSDT", "price": "0"},
-    {"symbol": "BTCUSDT", "price": "-1"}, {"symbol": "BTCUSDT", "price": None}, {"symbol": "BTCUSDT", "price": True},
-    {"symbol": "BTCUSDT", "price": "NaN"}, {"code": -1121, "msg": "Invalid symbol."},
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        "x",
+        {},
+        {"symbol": "ETHUSDT", "price": "1"},
+        {"symbol": "BTCUSDT"},
+        {"symbol": "BTCUSDT", "price": "0"},
+        {"symbol": "BTCUSDT", "price": "-1"},
+        {"symbol": "BTCUSDT", "price": None},
+        {"symbol": "BTCUSDT", "price": True},
+        {"symbol": "BTCUSDT", "price": "NaN"},
+        {"code": -1121, "msg": "Invalid symbol."},
+    ],
+)
 def test_binance_hostile(payload):
     with pytest.raises(ProviderPayloadError):
         map_binance(payload, NOW)
@@ -45,7 +61,10 @@ def test_binance_rate_limit_kind():
 
 def test_fear_greed_points():
     records = map_fear_greed(jfixture("fear_greed.json"), NOW)
-    assert [r.provider_id for r in records] == ["alternative_me:fng:1759881600", "alternative_me:fng:1759795200"]
+    assert [r.provider_id for r in records] == [
+        "alternative_me:fng:1759881600",
+        "alternative_me:fng:1759795200",
+    ]
     data = wd(records[0])
     assert data["value"] == 25 and data["unit"] == "index (0-100)" and data["currency"] is None
     assert data["provider_fields"]["value_classification"] == "Extreme Fear"
@@ -54,19 +73,36 @@ def test_fear_greed_points():
 
 
 def _fng(**item):
-    return {"data": [{"value": "50", "value_classification": "Neutral", "timestamp": "1759881600", **item}],
-            "metadata": {"error": None}}
+    return {
+        "data": [
+            {"value": "50", "value_classification": "Neutral", "timestamp": "1759881600", **item}
+        ],
+        "metadata": {"error": None},
+    }
 
 
-@pytest.mark.parametrize("payload", [
-    [], {}, {"data": [], "metadata": {"error": None}},
-    {"data": [{"value": "50"}], "metadata": {"error": "Limit exceeded"}},
-    {"data": [{"value": "50", "value_classification": "N", "timestamp": "1"}]},
-    _fng(value="101"), _fng(value="-1"), _fng(value="50.5"), _fng(value=True), _fng(value=None), _fng(value="x"),
-    _fng(timestamp="abc"), _fng(timestamp="99999999999"), _fng(timestamp=None), _fng(value_classification="<b>"),
-    {"data": [dict(_fng()["data"][0])] * 2, "metadata": {"error": None}},
-    {"data": [dict(_fng()["data"][0]) for _ in range(3)], "metadata": {"error": None}},
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {},
+        {"data": [], "metadata": {"error": None}},
+        {"data": [{"value": "50"}], "metadata": {"error": "Limit exceeded"}},
+        {"data": [{"value": "50", "value_classification": "N", "timestamp": "1"}]},
+        _fng(value="101"),
+        _fng(value="-1"),
+        _fng(value="50.5"),
+        _fng(value=True),
+        _fng(value=None),
+        _fng(value="x"),
+        _fng(timestamp="abc"),
+        _fng(timestamp="99999999999"),
+        _fng(timestamp=None),
+        _fng(value_classification="<b>"),
+        {"data": [dict(_fng()["data"][0])] * 2, "metadata": {"error": None}},
+        {"data": [dict(_fng()["data"][0]) for _ in range(3)], "metadata": {"error": None}},
+    ],
+)
 def test_fear_greed_hostile(payload):
     with pytest.raises(ProviderPayloadError):
         map_fear_greed(payload, NOW)
@@ -82,15 +118,28 @@ def test_coinpaprika_usd_and_empty_price_missing():
     payload = jfixture("coinpaprika_btc.json")
     payload["quotes"]["USD"]["price"] = ""
     missing = wd(map_coinpaprika(payload, NOW)[0])
-    assert missing["value"] is None and missing["quality"] == "missing" and missing["missing_reason"] == "provider_null"
+    assert (
+        missing["value"] is None
+        and missing["quality"] == "missing"
+        and missing["missing_reason"] == "provider_null"
+    )
 
 
-@pytest.mark.parametrize("mutate", [
-    lambda p: p.update(id="eth-ethereum"), lambda p: p.update(symbol="ETH"), lambda p: p.pop("last_updated"),
-    lambda p: p.update(last_updated="2026-10-08T01:00:00"), lambda p: p.update(last_updated="2999-01-01T00:00:00Z"),
-    lambda p: p.update(quotes={}), lambda p: p["quotes"]["USD"].update(price=0), lambda p: p["quotes"]["USD"].update(price=None),
-    lambda p: p["quotes"]["USD"].update(price=False), lambda p: p.update(quotes={"USDT": {"price": 1}}),
-])
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.update(id="eth-ethereum"),
+        lambda p: p.update(symbol="ETH"),
+        lambda p: p.pop("last_updated"),
+        lambda p: p.update(last_updated="2026-10-08T01:00:00"),
+        lambda p: p.update(last_updated="2999-01-01T00:00:00Z"),
+        lambda p: p.update(quotes={}),
+        lambda p: p["quotes"]["USD"].update(price=0),
+        lambda p: p["quotes"]["USD"].update(price=None),
+        lambda p: p["quotes"]["USD"].update(price=False),
+        lambda p: p.update(quotes={"USDT": {"price": 1}}),
+    ],
+)
 def test_coinpaprika_hostile(mutate):
     payload = jfixture("coinpaprika_btc.json")
     mutate(payload)
@@ -98,10 +147,14 @@ def test_coinpaprika_hostile(mutate):
         map_coinpaprika(payload, NOW)
 
 
-@pytest.mark.parametrize(("payload", "kind"), [
-    ({"error": "Too many requests"}, "rate_limited"), ({"error": "Payment required for this plan"}, "entitlement"),
-    ({"error": "Something"}, "invalid"),
-])
+@pytest.mark.parametrize(
+    ("payload", "kind"),
+    [
+        ({"error": "Too many requests"}, "rate_limited"),
+        ({"error": "Payment required for this plan"}, "entitlement"),
+        ({"error": "Something"}, "invalid"),
+    ],
+)
 def test_coinpaprika_error_kinds(payload, kind):
     with pytest.raises(ProviderPayloadError) as err:
         map_coinpaprika(payload, NOW)
@@ -112,22 +165,40 @@ def test_coingecko_collection_basis_and_optional_timestamp():
     (record,) = map_coingecko(jfixture("coingecko_btc.json"), NOW)
     assert record.provider_id == "coingecko:bitcoin:USD" and record.observed_at == NOW
     assert record.metadata["provider_record"]["timestamp_basis"] == "collection"
-    assert wd(record)["provider_fields"] == {"coin_id": "bitcoin", "quote": "USD", "decimal_value": "67123.4"}
+    assert wd(record)["provider_fields"] == {
+        "coin_id": "bitcoin",
+        "quote": "USD",
+        "decimal_value": "67123.4",
+    }
     (stamped,) = map_coingecko({"bitcoin": {"usd": 5, "last_updated_at": 1759881600}}, NOW)
-    assert stamped.provider_id == "coingecko:bitcoin:USD:1759881600" and wd(stamped)["provider_fields"]["last_updated_at"] == 1759881600
+    assert (
+        stamped.provider_id == "coingecko:bitcoin:USD:1759881600"
+        and wd(stamped)["provider_fields"]["last_updated_at"] == 1759881600
+    )
     (null,) = map_coingecko({"bitcoin": {"usd": None}}, NOW)
     assert wd(null)["quality"] == "missing"
 
 
-@pytest.mark.parametrize(("payload", "kind"), [
-    ({"status": {"error_code": 429, "error_message": "x"}}, "rate_limited"),
-    ({"status": {"error_code": 10002}}, "credential"), ({"status": {"error_code": 10010}}, "credential"),
-    ({"status": {"error_code": 10011}}, "credential"), ({"error_code": 401, "error": "x"}, "credential"),
-    ({"status": {"error_code": 10005}}, "entitlement"), ({"status": {"error_code": 500}}, "invalid"),
-    ({"error": "x"}, "invalid"), ({}, "invalid"), ({"bitcoin": {}}, "invalid"), ({"bitcoin": {"eur": 1}}, "invalid"),
-    ({"bitcoin": {"usd": 0}}, "invalid"), ({"bitcoin": {"usd": True}}, "invalid"), ({"ethereum": {"usd": 1}}, "invalid"),
-    ({"bitcoin": {"usd": 1, "last_updated_at": "soon"}}, "invalid"),
-])
+@pytest.mark.parametrize(
+    ("payload", "kind"),
+    [
+        ({"status": {"error_code": 429, "error_message": "x"}}, "rate_limited"),
+        ({"status": {"error_code": 10002}}, "credential"),
+        ({"status": {"error_code": 10010}}, "credential"),
+        ({"status": {"error_code": 10011}}, "credential"),
+        ({"error_code": 401, "error": "x"}, "credential"),
+        ({"status": {"error_code": 10005}}, "entitlement"),
+        ({"status": {"error_code": 500}}, "invalid"),
+        ({"error": "x"}, "invalid"),
+        ({}, "invalid"),
+        ({"bitcoin": {}}, "invalid"),
+        ({"bitcoin": {"eur": 1}}, "invalid"),
+        ({"bitcoin": {"usd": 0}}, "invalid"),
+        ({"bitcoin": {"usd": True}}, "invalid"),
+        ({"ethereum": {"usd": 1}}, "invalid"),
+        ({"bitcoin": {"usd": 1, "last_updated_at": "soon"}}, "invalid"),
+    ],
+)
 def test_coingecko_hostile_kinds(payload, kind):
     with pytest.raises(ProviderPayloadError) as err:
         map_coingecko(payload, NOW)
@@ -136,7 +207,11 @@ def test_coingecko_hostile_kinds(payload, kind):
 
 def test_coingecko_key_only_in_header():
     req = coingecko_request("k-123")
-    assert req.headers == {"x-cg-demo-api-key": "k-123"} and "k-123" not in req.url and "k-123" not in repr(req)
+    assert (
+        req.headers == {"x-cg-demo-api-key": "k-123"}
+        and "k-123" not in req.url
+        and "k-123" not in repr(req)
+    )
     assert req.url == COINGECKO_URL
     for bad in ("", " k", "k\n", "x" * 300):
         with pytest.raises(ProviderPayloadError):
@@ -148,27 +223,38 @@ def test_coingecko_key_only_in_header():
 def test_coingecko_configured_assets_share_one_request_and_keep_distinct_series():
     from modules.connectors.providers.keyed import KEYED
 
-    cfg = {"coingecko_assets": [
-        {"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},
-        {"id": "bitcoin-cash", "symbol": "BTC", "name": "Bitcoin Cash"},
-    ]}
+    cfg = {
+        "coingecko_assets": [
+            {"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},
+            {"id": "bitcoin-cash", "symbol": "BTC", "name": "Bitcoin Cash"},
+        ]
+    }
     row = KEYED["coingecko"]
     request = row.build("demo-key", cfg)
     assert request.url.endswith("ids=bitcoin,bitcoin-cash&vs_currencies=usd")
     assert request.headers == {"x-cg-demo-api-key": "demo-key"}
     records = row.mapper({"bitcoin": {"usd": 5}, "bitcoin-cash": {"usd": 2}}, NOW, cfg)
     assert [wd(record)["symbol"] for record in records] == ["BITCOIN", "BITCOIN-CASH"]
-    assert [wd(record)["provider_fields"]["coin_id"] for record in records] == ["bitcoin", "bitcoin-cash"]
-    assert [record.provider_id for record in records] == ["coingecko:bitcoin:USD", "coingecko:bitcoin-cash:USD"]
+    assert [wd(record)["provider_fields"]["coin_id"] for record in records] == [
+        "bitcoin",
+        "bitcoin-cash",
+    ]
+    assert [record.provider_id for record in records] == [
+        "coingecko:bitcoin:USD",
+        "coingecko:bitcoin-cash:USD",
+    ]
 
 
 def test_coingecko_selected_missing_price_rejects_whole_collection():
     from modules.connectors.providers.keyed import KEYED
 
-    cfg = {"coingecko_assets": [{"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},
-                                {"id": "ethereum", "symbol": "ETH", "name": "Ethereum"}]}
-    for payload in ({"bitcoin": {"usd": 5}},
-                    {"bitcoin": {"usd": 5}, "ethereum": {"usd": None}}):
+    cfg = {
+        "coingecko_assets": [
+            {"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},
+            {"id": "ethereum", "symbol": "ETH", "name": "Ethereum"},
+        ]
+    }
+    for payload in ({"bitcoin": {"usd": 5}}, {"bitcoin": {"usd": 5}, "ethereum": {"usd": None}}):
         with pytest.raises(ProviderPayloadError, match="coingecko_price_missing"):
             KEYED["coingecko"].mapper(payload, NOW, cfg)
 
@@ -179,9 +265,16 @@ def test_coingecko_long_id_has_bounded_stable_series_symbol():
     coin_id = "a-very-long-but-valid-coingecko-asset-identifier-1234567890"
     key = coingecko_series_symbol(coin_id)
     assert len(key) == 40 and key.startswith("A-VERY-LONG-BUT-VALID-COINGECK")
-    cfg = ConnectorConfig.model_validate({"coingecko_assets": [{"id": coin_id, "symbol": "LONG", "name": "Long Coin"}]})
+    cfg = ConnectorConfig.model_validate(
+        {"coingecko_assets": [{"id": coin_id, "symbol": "LONG", "name": "Long Coin"}]}
+    )
     assert cfg.coingecko_assets[0].series_symbol == key
-    assert ConnectorConfig.model_validate(cfg.model_dump(mode="json")).coingecko_assets[0].series_symbol == key
+    assert (
+        ConnectorConfig.model_validate(cfg.model_dump(mode="json"))
+        .coingecko_assets[0]
+        .series_symbol
+        == key
+    )
 
 
 def test_coingecko_config_rejects_duplicate_or_untrusted_assets():
@@ -190,8 +283,13 @@ def test_coingecko_config_rejects_duplicate_or_untrusted_assets():
     from modules.connectors.public import ConnectorConfig
 
     good = {"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"}
-    for assets in ([good, good], [{**good, "id": "Bitcoin"}], [{**good, "series_symbol": "ETHEREUM"}],
-                   [good] * 21, []):
+    for assets in (
+        [good, good],
+        [{**good, "id": "Bitcoin"}],
+        [{**good, "series_symbol": "ETHEREUM"}],
+        [good] * 21,
+        [],
+    ):
         with pytest.raises(ValidationError):
             ConnectorConfig.model_validate({"coingecko_assets": assets})
 
@@ -202,12 +300,33 @@ def test_body_dispatch_and_urls_match_catalog():
     from modules.connectors.provider_specs import get_provider_spec
     from modules.connectors.providers.world_data import PURE_ADAPTERS
 
-    assert map_pure_provider_body("binance", fixture("binance_btcusdt.json"), NOW)[0].provider_id == "binance:BTCUSDT:price"
+    assert (
+        map_pure_provider_body("binance", fixture("binance_btcusdt.json"), NOW)[0].provider_id
+        == "binance:BTCUSDT:price"
+    )
     assert BINANCE_URL.startswith("https://data-api.binance.vision/")
     from modules.connectors.providers.json_feed import JSON_FEEDS
 
-    assert set(PURE_ADAPTERS) == {"world_bank", "frankfurter", "ecb", "binance", "alternative_me", "usgs", "coinpaprika", "coingecko", "nasa_eonet", "cisa_kev", "vn_stock"} | set(JSON_FEEDS) | {
-        "noaa_kp", "open_er_api", "oecd_cli", "iss_position", "disease_sh", "ioda", "nvd",
+    assert set(PURE_ADAPTERS) == {
+        "world_bank",
+        "frankfurter",
+        "ecb",
+        "binance",
+        "alternative_me",
+        "usgs",
+        "coinpaprika",
+        "coingecko",
+        "nasa_eonet",
+        "cisa_kev",
+        "vn_stock",
+    } | set(JSON_FEEDS) | {
+        "noaa_kp",
+        "open_er_api",
+        "oecd_cli",
+        "iss_position",
+        "disease_sh",
+        "ioda",
+        "nvd",
     }
     for provider, adapter in PURE_ADAPTERS.items():
         spec = get_provider_spec(provider)
@@ -216,5 +335,7 @@ def test_body_dispatch_and_urls_match_catalog():
         assert request.method == "GET" and parts.scheme == "https" and parts.hostname in spec.hosts
         target = parts.path + ("?" + parts.query if parts.query else "")
         # Date-addressed rows (Wikimedia) declare a ``{yyyy}/{mm}/{dd}`` template: match on its fixed prefix.
-        assert target in spec.endpoints or any("{" in e and target.startswith(e.split("{")[0]) for e in spec.endpoints)
+        assert target in spec.endpoints or any(
+            "{" in e and target.startswith(e.split("{")[0]) for e in spec.endpoints
+        )
         assert not parts.username and not parts.password
