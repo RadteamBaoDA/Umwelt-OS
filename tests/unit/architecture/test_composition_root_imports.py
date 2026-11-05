@@ -33,3 +33,17 @@ def test_api_and_worker_entry_points_still_import() -> None:
     """Dropping the eager facade imports must not break the composed API or worker entry points."""
     result = _run("import apps.api.main, apps.worker.main")
     assert result.returncode == 0, result.stderr
+
+
+def test_cycle_prone_modules_import_first_in_a_fresh_interpreter() -> None:
+    """Each module must import cleanly as the FIRST import (guards ingestion/connectors facade cycles)."""
+    for module in (
+        "modules.ingestion._purge",
+        "modules.connectors.service.collection_requests",
+        "modules.connectors.service.config",
+        "modules.connectors.service.packaged",
+        "modules.connectors.service.schemas",
+        "modules.connectors.service.scope",
+    ):
+        result = _run(f"import {module}")
+        assert result.returncode == 0, f"{module}: {result.stderr[-600:]}"
