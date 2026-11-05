@@ -1,29 +1,5 @@
 """Owner-scoped agent run creation, lookup, and cancellation contracts."""
 
-from importlib import import_module as _import_module
-from typing import TYPE_CHECKING as _TYPE_CHECKING
-from typing import Any as _Any
-
-# Re-exports of private submodules that themselves import this facade are resolved lazily (PEP 562) so the two cannot
-# form an import cycle; type checkers see them through the TYPE_CHECKING block at the end of the module.
-_LAZY_DTO_MODULES = {
-    "mark_effect_outcome": "modules.agents.approvals",
-}
-
-
-def __getattr__(name: str) -> _Any:
-    """Resolve the lazily re-exported names on first access (module-level ``__getattr__``).
-
-    Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
-    """
-    module_name = _LAZY_DTO_MODULES.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(_import_module(module_name), name)
-    globals()[name] = value
-    return value
-
-
 import asyncio
 import binascii
 import hashlib
@@ -33,7 +9,10 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib import import_module as _import_module
+from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any
+from typing import Any as _Any
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -90,6 +69,25 @@ from modules.tools.public import (
     revalidate_native_output_fences,
     revalidate_native_output_fences_many,
 )
+
+# Re-exports of private submodules that themselves import this facade are resolved lazily (PEP 562) so the two cannot
+# form an import cycle; type checkers see them through the TYPE_CHECKING block at the end of the module.
+_LAZY_DTO_MODULES = {
+    "mark_effect_outcome": "modules.agents.approvals",
+}
+
+
+def __getattr__(name: str) -> _Any:
+    """Resolve the lazily re-exported names on first access (module-level ``__getattr__``).
+
+    Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
+    """
+    module_name = _LAZY_DTO_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(module_name), name)
+    globals()[name] = value
+    return value
 
 WORKFLOW_VERSION = "assistant-readonly-v1"
 APPROVAL_WORKFLOW_VERSION = "assistant-approved-v1"

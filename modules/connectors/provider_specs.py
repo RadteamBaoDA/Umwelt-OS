@@ -729,7 +729,8 @@ BUILTIN_PROVIDERS: frozenset[str] = frozenset(
 # presets (measurement snapshots are always fresh) plus the owner-scoped Google News query source.
 # Measurement providers (cisa_kev, usgs, ...) are excluded even when tagged "event": their documents are
 # snapshots that never dedup by seen key, so a cursor would only regress or stall.
-from modules.knowledge.documents.public import MEASUREMENT_PROVIDER_IDS
+# Late import: avoids a circular import with the documents contract.
+from modules.knowledge.documents.public import MEASUREMENT_PROVIDER_IDS  # noqa: E402
 
 INCREMENTAL_PROVIDERS: frozenset[str] = frozenset(
     spec.id for spec in FREE_PROVIDER_SPECS

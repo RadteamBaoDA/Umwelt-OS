@@ -7,36 +7,15 @@ Cross-module task reads/writes go through modules.tasks.public DTO contracts.
 
 from __future__ import annotations
 
-from importlib import import_module as _import_module
-from typing import TYPE_CHECKING as _TYPE_CHECKING
-from typing import Any as _Any
-
-# Re-exports of private submodules that themselves import this facade are resolved lazily (PEP 562) so the two cannot
-# form an import cycle; type checkers see them through the TYPE_CHECKING block at the end of the module.
-_LAZY_DTO_MODULES = {
-    "register_goal_tools": "modules.goals.tools",
-}
-
-
-def __getattr__(name: str) -> _Any:
-    """Resolve the lazily re-exported names on first access (module-level ``__getattr__``).
-
-    Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
-    """
-    module_name = _LAZY_DTO_MODULES.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(_import_module(module_name), name)
-    globals()[name] = value
-    return value
-
-
 import hashlib
 import json
 from collections.abc import Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
+from importlib import import_module as _import_module
+from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any
+from typing import Any as _Any
 from uuid import UUID, uuid5
 
 from sqlalchemy import ColumnElement, func, select, tuple_
@@ -75,6 +54,25 @@ from modules.goals.schemas import (
 from modules.goals.seed import (
     ensure_demo_goals,  # re-export: used by documents seed
 )
+
+# Re-exports of private submodules that themselves import this facade are resolved lazily (PEP 562) so the two cannot
+# form an import cycle; type checkers see them through the TYPE_CHECKING block at the end of the module.
+_LAZY_DTO_MODULES = {
+    "register_goal_tools": "modules.goals.tools",
+}
+
+
+def __getattr__(name: str) -> _Any:
+    """Resolve the lazily re-exported names on first access (module-level ``__getattr__``).
+
+    Raises ``AttributeError`` for any other missing attribute, preserving normal module semantics.
+    """
+    module_name = _LAZY_DTO_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(module_name), name)
+    globals()[name] = value
+    return value
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
