@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError, ForbiddenError
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.memory import public
 from modules.memory.public import MemoryService
@@ -59,7 +59,7 @@ async def test_member_is_denied_before_any_query(call) -> None:
     session.execute = AsyncMock()
     session.scalar = AsyncMock()
     session.scalars = AsyncMock()
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await call(MemoryService(session))
     assert caught.value.status_code == 403
     session.execute.assert_not_awaited()
@@ -121,7 +121,7 @@ async def test_read_export_privacy_is_scoped_and_admitted() -> None:
     admit.assert_awaited_once()
     assert result.persisted is False
     assert "memory_privacy_settings.workspace_id = " in _where(captured[0])
-    with pytest.raises(HTTPException):
+    with pytest.raises(ForbiddenError):
         await public.read_export_privacy(session, **{**CTX, "scope": MEMBER})
 
 

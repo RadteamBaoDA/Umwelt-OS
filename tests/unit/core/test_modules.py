@@ -121,7 +121,7 @@ def test_every_route_module_gate_id_is_registered() -> None:
 
     def record(call) -> None:
         if getattr(call, "__name__", "") == "require_enabled_module":
-            cells = dict(zip(call.__code__.co_freevars, (c.cell_contents for c in call.__closure__)))
+            cells = dict(zip(call.__code__.co_freevars, (c.cell_contents for c in call.__closure__), strict=True))
             found.add(cells["module_id"])
 
     def walk_dependant(dependant) -> None:

@@ -74,7 +74,7 @@ class TestListRelationships:
     async def test_naive_datetime_rejected(self) -> None:
         """Verify naive valid_at or knowledge_as_of raises ValueError."""
         session = AsyncMock()
-        naive_dt = datetime(2026, 10, 5, 12, 0, 0)  # No tzinfo  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
+        naive_dt = datetime(2026, 10, 5, 12, 0, 0)  # No tzinfo  # intentionally naive: wall-clock/DST math or naive-rejection test
 
         with pytest.raises(ValueError, match="Relationship time controls require aware instants"):
             await list_relationships(session, limit=10, cursor=None, valid_at=naive_dt, **KW)
@@ -228,7 +228,7 @@ class TestListRelationshipEvidence:
     async def test_naive_cutoff_rejected(self) -> None:
         """Verify naive knowledge_as_of raises ValueError."""
         session = AsyncMock()
-        naive_dt = datetime(2026, 10, 5, 12, 0, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
+        naive_dt = datetime(2026, 10, 5, 12, 0, 0)
         with pytest.raises(ValueError, match="Evidence cutoff requires an aware instant"):
             await list_relationship_evidence(session, relationship_id=uuid4(), limit=10, cursor=None, knowledge_as_of=naive_dt, **KW)
 
@@ -311,7 +311,7 @@ class TestCreateRelationship:
             reason="Test",
         )
 
-        with (  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        with (
             patch("modules.knowledge.documents.public.read_evidence_refs", AsyncMock(return_value=[])),
             patch("modules.knowledge.entities.public.get_entity_refs", AsyncMock(side_effect=LookupError("Entity missing"))),
         ):

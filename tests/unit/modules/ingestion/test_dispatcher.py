@@ -8,8 +8,8 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from fastapi import HTTPException
 
+from core.errors import ConflictError, DomainError
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.ingestion import dispatcher, public
 from modules.ingestion.models import (
@@ -22,6 +22,8 @@ from modules.ingestion.worker import (
     ConnectorRetryError,
     _retry_after_seconds,
 )
+
+from .patching import patch_ingestion
 
 SCOPE = WorkspaceContext(user_id=7, workspace_id=uuid4(), role="owner", membership_revision=3)
 
@@ -131,7 +133,7 @@ class TestDispatcherWork:
         result.scalar_one_or_none.return_value = event.id
         session.execute.return_value = result
 
-        with patch.object(public, "_admit_ingestion_scope", AsyncMock()):
+        with patch_ingestion("_admit_ingestion_scope", AsyncMock()):
             assert await dispatcher.mark_event_delivered(
                 session, event.id, scope=SCOPE, multi_workspace_enabled=False,
             ) is True
@@ -144,7 +146,7 @@ class TestDispatcherWork:
         result.scalar_one_or_none.return_value = None
         session.execute.return_value = result
 
-        with patch.object(public, "_admit_ingestion_scope", AsyncMock()):
+        with patch_ingestion("_admit_ingestion_scope", AsyncMock()):
             assert await dispatcher.mark_event_delivered(
                 session, uuid4(), scope=SCOPE, multi_workspace_enabled=False,
             ) is False
@@ -208,8 +210,8 @@ class TestBatchAndRunStatusTransitions:
 
         locked = SourceFenceSet(fences=(fence,), access_fence=AccessFence(SCOPE.workspace_id, 7, 3, 5))
         with (
-            patch("modules.ingestion.public._admit_ingestion_scope", AsyncMock()),
-            patch("modules.ingestion.public.sources.lock_source_set", AsyncMock(return_value=locked)),
+            patch_ingestion("_admit_ingestion_scope", AsyncMock()),
+            patch("modules.sources.public.lock_source_set", AsyncMock(return_value=locked)),
         ):
             session.get.side_effect = lambda model, ident, **kwargs: run if model == IngestionRun else None
             session.scalar.return_value = run
@@ -217,7 +219,7 @@ class TestBatchAndRunStatusTransitions:
             mock_stages.all.return_value = [st1, st2]
             session.scalars.return_value = mock_stages
 
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(DomainError) as exc_info:
                 await public.retry_run(session, run_id, "normalize", scope=SCOPE, multi_workspace_enabled=False)
             assert exc_info.value.status_code == 409
             assert exc_info.value.detail == "Ingestion run still has an active stage"
@@ -299,8 +301,8 @@ class TestCursorCasLogic:
         # If concurrent writer moved cursor forward, rowcount is 0 -> HTTP 409
         rowcount_conflict = 0
         if rowcount_conflict != 1:
-            with pytest.raises(HTTPException) as exc_info:
-                raise HTTPException(status_code=409, detail="Collection cursor changed")
+            with pytest.raises(DomainError) as exc_info:
+                raise ConflictError("Collection cursor changed")
             assert exc_info.value.status_code == 409
             assert exc_info.value.detail == "Collection cursor changed"
 
@@ -323,7 +325,7 @@ class TestCursorCasLogic:
 
         cursor_after = older_item_time.isoformat()
         # Verify cursor monotonic guard
-        latest = datetime.fromisoformat(cursor_after.replace("Z", "+00:00"))  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+        latest = datetime.fromisoformat(cursor_after.replace("Z", "+00:00"))
         if prior_cursor > latest:
             cursor_after = prior_cursor.isoformat()
 

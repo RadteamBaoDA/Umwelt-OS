@@ -17,15 +17,14 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.pagination import decode_cursor, encode_cursor
+from core.errors import ForbiddenError
+from core.pagination import b64url_decode, b64url_encode, decode_cursor, encode_cursor
 from core.realtime import commit_with_replay, make_graph_change
-from core.workspaces import public as workspaces
+from core.workspaces.admission import ALL_SCOPE_TYPES, admit_scope
+from core.workspaces.admission import actor_id as _actor
 from core.workspaces.schemas import (
     AccessFence,
-    AdminWorkspaceReadContext,
-    InternalJobScope,
     Scope,
-    WorkspaceContext,
 )
 from modules.knowledge.entities.models import (
     Entity,
@@ -71,6 +70,7 @@ from modules.knowledge.entities.schemas import (
     EntityTemporalNodeSeed,
     VersionMembershipReference,
     canonicalize_name,
+    validate_metadata,
 )
 from modules.knowledge.entities.seed import (
     ensure_demo_entities,  # re-export: used by documents seed
@@ -79,30 +79,19 @@ from modules.sources import public as sources
 from modules.sources.schemas import SourceExportFence, SourceFence
 
 
-def _actor(scope: Scope) -> int:
-    """Return the principal recorded by a real workspace or durable job scope."""
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
-
-
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,
 ) -> AccessFence:
-    """Require owner scope and capture or lock authorization before entity locks."""
-    if not isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext, InternalJobScope)):
-        raise TypeError("An explicit entity workspace scope is required")
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
-    if type(multi_workspace_enabled) is not bool:
-        raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    if lock and isinstance(scope, AdminWorkspaceReadContext):
-        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
-    if lock:
-        return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
-        )
-    return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    """Require owner scope and capture or lock authorization before entity locks.
+
+    Delegates to the canonical ``admit_scope``: typed workspace/admin-read/job scope (``TypeError``), owner-only
+    members (403), admin viewers denied when ``lock`` is true (403), boolean multi-workspace flag, then a locked
+    (with ``expected``) or read access fence. No commit.
+    """
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
+        allowed_scopes=ALL_SCOPE_TYPES, scope_label="entity workspace", admin_read_only_on_lock=True,
     )
 
 
@@ -111,7 +100,7 @@ async def observability_quality_summary(
 ) -> dict[str, int]:
     """Return global entity quality counts only for the explicit instance operator route."""
     if instance_operator is not True:
-        raise HTTPException(status_code=403, detail="Instance operator access required")
+        raise ForbiddenError("Instance operator access required")
     unresolved = int(await session.scalar(select(func.count()).select_from(Entity).where(
         and_(Entity.canonical_name.is_(None), Entity.name.is_(None))
     )) or 0)
@@ -123,7 +112,17 @@ async def observability_quality_summary(
 
 # Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
 __all__ = [
+    "EntityEvidencePage",
+    "EntityHistoryPage",
+    "EntityPage",
+    "EntityRead",
+    "EntityRelationshipReviewRequest",
+    "EntityRelationshipReviewResult",
+    "EntityReviewAssignmentRequest",
+    "EntityReviewAssignmentResult",
+    "EntityReviewPage",
     "ensure_demo_entities",
+    "validate_metadata",
 ]
 
 ENTITY_EXPORT_PAGE_MAX_BYTES = 16_777_216
@@ -135,7 +134,7 @@ def _encode_entity_export_cursor(owner_id: int, workspace_id: UUID, snapshot_at:
                           "snapshot": snapshot_at.astimezone(UTC).isoformat(),
                           "at": position_at.astimezone(UTC).isoformat(), "id": str(position_id)},
                          sort_keys=True, separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    return b64url_encode(payload)
 
 
 def _decode_entity_export_cursor(cursor: str, owner_id: int, workspace_id: UUID) -> tuple[datetime, datetime, UUID]:
@@ -143,7 +142,7 @@ def _decode_entity_export_cursor(cursor: str, owner_id: int, workspace_id: UUID)
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        raw = b64url_decode(cursor)
         value = json.loads(raw)
         if not isinstance(value, dict) or set(value) != {"v", "owner", "workspace", "kind", "snapshot", "at", "id"}:
             raise ValueError
@@ -233,30 +232,10 @@ async def _entity_export_field_is_supported(
     ).limit(1)) is not None
 
 
-async def export_page(
-    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50,
-    cursor: str | None = None, scope: Scope, multi_workspace_enabled: bool,
-) -> EntityExportPage:
-    """Return bounded canonical entity facts with aliases, citation IDs, and final-validation fences.
-
-    Owner fields and owner-origin aliases survive independently; non-owner name and description
-    values require exact current support from an export-eligible source. Derived and origin-less
-    aliases likewise require exact eligible alias-support memberships. Creator source IDs, arbitrary
-    metadata, extraction payloads and audit details are excluded. Combined citations are capped at 100;
-    an overfull record fails explicitly so no canonical fact is silently truncated.
-    """
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if owner_id != _actor(scope) or record_kind != "entities" or not 1 <= limit <= 100:
-        raise ValueError("Entity export kind or page limit is invalid")
-    if cursor is None:
-        snapshot_at, position = datetime.now(UTC), None
-    else:
-        snapshot_at, position_at, position_id = _decode_entity_export_cursor(cursor, owner_id, scope.workspace_id)
-        position = (position_at, position_id)
-    snapshot_count = await _entity_export_count(
-        session, snapshot_at, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    )
-    eligible = sources.export_eligible_source_ids(scope=scope)
+def _entity_export_statement(
+    scope: Scope, snapshot_at: datetime, position: tuple[datetime, UUID] | None, eligible: Any,
+) -> Any:
+    """Build the keyset select of exportable entities at the snapshot (owner-set fields or eligible support)."""
     eligible_membership = exists(select(EntityEvidenceMembership.id).where(
         EntityEvidenceMembership.entity_id == Entity.id,
         EntityEvidenceMembership.workspace_id == scope.workspace_id,
@@ -281,94 +260,158 @@ async def export_page(
     )
     if position is not None:
         statement = statement.where(tuple_(Entity.created_at, Entity.id) > position)
+    return statement
+
+
+async def _entity_export_children(
+    session: AsyncSession, row: Entity, eligible: Any, scope: Scope,
+) -> tuple[list[EntityAlias], list[EntityEvidenceMembership], dict[UUID, list[Any]]]:
+    """Read one entity's exportable aliases, citations and per-alias support rows within explicit bounds.
+
+    Raises ``ValueError`` when aliases or citations exceed 100, any alias exceeds 100 support rows, or total
+    alias support exceeds 100, so no fact is silently truncated.
+    """
+    aliases = list((await session.scalars(select(EntityAlias).where(
+        EntityAlias.entity_id == row.id,
+        or_(EntityAlias.origin == "owner", exists(select(EntityAliasEvidence.id).join(
+            EntityEvidenceMembership, EntityEvidenceMembership.id == EntityAliasEvidence.membership_id,
+        ).where(
+            EntityAliasEvidence.alias_id == EntityAlias.id,
+            EntityEvidenceMembership.entity_id == EntityAlias.entity_id,
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            EntityEvidenceMembership.source_id.in_(eligible),
+        ))),
+    )
+                                          .order_by(EntityAlias.id).limit(101)
+                                          .execution_options(populate_existing=True))).all())
+    evidence = list((await session.scalars(select(EntityEvidenceMembership).where(
+        EntityEvidenceMembership.entity_id == row.id,
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
+        EntityEvidenceMembership.source_id.in_(eligible),
+    ).order_by(EntityEvidenceMembership.id).limit(101)
+      .execution_options(populate_existing=True))).all())
+    if len(aliases) > 100 or len(evidence) > 100:
+        raise ValueError("An entity export record exceeds the alias or citation reference bound")
+    alias_support_rows: dict[UUID, list[Any]] = {}
+    for alias in aliases:
+        support_rows = list((await session.execute(select(EntityAliasEvidence, EntityEvidenceMembership).join(
+            EntityEvidenceMembership, EntityEvidenceMembership.id == EntityAliasEvidence.membership_id,
+        ).where(
+            EntityAliasEvidence.alias_id == alias.id,
+            EntityEvidenceMembership.entity_id == alias.entity_id,
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+            EntityEvidenceMembership.source_id.in_(eligible),
+        ).order_by(EntityAliasEvidence.id).limit(101)
+          .execution_options(populate_existing=True))).all())
+        if len(support_rows) > 100:
+            raise ValueError("An entity alias exceeds the support reference bound")
+        alias_support_rows[alias.id] = support_rows
+    if sum(map(len, alias_support_rows.values())) > 100:
+        raise ValueError("An entity export record exceeds the total alias support bound")
+    return aliases, evidence, alias_support_rows
+
+
+async def _entity_export_item(
+    session: AsyncSession, row: Entity, eligible: Any, *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[EntityExportRead, EntityExportFence]:
+    """Build one entity's export record and its final-validation fence.
+
+    Non-owner name/description are exported only with exact eligible support (otherwise blanked with their
+    origin). Reads children, distinct source generations (<= 100) and field support in that order.
+    """
+    aliases, evidence, alias_support_rows = await _entity_export_children(session, row, eligible, scope)
+    source_ids = {item.source_id for item in evidence}
+    source_ids.update(membership.source_id for rows_for_alias in alias_support_rows.values()
+                      for _, membership in rows_for_alias)
+    if len(source_ids) > 100:
+        raise ValueError("An entity export record exceeds the distinct source generation bound")
+    source_generations = await _entity_export_source_generations(
+        session, source_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    alias_items = [EntityExportAlias(
+        id=alias.id, alias=alias.alias, confirmed=alias.confirmed, origin=alias.origin,
+        confidence=alias.confidence, created_at=alias.created_at,
+        supports=[EntityExportAliasEvidence(
+            membership_id=membership.id, source_id=membership.source_id,
+            source_generation=source_generations[membership.source_id], confidence=support.confidence,
+        ) for support, membership in alias_support_rows[alias.id]],
+    ) for alias in aliases]
+    evidence_items = [EntityExportEvidence(
+        id=item.id, source_id=item.source_id, source_generation=source_generations[item.source_id],
+        document_id=item.document_id,
+        document_version_id=item.document_version_id, chunk_id=item.chunk_id,
+        observed_at=item.observed_at, extracted_at=item.extracted_at, confidence=item.confidence,
+    ) for item in evidence]
+    name = row.name
+    canonical_name = row.canonical_name
+    name_origin = row.name_origin
+    if row.name_origin != "owner" and not await _entity_export_field_is_supported(
+        session, row, "name", row.name, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        name = canonical_name = None
+        name_origin = None
+    description = row.description
+    description_origin = row.description_origin
+    if row.description_origin != "owner" and not await _entity_export_field_is_supported(
+        session, row, "description", row.description,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        description = None
+        description_origin = None
+    item = EntityExportRead(
+        id=row.id, type=row.type, name=name, canonical_name=canonical_name,
+        description=description, revision=row.revision, name_origin=name_origin,
+        description_origin=description_origin, first_seen_at=row.first_seen_at,
+        last_seen_at=row.last_seen_at, created_at=row.created_at, updated_at=row.updated_at,
+        aliases=alias_items, evidence=evidence_items,
+    )
+    fence = EntityExportFence(
+        id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
+        alias_ids=[alias.id for alias in alias_items], evidence_ids=[ev.id for ev in evidence_items],
+        source_fences=[EntitySourceExportFence(source_id=source_id, generation=generation)
+                       for source_id, generation in sorted(source_generations.items(), key=lambda pair: str(pair[0]))],
+        alias_digest=sha256(json.dumps([alias.model_dump(mode="json") for alias in alias_items],
+                                       ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
+        evidence_digest=sha256(json.dumps([ev.model_dump(mode="json") for ev in evidence_items],
+                                          ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
+    )
+    return item, fence
+
+
+async def export_page(
+    session: AsyncSession, *, owner_id: int, record_kind: str, limit: int = 50,
+    cursor: str | None = None, scope: Scope, multi_workspace_enabled: bool,
+) -> EntityExportPage:
+    """Return bounded canonical entity facts with aliases, citation IDs, and final-validation fences.
+
+    Owner fields and owner-origin aliases survive independently; non-owner name and description
+    values require exact current support from an export-eligible source. Derived and origin-less
+    aliases likewise require exact eligible alias-support memberships. Creator source IDs, arbitrary
+    metadata, extraction payloads and audit details are excluded. Combined citations are capped at 100;
+    an overfull record fails explicitly so no canonical fact is silently truncated.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if owner_id != _actor(scope) or record_kind != "entities" or not 1 <= limit <= 100:
+        raise ValueError("Entity export kind or page limit is invalid")
+    if cursor is None:
+        snapshot_at, position = datetime.now(UTC), None
+    else:
+        snapshot_at, position_at, position_id = _decode_entity_export_cursor(cursor, owner_id, scope.workspace_id)
+        position = (position_at, position_id)
+    snapshot_count = await _entity_export_count(
+        session, snapshot_at, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    eligible = sources.export_eligible_source_ids(scope=scope)
+    statement = _entity_export_statement(scope, snapshot_at, position, eligible)
     rows = list((await session.scalars(statement.order_by(Entity.created_at, Entity.id)
                                        .limit(limit + 1).execution_options(populate_existing=True))).all())
     has_more = len(rows) > limit
     items: list[EntityExportRead] = []
     fences: list[EntityExportFence] = []
     for row in rows[:limit]:
-        aliases = list((await session.scalars(select(EntityAlias).where(
-            EntityAlias.entity_id == row.id,
-            or_(EntityAlias.origin == "owner", exists(select(EntityAliasEvidence.id).join(
-                EntityEvidenceMembership, EntityEvidenceMembership.id == EntityAliasEvidence.membership_id,
-            ).where(
-                EntityAliasEvidence.alias_id == EntityAlias.id,
-                EntityEvidenceMembership.entity_id == EntityAlias.entity_id,
-                EntityEvidenceMembership.workspace_id == scope.workspace_id,
-                EntityEvidenceMembership.source_id.in_(eligible),
-            ))),
-        )
-                                              .order_by(EntityAlias.id).limit(101)
-                                              .execution_options(populate_existing=True))).all())
-        evidence = list((await session.scalars(select(EntityEvidenceMembership).where(
-            EntityEvidenceMembership.entity_id == row.id,
-            EntityEvidenceMembership.workspace_id == scope.workspace_id,
-            EntityEvidenceMembership.source_id.in_(eligible),
-        ).order_by(EntityEvidenceMembership.id).limit(101)
-          .execution_options(populate_existing=True))).all())
-        if len(aliases) > 100 or len(evidence) > 100:
-            raise ValueError("An entity export record exceeds the alias or citation reference bound")
-        alias_support_rows: dict[UUID, list[Any]] = {}
-        for alias in aliases:
-            support_rows = list((await session.execute(select(EntityAliasEvidence, EntityEvidenceMembership).join(
-                EntityEvidenceMembership, EntityEvidenceMembership.id == EntityAliasEvidence.membership_id,
-            ).where(
-                EntityAliasEvidence.alias_id == alias.id,
-                EntityEvidenceMembership.entity_id == alias.entity_id,
-                EntityEvidenceMembership.workspace_id == scope.workspace_id,
-                EntityEvidenceMembership.source_id.in_(eligible),
-            ).order_by(EntityAliasEvidence.id).limit(101)
-              .execution_options(populate_existing=True))).all())
-            if len(support_rows) > 100:
-                raise ValueError("An entity alias exceeds the support reference bound")
-            alias_support_rows[alias.id] = support_rows
-        if sum(map(len, alias_support_rows.values())) > 100:
-            raise ValueError("An entity export record exceeds the total alias support bound")
-        source_ids = {item.source_id for item in evidence}
-        source_ids.update(membership.source_id for rows_for_alias in alias_support_rows.values()
-                          for _, membership in rows_for_alias)
-        if len(source_ids) > 100:
-            raise ValueError("An entity export record exceeds the distinct source generation bound")
-        source_generations = await _entity_export_source_generations(
-            session, source_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        )
-        alias_items = [EntityExportAlias(
-            id=alias.id, alias=alias.alias, confirmed=alias.confirmed, origin=alias.origin,
-            confidence=alias.confidence, created_at=alias.created_at,
-            supports=[EntityExportAliasEvidence(
-                membership_id=membership.id, source_id=membership.source_id,
-                source_generation=source_generations[membership.source_id], confidence=support.confidence,
-            ) for support, membership in alias_support_rows[alias.id]],
-        ) for alias in aliases]
-        evidence_items = [EntityExportEvidence(
-            id=item.id, source_id=item.source_id, source_generation=source_generations[item.source_id],
-            document_id=item.document_id,
-            document_version_id=item.document_version_id, chunk_id=item.chunk_id,
-            observed_at=item.observed_at, extracted_at=item.extracted_at, confidence=item.confidence,
-        ) for item in evidence]
-        name = row.name
-        canonical_name = row.canonical_name
-        name_origin = row.name_origin
-        if row.name_origin != "owner" and not await _entity_export_field_is_supported(
-            session, row, "name", row.name, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        ):
-            name = canonical_name = None
-            name_origin = None
-        description = row.description
-        description_origin = row.description_origin
-        if row.description_origin != "owner" and not await _entity_export_field_is_supported(
-            session, row, "description", row.description,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        ):
-            description = None
-            description_origin = None
-        item = EntityExportRead(
-            id=row.id, type=row.type, name=name, canonical_name=canonical_name,
-            description=description, revision=row.revision, name_origin=name_origin,
-            description_origin=description_origin, first_seen_at=row.first_seen_at,
-            last_seen_at=row.last_seen_at, created_at=row.created_at, updated_at=row.updated_at,
-            aliases=alias_items, evidence=evidence_items,
+        item, fence = await _entity_export_item(
+            session, row, eligible, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         proposed = _entity_export_payload_bytes(items + [item])
         if proposed > ENTITY_EXPORT_PAGE_MAX_BYTES:
@@ -377,16 +420,7 @@ async def export_page(
             has_more = True
             break
         items.append(item)
-        fences.append(EntityExportFence(
-            id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
-            alias_ids=[item.id for item in alias_items], evidence_ids=[item.id for item in evidence_items],
-            source_fences=[EntitySourceExportFence(source_id=source_id, generation=generation)
-                           for source_id, generation in sorted(source_generations.items(), key=lambda pair: str(pair[0]))],
-            alias_digest=sha256(json.dumps([item.model_dump(mode="json") for item in alias_items],
-                                           ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
-            evidence_digest=sha256(json.dumps([item.model_dump(mode="json") for item in evidence_items],
-                                              ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
-        ))
+        fences.append(fence)
     next_cursor = (_encode_entity_export_cursor(owner_id, scope.workspace_id, snapshot_at, items[-1].created_at, items[-1].id)
                    if has_more and items else None)
     return EntityExportPage(
@@ -584,6 +618,23 @@ async def get_temporal_node_seeds(
     return tuple(result)
 
 
+def _decode_identity_cursor(cursor: str, entity_id: UUID, message: str) -> tuple[str, tuple[datetime, UUID]]:
+    """Decode an entity-bound history cursor ``[entity_id, position]`` (<= 1,024 chars, strict base64).
+
+    Returns the inner position string and its decoded ``(timestamp, id)``. Any malformation, foreign entity
+    identity or bad position raises ``ValueError(message)``.
+    """
+    try:
+        if len(cursor) > 1024:
+            raise ValueError
+        identity, position = json.loads(b64url_decode(cursor))
+        if identity != str(entity_id):
+            raise ValueError
+        return position, decode_cursor(position)
+    except (ValueError, TypeError, binascii.Error) as exc:
+        raise ValueError(message) from exc
+
+
 async def list_entity_history(
     session: AsyncSession, entity_id: UUID, limit: int = 50, cursor: str | None = None,
     *, membership_cursor: str | None = None, scope: Scope, multi_workspace_enabled: bool,
@@ -610,15 +661,7 @@ async def list_entity_history(
         EntityOwnerAction.affected_ids.contains([str(canonical)]),
     ))
     if cursor:
-        try:
-            if len(cursor) > 1024:
-                raise ValueError
-            identity, position = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
-            if identity != str(entity_id):
-                raise ValueError
-            timestamp, identifier = decode_cursor(position)
-        except (ValueError, TypeError, binascii.Error) as exc:
-            raise ValueError("Invalid entity history cursor") from exc
+        _, (timestamp, identifier) = _decode_identity_cursor(cursor, entity_id, "Invalid entity history cursor")
         statement = statement.where(tuple_(EntityOwnerAction.created_at, EntityOwnerAction.id) < (timestamp, identifier))
     rows = list((await session.scalars(statement.order_by(
         EntityOwnerAction.created_at.desc(), EntityOwnerAction.id.desc(),
@@ -627,20 +670,11 @@ async def list_entity_history(
     next_cursor = None
     if more and rows:
         position = encode_cursor(rows[-1].created_at, rows[-1].id)
-        next_cursor = base64.urlsafe_b64encode(json.dumps([str(entity_id), position]).encode()).decode().rstrip("=")
+        next_cursor = b64url_encode(json.dumps([str(entity_id), position]).encode())
     membership_position = None
     if membership_cursor:
-        try:
-            if len(membership_cursor) > 1024:
-                raise ValueError
-            identity, membership_position = json.loads(base64.b64decode(
-                membership_cursor + "=" * (-len(membership_cursor) % 4), altchars=b"-_", validate=True,
-            ))
-            if identity != str(entity_id):
-                raise ValueError
-            decode_cursor(membership_position)
-        except (ValueError, TypeError, binascii.Error) as exc:
-            raise ValueError("Invalid entity membership history cursor") from exc
+        membership_position, _ = _decode_identity_cursor(
+            membership_cursor, entity_id, "Invalid entity membership history cursor")
     membership_page = await list_entity_evidence(
         session, canonical, limit, membership_position, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
@@ -656,9 +690,9 @@ async def list_entity_history(
         membership_page.items = [item for item in membership_page.items if item.source_id in permitted]
     membership_next = None
     if membership_page and membership_page.next_cursor:
-        membership_next = base64.urlsafe_b64encode(json.dumps([
+        membership_next = b64url_encode(json.dumps([
             str(entity_id), membership_page.next_cursor,
-        ]).encode()).decode().rstrip("=")
+        ]).encode())
     return EntityHistoryPage(items=[EntityHistoryItem(
         id=row.id, recorded_at=row.created_at, operation=row.operation,
         affected_ids=row.affected_ids, revisions=row.revisions,
@@ -794,6 +828,7 @@ async def list_entities(
     if query:
         # Escape LIKE metacharacters so a literal % or _ in the query is not a wildcard.
         def _like_escape(value: str) -> str:
+            """Escape backslash, ``%`` and ``_`` so user text matches literally under ``ILIKE ... ESCAPE '\\'``."""
             return value.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
 
         statement = statement.where(or_(
@@ -832,6 +867,107 @@ async def get_entity(
     return _entity_read(entity, aliases.get(entity.id))
 
 
+_MAX_CANONICAL_HOPS = 32
+
+
+async def _resolve_canonical_bulk(
+    session: AsyncSession, ids: list[UUID], *, workspace_id: UUID,
+) -> dict[UUID, UUID | Exception]:
+    """Resolve many entity IDs through the owner redirect chain with one query round per hop (no admission).
+
+    Mirrors ``resolve_canonical_entity_id`` exactly, per ID: a redirect-free ID must exist in the workspace
+    (else ``LookupError("Entity reference is missing")``), a tombstoned redirect (NULL target) yields
+    ``LookupError("Entity identity was deleted")``, a revisited target ``ValueError`` (cycle) and a chain
+    longer than 32 hops ``ValueError`` (limit). Failures are returned as exception *values* so callers keep
+    the first-failure-in-input-order semantics of the sequential loop. At most 33 rounds x 2 statements.
+    """
+    unique = list(dict.fromkeys(ids))
+    state = {identifier: identifier for identifier in unique}
+    seen = {identifier: {identifier} for identifier in unique}
+    result: dict[UUID, UUID | Exception] = {}
+    pending = set(unique)
+    for _ in range(_MAX_CANONICAL_HOPS):
+        if not pending:
+            break
+        currents = {state[identifier] for identifier in pending}
+        redirects = {
+            old: target for old, target in (await session.execute(
+                select(EntityRedirect.old_entity_id, EntityRedirect.target_entity_id).where(
+                    EntityRedirect.workspace_id == workspace_id, EntityRedirect.old_entity_id.in_(currents),
+                )
+            )).all()
+        }
+        unredirected = currents - redirects.keys()
+        existing = set((await session.scalars(select(Entity.id).where(
+            Entity.id.in_(unredirected), Entity.workspace_id == workspace_id,
+        ))).all()) if unredirected else set()
+        for identifier in list(pending):
+            current = state[identifier]
+            if current not in redirects:
+                result[identifier] = current if current in existing else LookupError("Entity reference is missing")
+                pending.discard(identifier)
+                continue
+            target = redirects[current]
+            if target is None:
+                result[identifier] = LookupError("Entity identity was deleted")
+                pending.discard(identifier)
+            elif target in seen[identifier]:
+                result[identifier] = ValueError("Entity redirect cycle detected")
+                pending.discard(identifier)
+            else:
+                seen[identifier].add(target)
+                state[identifier] = target
+    for identifier in pending:
+        result[identifier] = ValueError("Entity redirect chain exceeds its limit")
+    return result
+
+
+async def resolve_canonical_entity_ids(
+    session: AsyncSession, ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[UUID | None]:
+    """Bulk ``resolve_canonical_entity_id``: canonical IDs aligned with ``ids`` (duplicates allowed, <=100).
+
+    Read-only, one admission, a constant number of queries per redirect hop. IDs that are missing or
+    deleted map to ``None`` (the singular raises ``LookupError``); a redirect cycle or over-long chain
+    raises ``ValueError`` exactly like the singular, for the first such ID in input order.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if len(ids) > 100:
+        raise ValueError("Entity bulk query must contain at most 100 IDs")
+    resolved = await _resolve_canonical_bulk(session, ids, workspace_id=scope.workspace_id)
+    canonical: list[UUID | None] = []
+    for identifier in ids:
+        outcome = resolved[identifier]
+        if isinstance(outcome, ValueError):
+            raise outcome
+        canonical.append(None if isinstance(outcome, Exception) else outcome)  # only LookupError remains here
+    return canonical
+
+
+async def get_entities(
+    session: AsyncSession, ids: list[UUID], *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[EntityRead | None]:
+    """Bulk ``get_entity``: reads aligned with ``ids`` (duplicates allowed, at most 100), ``None`` if unavailable.
+
+    Follows redirects, applies the same workspace scoping and builds each read with the same alias
+    projection as ``get_entity``; costs a constant number of queries instead of ~4 per ID. Read-only.
+    """
+    canonical_ids = await resolve_canonical_entity_ids(
+        session, ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    wanted = list(dict.fromkeys(identifier for identifier in canonical_ids if identifier is not None))
+    if not wanted:
+        return [None] * len(ids)
+    rows = {row.id: row for row in (await session.scalars(select(Entity).where(
+        Entity.id.in_(wanted), Entity.workspace_id == scope.workspace_id,
+    ))).all()}
+    aliases = await _aliases(session, list(rows), scope=scope)
+    return [
+        _entity_read(rows[identifier], aliases.get(identifier)) if identifier is not None and identifier in rows else None
+        for identifier in canonical_ids
+    ]
+
+
 async def get_entity_refs(
     session: AsyncSession, ids: list[UUID], *, for_write: bool = False,
     scope: Scope, multi_workspace_enabled: bool,
@@ -848,7 +984,16 @@ async def get_entity_refs(
     if not ids:
         return []
     canonical_ids: dict[UUID, UUID] = {}
-    for identifier in ids:
+    if not for_write:
+        # Read mode: one bulk redirect resolution (constant queries) instead of two queries per ID. The first
+        # failing ID in request order raises the same exception the sequential loop below would raise.
+        resolved = await _resolve_canonical_bulk(session, ids, workspace_id=scope.workspace_id)
+        for identifier in ids:
+            outcome = resolved[identifier]
+            if isinstance(outcome, Exception):
+                raise outcome
+            canonical_ids[identifier] = outcome
+    for identifier in ids if for_write else ():
         try:
             canonical_ids[identifier] = await resolve_canonical_entity_id(
                 session, identifier, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -1103,10 +1248,80 @@ async def list_entity_evidence(
     return EntityEvidencePage(items=items, next_cursor=next_cursor)
 
 
+async def list_entity_evidence_bulk(
+    session: AsyncSession, ids: list[UUID], limit: int = 50,
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[EntityEvidencePage | None]:
+    """Bulk first-page ``list_entity_evidence``: pages aligned with ``ids`` (duplicates allowed, at most 100).
+
+    Per entity the result equals ``list_entity_evidence(id, limit)`` without a cursor: redirects are followed,
+    rows are ordered ``(extracted_at, id)`` and cut at ``limit`` (``next_cursor`` set when more exist), items
+    whose evidence ref is no longer readable are dropped, and a missing entity yields ``None``. One
+    window-function query selects the first ``limit + 1`` memberships of every entity and evidence refs are
+    read in batches of at most 100 unique pairs, instead of ~3 statements per entity. Read-only.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Entity evidence page limit must be between 1 and 100")
+    canonical_ids = await resolve_canonical_entity_ids(
+        session, ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    wanted = list(dict.fromkeys(identifier for identifier in canonical_ids if identifier is not None))
+    rows_by_entity: dict[UUID, list[EntityEvidenceMembership]] = {identifier: [] for identifier in wanted}
+    if wanted:
+        position = func.row_number().over(
+            partition_by=EntityEvidenceMembership.entity_id,
+            order_by=(EntityEvidenceMembership.extracted_at, EntityEvidenceMembership.id),
+        )
+        ranked = select(EntityEvidenceMembership.id.label("membership_id"), position.label("position")).where(
+            EntityEvidenceMembership.entity_id.in_(wanted),
+            EntityEvidenceMembership.workspace_id == scope.workspace_id,
+        ).subquery()
+        memberships = (await session.scalars(
+            select(EntityEvidenceMembership)
+            .join(ranked, ranked.c.membership_id == EntityEvidenceMembership.id)
+            .where(ranked.c.position <= limit + 1)
+            .order_by(EntityEvidenceMembership.entity_id, EntityEvidenceMembership.extracted_at, EntityEvidenceMembership.id)
+        )).all()
+        for membership in memberships:
+            rows_by_entity[membership.entity_id].append(membership)
+    from modules.knowledge.documents import public as documents
+
+    pairs = list(dict.fromkeys(
+        (row.document_version_id, row.chunk_id)
+        for identifier in wanted for row in rows_by_entity[identifier][:limit]
+    ))
+    by_pair: dict[tuple[UUID, UUID], Any] = {}
+    for start in range(0, len(pairs), 100):  # read_evidence_refs accepts at most 100 unique pairs per call
+        for evidence_ref in await documents.read_evidence_refs(
+            session, pairs[start:start + 100], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ):
+            by_pair[(evidence_ref.document_version_id, evidence_ref.chunk_id)] = evidence_ref
+    pages: dict[UUID, EntityEvidencePage] = {}
+    for identifier in wanted:
+        entity_rows = rows_by_entity[identifier]
+        has_more = len(entity_rows) > limit
+        entity_rows = entity_rows[:limit]
+        items = [
+            EntityEvidenceRead(
+                id=row.id, entity_id=row.entity_id, document_id=ref.document_id,
+                document_version_id=row.document_version_id, version_number=ref.version_number,
+                chunk_id=row.chunk_id, observed_at=row.observed_at, extracted_at=row.extracted_at,
+                confidence=row.confidence, source_id=ref.source_id, title=ref.title,
+                canonical_url=ref.canonical_url,
+                metadata_is_version_snapshot=ref.metadata_is_version_snapshot, excerpt=ref.excerpt,
+            )
+            for row in entity_rows
+            if (ref := by_pair.get((row.document_version_id, row.chunk_id))) is not None
+        ]
+        next_cursor = encode_cursor(entity_rows[-1].extracted_at, entity_rows[-1].id) if has_more and entity_rows else None
+        pages[identifier] = EntityEvidencePage(items=items, next_cursor=next_cursor)
+    return [pages[identifier] if identifier is not None else None for identifier in canonical_ids]
+
+
 def _review_cursor(timestamp: datetime, work_id: UUID, index: int) -> str:
     """Encode a review item position as unpadded URL-safe JSON cursor data."""
     raw = json.dumps([timestamp.isoformat(), str(work_id), index], separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_review_cursor(value: str) -> tuple[datetime, UUID, int]:
@@ -1129,33 +1344,84 @@ def _decode_review_cursor(value: str) -> tuple[datetime, UUID, int]:
         raise ValueError("Invalid review cursor") from exc
 
 
-async def list_review_candidates(
-    session: AsyncSession, limit: int = 50, cursor: str | None = None, *,
-    scope: Scope, multi_workspace_enabled: bool,
-) -> EntityReviewPage:
-    """Bounded owner projection; only immutable future snapshots are actionable."""
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if not 1 <= limit <= 100:
-        raise ValueError("Review page limit must be between 1 and 100")
-    cursor_time, cursor_work, cursor_index = _decode_review_cursor(cursor) if cursor else (None, None, 0)
-    statement = select(EntityExtractionWork, EntityExtractionResult).join(
-        EntityExtractionResult, EntityExtractionResult.work_id == EntityExtractionWork.id
-    ).where(
-        EntityExtractionWork.workspace_id == scope.workspace_id,
-        EntityExtractionResult.review_json.is_not(None),
+def _review_candidate_item(
+    work: EntityExtractionWork, result: EntityExtractionResult, candidate: dict[str, Any], state: object, fences: dict[UUID, Any],
+) -> tuple[EntityReviewCandidate, list[tuple[UUID, UUID]], tuple[UUID, UUID, str, str, UUID] | None] | None:
+    """Project one stored review candidate (pure) into its DTO plus evidence and endpoint lookup keys.
+
+    Returns ``None`` for malformed candidates (non-string name/reason). The item is actionable only for a
+    succeeded work row with an immutable matching digest, a live version fence and the identity fields of its
+    kind; malformed ids/chunk ids are silently skipped, evidence is capped at 5 chunks per entity candidate.
+    """
+    name, reason = candidate.get("candidate_name", candidate.get("candidate_name")), candidate.get("reason")
+    if not isinstance(name, str) or not isinstance(reason, str):
+        return None
+    ids = candidate.get("possible_entity_ids", [])
+    valid_ids = []
+    for value in ids if isinstance(ids, list) else []:
+        try:
+            valid_ids.append(UUID(str(value)))
+        except ValueError:
+            continue
+    kind = candidate.get("kind") if candidate.get("kind") in {"entity", "relationship"} else (
+        "relationship" if reason.startswith("relationship_") else "entity"
     )
-    if cursor_time is not None and cursor_work is not None:
-        statement = statement.where(tuple_(EntityExtractionWork.updated_at, EntityExtractionWork.id) <= (cursor_time, cursor_work))
-    rows = (await session.execute(
-        statement
-        .order_by(EntityExtractionWork.updated_at.desc(), EntityExtractionWork.id.desc())
-        .limit(101)
-    )).all()
-    from modules.knowledge.documents import public as documents
-    fences = await documents.review_version_fences(
-        session, [work.document_version_id for work, _ in rows[:100]],
-        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    candidate_id = None
+    try:
+        candidate_id = UUID(str(candidate.get("candidate_id"))) if candidate.get("candidate_id") else None
+    except ValueError:
+        pass
+    digest_ok = False
+    try:
+        digest_ok = candidate.get("snapshot_digest") == _review_snapshot_digest(candidate)
+    except (KeyError, TypeError):
+        pass
+    actionable = bool(candidate_id and digest_ok and not state and work.status == "succeeded" and (
+        work.document_version_id in fences and (
+        kind == "entity" and candidate.get("candidate_key") and candidate.get("match_fingerprint") and candidate.get("chunk_ids")
+        or kind == "relationship" and candidate.get("source_candidate_key") and candidate.get("target_candidate_key") and candidate.get("chunk_id") and candidate.get("relationship_type")
+        )
+    ))
+    candidate_evidence: list[tuple[UUID, UUID]] = []
+    if kind == "entity" and isinstance(candidate.get("chunk_ids"), list):
+        for raw_chunk in candidate["chunk_ids"][:5]:
+            try:
+                candidate_evidence.append((work.document_version_id, UUID(str(raw_chunk))))
+            except (ValueError, TypeError):
+                continue
+    elif kind == "relationship" and candidate.get("chunk_id"):
+        try:
+            candidate_evidence.append((work.document_version_id, UUID(str(candidate["chunk_id"]))))
+        except (ValueError, TypeError):
+            pass
+    fence = fences.get(work.document_version_id)
+    item = EntityReviewCandidate(
+        kind=kind, candidate_id=candidate_id, work_id=work.id, result_id=result.id,
+        snapshot_digest=candidate.get("snapshot_digest") if actionable else None,
+        document_version_id=work.document_version_id, source_generation=work.source_generation,
+        owner_generation=fence.current_source_generation if fence else None,
+        document_id=fence.document_id if fence else None,
+        version_number=fence.version_number if fence else None,
+        source_id=fence.source_id if fence else None,
+        source_name=fence.source_name if fence else None,
+        actionable=actionable, status=work.status, candidate_name=name[:300],
+        candidate_type=str(candidate.get("candidate_type")) if candidate.get("candidate_type") else None,
+        reason=reason[:128], possible_entity_ids=valid_ids[:30],
+        relationship_type=str(candidate.get("relationship_type")) if kind == "relationship" and candidate.get("relationship_type") else None,
     )
+    endpoint_key = (work.id, work.document_version_id, str(candidate.get("source_candidate_key")), str(candidate.get("target_candidate_key")), candidate_evidence[0][1]) if kind == "relationship" and candidate.get("source_candidate_key") and candidate.get("target_candidate_key") and candidate_evidence else None
+    return item, candidate_evidence, endpoint_key
+
+
+def _collect_review_items(
+    rows: list[Any], fences: dict[UUID, Any], limit: int, cursor_work: UUID | None, cursor_index: int,
+) -> tuple[list[EntityReviewCandidate], list[list[tuple[UUID, UUID]]], list[tuple[UUID, UUID, str, str, UUID] | None], str | None]:
+    """Walk up to 100 work rows and collect at most ``limit`` undecided review items (pure).
+
+    Resumes inside the cursor's work row at ``cursor_index``, skips candidates with a terminal decision state,
+    and computes the continuation cursor: next candidate of the same row, the row end, or row 100 when more
+    than 100 rows were fetched.
+    """
     items: list[EntityReviewCandidate] = []
     evidence_keys: list[list[tuple[UUID, UUID]]] = []
     endpoint_keys: list[tuple[UUID, UUID, str, str, UUID] | None] = []
@@ -1170,64 +1436,13 @@ async def list_review_candidates(
             state = candidate.get("decision_state")
             if isinstance(state, dict) and state.get("kind") in {"assigned", "resolved", "suppressed"}:
                 continue
-            name, reason = candidate.get("candidate_name", candidate.get("candidate_name")), candidate.get("reason")
-            if not isinstance(name, str) or not isinstance(reason, str):
+            projected = _review_candidate_item(work, result, candidate, state, fences)
+            if projected is None:
                 continue
-            ids = candidate.get("possible_entity_ids", [])
-            valid_ids = []
-            for value in ids if isinstance(ids, list) else []:
-                try:
-                    valid_ids.append(UUID(str(value)))
-                except ValueError:
-                    continue
-            kind = candidate.get("kind") if candidate.get("kind") in {"entity", "relationship"} else (
-                "relationship" if reason.startswith("relationship_") else "entity"
-            )
-            candidate_id = None
-            try:
-                candidate_id = UUID(str(candidate.get("candidate_id"))) if candidate.get("candidate_id") else None
-            except ValueError:
-                pass
-            digest_ok = False
-            try:
-                digest_ok = candidate.get("snapshot_digest") == _review_snapshot_digest(candidate)
-            except (KeyError, TypeError):
-                pass
-            actionable = bool(candidate_id and digest_ok and not state and work.status == "succeeded" and (
-                work.document_version_id in fences and (
-                kind == "entity" and candidate.get("candidate_key") and candidate.get("match_fingerprint") and candidate.get("chunk_ids")
-                or kind == "relationship" and candidate.get("source_candidate_key") and candidate.get("target_candidate_key") and candidate.get("chunk_id") and candidate.get("relationship_type")
-                )
-            ))
-            candidate_evidence: list[tuple[UUID, UUID]] = []
-            if kind == "entity" and isinstance(candidate.get("chunk_ids"), list):
-                for raw_chunk in candidate["chunk_ids"][:5]:
-                    try:
-                        candidate_evidence.append((work.document_version_id, UUID(str(raw_chunk))))
-                    except (ValueError, TypeError):
-                        continue
-            elif kind == "relationship" and candidate.get("chunk_id"):
-                try:
-                    candidate_evidence.append((work.document_version_id, UUID(str(candidate["chunk_id"]))))
-                except (ValueError, TypeError):
-                    pass
-            fence = fences.get(work.document_version_id)
-            items.append(EntityReviewCandidate(
-                kind=kind, candidate_id=candidate_id, work_id=work.id, result_id=result.id,
-                snapshot_digest=candidate.get("snapshot_digest") if actionable else None,
-                document_version_id=work.document_version_id, source_generation=work.source_generation,
-                owner_generation=fence.current_source_generation if fence else None,
-                document_id=fence.document_id if fence else None,
-                version_number=fence.version_number if fence else None,
-                source_id=fence.source_id if fence else None,
-                source_name=fence.source_name if fence else None,
-                actionable=actionable, status=work.status, candidate_name=name[:300],
-                candidate_type=str(candidate.get("candidate_type")) if candidate.get("candidate_type") else None,
-                reason=reason[:128], possible_entity_ids=valid_ids[:30],
-                relationship_type=str(candidate.get("relationship_type")) if kind == "relationship" and candidate.get("relationship_type") else None,
-            ))
+            item, candidate_evidence, endpoint_key = projected
+            items.append(item)
             evidence_keys.append(candidate_evidence)
-            endpoint_keys.append((work.id, work.document_version_id, str(candidate.get("source_candidate_key")), str(candidate.get("target_candidate_key")), candidate_evidence[0][1]) if kind == "relationship" and candidate.get("source_candidate_key") and candidate.get("target_candidate_key") and candidate_evidence else None)
+            endpoint_keys.append(endpoint_key)
             if len(items) == limit:
                 if candidate_index + 1 < len(review):
                     next_cursor = _review_cursor(work.updated_at, work.id, candidate_index + 1)
@@ -1240,6 +1455,43 @@ async def list_review_candidates(
         work, result = rows[99]
         review = result.review_json if isinstance(result.review_json, list) else []
         next_cursor = _review_cursor(work.updated_at, work.id, len(review))
+    return items, evidence_keys, endpoint_keys, next_cursor
+
+
+def _review_endpoint_dtos(
+    endpoints: tuple[UUID, UUID, str, str, UUID], endpoint_rows: list[Any], entity_refs_by_id: dict[UUID, Any],
+) -> list[EntityReviewEndpoint]:
+    """Resolve a relationship candidate's source/target endpoint memberships to assigned/ambiguous/unassigned DTOs."""
+    work_id, version_id, source_key, target_key, chunk_id = endpoints
+    endpoint_dtos = []
+    for key in (source_key, target_key):
+        matches = [row for row in endpoint_rows if row.extraction_identity == str(work_id) and row.candidate_key == key and row.document_version_id == version_id and row.chunk_id == chunk_id]
+        if len(matches) != 1:
+            endpoint_dtos.append(EntityReviewEndpoint(state="ambiguous" if matches else "unassigned"))
+            continue
+        member = matches[0]
+        endpoint_ref = entity_refs_by_id.get(member.entity_id)
+        if endpoint_ref is None:
+            endpoint_dtos.append(EntityReviewEndpoint(state="unassigned"))
+            continue
+        endpoint_dtos.append(EntityReviewEndpoint(
+            state="assigned", entity_id=endpoint_ref.canonical_id, entity_name=endpoint_ref.name,
+            entity_type=endpoint_ref.type, membership_id=member.id,
+        ))
+    return endpoint_dtos
+
+
+async def _attach_review_evidence(
+    session: AsyncSession, items: list[EntityReviewCandidate], evidence_keys: list[list[tuple[UUID, UUID]]],
+    endpoint_keys: list[tuple[UUID, UUID, str, str, UUID] | None], fences: dict[UUID, Any], *,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> None:
+    """Read evidence refs (100 per call) and relationship endpoint memberships, then fill each item in place.
+
+    Relationship items whose endpoints are not two distinct assigned entities lose their actionability and
+    digest. Read-only; evidence reads go through the documents owner, entity refs through ``get_entity_refs``.
+    """
+    from modules.knowledge.documents import public as documents
     all_keys = list(dict.fromkeys(key for group in evidence_keys for key in group))
     refs_by_pair = {}
     for offset in range(0, len(all_keys), 100):
@@ -1269,7 +1521,7 @@ async def list_review_candidates(
             multi_workspace_enabled=multi_workspace_enabled,
         ))
     entity_refs_by_id = {ref.requested_id: ref for ref in entity_refs}
-    for item, keys, endpoints in zip(items, evidence_keys, endpoint_keys):
+    for item, keys, endpoints in zip(items, evidence_keys, endpoint_keys, strict=False):
         fence = fences.get(item.document_version_id)
         item.evidence = [EntityReviewEvidence(
             document_id=ref.document_id, document_version_id=ref.document_version_id,
@@ -1281,27 +1533,48 @@ async def list_review_candidates(
         ) for key in keys if (ref := refs_by_pair.get(key)) is not None]
         if endpoints is None:
             continue
-        work_id, version_id, source_key, target_key, chunk_id = endpoints
-        endpoint_dtos = []
-        for key in (source_key, target_key):
-            matches = [row for row in endpoint_rows if row.extraction_identity == str(work_id) and row.candidate_key == key and row.document_version_id == version_id and row.chunk_id == chunk_id]
-            if len(matches) != 1:
-                endpoint_dtos.append(EntityReviewEndpoint(state="ambiguous" if matches else "unassigned"))
-                continue
-            member = matches[0]
-            endpoint_ref = entity_refs_by_id.get(member.entity_id)
-            if endpoint_ref is None:
-                endpoint_dtos.append(EntityReviewEndpoint(state="unassigned"))
-                continue
-            endpoint_dtos.append(EntityReviewEndpoint(
-                state="assigned", entity_id=endpoint_ref.canonical_id, entity_name=endpoint_ref.name,
-                entity_type=endpoint_ref.type, membership_id=member.id,
-            ))
+        endpoint_dtos = _review_endpoint_dtos(endpoints, endpoint_rows, entity_refs_by_id)
         item.source_endpoint, item.target_endpoint = endpoint_dtos
         if (len(endpoint_dtos) != 2 or any(endpoint.state != "assigned" for endpoint in endpoint_dtos)
                 or endpoint_dtos[0].entity_id == endpoint_dtos[1].entity_id):
             item.actionable = False
             item.snapshot_digest = None
+
+
+async def list_review_candidates(
+    session: AsyncSession, limit: int = 50, cursor: str | None = None, *,
+    scope: Scope, multi_workspace_enabled: bool,
+) -> EntityReviewPage:
+    """Bounded owner projection; only immutable future snapshots are actionable."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not 1 <= limit <= 100:
+        raise ValueError("Review page limit must be between 1 and 100")
+    cursor_time, cursor_work, cursor_index = _decode_review_cursor(cursor) if cursor else (None, None, 0)
+    statement = select(EntityExtractionWork, EntityExtractionResult).join(
+        EntityExtractionResult, EntityExtractionResult.work_id == EntityExtractionWork.id
+    ).where(
+        EntityExtractionWork.workspace_id == scope.workspace_id,
+        EntityExtractionResult.review_json.is_not(None),
+    )
+    if cursor_time is not None and cursor_work is not None:
+        statement = statement.where(tuple_(EntityExtractionWork.updated_at, EntityExtractionWork.id) <= (cursor_time, cursor_work))
+    rows = (await session.execute(
+        statement
+        .order_by(EntityExtractionWork.updated_at.desc(), EntityExtractionWork.id.desc())
+        .limit(101)
+    )).all()
+    from modules.knowledge.documents import public as documents
+    fences = await documents.review_version_fences(
+        session, [work.document_version_id for work, _ in rows[:100]],
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    items, evidence_keys, endpoint_keys, next_cursor = _collect_review_items(
+        list(rows), fences, limit, cursor_work, cursor_index,
+    )
+    await _attach_review_evidence(
+        session, items, evidence_keys, endpoint_keys, fences, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     return EntityReviewPage(items=items, next_cursor=next_cursor)
 
 
@@ -1346,20 +1619,18 @@ def _review_entity_bindings(review: list[Any]) -> dict[str, tuple[str, set[UUID]
     return bindings
 
 
-async def assign_review_candidate(
-    session: AsyncSession, candidate_id: UUID, payload: EntityReviewAssignmentRequest, *,
-    scope: Scope, multi_workspace_enabled: bool, actor_id: int,
-) -> EntityReviewAssignmentResult:
-    """Bind one durable extraction candidate to an owner-selected canonical entity."""
-    from modules.knowledge.documents import public as documents
+async def _review_hints(
+    session: AsyncSession, result_id: UUID, scope: Scope,
+) -> tuple[EntityExtractionResult, EntityExtractionWork]:
+    """Read (unlocked) the workspace-scoped extraction result and its work row for a review action.
 
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
-    if actor_id != _actor(scope):
-        raise HTTPException(status_code=403, detail="Review actor does not match the admitted owner")
+    Raises ``LookupError`` when either row is unavailable. The rows are hints only; the caller re-reads and
+    locks them FOR UPDATE after the owner Source and evidence locks.
+    """
     result_hint = await session.scalar(select(EntityExtractionResult).join(
         EntityExtractionWork, EntityExtractionWork.id == EntityExtractionResult.work_id,
     ).where(
-        EntityExtractionResult.id == payload.result_id,
+        EntityExtractionResult.id == result_id,
         EntityExtractionWork.workspace_id == scope.workspace_id,
     ))
     if result_hint is None:
@@ -1370,20 +1641,69 @@ async def assign_review_candidate(
     ))
     if work_hint is None:
         raise LookupError("Review work is unavailable")
-    extraction_generation = work_hint.source_generation
-    extraction_version_id = work_hint.document_version_id
-    extraction_work_id = work_hint.id
-    reviews = result_hint.review_json if isinstance(result_hint.review_json, list) else []
-    candidates = [item for item in reviews if isinstance(item, dict) and item.get("candidate_id") == str(candidate_id)]
-    if len(candidates) != 1:
-        raise LookupError("Review candidate is no longer available")
-    snapshot = candidates[0]
-    if snapshot.get("kind") != "entity" or snapshot.get("snapshot_digest") != payload.snapshot_digest or _review_snapshot_digest(snapshot) != payload.snapshot_digest:
-        raise ValueError("Review candidate snapshot changed; reload the queue")
-    if snapshot.get("decision_state"):
-        raise ValueError("Review candidate was already resolved")
-    if payload.future_document_id is not None:
-        raise ValueError("Future document scope is not available from this review action")
+    return result_hint, work_hint
+
+
+async def _lock_review_owner_source(
+    session: AsyncSession, work_hint: EntityExtractionWork, expected_generation: int, fence: AccessFence, *,
+    scope: Scope, multi_workspace_enabled: bool, removed_message: str, changed_message: str,
+) -> tuple[UUID, UUID, Any]:
+    """Locate the reviewed version's document/source and lock the Source against the caller's access fence.
+
+    Raises ``LookupError(removed_message)`` when the evidence locator is gone and
+    ``ValueError(changed_message)`` when the Source is missing or its generation differs from
+    ``expected_generation``. Returns ``(document_id, source_id, source_fence)``.
+    """
+    from modules.knowledge.documents import public as documents
+    locator = await documents.review_version_locator(
+        session, work_hint.document_version_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if locator is None:
+        raise LookupError(removed_message)
+    document_id, source_id = locator
+    source = await sources.lock_source(
+        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        expected_access_fence=fence,
+    )
+    if source is None or source.generation != expected_generation:
+        raise ValueError(changed_message)
+    return document_id, source_id, source
+
+
+async def _lock_review_extraction(
+    session: AsyncSession, work_id: UUID, result_id: UUID, scope: Scope,
+) -> tuple[EntityExtractionWork | None, EntityExtractionResult | None]:
+    """Re-read the work row then the result row FOR UPDATE (that order) with fresh state (populate_existing)."""
+    work = await session.scalar(select(EntityExtractionWork).where(
+        EntityExtractionWork.id == work_id,
+        EntityExtractionWork.workspace_id == scope.workspace_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    result = await session.scalar(select(EntityExtractionResult).where(
+        EntityExtractionResult.id == result_id, EntityExtractionResult.work_id == work_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    return work, result
+
+
+def _set_review_decision(result: EntityExtractionResult, candidate_id: UUID, state: dict[str, Any]) -> None:
+    """Replace ``result.review_json`` with a deep copy whose matching candidate carries ``decision_state``.
+
+    A new list object is assigned so the JSON column change is detected by the ORM.
+    """
+    updated_review = deepcopy(result.review_json)
+    for item in updated_review:
+        if isinstance(item, dict) and item.get("candidate_id") == str(candidate_id):
+            item["decision_state"] = state
+            break
+    result.review_json = updated_review
+
+
+def _assign_selector(snapshot: dict[str, Any]) -> tuple[str, str, str, list[UUID], float]:
+    """Parse and bound-check the evidence selector of an entity review snapshot (pure).
+
+    Returns ``(candidate_type, candidate_key, fingerprint, chunk_ids, confidence)``; raises ``ValueError``
+    when fields are missing/unparseable or chunk/fingerprint/key sizes are invalid.
+    """
     try:
         candidate_type = str(snapshot["candidate_type"])
         candidate_key = str(snapshot["candidate_key"])
@@ -1394,33 +1714,75 @@ async def assign_review_candidate(
         raise ValueError("Review candidate evidence selector is unavailable") from exc
     if not 1 <= len(chunks) <= 5 or len(set(chunks)) != len(chunks) or len(fingerprint) != 64 or len(candidate_key) != 64:
         raise ValueError("Review candidate evidence selector is invalid")
+    return candidate_type, candidate_key, fingerprint, chunks, confidence
 
-    locator = await documents.review_version_locator(
-        session, work_hint.document_version_id, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
-    )
-    if locator is None:
-        raise LookupError("Review evidence was removed")
-    document_id, source_id = locator
-    source = await sources.lock_source(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        expected_access_fence=fence,
-    )
-    if source is None or source.generation != payload.expected_owner_generation:
-        raise ValueError("Owner evidence fence changed; reload the review candidate")
-    evidence = await documents.lock_review_version_evidence(
-        session, document_id=document_id, source_id=source_id,
-        version_id=work_hint.document_version_id, source_generation=source.generation,
-        chunk_ids=chunks, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-    )
-    if evidence is None:
-        raise LookupError("Selected source evidence is no longer retained")
 
-    bindings = _review_entity_bindings(reviews)
-    if str(candidate_id) not in bindings or bindings[str(candidate_id)] != (fingerprint, set(chunks)):
-        raise ValueError("Selected candidate is missing from the complete result selector set")
+async def _record_assign_decisions(
+    session: AsyncSession, membership_ids: list[UUID], payload: EntityReviewAssignmentRequest, fingerprint: str,
+    actor_id: int, scope: Scope,
+) -> None:
+    """Add an ``assign`` correction decision per membership, locking any existing decision row first.
+
+    Raises ``ValueError`` when a membership already has a conflicting owner decision. Adds rows to the
+    session without flushing or committing.
+    """
+    for membership_id in membership_ids:
+        existing = await session.scalar(select(EntityCorrectionDecision).where(
+            EntityCorrectionDecision.workspace_id == scope.workspace_id,
+            EntityCorrectionDecision.scope == "evidence", EntityCorrectionDecision.membership_id == membership_id,
+        ).with_for_update())
+        if existing is None:
+            session.add(EntityCorrectionDecision(
+                workspace_id=scope.workspace_id,
+                decision="assign", scope="evidence", entity_id=payload.target_entity_id,
+                membership_id=membership_id, match_fingerprint=fingerprint, actor_id=actor_id,
+                reason=payload.reason, created_at=datetime.now(UTC),
+            ))
+        elif existing.decision != "assign" or existing.entity_id != payload.target_entity_id:
+            raise ValueError("Evidence membership already has a conflicting owner decision")
+
+
+def _candidate_snapshots(review_json: object, candidate_id: UUID) -> list[dict[str, Any]]:
+    """Return the review items whose ``candidate_id`` equals ``candidate_id`` (non-list review is empty)."""
+    reviews = review_json if isinstance(review_json, list) else []
+    return [item for item in reviews if isinstance(item, dict) and item.get("candidate_id") == str(candidate_id)]
+
+
+def _assign_snapshot(
+    result_hint: EntityExtractionResult, candidate_id: UUID, payload: EntityReviewAssignmentRequest,
+) -> tuple[list[Any], dict[str, Any]]:
+    """Select and validate the entity review snapshot an assignment targets (pure).
+
+    Returns the full review list (for selector-set binding) and the matching snapshot. Raises
+    ``LookupError`` if the candidate is gone, ``ValueError`` if the digest changed, a decision already exists
+    or a future-document scope is requested.
+    """
+    reviews = result_hint.review_json if isinstance(result_hint.review_json, list) else []
+    candidates = _candidate_snapshots(reviews, candidate_id)
+    if len(candidates) != 1:
+        raise LookupError("Review candidate is no longer available")
+    snapshot = candidates[0]
+    if snapshot.get("kind") != "entity" or snapshot.get("snapshot_digest") != payload.snapshot_digest or _review_snapshot_digest(snapshot) != payload.snapshot_digest:
+        raise ValueError("Review candidate snapshot changed; reload the queue")
+    if snapshot.get("decision_state"):
+        raise ValueError("Review candidate was already resolved")
+    if payload.future_document_id is not None:
+        raise ValueError("Future document scope is not available from this review action")
+    return reviews, snapshot
+
+
+async def _assign_prior_and_target(
+    session: AsyncSession, candidate_id: UUID, payload: EntityReviewAssignmentRequest, *, document_id: UUID,
+    version_id: UUID, bindings: dict[str, tuple[str, set[UUID]]], candidate_type: str, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> tuple[tuple[UUID, str, UUID | None] | None, Any]:
+    """Read the prior correction decision and lock the target entity for write.
+
+    Raises ``ValueError`` if a conflicting decision exists or the target's canonical id, type or revision
+    differs from the request. Returns ``(prior_decision, target_ref)``.
+    """
     prior = await get_document_correction_decisions(
-        session, document_id, work_hint.document_version_id, bindings,
+        session, document_id, version_id, bindings,
         scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     prior_decision = prior.get(str(candidate_id))
@@ -1433,17 +1795,58 @@ async def assign_review_candidate(
     target = refs[0]
     if target.canonical_id != payload.target_entity_id or target.type != candidate_type or target.revision != payload.expected_target_revision:
         raise ValueError("Target entity changed or has an incompatible identity")
+    return prior_decision, target
 
-    work = await session.scalar(select(EntityExtractionWork).where(
-        EntityExtractionWork.id == work_hint.id,
-        EntityExtractionWork.workspace_id == scope.workspace_id,
-    ).with_for_update().execution_options(populate_existing=True))
-    result = await session.scalar(select(EntityExtractionResult).where(
-        EntityExtractionResult.id == payload.result_id, EntityExtractionResult.work_id == work_hint.id,
-    ).with_for_update().execution_options(populate_existing=True))
+
+async def assign_review_candidate(
+    session: AsyncSession, candidate_id: UUID, payload: EntityReviewAssignmentRequest, *,
+    scope: Scope, multi_workspace_enabled: bool, actor_id: int,
+) -> EntityReviewAssignmentResult:
+    """Bind one durable extraction candidate to an owner-selected canonical entity.
+
+    Lock order: access fence (admission) -> Source -> document evidence -> target entity -> extraction work
+    and result rows (FOR UPDATE) -> evidence again -> correction decisions (FOR UPDATE). Every stale snapshot,
+    selector or decision change raises ``ValueError``/``LookupError`` before any write; success commits once
+    via ``commit_with_replay``.
+    """
+    from modules.knowledge.documents import public as documents
+
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    if actor_id != _actor(scope):
+        raise ForbiddenError("Review actor does not match the admitted owner")
+    result_hint, work_hint = await _review_hints(session, payload.result_id, scope)
+    extraction_generation = work_hint.source_generation
+    extraction_version_id = work_hint.document_version_id
+    extraction_work_id = work_hint.id
+    reviews, snapshot = _assign_snapshot(result_hint, candidate_id, payload)
+    candidate_type, candidate_key, fingerprint, chunks, confidence = _assign_selector(snapshot)
+
+    document_id, source_id, source = await _lock_review_owner_source(
+        session, work_hint, payload.expected_owner_generation, fence, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, removed_message="Review evidence was removed",
+        changed_message="Owner evidence fence changed; reload the review candidate",
+    )
+    evidence = await documents.lock_review_version_evidence(
+        session, document_id=document_id, source_id=source_id,
+        version_id=work_hint.document_version_id, source_generation=source.generation,
+        chunk_ids=chunks, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if evidence is None:
+        raise LookupError("Selected source evidence is no longer retained")
+
+    bindings = _review_entity_bindings(reviews)
+    if str(candidate_id) not in bindings or bindings[str(candidate_id)] != (fingerprint, set(chunks)):
+        raise ValueError("Selected candidate is missing from the complete result selector set")
+    prior_decision, target = await _assign_prior_and_target(
+        session, candidate_id, payload, document_id=document_id, version_id=work_hint.document_version_id,
+        bindings=bindings, candidate_type=candidate_type, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+
+    work, result = await _lock_review_extraction(session, work_hint.id, payload.result_id, scope)
     if work is None or result is None or work.status != "succeeded" or work.document_version_id != extraction_version_id or work.source_generation != extraction_generation or work.id != extraction_work_id:
         raise ValueError("Review extraction changed; reload the queue")
-    current_snapshot = [item for item in (result.review_json if isinstance(result.review_json, list) else []) if isinstance(item, dict) and item.get("candidate_id") == str(candidate_id)]
+    current_snapshot = _candidate_snapshots(result.review_json, candidate_id)
     if len(current_snapshot) != 1 or current_snapshot[0].get("snapshot_digest") != payload.snapshot_digest or _review_snapshot_digest(current_snapshot[0]) != payload.snapshot_digest or current_snapshot[0].get("decision_state"):
         raise ValueError("Review candidate snapshot changed or was resolved")
     evidence = await documents.lock_review_version_evidence(
@@ -1476,26 +1879,11 @@ async def assign_review_candidate(
         observed_at=ref.observed_at, confidence=confidence, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     ) for ref in evidence]
-    for membership_id in memberships:
-        existing = await session.scalar(select(EntityCorrectionDecision).where(
-            EntityCorrectionDecision.workspace_id == scope.workspace_id,
-            EntityCorrectionDecision.scope == "evidence", EntityCorrectionDecision.membership_id == membership_id,
-        ).with_for_update())
-        if existing is None:
-            session.add(EntityCorrectionDecision(
-                workspace_id=scope.workspace_id,
-                decision="assign", scope="evidence", entity_id=payload.target_entity_id,
-                membership_id=membership_id, match_fingerprint=fingerprint, actor_id=actor_id,
-                reason=payload.reason, created_at=datetime.now(UTC),
-            ))
-        elif existing.decision != "assign" or existing.entity_id != payload.target_entity_id:
-            raise ValueError("Evidence membership already has a conflicting owner decision")
-    updated_review = deepcopy(result.review_json)
-    for item in updated_review:
-        if isinstance(item, dict) and item.get("candidate_id") == str(candidate_id):
-            item["decision_state"] = {"kind": "assigned", "target_entity_id": str(payload.target_entity_id), "membership_ids": [str(value) for value in memberships]}
-            break
-    result.review_json = updated_review
+    await _record_assign_decisions(session, memberships, payload, fingerprint, actor_id, scope)
+    _set_review_decision(result, candidate_id, {
+        "kind": "assigned", "target_entity_id": str(payload.target_entity_id),
+        "membership_ids": [str(value) for value in memberships],
+    })
     await record_owner_action(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         operation="entity_review_assign", reason=payload.reason,
@@ -1510,36 +1898,39 @@ async def assign_review_candidate(
     return EntityReviewAssignmentResult(candidate_id=candidate_id, target_entity_id=payload.target_entity_id, membership_ids=memberships, revision=target.revision)
 
 
-async def resolve_relationship_review(
-    session: AsyncSession, candidate_id: UUID, payload: EntityRelationshipReviewRequest, *,
-    scope: Scope, multi_workspace_enabled: bool, actor_id: int,
-) -> EntityRelationshipReviewResult:
-    """Publish a stored relationship only after both exact endpoint memberships exist."""
-    from modules.knowledge.documents import public as documents
-    from modules.knowledge.relationships import public as relationships
+async def _relationship_endpoint_memberships(
+    session: AsyncSession, *, scope: Scope, work_id: UUID, document_version_id: UUID, chunk_id: UUID,
+    source_key: str, target_key: str,
+) -> tuple[EntityEvidenceMembership, EntityEvidenceMembership]:
+    """Require one distinct endpoint membership per candidate on the cited chunk.
 
-    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
-    if actor_id != _actor(scope):
-        raise HTTPException(status_code=403, detail="Review actor does not match the admitted owner")
-    result_hint = await session.scalar(select(EntityExtractionResult).join(
-        EntityExtractionWork, EntityExtractionWork.id == EntityExtractionResult.work_id,
-    ).where(
-        EntityExtractionResult.id == payload.result_id,
-        EntityExtractionWork.workspace_id == scope.workspace_id,
-    ))
-    if result_hint is None:
-        raise LookupError("Review result is unavailable")
-    work_hint = await session.scalar(select(EntityExtractionWork).where(
-        EntityExtractionWork.id == result_hint.work_id,
-        EntityExtractionWork.workspace_id == scope.workspace_id,
-    ))
-    if work_hint is None:
-        raise LookupError("Review work is unavailable")
-    extraction_generation = work_hint.source_generation
-    extraction_version_id = work_hint.document_version_id
-    extraction_work_id = work_hint.id
-    reviews = result_hint.review_json if isinstance(result_hint.review_json, list) else []
-    snapshots = [item for item in reviews if isinstance(item, dict) and item.get("candidate_id") == str(candidate_id)]
+    Reads at most 3 rows ordered by (entity_id, id); raises ``ValueError`` unless each candidate key has
+    exactly one membership and the two resolve to different memberships and entities.
+    """
+    rows = list((await session.scalars(select(EntityEvidenceMembership).where(
+        EntityEvidenceMembership.workspace_id == scope.workspace_id,
+        EntityEvidenceMembership.extraction_identity == str(work_id),
+        EntityEvidenceMembership.candidate_key.in_([source_key, target_key]),
+        EntityEvidenceMembership.document_version_id == document_version_id,
+        EntityEvidenceMembership.chunk_id == chunk_id,
+    ).order_by(EntityEvidenceMembership.entity_id, EntityEvidenceMembership.id).limit(3))).all())
+    left = [row for row in rows if row.candidate_key == source_key]
+    right = [row for row in rows if row.candidate_key == target_key]
+    if len(left) != 1 or len(right) != 1 or left[0].id == right[0].id or left[0].entity_id == right[0].entity_id:
+        raise ValueError("Both endpoints require one distinct exact evidence membership on the cited chunk")
+    return left[0], right[0]
+
+
+def _relationship_review_selector(
+    result_hint: EntityExtractionResult, candidate_id: UUID, payload: EntityRelationshipReviewRequest,
+) -> tuple[dict[str, Any], str, str, str, UUID]:
+    """Select and validate the relationship review snapshot (pure).
+
+    Returns ``(snapshot, source_key, target_key, relationship_type, chunk_id)``. Raises ``LookupError`` when
+    the snapshot is absent or not a relationship, ``ValueError`` when the digest changed, a decision exists or
+    the endpoint selector is empty/self-referential.
+    """
+    snapshots = _candidate_snapshots(result_hint.review_json, candidate_id)
     if len(snapshots) != 1 or snapshots[0].get("kind") != "relationship":
         raise LookupError("Relationship review snapshot is unavailable")
     snapshot = snapshots[0]
@@ -1553,20 +1944,37 @@ async def resolve_relationship_review(
     chunk_id = UUID(str(snapshot.get("chunk_id")))
     if not source_key or not target_key or source_key == target_key or not relationship_type:
         raise ValueError("Relationship endpoint selector is invalid")
+    return snapshot, source_key, target_key, relationship_type, chunk_id
 
-    locator = await documents.review_version_locator(
-        session, work_hint.document_version_id, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
+
+async def resolve_relationship_review(
+    session: AsyncSession, candidate_id: UUID, payload: EntityRelationshipReviewRequest, *,
+    scope: Scope, multi_workspace_enabled: bool, actor_id: int,
+) -> EntityRelationshipReviewResult:
+    """Publish a stored relationship only after both exact endpoint memberships exist.
+
+    Lock order: access fence -> Source -> cited evidence -> endpoint entities -> endpoint memberships ->
+    extraction work and result rows (FOR UPDATE); the endpoint memberships are re-read after the row locks
+    and must be unchanged. Commits once via ``commit_with_replay``.
+    """
+    from modules.knowledge.documents import public as documents
+    from modules.knowledge.relationships import public as relationships
+
+    fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
+    if actor_id != _actor(scope):
+        raise ForbiddenError("Review actor does not match the admitted owner")
+    result_hint, work_hint = await _review_hints(session, payload.result_id, scope)
+    extraction_generation = work_hint.source_generation
+    extraction_version_id = work_hint.document_version_id
+    extraction_work_id = work_hint.id
+    snapshot, source_key, target_key, relationship_type, chunk_id = _relationship_review_selector(
+        result_hint, candidate_id, payload)
+
+    document_id, source_id, source = await _lock_review_owner_source(
+        session, work_hint, payload.expected_owner_generation, fence, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, removed_message="Relationship evidence was removed",
+        changed_message="Owner evidence fence changed; reload the relationship review",
     )
-    if locator is None:
-        raise LookupError("Relationship evidence was removed")
-    document_id, source_id = locator
-    source = await sources.lock_source(
-        session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        expected_access_fence=fence,
-    )
-    if source is None or source.generation != payload.expected_owner_generation:
-        raise ValueError("Owner evidence fence changed; reload the relationship review")
     refs = await documents.lock_review_version_evidence(
         session, document_id=document_id, source_id=source_id,
         version_id=work_hint.document_version_id, source_generation=source.generation,
@@ -1576,19 +1984,11 @@ async def resolve_relationship_review(
         raise LookupError("Relationship evidence is no longer retained")
 
     async def endpoint_memberships() -> tuple[EntityEvidenceMembership, EntityEvidenceMembership]:
-        """Require one distinct endpoint membership per candidate on the cited chunk."""
-        rows = list((await session.scalars(select(EntityEvidenceMembership).where(
-            EntityEvidenceMembership.workspace_id == scope.workspace_id,
-            EntityEvidenceMembership.extraction_identity == str(work_hint.id),
-            EntityEvidenceMembership.candidate_key.in_([source_key, target_key]),
-            EntityEvidenceMembership.document_version_id == work_hint.document_version_id,
-            EntityEvidenceMembership.chunk_id == chunk_id,
-        ).order_by(EntityEvidenceMembership.entity_id, EntityEvidenceMembership.id).limit(3))).all())
-        left = [row for row in rows if row.candidate_key == source_key]
-        right = [row for row in rows if row.candidate_key == target_key]
-        if len(left) != 1 or len(right) != 1 or left[0].id == right[0].id or left[0].entity_id == right[0].entity_id:
-            raise ValueError("Both endpoints require one distinct exact evidence membership on the cited chunk")
-        return left[0], right[0]
+        """Bind the shared membership lookup to this review item."""
+        return await _relationship_endpoint_memberships(
+            session, scope=scope, work_id=work_hint.id, document_version_id=work_hint.document_version_id,
+            chunk_id=chunk_id, source_key=source_key, target_key=target_key,
+        )
 
     source_membership, target_membership = await endpoint_memberships()
     expected_membership_ids = (source_membership.id, target_membership.id)
@@ -1606,16 +2006,10 @@ async def resolve_relationship_review(
         session, [source_membership.id, target_membership.id], for_write=True,
         scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
-    work = await session.scalar(select(EntityExtractionWork).where(
-        EntityExtractionWork.id == work_hint.id,
-        EntityExtractionWork.workspace_id == scope.workspace_id,
-    ).with_for_update().execution_options(populate_existing=True))
-    result = await session.scalar(select(EntityExtractionResult).where(
-        EntityExtractionResult.id == payload.result_id, EntityExtractionResult.work_id == work_hint.id,
-    ).with_for_update().execution_options(populate_existing=True))
+    work, result = await _lock_review_extraction(session, work_hint.id, payload.result_id, scope)
     if work is None or result is None or work.status != "succeeded" or work.source_generation != extraction_generation or work.document_version_id != extraction_version_id or work.id != extraction_work_id:
         raise ValueError("Relationship extraction changed; reload the queue")
-    current = [item for item in (result.review_json if isinstance(result.review_json, list) else []) if isinstance(item, dict) and item.get("candidate_id") == str(candidate_id)]
+    current = _candidate_snapshots(result.review_json, candidate_id)
     if len(current) != 1 or current[0].get("snapshot_digest") != payload.snapshot_digest or _review_snapshot_digest(current[0]) != payload.snapshot_digest or current[0].get("decision_state"):
         raise ValueError("Relationship review snapshot changed or was resolved")
     source_membership, target_membership = await endpoint_memberships()
@@ -1635,12 +2029,7 @@ async def resolve_relationship_review(
     )
     if relationship_id is None:
         raise ValueError("Relationship endpoints are identical")
-    updated_review = deepcopy(result.review_json)
-    for item in updated_review:
-        if isinstance(item, dict) and item.get("candidate_id") == str(candidate_id):
-            item["decision_state"] = {"kind": "resolved", "relationship_id": str(relationship_id)}
-            break
-    result.review_json = updated_review
+    _set_review_decision(result, candidate_id, {"kind": "resolved", "relationship_id": str(relationship_id)})
     await record_owner_action(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         operation="relationship_review_resolve", reason=payload.reason,
@@ -2138,21 +2527,19 @@ async def record_extraction_membership(
     return membership_id
 
 
-async def get_document_correction_decisions(
-    session: AsyncSession, document_id: UUID, document_version_id: UUID,
-    candidates: dict[str, tuple[str, set[UUID]]],
-    *, scope: Scope, multi_workspace_enabled: bool, for_update: bool = False,
-) -> dict[str, tuple[UUID, str, UUID | None] | None]:
-    """Resolve bounded evidence/document owner decisions, reporting ambiguous conflicts."""
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if len(candidates) > 30:
-        raise ValueError("Correction decision lookup exceeds its candidate limit")
-    if not candidates:
-        return {}
-    fingerprints = {spec[0] for spec in candidates.values()}
-    chunk_ids = {chunk_id for _, chunks in candidates.values() for chunk_id in chunks}
-    if len(chunk_ids) > 200 or any(not chunks for _, chunks in candidates.values()):
-        raise ValueError("Correction evidence binding exceeds its chunk limit")
+async def _read_decision_rows(
+    session: AsyncSession, *, scope: Scope, document_id: UUID, document_version_id: UUID,
+    fingerprints: set[str], chunk_ids: set[UUID], for_update: bool,
+) -> tuple[
+    list[EntityEvidenceMembership], list[EntityCorrectionDecision],
+    list[tuple[EntityCorrectionDecision, UUID, str | None]], list[EntityCorrectionDecision],
+]:
+    """Read matching memberships, evidence-scoped decisions and document-scoped decisions (each bounded to 201).
+
+    Query order is memberships -> evidence decisions (skipped when no memberships) -> document decisions;
+    with ``for_update`` each query takes ``FOR UPDATE`` in that order. Returns the memberships, the evidence
+    decisions, the evidence decisions paired with their membership chunk/fingerprint, and the document rows.
+    """
     membership_query = select(EntityEvidenceMembership).where(
         EntityEvidenceMembership.workspace_id == scope.workspace_id,
         EntityEvidenceMembership.document_id == document_id,
@@ -2165,12 +2552,6 @@ async def get_document_correction_decisions(
     memberships = list((await session.scalars(
         membership_query.execution_options(populate_existing=True)
     )).all())
-    memberships_by_selector: dict[tuple[str, UUID], list[EntityEvidenceMembership]] = {}
-    for membership in memberships:
-        if membership.match_fingerprint is not None:
-            memberships_by_selector.setdefault(
-                (membership.match_fingerprint, membership.chunk_id), []
-            ).append(membership)
     membership_ids = sorted({row.id for row in memberships}, key=str)
     decisions_query = select(EntityCorrectionDecision).where(
         EntityCorrectionDecision.workspace_id == scope.workspace_id,
@@ -2200,6 +2581,27 @@ async def get_document_correction_decisions(
     document_rows = list((await session.scalars(
         document_query.execution_options(populate_existing=True)
     )).all())
+    return memberships, evidence_decisions, evidence_rows, document_rows
+
+
+def _resolve_correction_decisions(
+    candidates: dict[str, tuple[str, set[UUID]]], memberships: list[EntityEvidenceMembership],
+    evidence_decisions: list[EntityCorrectionDecision],
+    evidence_rows: list[tuple[EntityCorrectionDecision, UUID, str | None]],
+    document_rows: list[EntityCorrectionDecision],
+) -> dict[str, tuple[UUID, str, UUID | None] | None]:
+    """Fold the read rows into one decision per candidate (pure).
+
+    A candidate resolves to its newest matching decision, ``None`` when there is none, or a ``conflict``
+    (nil-UUID id when nothing matched) when rows hit a read bound, evidence is partial or fingerprint-ambiguous,
+    selectors overlap between candidates, or evidence and document decisions disagree.
+    """
+    memberships_by_selector: dict[tuple[str, UUID], list[EntityEvidenceMembership]] = {}
+    for membership in memberships:
+        if membership.match_fingerprint is not None:
+            memberships_by_selector.setdefault(
+                (membership.match_fingerprint, membership.chunk_id), []
+            ).append(membership)
     by_document_fingerprint: dict[str, list[EntityCorrectionDecision]] = {}
     for row in document_rows:
         if row.match_fingerprint is not None:
@@ -2259,6 +2661,33 @@ async def get_document_correction_decisions(
             latest = max(all_matches, key=lambda row: (row.created_at, row.id))
             result[request_key] = (latest.id, latest.decision, latest.entity_id)
     return result
+
+
+async def get_document_correction_decisions(
+    session: AsyncSession, document_id: UUID, document_version_id: UUID,
+    candidates: dict[str, tuple[str, set[UUID]]],
+    *, scope: Scope, multi_workspace_enabled: bool, for_update: bool = False,
+) -> dict[str, tuple[UUID, str, UUID | None] | None]:
+    """Resolve bounded evidence/document owner decisions, reporting ambiguous conflicts.
+
+    Admits the scope (read fence), enforces at most 30 candidates and 200 distinct chunks (``ValueError``),
+    then reads rows (``FOR UPDATE`` when requested) and resolves each candidate; see
+    ``_resolve_correction_decisions`` for the conflict rules.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if len(candidates) > 30:
+        raise ValueError("Correction decision lookup exceeds its candidate limit")
+    if not candidates:
+        return {}
+    fingerprints = {spec[0] for spec in candidates.values()}
+    chunk_ids = {chunk_id for _, chunks in candidates.values() for chunk_id in chunks}
+    if len(chunk_ids) > 200 or any(not chunks for _, chunks in candidates.values()):
+        raise ValueError("Correction evidence binding exceeds its chunk limit")
+    memberships, evidence_decisions, evidence_rows, document_rows = await _read_decision_rows(
+        session, scope=scope, document_id=document_id, document_version_id=document_version_id,
+        fingerprints=fingerprints, chunk_ids=chunk_ids, for_update=for_update,
+    )
+    return _resolve_correction_decisions(candidates, memberships, evidence_decisions, evidence_rows, document_rows)
 
 
 async def create_entity(
@@ -2539,6 +2968,12 @@ def _require_cleanup_fences(
     actual: AccessFence, *, source_id: UUID, scope: Scope,
     access_fence: AccessFence, source_fence: SourceFence,
 ) -> None:
+    """Require the live access fence and Source to still match those held by a cleanup transaction.
+
+    Raises HTTP 409 "Cleanup authority changed" (kept as ``HTTPException``: purge callers in sources/documents/
+    ingestion branch on ``HTTPException`` status codes) when the fence differs or the Source id/workspace does not
+    match the closure. Pure comparison; no I/O.
+    """
     if (
         actual != access_fence or source_fence.id != source_id
         or source_fence.workspace_id != scope.workspace_id

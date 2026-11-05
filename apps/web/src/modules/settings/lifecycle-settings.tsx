@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { Input } from '@/components/ui/input';
 
 type Retention = { configuration_revision: number; agent_trace_days: number; raw_source_retention: 'retain'; document_history_retention: 'retain' };
 type Module = { id: string; name: string; enabled: boolean; explicitly_disabled: boolean; blocked_by: string[] };
@@ -15,6 +16,63 @@ type Summary = { completed_at: string | null; agent_traces_redacted: number; tem
 
 /** Renders revision-fenced retention controls, dependency-aware module switches and the latest cleanup outcome. */
 export function LifecycleSettings() {
+  const s0 = useLifecycleSettingsController();
+
+  const vm: LifecycleSettingsVm = s0;
+  return <section className="mt-6 space-y-5 border-t border-border pt-5" aria-labelledby="lifecycle-title">
+<LifecycleRetention vm={vm} />
+<LifecycleModulesAndMaintenance vm={vm} />
+  </section>;
+}
+
+type LifecycleSettingsVm = ReturnType<typeof useLifecycleSettingsController>;
+
+/** Heading and retention controls. */
+function LifecycleRetention({ vm }: { vm: LifecycleSettingsVm }) {
+  const { t, retention, saveRetention, days, setDays } = vm;
+  return (
+<>
+    <h2 id="lifecycle-title" className="text-lg font-semibold">{t('lifecycleTitle')}</h2>
+    <article className="space-y-3">
+      <h3 className="font-medium">{t('retentionTitle')}</h3>
+      <p className="text-muted-foreground text-sm">{t('retentionDescription')}</p>
+      {retention.data && <div className="flex flex-wrap items-end gap-3">
+        <label className="label">{t('agentTraceDays')}<Input className="mt-1 w-32" type="number" min={1} max={3650} value={days ?? retention.data.agent_trace_days} onChange={(event) => setDays(Number(event.target.value))} /></label>
+        <Button variant="outline" disabled={saveRetention.isPending || days === null || days < 1 || days > 3650} onClick={() => saveRetention.mutate(retention.data!)}>{t('saveRetention')}</Button>
+      </div>}
+      {retention.isError && <p role="alert" className="text-destructive">{t('lifecycleLoadFailed')}</p>}
+      {saveRetention.isError && <p role="alert" className="text-destructive">{t('lifecycleSaveFailed')}</p>}
+    </article>
+</>
+  );
+}
+
+/** Module availability and maintenance controls. */
+function LifecycleModulesAndMaintenance({ vm }: { vm: LifecycleSettingsVm }) {
+  const { t, locale, modules, summary, toggleModule } = vm;
+  return (
+<>
+    <article className="space-y-3">
+      <h3 className="font-medium">{t('modulesTitle')}</h3>
+      <p className="text-muted-foreground text-sm">{t('modulesDescription')}</p>
+      {modules.data?.modules.map((module) => <label key={module.id} className="flex items-center justify-between gap-4 border-b border-border py-2 text-sm">
+        <span>{module.name}{module.blocked_by.length > 0 && <span className="text-muted-foreground block">{t('blockedBy')}: {module.blocked_by.join(', ')}</span>}</span>
+        <Checkbox aria-label={`${module.name}: ${module.enabled ? t('enabled') : t('disabled')}`} checked={module.enabled} disabled={toggleModule.isPending || module.blocked_by.length > 0} onCheckedChange={() => toggleModule.mutate({ state: modules.data!, module })} />
+      </label>)}
+      {modules.isError && <p role="alert" className="text-destructive">{t('lifecycleLoadFailed')}</p>}
+      {toggleModule.isError && <p role="alert" className="text-destructive">{t('moduleSaveFailed')}</p>}
+    </article>
+    <article className="space-y-2">
+      <h3 className="font-medium">{t('maintenanceTitle')}</h3>
+      {summary.data && <p className="text-muted-foreground text-sm">{t('maintenanceCounts', { traces: summary.data.agent_traces_redacted, temporary: summary.data.temporary_data_deleted })}{summary.data.completed_at ? ` · ${new Date(summary.data.completed_at).toLocaleString(locale)}` : ''}{summary.data.next_eligible_at ? ` · ${t('nextEligible')}: ${new Date(summary.data.next_eligible_at).toLocaleString(locale)}` : ''}</p>}
+      {summary.isError && <p className="text-muted-foreground text-sm">{t('lifecycleLoadFailed')}</p>}
+    </article>
+</>
+  );
+}
+
+/** Holds the state, queries and derived values of LifecycleSettings. */
+function useLifecycleSettingsController() {
   const t = useTranslations('observability');
   const locale = useLocale() === 'vi-vi' ? 'vi-VN' : 'en-US';
   const { csrfToken } = useWorkspaceSession();
@@ -32,32 +90,5 @@ export function LifecycleSettings() {
     onSuccess: (value) => { cache.setQueryData(['module-lifecycle'], value); },
   });
 
-  return <section className="mt-6 space-y-5 border-t border-border pt-5" aria-labelledby="lifecycle-title">
-    <h2 id="lifecycle-title" className="text-lg font-semibold">{t('lifecycleTitle')}</h2>
-    <article className="space-y-3">
-      <h3 className="font-medium">{t('retentionTitle')}</h3>
-      <p className="text-muted-foreground text-sm">{t('retentionDescription')}</p>
-      {retention.data && <div className="flex flex-wrap items-end gap-3">
-        <label className="label">{t('agentTraceDays')}<input className="input mt-1 w-32" type="number" min={1} max={3650} value={days ?? retention.data.agent_trace_days} onChange={(event) => setDays(Number(event.target.value))} /></label>
-        <Button variant="outline" disabled={saveRetention.isPending || days === null || days < 1 || days > 3650} onClick={() => saveRetention.mutate(retention.data!)}>{t('saveRetention')}</Button>
-      </div>}
-      {retention.isError && <p role="alert" className="text-destructive">{t('lifecycleLoadFailed')}</p>}
-      {saveRetention.isError && <p role="alert" className="text-destructive">{t('lifecycleSaveFailed')}</p>}
-    </article>
-    <article className="space-y-3">
-      <h3 className="font-medium">{t('modulesTitle')}</h3>
-      <p className="text-muted-foreground text-sm">{t('modulesDescription')}</p>
-      {modules.data?.modules.map((module) => <label key={module.id} className="flex items-center justify-between gap-4 border-b border-border py-2 text-sm">
-        <span>{module.name}{module.blocked_by.length > 0 && <span className="text-muted-foreground block">{t('blockedBy')}: {module.blocked_by.join(', ')}</span>}</span>
-        <Checkbox aria-label={`${module.name}: ${module.enabled ? t('enabled') : t('disabled')}`} checked={module.enabled} disabled={toggleModule.isPending || module.blocked_by.length > 0} onCheckedChange={() => toggleModule.mutate({ state: modules.data!, module })} />
-      </label>)}
-      {modules.isError && <p role="alert" className="text-destructive">{t('lifecycleLoadFailed')}</p>}
-      {toggleModule.isError && <p role="alert" className="text-destructive">{t('moduleSaveFailed')}</p>}
-    </article>
-    <article className="space-y-2">
-      <h3 className="font-medium">{t('maintenanceTitle')}</h3>
-      {summary.data && <p className="text-muted-foreground text-sm">{t('maintenanceCounts', { traces: summary.data.agent_traces_redacted, temporary: summary.data.temporary_data_deleted })}{summary.data.completed_at ? ` · ${new Date(summary.data.completed_at).toLocaleString(locale)}` : ''}{summary.data.next_eligible_at ? ` · ${t('nextEligible')}: ${new Date(summary.data.next_eligible_at).toLocaleString(locale)}` : ''}</p>}
-      {summary.isError && <p className="text-muted-foreground text-sm">{t('lifecycleLoadFailed')}</p>}
-    </article>
-  </section>;
+  return { t, locale, cache, retention, modules, summary, saveRetention, toggleModule, days, setDays, csrfToken };
 }

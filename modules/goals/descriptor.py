@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class GoalsDescriptor:
+class GoalsDescriptor(ModuleDescriptor):
     """Declare goals module metadata, routes, events, and tools."""
 
     id: str = "goals"
@@ -31,6 +33,11 @@ class GoalsDescriptor:
     )
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.goals.routes", 340),
+    )
+    erasure_module: str | None = "modules.goals.erasure"
+    erasure_order: int = 60
 
 
 descriptor = GoalsDescriptor()

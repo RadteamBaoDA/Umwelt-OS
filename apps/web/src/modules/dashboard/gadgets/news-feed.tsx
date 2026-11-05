@@ -2,8 +2,8 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
-import { DetailDialog, type DetailTarget } from '@/modules/detail/detail-dialog';
-import { StoryList } from '@/modules/news/story-list';
+import { DetailDialog, type DetailTarget } from '@/modules/detail';
+import { StoryList } from '@/modules/news';
 import type { GadgetInstance } from '../api';
 import { GadgetNotice } from './gadget-notice';
 

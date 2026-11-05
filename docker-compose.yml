@@ -87,7 +87,42 @@ services:
       resources:
         limits: {memory: 1G}
         reservations: {memory: 256M}
-    stop_grace_period: 30s
+    stop_grace_period: 240s  # >= job_timeout (180) + job_completion_wait margin; SIGTERM drains running jobs
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  cron-worker:
+    # Recurring jobs (pollers, recovery, retention) on their own queue/process so they never take
+    # ingestion max_jobs slots; every job is lease-guarded, so extra replicas are safe.
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ["arq", "apps.worker.main.CronWorkerSettings"]
+    env_file: .env
+    environment:
+      LANGFUSE_ENABLED: "false"
+    healthcheck:
+      test: ["CMD", "arq", "--check", "apps.worker.main.CronWorkerSettings"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    init: true
+    volumes:
+      - app-data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    cpu_shares: 512
+    deploy:
+      resources:
+        limits: {memory: 512M}
+        reservations: {memory: 192M}
+    stop_grace_period: 240s  # >= job_timeout (180) + job_completion_wait margin; SIGTERM drains running jobs
     restart: unless-stopped
     logging: *default-logging
     security_opt: ["no-new-privileges:true"]
@@ -118,7 +153,7 @@ services:
       resources:
         limits: {memory: 768M}
         reservations: {memory: 256M}
-    stop_grace_period: 30s
+    stop_grace_period: 660s  # >= CHAT_JOB_TIMEOUT (600) + 60; SIGTERM drains running jobs
     restart: unless-stopped
     logging: *default-logging
     security_opt: ["no-new-privileges:true"]
@@ -149,7 +184,7 @@ services:
       resources:
         limits: {memory: 768M}
         reservations: {memory: 256M}
-    stop_grace_period: 30s
+    stop_grace_period: 960s  # >= MODEL_WORKER_JOB_TIMEOUT_SECONDS (900) + 60; raise together
     restart: unless-stopped
     logging: *default-logging
     security_opt: ["no-new-privileges:true"]

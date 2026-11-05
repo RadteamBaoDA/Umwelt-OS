@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -59,75 +60,109 @@ def validate(source: ConnectorSource) -> dict[str, Any]:
     if source.type not in SUPPORTED_TYPES:
         raise ValueError("This source type has no packaged connector")
     if source.provider is not None:
-        if source.provider not in NATIVE_PROVIDERS:
-            raise ValueError("Provider is not registered")
-        if source.type != PROVIDER_SOURCE_TYPES[source.provider]:
-            raise ValueError("Source type does not match the registered provider")
-        scope_fields = PROVIDER_SCOPE_FIELDS[source.provider]
-        common = {
-            "timezone", "schedule_interval_minutes", "timeout_seconds",
-            "realtime_mode", "retention_days", "skip_embedding",
-        }
-        expected_history = "pending_updates" if source.provider == "telegram" else "returned_snapshot"
-        raw_keys = set(source.configuration or {})
-        allowed = scope_fields | common | {"history_mode"}
-        if source.provider in INCREMENTAL_PROVIDERS:
-            allowed |= COLLECTION_FILTER_FIELDS
-        if source.provider in SECTION_CATALOG:
-            allowed |= {"feed_sections"}
-        allowed |= option_fields(source.provider)
-        if raw_keys - allowed:
-            raise ValueError("Provider configuration contains unsupported fields")
-        optional_scope_fields = OPTIONAL_SCOPE_FIELDS.get(source.provider, frozenset())
-        required_scope_fields = scope_fields - optional_scope_fields
-        # Name the missing schema keys (never values) so the editor can point the owner at each empty field.
-        missing = sorted(required_scope_fields - raw_keys)
-        if source.configuration.get("history_mode") != expected_history:
-            missing.append("history_mode")
-        if missing:
-            raise ValueError(f"Missing required fields: {', '.join(missing)}")
-        config = configuration(source)
-        if config.feed_sections is not None:
-            validate_sections(source.provider, config.feed_sections)
-        validate_options(source.provider, config.model_dump(exclude_none=True))
-        if config.timeout_seconds > 30:
-            raise ValueError("Native provider request timeout cannot exceed 30 seconds")
-        floor = min_interval_minutes(source.provider)
-        if config.schedule_interval_minutes is not None and config.schedule_interval_minutes < floor:
-            raise ValueError(f"schedule_interval_below_minimum: minimum {floor} minutes")
-        if source.provider == "github_releases" and (not config.github_owner or not config.github_repository):
-            raise ValueError("GitHub owner and repository are required")
-        if source.provider == "bluesky" and not config.bluesky_actor:
-            raise ValueError("A Bluesky handle or DID is required")
-        if source.provider == "mastodon" and bool(config.mastodon_account) == bool(config.mastodon_hashtag):
-            raise ValueError("Choose exactly one Mastodon account or hashtag")
-        if source.provider == "x" and bool(config.x_account) == bool(config.x_query):
-            raise ValueError("Choose exactly one X account or search query")
-        if source.provider == "alpha_vantage" and (
-            not config.market_symbols or not config.market_currency or not config.market_exchange_timezone
-        ):
-            raise ValueError("Alpha Vantage symbols, currency, and exchange timezone are required")
-        if source.provider == "open_meteo" and (
-            config.weather_latitude is None or config.weather_longitude is None
-            or not config.weather_timezone or not config.weather_metrics
-        ):
-            raise ValueError("Open-Meteo coordinates, timezone, and metric scope are required")
-        if source.provider == "health" and (not config.fhir_base_url or not config.fhir_patient_id):
-            raise ValueError("FHIR endpoint and patient ID are required")
-        if source.provider == "home_assistant" and (not config.ha_base_url or not config.ha_entity_ids):
-            raise ValueError("Home Assistant endpoint and selected entities are required")
-        if source.provider == "github":
-            from modules.connectors.github.schemas import project_github_source_config
+        return _validate_provider_source(source, source.provider)
+    return _validate_generic_source(source)
 
-            project_github_source_config(config.model_dump(exclude_none=True))
-        return {
-            "source_id": str(source.id),
-            "source_generation": source.generation,
-            "type": source.type,
-            "provider": source.provider,
-            "timezone": config.timezone or DEFAULT_TIMEZONE,
-            "configuration": config.model_dump(mode="json", exclude_none=True),
-        }
+
+# Provider -> (predicate that is True when the scope is INCOMPLETE, error message). A provider
+# with extra mandatory scope adds one row here; ``_validate_provider_source`` never changes.
+_PROVIDER_SCOPE_RULES: dict[str, tuple[Callable[[ConnectorConfig], bool], str]] = {
+    "github_releases": (
+        lambda c: not c.github_owner or not c.github_repository, "GitHub owner and repository are required"),
+    "bluesky": (lambda c: not c.bluesky_actor, "A Bluesky handle or DID is required"),
+    "mastodon": (
+        lambda c: bool(c.mastodon_account) == bool(c.mastodon_hashtag),
+        "Choose exactly one Mastodon account or hashtag"),
+    "x": (lambda c: bool(c.x_account) == bool(c.x_query), "Choose exactly one X account or search query"),
+    "alpha_vantage": (
+        lambda c: not c.market_symbols or not c.market_currency or not c.market_exchange_timezone,
+        "Alpha Vantage symbols, currency, and exchange timezone are required"),
+    "open_meteo": (
+        lambda c: (c.weather_latitude is None or c.weather_longitude is None
+                   or not c.weather_timezone or not c.weather_metrics),
+        "Open-Meteo coordinates, timezone, and metric scope are required"),
+    "health": (lambda c: not c.fhir_base_url or not c.fhir_patient_id, "FHIR endpoint and patient ID are required"),
+    "home_assistant": (
+        lambda c: not c.ha_base_url or not c.ha_entity_ids,
+        "Home Assistant endpoint and selected entities are required"),
+}
+
+
+def _check_provider_keys(source: ConnectorSource, provider: str) -> None:
+    """Reject unsupported configuration keys and name every missing required scope key.
+
+    Raises ``ValueError`` listing missing schema keys (never values) so the editor can point the
+    owner at each empty field; ``history_mode`` must match the provider's receive mode.
+    """
+    scope_fields = PROVIDER_SCOPE_FIELDS[provider]
+    common = {
+        "timezone", "schedule_interval_minutes", "timeout_seconds",
+        "realtime_mode", "retention_days", "skip_embedding",
+    }
+    expected_history = "pending_updates" if provider == "telegram" else "returned_snapshot"
+    raw_keys = set(source.configuration or {})
+    allowed = scope_fields | common | {"history_mode"}
+    if provider in INCREMENTAL_PROVIDERS:
+        allowed |= COLLECTION_FILTER_FIELDS
+    if provider in SECTION_CATALOG:
+        allowed |= {"feed_sections"}
+    allowed |= option_fields(provider)
+    if raw_keys - allowed:
+        raise ValueError("Provider configuration contains unsupported fields")
+    optional_scope_fields = OPTIONAL_SCOPE_FIELDS.get(provider, frozenset())
+    required_scope_fields = scope_fields - optional_scope_fields
+    # Name the missing schema keys (never values) so the editor can point the owner at each empty field.
+    missing = sorted(required_scope_fields - raw_keys)
+    if source.configuration.get("history_mode") != expected_history:
+        missing.append("history_mode")
+    if missing:
+        raise ValueError(f"Missing required fields: {', '.join(missing)}")
+
+
+def _validate_provider_source(source: ConnectorSource, provider: str) -> dict[str, Any]:
+    """Validate a registered native provider source and return its collector snapshot.
+
+    Order: registration and type match, key allow-list, section/option validation, timeout and
+    interval floor, then the provider's mandatory-scope rule (``_PROVIDER_SCOPE_RULES``) and the
+    GitHub config projection. Pure; raises ``ValueError``.
+    """
+    if provider not in NATIVE_PROVIDERS:
+        raise ValueError("Provider is not registered")
+    if source.type != PROVIDER_SOURCE_TYPES[provider]:
+        raise ValueError("Source type does not match the registered provider")
+    _check_provider_keys(source, provider)
+    config = configuration(source)
+    if config.feed_sections is not None:
+        validate_sections(provider, config.feed_sections)
+    validate_options(provider, config.model_dump(exclude_none=True))
+    if config.timeout_seconds > 30:
+        raise ValueError("Native provider request timeout cannot exceed 30 seconds")
+    floor = min_interval_minutes(provider)
+    if config.schedule_interval_minutes is not None and config.schedule_interval_minutes < floor:
+        raise ValueError(f"schedule_interval_below_minimum: minimum {floor} minutes")
+    rule = _PROVIDER_SCOPE_RULES.get(provider)
+    if rule is not None and rule[0](config):
+        raise ValueError(rule[1])
+    if provider == "github":
+        from modules.connectors.github.schemas import project_github_source_config
+
+        project_github_source_config(config.model_dump(exclude_none=True))
+    return {
+        "source_id": str(source.id),
+        "source_generation": source.generation,
+        "type": source.type,
+        "provider": provider,
+        "timezone": config.timezone or DEFAULT_TIMEZONE,
+        "configuration": config.model_dump(mode="json", exclude_none=True),
+    }
+
+
+def _validate_generic_source(source: ConnectorSource) -> dict[str, Any]:
+    """Validate an RSS/web/REST source with no provider and return its collector snapshot.
+
+    Provider-scope keys are rejected (they need a registered provider); the feed/page URL is
+    required, REST needs ``items_path`` and the default HTTP(S) port. Pure; raises ``ValueError``.
+    """
     if set(source.configuration or {}) & (COLLECTION_FILTER_FIELDS | {
         "feed_sections", *sorted(ALL_OPTION_NAMES - COLLECTION_FILTER_FIELDS), "youtube_channel_id", "arxiv_category", "huggingface_author", "bluesky_actor",
         "github_owner", "github_repository", "include_issues", "include_pulls", "include_commits", "include_releases", "telegram_chat_ids", "history_mode",
@@ -183,7 +218,7 @@ def normalize(record: dict[str, Any]) -> dict[str, Any]:
     from datetime import UTC, datetime
 
     raw_timestamp = str(record.get("observed_at") or "")
-    timestamp = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00")) if raw_timestamp else datetime.now(UTC)  # noqa: FURB162  # keeps exact parsing of 'Z' suffix; fromisoformat(Z) is not strictly equivalent
+    timestamp = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00")) if raw_timestamp else datetime.now(UTC)
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=UTC)
     return {

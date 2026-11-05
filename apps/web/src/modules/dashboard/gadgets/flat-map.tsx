@@ -89,21 +89,17 @@ export function fitZoom(width: number, height: number): number {
   return Math.log2(Math.min(width / 360, height / 180) * 0.92);
 }
 
-/** Render an equirectangular map with optional bounded weather imagery and selectable evidence points. */
-export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive, weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange, focusSelected = false }: FlatMapProps) {
-  const t = useTranslations('dashboard');
+/**
+ * Tracks WebGL context loss for Deck's canvas. Loss is prevented from tearing the map down and shown as
+ * unavailable until the context is restored; listeners are moved to a new canvas on re-initialisation and removed on unmount.
+ *
+ * @param onInitialized Called each time Deck initialises a context (clears the caller's "unavailable" flag).
+ * @returns The context-lost flag and Deck's `onWebGLInitialized` handler.
+ */
+function useWebglContextGuard(onInitialized: () => void) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const contextHandlersRef = useRef<{ lost: (event: Event) => void; restored: () => void } | null>(null);
   const [contextLost, setContextLost] = useState(false);
-  const [unavailable, setUnavailable] = useState(false);
-  const [themeRevision, setThemeRevision] = useState(0);
-  const weather = useWeatherRaster({ weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange }, visible && !unavailable && !contextLost);
-
-  useEffect(() => {
-    const observer = new MutationObserver(() => setThemeRevision((value) => value + 1));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => () => {
     const canvas = canvasRef.current;
@@ -116,17 +112,56 @@ export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, h
     contextHandlersRef.current = null;
   }, []);
 
+  /** Attach context lifecycle listeners to Deck's initialized canvas and retain them for cleanup. */
+  const handleWebGLInitialized = (gl: WebGLRenderingContext) => {
+    const canvas = gl.canvas as HTMLCanvasElement;
+    const handlers = {
+      lost: (event: Event) => {
+        event.preventDefault();
+        setContextLost(true);
+      },
+      restored: () => setContextLost(false),
+    };
+    const previousCanvas = canvasRef.current;
+    const previousHandlers = contextHandlersRef.current;
+    if (previousCanvas && previousHandlers) {
+      previousCanvas.removeEventListener('webglcontextlost', previousHandlers.lost);
+      previousCanvas.removeEventListener('webglcontextrestored', previousHandlers.restored);
+    }
+    canvas.addEventListener('webglcontextlost', handlers.lost);
+    canvas.addEventListener('webglcontextrestored', handlers.restored);
+    canvasRef.current = canvas;
+    contextHandlersRef.current = handlers;
+    onInitialized();
+  };
+  return { contextLost, handleWebGLInitialized };
+}
+
+/** Render an equirectangular map with optional bounded weather imagery and selectable evidence points. */
+export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, height, visible, interactive, weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange, focusSelected = false }: FlatMapProps) {
+  const t = useTranslations('dashboard');
+  const [unavailable, setUnavailable] = useState(false);
+  const { contextLost, handleWebGLInitialized } = useWebglContextGuard(() => setUnavailable(false));
+  const [themeRevision, setThemeRevision] = useState(0);
+  const weather = useWeatherRaster({ weatherLayer, weatherWorkspaceId, weatherRevision, onWeatherStateChange }, visible && !unavailable && !contextLost);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => setThemeRevision((value) => value + 1));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
   const views = useMemo(() => [new OrthographicView({ id: 'world-flat', flipY: false })], []);
   const zoom = fitZoom(width, height);
   const [viewState, setViewState] = useState({ target: [0, 0, 0] as [number, number, number], zoom });
   // Resize changes the fitted external map view while preserving its current target.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs React state to the Deck-controlled view when the fitted zoom changes; the user's pan target must survive, so it cannot be derived or keyed.
   useEffect(() => { setViewState((current) => ({ ...current, zoom })); }, [zoom]);
   const focused = focusSelected ? features.find((item) => item.feature_id === selectedFeatureId) : undefined;
   const focusedLat = focused?.latitude, focusedLon = focused?.longitude;
   useEffect(() => {
     // Selection from the accessible event list must update Deck's controlled view.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-centres the Deck-controlled view only when the selected feature changes, so later user panning is not overwritten.
     if (focusedLat !== undefined && focusedLon !== undefined) setViewState((current) => ({ ...current, target: [focusedLon, focusedLat, 0] }));
   }, [selectedFeatureId, focusedLat, focusedLon]);
   const layers = useMemo(() => [
@@ -164,29 +199,6 @@ export function FlatMap({ features, selectedFeatureId, onSelectFeature, width, h
       updateTriggers: { getRadius: [selectedFeatureId], getFillColor: [selectedFeatureId, themeRevision] },
     }),
   ], [features, selectedFeatureId, themeRevision, weather]);
-
-  /** Attach context lifecycle listeners to Deck's initialized canvas and retain them for cleanup. */
-  const handleWebGLInitialized = (gl: WebGLRenderingContext) => {
-    const canvas = gl.canvas as HTMLCanvasElement;
-    const handlers = {
-      lost: (event: Event) => {
-        event.preventDefault();
-        setContextLost(true);
-      },
-      restored: () => setContextLost(false),
-    };
-    const previousCanvas = canvasRef.current;
-    const previousHandlers = contextHandlersRef.current;
-    if (previousCanvas && previousHandlers) {
-      previousCanvas.removeEventListener('webglcontextlost', previousHandlers.lost);
-      previousCanvas.removeEventListener('webglcontextrestored', previousHandlers.restored);
-    }
-    canvas.addEventListener('webglcontextlost', handlers.lost);
-    canvas.addEventListener('webglcontextrestored', handlers.restored);
-    canvasRef.current = canvas;
-    contextHandlersRef.current = handlers;
-    setUnavailable(false);
-  };
 
   return <div className="relative h-full min-h-48 shrink-0 w-full">
     <DeckGL<typeof views>

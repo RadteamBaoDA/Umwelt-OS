@@ -5,9 +5,9 @@ import { useTranslations } from 'next-intl';
 import { formatChartValue, type ChartDataPoint } from '@/core/charts/recharts-wrapper';
 import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations/api';
-import { getConnectorConfiguration } from '@/modules/sources/api';
-import { isStale, periodKind } from '@/modules/sources/freshness';
+import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations';
+import { getConnectorConfiguration } from '@/modules/sources';
+import { isStale, periodKind } from '@/modules/sources';
 import type { GadgetInstance } from '../api';
 import { METRIC_FALLBACK_LOOKBACK_DAYS, useEffectiveLookback } from './use-effective-lookback';
 import { useReportGadgetFreshness } from '../gadget-freshness';
@@ -16,6 +16,7 @@ import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { formatMetricLabel } from './metric-label';
 import { metricBetterDirection } from './metric-direction';
 import { SeriesRow } from './series-row';
+import { getDateTimeFormat } from '@/modules/shared';
 
 /** Per-provider presentation: display name and attribution link shown next to the value. */
 export const PROVIDER_PRESENTATION: Record<string, { name: string; href: string }> = {
@@ -87,7 +88,7 @@ export function deltaVsPrevious(points: ChartDataPoint[] | undefined): number | 
 function formatReferenceDate(value: string, locale: ReturnType<typeof useDisplayPreferences>['locale']): string {
   const date = new Date(`${value}T00:00:00Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(normalizeFormattingLocale(locale), { dateStyle: 'medium', timeZone: 'UTC' }).format(date);
+  return getDateTimeFormat(normalizeFormattingLocale(locale), { dateStyle: 'medium', timeZone: 'UTC' }).format(date);
 }
 
 /**
@@ -119,17 +120,14 @@ function boundedIndexSuffix(item: WorldObservation): string | null {
 }
 
 /**
- * Generic provider observation gadget (Fear & Greed, FX, GDP, BTC price, USGS quakes). One series renders a KPI
- * (figure, delta vs previous observation, sparkline); several render SeriesRows.
- * Several bound sources (up to 5) each get their own query, because one shared request would drop symbol-less rows
- * (Fear & Greed, FX) under a `symbols` filter and share a row budget; their rows are merged (labels prefixed with
- * the source name) and the merged list is capped at 20. `symbols` apply only to symbol-keyed providers. Observed/published/collected times
- * sit in the value tooltip, attribution + freshness in the frame footer, FX reference date / annual period inline, a stale flag after two polling intervals, and keeps the last good
- * value visible with an error banner when a refresh fails.
+ * Loads one observation window per bound source and merges them (latest value + history per series).
+ * Reports provider attribution and the newest collection time as the frame footer.
+ *
+ * @returns Source ids, aggregate query status, merged latest rows, per-series history, per-source info and the
+ * connector configuration query (its polling interval drives the stale flag).
  */
-export function ProviderObservationGadget({ instance }: { instance: GadgetInstance }) {
+function useProviderObservations(instance: GadgetInstance) {
   const t = useTranslations('dashboard');
-  const display = useDisplayPreferences();
   const definition = instance.definition;
   const sourceIds = definition.source_ids ?? [];
   const sourceId = sourceIds[0] ?? '';
@@ -162,19 +160,37 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
   const providerNames = [...new Set(items.map((item) => PROVIDER_PRESENTATION[item.provider]?.name).filter(Boolean))].join(', ');
   // Provider attribution + freshness live in the frame footer, not in the body.
   useReportGadgetFreshness(items.reduce<string | null>((max, item) => (!max || item.collected_at > max ? item.collected_at : max), null), providerNames ? t('providerObsAttribution', { provider: providerNames }) : null);
+  return { sourceIds, sourceId, query, items, history, sources, sourceQuery };
+}
+
+/** Reference date / annual period lines and the provider attribution links (hidden in small containers). */
+function ObservationNotes({ items }: { items: WorldObservation[] }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  return <div className="space-y-0.5 text-xs text-muted-foreground @max-[24rem]/gadget:hidden">
+    {items.map((item) => {
+      const kind = periodKind(item.provider);
+      return <div key={item.id}>
+        {kind === 'referenceDate' && item.reference_date && <p>{t('providerObsReferenceDate', { date: formatReferenceDate(item.reference_date, display.locale) })}</p>}
+        {kind === 'annualPeriod' && item.period && <p>{t('providerObsPeriod', { period: item.period })}</p>}
+      </div>;
+    })}
+    {[...new Set(items.map((item) => item.provider))].map((provider) => PROVIDER_PRESENTATION[provider] && <p key={provider}><a className="underline" href={PROVIDER_PRESENTATION[provider].href} target="_blank" rel="noreferrer">{PROVIDER_PRESENTATION[provider].name}</a></p>)}
+  </div>;
+}
+
+/** One reading as a KPI (single series) or a list of SeriesRows (several), with observed/published/collected tooltips. */
+function ObservationRows({ instance, items, history, sources, sourceIds }: {
+  instance: GadgetInstance;
+  items: WorldObservation[];
+  history: ReturnType<typeof historyPerSeries>;
+  sources: ReturnType<typeof useEffectiveLookback>['sources'];
+  sourceIds: string[];
+}) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
   /** Formats an observation timestamp with the display locale and timezone. */
   const fmt = (value: string) => formatDateTime(value, display.locale, display.timezone);
-
-  if (!sourceId) return <GadgetNotice kind="setup" message={t('providerObsSourceRequired')} />;
-  if (query.isPending) return <GadgetSkeleton variant="metric" label={t('observationLoading')} />;
-  // No last good value to fall back on: plain error.
-  if (!items.length && query.isError) return <GadgetNotice kind="error" message={t('observationLoadFailed')} />;
-  if (!items.length) return <GadgetNotice kind="empty" message={t('observationEmpty')} />;
-
-  const interval = sourceQuery.data?.configuration.schedule_interval_minutes;
-  const lastCollected = items.reduce((max, item) => (item.collected_at > max ? item.collected_at : max), items[0].collected_at);
-  const stale = isStale(lastCollected, interval);
-
   /** Tooltip text listing the observed / published / collected times of one reading. */
   const timesTitle = (item: WorldObservation) => [
     `${t('providerObsObserved')}: ${fmt(item.observed_at)}`,
@@ -187,31 +203,50 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
   /** Unit text shown beside the figure: bounded-index suffix, else the plain unit (bare "index" adds nothing). */
   const unitOf = (item: WorldObservation) => boundedIndexSuffix(item) ?? (item.unit === 'index' ? undefined : item.unit);
   const single = items.length === 1 ? items[0] : null;
+  if (single) {
+    return (
+      <div title={timesTitle(single)} data-testid="observation-row" role="group" aria-label={single.value === null ? t('weatherMissingValue') : `${single.value} ${single.currency ?? single.unit}`}>
+        <GadgetKpi label={labelOf(single)} value={single.value} currency={single.currency ?? undefined} unit={unitOf(single)} format={(v) => formatObservationValue(single, v, display.locale)} deltaPercent={deltaVsPrevious(history.get(seriesKey(single)))} better={metricBetterDirection(single.metric)} series={history.get(seriesKey(single))} />
+      </div>
+    );
+  }
+  return (
+    <ul className="divide-y divide-border" aria-label={instance.title || t('providerObsTitle')}>
+      {items.map((item) => <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
+        <SeriesRow label={labelOf(item)} value={item.value} currency={item.currency ?? undefined} unit={unitOf(item)} format={(v) => formatObservationValue(item, v, display.locale)} series={history.get(seriesKey(item))} deltaPercent={deltaVsPrevious(history.get(seriesKey(item)))} better={metricBetterDirection(item.metric)} />
+      </li>)}
+    </ul>
+  );
+}
+
+/**
+ * Generic provider observation gadget (Fear & Greed, FX, GDP, BTC price, USGS quakes). One series renders a KPI
+ * (figure, delta vs previous observation, sparkline); several render SeriesRows.
+ * Several bound sources (up to 5) each get their own query, because one shared request would drop symbol-less rows
+ * (Fear & Greed, FX) under a `symbols` filter and share a row budget; their rows are merged (labels prefixed with
+ * the source name) and the merged list is capped at 20. `symbols` apply only to symbol-keyed providers. Observed/published/collected times
+ * sit in the value tooltip, attribution + freshness in the frame footer, FX reference date / annual period inline, a stale flag after two polling intervals, and keeps the last good
+ * value visible with an error banner when a refresh fails.
+ */
+export function ProviderObservationGadget({ instance }: { instance: GadgetInstance }) {
+  const t = useTranslations('dashboard');
+  const { sourceIds, sourceId, query, items, history, sources, sourceQuery } = useProviderObservations(instance);
+
+  if (!sourceId) return <GadgetNotice kind="setup" message={t('providerObsSourceRequired')} />;
+  if (query.isPending) return <GadgetSkeleton variant="metric" label={t('observationLoading')} />;
+  // No last good value to fall back on: plain error.
+  if (!items.length && query.isError) return <GadgetNotice kind="error" message={t('observationLoadFailed')} />;
+  if (!items.length) return <GadgetNotice kind="empty" message={t('observationEmpty')} />;
+
+  const interval = sourceQuery.data?.configuration.schedule_interval_minutes;
+  const lastCollected = items.reduce((max, item) => (item.collected_at > max ? item.collected_at : max), items[0].collected_at);
+  const stale = isStale(lastCollected, interval);
 
   return <section className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
     {query.isError && <p role="alert" className="text-xs text-destructive">{t('providerObsRefreshFailed')}</p>}
     {stale && <p role="status" className="text-xs text-muted-foreground">{t('providerObsStale')}</p>}
-    {single ? (
-      <div title={timesTitle(single)} data-testid="observation-row" role="group" aria-label={single.value === null ? t('weatherMissingValue') : `${single.value} ${single.currency ?? single.unit}`}>
-        <GadgetKpi label={labelOf(single)} value={single.value} currency={single.currency ?? undefined} unit={unitOf(single)} format={(v) => formatObservationValue(single, v, display.locale)} deltaPercent={deltaVsPrevious(history.get(seriesKey(single)))} better={metricBetterDirection(single.metric)} series={history.get(seriesKey(single))} />
-      </div>
-    ) : (
-      <ul className="divide-y divide-border" aria-label={instance.title || t('providerObsTitle')}>
-        {items.map((item) => <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
-          <SeriesRow label={labelOf(item)} value={item.value} currency={item.currency ?? undefined} unit={unitOf(item)} format={(v) => formatObservationValue(item, v, display.locale)} series={history.get(seriesKey(item))} deltaPercent={deltaVsPrevious(history.get(seriesKey(item)))} better={metricBetterDirection(item.metric)} />
-        </li>)}
-      </ul>
-    )}
+    <ObservationRows instance={instance} items={items} history={history} sources={sources} sourceIds={sourceIds} />
     {/* Reference date / annual period and the attribution link: hidden in small containers (figure + delta + spark only). */}
-    <div className="space-y-0.5 text-xs text-muted-foreground @max-[24rem]/gadget:hidden">
-      {items.map((item) => {
-        const kind = periodKind(item.provider);
-        return <div key={item.id}>
-          {kind === 'referenceDate' && item.reference_date && <p>{t('providerObsReferenceDate', { date: formatReferenceDate(item.reference_date, display.locale) })}</p>}
-          {kind === 'annualPeriod' && item.period && <p>{t('providerObsPeriod', { period: item.period })}</p>}
-        </div>;
-      })}
-      {[...new Set(items.map((item) => item.provider))].map((provider) => PROVIDER_PRESENTATION[provider] && <p key={provider}><a className="underline" href={PROVIDER_PRESENTATION[provider].href} target="_blank" rel="noreferrer">{PROVIDER_PRESENTATION[provider].name}</a></p>)}
-    </div>
+    <ObservationNotes items={items} />
   </section>;
 }

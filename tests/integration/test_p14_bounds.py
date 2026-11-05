@@ -82,7 +82,7 @@ async def test_oversized_upload_does_not_grow_tmp_dir_content_length_and_chunked
 ) -> None:
     """In-process ASGI app (same middleware stack): neither path may spool the body to temp files."""
     tmp = Path(tempfile.gettempdir())
-    before = {p.name for p in tmp.iterdir()}
+    before = {p.name for p in tmp.iterdir()}  # noqa: ASYNC240  # test fixture file access
     app = create_app(Settings(database_url=committed_engine.url.render_as_string(hide_password=False), csrf_signing_secret="s"))
 
     async def chunked() -> AsyncIterator[bytes]:
@@ -99,4 +99,4 @@ async def test_oversized_upload_does_not_grow_tmp_dir_content_length_and_chunked
         )
     assert sized.status_code == 413 and streamed.status_code == 413
     assert streamed.json() == {"detail": "Request body too large"}
-    assert {p.name for p in tmp.iterdir()} - before == set()
+    assert {p.name for p in tmp.iterdir()} - before == set()  # noqa: ASYNC240  # test fixture file access

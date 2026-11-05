@@ -1,12 +1,12 @@
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from datetime import timedelta
 from functools import wraps
 from typing import Any, ClassVar, cast
 
-from arq.connections import RedisSettings
-from arq.cron import cron as _cron
+from arq.constants import default_queue_name
 from arq.worker import func as _arq_func
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, or_, select
@@ -17,15 +17,48 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from apps.worker.cron_schedule import (
+    CRON_MAX_TRIES,
+    DAY,
+    HOUR,
+    CronSpec,
+    build_cron,
+    guarded_function,
+)
+from core.async_runtime import configure_default_executor
 from core.auth.deletion_worker import recover_account_deletions
 from core.auth.models import AuthSession
 from core.config import Settings
-from core.database import make_session_factory
+from core.cron import (
+    CRON_QUEUE,
+    RUN_CRON_FUNCTION,
+    clear_wake_flag,
+    overdue_jobs,
+    read_last_success,
+    set_wake_hook,
+    stable_offset,
+    wake,
+)
+from core.database import dispose_engine, make_session_factory_for_role
 from core.heavy_work import HEAVY_JOB_MAX_TRIES
 from core.ids import uuid7
+from core.metrics import (
+    monitor_event_loop_lag,
+    spawn_background,
+    start_worker_metrics_server,
+    stop_background,
+)
+from core.model_gateway.pool import close_pinned_clients
 from core.modules import effective_modules, register_modules, scheduled_job_owners
-from core.system.health import ARQ_WORKER_GENERATION_KEY, ARQ_WORKER_HEALTH_KEY
+from core.redis_client import build_redis_settings, build_worker_redis_pool
+from core.system.health import (
+    ARQ_CRON_WORKER_HEALTH_KEY,
+    ARQ_WORKER_GENERATION_KEY,
+    ARQ_WORKER_HEALTH_KEY,
+)
 from core.telemetry import install_log_redaction, instrument_job, set_process_role
+from core.tracing import configure_tracing, instrument_engine, traced_job
+from core.worker_dlq import dead_letter
 from core.worker_queues import MODEL_QUEUE
 from modules.agents.worker import (
     compose_agent_registry,
@@ -110,10 +143,6 @@ def _gate_module_job(function: Callable[..., Any]) -> Callable[..., Any]:
     return guarded
 
 
-def cron(function: Callable[..., Any], *args: Any, **kwargs: Any) -> object:
-    """Attach the fresh owner-module availability check to worker schedules."""
-    return _cron(_gate_module_job(function), *args, **kwargs)
-
 HEAVY_SLOT_JOBS = frozenset({"process_uploaded_file", "process_graph_operation"})
 
 
@@ -134,28 +163,64 @@ def _silence_cron_logs() -> None:
     logging.getLogger("arq.worker").setLevel(logging.WARNING)
 
 
-async def startup(ctx: dict[str, object]) -> None:
-    """Load the bounded database pool and compose the worker-owned native/MCP agent registry.
+# Offset added to METRICS_WORKER_PORT per worker process so all four can share one host / network
+# namespace; mirrored in docker-compose.monitoring.yml, infrastructure/monitoring/prometheus.yml and
+# docs/observability.md.
+METRICS_PORT_OFFSETS = {"worker": 0, "chat-worker": 1, "model-worker": 2, "cron-worker": 3}
 
-    Keep one nested checkpoint and bounded-discovery lock shared across ARQ's copied
-    invocation contexts; neither is authority or durable, and both reset on restart.
+
+def _install_observability(ctx: dict[str, object], settings: Settings, engine: AsyncEngine, role: str) -> None:
+    """Start optional worker metrics and tracing; both are off unless configured and never block startup.
+
+    The metrics HTTP server binds ``METRICS_WORKER_PORT + METRICS_PORT_OFFSETS[role]`` (worker 0, chat
+    worker 1, model worker 2, cron worker 3) so the worker processes can coexist on one host. The
+    event-loop lag task is stored in ``ctx["metrics_tasks"]`` for cancellation in ``shutdown``. Tracing
+    instruments this process's engine.
+    """
+    if settings.metrics_worker_port and start_worker_metrics_server(
+        settings.metrics_worker_port + METRICS_PORT_OFFSETS[role], settings.metrics_worker_bind,
+    ):
+        ctx["metrics_tasks"] = [spawn_background(monitor_event_loop_lag(), f"{role}-loop-lag")]
+    if configure_tracing(
+        settings.otel_exporter_otlp_endpoint, service_name=f"umwelt-{role}",
+        sample_ratio=settings.otel_traces_sample_ratio,
+    ):
+        instrument_engine(engine)
+
+
+async def _boot_runtime(
+    ctx: dict[str, object], *, role: str, pool_size: int, max_overflow: int, direct_pool_size: int,
+) -> None:
+    """Shared startup for the processes that run the full job ctx (main worker and cron worker).
+
+    Installs settings, the shared dispatch/cursor state, log redaction, the bounded database pool,
+    optional metrics/tracing for ``role``, the worker-owned agent registry and the event-driven wake
+    hook. The engine comes from ``make_session_factory_for_role`` (direct or PgBouncer mode) with the bounded
+    worker statement timeout and ``direct_pool_size`` session-lease connections. When registry composition fails the metrics tasks are stopped and the engine is disposed
+    before the error propagates. Nested state is neither authority nor durable and resets on restart.
     """
     _silence_cron_logs()
+    configure_default_executor()  # explicit default thread-pool size; see core.async_runtime
     settings = Settings()
     ctx["settings"] = settings
+    # SAFE PER PROCESS: this lock only serialises overlapping cron calls of one process so they cannot regress the
+    # scan cursor. It is not a cross-replica mutex: every claim is fenced in SQL (FOR UPDATE SKIP LOCKED, leases,
+    # dispatched_at), so replicas scanning from their own cursors never double-claim an outbox event.
     ctx["ingestion_dispatch_scan_state"] = {"cursor": None, "lock": asyncio.Lock()}
     ctx["w2_cursor_state"] = {}  # dict[str,str] shared across ARQ ctx copies; see core/worker_cursors.py for key namespaces (_gen:/_unsynced:)
     install_log_redaction()
-    set_process_role("worker")
-    engine, factory = make_session_factory(
-        settings.database_url,
-        pool_size=WorkerSettings.max_jobs + 1,
-        max_overflow=10,
-        statement_timeout_ms=0,
-        idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
+    set_process_role(role)
+    engine, factory = make_session_factory_for_role(
+        settings,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        # Bounded (default 120 s): jobs spend long periods in provider/parse I/O, never inside a DB statement.
+        statement_timeout_ms=settings.db_worker_statement_timeout_ms,
+        direct_pool_size=direct_pool_size,  # at most one session run/erasure lease per concurrent job
     )
     ctx["session_factory"] = factory
     ctx["db_engine"] = engine
+    _install_observability(ctx, settings, engine, role)
     try:
         registry, admission, runtime = await compose_agent_registry(
             settings, cast(async_sessionmaker[AsyncSession], ctx["session_factory"]),
@@ -164,10 +229,69 @@ async def startup(ctx: dict[str, object]) -> None:
         ctx["agent_tool_registry"] = registry
         ctx["agent_mcp_admission"] = admission
         ctx["agent_mcp_runtime"] = runtime
-        await cast(Redis, ctx["redis"]).set(ARQ_WORKER_GENERATION_KEY, uuid7().hex)
     except Exception:
-        await engine.dispose()
+        await stop_background(cast("list[asyncio.Task[None]]", ctx.pop("metrics_tasks", [])))
+        await dispose_engine(engine)
         raise
+    redis = cast(Redis, ctx["redis"])
+
+    async def wake_poller(job_name: str, defer_seconds: float = 1.0) -> None:
+        """Enqueue an immediate run of a poller cron after a worker-side commit (best-effort)."""
+        await wake(redis, job_name, defer_seconds=defer_seconds)
+
+    set_wake_hook(wake_poller)
+
+
+async def startup(ctx: dict[str, object]) -> None:
+    """Load the bounded database pool and compose the worker-owned native/MCP agent registry.
+
+    Keep one nested checkpoint and bounded-discovery lock shared across ARQ's copied
+    invocation contexts; neither is authority or durable, and both reset on restart. Publishes a new
+    worker generation for health once composition succeeded.
+    """
+    await _boot_runtime(
+        ctx, role="worker", pool_size=WorkerSettings.max_jobs + 1, max_overflow=10,
+        direct_pool_size=WorkerSettings.max_jobs,
+    )
+    await cast(Redis, ctx["redis"]).set(ARQ_WORKER_GENERATION_KEY, uuid7().hex)
+
+
+CRON_DB_POOL = (8 + 1, 5)  # (pool_size = CronWorkerSettings.max_jobs + 1, max_overflow); counted as 14 in docs/deployment.md
+
+
+async def catch_up_missed_runs(ctx: dict[str, object]) -> list[str]:
+    """Enqueue one lease-guarded run of every non-startup cron whose last success is older than 2x its period.
+
+    Reads the persisted ``cron:last_success`` hash; jobs that never succeeded count as overdue. Runs are
+    deferred by a stable 0-29 s offset so a restart does not stampede, use the job id
+    ``catchup:<name>:<minute>`` (no duplicates across replicas) and pass through the same single-flight
+    lease as scheduled runs via ``run_cron_job``. Returns the enqueued names; enqueue failures are logged and skipped.
+    """
+    redis = cast(Redis, ctx["redis"])
+    periods = {spec.name: spec.period_seconds for spec in CRON_SPECS if not spec.run_at_startup}
+    queued: list[str] = []
+    bucket = int(time.time() // 60)  # replicas restarting together coalesce; the lease guards the rest
+    for name in overdue_jobs(periods, await read_last_success(redis)):
+        try:
+            job = await cast(Any, redis).enqueue_job(
+                RUN_CRON_FUNCTION, name, False, _job_id=f"catchup:{name}:{bucket}", _queue_name=CRON_QUEUE,
+                _defer_by=stable_offset(name, 30, "catch-up"),
+            )
+        except Exception:
+            logging.getLogger(__name__).warning("cron catch-up enqueue failed job=%s", name, exc_info=True)
+            continue
+        if job is not None:
+            queued.append(name)
+    return queued
+
+
+async def cron_startup(ctx: dict[str, object]) -> None:
+    """Cron-worker startup: full job ctx on its own bounded pool, then missed-run catch-up."""
+    await _boot_runtime(
+        ctx, role="cron-worker", pool_size=CRON_DB_POOL[0], max_overflow=CRON_DB_POOL[1],
+        direct_pool_size=CronWorkerSettings.max_jobs,
+    )
+    await catch_up_missed_runs(ctx)
 
 
 CHAT_DB_POOL = (10, 10)  # fixed (pool_size, max_overflow); counted as 20 in docs/deployment.md and .env.example
@@ -176,19 +300,20 @@ CHAT_DB_POOL = (10, 10)  # fixed (pool_size, max_overflow); counted as 20 in doc
 async def chat_startup(ctx: dict[str, object]) -> None:
     """Minimal chat-worker startup: bounded DB pool only (no agent registry, no worker-generation key)."""
     _silence_cron_logs()
+    configure_default_executor()  # explicit default thread-pool size; see core.async_runtime
     settings = Settings()
     ctx["settings"] = settings
     install_log_redaction()
     set_process_role("chat-worker")
-    engine, factory = make_session_factory(
-        settings.database_url,
+    engine, factory = make_session_factory_for_role(
+        settings,
         pool_size=CHAT_DB_POOL[0],
         max_overflow=CHAT_DB_POOL[1],
         statement_timeout_ms=settings.db_statement_timeout_ms,
-        idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
     )
     ctx["session_factory"] = factory
     ctx["db_engine"] = engine
+    _install_observability(ctx, settings, engine, "chat-worker")
 
 
 MODEL_DB_POOL = (4 + 1, 5)  # (pool_size = ModelWorkerSettings.max_jobs + 1, max_overflow); counted as 10 in docs/deployment.md
@@ -197,29 +322,42 @@ MODEL_DB_POOL = (4 + 1, 5)  # (pool_size = ModelWorkerSettings.max_jobs + 1, max
 async def model_startup(ctx: dict[str, object]) -> None:
     """Minimal model-worker startup: bounded DB pool only (no agent registry, no worker-generation key)."""
     _silence_cron_logs()
+    configure_default_executor()  # explicit default thread-pool size; see core.async_runtime
     settings = Settings()
     ctx["settings"] = settings
     install_log_redaction()
     set_process_role("model-worker")
-    engine, factory = make_session_factory(
-        settings.database_url,
+    engine, factory = make_session_factory_for_role(
+        settings,
         pool_size=MODEL_DB_POOL[0],
         max_overflow=MODEL_DB_POOL[1],
-        statement_timeout_ms=0,  # long model calls hold no DB statement; mirrors the main worker
-        idle_tx_timeout_ms=settings.db_idle_tx_timeout_ms,
+        # Remote model calls run outside DB statements, so a bounded timeout never interrupts them.
+        statement_timeout_ms=settings.db_model_worker_statement_timeout_ms,
+        direct_pool_size=1,  # no session leases on this role
     )
     ctx["session_factory"] = factory
     ctx["db_engine"] = engine
+    _install_observability(ctx, settings, engine, "model-worker")
 
 
 async def shutdown(ctx: dict[str, object]) -> None:
-    """Stop new worker MCP admissions and dispose the database engine when present."""
+    """Release every worker process's runtime in dependency order (all four worker settings share this hook).
+
+    Clears the wake hook, cancels the metrics tasks, stops new worker MCP admissions, closes the pooled
+    model-gateway HTTP clients and finally disposes the database engine (and its PgBouncer-mode direct sibling)
+    when present; the engines are disposed even when closing the HTTP clients fails.
+    """
+    set_wake_hook(None)
+    await stop_background(cast("list[asyncio.Task[None]]", ctx.get("metrics_tasks", [])))
     admission = ctx.get("agent_mcp_admission")
     if admission is not None:
         cast(Any, admission).stop()
-    engine = ctx.get("db_engine")
-    if engine is not None:
-        await cast(AsyncEngine, engine).dispose()
+    try:
+        await close_pinned_clients()  # pooled model-gateway HTTP clients
+    finally:
+        engine = ctx.get("db_engine")
+        if engine is not None:
+            await dispose_engine(cast(AsyncEngine, engine))
 
 
 async def purge_expired_sessions(ctx: dict[str, object]) -> int:
@@ -246,6 +384,68 @@ async def purge_expired_sessions(ctx: dict[str, object]) -> int:
         return result.rowcount or 0
 
 
+def _register(
+    function: Callable[..., Any], *, max_tries: int, timeout: float, queue: str = default_queue_name,
+) -> Any:
+    """Wrap a job with its dead-letter recorder and trace span, then apply per-function arq options.
+
+    ``traced_job`` is outermost so the producer's ``_trace_carrier`` kwarg is stripped before the
+    dead-letter recorder hashes the arguments, and the failure bookkeeping runs inside the job span.
+    The effective try limit is the per-function override (heavy-slot jobs) or the worker default
+    ``max_tries``; every attempt after which arq will not run the job again (permanent failure, timeout,
+    or exhausted tries) is persisted to ``worker_dead_letters`` (see
+    ``core.worker_dlq``). Returns the arq ``Function`` when options apply, else the wrapped coroutine.
+    """
+    options = _arq_options(function.__name__)
+    wrapped = traced_job(dead_letter(
+        function, max_tries=int(options.get("max_tries", max_tries)), queue=queue, timeout_seconds=timeout,
+    ))
+    return _arq_func(wrapped, **options) if options else wrapped
+
+
+# Every recurring job with its period. Phases inside the period come from a stable hash of the job
+# name (apps/worker/cron_schedule.py), so no more than a few jobs share a second. Pollers whose work is
+# also triggered by an enqueue (dispatch_pending_work via the outbox commit hook, index_pending_chunks
+# via the same hook's ready events) keep a slow safety-net period instead of 5 s.
+CRON_SPECS: tuple[CronSpec, ...] = (
+    CronSpec(purge_expired_sessions, HOUR),
+    CronSpec(recover_account_deletions, 30, run_at_startup=True),
+    CronSpec(purge_collection_receipts, HOUR, minute=7),
+    CronSpec(run_retention_maintenance, HOUR),
+    CronSpec(sample_system_health, 60),
+    CronSpec(cleanup_storage_orphans, 300),
+    CronSpec(dispatch_pending_work, 30, run_at_startup=True),
+    CronSpec(index_pending_chunks, 60),
+    CronSpec(reconcile_connectors, 5, run_at_startup=True),
+    CronSpec(dispatch_due_collections, 15, run_at_startup=True),
+    CronSpec(reconcile_document_memory_cleanup, 5, run_at_startup=True),
+    CronSpec(reconcile_document_agent_cleanup, 5, run_at_startup=True),
+    CronSpec(reconcile_document_copied_stage_cleanup, 5, run_at_startup=True),
+    CronSpec(reconcile_source_coverage, 30, run_at_startup=True),
+    CronSpec(recover_entity_extraction_work, 60),
+    CronSpec(recover_timeline_extraction_work, 60),
+    CronSpec(recover_graph_work, 5, run_at_startup=True),
+    CronSpec(recover_news_work, 60, run_at_startup=True),
+    CronSpec(backfill_news_attribution, 1800, run_at_startup=True),
+    CronSpec(run_scheduled_brief, 60, run_at_startup=True),
+    CronSpec(run_scheduled_highlights, 60, run_at_startup=True),
+    CronSpec(purge_expired_chat_runs, 900),
+    CronSpec(reconcile_agent_dispatch, 5, run_at_startup=True),
+    CronSpec(reconcile_automation_runs, 5, run_at_startup=True),
+    CronSpec(recover_translation_jobs, 60),
+    CronSpec(sweep_translation_orphans, 300),
+    CronSpec(expire_translations, DAY, hour=3, minute=17),
+)
+CHAT_CRON_SPECS: tuple[CronSpec, ...] = (
+    CronSpec(recover_chat_runs, 15),
+    CronSpec(recover_parked_input_runs, 30),
+)
+
+
+WORKER_JOB_TIMEOUT = 180
+MODEL_JOB_TIMEOUT = Settings().model_worker_job_timeout_seconds
+
+
 class WorkerSettings:
     """ARQ worker registration, recurring schedules, retry/concurrency bounds, and lifecycle hooks."""
     # Queue delay / duration / outcome telemetry wraps only event-driven jobs (labelled by function
@@ -261,44 +461,16 @@ class WorkerSettings:
         instrument_job(process_news_document_ready), purge_expired_chat_runs,
         instrument_job(process_agent_run, run_id_kind="agent_run_id"), instrument_job(process_automation_run),
     ]
-    functions = [_gate_module_job(function) for function in functions]
+    functions = [_register(_gate_module_job(function), max_tries=5, timeout=WORKER_JOB_TIMEOUT) for function in functions]
     # Outbox consumers are re-enqueued under the fixed id `ingestion:{event.id}` per continuation; a
     # kept arq result (default 3600 s) would turn those enqueues into no-ops. Nothing reads arq
     # results, and the in-progress job key still dedupes concurrently queued jobs.
     # Heavy-slot jobs retry on contention; with several job slots the default max_tries would be
     # exhausted (and the job id blocked for keep_result_s) before the slot holder finishes.
-    functions = [_arq_func(function, **_arq_options(function.__name__)) if _arq_options(function.__name__)
-                 else function for function in functions]
-    cron_jobs: ClassVar[list[object]] = [
-        cron(purge_expired_sessions, minute=0),
-        cron(recover_account_deletions, second={0, 30}, run_at_startup=True),
-        cron(purge_collection_receipts, minute=7),
-        cron(run_retention_maintenance, minute=0),
-        cron(sample_system_health, second=0),
-        cron(cleanup_storage_orphans, minute=set(range(0, 60, 5))),
-        cron(dispatch_pending_work, second=set(range(0, 60, 5)), run_at_startup=True),
-        cron(index_pending_chunks, minute=set(range(0, 60, 1))),
-        cron(reconcile_connectors, second=set(range(0, 60, 5)), run_at_startup=True),
-        cron(dispatch_due_collections, second={0, 15, 30, 45}, run_at_startup=True),
-        cron(reconcile_document_memory_cleanup, second=set(range(0, 60, 5)), run_at_startup=True),
-        cron(reconcile_document_agent_cleanup, second=set(range(0, 60, 5)), run_at_startup=True),
-        cron(reconcile_document_copied_stage_cleanup, second=set(range(0, 60, 5)), run_at_startup=True),
-        cron(reconcile_source_coverage, second={0, 30}, run_at_startup=True),
-        cron(recover_entity_extraction_work, minute=set(range(0, 60, 1))),
-        cron(recover_timeline_extraction_work, minute=set(range(0, 60, 1))),
-        cron(recover_graph_work, second=set(range(0, 60, 5)), run_at_startup=True),
-        cron(recover_news_work, minute=set(range(0, 60, 1)), run_at_startup=True),
-        cron(backfill_news_attribution, minute={11, 41}, run_at_startup=True),
-        cron(run_scheduled_brief, minute=set(range(0, 60, 1)), run_at_startup=True),
-        cron(run_scheduled_highlights, minute=set(range(0, 60, 1)), run_at_startup=True),
-        cron(purge_expired_chat_runs, minute=set(range(0, 60, 15))),
-        cron(reconcile_agent_dispatch, second=set(range(0, 60, 5)), run_at_startup=True),
-        cron(reconcile_automation_runs, second=set(range(0, 60, 5)), run_at_startup=True),
-        cron(recover_translation_jobs, minute=set(range(0, 60, 1))),
-        cron(sweep_translation_orphans, minute=set(range(0, 60, 5))),
-        cron(expire_translations, hour=3, minute=17),
-    ]
-    redis_settings = RedisSettings.from_dsn(Settings().redis_url)
+    # Cron jobs run on CronWorkerSettings (queue arq:cron); only event-driven functions stay here.
+    redis_settings = build_redis_settings(Settings())
+    # Sentinel mode supplies a pool so the sentinel password/timeouts match the API; None keeps arq's direct path.
+    redis_pool = build_worker_redis_pool(Settings())
 
     # Heavy local work (parsing, embedding, graph, browser reads) is serialized across
     # processes by `core.heavy_work.heavy_job_slot` and retries on contention, so extra slots only
@@ -310,10 +482,65 @@ class WorkerSettings:
     max_tries = 5
     # The graph owner budget is 150 seconds; ARQ must leave time for durable
     # uncertainty publication and cancellation before the 180-second lease ends.
-    job_timeout = 180
+    job_timeout = WORKER_JOB_TIMEOUT
     health_check_key = ARQ_WORKER_HEALTH_KEY
     health_check_interval = 15
+    # Graceful drain: on SIGTERM stop taking new jobs and let running ones finish for up to
+    # job_timeout + 5 s before cancelling (cancelled jobs are retried). compose stop_grace_period must
+    # exceed this (240 s); see docs/deployment.md.
+    job_completion_wait = job_timeout + 5
     on_startup = startup
+    on_shutdown = shutdown
+
+
+_CRON_GUARDED: dict[str, Callable[..., Any]] = {
+    spec.name: guarded_function(spec, _gate_module_job) for spec in CRON_SPECS
+}
+
+
+async def run_cron_job(ctx: dict[str, Any], job_name: str, is_wake: bool = True) -> Any:
+    """Run the named cron job once through its single-flight lease (wake-up and catch-up entry point).
+
+    A plain arq function, deliberately not a ``CronJob``: arq keeps CronJob in-progress keys for 60 s and
+    fixed job ids block on kept results, which made wake-ups slower than the safety-net poll. Wakes and
+    catch-ups enqueue this with a unique job id instead. ``is_wake`` marks a wake-up so that meeting a
+    held lease leaves a rerun request for the holder. Clears the wake debounce flag first so commits that
+    land during the run queue the next wake. Unknown names are ignored (stale job from another build).
+    """
+    function = _CRON_GUARDED.get(job_name)
+    if function is None:
+        return None
+    redis = ctx.get("redis")
+    if is_wake and redis is not None:
+        await clear_wake_flag(redis, job_name)
+    return await function({**ctx, "cron_wake": is_wake})
+
+
+class CronWorkerSettings:
+    """Dedicated arq worker for every recurring job, so polls never occupy ingestion ``max_jobs`` slots.
+
+    Cron jobs are registered here only (WorkerSettings keeps the event-driven consumers). Each job is
+    lease-guarded (``core.cron.single_flight``) with a hashed phase; wake-ups and missed-run catch-up are
+    enqueued on ``CRON_QUEUE`` under the ``cron:<function name>`` job name this worker registers. Heavy
+    work inside a cron still serializes through ``core.heavy_work.heavy_job_slot`` across processes.
+    """
+    # traced_job strips the ``_trace_carrier`` that a tracing API adds to wake-up enqueues.
+    functions: ClassVar[list[Any]] = [_arq_func(traced_job(run_cron_job), max_tries=CRON_MAX_TRIES)]
+    cron_jobs: ClassVar[list[object]] = [build_cron(spec, _gate_module_job) for spec in CRON_SPECS]
+    redis_settings = build_redis_settings(Settings())
+    # Sentinel mode supplies a pool so the sentinel password/timeouts match the API; None keeps arq's direct path.
+    redis_pool = build_worker_redis_pool(Settings())
+    queue_name = CRON_QUEUE
+    max_jobs = 8
+    max_tries = CRON_MAX_TRIES  # only ``Retry`` (heavy-slot contention) consumes tries; other errors never rerun
+    # No kept results: cron/wake outcomes live in core.cron bookkeeping; a stored failed result (default
+    # 3600 s) would otherwise block re-enqueueing under the same id.
+    keep_result = 0
+    job_timeout = 180
+    health_check_key = ARQ_CRON_WORKER_HEALTH_KEY
+    health_check_interval = 15
+    job_completion_wait = job_timeout + 5
+    on_startup = cron_startup
     on_shutdown = shutdown
 
 
@@ -321,22 +548,24 @@ class ModelWorkerSettings:
     """Dedicated arq worker for remote-model background jobs (entity/timeline extraction, translation).
 
     Isolated from the main worker so slow provider calls never hold its job slots or the
-    cross-process heavy slot that chunk embedding needs. Recovery crons stay on WorkerSettings and
+    cross-process heavy slot that chunk embedding needs. Recovery crons run on CronWorkerSettings and
     only enqueue onto this queue.
     """
     functions: ClassVar[list[Any]] = [
         process_entity_extraction_work, process_timeline_extraction_work, translate_content,
     ]
-    functions = [_gate_module_job(instrument_job(function)) for function in functions]
-    functions = [_arq_func(function, **_arq_options(function.__name__)) if _arq_options(function.__name__)
-                 else function for function in functions]
-    redis_settings = RedisSettings.from_dsn(Settings().redis_url)
+    functions = [_register(_gate_module_job(instrument_job(function)), max_tries=5, timeout=MODEL_JOB_TIMEOUT, queue=MODEL_QUEUE)
+                 for function in functions]
+    redis_settings = build_redis_settings(Settings())
+    # Sentinel mode supplies a pool so the sentinel password/timeouts match the API; None keeps arq's direct path.
+    redis_pool = build_worker_redis_pool(Settings())
     queue_name = MODEL_QUEUE
     max_jobs = 4
-    job_timeout = Settings().model_worker_job_timeout_seconds
+    job_timeout = MODEL_JOB_TIMEOUT
     max_tries = 5
     health_check_key = "arq:model:health-check"
     health_check_interval = 15
+    job_completion_wait = job_timeout + 5  # compose stop_grace_period must exceed this; see docs/deployment.md
     on_startup = model_startup
     on_shutdown = shutdown
 
@@ -347,18 +576,18 @@ class ChatWorkerSettings:
     # gated return nor an interrupted/failed job may block the fixed job id, or recovery could not re-enqueue.
     keep_result = 0
     functions: ClassVar[list[Any]] = [
-        _arq_func(_gate_module_job(instrument_job(process_chat_response)), keep_result=0),
+        _arq_func(traced_job(_gate_module_job(instrument_job(process_chat_response))), keep_result=0),
     ]
-    cron_jobs: ClassVar[list[object]] = [
-        cron(recover_chat_runs, second={0, 15, 30, 45}),
-        cron(recover_parked_input_runs, second={7, 37}),
-    ]
-    redis_settings = RedisSettings.from_dsn(Settings().redis_url)
+    cron_jobs: ClassVar[list[object]] = [build_cron(spec, _gate_module_job) for spec in CHAT_CRON_SPECS]
+    redis_settings = build_redis_settings(Settings())
+    # Sentinel mode supplies a pool so the sentinel password/timeouts match the API; None keeps arq's direct path.
+    redis_pool = build_worker_redis_pool(Settings())
     queue_name = CHAT_QUEUE
     max_jobs = 15  # keeps 5 of the shared 10+10 DB pool free for cron/rerank sessions (pool_timeout 5 s)
     job_timeout = CHAT_JOB_TIMEOUT
     max_tries = 1
     health_check_key = "arq:chat:health-check"
     health_check_interval = 15
+    job_completion_wait = job_timeout + 5  # compose stop_grace_period must exceed this; see docs/deployment.md
     on_startup = chat_startup
     on_shutdown = shutdown

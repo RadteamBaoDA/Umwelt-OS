@@ -46,7 +46,7 @@ class ExtractedEntity(BaseModel):
     def finite_confidence(cls, value: object) -> float:
         """Accept JSON numeric confidence only when finite and within [0, 1]."""
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError("confidence must be a JSON number")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("confidence must be a JSON number")
         try:
             number = float(value)
         except (OverflowError, ValueError):
@@ -78,7 +78,7 @@ class ExtractedRelationship(BaseModel):
     def finite_confidence(cls, value: object) -> float:
         """Accept JSON numeric confidence only when finite and within [0, 1]."""
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError("confidence must be a JSON number")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("confidence must be a JSON number")
         try:
             number = float(value)
         except (OverflowError, ValueError):

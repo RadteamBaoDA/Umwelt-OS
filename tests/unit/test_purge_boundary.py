@@ -13,7 +13,7 @@ FORBIDDEN = (
 
 def test_purge_expired_datasource_data_uses_public_contracts_only():
     """purge_expired_datasource_data has no function-local imports of foreign private modules."""
-    tree = ast.parse(Path("modules/ingestion/public.py").read_text(encoding="utf-8"))
+    tree = ast.parse(Path("modules/ingestion/_purge.py").read_text(encoding="utf-8"))
     func = next(
         n for n in ast.walk(tree)
         if isinstance(n, ast.AsyncFunctionDef) and n.name == "purge_expired_datasource_data"

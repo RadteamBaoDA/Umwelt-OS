@@ -189,7 +189,7 @@ class TestEventCreate:
 
     def test_naive_timestamp_rejected(self) -> None:
         """Verify naive timestamps without UTC offset raise ValidationError."""
-        naive_dt = datetime(2025, 1, 1, 10, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
+        naive_dt = datetime(2025, 1, 1, 10, 0)
         with pytest.raises(ValidationError, match="timestamps must include an explicit UTC offset"):
             EventCreate(
                 type="talk",

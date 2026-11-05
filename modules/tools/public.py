@@ -13,6 +13,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import ConflictError, DomainError, ForbiddenError
 from core.tools import (
     ToolDefinition,
     ToolDestination,
@@ -184,10 +185,47 @@ async def revalidate_native_output_fences(
                 )
             if not valid:
                 return False
-    except (HTTPException, SQLAlchemyError, ValueError, OSError, TimeoutError):
+    except (HTTPException, DomainError, SQLAlchemyError, ValueError, OSError, TimeoutError):
         # Admission/database/validation failures suppress output; TypeError/AttributeError are bugs and propagate.
         return False
     return True
+
+
+async def _revalidate_combined_fences(
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
+    search_fences: dict[Any, Any], document_fences: dict[Any, Any], *, allowed_ids: Any,
+    owner_all: bool, destination: Any, scope: Scope, multi_workspace_enabled: bool,
+) -> bool:
+    """Run the Search then Document owner fence checks over de-duplicated fences, 100 per call.
+
+    Each owner module answers one yes/no for a whole page, so the first failing page ends the
+    combined check; Document fences are only checked when the Search ones passed. One read session
+    per owner module, no writes. Exceptions propagate to the caller's per-row fallback.
+    """
+    combined_ok = True
+    if search_fences:
+        from modules.search import public as search
+
+        unique = list(search_fences.values())
+        async with session_factory() as session:
+            for offset in range(0, len(unique), 100):
+                combined_ok = combined_ok and await search.revalidate_tool_search_fences(
+                    session, unique[offset:offset + 100], source_ids=allowed_ids, owner_all=owner_all,
+                    destination=destination, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
+    if document_fences and combined_ok:
+        from modules.knowledge.documents import public as documents
+
+        unique = list(document_fences.values())
+        async with session_factory() as session:
+            for offset in range(0, len(unique), 100):
+                combined_ok = combined_ok and await documents.revalidate_tool_document_fences(
+                    session, unique[offset:offset + 100], source_ids=allowed_ids, owner_all=owner_all,
+                    destination=destination, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                )
+    return combined_ok
 
 
 async def revalidate_native_output_fences_many(
@@ -219,7 +257,7 @@ async def revalidate_native_output_fences_many(
     async def per_row(index: int) -> bool:
         """Exact per-row verdict used whenever a combined check cannot attribute a failure."""
         sink, principal = items[index]
-        assert principal is not None
+        assert principal is not None  # noqa: S101  # mypy narrowing invariant
         return await revalidate_native_output_fences(
             session_factory, sink, principal, destination_kind=destination_kind,
             multi_workspace_enabled=multi_workspace_enabled,
@@ -257,36 +295,17 @@ async def revalidate_native_output_fences_many(
                 (f.document_id, f.document_version_id, f.source_id, f.source_generation, f.chunk_id): f
                 for _, p in live for f in p.document_fences
             }
-            combined_ok = True
-            if search_fences:
-                from modules.search import public as search
-
-                unique = list(search_fences.values())
-                async with session_factory() as session:
-                    for offset in range(0, len(unique), 100):
-                        combined_ok = combined_ok and await search.revalidate_tool_search_fences(
-                            session, unique[offset:offset + 100], source_ids=allowed_ids, owner_all=owner_all,
-                            destination=destination, scope=scope,
-                            multi_workspace_enabled=multi_workspace_enabled,
-                        )
-            if document_fences and combined_ok:
-                from modules.knowledge.documents import public as documents
-
-                unique = list(document_fences.values())
-                async with session_factory() as session:
-                    for offset in range(0, len(unique), 100):
-                        combined_ok = combined_ok and await documents.revalidate_tool_document_fences(
-                            session, unique[offset:offset + 100], source_ids=allowed_ids, owner_all=owner_all,
-                            destination=destination, scope=scope,
-                            multi_workspace_enabled=multi_workspace_enabled,
-                        )
+            combined_ok = await _revalidate_combined_fences(
+                session_factory, search_fences, document_fences, allowed_ids=allowed_ids, owner_all=owner_all,
+                destination=destination, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            )
             if combined_ok:
                 for index, _ in live:
                     verdicts[index] = True
             else:
                 for index, _ in live:
                     verdicts[index] = await per_row(index)
-        except (HTTPException, SQLAlchemyError, ValueError, OSError, TimeoutError):
+        except (HTTPException, DomainError, SQLAlchemyError, ValueError, OSError, TimeoutError):
             # Suppress nothing on a combined failure: let each row decide on its own.
             for index, _ in members:
                 verdicts[index] = await per_row(index)
@@ -322,7 +341,7 @@ async def _assert_source_browser_cleanup_in_uow(
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
         raise TypeError("An explicit Source browser cleanup scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError("Workspace owner required")
     if (not isinstance(source_id, UUID) or type(multi_workspace_enabled) is not bool
             or not isinstance(access_fence, AccessFence) or not isinstance(source_fence, SourceFence)):
         raise TypeError("Source browser cleanup requires typed fences and an explicit boolean feature flag")
@@ -333,7 +352,7 @@ async def _assert_source_browser_cleanup_in_uow(
             or (isinstance(scope, InternalJobScope) and scope.source_id is not None and (
                 scope.source_id != source_id or scope.source_generation != source_fence.generation
             ))):
-        raise HTTPException(status_code=409, detail="Source browser cleanup subject changed")
+        raise ConflictError("Source browser cleanup subject changed")
     with session.no_autoflush:
         current_access = await workspaces.read_access_fence(
             session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -343,7 +362,7 @@ async def _assert_source_browser_cleanup_in_uow(
         )
     if (current_access != access_fence or current_source is None
             or current_source != source_fence or current_source.status not in {"active", "paused", "archived"}):
-        raise HTTPException(status_code=409, detail="Source browser cleanup anchor is unavailable or stale")
+        raise ConflictError("Source browser cleanup anchor is unavailable or stale")
     return actor_user_id
 
 
@@ -531,7 +550,7 @@ async def purge_browser_results_in_uow(
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
         raise TypeError("An explicit workspace scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError("Workspace owner required")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     selectors = []

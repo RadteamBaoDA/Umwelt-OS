@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class ConnectorsDescriptor:
+class ConnectorsDescriptor(ModuleDescriptor):
     """Describe source connector routes and the bounded reconciliation worker."""
 
     id: str = "connectors"
@@ -22,6 +24,17 @@ class ConnectorsDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.connectors.routes", 150),
+        RouterSpec("modules.connectors.routes:operator_router", 160),
+        RouterSpec("modules.connectors.builtins", 180),
+        RouterSpec("modules.connectors.provisioning_routes", 190),
+        RouterSpec("modules.connectors.github.routes", 200),
+        RouterSpec("modules.connectors.oauth_routes", 210),
+        RouterSpec("modules.connectors.reddit_oauth_routes", 220),
+    )
+    erasure_module: str | None = "modules.connectors.erasure"
+    erasure_order: int = 40
 
 
 descriptor = ConnectorsDescriptor()

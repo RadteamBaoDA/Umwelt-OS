@@ -174,6 +174,110 @@ class ToolRegistry:
         count("tool_calls_total", tool=label, outcome="ok" if result.success else (result.error_code or "error"))
         return result
 
+    @staticmethod
+    def _arguments_failure(args: dict[str, Any], definition: ToolDefinition) -> ToolResult | None:
+        """Return an ``invalid_arguments`` failure when args violate the input schema, are not JSON, or are oversized.
+
+        Pure validation: no I/O and no side effects; ``None`` means the arguments are acceptable.
+        """
+        if validate_json_schema(args, definition.input_schema):
+            return ToolResult(success=False, error="Tool arguments do not match its registered schema", error_code="invalid_arguments")
+        try:
+            if len(json.dumps(args, allow_nan=False, separators=(",", ":")).encode()) > definition.max_arguments_bytes:
+                return ToolResult(success=False, error="Tool arguments exceed their size limit", error_code="invalid_arguments")
+        except (TypeError, ValueError, RecursionError):
+            return ToolResult(success=False, error="Tool arguments must be JSON data", error_code="invalid_arguments")
+        return None
+
+    def _authorization_changed(
+        self,
+        name: str,
+        definition: ToolDefinition,
+        handler: Any,
+        principal: ToolExecutionPrincipal,
+        args: dict[str, Any],
+        destination: Any,
+        *,
+        principal_current: bool,
+        module_state_current: bool,
+        queued_modules: Any,
+        queued_approval: bool,
+    ) -> bool:
+        """Return True when registry, handler, principal or policy changed while the call was queued.
+
+        Re-resolves the registered tool synchronously (no await between this check and dispatch)
+        and compares version, schema fingerprint and handler identity against the admitted call.
+        """
+        registered = self._tools.get(name)
+        current_handler = self._handlers.get(name)
+        return bool(
+            not principal_current
+            or not module_state_current
+            or registered is None
+            or registered.version != definition.version
+            or self._fingerprints.get(name) != definition.schema_fingerprint
+            or registered.schema_fingerprint != definition.schema_fingerprint
+            or current_handler is not handler
+            or not self._module_enabled(registered.module, queued_modules)
+            or name not in principal.allowed_tools
+            or not set(registered.permissions).issubset(principal.capabilities)
+            or destination not in principal.destinations
+            or self._principal_scope_missing(principal)
+            or not self.policy.evaluate(
+                principal.actor_id, registered, args,
+                trusted_approval=queued_approval,
+            ).allowed
+        )
+
+    @staticmethod
+    def _principal_scope_missing(principal: ToolExecutionPrincipal) -> bool:
+        """Return True when the principal has no actor, no source scope for a non-owner, or an invalid owner-all flag."""
+        return bool(
+            not principal.actor_id
+            or (not principal.is_owner and not principal.source_ids)
+            or (principal.owner_all_sources and not principal.is_owner)
+        )
+
+    @staticmethod
+    def _finalize_result(raw: Any, definition: ToolDefinition, started: float) -> ToolResult:
+        """Normalize a handler return into a bounded ``ToolResult``.
+
+        Failures are reduced to an allow-listed error code; successes are JSON-encoded, checked
+        against evidence-ref, byte and output-schema bounds, then the full public envelope is
+        size-checked. Raises only if encoding itself fails (caller maps to ``execution_failed``).
+        """
+        if isinstance(raw, ToolResult):
+            if not raw.success:
+                code = raw.error_code if raw.error_code in ALLOWED_ERROR_CODES else "execution_failed"
+                failure = ToolResult(success=False, error="Tool execution failed", error_code=code)
+                if len(failure.model_dump_json().encode()) > definition.max_result_bytes:
+                    return ToolResult(success=False, error="Tool result is unavailable", error_code="invalid_result")
+                return failure
+            raw_data = raw.data
+            evidence_refs = raw.evidence_refs
+        else:
+            raw_data = raw
+            evidence_refs = ()
+        payload = jsonable_encoder(raw_data)
+        encoded = json.dumps(payload, allow_nan=False, separators=(",", ":")).encode()
+        refs = tuple(evidence_refs)
+        if (
+            len(encoded) > definition.max_result_bytes
+            or len(refs) > MAX_EVIDENCE_REFS
+            or sum(len(value.encode("utf-8")) for value in refs if isinstance(value, str)) > MAX_EVIDENCE_BYTES
+            or any(not isinstance(value, str) or not value or len(value) > 256 for value in refs)
+            or validate_json_schema(payload, definition.output_schema)
+        ):
+            return ToolResult(success=False, error="Tool returned an invalid or oversized result", error_code="invalid_result")
+        result = ToolResult(
+            success=True, data=payload, evidence_refs=refs,
+            execution_time_ms=(time.perf_counter()-started)*1000,
+        )
+        # Bound the actual public envelope, including evidence IDs and status metadata.
+        if len(result.model_dump_json().encode()) > definition.max_result_bytes:
+            return ToolResult(success=False, error="Tool returned an invalid or oversized result", error_code="invalid_result")
+        return result
+
     async def _invoke_tool(
         self,
         name: str,
@@ -210,19 +314,11 @@ class ToolRegistry:
         destination = execution_context.get("destination_id")
         if destination is None or destination not in principal.destinations:
             return ToolResult(success=False, error="Tool destination is not granted", error_code="forbidden")
-        if (
-            not principal.actor_id
-            or (not principal.is_owner and not principal.source_ids)
-            or (principal.owner_all_sources and not principal.is_owner)
-        ):
+        if self._principal_scope_missing(principal):
             return ToolResult(success=False, error="Execution principal has no authorized scope", error_code="forbidden")
-        if validate_json_schema(args, definition.input_schema):
-            return ToolResult(success=False, error="Tool arguments do not match its registered schema", error_code="invalid_arguments")
-        try:
-            if len(json.dumps(args, allow_nan=False, separators=(",", ":")).encode()) > definition.max_arguments_bytes:
-                return ToolResult(success=False, error="Tool arguments exceed their size limit", error_code="invalid_arguments")
-        except (TypeError, ValueError, RecursionError):
-            return ToolResult(success=False, error="Tool arguments must be JSON data", error_code="invalid_arguments")
+        args_failure = self._arguments_failure(args, definition)
+        if args_failure is not None:
+            return args_failure
         approval_required = definition.risk != ToolRisk.READ_ONLY or definition.confirmation_required
         approval_verifier = execution_context.get("approval_verifier")
         try:
@@ -267,61 +363,14 @@ class ToolRegistry:
                     except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
                         queued_approval = False
                     # Resolve again after the awaited owner recheck; no await separates this from dispatch.
-                    registered = self._tools.get(name)
-                    current_handler = self._handlers.get(name)
-                    if (
-                        not principal_current
-                        or not module_state_current
-                        or registered is None
-                        or registered.version != definition.version
-                        or self._fingerprints.get(name) != definition.schema_fingerprint
-                        or registered.schema_fingerprint != definition.schema_fingerprint
-                        or current_handler is not handler
-                        or not self._module_enabled(registered.module, queued_modules)
-                        or name not in principal.allowed_tools
-                        or not set(registered.permissions).issubset(principal.capabilities)
-                        or destination not in principal.destinations
-                        or not principal.actor_id
-                        or (not principal.is_owner and not principal.source_ids)
-                        or (principal.owner_all_sources and not principal.is_owner)
-                        or not self.policy.evaluate(
-                            principal.actor_id, registered, args,
-                            trusted_approval=queued_approval,
-                        ).allowed
+                    if self._authorization_changed(
+                        name, definition, handler, principal, args, destination,
+                        principal_current=principal_current, module_state_current=module_state_current,
+                        queued_modules=queued_modules, queued_approval=queued_approval,
                     ):
                         return ToolResult(success=False, error="Tool authorization changed while queued", error_code="forbidden")
                     raw = await handler(args, execution_context)
-            if isinstance(raw, ToolResult):
-                if not raw.success:
-                    code = raw.error_code if raw.error_code in ALLOWED_ERROR_CODES else "execution_failed"
-                    failure = ToolResult(success=False, error="Tool execution failed", error_code=code)
-                    if len(failure.model_dump_json().encode()) > definition.max_result_bytes:
-                        return ToolResult(success=False, error="Tool result is unavailable", error_code="invalid_result")
-                    return failure
-                raw_data = raw.data
-                evidence_refs = raw.evidence_refs
-            else:
-                raw_data = raw
-                evidence_refs = ()
-            payload = jsonable_encoder(raw_data)
-            encoded = json.dumps(payload, allow_nan=False, separators=(",", ":")).encode()
-            refs = tuple(evidence_refs)
-            if (
-                len(encoded) > definition.max_result_bytes
-                or len(refs) > MAX_EVIDENCE_REFS
-                or sum(len(value.encode("utf-8")) for value in refs if isinstance(value, str)) > MAX_EVIDENCE_BYTES
-                or any(not isinstance(value, str) or not value or len(value) > 256 for value in refs)
-                or validate_json_schema(payload, definition.output_schema)
-            ):
-                return ToolResult(success=False, error="Tool returned an invalid or oversized result", error_code="invalid_result")
-            result = ToolResult(
-                success=True, data=payload, evidence_refs=refs,
-                execution_time_ms=(time.perf_counter()-started)*1000,
-            )
-            # Bound the actual public envelope, including evidence IDs and status metadata.
-            if len(result.model_dump_json().encode()) > definition.max_result_bytes:
-                return ToolResult(success=False, error="Tool returned an invalid or oversized result", error_code="invalid_result")
-            return result
+            return self._finalize_result(raw, definition, started)
         except TimeoutError:
             return ToolResult(success=False, error="Tool execution timed out", error_code="timeout", execution_time_ms=(time.perf_counter()-started)*1000)
         except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely

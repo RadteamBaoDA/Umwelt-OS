@@ -4,12 +4,13 @@ from datetime import date
 from typing import Any, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.demo_seed import demo_seed_id
+from core.errors import ForbiddenError
 from core.workspaces import public as workspaces
+from core.workspaces.admission import actor_id as _actor
 from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
 from modules.goals.models import Goal
 
@@ -19,17 +20,12 @@ async def _admit_seed(session: AsyncSession, *, scope: Scope, multi_workspace_en
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
         raise TypeError("An explicit seed workspace scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError(detail="Workspace owner required")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     await workspaces.read_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
-
-
-def _actor(scope: Scope) -> int:
-    """Return the principal recorded by a real workspace or durable job scope."""
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
 
 
 def _ws_id(scope: Scope, seed_id: object) -> UUID:

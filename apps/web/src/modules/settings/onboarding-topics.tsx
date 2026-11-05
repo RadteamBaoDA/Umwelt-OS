@@ -4,8 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { createTopic, fetchAllTopics, updateTopic } from '@/modules/news/api';
-import type { Topic } from '@/modules/news/types';
+import { createTopic, fetchAllTopics, updateTopic } from '@/modules/news';
+import type { Topic } from '@/modules/news';
 
 /** Stable English topic names: the stored name is the identity so re-running onboarding in any locale never duplicates. */
 const PRESETS = [

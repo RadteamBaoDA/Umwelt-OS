@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError, NotFoundError
 from core.events import DomainEvent
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.ingestion.models import (
@@ -44,6 +44,8 @@ from modules.ingestion.schemas import (
 )
 from modules.sources.schemas import ConnectorSource, SourceFence, SourceFenceSet
 
+from .patching import patch_ingestion
+
 WORKSPACE_ID = uuid4()
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WORKSPACE_ID, role="owner", membership_revision=3)
 ACCESS = AccessFence(WORKSPACE_ID, 7, 3, 5)
@@ -52,7 +54,7 @@ ACCESS = AccessFence(WORKSPACE_ID, 7, 3, 5)
 @pytest.fixture(autouse=True)
 def _admitted_scope():
     """Owner admission is covered by scope tests; these exercise ingestion behaviour only."""
-    with patch("modules.ingestion.public._admit_ingestion_scope", AsyncMock(return_value=ACCESS)):
+    with patch_ingestion("_admit_ingestion_scope", AsyncMock(return_value=ACCESS)):
         yield
 
 
@@ -109,7 +111,7 @@ class TestDigestAndCredentials:
     async def test_create_collector_credential_source_not_found(self) -> None:
         """Create collector credential raises LookupError if source is absent."""
         session = AsyncMock()
-        with patch("modules.sources.public.lock_source", return_value=None):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        with patch("modules.sources.public.lock_source", return_value=None):
             with pytest.raises(LookupError, match="Source not found"):
                 await create_collector_credential(session, uuid4(), scope=SCOPE, multi_workspace_enabled=False)
 
@@ -199,9 +201,9 @@ class TestReceiveBatchAndReceipts:
         session = AsyncMock()
         payload = self._sample_payload(uuid4())
 
-        missing = HTTPException(status_code=404, detail="Source set is unavailable")
-        with patch("modules.ingestion.public._lock_source_projection", side_effect=missing):
-            with pytest.raises(HTTPException) as exc_info:
+        missing = NotFoundError("Source set is unavailable")
+        with patch_ingestion("_lock_source_projection", side_effect=missing):
+            with pytest.raises(DomainError) as exc_info:
                 await receive_batch(session, payload, "token", scope=SCOPE, multi_workspace_enabled=False)
             assert exc_info.value.status_code == 404
 
@@ -215,8 +217,8 @@ class TestReceiveBatchAndReceipts:
 
         session.scalar.return_value = None  # No valid grant found
 
-        with patch("modules.ingestion.public._lock_source_projection", return_value=_projection(source)):
-            with pytest.raises(HTTPException) as exc_info:
+        with patch_ingestion("_lock_source_projection", return_value=_projection(source)):
+            with pytest.raises(DomainError) as exc_info:
                 await receive_batch(session, payload, "bad-token", scope=SCOPE, multi_workspace_enabled=False)
             assert exc_info.value.status_code == 401
 
@@ -246,7 +248,7 @@ class TestReceiveBatchAndReceipts:
 
         session.scalar.side_effect = ["valid_hash", existing_batch, existing_run]
 
-        with patch("modules.ingestion.public._lock_source_projection", return_value=_projection(source)), \
+        with patch_ingestion("_lock_source_projection", return_value=_projection(source)), \
              patch("modules.connectors.public.is_native_provider", return_value=False), \
              patch("modules.connectors.public.require_batch_fence", return_value=True):
             batch, run = await receive_batch(session, payload, "valid-token", scope=SCOPE, multi_workspace_enabled=False)
@@ -271,10 +273,10 @@ class TestReceiveBatchAndReceipts:
 
         session.scalar.side_effect = ["valid_hash", existing_batch]
 
-        with patch("modules.ingestion.public._lock_source_projection", return_value=_projection(source)), \
+        with patch_ingestion("_lock_source_projection", return_value=_projection(source)), \
              patch("modules.connectors.public.is_native_provider", return_value=False), \
              patch("modules.connectors.public.require_batch_fence", return_value=True):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(DomainError) as exc_info:
                 await receive_batch(session, payload, "valid-token", scope=SCOPE, multi_workspace_enabled=False)
             assert exc_info.value.status_code == 409
             assert "Batch key was already used with different content" in exc_info.value.detail
@@ -291,7 +293,7 @@ class TestReceiveBatchAndReceipts:
 
         payload = self._sample_payload(uuid4())
 
-        with patch("modules.ingestion.public.receive_batch", return_value=(batch, run)):
+        with patch_ingestion("receive_batch", return_value=(batch, run)):
             receipt = await receive_connector_batch(session, payload, "token", scope=SCOPE, multi_workspace_enabled=False)
             assert isinstance(receipt, Receipt)
             assert receipt.batch_id == batch.id
@@ -317,8 +319,8 @@ class TestQueueConnectorCrawl:
             configuration={},
             provider="web",
         )
-        with patch("modules.ingestion.public._lock_source_projection", return_value=_projection(source)):
-            with pytest.raises(HTTPException) as exc_info:
+        with patch_ingestion("_lock_source_projection", return_value=_projection(source)):
+            with pytest.raises(DomainError) as exc_info:
                 await queue_connector_crawl(session, source_id, 1, 1, None, {}, scope=SCOPE, multi_workspace_enabled=False)
             assert exc_info.value.status_code == 409
 
@@ -343,12 +345,12 @@ class TestQueueConnectorCrawl:
         session.scalar.return_value = None  # No existing batch
         session.get.return_value = state
 
-        with patch("modules.ingestion.public._lock_source_projection", return_value=_projection(source)), \
+        with patch_ingestion("_lock_source_projection", return_value=_projection(source)), \
              patch("modules.connectors.public.is_native_provider", return_value=False), \
              patch("modules.connectors.public.require_collection_fence", return_value=True), \
              patch("modules.sources.public.record_collection_started_in_uow", return_value=True), \
-             patch("modules.ingestion.public.publish_event", return_value=None) as mock_pub, \
-             patch("modules.ingestion.public.commit_with_replay", return_value=None):
+             patch_ingestion("publish_event", return_value=None) as mock_pub, \
+             patch_ingestion("commit_with_replay", return_value=None):
             receipt = await queue_connector_crawl(session, source_id, 1, 1, None, {"url": "https://example.com"}, scope=SCOPE, multi_workspace_enabled=False)
             assert isinstance(receipt, CrawlReceipt)
             assert receipt.run_id is not None
@@ -378,8 +380,8 @@ class TestReceiveFile:
              patch("modules.sources.public.record_collection_started_in_uow", return_value=True), \
              patch("modules.knowledge.documents.public.prepare_uploaded_document_in_uow", return_value=None), \
              patch("modules.knowledge.documents.public.add_uploaded_document", return_value=doc_id), \
-             patch("modules.ingestion.public.publish_event", return_value=None) as mock_pub, \
-             patch("modules.ingestion.public.commit_with_replay", return_value=None):
+             patch_ingestion("publish_event", return_value=None) as mock_pub, \
+             patch_ingestion("commit_with_replay", return_value=None):
             run, created = await receive_file(
                 session, source_id, doc_id, "doc.pdf", "application/pdf", "file:///tmp/doc.pdf", 1024, "sha256abc", scope=SCOPE, multi_workspace_enabled=False,
                 expected_access_fence=ACCESS, expected_source_fence=_fence(source_id),
@@ -454,7 +456,7 @@ class TestStatusVerificationAndRetry:
         session.scalar.return_value = run
 
         with patch("modules.sources.public.lock_source_set", return_value=_locked(source_id, "paused")):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(DomainError) as exc_info:
                 await retry_run(session, run_id, scope=SCOPE, multi_workspace_enabled=False)
             assert exc_info.value.status_code == 409
 
@@ -476,12 +478,12 @@ class TestAcceptCollectionNoChangesCursorGuard:
         state = SourceIngestionState(source_id=source_id, cursor="B")
         session.scalar.return_value = state
         settle = AsyncMock()
-        with patch("modules.ingestion.public._lock_source_projection", return_value=_projection(source)), \
+        with patch_ingestion("_lock_source_projection", return_value=_projection(source)), \
              patch("modules.connectors.public.is_native_provider", return_value=False), \
              patch("modules.connectors.public.require_collection_fence", return_value=True), \
-             patch("modules.ingestion.public._authorize_collection", AsyncMock()), \
-             patch("modules.ingestion.public._settle_request", settle), \
-             patch("modules.ingestion.public.commit_with_replay", AsyncMock()) as commit,              pytest.raises(HTTPException) as exc_info:
+             patch_ingestion("_authorize_collection", AsyncMock()), \
+             patch_ingestion("_settle_request", settle), \
+             patch_ingestion("commit_with_replay", AsyncMock()) as commit,              pytest.raises(DomainError) as exc_info:
             await accept_collection_no_changes(
                 session, source_id=source_id, source_generation=1, connector_revision=1,
                 request_ref=MagicMock(), scope=SCOPE, multi_workspace_enabled=False,

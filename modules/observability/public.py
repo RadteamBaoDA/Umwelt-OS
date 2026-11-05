@@ -98,6 +98,7 @@ async def list_runs(
     instance aggregate takes it, other kinds keep their owner contracts and gain no invented scope.
     """
     async def ingestion_runs(s: AsyncSession, n: int) -> list[RunMeta]:
+        """Adapt the ingestion run-metadata reader to the common ``(session, limit)`` source signature, keeping the operator flag."""
         return await ingestion.list_run_meta(s, n, instance_operator=instance_operator)
 
     sources = {"ingestion": ingestion_runs, "agent": agents.list_run_meta,

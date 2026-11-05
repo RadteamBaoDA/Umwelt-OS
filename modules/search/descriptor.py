@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class SearchDescriptor:
+class SearchDescriptor(ModuleDescriptor):
     """Declare search's public capabilities and its document-chunk dependency."""
 
     id: str = "search"
@@ -20,6 +22,11 @@ class SearchDescriptor:
     tools: tuple[str, ...] = ("search.query",)
     navigation: tuple[dict[str, str], ...] = ({"label": "Search", "href": "/search"},)
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.search.routes", 270),
+    )
+    erasure_module: str | None = "modules.search.erasure"
+    erasure_order: int = 170
 
 
 descriptor = SearchDescriptor()

@@ -1,3 +1,5 @@
+"""Private SQLAlchemy persistence models owned by the Documents module."""
+
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -6,6 +8,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Computed,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -17,7 +20,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -181,6 +184,8 @@ class DocumentChunk(Base):
     __tablename__ = "document_chunks"
     __table_args__ = (
         UniqueConstraint("document_version_id", "chunk_index", name="uq_document_chunks_version_index"),
+        # Created CONCURRENTLY by migration 0014; lexical search matches and ranks through this column.
+        Index("ix_document_chunks_content_tsv_gin", "content_tsv", postgresql_using="gin"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
@@ -193,6 +198,11 @@ class DocumentChunk(Base):
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default="{}"
+    )
+    # Stored generated tsvector (same expression the former expression GIN indexes used). Deferred: only the
+    # lexical search statement references it, so ORM loads never transfer it and inserts never write it.
+    content_tsv: Mapped[Any] = mapped_column(
+        TSVECTOR, Computed("to_tsvector('simple', content)", persisted=True), deferred=True,
     )
 
 

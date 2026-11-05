@@ -1,99 +1,57 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { useEffect, useRef, useState } from 'react';
-import { Button } from '@/components/ui/button';
+import type { ComponentType } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
-import { CheckboxField } from '@/modules/settings/settings-layout';
+import { CheckboxField } from '@/components/settings-layout';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { formatDateTime } from '@/core/i18n';
-import { ApiError } from '@/core/api';
-import { safeHttpUrl } from '@/core/safe-url';
-import { useDisplayPreferences } from '@/core/query-provider';
-import { acknowledgeProviderTerms, connectorKeys, getProviderTerms, searchCoinGeckoCoins, type CoinGeckoCoin, type ConnectorCatalogEntry, type ConnectorConfig, type DeclaredUse, type Source } from './api';
-import { isStale, periodKind } from './freshness';
+import type { ConnectorConfig } from './api';
+import { CoinGeckoPicker, LocationButton, ScopeField, ScopeHint, useIdListText } from './scope-fields';
+
+export { ProviderGuide, ProviderTerms } from './provider-guide';
+export { ScopeHint } from './scope-fields';
 
 export type NativeProvider = 'youtube' | 'arxiv' | 'huggingface' | 'reddit' | 'bluesky' | 'mastodon' | 'x' | 'github' | 'github_releases' | 'telegram' | 'alpha_vantage' | 'coingecko' | 'open_meteo' | 'google_news' | 'sec_edgar' | 'openalex' | 'fred' | 'openweathermap' | 'openaq' | 'nasa_firms' | 'notion' | 'slack';
 
-/** Renders bounded native-provider scopes, including Reddit subreddits and selected Notion pages/Slack channels; values stay in the revision-fenced draft. */
-export function ProviderScope({
-  provider,
-  configuration,
-  disabled,
-  sourceId,
-  credentialConfigured,
-  resetEpoch,
-  onChange,
-}: {
+type ScopeChange = <K extends keyof ConnectorConfig>(key: K, value: ConnectorConfig[K]) => void;
+
+/** Props every provider scope section receives; sections read only the configuration keys they own. */
+export interface ScopeSectionProps {
   provider: NativeProvider;
   configuration: ConnectorConfig;
   disabled: boolean;
   sourceId?: string;
   credentialConfigured?: boolean;
   resetEpoch: number;
-  onChange: <K extends keyof ConnectorConfig>(key: K, value: ConnectorConfig[K]) => void;
-}) {
-  const t = useTranslations('sources');
-  const parsedTelegramIds = configuration.telegram_chat_ids ?? [];
-  const parsedTelegramSignature = JSON.stringify(parsedTelegramIds);
-  const telegramTextFromConfig = parsedTelegramIds.join(', ');
-  const parsedNotionIds = configuration.notion_page_ids ?? [];
-  const parsedNotionSignature = JSON.stringify(parsedNotionIds);
-  const parsedSlackIds = configuration.slack_channel_ids ?? [];
-  const parsedSlackSignature = JSON.stringify(parsedSlackIds);
-  const [telegramText, setTelegramText] = useState(() => parsedTelegramIds.join(', '));
-  const [notionText, setNotionText] = useState(() => parsedNotionIds.join(', '));
-  const [slackText, setSlackText] = useState(() => parsedSlackIds.join(', '));
-  const lastEmittedSignature = useRef(parsedTelegramSignature);
-  const lastNotionSignature = useRef(parsedNotionSignature);
-  const lastSlackSignature = useRef(parsedSlackSignature);
-  const lastNotionResetEpoch = useRef(resetEpoch);
-  const lastSlackResetEpoch = useRef(resetEpoch);
-  const lastResetEpoch = useRef(resetEpoch);
-  useEffect(() => {
-    // A reset is authoritative even when parsed values match; otherwise ignore local owner echoes that would erase typed separators.
-    if (resetEpoch !== lastResetEpoch.current) {
-      lastResetEpoch.current = resetEpoch;
-      lastEmittedSignature.current = parsedTelegramSignature;
-      setTelegramText(telegramTextFromConfig);
-    } else if (parsedTelegramSignature !== lastEmittedSignature.current) {
-      lastEmittedSignature.current = parsedTelegramSignature;
-      setTelegramText(telegramTextFromConfig);
-    }
-  }, [parsedTelegramSignature, resetEpoch, telegramTextFromConfig]);
-  useEffect(() => {
-    if (resetEpoch !== lastNotionResetEpoch.current || parsedNotionSignature !== lastNotionSignature.current) {
-      lastNotionResetEpoch.current = resetEpoch;
-      lastNotionSignature.current = parsedNotionSignature;
-      setNotionText(parsedNotionIds.join(', '));
-    }
-  }, [parsedNotionSignature, resetEpoch]);
-  useEffect(() => {
-    if (resetEpoch !== lastSlackResetEpoch.current || parsedSlackSignature !== lastSlackSignature.current) {
-      lastSlackResetEpoch.current = resetEpoch;
-      lastSlackSignature.current = parsedSlackSignature;
-      setSlackText(parsedSlackIds.join(', '));
-    }
-  }, [parsedSlackSignature, resetEpoch]);
-  /** Pairs a scope field with its translated label and constrained native input. */
-  const field = (key: keyof ConnectorConfig, label: string, value: string, update: (value: string) => void, props: { maxLength?: number; pattern?: string } = {}) => (
-    <div className="field" key={key}>
-      <Label htmlFor={`source-scope-${key}`}>{label}</Label>
-      <Input id={`source-scope-${key}`} value={value} disabled={disabled} required aria-describedby={`source-hint-${key}`} onChange={(event) => update(event.target.value)} {...props} />
-      <ScopeHint field={key} />
-    </div>
-  );
+  onChange: ScopeChange;
+}
 
-  if (provider === 'sec_edgar') return <>
-    {field('sec_cik', t('secCik'), configuration.sec_cik ?? '', (value) => onChange('sec_cik', value), { maxLength: 10, pattern: '[0-9]{10}' })}
-    {field('sec_contact_email', t('secContactEmail'), configuration.sec_contact_email ?? '', (value) => onChange('sec_contact_email', value), { maxLength: 254 })}
+const LAT_PATTERN = '-?[0-9]{1,2}(\\.[0-9]+)?';
+const LON_PATTERN = '-?[0-9]{1,3}(\\.[0-9]+)?';
+/** Bluesky handle (domain name) or did:plc / did:web identifier; kept as a JS string so the escape is a single backslash. */
+const BLUESKY_ACTOR_PATTERN = '(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}|did:plc:[a-z2-7]{24}|did:web:[A-Za-z0-9.%:-]{1,220}';
+/** Splits a comma/space separated list of terms. */
+const splitTerms = (value: string) => value.split(/[\s,]+/).filter(Boolean);
+/** Parses a numeric text field; an emptied field is `undefined`. */
+const toNumber = (value: string) => (value === '' ? undefined : Number(value));
+
+/** SEC EDGAR scope: CIK and the contact e-mail the SEC requires in the User-Agent. */
+function SecEdgarScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <>
+    <ScopeField name="sec_cik" label={t('secCik')} value={configuration.sec_cik ?? ''} onValue={(value) => onChange('sec_cik', value)} disabled={disabled} maxLength={10} pattern="[0-9]{10}" />
+    <ScopeField name="sec_contact_email" label={t('secContactEmail')} value={configuration.sec_contact_email ?? ''} onValue={(value) => onChange('sec_contact_email', value)} disabled={disabled} maxLength={254} />
     <small className="text-muted-foreground">{t('secHelp')}</small>
   </>;
-  if (provider === 'google_news') return <>
-    {field('news_query', t('newsQuery'), configuration.news_query ?? '', (value) => onChange('news_query', value), { maxLength: 200 })}
+}
+
+/** Google News scope: query, optional site restriction and result locale. */
+function GoogleNewsScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <>
+    <ScopeField name="news_query" label={t('newsQuery')} value={configuration.news_query ?? ''} onValue={(value) => onChange('news_query', value)} disabled={disabled} maxLength={200} />
     <div className="field">
       <Label htmlFor="source-scope-news_site">{t('newsSite')}</Label>
       <Select value={configuration.news_site ?? 'any'} onValueChange={(value) => onChange('news_site', value as ConnectorConfig['news_site'])} disabled={disabled}>
@@ -116,311 +74,202 @@ export function ProviderScope({
     </div>
     <small className="text-muted-foreground">{t('newsHelp')}</small>
   </>;
-  if (provider === 'openalex') return <>
-    {field('scholarly_query', t('scholarlyQuery'), configuration.scholarly_query ?? '', (value) => onChange('scholarly_query', value), { maxLength: 200 })}
+}
+
+/** OpenAlex scope: one scholarly search query. */
+function OpenAlexScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <>
+    <ScopeField name="scholarly_query" label={t('scholarlyQuery')} value={configuration.scholarly_query ?? ''} onValue={(value) => onChange('scholarly_query', value)} disabled={disabled} maxLength={200} />
     <small className="text-muted-foreground">{t('scholarlyHelp')}</small>
   </>;
-  if (provider === 'fred') return field('fred_series_id', t('fredSeriesId'), configuration.fred_series_id ?? '', (value) => onChange('fred_series_id', value.toUpperCase()), { maxLength: 25, pattern: '[A-Z0-9_]{1,25}' });
-  if (provider === 'openweathermap') return <>
+}
+
+/** FRED scope: series id, upper-cased as typed. */
+function FredScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <ScopeField name="fred_series_id" label={t('fredSeriesId')} value={configuration.fred_series_id ?? ''} onValue={(value) => onChange('fred_series_id', value.toUpperCase())} disabled={disabled} maxLength={25} pattern="[A-Z0-9_]{1,25}" />;
+}
+
+/** OpenWeatherMap scope: coordinates, fillable from the device location. */
+function OpenWeatherMapScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <>
     <LocationButton disabled={disabled} onLocate={(latitude, longitude) => { onChange('owm_latitude', latitude); onChange('owm_longitude', longitude); }} />
-    {field('owm_latitude', t('weatherLatitude'), String(configuration.owm_latitude ?? ''), (value) => onChange('owm_latitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,2}(\\.[0-9]+)?' })}
-    {field('owm_longitude', t('weatherLongitude'), String(configuration.owm_longitude ?? ''), (value) => onChange('owm_longitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,3}(\\.[0-9]+)?' })}
+    <ScopeField name="owm_latitude" label={t('weatherLatitude')} value={String(configuration.owm_latitude ?? '')} onValue={(value) => onChange('owm_latitude', toNumber(value))} disabled={disabled} maxLength={24} pattern={LAT_PATTERN} />
+    <ScopeField name="owm_longitude" label={t('weatherLongitude')} value={String(configuration.owm_longitude ?? '')} onValue={(value) => onChange('owm_longitude', toNumber(value))} disabled={disabled} maxLength={24} pattern={LON_PATTERN} />
   </>;
-  if (provider === 'openaq') return field('openaq_location_id', t('openaqLocationId'), String(configuration.openaq_location_id ?? ''), (value) => onChange('openaq_location_id', value === '' ? undefined : Number(value)), { maxLength: 10, pattern: '[0-9]{1,10}' });
-  if (provider === 'nasa_firms') return field('firms_country', t('firmsCountry'), configuration.firms_country ?? '', (value) => onChange('firms_country', value.toUpperCase()), { maxLength: 3, pattern: '[A-Z]{3}' });
-  if (provider === 'youtube') return <>{field('youtube_channel_id', t('youtubeChannelId'), configuration.youtube_channel_id ?? '', (value) => onChange('youtube_channel_id', value), { maxLength: 24, pattern: 'UC[A-Za-z0-9_-]{22}' })}</>;
-  if (provider === 'reddit') return <>{field('reddit_subreddit', t('redditSubreddit'), configuration.reddit_subreddit ?? '', (value) => onChange('reddit_subreddit', value.trim()), { maxLength: 21, pattern: '[A-Za-z0-9_]{2,21}' })}<small className="text-muted-foreground">{t('redditReadOnlyHelp')}</small></>;
-  if (provider === 'bluesky') return <>{field('bluesky_actor', t('blueskyActor'), configuration.bluesky_actor ?? '', (value) => onChange('bluesky_actor', value.trim()), { maxLength: 253, pattern: '(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}|did:plc:[a-z2-7]{24}|did:web:[A-Za-z0-9.%:-]{1,220}' })}</>;
-  if (provider === 'mastodon') return <>
-    {/* Account and hashtag are mutually exclusive on the server, so each is optional here and the empty one is sent as undefined. */}
-    <div className="field">
-      <Label htmlFor="source-scope-mastodon_instance_url">{t('mastodonInstanceUrl')}</Label>
-      <Input id="source-scope-mastodon_instance_url" type="url" required maxLength={512} disabled={disabled} value={configuration.mastodon_instance_url ?? ''} aria-describedby="source-hint-mastodon_instance_url" onChange={(event) => onChange('mastodon_instance_url', event.target.value.trim() || undefined)} />
-      <ScopeHint field="mastodon_instance_url" />
-    </div>
-    <div className="field">
-      <Label htmlFor="source-scope-mastodon_account">{t('mastodonAccount')}</Label>
-      <Input id="source-scope-mastodon_account" maxLength={320} disabled={disabled} required={!configuration.mastodon_hashtag} value={configuration.mastodon_account ?? ''} aria-describedby="source-hint-mastodon_account" onChange={(event) => onChange('mastodon_account', event.target.value.trim() || undefined)} />
-      <ScopeHint field="mastodon_account" />
-    </div>
-    <div className="field">
-      <Label htmlFor="source-scope-mastodon_hashtag">{t('mastodonHashtag')}</Label>
-      <Input id="source-scope-mastodon_hashtag" maxLength={100} disabled={disabled} required={!configuration.mastodon_account} value={configuration.mastodon_hashtag ?? ''} aria-describedby="source-hint-mastodon_hashtag" onChange={(event) => onChange('mastodon_hashtag', event.target.value.trim().replace(/^#/, '') || undefined)} />
-      <ScopeHint field="mastodon_hashtag" />
-    </div>
+}
+
+/** OpenAQ scope: numeric location id. */
+function OpenAqScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <ScopeField name="openaq_location_id" label={t('openaqLocationId')} value={String(configuration.openaq_location_id ?? '')} onValue={(value) => onChange('openaq_location_id', toNumber(value))} disabled={disabled} maxLength={10} pattern="[0-9]{1,10}" />;
+}
+
+/** NASA FIRMS scope: three-letter country code, upper-cased as typed. */
+function NasaFirmsScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <ScopeField name="firms_country" label={t('firmsCountry')} value={configuration.firms_country ?? ''} onValue={(value) => onChange('firms_country', value.toUpperCase())} disabled={disabled} maxLength={3} pattern="[A-Z]{3}" />;
+}
+
+/** YouTube scope: channel id. */
+function YoutubeScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <ScopeField name="youtube_channel_id" label={t('youtubeChannelId')} value={configuration.youtube_channel_id ?? ''} onValue={(value) => onChange('youtube_channel_id', value)} disabled={disabled} maxLength={24} pattern="UC[A-Za-z0-9_-]{22}" />;
+}
+
+/** Reddit scope: one subreddit (read-only access). */
+function RedditScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <><ScopeField name="reddit_subreddit" label={t('redditSubreddit')} value={configuration.reddit_subreddit ?? ''} onValue={(value) => onChange('reddit_subreddit', value.trim())} disabled={disabled} maxLength={21} pattern="[A-Za-z0-9_]{2,21}" /><small className="text-muted-foreground">{t('redditReadOnlyHelp')}</small></>;
+}
+
+/** Bluesky scope: handle (domain) or DID. */
+function BlueskyScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <ScopeField name="bluesky_actor" label={t('blueskyActor')} value={configuration.bluesky_actor ?? ''} onValue={(value) => onChange('bluesky_actor', value.trim())} disabled={disabled} maxLength={253} pattern={BLUESKY_ACTOR_PATTERN} />;
+}
+
+/** One optional text input with its hint, used by the mutually-exclusive scopes (Mastodon, X); an emptied value is sent as undefined. */
+function OptionalScopeInput({ name, label, value, required, maxLength, type, disabled, onValue }: {
+  name: keyof ConnectorConfig; label: string; value: string; required: boolean; maxLength: number; type?: 'url'; disabled: boolean; onValue: (raw: string) => void;
+}) {
+  return <div className="field">
+    <Label htmlFor={`source-scope-${name}`}>{label}</Label>
+    <Input id={`source-scope-${name}`} type={type} required={required} maxLength={maxLength} disabled={disabled} value={value} aria-describedby={`source-hint-${name}`} onChange={(event) => onValue(event.target.value)} />
+    <ScopeHint field={name} />
+  </div>;
+}
+
+/** Mastodon scope. Account and hashtag are mutually exclusive on the server, so each is optional here and the empty one is sent as undefined. */
+function MastodonScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <>
+    <OptionalScopeInput name="mastodon_instance_url" type="url" label={t('mastodonInstanceUrl')} required maxLength={512} disabled={disabled} value={configuration.mastodon_instance_url ?? ''} onValue={(raw) => onChange('mastodon_instance_url', raw.trim() || undefined)} />
+    <OptionalScopeInput name="mastodon_account" label={t('mastodonAccount')} required={!configuration.mastodon_hashtag} maxLength={320} disabled={disabled} value={configuration.mastodon_account ?? ''} onValue={(raw) => onChange('mastodon_account', raw.trim() || undefined)} />
+    <OptionalScopeInput name="mastodon_hashtag" label={t('mastodonHashtag')} required={!configuration.mastodon_account} maxLength={100} disabled={disabled} value={configuration.mastodon_hashtag ?? ''} onValue={(raw) => onChange('mastodon_hashtag', raw.trim().replace(/^#/, '') || undefined)} />
     <small className="text-muted-foreground">{t('mastodonHelp')}</small>
   </>;
-  if (provider === 'x') return <>
-    {/* The server requires exactly one of account or search query; each is optional here and the empty one is sent as undefined. */}
-    <div className="field">
-      <Label htmlFor="source-scope-x_account">{t('xAccount')}</Label>
-      <Input id="source-scope-x_account" maxLength={16} disabled={disabled} required={!configuration.x_query} value={configuration.x_account ?? ''} aria-describedby="source-hint-x_account" onChange={(event) => onChange('x_account', event.target.value.trim().replace(/^@/, '') || undefined)} />
-      <ScopeHint field="x_account" />
-    </div>
-    <div className="field">
-      <Label htmlFor="source-scope-x_query">{t('xQuery')}</Label>
-      <Input id="source-scope-x_query" maxLength={512} disabled={disabled} required={!configuration.x_account} value={configuration.x_query ?? ''} aria-describedby="source-hint-x_query" onChange={(event) => onChange('x_query', event.target.value.trim() || undefined)} />
-      <ScopeHint field="x_query" />
-    </div>
+}
+
+/** X scope. The server requires exactly one of account or search query; each is optional here and the empty one is sent as undefined. */
+function XScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <>
+    <OptionalScopeInput name="x_account" label={t('xAccount')} required={!configuration.x_query} maxLength={16} disabled={disabled} value={configuration.x_account ?? ''} onValue={(raw) => onChange('x_account', raw.trim().replace(/^@/, '') || undefined)} />
+    <OptionalScopeInput name="x_query" label={t('xQuery')} required={!configuration.x_account} maxLength={512} disabled={disabled} value={configuration.x_query ?? ''} onValue={(raw) => onChange('x_query', raw.trim() || undefined)} />
     <small className="text-muted-foreground">{t('xScopeHelp')}</small>
   </>;
-  if (provider === 'arxiv') return <>{field('arxiv_category', t('arxivCategory'), configuration.arxiv_category ?? '', (value) => onChange('arxiv_category', value), { maxLength: 64, pattern: '[A-Za-z][A-Za-z0-9.-]{0,63}' })}</>;
-  if (provider === 'huggingface') return <>{field('huggingface_author', t('huggingfaceAuthor'), configuration.huggingface_author ?? '', (value) => onChange('huggingface_author', value), { maxLength: 96, pattern: '[A-Za-z0-9][A-Za-z0-9_-]{0,95}' })}</>;
-  if (provider === 'github' || provider === 'github_releases') return <>
-    {field('github_owner', t('githubOwner'), configuration.github_owner ?? '', (value) => onChange('github_owner', value), { maxLength: 39, pattern: '[A-Za-z0-9][A-Za-z0-9-]{0,38}' })}
-    {field('github_repository', t('githubRepository'), configuration.github_repository ?? '', (value) => onChange('github_repository', value), { maxLength: 100, pattern: '[A-Za-z0-9_.-]{1,100}' })}
-    {provider === 'github' && <>
-      {(['include_issues', 'include_pulls', 'include_commits', 'include_releases'] as const).map((key) => <CheckboxField key={key}>
-        <Checkbox id={`source-scope-${key}`} disabled={disabled} checked={configuration[key] ?? (key === 'include_commits' || key === 'include_releases')} onCheckedChange={(checked) => onChange(key, checked === true)} />
-        <Label htmlFor={`source-scope-${key}`}>{t(({ include_issues: 'githubIssues', include_pulls: 'githubPulls', include_commits: 'githubCommits', include_releases: 'githubReleases' } as const)[key])}</Label>
-      </CheckboxField>)}
-      <div className="field">
-        <Label htmlFor="source-scope-github_history_days">{t('githubHistoryDays')}</Label>
-        <Input id="source-scope-github_history_days" type="number" min={1} max={365} value={configuration.github_history_days ?? 90} disabled={disabled} aria-describedby="source-hint-github_history_days" onChange={(event) => onChange('github_history_days', Number(event.target.value))} />
-        <ScopeHint field="github_history_days" />
-      </div>
-    </>}
+}
+
+/** arXiv scope: category. */
+function ArxivScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <ScopeField name="arxiv_category" label={t('arxivCategory')} value={configuration.arxiv_category ?? ''} onValue={(value) => onChange('arxiv_category', value)} disabled={disabled} maxLength={64} pattern="[A-Za-z][A-Za-z0-9.-]{0,63}" />;
+}
+
+/** Hugging Face scope: author. */
+function HuggingFaceScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <ScopeField name="huggingface_author" label={t('huggingfaceAuthor')} value={configuration.huggingface_author ?? ''} onValue={(value) => onChange('huggingface_author', value)} disabled={disabled} maxLength={96} pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,95}" />;
+}
+
+const GITHUB_INCLUDES = [['include_issues', 'githubIssues'], ['include_pulls', 'githubPulls'], ['include_commits', 'githubCommits'], ['include_releases', 'githubReleases']] as const;
+
+/** GitHub-only scope extras: which activity kinds to include (commits/releases default on) and the history window in days. */
+function GithubActivityOptions({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <>
+    {GITHUB_INCLUDES.map(([key, label]) => <CheckboxField key={key}>
+      <Checkbox id={`source-scope-${key}`} disabled={disabled} checked={configuration[key] ?? (key === 'include_commits' || key === 'include_releases')} onCheckedChange={(checked) => onChange(key, checked === true)} />
+      <Label htmlFor={`source-scope-${key}`}>{t(label)}</Label>
+    </CheckboxField>)}
+    <div className="field">
+      <Label htmlFor="source-scope-github_history_days">{t('githubHistoryDays')}</Label>
+      <Input id="source-scope-github_history_days" type="number" min={1} max={365} value={configuration.github_history_days ?? 90} disabled={disabled} aria-describedby="source-hint-github_history_days" onChange={(event) => onChange('github_history_days', Number(event.target.value))} />
+      <ScopeHint field="github_history_days" />
+    </div>
   </>;
-  if (provider === 'alpha_vantage') return <>
-    {field('market_symbols', t('marketSymbols'), (configuration.market_symbols ?? []).join(', '), (value) => onChange('market_symbols', value.split(/[\s,]+/).filter(Boolean).slice(0, 5)), { maxLength: 110 })}
-    {field('market_currency', t('marketCurrency'), configuration.market_currency ?? '', (value) => onChange('market_currency', value.toUpperCase()), { maxLength: 3, pattern: '[A-Z]{3}' })}
-    {field('market_exchange_timezone', t('marketExchangeTimezone'), configuration.market_exchange_timezone ?? '', (value) => onChange('market_exchange_timezone', value), { maxLength: 64 })}
+}
+
+/** GitHub / GitHub releases scope: owner and repository; the full GitHub provider adds activity options. */
+function GithubScope(props: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  const { configuration, disabled, onChange, provider } = props;
+  return <>
+    <ScopeField name="github_owner" label={t('githubOwner')} value={configuration.github_owner ?? ''} onValue={(value) => onChange('github_owner', value)} disabled={disabled} maxLength={39} pattern="[A-Za-z0-9][A-Za-z0-9-]{0,38}" />
+    <ScopeField name="github_repository" label={t('githubRepository')} value={configuration.github_repository ?? ''} onValue={(value) => onChange('github_repository', value)} disabled={disabled} maxLength={100} pattern="[A-Za-z0-9_.-]{1,100}" />
+    {provider === 'github' && <GithubActivityOptions {...props} />}
   </>;
-  if (provider === 'coingecko') return <CoinGeckoPicker sourceId={sourceId ?? ''} credentialConfigured={credentialConfigured ?? false} disabled={disabled} assets={configuration.coingecko_assets} onChange={(assets) => onChange('coingecko_assets', assets)} />;
-  if (provider === 'open_meteo') return <>
+}
+
+/** Alpha Vantage scope: up to five symbols, quote currency and exchange timezone. */
+function AlphaVantageScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <>
+    <ScopeField name="market_symbols" label={t('marketSymbols')} value={(configuration.market_symbols ?? []).join(', ')} onValue={(value) => onChange('market_symbols', splitTerms(value).slice(0, 5))} disabled={disabled} maxLength={110} />
+    <ScopeField name="market_currency" label={t('marketCurrency')} value={configuration.market_currency ?? ''} onValue={(value) => onChange('market_currency', value.toUpperCase())} disabled={disabled} maxLength={3} pattern="[A-Z]{3}" />
+    <ScopeField name="market_exchange_timezone" label={t('marketExchangeTimezone')} value={configuration.market_exchange_timezone ?? ''} onValue={(value) => onChange('market_exchange_timezone', value)} disabled={disabled} maxLength={64} />
+  </>;
+}
+
+/** CoinGecko scope: asset picker backed by the keyed coin search. */
+function CoinGeckoScope({ configuration, disabled, sourceId, credentialConfigured, onChange }: ScopeSectionProps) {
+  return <CoinGeckoPicker sourceId={sourceId ?? ''} credentialConfigured={credentialConfigured ?? false} disabled={disabled} assets={configuration.coingecko_assets} onChange={(assets) => onChange('coingecko_assets', assets)} />;
+}
+
+/** Open-Meteo scope: coordinates (fillable from the device, which also sets the browser timezone), timezone and metrics. */
+function OpenMeteoScope({ configuration, disabled, onChange }: ScopeSectionProps) {
+  const t = useTranslations('sources');
+  return <>
     <LocationButton disabled={disabled} onLocate={(latitude, longitude) => {
       onChange('weather_latitude', latitude);
       onChange('weather_longitude', longitude);
       // The browser zone matches the located device, so it replaces the default forecast timezone.
       onChange('weather_timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
     }} />
-    {field('weather_latitude', t('weatherLatitude'), String(configuration.weather_latitude ?? ''), (value) => onChange('weather_latitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,2}(\\.[0-9]+)?' })}
-    {field('weather_longitude', t('weatherLongitude'), String(configuration.weather_longitude ?? ''), (value) => onChange('weather_longitude', value === '' ? undefined : Number(value)), { maxLength: 24, pattern: '-?[0-9]{1,3}(\\.[0-9]+)?' })}
-    {field('weather_timezone', t('weatherTimezone'), configuration.weather_timezone ?? '', (value) => onChange('weather_timezone', value), { maxLength: 64 })}
-    {field('weather_metrics', t('weatherMetrics'), (configuration.weather_metrics ?? []).join(', '), (value) => onChange('weather_metrics', value.split(/[\s,]+/).filter(Boolean).slice(0, 4)), { maxLength: 200 })}
+    <ScopeField name="weather_latitude" label={t('weatherLatitude')} value={String(configuration.weather_latitude ?? '')} onValue={(value) => onChange('weather_latitude', toNumber(value))} disabled={disabled} maxLength={24} pattern={LAT_PATTERN} />
+    <ScopeField name="weather_longitude" label={t('weatherLongitude')} value={String(configuration.weather_longitude ?? '')} onValue={(value) => onChange('weather_longitude', toNumber(value))} disabled={disabled} maxLength={24} pattern={LON_PATTERN} />
+    <ScopeField name="weather_timezone" label={t('weatherTimezone')} value={configuration.weather_timezone ?? ''} onValue={(value) => onChange('weather_timezone', value)} disabled={disabled} maxLength={64} />
+    <ScopeField name="weather_metrics" label={t('weatherMetrics')} value={(configuration.weather_metrics ?? []).join(', ')} onValue={(value) => onChange('weather_metrics', splitTerms(value).slice(0, 4))} disabled={disabled} maxLength={200} />
   </>;
-  if (provider === 'notion') return <div className="field">
-    <Label htmlFor="source-scope-notion_page_ids">{t('notionPageIds')}</Label>
-    <Input id="source-scope-notion_page_ids" maxLength={13000} disabled={disabled} required value={notionText} aria-describedby="source-scope-notion-help" onChange={(event) => {
-      const rawText = event.target.value;
-      setNotionText(rawText);
-      const values = rawText.split(/[\s,]+/).filter(Boolean);
-      lastNotionSignature.current = JSON.stringify(values);
-      onChange('notion_page_ids', values);
-    }} />
-    <small id="source-scope-notion-help" className="text-muted-foreground">{t('notionPageIdsHelp')}</small>
-  </div>;
-  if (provider === 'slack') return <div className="field">
-    <Label htmlFor="source-scope-slack_channel_ids">{t('slackChannelIds')}</Label>
-    <Input id="source-scope-slack_channel_ids" maxLength={8400} disabled={disabled} required value={slackText} aria-describedby="source-scope-slack-help" onChange={(event) => {
-      const rawText = event.target.value;
-      setSlackText(rawText);
-      const values = rawText.split(/[\s,]+/).filter(Boolean);
-      lastSlackSignature.current = JSON.stringify(values);
-      onChange('slack_channel_ids', values);
-    }} />
-    <small id="source-scope-slack-help" className="text-muted-foreground">{t('slackChannelIdsHelp')}</small>
-  </div>;
+}
+
+/** Id-list scopes (Notion pages, Slack channels, Telegram chats) share one raw-text field; only keys and messages differ. */
+const ID_LIST_SCOPES = {
+  notion: { key: 'notion_page_ids', label: 'notionPageIds', help: 'notionPageIdsHelp', helpId: 'source-scope-notion-help', maxLength: 13000 },
+  slack: { key: 'slack_channel_ids', label: 'slackChannelIds', help: 'slackChannelIdsHelp', helpId: 'source-scope-slack-help', maxLength: 8400 },
+  telegram: { key: 'telegram_chat_ids', label: 'telegramChannelIds', help: 'telegramChannelHelp', helpId: 'source-scope-telegram-help', maxLength: 2200 },
+} as const;
+
+/** Raw-text id list field bound to one configuration key; see `useIdListText` for the sync rules with the draft. */
+function IdListScope({ spec, configuration, disabled, resetEpoch, onChange }: ScopeSectionProps & { spec: (typeof ID_LIST_SCOPES)[keyof typeof ID_LIST_SCOPES] }) {
+  const t = useTranslations('sources');
+  const text = useIdListText(configuration[spec.key] ?? [], resetEpoch);
   return <div className="field">
-    <Label htmlFor="source-scope-telegram_chat_ids">{t('telegramChannelIds')}</Label>
-    <Input id="source-scope-telegram_chat_ids" maxLength={2200} disabled={disabled} required value={telegramText} aria-describedby="source-scope-telegram-help" onChange={(event) => {
-      const rawText = event.target.value;
-      setTelegramText(rawText);
-      const values = rawText.split(/[\s,]+/).filter(Boolean);
-      // Keep raw separators and every entered value for continued typing and authoritative server bound/format rejection.
-      lastEmittedSignature.current = JSON.stringify(values);
-      onChange('telegram_chat_ids', values);
-    }} />
-    <small id="source-scope-telegram-help" className="text-muted-foreground">{t('telegramChannelHelp')}</small>
-  </div>;
-}
-
-/** Chooses up to twenty CoinGecko IDs; the stored ID distinguishes assets with the same ticker symbol. */
-function CoinGeckoPicker({ sourceId, credentialConfigured, disabled, assets, onChange }: { sourceId: string; credentialConfigured: boolean; disabled: boolean; assets?: CoinGeckoCoin[]; onChange: (assets: CoinGeckoCoin[]) => void }) {
-  const t = useTranslations('sources');
-  const selected = assets ?? [{ id: 'bitcoin', symbol: 'BTC', name: 'Bitcoin' }];
-  const [search, setSearch] = useState('');
-  const [query, setQuery] = useState('');
-  useEffect(() => {
-    const timer = setTimeout(() => setQuery(search.trim()), 350);
-    return () => clearTimeout(timer);
-  }, [search]);
-  const ready = Boolean(sourceId && credentialConfigured);
-  const coins = useQuery({
-    queryKey: connectorKeys.coingeckoCoins(sourceId, query),
-    queryFn: ({ signal }) => searchCoinGeckoCoins(sourceId, query, signal),
-    enabled: ready && query.length >= 2,
-    staleTime: 5 * 60_000,
-    retry: false,
-  });
-  return <div className="field">
-    <Label htmlFor="source-scope-coingecko-search">{t('coingeckoCoins')}</Label>
-    <ul className="grid gap-1" aria-label={t('coingeckoSelected')}>
-      {selected.map((coin) => <li key={coin.id} className="flex items-center justify-between gap-2 rounded-md border border-border p-2 text-sm">
-        <span className="min-w-0 break-words">{coin.name} ({coin.symbol}) <span className="text-muted-foreground">{coin.id}</span></span>
-        <Button type="button" variant="outline" size="sm" disabled={disabled || selected.length === 1} onClick={() => onChange(selected.filter((item) => item.id !== coin.id))} aria-label={t('coingeckoRemove', { name: coin.name })}>{t('coingeckoRemoveButton')}</Button>
-      </li>)}
-    </ul>
-    <Input id="source-scope-coingecko-search" value={search} maxLength={80} disabled={disabled || !ready || selected.length >= 20} placeholder={t('coingeckoSearchPlaceholder')} onChange={(event) => setSearch(event.target.value)} aria-describedby="source-scope-coingecko-help" />
-    <small id="source-scope-coingecko-help" className="text-muted-foreground">{ready ? t('coingeckoSearchHelp') : t('coingeckoSaveKeyFirst')}</small>
-    {selected.length >= 20 && <small className="text-muted-foreground">{t('coingeckoLimit')}</small>}
-    {coins.isPending && query.length >= 2 && ready && <small role="status" className="text-muted-foreground">{t('loading')}</small>}
-    {coins.isError && <small role="alert" className="text-destructive">{t(coins.error instanceof ApiError && coins.error.status === 409 ? 'coingeckoKeyNeedsRefresh' : coins.error instanceof ApiError && coins.error.status === 429 ? 'coingeckoSearchLimited' : 'coingeckoSearchFailed')}</small>}
-    {coins.data && query.length >= 2 && <ul className="max-h-48 overflow-y-auto rounded-md border border-border" aria-label={t('coingeckoResults')}>
-      {coins.data.items.filter((coin) => !selected.some((item) => item.id === coin.id)).map((coin) => <li key={coin.id}>
-        <Button type="button" variant="ghost" className="h-auto min-h-9 w-full justify-start whitespace-normal text-left pointer-coarse:min-h-11" disabled={disabled || selected.length >= 20} onClick={() => { onChange([...selected, coin]); setSearch(''); setQuery(''); }}>{coin.name} ({coin.symbol}) · {coin.id}</Button>
-      </li>)}
-    </ul>}
+    <Label htmlFor={`source-scope-${spec.key}`}>{t(spec.label)}</Label>
+    <Input id={`source-scope-${spec.key}`} maxLength={spec.maxLength} disabled={disabled} required value={text.value} aria-describedby={spec.helpId} onChange={(event) => onChange(spec.key, text.edit(event.target.value))} />
+    <small id={spec.helpId} className="text-muted-foreground">{t(spec.help)}</small>
   </div>;
 }
 
 /**
- * Fills coordinates from the browser Geolocation API after an explicit owner click (the browser asks for permission).
- * Coordinates are rounded to 4 decimals (~11 m), enough for weather and within the server bounds; denial or
- * failure shows a hint and leaves the typed values unchanged.
+ * Provider -> scope section registry. A new native provider plugs in by adding one entry here (and its name to
+ * `NativeProvider`); `ProviderScope` itself does not change.
  */
-function LocationButton({ disabled, onLocate }: { disabled: boolean; onLocate: (latitude: number, longitude: number) => void }) {
-  const t = useTranslations('sources');
-  const [state, setState] = useState<'idle' | 'locating' | 'denied' | 'unavailable'>('idle');
-  const supported = typeof navigator !== 'undefined' && 'geolocation' in navigator;
-  /** Requests one position and reports it rounded, or records why it could not be read. */
-  const locate = () => {
-    setState('locating');
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        setState('idle');
-        onLocate(Math.round(coords.latitude * 1e4) / 1e4, Math.round(coords.longitude * 1e4) / 1e4);
-      },
-      (failure) => setState(failure.code === failure.PERMISSION_DENIED ? 'denied' : 'unavailable'),
-      { timeout: 10_000, maximumAge: 600_000 },
-    );
-  };
-  return <div className="flex flex-wrap items-center gap-2">
-    <Button type="button" variant="outline" disabled={disabled || !supported || state === 'locating'} onClick={locate}>
-      {state === 'locating' ? t('locating') : t('useMyLocation')}
-    </Button>
-    {(state === 'denied' || state === 'unavailable' || !supported) && <small role="status" className="text-muted-foreground">
-      {t(state === 'denied' ? 'locationDenied' : 'locationUnavailable')}
-    </small>}
-  </div>;
-}
-
-/**
- * Input rules for one typed source field (format, delimiter, bounds, example), rendered under the input.
- * The id `source-hint-<field>` is what the input's `aria-describedby` points at; fields without a rule render nothing.
- */
-export function ScopeHint({ field }: { field: string }) {
-  const t = useTranslations('sources');
-  const key = `scopeHint.${field}`;
-  if (!t.has(key)) return null;
-  return <small id={`source-hint-${field}`} className="text-muted-foreground">{t(key as 'guideTitle')}</small>;
-}
-
-const GUIDE_MAX_STEPS = 8;
-
-/**
- * Resolves the ordered message keys of a provider's setup steps.
- * Falls back from the provider's own guide to its generic source type (`rss`, `rest`, `web`, `mcp` are their own ids)
- * and finally to the generic manual or keyed guide, so every manually configured source shows steps.
- * @param t Translator for the `sources` namespace (only `has` is used).
- * @param providerId Catalog provider id.
- * @param keyed Whether the provider needs an owner-entered key.
- * @returns Message keys `guideSteps.<id>.s1..sN` in order; empty when no guide exists.
- */
-function guideStepKeys(t: { has(key: string): boolean }, providerId: string, keyed: boolean): string[] {
-  const id = [providerId, keyed ? 'genericKeyed' : 'generic'].find((candidate) => t.has(`guideSteps.${candidate}.s1`));
-  if (!id) return [];
-  const keys: string[] = [];
-  for (let n = 1; n <= GUIDE_MAX_STEPS && t.has(`guideSteps.${id}.s${n}`); n += 1) keys.push(`guideSteps.${id}.s${n}`);
-  return keys;
-}
-
-/** Setup guide for a catalog provider. Shows only catalog facts: no invented quotas, terms or sample output. */
-export function ProviderGuide({ entry, source, now, onTest, testBusy, testPassed }: {
-  entry: ConnectorCatalogEntry; source?: Source | null; now?: Date;
-  /** Runs the existing owner validate action; it never calls the provider. Omitted until the source exists. */
-  onTest?: () => void; testBusy?: boolean; testPassed?: boolean;
-}) {
-  const t = useTranslations('sources');
-  const display = useDisplayPreferences();
-  if (!entry.terms_url && !entry.attribution) return null;
-  const fmt = (value: string) => formatDateTime(value, display.locale, display.timezone);
-  const interval = entry.default_interval_minutes ?? null;
-  const stale = source ? isStale(source.last_success_at, interval, now) : false;
-  const period = periodKind(entry.provider_id);
-  const keyed = (entry.key_fields ?? []).length > 0;
-  const quotas = (entry.quota_policies ?? []).map((q) => (q.limit_units === null ? t('guideQuotaUnknown', { window: q.window }) : t('guideQuota', { limit: q.limit_units, unit: q.unit, window: q.window })));
-  const steps = guideStepKeys(t, entry.provider_id, keyed);
-  const row = (label: string, body: React.ReactNode) => <div className="grid gap-1 sm:grid-cols-[10rem_1fr]"><dt className="font-medium">{label}</dt><dd className="text-muted-foreground">{body}</dd></div>;
-  return <section aria-label={t('guideTitle')} className="grid gap-2 rounded-lg border border-border bg-surface p-3 text-sm">
-    <h4 className="font-semibold">{t('guideTitle')}</h4>
-    {steps.length > 0 && <div className="grid gap-1" data-testid="guide-steps"><strong>{t('guideStepsTitle')}</strong>
-      <ol className="ml-5 list-decimal text-muted-foreground">{steps.map((key) => <li key={key}>{t(key as 'guideTitle')}</li>)}</ol></div>}
-    <dl className="grid gap-2">
-      {row(t('guideData'), [...(entry.hosts ?? []), ...(entry.endpoints ?? [])].join(' · ') || t('guideNone'))}
-      {period && row(t('guidePeriod'), t(period === 'referenceDate' ? 'guideReferenceDate' : 'guideAnnualPeriod'))}
-      {row(t('guideKey'), keyed ? t('guideKeyRequired') : t('guideKeyNone'))}
-      {interval !== null && row(t('guideCadence'), t('everyMinutes', { minutes: interval }))}
-      {quotas.length > 0 && row(t('guideQuotaLabel'), quotas.join('; '))}
-      {entry.attribution && row(t('guideAttribution'), <>{entry.attribution}{entry.terms_url ? <> <a className="text-foreground underline underline-offset-2" href={safeHttpUrl(entry.terms_url)} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a></> : null}</>)}
-      {row(t('guideVerified'), entry.runtime_verified ? t('guideVerifiedYes') : t('guideVerifiedNo'))}
-      {source && row(t('guideLastSuccess'), source.last_success_at ? <>{fmt(source.last_success_at)}{stale && <span role="status" className="ml-2 rounded-md border border-border px-1.5 py-0.5 text-xs text-destructive">{t('stale')}</span>}</> : t('never'))}
-      {source?.collection_error_code && row(t('guideLastError'), <span role="alert" className="text-destructive">{source.collection_error_code}{source.last_success_at ? ` · ${t('guideShowingLastGood')}` : ''}</span>)}
-      {row(t('guideRecovery'), t('guideRecoveryBody'))}
-    </dl>
-    {entry.example_config && <div className="grid gap-1"><strong>{t('guideExampleConfig')}</strong>
-      <pre className="overflow-x-auto rounded-md border border-border bg-muted p-2 text-xs" data-testid="guide-example-config">{JSON.stringify(entry.example_config, null, 2)}</pre></div>}
-    {entry.sample_output && <div className="grid gap-1"><strong>{t('guideSampleOutput')}</strong>
-      <pre className="overflow-x-auto rounded-md border border-border bg-muted p-2 text-xs" data-testid="guide-sample-output">{JSON.stringify(entry.sample_output, null, 2)}</pre></div>}
-    {(entry.example_config || entry.sample_output) && <small className="text-muted-foreground">{t('guideExampleNote')}</small>}
-    <div className="flex flex-wrap items-center gap-2">
-      <Button type="button" variant="outline" disabled={!onTest || testBusy} onClick={onTest}>{t('guideTest')}</Button>
-      <small className="text-muted-foreground">{onTest ? t('guideTestNote') : t('guideTestNeedsSource')}</small>
-      {testPassed && <small role="status">{t('guideTestPassed')}</small>}
-    </div>
-  </section>;
-}
-
-const TERMS_DECISION: Record<string, 'termsEligibleYes' | 'termsNotAcknowledged' | 'termsUseIncompatible' | 'termsOperatorReview'> = {
-  ok: 'termsEligibleYes', terms_not_acknowledged: 'termsNotAcknowledged', use_incompatible: 'termsUseIncompatible', operator_review_required: 'termsOperatorReview',
+const SCOPE_SECTIONS: Record<NativeProvider, ComponentType<ScopeSectionProps>> = {
+  sec_edgar: SecEdgarScope, google_news: GoogleNewsScope, openalex: OpenAlexScope, fred: FredScope, openweathermap: OpenWeatherMapScope,
+  openaq: OpenAqScope, nasa_firms: NasaFirmsScope, youtube: YoutubeScope, reddit: RedditScope, bluesky: BlueskyScope,
+  mastodon: MastodonScope, x: XScope, arxiv: ArxivScope, huggingface: HuggingFaceScope, github: GithubScope, github_releases: GithubScope,
+  alpha_vantage: AlphaVantageScope, coingecko: CoinGeckoScope, open_meteo: OpenMeteoScope,
+  notion: (props) => <IdListScope {...props} spec={ID_LIST_SCOPES.notion} />,
+  slack: (props) => <IdListScope {...props} spec={ID_LIST_SCOPES.slack} />,
+  telegram: (props) => <IdListScope {...props} spec={ID_LIST_SCOPES.telegram} />,
 };
 
-/** Owner declaration of deployment use and acknowledgement of the current catalog terms version. Activation stays blocked until the server reports the terms as accepted. */
-export function ProviderTerms({ sourceId, entry, csrfToken, disabled }: { sourceId: string; entry: ConnectorCatalogEntry; csrfToken: string; disabled?: boolean }) {
-  const t = useTranslations('sources');
-  const queryClient = useQueryClient();
-  const [use, setUse] = useState<DeclaredUse | ''>('');
-  const [read, setRead] = useState(false);
-  const termsQuery = useQuery({ queryKey: connectorKeys.terms(sourceId), queryFn: ({ signal }) => getProviderTerms(sourceId, signal) });
-  const version = entry.terms_checked_on ?? '';
-  const save = useMutation({
-    mutationFn: () => acknowledgeProviderTerms(sourceId, declared as DeclaredUse, version, csrfToken),
-    onSuccess: (result) => {
-      queryClient.setQueryData(connectorKeys.terms(sourceId), result);
-      void queryClient.invalidateQueries({ queryKey: connectorKeys.activation(sourceId) });
-    },
-  });
-  const current = termsQuery.data ?? null;
-  const decision = current ? TERMS_DECISION[current.decision] ?? 'termsNotAcknowledged' : 'termsNotAcknowledged';
-  const declared = use || (current?.declared_use as DeclaredUse | undefined) || '';
-  return <section aria-label={t('termsTitle')} className="grid gap-2 rounded-lg border border-border p-3 text-sm">
-    <h4 className="font-semibold">{t('termsTitle')}</h4>
-    {!current?.eligible && <p role="status" className="text-destructive">{t('termsRequired')}</p>}
-    {termsQuery.isError ? <p role="alert" className="text-destructive">{t('termsLoadFailed')}</p> : <p>{t(decision)}</p>}
-    <p className="text-muted-foreground">{t('termsVersion')}: {version || t('guideNone')} · <a className="text-foreground underline underline-offset-2" href={safeHttpUrl(entry.terms_url)} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a></p>
-    <div className="field"><Label htmlFor="terms-declared-use">{t('termsDeclaredUse')}</Label>
-      <Select value={declared} onValueChange={(value) => setUse(value as DeclaredUse)} disabled={disabled}>
-        <SelectTrigger id="terms-declared-use"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value="personal">{t('termsUsePersonal')}</SelectItem><SelectItem value="noncommercial">{t('termsUseNoncommercial')}</SelectItem>
-          <SelectItem value="commercial">{t('termsUseCommercial')}</SelectItem><SelectItem value="unknown">{t('termsUseUnknown')}</SelectItem>
-        </SelectContent>
-      </Select></div>
-    <div className="flex items-center gap-3"><Checkbox id="terms-read" checked={read} disabled={disabled} onCheckedChange={(checked) => setRead(checked === true)} /><Label htmlFor="terms-read">{t('termsAcknowledge')}</Label></div>
-    <div className="flex items-center gap-2">
-      <Button type="button" disabled={disabled || save.isPending || !declared || !read || !version} onClick={() => save.mutate()}>{save.isPending ? t('termsSaving') : t('termsSave')}</Button>
-      {save.isSuccess && <small role="status">{t('termsSaved')}</small>}
-      {save.isError && <small role="alert" className="text-destructive">{t('actionFailed')}</small>}
-    </div>
-  </section>;
+/** Renders bounded native-provider scopes, including Reddit subreddits and selected Notion pages/Slack channels; values stay in the revision-fenced draft. */
+export function ProviderScope(props: ScopeSectionProps) {
+  const Section = SCOPE_SECTIONS[props.provider] ?? SCOPE_SECTIONS.telegram;
+  return <Section {...props} />;
 }

@@ -85,4 +85,4 @@ async def test_history_window_scales_to_two_week_fifteen_minute_series(
             dialect=session.bind.dialect, compile_kwargs={"literal_binds": True})
         plan = (await session.execute(text("EXPLAIN (ANALYZE, BUFFERS) " + str(compiled)))).scalars().all()
         # The harness runs pytest -q, which hides captured stdout, so the plan goes to a temp file.
-        Path(tempfile.gettempdir(), "history-plan.txt").write_text("\n".join(plan), encoding="utf-8")
+        Path(tempfile.gettempdir(), "history-plan.txt").write_text("\n".join(plan), encoding="utf-8")  # noqa: ASYNC240  # test fixture file access

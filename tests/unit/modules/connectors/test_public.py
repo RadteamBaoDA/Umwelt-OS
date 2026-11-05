@@ -527,7 +527,7 @@ class TestStatusChecksAndGuards:
             workspace_id=WORKSPACE_ID, local_only=False, id=source_id, type="rss", status="active",
             generation=1, configuration={},
         )
-        with patch("modules.connectors.provisioning.require_collection_fence", new_callable=AsyncMock) as mock_fence,              patch("modules.connectors.public._read_scoped_source", AsyncMock(return_value=source)):
+        with patch("modules.connectors.provisioning.require_collection_fence", new_callable=AsyncMock) as mock_fence,              patch("modules.connectors.service.config._read_scoped_source", AsyncMock(return_value=source)):
             mock_fence.return_value = True
             allowed = await collection_allowed(
                 session,
@@ -609,15 +609,28 @@ class TestStatusChecksAndGuards:
             await validate_public_url("https://user:pass@example.com/feed")
 
         # Resolves to private IP
-        with patch("modules.connectors.public.getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 443))]):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        with patch("modules.connectors.service.collection_requests.getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 443))]):
             with pytest.raises(ValueError, match="URL resolves to a non-public address"):
                 await validate_public_url("https://localhost/feed")
 
-        with patch("modules.connectors.public.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.1", 443))]):  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        with patch("modules.connectors.service.collection_requests.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.1", 443))]):
             with pytest.raises(ValueError, match="URL resolves to a non-public address"):
                 await validate_public_url("https://router.local/feed")
 
         # Resolves to public IP
-        with patch("modules.connectors.public.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 443))]):
+        with patch("modules.connectors.service.collection_requests.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 443))]):
             res = await validate_public_url("https://example.com/feed.xml")
             assert res == "https://example.com/feed.xml"
+
+
+def test_public_reexports_collection_schema_dtos() -> None:
+    """Every DTO that other modules import from collection_schemas is also reachable from public."""
+    from modules.connectors import collection_schemas, public
+
+    for name in (
+        "CollectionAdmissionRead", "CollectionAdmissionRequest", "CollectionRequestRead", "CollectionRequestRef",
+        "ManagedConnectorReceipt", "ManagedCrawlRequest", "ManagedNoChanges",
+    ):
+        assert getattr(public, name) is getattr(collection_schemas, name)
+    with pytest.raises(AttributeError):
+        public.NotAnExport  # noqa: B018

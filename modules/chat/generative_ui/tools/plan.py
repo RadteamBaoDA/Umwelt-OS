@@ -60,6 +60,22 @@ def _extract_steps_from_text(text: str) -> list[str]:
     return extracted[:10]
 
 
+def _first_provenance(evidence: Sequence[Any]) -> tuple[str | None, str | None, str | None]:
+    """Return the ``(source_id, document_id, chunk_id)`` of the first evidence item (dict or object).
+
+    Missing or empty values become None; with no evidence all three are None.
+    """
+    if not evidence:
+        return None, None, None
+    item = evidence[0]
+
+    def attr(name: str) -> str | None:
+        """Stringified field of the first evidence item, or None when empty."""
+        return str(item.get(name) if isinstance(item, dict) else getattr(item, name, "")) or None
+
+    return attr("source_id"), attr("document_id"), attr("chunk_id")
+
+
 def build_plan_payload(
     prompt: str,
     answer_text: str = "",
@@ -82,20 +98,7 @@ def build_plan_payload(
     Returns:
         Validated `PlanPayload` instance.
     """
-    first_source_id: str | None = None
-    first_doc_id: str | None = None
-    first_chunk_id: str | None = None
-    if evidence:
-        item = evidence[0]
-        first_source_id = str(
-            item.get("source_id") if isinstance(item, dict) else getattr(item, "source_id", "")
-        ) or None
-        first_doc_id = str(
-            item.get("document_id") if isinstance(item, dict) else getattr(item, "document_id", "")
-        ) or None
-        first_chunk_id = str(
-            item.get("chunk_id") if isinstance(item, dict) else getattr(item, "chunk_id", "")
-        ) or None
+    first_source_id, first_doc_id, first_chunk_id = _first_provenance(evidence)
 
     resolved_steps: list[PlanStep] = []
     if steps:

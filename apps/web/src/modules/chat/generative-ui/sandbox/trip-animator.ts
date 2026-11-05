@@ -35,6 +35,11 @@ export interface TripAnimatorController {
   dispose: () => void;
 }
 
+/* eslint-disable max-lines-per-function --
+ * Documented exception: `createTripAnimator` is serialized with `Function.prototype.toString()` into sandboxed
+ * iframes and standalone exports (`TRIP_ANIMATOR_SCRIPT`), so it must stay one self-contained function. Module-level
+ * helpers would not exist inside the iframe, and bundler name mangling would break references to them.
+ */
 /**
  * Creates a self-contained multi-step animation controller that interpolates across `stopCount` stops,
  * respects `prefers-reduced-motion: reduce`, pauses automatically when the document is hidden,
@@ -216,6 +221,7 @@ export function createTripAnimator(options: TripAnimationOptions): TripAnimatorC
     dispose,
   };
 }
+/* eslint-enable max-lines-per-function */
 
 /**
  * Object-oriented wrapper around `createTripAnimator` providing `play`, `pause`, `reset`,

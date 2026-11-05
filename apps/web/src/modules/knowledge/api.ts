@@ -1,4 +1,4 @@
-import { apiRequest, csrfHeaders, workspaceHeaders } from '@/core/api';
+import { apiRequest, apiRequestRaw, csrfHeaders } from '@/core/api';
 
 export type Document = {
   id: string; source_id: string; external_id: string | null; title: string;
@@ -379,10 +379,10 @@ export function revokeShare(workspaceId: string, type: ShareResourceType, resour
 
 /**
  * Downloads the original file as a blob so the workspace header and publication gate apply
- * (a plain link cannot send the header). apiRequest only parses JSON, so this uses fetch with the shared header helper.
+ * (a plain link cannot send the header). apiRequest only parses JSON, so this uses the shared raw request variant.
  */
 export async function downloadRawDocument(id: string, fileName: string): Promise<void> {
-  const response = await fetch(`/api/v1/documents/${id}/raw`, { cache: 'no-store', credentials: 'same-origin', headers: workspaceHeaders('selected') });
+  const response = await apiRequestRaw(`/api/v1/documents/${id}/raw`);
   if (!response.ok) throw new Error(String(response.status));
   const url = URL.createObjectURL(await response.blob());
   const link = window.document.createElement('a');

@@ -8,13 +8,13 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import ColumnElement, Uuid, and_, case, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import ConflictError
 from core.realtime import KnowledgeChanged, make_knowledge_change
-from core.workspaces import public as workspaces
+from core.workspaces.admission import admit_scope
 from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
@@ -29,6 +29,9 @@ from modules.knowledge.temporal.models import (
     GraphReconcileRun,
     GraphSupport,
 )
+
+# These schema DTOs are part of this public contract: other modules import them from here
+# (``public.ChangePage`` ...) instead of reaching into ``schemas``.
 from modules.knowledge.temporal.schemas import (
     ChangePage,
     ChangeRead,
@@ -40,17 +43,24 @@ from modules.sources import public as sources
 from modules.sources.schemas import SourceFence
 
 
-def _actor(scope: Scope) -> int:
-    """The durable actor of a typed scope."""
+def _operator_actor(scope: Scope) -> int:
+    """Return the durable actor of a typed scope, deliberately DIVERGENT from ``admission.actor_id``.
+
+    Only ``WorkspaceContext`` yields ``user_id``; an ``AdminWorkspaceReadContext`` yields the
+    *operator* (``actor_user_id``) so admin reads are attributed to the operator, whereas the
+    canonical helper would yield the data owner.
+    """
     return scope.user_id if isinstance(scope, WorkspaceContext) else scope.actor_user_id
 
 
 async def _admit(session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool) -> AccessFence:
-    """Require current owner workspace access before Temporal owner queries or writes; return the admitted fence."""
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
-    return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    """Require current owner workspace access before Temporal owner queries or writes; return the admitted fence.
+
+    Delegates to the canonical ``admit_scope`` (owner only, read only, no feature-flag type
+    check) so the member 403 and the non-locking fence read stay shared with other modules.
+    """
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, check_flag=False,
     )
 
 
@@ -129,7 +139,7 @@ async def schedule_version(
     if partition is None or partition.reservations >= 100 or partition.evidence_reservations + chunk_count > 100:
         if partition is not None:
             partition.sealed = True
-        assert allocation is not None
+        assert allocation is not None  # noqa: S101  # mypy narrowing invariant
         partition = GraphPartition(workspace_id=scope.workspace_id, source_id=ready.source_id,
                                    generation=ready.source_generation,
                                    ordinal=allocation.next_bucket, reservations=0)
@@ -154,7 +164,7 @@ async def schedule_version(
     if input_error is not None:
         mapping.status, mapping.error_code = "blocked", input_error
         operation = await session.get(GraphOperation, operation_id)
-        assert operation is not None
+        assert operation is not None  # noqa: S101  # mypy narrowing invariant
         operation.status, operation.error_code = "blocked", input_error
         # Version chunks are immutable; model/dependency retries cannot make
         # over-limit input valid. A new ready version gets its own mapping.
@@ -242,11 +252,16 @@ def _require_cleanup_fences(
     actual: AccessFence, *, closure: TemporalCleanupClosure, scope: Scope,
     access_fence: AccessFence, source_fence: SourceFence,
 ) -> None:
+    """Require the caller-held access and source fences to equal the freshly admitted ones.
+
+    Raises ``ConflictError`` (409 "Cleanup authority changed") when the access fence drifted,
+    or the held source fence is for another source/workspace than the cleanup closure; no I/O.
+    """
     if (
         actual != access_fence or source_fence.id != closure.source_id
         or source_fence.workspace_id != scope.workspace_id
     ):
-        raise HTTPException(status_code=409, detail="Cleanup authority changed")
+        raise ConflictError("Cleanup authority changed")
 
 
 async def tombstone_cleanup_ids(
@@ -483,7 +498,7 @@ async def request_reconcile(
     await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     selection = request.model_dump(mode="json", exclude_none=True)
     condition = await _scope_condition(session, selection, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    run = GraphReconcileRun(workspace_id=scope.workspace_id, actor_user_id=_actor(scope),
+    run = GraphReconcileRun(workspace_id=scope.workspace_id, actor_user_id=_operator_actor(scope),
                             scope=selection, status="pending")
     session.add(run)
     await session.flush()

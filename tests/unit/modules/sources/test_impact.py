@@ -10,16 +10,19 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import public as chat
-from modules.connectors import routes as connector_routes
+from modules.connectors import native_fetch
+from modules.connectors.native_fetch import GITHUB_RECONNECT_DETAIL
+from modules.connectors.native_fetch import collection_error_code as _collection_error_code
 from modules.connectors.providers.telegram import _TelegramAPIError
-from modules.connectors.routes import GITHUB_RECONNECT_DETAIL, _collection_error_code
 from modules.dashboard import public as dashboard
 from modules.knowledge.documents import public as documents
 from modules.sources import public as source_public
 from modules.sources import public as sources
 from modules.sources import routes as source_routes
+from tests.unit.modules._documents_patch import monkeypatch_documents
 
 WORKSPACE_ID = uuid4()
 
@@ -61,8 +64,8 @@ def test_non_httpx_auth_failures_map_to_error_code(exc: BaseException, code: str
 
 
 def test_fetch_native_provider_uses_error_code_helper_in_both_branches() -> None:
-    source = inspect.getsource(connector_routes.fetch_native_provider)
-    assert source.count("error_code=_collection_error_code(exc)") == 2
+    source = inspect.getsource(native_fetch.run_provider_fetch)
+    assert source.count("error_code=collection_error_code(exc)") == 2
 
 
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WORKSPACE_ID, role="owner", membership_revision=3)
@@ -106,7 +109,7 @@ async def test_find_document_identity_sql_carries_workspace_predicate(monkeypatc
     async def admitted(*_a: Any, **_kw: Any) -> None:
         return None
 
-    monkeypatch.setattr(documents, "_admit_document_scope", admitted)
+    monkeypatch_documents(monkeypatch, "_admit_document_scope", admitted)
     session = FakeSession(uuid4())
     assert await documents.find_document_identity(
         session, uuid4(), "file:abc", scope=SCOPE, multi_workspace_enabled=False,  # type: ignore[arg-type]
@@ -145,7 +148,7 @@ async def test_impact_is_409_while_purge_pending(monkeypatch: pytest.MonkeyPatch
         return object()
 
     monkeypatch.setattr(sources, "get_source", found)
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await sources.get_source_impact(
             ImpactSession(None), uuid4(), scope=SCOPE, multi_workspace_enabled=False,  # type: ignore[arg-type]
         )

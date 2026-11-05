@@ -11,10 +11,11 @@ import { formatDateTime } from '@/core/i18n';
 import { safeHttpUrl } from '@/core/safe-url';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchStory } from './story-api';
-import { TranslatedBadge } from '@/modules/translations/translated-badge';
-import { TranslationNote } from '@/modules/translations/translation-note';
-import { useContentTranslation } from '@/modules/translations/use-content-translation';
+import { TranslatedBadge } from '@/modules/translations';
+import { TranslationNote } from '@/modules/translations';
+import { useContentTranslation } from '@/modules/translations';
 import { useNewsIncompleteLabel } from './use-news-incomplete-label';
+import type { Story, StoryEvidence } from './story-types';
 
 /** Props for the detail renderer shown when a story is opened from its gadget. */
 export type StoryDetailProps = {
@@ -29,82 +30,57 @@ const badgeClass = 'inline-flex h-6 items-center rounded-full border border-bord
 const signalKeys = ['topic', 'entity', 'goal', 'recency', 'importance', 'novelty'] as const;
 type SignalKey = (typeof signalKeys)[number];
 
+/** Signals that explain why a story is relevant; none while relevance is unavailable, unknown signal names dropped. */
+function relevanceReasons(story: Story | undefined): SignalKey[] {
+  if (story?.relevance_state === 'unavailable') return [];
+  return (story?.why_relevant ?? []).filter((name): name is SignalKey => (signalKeys as readonly string[]).includes(name));
+}
+
+/** Timeline = real evidence events (first collected per source document), oldest first, at most eight. */
+function buildTimeline(evidence: StoryEvidence[]) {
+  return [...evidence]
+    .map((item) => ({ key: `${item.document_version_id}:${item.chunk_id}`, at: item.published_at ?? item.observed_at, source: item.source_name, title: item.title }))
+    .sort((a, b) => a.at.localeCompare(b.at))
+    .slice(0, 8);
+}
+
 /**
  * Render current excerpts and citations from one protected detail snapshot.
  * Ordinary title-free support pages retain their cursor; an authority-change
  * omission suppresses every cached page until the owner explicitly restarts.
  */
-export function StoryDetail({ storyId, sourceIds, onBack, onClose }: StoryDetailProps) {
-  const t = useTranslations('news');
-  const d = useTranslations('detail');
-  const display = useDisplayPreferences();
-  const incompleteLabel = useNewsIncompleteLabel();
-  const queryClient = useQueryClient();
-  const { openDrawer } = useChatController();
-  const [snapshotGeneration, setSnapshotGeneration] = useState(0);
-  const [copied, setCopied] = useState<'ok' | 'failed' | null>(null);
-  const detail = useInfiniteQuery({
-    queryKey: ['news-story', storyId, sourceIds, snapshotGeneration],
-    queryFn: ({ pageParam }) => fetchStory(storyId, sourceIds, pageParam),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (page) => page.evidence_cursor ?? undefined,
-    enabled: Boolean(storyId),
-    refetchOnMount: false,
-    refetchOnReconnect: false,
-    refetchOnWindowFocus: false,
-    retry: false,
-  });
-  /**
-   * Drop every page from the prior cursor chain and start a fresh fixed-as-of read.
-   * This is only invoked by an explicit retry/restart action, never automatically.
-   */
-  function restartSnapshot(): void {
-    queryClient.removeQueries({ queryKey: ['news-story', storyId, sourceIds] });
-    setSnapshotGeneration((generation) => generation + 1);
-  }
-  const pages = detail.data?.pages ?? [];
-  const authorityChanged = pages.some((page) => page.incomplete_reasons.includes('evidence_changed_during_read'));
-  const contentAvailable = !detail.isError && !authorityChanged;
-  // A later authority failure revokes the whole cursor snapshot, including earlier cached pages.
-  const visiblePages = contentAvailable ? pages : [];
-  const story = visiblePages.find((page) => page.story !== null)?.story ?? undefined;
-  const targets = story?.translation_revision ? [{ id: story.id, revision: story.translation_revision }] : [];
-  const translation = useContentTranslation('news_story', targets);
-  const [showOriginal, setShowOriginal] = useState(false);
-  const translated = showOriginal || !story ? undefined : translation.results.get(story.id)?.translation ?? undefined;
-  const evidence = visiblePages.flatMap((page) => page.story?.evidence ?? []);
-  const omissionReasons = [...new Set(visiblePages.flatMap((page) => page.incomplete_reasons))];
-  const firstUrl = evidence.map((item) => safeHttpUrl(item.url)).find(Boolean) ?? null;
-  const reasons = story?.relevance_state === 'unavailable' ? [] : (story?.why_relevant ?? []).filter((name): name is SignalKey => (signalKeys as readonly string[]).includes(name));
+export function StoryDetail(props: StoryDetailProps) {
+  const s0 = useStoryDetailQuery(props);
 
-  // Timeline = real evidence events (first collected per source document), oldest first.
-  const timeline = [...evidence]
-    .map((item) => ({ key: `${item.document_version_id}:${item.chunk_id}`, at: item.published_at ?? item.observed_at, source: item.source_name, title: item.title }))
-    .sort((a, b) => a.at.localeCompare(b.at))
-    .slice(0, 8);
+  const s1 = useStoryDetailView(s0);
 
-  /** Closes the dialog, then opens the quick-chat drawer grounded in this story's evidence chunks. */
-  function askAi(): void {
-    onClose?.();
-    openDrawer({ context: { kind: 'selection', items: evidence.slice(0, 8).map((item) => ({
-      sourceId: item.source_id, documentId: item.document_id, documentVersionId: item.document_version_id, chunkId: item.chunk_id, title: item.title,
-    })) } });
-  }
+  const s2 = useStoryDetailActions(s1);
 
-  /** Copies a plain-text citation (title, source, time, link) for the first evidence rows. */
-  async function copyCitation(): Promise<void> {
-    if (!story) return;
-    const lines = evidence.slice(0, 5).map((item) => `${item.title} — ${item.source_name}, ${formatDateTime(item.observed_at, display.locale, display.timezone)}${item.url ? ` ${item.url}` : ''}`);
-    try {
-      await navigator.clipboard.writeText([story.title, ...lines].join('\n'));
-      setCopied('ok');
-    } catch {
-      setCopied('failed');
-    }
-  }
-
+  const vm: StoryDetailVm = s2;
   return (
     <section className="flex h-full min-h-0 flex-col gap-4 overflow-auto rounded-lg border border-border bg-background p-4 text-foreground">
+<StoryDetailStatus vm={vm} />
+      <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_16rem]">
+      <div className="min-w-0 space-y-4">
+<StoryArticle vm={vm} />
+<StoryOmissionNotice vm={vm} />
+<StoryEvidenceList vm={vm} />
+<StoryLoadMore vm={vm} />
+      </div>
+<StoryAside vm={vm} />
+      </div>
+<StoryFooter vm={vm} />
+    </section>
+  );
+}
+
+type StoryDetailVm = ReturnType<typeof useStoryDetailActions>;
+
+/** Back button plus loading and unavailable/changed-evidence notices. */
+function StoryDetailStatus({ vm }: { vm: StoryDetailVm }) {
+  const { t, detail, onBack, authorityChanged, restartSnapshot } = vm;
+  return (
+<>
       <Button variant="ghost" className="w-fit" onClick={onBack}>
         <ArrowLeft aria-hidden="true" className="mr-2 size-4" />{t('back')}
       </Button>
@@ -115,9 +91,15 @@ export function StoryDetail({ storyId, sourceIds, onBack, onClose }: StoryDetail
           <Button variant="outline" size="sm" onClick={restartSnapshot}>{t('restartSnapshot')}</Button>
         </div>
       ) : null}
-      <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_16rem]">
-      <div className="min-w-0 space-y-4">
-      {story ? (
+</>
+  );
+}
+
+/** Story badges, title, citation tools, excerpt and partial-data notices. */
+function StoryArticle({ vm }: { vm: StoryDetailVm }) {
+  const { t, d, display, incompleteLabel, copied, story, translation, translated, firstUrl, showOriginal, setShowOriginal, copyCitation } = vm;
+  return (
+      story ? (
         <article className="space-y-3" aria-labelledby="story-detail-title">
           <div className="flex flex-wrap items-center gap-2">
             <span className={badgeClass}>{d('evidenceCount', { count: story.evidence_count })}</span>
@@ -143,13 +125,27 @@ export function StoryDetail({ storyId, sourceIds, onBack, onClose }: StoryDetail
           ) : null}
           {story.relevance_signals.project?.available === false ? <p className="text-xs text-muted-foreground">{t('unavailable')}</p> : null}
         </article>
-      ) : null}
-      {contentAvailable && omissionReasons.length ? (
+      ) : null
+  );
+}
+
+/** Partial-data notice for omitted evidence pages. */
+function StoryOmissionNotice({ vm }: { vm: StoryDetailVm }) {
+  const { t, incompleteLabel, contentAvailable, omissionReasons } = vm;
+  return (
+      contentAvailable && omissionReasons.length ? (
         <div role="status" className="space-y-1 text-xs text-muted-foreground">
           <p>{t('partialData')}</p>
           {omissionReasons.map((reason) => <p key={reason}>{incompleteLabel(reason)}</p>)}
         </div>
-      ) : null}
+      ) : null
+  );
+}
+
+/** Evidence cards with open-source links. */
+function StoryEvidenceList({ vm }: { vm: StoryDetailVm }) {
+  const { t, d, display, contentAvailable, story, evidence } = vm;
+  return (
       <section className="space-y-3" aria-label={t('evidence', { count: story?.evidence_count ?? 0 })}>
         <h3 className="text-sm font-semibold">{d('sourcesAndEvidence')}</h3>
         {evidence.map((item) => (
@@ -168,13 +164,26 @@ export function StoryDetail({ storyId, sourceIds, onBack, onClose }: StoryDetail
         ))}
         {contentAvailable && story ? <p className="text-xs text-muted-foreground">{d('independenceUnknown')}</p> : null}
       </section>
-      {contentAvailable && detail.hasNextPage ? (
+  );
+}
+
+/** Load-more button for further evidence pages. */
+function StoryLoadMore({ vm }: { vm: StoryDetailVm }) {
+  const { t, detail, contentAvailable } = vm;
+  return (
+      contentAvailable && detail.hasNextPage ? (
         <Button variant="outline" onClick={() => { void detail.fetchNextPage(); }} disabled={detail.isFetchingNextPage}>
           {detail.isFetchingNextPage ? t('loading') : t('loadMore')}
         </Button>
-      ) : null}
-      </div>
-      {story ? (
+      ) : null
+  );
+}
+
+/** Relevance signals and evidence timeline. */
+function StoryAside({ vm }: { vm: StoryDetailVm }) {
+  const { d, display, story, reasons, timeline } = vm;
+  return (
+      story ? (
         <aside className="min-w-0 space-y-5">
           {reasons.length ? (
             <div className="space-y-2">
@@ -196,15 +205,103 @@ export function StoryDetail({ storyId, sourceIds, onBack, onClose }: StoryDetail
             </div>
           ) : null}
         </aside>
-      ) : null}
-      </div>
-      {story ? (
+      ) : null
+  );
+}
+
+/** Create-rule link and Ask AI action. */
+function StoryFooter({ vm }: { vm: StoryDetailVm }) {
+  const { d, onClose, story, evidence, askAi } = vm;
+  return (
+      story ? (
         <footer className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
           <Button asChild variant="outline"><Link href="/dashboard?manage=highlights" onClick={onClose}>{d('createRule')}</Link></Button>
           <span className="flex-1" />
           <Button type="button" disabled={!evidence.length} onClick={askAi}>{d('askAiAboutThis')}</Button>
         </footer>
-      ) : null}
-    </section>
+      ) : null
   );
+}
+
+/** Loads the fixed-as-of story snapshot page by page; reads are never refetched automatically. */
+function useStoryDetailQuery(props: StoryDetailProps) {
+  const { storyId, sourceIds, onBack, onClose } = props;
+  const t = useTranslations('news');
+  const d = useTranslations('detail');
+  const display = useDisplayPreferences();
+  const incompleteLabel = useNewsIncompleteLabel();
+  const queryClient = useQueryClient();
+  const { openDrawer } = useChatController();
+  const [snapshotGeneration, setSnapshotGeneration] = useState(0);
+  const [copied, setCopied] = useState<'ok' | 'failed' | null>(null);
+  const detail = useInfiniteQuery({
+    queryKey: ['news-story', storyId, sourceIds, snapshotGeneration],
+    queryFn: ({ pageParam }) => fetchStory(storyId, sourceIds, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.evidence_cursor ?? undefined,
+    enabled: Boolean(storyId),
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
+  return { t, d, display, incompleteLabel, queryClient, detail, snapshotGeneration, setSnapshotGeneration, copied, setCopied, storyId, sourceIds, onBack, onClose, openDrawer };
+}
+
+/** Restarts the snapshot on request and derives visible pages, story, translation, evidence, timeline and relevance reasons (all hidden once authority changed). */
+function useStoryDetailView(p: ReturnType<typeof useStoryDetailQuery>) {
+  const { queryClient, detail, setSnapshotGeneration, storyId, sourceIds } = p;
+  /**
+   * Drop every page from the prior cursor chain and start a fresh fixed-as-of read.
+   * This is only invoked by an explicit retry/restart action, never automatically.
+   */
+  function restartSnapshot(): void {
+    queryClient.removeQueries({ queryKey: ['news-story', storyId, sourceIds] });
+    setSnapshotGeneration((generation) => generation + 1);
+  }
+  const pages = detail.data?.pages ?? [];
+  const authorityChanged = pages.some((page) => page.incomplete_reasons.includes('evidence_changed_during_read'));
+  const contentAvailable = !detail.isError && !authorityChanged;
+  // A later authority failure revokes the whole cursor snapshot, including earlier cached pages.
+  const visiblePages = contentAvailable ? pages : [];
+  const story = visiblePages.find((page) => page.story !== null)?.story ?? undefined;
+  const targets = story?.translation_revision ? [{ id: story.id, revision: story.translation_revision }] : [];
+  const translation = useContentTranslation('news_story', targets);
+  const [showOriginal, setShowOriginal] = useState(false);
+  const translated = showOriginal || !story ? undefined : translation.results.get(story.id)?.translation ?? undefined;
+  const evidence = visiblePages.flatMap((page) => page.story?.evidence ?? []);
+  const omissionReasons = [...new Set(visiblePages.flatMap((page) => page.incomplete_reasons))];
+  const firstUrl = evidence.map((item) => safeHttpUrl(item.url)).find(Boolean) ?? null;
+  const reasons = relevanceReasons(story);
+
+  const timeline = buildTimeline(evidence);
+
+  return { ...p, pages, authorityChanged, contentAvailable, visiblePages, story, targets, translation, translated, evidence, omissionReasons, firstUrl, reasons, timeline, showOriginal, setShowOriginal, restartSnapshot };
+}
+
+/** Ask-AI hand-off to the chat drawer and the clipboard citation copy. */
+function useStoryDetailActions(p: ReturnType<typeof useStoryDetailView>) {
+  const { display, setCopied, onClose, openDrawer, story, evidence } = p;
+  /** Closes the dialog, then opens the quick-chat drawer grounded in this story's evidence chunks. */
+  function askAi(): void {
+    onClose?.();
+    openDrawer({ context: { kind: 'selection', items: evidence.slice(0, 8).map((item) => ({
+      sourceId: item.source_id, documentId: item.document_id, documentVersionId: item.document_version_id, chunkId: item.chunk_id, title: item.title,
+    })) } });
+  }
+
+  /** Copies a plain-text citation (title, source, time, link) for the first evidence rows. */
+  async function copyCitation(): Promise<void> {
+    if (!story) return;
+    const lines = evidence.slice(0, 5).map((item) => `${item.title} — ${item.source_name}, ${formatDateTime(item.observed_at, display.locale, display.timezone)}${item.url ? ` ${item.url}` : ''}`);
+    try {
+      await navigator.clipboard.writeText([story.title, ...lines].join('\n'));
+      setCopied('ok');
+    } catch {
+      setCopied('failed');
+    }
+  }
+
+  return { ...p, askAi, copyCitation };
 }

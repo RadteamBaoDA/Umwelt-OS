@@ -37,16 +37,18 @@ export function resolveMediaUrl(raw: unknown, origin: string): string | null {
     return null;
   }
   if (parsed.pathname === PROXY_PATH) {
-    const keys = [...parsed.searchParams.keys()];
-    if (keys.length !== 1 || keys[0] !== 'token' || !parsed.searchParams.get('token')) {
-      return null;
-    }
-    return parsed.href;
+    return hasOnlyTokenParam(parsed) ? parsed.href : null;
   }
   if (TILE_PATH.test(parsed.pathname) && !parsed.search) {
     return parsed.href;
   }
   return null;
+}
+
+/** True when the proxy URL carries exactly one query parameter, `token`, and it is non-empty. */
+function hasOnlyTokenParam(parsed: URL): boolean {
+  const keys = [...parsed.searchParams.keys()];
+  return keys.length === 1 && keys[0] === 'token' && Boolean(parsed.searchParams.get('token'));
 }
 
 /**

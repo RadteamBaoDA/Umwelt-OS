@@ -100,7 +100,7 @@ class StreamBuffer:
         self._queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=maxsize)
         self._closed: bool = False
 
-    async def put(self, event_chunk: str, timeout: float = 5.0) -> bool:
+    async def put(self, event_chunk: str, timeout: float = 5.0) -> bool:  # noqa: ASYNC109  # bounded queue put API takes a timeout, enforced with asyncio.wait_for
         """Push a formatted SSE event chunk into the buffer with timeout.
 
         Args:

@@ -165,6 +165,7 @@ def collection_cooldown_seconds(provider: str | None, last_started: datetime | N
 
 
 def _unknown(kind: str = "provider", unit: str = "http_calls", cost: int = 1) -> QuotaWindowPolicy:
+    """Build the conservative quota window for a provider whose official daily limit is unpublished."""
     return QuotaWindowPolicy(
         "official_unknown_calls_utc_day", kind, "day", unit, None, cost, "official_unknown",  # type: ignore[arg-type]
     )
@@ -172,6 +173,7 @@ def _unknown(kind: str = "provider", unit: str = "http_calls", cost: int = 1) ->
 
 def _day(limit: int, kind: str = "provider", unit: str = "http_calls", cost: int = 1,
          key: str = "pilot_calls_utc_day") -> QuotaWindowPolicy:
+    """Build a UTC-day quota window with a fixed pilot ``limit`` of ``cost``-weighted calls."""
     return QuotaWindowPolicy(key, kind, "day", unit, limit, cost)  # type: ignore[arg-type]
 
 
@@ -179,6 +181,7 @@ def _spec(id_: str, label: str, category: str, hosts: tuple[str, ...], kind: str
           eligibility: str, attribution: str, endpoints: tuple[str, ...], quota: tuple[QuotaWindowPolicy, ...],
           execution: str = "supported", key: bool = False, secret: str | None = None,
           implemented: bool = False) -> FreeProviderSpec:
+    """Build one free-provider spec; ``code_implemented`` is true when flagged or the id is dispatchable."""
     return FreeProviderSpec(
         id=id_, hosts=hosts, data_kind=kind, key_required=key, default_interval_minutes=interval,  # type: ignore[arg-type]
         terms_url=terms_url, eligibility=eligibility, attribution=attribution, execution=execution,  # type: ignore[arg-type]
@@ -320,7 +323,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
                              "official_documented"),
            QuotaWindowPolicy("official_call_credits_per_month", "credential", "month", "call_credits", 10_000, 1,
                              "official_documented")),
-          key=True, secret="header"),
+          key=True, secret="header"),  # noqa: S106  # label/URL/enum value, not a credential
     # Existing C1 adapter. 12/UTC-day is the conservative pilot cap until the provider reset
     # anchor is evidenced; the official 25/day fact is recorded separately.
     _spec("alpha_vantage", "Alpha Vantage daily equities", "economy", ("www.alphavantage.co",), "measurement", 1440,
@@ -331,7 +334,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
            QuotaWindowPolicy("pilot_calls_utc_minute", "credential", "minute", "http_calls", 1),
            QuotaWindowPolicy("official_calls_per_day", "credential", "day", "http_calls", 25, 1,
                              "official_documented")),
-          key=True, secret="query", implemented=True),
+          key=True, secret="query", implemented=True),  # noqa: S106  # label/URL/enum value, not a credential
     # ---- Built-in RSS/Atom world-data feeds. Feed-only title/summary/link; the linked page is never fetched.
     # Eligibility follows each publisher's published terms; where a free-reuse statement is not explicit it is review.
     _spec("aljazeera_world", "Al Jazeera World News", "news", ("www.aljazeera.com",), "news", 30,
@@ -453,7 +456,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           (_day(8, kind="credential"),
            QuotaWindowPolicy("official_calls_per_minute", "credential", "minute", "http_calls", 120, 1,
                              "official_documented")),
-          key=True, secret="query"),
+          key=True, secret="query"),  # noqa: S106  # label/URL/enum value, not a credential
     _spec("finnhub_news", "Finnhub market news", "news", ("finnhub.io",), "news", 60,
           "https://finnhub.io/terms-of-service", "personal",
           "Credit Finnhub and link the original article; the free plan is for personal use.",
@@ -461,7 +464,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           (_day(48, kind="credential"),
            QuotaWindowPolicy("official_calls_per_minute", "credential", "minute", "http_calls", 60, 1,
                              "official_documented")),
-          key=True, secret="header"),
+          key=True, secret="header"),  # noqa: S106  # label/URL/enum value, not a credential
     _spec("newsapi", "NewsAPI top headlines (US business)", "news", ("newsapi.org",), "news", 360,
           "https://newsapi.org/terms", "review",
           "Credit NewsAPI.org and the article's publisher; the free Developer plan is for development use only.",
@@ -469,7 +472,7 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           (_day(12, kind="credential"),
            QuotaWindowPolicy("official_calls_per_day", "credential", "day", "http_calls", 100, 1,
                              "official_documented")),
-          key=True, secret="header"),
+          key=True, secret="header"),  # noqa: S106  # label/URL/enum value, not a credential
     _spec("openweathermap", "OpenWeather current conditions", "hazards", ("api.openweathermap.org",), "measurement", 60,
           "https://openweathermap.org/api", "open",
           "Weather data provided by OpenWeather (CC BY-SA 4.0); state any processing.",
@@ -477,17 +480,17 @@ _SPECS_RAW: tuple[FreeProviderSpec, ...] = (
           (_day(48, kind="credential"),
            QuotaWindowPolicy("official_calls_per_minute", "credential", "minute", "http_calls", 60, 1,
                              "official_documented")),
-          key=True, secret="query"),
+          key=True, secret="query"),  # noqa: S106  # label/URL/enum value, not a credential
     _spec("openaq", "OpenAQ latest air quality", "hazards", ("api.openaq.org",), "measurement", 60,
           "https://docs.openaq.org/about/about", "open",
           "Credit OpenAQ and the originating data provider; data licenses vary per provider (mostly CC BY 4.0).",
           ("/v3/locations/{location}/sensors",), (_day(48, kind="credential"), _unknown("credential")),
-          key=True, secret="header"),
+          key=True, secret="header"),  # noqa: S106  # label/URL/enum value, not a credential
     _spec("nasa_firms", "NASA FIRMS active fires (VIIRS, 24h)", "hazards", ("firms.modaps.eosdis.nasa.gov",), "event", 360,
           "https://www.earthdata.nasa.gov/engage/open-data-services-software-policies", "open",
           "Credit NASA FIRMS (LANCE/EOSDIS); hotspots are detections, not confirmed fires.",
           ("/api/country/csv/{MAP_KEY}/VIIRS_SNPP_NRT/{country}/1",), (_day(16, kind="credential"), _unknown("credential")),
-          key=True, secret="path"),
+          key=True, secret="path"),  # noqa: S106  # label/URL/enum value, not a credential
 )
 
 # The built-in expansion (RSS, JSON, bespoke and keyed presets) was checked later than the original 21 presets;
@@ -583,7 +586,7 @@ FREE_PROVIDER_SPECS: tuple[FreeProviderSpec, ...] = tuple(
 )
 
 _BY_ID = {spec.id: spec for spec in FREE_PROVIDER_SPECS}
-assert len(_BY_ID) == len(FREE_PROVIDER_SPECS)  # import-time catalog invariant
+assert len(_BY_ID) == len(FREE_PROVIDER_SPECS)  # noqa: S101  # import-time catalog invariant (not narrowing)
 
 
 def get_provider_spec(provider_id: str | None) -> FreeProviderSpec | None:
@@ -714,7 +717,7 @@ def evaluate_terms(
 # Presets the owner can switch on with one toggle: fixed endpoint (no owner scope), no API key, and an
 # adapter exists. Derived (not listed) so a new fixed-scope spec is exposed automatically. backends has no
 # connector imports, so this module-level import is cycle-safe.
-from modules.connectors.backends import FIXED_SCOPE_PROVIDERS
+from modules.connectors.backends import FIXED_SCOPE_PROVIDERS  # noqa: E402
 
 BUILTIN_PROVIDERS: frozenset[str] = frozenset(
     spec.id for spec in FREE_PROVIDER_SPECS
@@ -726,7 +729,8 @@ BUILTIN_PROVIDERS: frozenset[str] = frozenset(
 # presets (measurement snapshots are always fresh) plus the owner-scoped Google News query source.
 # Measurement providers (cisa_kev, usgs, ...) are excluded even when tagged "event": their documents are
 # snapshots that never dedup by seen key, so a cursor would only regress or stall.
-from modules.knowledge.documents.schemas import MEASUREMENT_PROVIDER_IDS
+# Late import: avoids a circular import with knowledge schemas.
+from modules.knowledge.documents.schemas import MEASUREMENT_PROVIDER_IDS  # noqa: E402
 
 INCREMENTAL_PROVIDERS: frozenset[str] = frozenset(
     spec.id for spec in FREE_PROVIDER_SPECS

@@ -18,6 +18,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 import core.auth.models  # noqa: F401  # registers the owner table for foreign keys
+from core.errors import DomainError
 from core.worker_cursors import STATE_KEY
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import InternalJobScope
@@ -104,7 +105,7 @@ class Env:
         async with self.factory() as session:
             try:
                 await provisioning.require_n8n_backend(session, self.source_id)
-            except HTTPException as exc:
+            except (HTTPException, DomainError) as exc:
                 return exc.status_code
             finally:
                 await session.rollback()

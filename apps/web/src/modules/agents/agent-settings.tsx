@@ -6,11 +6,12 @@ import { useFormatter, useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
-import { apiRequest, csrfHeaders } from '@/core/api';
+import { apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { AgentList } from './agent-list';
 import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns, updateAgentProfile, type AgentProfile, type AgentRun } from './api';
 import { AgentRunDetail } from './run-detail';
+import { useResetOnChange } from '@/modules/shared';
 
 interface SourceItem { id: string; name: string; status: string }
 interface SourcePage { items: SourceItem[]; next_cursor: string | null }
@@ -24,93 +25,59 @@ const runStatusKeys: Record<string, 'agentRunQueued' | 'agentRunRunning' | 'agen
   succeeded: 'agentRunSucceeded', failed: 'agentRunFailed', cancelled: 'agentRunCancelled',
 };
 
+/** Maps server-reported unavailability reasons to their message keys. */
+const reasonKeys: Record<string, string> = {
+  bounded_supervisor_handoff_unavailable: 'agentSupervisorHandoffUnavailable',
+  phase_8_personal_tools_unavailable: 'agentPersonalToolsUnavailable',
+  project_owner_tools_unavailable: 'agentProjectToolsUnavailable',
+  news_owner_tools_unavailable: 'agentNewsToolsUnavailable',
+  phase_8_planning_tools_unavailable: 'agentPlanningToolsUnavailable',
+  phase_10_automation_unavailable: 'agentAutomationGate',
+  bounded_browser_unavailable: 'agentBrowserUnavailable',
+  model_role_unconfigured: 'agentModelUnavailable',
+  model_tool_capability_unverified: 'agentModelToolUnverified',
+  registered_read_tools_unavailable: 'agentRegisteredToolsUnavailable',
+};
+
 /** Manage owner-authored profiles, exact current tools/source grants, and a bounded recent run window. */
 export function AgentSettingsWorkspace() {
-  const t = useTranslations('aiSettings');
-  const format = useFormatter();
-  const { csrfToken } = useWorkspaceSession();
-  const client = useQueryClient();
-  const profiles = useQuery({ queryKey: ['agent-profiles'], queryFn: getAgentProfiles });
-  const sources = useInfiniteQuery({
-    queryKey: ['agent-profile-sources'],
-    initialPageParam: null as string | null,
-    queryFn: ({ pageParam }) => {
-      const query = new URLSearchParams({ limit: '100' });
-      if (pageParam) query.set('cursor', pageParam);
-      return apiRequest<SourcePage>(`/api/v1/sources?${query.toString()}`);
-    },
-    getNextPageParam: (page) => page.next_cursor ?? undefined,
-  });
-  const [selectedId, setSelectedId] = React.useState('knowledge');
-  const selected = profiles.data?.find((item) => item.id === selectedId);
-  const [draft, setDraft] = React.useState<AgentProfile | null>(null);
-  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
-  const runs = useQuery({
-    queryKey: ['agent-runs', selectedId],
-    queryFn: () => listAgentRuns({ profile_id: selectedId, limit: 25 }),
-    enabled: Boolean(selectedId),
-    refetchInterval: (query) => query.state.data?.items.some((run) => ['queued', 'running', 'waiting_approval'].includes(run.status)) ? 3000 : false,
-  });
-  const runDetail = useQuery({
-    queryKey: ['agent-run', selectedRunId],
-    queryFn: () => getAgentRun(selectedRunId!),
-    enabled: Boolean(selectedRunId),
-    refetchInterval: (query) => query.state.data && ['queued', 'running', 'waiting_approval'].includes(query.state.data.status) ? 3000 : false,
-  });
-  React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
-    setDraft(selected ? { ...selected, allowed_tools: [...selected.allowed_tools], source_ids: [...selected.source_ids] } : null);
-    setSelectedRunId(null);
-  }, [selected]);
-  const save = useMutation({
-    mutationFn: (value: AgentProfile) => updateAgentProfile(value, csrfToken),
-    onSuccess: async (value) => {
-      client.setQueryData<AgentProfile[]>(['agent-profiles'], (items) => items?.map((item) => item.id === value.id ? value : item));
-      setDraft(value);
-      await client.invalidateQueries({ queryKey: ['agent-runs', value.id] });
-    },
-  });
-  const cancel = useMutation({
-    mutationFn: (run: AgentRun) => cancelAgentRun(run.id, csrfToken),
-    onSuccess: (value) => {
-      client.setQueryData(['agent-run', value.id], value);
-      void client.invalidateQueries({ queryKey: ['agent-runs', value.agent_id] });
-    },
-  });
+  const s0 = useAgentSettingsState();
+  const { t, profiles, sources, selectedId, setSelectedId, draft } = s0;
 
   if (profiles.isLoading || sources.isLoading) return <p className="text-muted-foreground" role="status">{t('agentLoading')}</p>;
   if (profiles.isError || sources.isError || !draft) return <p className="error" role="alert">{t('agentLoadFailed')}</p>;
-  const listedSources = (sources.data?.pages ?? []).flatMap((page) => page.items);
-  const sourceOptions = new Map(listedSources.map((item) => [item.id, item]));
-  for (const id of draft.source_ids) {
-    if (!sourceOptions.has(id)) sourceOptions.set(id, { id, name: id, status: 'selected' });
-  }
-  const availableSources = [...sourceOptions.values()].filter((item) =>
-    item.status === 'active' || draft.source_ids.includes(item.id),
-  );
-  const reasonKeys: Record<string, string> = {
-    bounded_supervisor_handoff_unavailable: 'agentSupervisorHandoffUnavailable',
-    phase_8_personal_tools_unavailable: 'agentPersonalToolsUnavailable',
-    project_owner_tools_unavailable: 'agentProjectToolsUnavailable',
-    news_owner_tools_unavailable: 'agentNewsToolsUnavailable',
-    phase_8_planning_tools_unavailable: 'agentPlanningToolsUnavailable',
-    phase_10_automation_unavailable: 'agentAutomationGate',
-    bounded_browser_unavailable: 'agentBrowserUnavailable',
-    model_role_unconfigured: 'agentModelUnavailable',
-    model_tool_capability_unverified: 'agentModelToolUnverified',
-    registered_read_tools_unavailable: 'agentRegisteredToolsUnavailable',
-  };
-  const selectedTools = new Set(draft.allowed_tools.map((item) => item.name));
-  const selectedSources = new Set(draft.source_ids);
+  const s1 = buildAgentSettingsView(s0, draft);
 
+  const vm: AgentSettingsWorkspaceVm = s1;
   return (
     <section className="space-y-5 border-t border-border pt-6">
+<AgentSettingsHeader vm={vm} />
+      <AgentList profiles={profiles.data ?? []} selectedId={selectedId} onSelect={setSelectedId} />
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,.8fr)]">
+<AgentProfileForm vm={vm} />
+<AgentRunHistory vm={vm} />
+      </div>
+    </section>
+  );
+}
+
+type AgentSettingsWorkspaceVm = ReturnType<typeof buildAgentSettingsView>;
+
+/** Section heading and description. */
+function AgentSettingsHeader({ vm }: { vm: AgentSettingsWorkspaceVm }) {
+  const { t } = vm;
+  return (
       <header className="space-y-1">
         <h2 className="text-lg font-semibold text-foreground">{t('agentsTitle')}</h2>
         <p className="text-sm text-muted-foreground">{t('agentsDescription')}</p>
       </header>
-      <AgentList profiles={profiles.data ?? []} selectedId={selectedId} onSelect={setSelectedId} />
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,.8fr)]">
+  );
+}
+
+/** Profile editor: enabled flag, prompt, tool and source grants, status and actions. */
+function AgentProfileForm({ vm }: { vm: AgentSettingsWorkspaceVm }) {
+  const { t, sources, selected, save, draft, setDraft, availableSources, selectedTools, selectedSources } = vm;
+  return (
         <form className="space-y-4 rounded-lg border border-border bg-surface p-4" onSubmit={(event) => { event.preventDefault(); if (draft) save.mutate(draft); }}>
           <h3 className="font-semibold text-foreground">{t(profileTitleKeys[draft.id] ?? 'agentProfileKnowledge')}</h3>
           {draft.unavailable_reasons.map((reason) => <p key={reason} className="text-sm text-muted-foreground">{t((reasonKeys[reason] ?? 'agentUnavailableReason') as 'agentUnavailableReason', { reason })}</p>)}
@@ -158,6 +125,13 @@ export function AgentSettingsWorkspace() {
             <Button type="button" variant="outline" disabled={save.isPending} onClick={() => setDraft(selected ? { ...selected, allowed_tools: [...selected.allowed_tools], source_ids: [...selected.source_ids] } : null)}>{t('agentCancel')}</Button>
           </div>
         </form>
+  );
+}
+
+/** Bounded recent run list with the selected run detail. */
+function AgentRunHistory({ vm }: { vm: AgentSettingsWorkspaceVm }) {
+  const { t, format, runs, runDetail, cancel, selectedRunId, setSelectedRunId } = vm;
+  return (
         <aside className="space-y-3 rounded-lg border border-border bg-surface p-4">
           <h3 className="font-semibold text-foreground">{t('agentHistory')}</h3>
           <p className="text-xs text-muted-foreground">{t('agentHistoryBound')}</p>
@@ -178,7 +152,78 @@ export function AgentSettingsWorkspace() {
           </div>
           {runDetail.data && <AgentRunDetail run={runDetail.data} onCancel={() => cancel.mutate(runDetail.data!)} cancelling={cancel.isPending} />}
         </aside>
-      </div>
-    </section>
   );
+}
+
+/** Loads profiles, sources, runs and the selected run, keeps an editable draft of the selected profile and declares the save and cancel mutations. */
+function useAgentSettingsState() {
+  const t = useTranslations('aiSettings');
+  const format = useFormatter();
+  const { csrfToken } = useWorkspaceSession();
+  const client = useQueryClient();
+  const profiles = useQuery({ queryKey: ['agent-profiles'], queryFn: getAgentProfiles });
+  const sources = useInfiniteQuery({
+    queryKey: ['agent-profile-sources'],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => {
+      const query = new URLSearchParams({ limit: '100' });
+      if (pageParam) query.set('cursor', pageParam);
+      return apiRequest<SourcePage>(`/api/v1/sources?${query.toString()}`);
+    },
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
+  });
+  const [selectedId, setSelectedId] = React.useState('knowledge');
+  const selected = profiles.data?.find((item) => item.id === selectedId);
+  const [draft, setDraft] = React.useState<AgentProfile | null>(null);
+  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null);
+  const runs = useQuery({
+    queryKey: ['agent-runs', selectedId],
+    queryFn: () => listAgentRuns({ profile_id: selectedId, limit: 25 }),
+    enabled: Boolean(selectedId),
+    refetchInterval: (query) => query.state.data?.items.some((run) => ['queued', 'running', 'waiting_approval'].includes(run.status)) ? 3000 : false,
+  });
+  const runDetail = useQuery({
+    queryKey: ['agent-run', selectedRunId],
+    queryFn: () => getAgentRun(selectedRunId!),
+    enabled: Boolean(selectedRunId),
+    refetchInterval: (query) => query.state.data && ['queued', 'running', 'waiting_approval'].includes(query.state.data.status) ? 3000 : false,
+  });
+  useResetOnChange([selected], () => {
+    setDraft(selected ? { ...selected, allowed_tools: [...selected.allowed_tools], source_ids: [...selected.source_ids] } : null);
+    setSelectedRunId(null);
+  });
+  const save = useMutation({
+    mutationFn: (value: AgentProfile) => updateAgentProfile(value, csrfToken),
+    onSuccess: async (value) => {
+      client.setQueryData<AgentProfile[]>(['agent-profiles'], (items) => items?.map((item) => item.id === value.id ? value : item));
+      setDraft(value);
+      await client.invalidateQueries({ queryKey: ['agent-runs', value.id] });
+    },
+  });
+  const cancel = useMutation({
+    mutationFn: (run: AgentRun) => cancelAgentRun(run.id, csrfToken),
+    onSuccess: (value) => {
+      client.setQueryData(['agent-run', value.id], value);
+      void client.invalidateQueries({ queryKey: ['agent-runs', value.agent_id] });
+    },
+  });
+
+  return { t, format, client, profiles, sources, selected, runs, runDetail, save, cancel, selectedId, setSelectedId, draft, setDraft, selectedRunId, setSelectedRunId, csrfToken };
+}
+
+/** Derives the selectable sources (including already-granted ones) and the selected tool and source sets from the draft. */
+function buildAgentSettingsView(p: ReturnType<typeof useAgentSettingsState>, draft: NonNullable<ReturnType<typeof useAgentSettingsState>['draft']>) {
+  const { sources } = p;
+  const listedSources = (sources.data?.pages ?? []).flatMap((page) => page.items);
+  const sourceOptions = new Map(listedSources.map((item) => [item.id, item]));
+  for (const id of draft.source_ids) {
+    if (!sourceOptions.has(id)) sourceOptions.set(id, { id, name: id, status: 'selected' });
+  }
+  const availableSources = [...sourceOptions.values()].filter((item) =>
+    item.status === 'active' || draft.source_ids.includes(item.id),
+  );
+  const selectedTools = new Set(draft.allowed_tools.map((item) => item.name));
+  const selectedSources = new Set(draft.source_ids);
+
+  return { ...p, draft, listedSources, sourceOptions, availableSources, selectedTools, selectedSources };
 }

@@ -1,6 +1,5 @@
 """Owner-scoped observation revision writes, selection and bounded reads."""
 
-import base64
 import hashlib
 import json
 from collections.abc import Sequence
@@ -28,9 +27,18 @@ from sqlalchemy import cast as sql_cast
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from core.errors import NotFoundError
 from core.ids import uuid7
+from core.pagination import (
+    b64url_decode,
+    b64url_encode,
+    decode_fingerprinted_cursor,
+    encode_fingerprinted_cursor,
+)
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
+from core.workspaces.admission import actor_id as _actor
+from core.workspaces.admission import admit_scope
+from core.workspaces.schemas import AccessFence, Scope
 from modules.connectors import public as connectors
 from modules.knowledge.documents import public as documents
 from modules.knowledge.observations.models import Observation
@@ -47,28 +55,25 @@ from modules.knowledge.observations.schemas import (
 from modules.sources import public as sources
 from modules.sources.schemas import SourceExportFence, SourceFence
 
+# Explicit re-exports consumed by other modules (mypy strict forbids implicit re-export).
+__all__ = [
+    "ObservationQuery",
+    "WorldMeasurement",
+]
+
 OBSERVATION_EXPORT_PAGE_MAX_BYTES = 16_777_216
-
-
-def _actor(scope: Scope) -> int:
-    """Return the actor bound to a validated workspace or internal-job scope."""
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
 
 
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, lock: bool = False,
 ) -> AccessFence:
-    """Admit owner-only observation access before domain reads or writes; W3 owns member grants."""
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
-    if type(multi_workspace_enabled) is not bool:
-        raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    if lock:
-        return await workspaces.lock_access_fence(
-            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        )
-    return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    """Admit owner-only observation access before domain reads or writes; W3 owns member grants.
+
+    Delegates to the canonical ``admit_scope`` (owner-only, no scope-type or admin-lock restriction, flag
+    must be a real ``bool``); ``lock=True`` locks the access fence. No commit.
+    """
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock,
     )
 
 
@@ -84,7 +89,7 @@ def _observation_export_cursor(
              "configuration_revision": access_fence.configuration_revision,
              "snapshot": snapshot_at.astimezone(UTC).isoformat(),
              "at": accepted_at.astimezone(UTC).isoformat(), "id": str(row_id)}
-    return base64.urlsafe_b64encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).decode().rstrip("=")
+    return b64url_encode(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
 
 
 def _decode_observation_export_cursor(
@@ -94,7 +99,7 @@ def _decode_observation_export_cursor(
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        value = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+        value = json.loads(b64url_decode(cursor))
         if not isinstance(value, dict) or set(value) != {
             "v", "owner", "workspace", "kind", "membership_revision", "configuration_revision",
             "snapshot", "at", "id",
@@ -418,7 +423,7 @@ async def _observation_source_proof(
     mutation; callers cannot substitute a newer generation or membership.
     """
     if not isinstance(access_fence, AccessFence) or not isinstance(source_fence, SourceFence):
-        raise RuntimeError("observation_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
+        raise RuntimeError("observation_preparation_fence_required")
     if (source_fence.id != source_id or source_fence.workspace_id != scope.workspace_id
             or access_fence.workspace_id != scope.workspace_id or source_fence.generation != source_generation
             or source_fence.status != "active"):
@@ -510,7 +515,7 @@ async def prepare_ingestion_observation_keys(
         _validate_observation_key(key[0])
     keys = tuple(dict.fromkeys(keys))
     if not isinstance(source_fence, SourceFence):
-        raise RuntimeError("observation_preparation_fence_required")  # noqa: TRY004 - fence contract raises RuntimeError by design
+        raise RuntimeError("observation_preparation_fence_required")
     if not await _observation_source_proof(
         session, source_id, source_fence.generation, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence, source_fence=source_fence,
@@ -721,21 +726,12 @@ def _cursor_fingerprint(
 
 
 def _decode_cursor(cursor: str, fingerprint: str) -> tuple[datetime, UUID]:
-    """Decode one bounded cursor and reject malformed or cross-filter reuse."""
-    if len(cursor) > 2048:
-        raise HTTPException(status_code=422, detail="Observation cursor is invalid")
-    try:
-        raw = base64.b64decode(cursor.encode() + b"=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        identity, stamp, row_id = json.loads(raw)
-        if identity != fingerprint:
-            raise ValueError
-        parsed = datetime.fromisoformat(stamp)
-        parsed_id = UUID(row_id)
-        if parsed.tzinfo is None or parsed.utcoffset() is None or str(parsed_id) != row_id:
-            raise ValueError
-        return parsed.astimezone(UTC), parsed_id
-    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise HTTPException(status_code=422, detail="Observation cursor is invalid") from exc
+    """Decode one bounded cursor and reject malformed or cross-filter reuse.
+
+    Delegates to ``core.pagination.decode_fingerprinted_cursor`` (wire-compatible with cursors issued by
+    ``list_observations``); every failure is HTTP 422 "Observation cursor is invalid".
+    """
+    return decode_fingerprinted_cursor(cursor, fingerprint, detail="Observation cursor is invalid")
 
 
 def _window_statement(
@@ -776,18 +772,14 @@ def _window_statement(
     return statement.where(not_(superseded))
 
 
-async def list_observations(
-    session: AsyncSession, query: ObservationQuery, cursor: str | None = None,
-    *, scope: Scope, multi_workspace_enabled: bool,
-) -> tuple[tuple[Observation, ...], str | None, bool, dict[UUID, int]]:
-    """Read bounded evidence points after owner admission and workspace/source filters.
+async def _current_source_scopes(
+    session: AsyncSession, query: ObservationQuery, *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[tuple[ObservationScopeRead, ...], dict[UUID, object]]:
+    """Resolve each requested source (sorted by id) to its current provider scope snapshot.
 
-    Default: current revisions backed by the current document version. With ``query.history`` also
-    superseded revisions (deduped per series point by ``_window_statement``) backed by any version of
-    the same document; scope, source generation, provider identity and provenance fences are unchanged.
-    Returns (rows, next cursor, scan truncated, document version number per row).
+    Returns the scope reads plus the raw snapshots keyed by source id. Raises 404 "One or more sources are
+    unavailable" if any source has no current snapshot (inactive or stale generation counts as ``-1``).
     """
-    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     scopes: list[ObservationScopeRead] = []
     current_scopes: dict[UUID, object] = {}
     for source_id in sorted(query.source_ids, key=str):
@@ -800,19 +792,24 @@ async def list_observations(
             scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         if snapshot is None:
-            raise HTTPException(status_code=404, detail="One or more sources are unavailable")
+            raise NotFoundError("One or more sources are unavailable")
         current_scopes[source_id] = snapshot
         scopes.append(ObservationScopeRead(
             source_id=snapshot.source_id, source_generation=snapshot.source_generation,
             provider=snapshot.provider_id, discriminator=snapshot.discriminator,
         ))
+    return tuple(scopes), current_scopes
+
+
+def _filtered_window(query: ObservationQuery, workspace_id: UUID, scopes: tuple[ObservationScopeRead, ...]) -> Any:
+    """Build the observation window select with the query's source-scope, geo, metric, symbol and region filters."""
     source_scope_filters = tuple(and_(
         Observation.source_id == item.source_id,
         Observation.source_generation == item.source_generation,
         Observation.provider == item.provider,
         Observation.provider_scope_discriminator == item.discriminator,
     ) for item in scopes)
-    statement = _window_statement(query, scope.workspace_id, source_scope_filters)
+    statement = _window_statement(query, workspace_id, source_scope_filters)
     if query.geospatial_only:
         # Do not infer point coordinates from a location label; only provider-recorded points map.
         statement = statement.where(
@@ -824,17 +821,31 @@ async def list_observations(
         statement = statement.where(Observation.symbol.in_(query.symbols))
     if query.regions:
         statement = statement.where(Observation.region.in_(query.regions))
-    scopes_tuple = tuple(scopes)
-    fingerprint = _cursor_fingerprint(query, scopes_tuple, access_fence=access_fence)
-    if cursor:
-        stamp, row_id = _decode_cursor(cursor, fingerprint)
-        statement = statement.where(tuple_(Observation.observed_at, Observation.id) < tuple_(stamp, row_id))
-    page: list[Observation] = []
+    return statement
+
+
+@dataclass
+class _ScanResult:
+    """Outcome of the bounded evidence scan: kept rows, their version numbers and truncation state."""
+
+    page: list[Observation]
+    version_numbers: dict[UUID, int]
+    last_scanned: Observation | None
+    truncated: bool
+
+
+async def _scan_evidence_page(
+    session: AsyncSession, statement: Any, query: ObservationQuery, current_scopes: dict[UUID, object],
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> _ScanResult:
+    """Scan newest-first batches (<=256 rows, <=2,048 scanned) keeping rows whose evidence version is allowed.
+
+    Stops once ``query.limit + 1`` rows are kept (the extra row proves another page), the window is exhausted,
+    or the scan ceiling is reached (``truncated``). Each batch advances the keyset bound past its last row.
+    """
+    result = _ScanResult(page=[], version_numbers={}, last_scanned=None, truncated=False)
     scanned = 0
-    last_scanned: Observation | None = None
-    page_version_numbers: dict[UUID, int] = {}
-    scan_truncated = False
-    while scanned < 2_048 and len(page) <= query.limit:
+    while scanned < 2_048 and len(result.page) <= query.limit:
         batch = tuple((await session.scalars(
             statement.order_by(Observation.observed_at.desc(), Observation.id.desc())
             .limit(min(256, 2_048 - scanned))
@@ -853,30 +864,52 @@ async def list_observations(
         )
         for row in batch:
             if row.id in allowed:
-                page.append(row)
-                page_version_numbers[row.id] = allowed[row.id]
-                if len(page) > query.limit:
+                result.page.append(row)
+                result.version_numbers[row.id] = allowed[row.id]
+                if len(result.page) > query.limit:
                     break
         scanned += len(batch)
-        last_scanned = batch[-1]
-        statement = statement.where(tuple_(Observation.observed_at, Observation.id) < tuple_(last_scanned.observed_at, last_scanned.id))
+        result.last_scanned = batch[-1]
+        statement = statement.where(tuple_(Observation.observed_at, Observation.id) < tuple_(result.last_scanned.observed_at, result.last_scanned.id))
         if len(batch) < min(256, 2_048 - (scanned - len(batch))):
             break
         if scanned >= 2_048:
-            scan_truncated = True
-    has_more = len(page) > query.limit
-    page = page[:query.limit]
-    page_version_numbers = {row.id: page_version_numbers[row.id] for row in page}
+            result.truncated = True
+    return result
+
+
+async def list_observations(
+    session: AsyncSession, query: ObservationQuery, cursor: str | None = None,
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> tuple[tuple[Observation, ...], str | None, bool, dict[UUID, int]]:
+    """Read bounded evidence points after owner admission and workspace/source filters.
+
+    Default: current revisions backed by the current document version. With ``query.history`` also
+    superseded revisions (deduped per series point by ``_window_statement``) backed by any version of
+    the same document; scope, source generation, provider identity and provenance fences are unchanged.
+    Returns (rows, next cursor, scan truncated, document version number per row).
+    """
+    access_fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    scopes, current_scopes = await _current_source_scopes(
+        session, query, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    statement = _filtered_window(query, scope.workspace_id, scopes)
+    fingerprint = _cursor_fingerprint(query, scopes, access_fence=access_fence)
+    if cursor:
+        stamp, row_id = _decode_cursor(cursor, fingerprint)
+        statement = statement.where(tuple_(Observation.observed_at, Observation.id) < tuple_(stamp, row_id))
+    scan = await _scan_evidence_page(
+        session, statement, query, current_scopes, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    has_more = len(scan.page) > query.limit
+    page = scan.page[:query.limit]
+    page_version_numbers = {row.id: scan.version_numbers[row.id] for row in page}
     next_cursor = None
     if has_more and page:
-        last = page[-1]
-        payload = json.dumps([fingerprint, last.observed_at.astimezone(UTC).isoformat(), str(last.id)], separators=(",", ":")).encode()
-        next_cursor = base64.urlsafe_b64encode(payload).decode().rstrip("=")
-    elif scan_truncated and last_scanned is not None:
-        last = last_scanned
-        payload = json.dumps([fingerprint, last.observed_at.astimezone(UTC).isoformat(), str(last.id)], separators=(",", ":")).encode()
-        next_cursor = base64.urlsafe_b64encode(payload).decode().rstrip("=")
-    return tuple(page), next_cursor, scan_truncated, page_version_numbers
+        next_cursor = encode_fingerprinted_cursor(fingerprint, page[-1].observed_at, page[-1].id)
+    elif scan.truncated and scan.last_scanned is not None:
+        next_cursor = encode_fingerprinted_cursor(fingerprint, scan.last_scanned.observed_at, scan.last_scanned.id)
+    return tuple(page), next_cursor, scan.truncated, page_version_numbers
 
 
 async def list_geospatial_observations(
@@ -946,6 +979,12 @@ def _require_cleanup_fences(
     actual: AccessFence, *, closure: ObservationCleanupClosure, scope: Scope,
     access_fence: AccessFence, source_fence: SourceFence,
 ) -> None:
+    """Require the live access fence and Source to still match those held by a cleanup transaction.
+
+    Raises HTTP 409 "Cleanup authority changed" (kept as ``HTTPException``: purge callers in sources/documents/
+    ingestion branch on ``HTTPException`` status codes) when the fence differs or the Source id/workspace does not
+    match the closure. Pure comparison; no I/O.
+    """
     if (
         actual != access_fence or source_fence.id != closure.source_id
         or source_fence.workspace_id != scope.workspace_id
@@ -994,6 +1033,11 @@ async def _held_observation_ids(
     session: AsyncSession, closure: ObservationCleanupClosure, *, scope: Scope,
     multi_workspace_enabled: bool, access_fence: AccessFence, source_fence: SourceFence,
 ) -> tuple[UUID, ...]:
+    """Re-check the cleanup fences, re-discover the closure, and return its observation ids unchanged.
+
+    Raises HTTP 409 when the access/source fences changed and ``RuntimeError("cleanup closure changed")`` when the
+    re-discovered closure overflows or differs, so the caller only touches rows locked in the original closure.
+    """
     _require_cleanup_fences(
         await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled),
         closure=closure, scope=scope, access_fence=access_fence, source_fence=source_fence,

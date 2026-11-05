@@ -161,7 +161,7 @@ def test_html_200_is_not_json_and_unknown_provider():
 
 def test_naive_collected_at_rejected():
     with pytest.raises(ValueError, match="timezone-aware"):
-        map_frankfurter(jfixture("frankfurter_usd_vnd.json"), datetime(2026, 10, 8))  # noqa: DTZ001
+        map_frankfurter(jfixture("frankfurter_usd_vnd.json"), datetime(2026, 10, 8))
 
 
 def test_frankfurter_multi_quote_live_shape():

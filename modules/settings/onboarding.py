@@ -2,12 +2,12 @@
 
 from datetime import UTC, datetime
 
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.schemas import AccountSessionRef
+from core.errors import ConflictError
 from modules.settings.models import OnboardingStateRecord
 from modules.settings.onboarding_schemas import OnboardingStateRead, OnboardingStateUpdate
 from modules.settings.public import require_preferences_account
@@ -58,22 +58,22 @@ async def save_onboarding_state(
     if row is None:
         raise RuntimeError("Onboarding state singleton could not be initialized")
     if row.configuration_revision != update.expected_revision:
-        raise HTTPException(status_code=409, detail="Onboarding progress changed; reload before saving")
+        raise ConflictError(detail="Onboarding progress changed; reload before saving")
     if row.completed_at is not None and update.current_step != "complete":
-        raise HTTPException(status_code=409, detail="Completed onboarding cannot be reopened")
+        raise ConflictError(detail="Completed onboarding cannot be reopened")
     order = ("ai_privacy", "capability", "sources", "sample_or_import", "indexing", "complete")
     if order.index(update.current_step) > order.index(row.current_step) + 1:
-        raise HTTPException(status_code=409, detail="Complete onboarding steps in order")
+        raise ConflictError(detail="Complete onboarding steps in order")
     if update.data_choice is not None and update.current_step == "sample_or_import":
         row.data_choice = update.data_choice
     elif update.data_choice is not None and update.data_choice != row.data_choice:
-        raise HTTPException(status_code=409, detail="Choose sample data or personal import on its onboarding step")
+        raise ConflictError(detail="Choose sample data or personal import on its onboarding step")
     if update.current_step == "indexing" and row.current_step == "sample_or_import" and row.data_choice is None:
-        raise HTTPException(status_code=409, detail="Choose sample data or personal import before indexing")
+        raise ConflictError(detail="Choose sample data or personal import before indexing")
     if update.current_step == "complete" and (
         row.current_step != "indexing" or row.data_choice is None
     ):
-        raise HTTPException(status_code=409, detail="Complete the earlier onboarding steps before finishing")
+        raise ConflictError(detail="Complete the earlier onboarding steps before finishing")
     row.current_step = update.current_step
     if update.current_step == "complete" and row.completed_at is None:
         row.completed_at = datetime.now(UTC)

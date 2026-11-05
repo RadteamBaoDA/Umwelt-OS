@@ -328,7 +328,7 @@ async def invitation_accept(
                 token_hash=auth.token_hash, csrf_hash=_hash(csrf_token or ""),
                 multi_workspace_enabled=settings.multi_workspace_enabled,
             )
-            assert actor is not None
+            assert actor is not None  # noqa: S101  # mypy narrowing invariant
             if actor.email != target.email:
                 raise HTTPException(status_code=403, detail="Invitation belongs to another account")
         else:

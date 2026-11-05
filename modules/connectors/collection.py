@@ -33,6 +33,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import DomainError, error_status, is_http_error
+from core.heavy_work import to_thread_joined
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.connectors import provider_options, provider_terms, provisioning, quota, scheduler
@@ -74,6 +76,8 @@ PURE_PROVIDERS = (  # coingecko needs a key slot
 )
 KEYED_PROVIDERS = {provider: row.placement for provider, row in KEYED.items()}  # provider -> stored credential header_name (header | query:<p> | path:<t>)
 SIMPLE_NATIVE = frozenset({"youtube", "arxiv", "huggingface", "bluesky", "reddit", "mastodon", "x", "github_releases", "alpha_vantage", "open_meteo", "google_mail", "google_calendar", "google_drive", "health", "home_assistant", "notion", "slack"})
+# Both HTTP-shaped error families a collaborator (Sources, terms, access admission) may raise.
+_HTTP_ERRORS = (HTTPException, DomainError)
 HEADER_AUTH_PROVIDERS = frozenset({"health", "home_assistant"})
 REVISIONED_REST_PROVIDERS = frozenset({"notion", "slack", "mastodon", "x"})
 REFUSED_HERE: frozenset[str] = frozenset()  # providers that must never run here (GitHub/Telegram are native now)
@@ -93,6 +97,7 @@ class CollectionFenceLost(Exception):  # control-flow signal
     """This attempt may no longer send or publish. ``cancel_as`` cancels the request; None leaves recovery to C2."""
 
     def __init__(self, reason: str, cancel_as: str | None = None) -> None:
+        """Store the machine reason and the optional cancellation outcome name."""
         super().__init__(reason)
         self.reason, self.cancel_as = reason, cancel_as
 
@@ -154,6 +159,7 @@ class SendGate:
         self, factory: async_sessionmaker[AsyncSession], attempt: Attempt, *, settings: Settings,
         deadline: float, quota_provider: str | None, fingerprint: Callable[[], Awaitable[str | None]] | None = None,
     ) -> None:
+        """Bind the per-attempt gate to its session factory, attempt, deadline, quota provider and fingerprint callback."""
         self._factory, self._a, self._settings = factory, attempt, settings
         self._deadline, self._quota_provider, self._fingerprint = deadline, quota_provider, fingerprint
         self.sends = 0
@@ -177,6 +183,7 @@ class SendGate:
     def bind_credential(self, fingerprint: str) -> None:
         """Key the shared credential budget on a deployment-keyed fingerprint (never the key)."""
         async def bound() -> str:
+            """Return the already-computed fingerprint."""
             return fingerprint
 
         self._fingerprint = bound
@@ -205,7 +212,7 @@ class SendGate:
                 if source is None:
                     raise CollectionFenceLost("source_inactive", "source_inactive")
                 revision = await provider_terms.require_terms_eligible(session, source)
-            except HTTPException as exc:
+            except _HTTP_ERRORS as exc:
                 raise TermsIneligible from exc
             finally:
                 await session.rollback()
@@ -230,6 +237,7 @@ class SendGate:
             await session.rollback()
 
     async def _check_world_credential(self, session: AsyncSession, source: ConnectorSource) -> None:
+        """Re-lock the connector and revalidate the captured world-credential operation; raises fence loss when it changed."""
         a = self._a
         try:
             source_fence, row, _ = await provisioning.lock_connector(
@@ -246,6 +254,7 @@ class SendGate:
             await session.rollback()
 
     async def _debit(self) -> None:
+        """Debit one physical send from the provider quota (no-op without a quota provider) and count it."""
         if self._quota_provider is None:
             return
         a = self._a
@@ -264,6 +273,7 @@ class SendGate:
 
 
 def _alpha_fingerprint(run_state: dict[str, Any]) -> Callable[[], Awaitable[str | None]]:
+    """Build the cached, deployment-keyed Alpha Vantage key fingerprint callback shared by the gate and quota debit."""
     async def fingerprint() -> str | None:
         """Deployment-keyed fingerprint of the Alpha key so one key shares one budget across workspaces."""
         from modules.connectors.providers.world_data import get_alpha_vantage_key
@@ -309,12 +319,12 @@ async def _load_attempt(
                 access_fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi)
                 row = await session.get(ConnectorProvisioning, request.source_id) if source is not None else None
                 break
-            except HTTPException as exc:
+            except _HTTP_ERRORS as exc:
                 source = None
-                if exc.status_code == 409 and resolve == 1:
+                if error_status(exc) == 409 and resolve == 1:
                     await session.rollback()
                     continue
-                denied = scheduler.denial_code(exc)
+                denied = scheduler.denial_code(cast(Any, exc))
                 break
         # Copy every ORM field used below before the rollback: rollback expires the rows and the session
         # closes on exit, so a later attribute read raises DetachedInstanceError (seen as executor_error).
@@ -344,6 +354,7 @@ async def _load_attempt(
 async def _settle(
     factory: async_sessionmaker[AsyncSession], admission: CollectionAdmissionRead, **kwargs: Any,
 ) -> bool:
+    """Settle the admission in its own short session; returns whether the scheduler accepted the settlement."""
     async with factory() as session:
         return await scheduler.settle_admission(session, admission.request_id, admission.admission_token, **kwargs)
 
@@ -378,6 +389,7 @@ async def _record_rate_limit(run: Run, deadline: datetime) -> None:
 # ---------------------------------------------------------------- generic adapters
 
 def _records(raw: list[dict[str, Any]]) -> list[IngestionRecord]:
+    """Validate raw adapter dicts into ``IngestionRecord`` objects stamped with one shared collection time."""
     collected_at = datetime.now(UTC)
     return [IngestionRecord.model_validate({**item, "collected_at": collected_at}) for item in raw]
 
@@ -395,7 +407,7 @@ async def _publish_realtime_snapshot(
         records: Accepted ingestion records committed in this collection batch.
         collected_at: Timestamp of the accepted collection batch.
     """
-    from core.realtime_routes import notify_realtime_wakeup
+    from core.realtime.routes import notify_realtime_wakeup
 
     a = run.attempt
     notify_realtime_wakeup(a.scope.workspace_id)
@@ -499,6 +511,7 @@ def _generic_update(
 
 
 async def _state(run: Run) -> CollectionState:
+    """Read the durable collection state (cursor, coverage) in a read-only session that is rolled back."""
     a = run.attempt
     async with run.factory() as session:
         state = await ingestion.get_collection_state(
@@ -616,12 +629,14 @@ def _with_header(
 ) -> Callable[..., Awaitable[rest.Fetched]]:
     """Wrap a gated send so the owner-entered header rides every same-origin request."""
     async def fetch(url: str, headers: dict[str, str] | None = None, **kwargs: Any) -> rest.Fetched:
+        """Call the wrapped sender with the owner-supplied header merged over the caller's headers."""
         return await send(url, headers={**(headers or {}), header: secret}, **kwargs)
 
     return fetch
 
 
 async def _run_rest(run: Run) -> None:
+    """Collect one generic REST source: gated fetch (optional owner header), checkpoint resume, atomic receipt."""
     from modules.connectors.registry import configuration
 
     a = run.attempt
@@ -662,6 +677,7 @@ async def _run_rss(run: Run) -> None:
     first: dict[str, Any] = {"pending": True}
 
     async def fetch(url: str) -> bytes:
+        """Fetch one feed page, adding conditional headers on the first page and remembering its validators; 304 raises ``_NotModified``."""
         headers = {"Accept": "application/atom+xml, application/rss+xml, application/xml, text/xml"}
         is_first, first["pending"] = first["pending"], False
         if is_first and conditional:
@@ -705,24 +721,39 @@ class _PageText(HTMLParser):
     """Visible text and anchors of one HTML page (stdlib; no optional crawl extra needed)."""
 
     def __init__(self) -> None:
+        """Initialise the visible-text and link accumulators."""
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.links: list[str] = []
         self._skip = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """Track skipped-element depth for script/style/noscript and collect anchor hrefs."""
         if tag in {"script", "style", "noscript"}:
             self._skip += 1
         elif tag == "a":
             self.links.extend(v for k, v in attrs if k == "href" and v)
 
     def handle_endtag(self, tag: str) -> None:
+        """Leave a skipped element when its closing tag arrives."""
         if tag in {"script", "style", "noscript"} and self._skip:
             self._skip -= 1
 
     def handle_data(self, data: str) -> None:
+        """Append non-blank text that is outside skipped elements."""
         if not self._skip and data.strip():
             self.parts.append(data.strip())
+
+
+def _parse_page(html: str) -> tuple[list[str], list[str]]:
+    """Return the visible text parts and anchor hrefs of one HTML page.
+
+    Pure CPU work (stdlib HTMLParser on up to ~10 MB), so callers run it through
+    ``to_thread_joined``; it touches no shared state and raises whatever the parser raises.
+    """
+    page = _PageText()
+    page.feed(html)
+    return page.parts, page.links
 
 
 async def _run_web(run: Run) -> None:
@@ -761,13 +792,13 @@ async def _run_web(run: Run) -> None:
             max_bytes=min(rest.MAX_PAGE_BYTES, rest.MAX_TRANSPORT_BYTES - spent), timeout=config.timeout_seconds)
         body = _require_body(fetched)
         spent += len(body)
-        page = _PageText()
-        page.feed(body.decode("utf-8", errors="replace"))
+        # HTMLParser.feed on a multi-MB page would stall the worker loop (heartbeats, heavy-slot renewal).
+        parts, links = await to_thread_joined(_parse_page, body.decode("utf-8", errors="replace"))
         records.append(normalize({
-            "provider_id": url, "content": "\n".join(page.parts)[:200_000],
+            "provider_id": url, "content": "\n".join(parts)[:200_000],
             "observed_at": datetime.now(UTC).isoformat(), "metadata": {"url": url}}))
         if depth < config.max_depth:
-            for href in page.links:
+            for href in links:
                 target = urldefrag(urljoin(url, href))[0]
                 if target not in visited and len(queue) < 100 and rest._origin(target) == origin:
                     visited.add(target)
@@ -794,6 +825,7 @@ async def _run_mcp(run: Run) -> None:
     lost: CollectionFenceLost | TermsIneligible | TimeoutError | None = None
 
     async def authorized() -> bool:
+        """Per-call authorization hook: run the gate, remember the first lost-authority exception and re-raise it."""
         nonlocal lost
         try:
             await run.gate()  # raises CollectionFenceLost / TermsIneligible / TimeoutError; never returns False
@@ -826,224 +858,310 @@ async def _run_mcp(run: Run) -> None:
 
 # ---------------------------------------------------------------- simple native providers
 
+@dataclass(frozen=True)
+class NativeCall:
+    """Inputs one native provider handler receives from ``_run_native``.
+
+    ``session`` is the open, never-committed session the dispatcher owns for the whole provider
+    call (handlers must not commit it); ``lease`` is the reserved source lease.
+    """
+
+    run: Run
+    lease: Any
+    collected_at: datetime
+    session: Any
+
+
+# A handler returns the provider page for the generic accept path, or ``None`` when it already
+# fenced credentials and accepted the receipt itself (the dispatcher then returns immediately).
+NativeHandler = Callable[[NativeCall], Awaitable[Any | None]]
+_NATIVE_HANDLERS: dict[str, NativeHandler] = {}
+
+
+def register_native_provider(providers: Sequence[str] | frozenset[str], handler: NativeHandler) -> None:
+    """Register ``handler`` for every provider name in ``providers`` (new native providers plug in here).
+
+    Later registrations replace earlier ones for the same name; no dispatcher edit is needed.
+    """
+    for name in providers:
+        _NATIVE_HANDLERS[name] = handler
+
+
+async def _native_feed(call: NativeCall) -> Any:
+    """YouTube/arXiv catalogue feeds; returns the page for the generic accept path."""
+    from modules.connectors.providers.feed_catalog import collect_provider_feed
+
+    run = call.run
+    return await collect_provider_feed(
+        run.attempt.source, collected_at=call.collected_at, session_factory=run.factory,
+        before_request=run.gate)
+
+
+async def _native_huggingface(call: NativeCall) -> Any:
+    """Hugging Face model search; returns the page for the generic accept path."""
+    from modules.connectors.providers.research import collect_huggingface_models
+
+    return await collect_huggingface_models(
+        call.run.attempt.source, collected_at=call.collected_at, before_request=call.run.gate)
+
+
+async def _native_bluesky(call: NativeCall) -> None:
+    """Bluesky profile feed; fences the credential and accepts the receipt itself."""
+    from modules.connectors.providers.social_feeds import collect_bluesky_profile
+
+    run, gate = call.run, call.run.gate
+    config = connectors.ConnectorConfig.model_validate(run.attempt.source.configuration)
+    page = await collect_bluesky_profile(
+        config.bluesky_actor or "", collected_at=call.collected_at,
+        cursor=call.lease.cursor_before,
+        fetch_bytes=lambda url: gate.fetch_bytes(
+            url, max_bytes=5 * 1024 * 1024, headers={"Accept": "application/json"}),
+    )
+    await _credential_fence(run)
+    await _accept_native(
+        run, call.lease, page.records, page.coverage, call.collected_at, cursor_after=page.cursor_after,
+    )
+
+
+async def _native_reddit(call: NativeCall) -> None:
+    """Reddit subreddit listing under the exact Reddit grant; accepts the receipt itself."""
+    from modules.connectors.providers.social_networks import collect_reddit_subreddit
+
+    run, gate = call.run, call.run.gate
+    config = connectors.ConnectorConfig.model_validate(run.attempt.source.configuration)
+    token, binding = await _reddit_access_token(run)
+
+    async def before_reddit_send() -> None:
+        """Debit admission and recheck the exact Reddit grant before every HTTP send."""
+        await gate()
+        await _credential_fence(run, reddit=binding)
+
+    page = await collect_reddit_subreddit(
+        config.reddit_subreddit or "", token, cursor=call.lease.cursor_before,
+        collected_at=call.collected_at,
+        fetch_bytes=lambda url, **kwargs: rest.fetch_bounded(
+            url, before_send=before_reddit_send, **kwargs),
+    )
+    await _credential_fence(run, reddit=binding)
+    await _accept_native(
+        run, call.lease, page.records, page.coverage, call.collected_at,
+        cursor_after=page.cursor_after, reddit_binding=binding,
+    )
+
+
+async def _native_mastodon_x(call: NativeCall) -> None:
+    """Mastodon or X scope read with its optional/required bearer; accepts the receipt itself."""
+    from modules.connectors.providers.social_networks import (
+        collect_mastodon_scope,
+        collect_x_scope,
+    )
+
+    run, gate, a = call.run, call.run.gate, call.run.attempt
+    config = connectors.ConnectorConfig.model_validate(a.source.configuration)
+    if a.source.provider == "mastodon":
+        optional_credential = await _optional_rest_secret(run)
+        if optional_credential is not None and optional_credential[0] != "Authorization":
+            raise CredentialMissing
+        social_page = await collect_mastodon_scope(
+            config.mastodon_instance_url or "", account=config.mastodon_account,
+            hashtag=config.mastodon_hashtag,
+            access_token=optional_credential[1] if optional_credential is not None else None,
+            cursor=call.lease.cursor_before, collected_at=call.collected_at, fetch_bytes=gate.fetch_bytes,
+        )
+        credential_revision = a.credential_revision if optional_credential is not None else None
+    else:
+        try:
+            header_name, bearer_token = await _rest_secret(run)
+        except rest.ProviderHttpError as exc:
+            raise CredentialMissing from exc
+        if header_name != "Authorization" or not bearer_token or a.credential_revision is None:
+            raise CredentialMissing
+        social_page = await collect_x_scope(
+            account=config.x_account, query=config.x_query, access_token=bearer_token,
+            cursor=call.lease.cursor_before, collected_at=call.collected_at, fetch_bytes=gate.fetch_bytes,
+        )
+        credential_revision = a.credential_revision
+    await _credential_fence(run)
+    await _accept_native(
+        run, call.lease, social_page.records, social_page.coverage, call.collected_at,
+        provider_credential_revision=credential_revision, cursor_after=social_page.cursor_after,
+    )
+
+
+async def _native_google(call: NativeCall) -> None:
+    """Gmail, Calendar or Drive read with the encrypted grant; commits the proof receipt itself."""
+    from modules.connectors.providers import google_api
+
+    run, gate, a = call.run, call.run.gate, call.run.attempt
+    provider = a.source.provider
+    token, binding = await _google_access_token(run)
+
+    async def before_google_send() -> None:
+        """Debit/revalidate each Google API send against the current grant and lease."""
+        await gate()
+        await _credential_fence(run, google=binding)
+
+    config = connectors.ConnectorConfig.model_validate(a.source.configuration)
+    if provider == "google_mail":
+        page = await google_api.collect_gmail(
+            token, config.google_mail_label_ids or (), before_request=before_google_send,
+            cursor=call.lease.cursor_before, collected_at=call.collected_at,
+        )
+    elif provider == "google_calendar":
+        page = await google_api.collect_calendar(
+            token, config.google_calendar_ids or (), before_request=before_google_send,
+            cursor=call.lease.cursor_before, collected_at=call.collected_at,
+        )
+    else:
+        page = await google_api.collect_drive(
+            token, config.google_drive_ids or (), before_request=before_google_send,
+            cursor=call.lease.cursor_before, collected_at=call.collected_at,
+        )
+    await _credential_fence(run, google=binding)
+    await _accept_proof(
+        run, call.lease, records=page.records, coverage=page.coverage, cursor_after=page.cursor_after,
+        collected_at=call.collected_at, google_binding=binding)
+
+
+async def _native_workspace_rest(call: NativeCall) -> None:
+    """Notion or Slack read with a revisioned bearer credential; accepts the receipt itself."""
+    from modules.connectors.providers.workspace_apps import (
+        NotionScope,
+        SlackScope,
+        collect_notion_pages,
+        collect_slack_channel_messages,
+    )
+
+    run, gate, a = call.run, call.run.gate, call.run.attempt
+    header_name, bearer_token = await _rest_secret(run)
+    if header_name != "Authorization" or not bearer_token or a.credential_revision is None:
+        raise CredentialMissing
+    config = connectors.ConnectorConfig.model_validate(a.source.configuration)
+    if a.source.provider == "notion":
+        page = await collect_notion_pages(
+            bearer_token, NotionScope(tuple(config.notion_page_ids or ())),
+            fetch_bytes=gate.fetch_bytes, collected_at=call.collected_at,
+        )
+    else:
+        page = await collect_slack_channel_messages(
+            bearer_token, SlackScope(tuple(config.slack_channel_ids or ())),
+            fetch_bytes=gate.fetch_bytes, collected_at=call.collected_at,
+        )
+    await _credential_fence(run)
+    await _accept_native(
+        run, call.lease, page.records, page.coverage, call.collected_at,
+        provider_credential_revision=a.credential_revision,
+    )
+
+
+def _local_service_failure(reason: str) -> Exception | None:
+    """Map a ``LocalServiceError`` reason to the collection error to raise, or ``None`` to re-raise unchanged."""
+    if reason == "authorization_rejected":
+        return rest.ProviderHttpError(401)
+    if reason == "rate_limited":
+        return connectors.ProviderRateLimited(datetime.now(UTC) + PAYLOAD_RATE_LIMIT_BACKOFF)
+    if reason == "request_failed":
+        return TimeoutError("local_service_request_failed")
+    if reason.startswith("destination_"):
+        return rest.UnsafeDestination(reason)
+    if reason.startswith("http_") and reason[5:].isdigit():
+        return rest.ProviderHttpError(int(reason[5:]))
+    return None
+
+
+async def _native_local_service(call: NativeCall) -> None:
+    """FHIR observations or Home Assistant snapshot against the configured local origin; accepts itself."""
+    from modules.connectors.providers.local_services import (
+        LocalServiceError,
+        collect_fhir_observations,
+        collect_home_assistant_snapshot,
+    )
+
+    run, gate, a = call.run, call.run.gate, call.run.attempt
+    provider = a.source.provider
+    header_name, bearer_token = await _rest_secret(run)
+    if header_name != "Authorization" or not bearer_token:
+        raise CredentialMissing
+
+    async def before_local_send() -> None:
+        """Recheck schedule admission and source/credential revisions before each local request."""
+        await gate()
+        await _credential_fence(run)
+
+    config = connectors.ConnectorConfig.model_validate(a.source.configuration)
+    try:
+        if provider == "health":
+            records = await collect_fhir_observations(
+                config.fhir_base_url or "", config.fhir_patient_id or "",
+                bearer_token=bearer_token, before_send=before_local_send, collected_at=call.collected_at,
+            )
+        else:
+            page = await collect_home_assistant_snapshot(
+                config.ha_base_url or "", tuple(config.ha_entity_ids or ()),
+                bearer_token=bearer_token, before_send=before_local_send,
+                cursor=call.lease.cursor_before, collected_at=call.collected_at,
+            )
+    except LocalServiceError as exc:
+        mapped = _local_service_failure(str(exc))
+        if mapped is None:
+            raise
+        raise mapped from exc
+    await _credential_fence(run)
+    if provider == "health":
+        await _accept_native(run, call.lease, records, "returned_snapshot", call.collected_at)
+    else:
+        await _accept_native(run, call.lease, page.records, page.coverage, call.collected_at,
+                             cursor_after=page.cursor_after)
+
+
+async def _native_github_releases(call: NativeCall) -> Any:
+    """GitHub releases feed; returns the page for the generic accept path."""
+    from modules.connectors.providers.social import collect_github_releases
+
+    return await collect_github_releases(
+        call.run.attempt.source, collected_at=call.collected_at, before_request=call.run.gate)
+
+
+async def _native_world_data(call: NativeCall) -> Any:
+    """Default handler: keyed/free world-data providers; returns the page for the generic accept path."""
+    from modules.connectors.providers.world_data import collect_world_data
+
+    run, a = call.run, call.run.attempt
+    return await collect_world_data(
+        a.source, collected_at=call.collected_at, settings=run.settings, session=call.session,
+        redis=_Unmetered(), scope=a.scope, multi_workspace_enabled=a.multi, access_fence=a.access_fence,
+        source_fence=a.source_fence, before_request=run.gate)
+
+
+register_native_provider(("youtube", "arxiv"), _native_feed)
+register_native_provider(("huggingface",), _native_huggingface)
+register_native_provider(("bluesky",), _native_bluesky)
+register_native_provider(("reddit",), _native_reddit)
+register_native_provider(("mastodon", "x"), _native_mastodon_x)
+register_native_provider(("google_mail", "google_calendar", "google_drive"), _native_google)
+register_native_provider(("notion", "slack"), _native_workspace_rest)
+register_native_provider(HEADER_AUTH_PROVIDERS, _native_local_service)
+register_native_provider(("github_releases",), _native_github_releases)
+
+
 async def _run_native(run: Run) -> None:
     """Collect one registered native provider through a reserved lease and atomic receipt.
 
-    Google uses its encrypted source grant and commits its opaque continuation only with the
-    receipt. FHIR and Home Assistant use the encrypted REST credential against the exact
-    configured local-service origin. Notion and Slack use the same encrypted bearer credential
-    owner with fixed public API origins; each send and the atomic receipt fence its revision.
-    Bluesky, Reddit, Mastodon and X use bounded read-only social adapters and commit returned cursors
-    with receipts, so paginated feed progress is durable only after accepted ingestion.
+    Dispatch is registry-driven (``register_native_provider``): the handler for the source
+    provider runs while one session stays open and is never committed. A handler that already
+    fenced credentials and accepted its receipt returns ``None``; otherwise the returned page is
+    rolled back, checked for provider back-off / Alpha Vantage operation capture and accepted
+    through the generic path. Providers without a handler fall to the world-data adapter.
     """
-    a, provider = run.attempt, run.attempt.source.provider
+    provider = run.attempt.source.provider
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
     gate = run.gate
-    page: Any = None  # Provider adapters intentionally return several validated receipt shapes.
+    handler = _NATIVE_HANDLERS.get(provider or "", _native_world_data)
     async with run.factory() as session:
-        if provider in {"youtube", "arxiv"}:
-            from modules.connectors.providers.feed_catalog import collect_provider_feed
-
-            page = await collect_provider_feed(
-                a.source, collected_at=collected_at, session_factory=run.factory, before_request=gate)
-        elif provider == "huggingface":
-            from modules.connectors.providers.research import collect_huggingface_models
-
-            page = await collect_huggingface_models(a.source, collected_at=collected_at, before_request=gate)
-        elif provider == "bluesky":
-            from modules.connectors.providers.social_feeds import collect_bluesky_profile
-
-            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
-            page = await collect_bluesky_profile(
-                config.bluesky_actor or "", collected_at=collected_at,
-                cursor=lease.cursor_before,
-                fetch_bytes=lambda url: gate.fetch_bytes(
-                    url, max_bytes=5 * 1024 * 1024, headers={"Accept": "application/json"}),
-            )
-            await _credential_fence(run)
-            await _accept_native(
-                run, lease, page.records, page.coverage, collected_at, cursor_after=page.cursor_after,
-            )
+        page = await handler(NativeCall(run, lease, collected_at, session))
+        if page is None:
             return
-        elif provider == "reddit":
-            from modules.connectors.providers.social_networks import collect_reddit_subreddit
-
-            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
-            token, binding = await _reddit_access_token(run)
-
-            async def before_reddit_send() -> None:
-                """Debit admission and recheck the exact Reddit grant before every HTTP send."""
-                await gate()
-                await _credential_fence(run, reddit=binding)
-
-            page = await collect_reddit_subreddit(
-                config.reddit_subreddit or "", token, cursor=lease.cursor_before,
-                collected_at=collected_at,
-                fetch_bytes=lambda url, **kwargs: rest.fetch_bounded(
-                    url, before_send=before_reddit_send, **kwargs),
-            )
-            await _credential_fence(run, reddit=binding)
-            await _accept_native(
-                run, lease, page.records, page.coverage, collected_at,
-                cursor_after=page.cursor_after, reddit_binding=binding,
-            )
-            return
-        elif provider in {"mastodon", "x"}:
-            from modules.connectors.providers.social_networks import (
-                collect_mastodon_scope,
-                collect_x_scope,
-            )
-
-            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
-            if provider == "mastodon":
-                optional_credential = await _optional_rest_secret(run)
-                if optional_credential is not None and optional_credential[0] != "Authorization":
-                    raise CredentialMissing
-                social_page = await collect_mastodon_scope(
-                    config.mastodon_instance_url or "", account=config.mastodon_account,
-                    hashtag=config.mastodon_hashtag,
-                    access_token=optional_credential[1] if optional_credential is not None else None,
-                    cursor=lease.cursor_before, collected_at=collected_at, fetch_bytes=gate.fetch_bytes,
-                )
-                credential_revision = a.credential_revision if optional_credential is not None else None
-            else:
-                try:
-                    header_name, bearer_token = await _rest_secret(run)
-                except rest.ProviderHttpError as exc:
-                    raise CredentialMissing from exc
-                if header_name != "Authorization" or not bearer_token or a.credential_revision is None:
-                    raise CredentialMissing
-                social_page = await collect_x_scope(
-                    account=config.x_account, query=config.x_query, access_token=bearer_token,
-                    cursor=lease.cursor_before, collected_at=collected_at, fetch_bytes=gate.fetch_bytes,
-                )
-                credential_revision = a.credential_revision
-            await _credential_fence(run)
-            await _accept_native(
-                run, lease, social_page.records, social_page.coverage, collected_at,
-                provider_credential_revision=credential_revision, cursor_after=social_page.cursor_after,
-            )
-            return
-        elif provider in {"google_mail", "google_calendar", "google_drive"}:
-            from modules.connectors.providers import google_api
-
-            token, binding = await _google_access_token(run)
-
-            async def before_google_send() -> None:
-                """Debit/revalidate each Google API send against the current grant and lease."""
-                await gate()
-                await _credential_fence(run, google=binding)
-
-            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
-            if provider == "google_mail":
-                page = await google_api.collect_gmail(
-                    token, config.google_mail_label_ids or (), before_request=before_google_send,
-                    cursor=lease.cursor_before, collected_at=collected_at,
-                )
-            elif provider == "google_calendar":
-                page = await google_api.collect_calendar(
-                    token, config.google_calendar_ids or (), before_request=before_google_send,
-                    cursor=lease.cursor_before, collected_at=collected_at,
-                )
-            else:
-                page = await google_api.collect_drive(
-                    token, config.google_drive_ids or (), before_request=before_google_send,
-                    cursor=lease.cursor_before, collected_at=collected_at,
-                )
-            await _credential_fence(run, google=binding)
-            await _accept_proof(
-                run, lease, records=page.records, coverage=page.coverage, cursor_after=page.cursor_after,
-                collected_at=collected_at, google_binding=binding)
-            return
-        elif provider in REVISIONED_REST_PROVIDERS:
-            from modules.connectors.providers.workspace_apps import (
-                NotionScope,
-                SlackScope,
-                collect_notion_pages,
-                collect_slack_channel_messages,
-            )
-
-            header_name, bearer_token = await _rest_secret(run)
-            if header_name != "Authorization" or not bearer_token or a.credential_revision is None:
-                raise CredentialMissing
-            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
-            if provider == "notion":
-                page = await collect_notion_pages(
-                    bearer_token, NotionScope(tuple(config.notion_page_ids or ())),
-                    fetch_bytes=gate.fetch_bytes, collected_at=collected_at,
-                )
-            else:
-                page = await collect_slack_channel_messages(
-                    bearer_token, SlackScope(tuple(config.slack_channel_ids or ())),
-                    fetch_bytes=gate.fetch_bytes, collected_at=collected_at,
-                )
-            await _credential_fence(run)
-            await _accept_native(
-                run, lease, page.records, page.coverage, collected_at,
-                provider_credential_revision=a.credential_revision,
-            )
-            return
-        elif provider in HEADER_AUTH_PROVIDERS:
-            from modules.connectors.providers.local_services import (
-                LocalServiceError,
-                collect_fhir_observations,
-                collect_home_assistant_snapshot,
-            )
-
-            header_name, bearer_token = await _rest_secret(run)
-            if header_name != "Authorization" or not bearer_token:
-                raise CredentialMissing
-
-            async def before_local_send() -> None:
-                """Recheck schedule admission and source/credential revisions before each local request."""
-                await gate()
-                await _credential_fence(run)
-
-            config = connectors.ConnectorConfig.model_validate(a.source.configuration)
-            try:
-                if provider == "health":
-                    records = await collect_fhir_observations(
-                        config.fhir_base_url or "", config.fhir_patient_id or "",
-                        bearer_token=bearer_token, before_send=before_local_send, collected_at=collected_at,
-                    )
-                else:
-                    page = await collect_home_assistant_snapshot(
-                        config.ha_base_url or "", tuple(config.ha_entity_ids or ()),
-                        bearer_token=bearer_token, before_send=before_local_send,
-                        cursor=lease.cursor_before, collected_at=collected_at,
-                    )
-            except LocalServiceError as exc:
-                reason = str(exc)
-                if reason == "authorization_rejected":
-                    raise rest.ProviderHttpError(401) from exc
-                if reason == "rate_limited":
-                    raise connectors.ProviderRateLimited(datetime.now(UTC) + PAYLOAD_RATE_LIMIT_BACKOFF) from exc
-                if reason == "request_failed":
-                    raise TimeoutError("local_service_request_failed") from exc
-                if reason.startswith("destination_"):
-                    raise rest.UnsafeDestination(reason) from exc
-                if reason.startswith("http_") and reason[5:].isdigit():
-                    raise rest.ProviderHttpError(int(reason[5:])) from exc
-                raise
-            await _credential_fence(run)
-            if provider == "health":
-                await _accept_native(run, lease, records, "returned_snapshot", collected_at)
-            else:
-                await _accept_native(run, lease, page.records, page.coverage, collected_at,
-                                     cursor_after=page.cursor_after)
-            return
-        elif provider == "github_releases":
-            from modules.connectors.providers.social import collect_github_releases
-
-            page = await collect_github_releases(a.source, collected_at=collected_at, before_request=gate)
-        else:
-            from modules.connectors.providers.world_data import collect_world_data
-
-            page = await collect_world_data(
-                a.source, collected_at=collected_at, settings=run.settings, session=session, redis=_Unmetered(),
-                scope=a.scope, multi_workspace_enabled=a.multi, access_fence=a.access_fence,
-                source_fence=a.source_fence, before_request=gate)
         await session.rollback()
     if page.next_eligible_at is not None:
         run.next_eligible_at = page.next_eligible_at
@@ -1113,6 +1231,7 @@ class _Unmetered:
     """Redis stand-in: PostgreSQL ledger debits are the quota authority; Redis may only pre-reject."""
 
     async def eval(self, *_args: object) -> int:
+        """Stand-in for the Redis ``eval`` used by quota scripts: always reports one unit granted (unmetered)."""
         return 1
 
 
@@ -1134,12 +1253,21 @@ def _payload(fn: Callable[..., Any], *args: Any) -> Any:
         raise  # "invalid": ValueError -> provider_response_invalid
 
 
+async def _payload_async(fn: Callable[..., Any], *args: Any) -> Any:
+    """Run ``_payload`` (decode + map of a provider body) off the event loop.
+
+    Same result and same translated exceptions as the inline call; the thread is joined on
+    cancellation so the collection lease/slot is never released under live host work.
+    """
+    return await to_thread_joined(_payload, fn, *args)
+
+
 def _coverage(records: Sequence[IngestionRecord]) -> Literal["returned_snapshot", "truncated"]:
     """Page coverage must equal the records' coverage (ingress rejects a mismatch)."""
     return "truncated" if any(r.metadata["provider_record"]["coverage"] == "truncated" for r in records) else "returned_snapshot"
 
 
-async def _get_body(run: Run, request: Any, *, max_bytes: int, timeout: float | None = None) -> rest.Fetched:
+async def _get_body(run: Run, request: Any, *, max_bytes: int, timeout: float | None = None) -> rest.Fetched:  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
     """One gated send (terms + quota + fences before the wire); no redirects, bounded bytes."""
     extra: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
     if getattr(request, "body", None) is not None:  # read-only POST search (VietnamWorks)
@@ -1148,6 +1276,7 @@ async def _get_body(run: Run, request: Any, *, max_bytes: int, timeout: float | 
 
 
 def _require_body(fetched: rest.Fetched) -> bytes:
+    """Return the page body, treating an unconditional-GET 304 (no body) as an HTTP 304 provider error."""
     if fetched.body is None:  # unconditional GET answered 304: not a usable page
         raise rest.ProviderHttpError(304)
     return fetched.body
@@ -1251,7 +1380,7 @@ async def _run_pure(run: Run) -> None:
     if (url := provider_options.build_url(provider, cfg, cursor=cursor, now=collected_at)) is not None:
         request = replace(request, url=url)  # owner options / native resume; headers stay the adapter's
     fetched = await _get_body(run, request, max_bytes=PURE_MAX_BYTES.get(provider, MAX_BODY_BYTES))
-    records = _payload(
+    records = await _payload_async(
         lambda *a: map_pure_provider_body(*a, **provider_options.map_options(provider, cfg)),
         provider, _require_body(fetched), collected_at)  # mapper scope follows the requested scope
     records = provider_options.filter_records(provider, cfg, records)  # region / KEV / NVD / FX / Kp (client)
@@ -1280,7 +1409,7 @@ async def _run_coinpaprika(run: Run) -> None:
             await asyncio.sleep(provider_options.COINPAPRIKA_GAP_SECONDS)
         fetched = await _get_body(run, replace(PURE_ADAPTERS["coinpaprika"].request(), url=url),
                                   max_bytes=MAX_BODY_BYTES)
-        records += _payload(lambda body, coin=coin: map_coinpaprika(decode_json(body), collected_at, coin_id=coin),
+        records += await _payload_async(lambda body, coin=coin: map_coinpaprika(decode_json(body), collected_at, coin_id=coin),
                             _require_body(fetched))
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
@@ -1304,7 +1433,7 @@ async def _run_vn_stock(run: Run) -> None:
         if index:
             await asyncio.sleep(1.0)
         fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
-        records += _payload(
+        records += await _payload_async(
             lambda body, group=group: vn_stock.map_vn_stock(decode_json(body), collected_at, symbols=group),
             _require_body(fetched))
     await _accept_native(run, lease, records, _coverage(records), collected_at)
@@ -1328,7 +1457,7 @@ async def _run_vietnamworks(run: Run) -> None:
         if index:
             await asyncio.sleep(1.0)
         fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
-        batches.append(_payload(
+        batches.append(await _payload_async(
             lambda body: jobs.map_vietnamworks(
                 decode_json(body), collected_at, cities=cfg.get("job_cities") or (), levels=cfg.get("job_levels") or (),
                 min_salary_usd=cfg.get("job_min_salary_usd")),
@@ -1357,6 +1486,7 @@ async def _run_itviec(run: Run) -> None:
     first = True
 
     async def page(request: Any) -> str:
+        """Fetch one listing page (spacing requests after the first) and return its decoded text."""
         nonlocal first
         if not first:
             await asyncio.sleep(jobs.ITVIEC_REQUEST_GAP_SECONDS)
@@ -1381,7 +1511,7 @@ async def _run_itviec(run: Run) -> None:
         except rest.ProviderHttpError as exc:
             if exc.status_code not in {404, 410}:
                 raise
-    records = _payload(
+    records = await _payload_async(
         lambda: jobs.map_itviec(pages, collected_at, levels=cfg.get("job_levels") or (), min_salary_usd=cfg.get("job_min_salary_usd")))
     records, cursor_after = await _select(run, lease, records, collected_at)
     await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
@@ -1421,8 +1551,8 @@ async def _run_keyed(run: Run) -> None:
     lease = await _lease(run)
     fetched = await _get_body(run, request, max_bytes=KEYED_MAX_BYTES)
     body = _require_body(fetched)
-    payload = body if row.binary else _payload(decode_json, body)
-    records = _payload(row.mapper, payload, collected_at, cfg)
+    payload = body if row.binary else (await _payload_async(decode_json, body))
+    records = await _payload_async(row.mapper, payload, collected_at, cfg)
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
@@ -1523,7 +1653,7 @@ async def _run_hn(run: Run) -> None:
             if exc.status_code != 404:
                 raise
             bodies[item_id] = None  # removed item: skipped and counted by the mapper
-    result = _payload(news.map_hn_stories, ids, bodies, collected_at, provider_options.hn_limit(cfg))
+    result = await _payload_async(news.map_hn_stories, ids, bodies, collected_at, provider_options.hn_limit(cfg))
     run.extras["skipped"] = result.skipped
     records, cursor_after = await _select(run, lease, result.records, collected_at)
     await _accept_native(run, lease, records, "returned_snapshot", collected_at, cursor_after=cursor_after)
@@ -1543,7 +1673,7 @@ async def _run_gdelt(run: Run) -> None:
     if (url := provider_options.build_url("gdelt_economy", cfg, cursor=cursor, now=collected_at)) is not None:
         request = replace(request, url=url)
     fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES, timeout=GDELT_TIMEOUT_SECONDS)
-    records = _payload(map_news_body, "gdelt_economy", _require_body(fetched), collected_at)
+    records = await _payload_async(map_news_body, "gdelt_economy", _require_body(fetched), collected_at)
     records, cursor_after = await _select(run, lease, records, collected_at)
     await _accept_native(run, lease, records, _coverage(records), collected_at, cursor_after=cursor_after)
 
@@ -1558,8 +1688,8 @@ async def _run_sec_edgar(run: Run) -> None:
     collected_at = datetime.now(UTC)
     lease = await _lease(run)
     fetched = await _get_body(run, request, max_bytes=MAX_BODY_BYTES)
-    payload = _payload(decode_json, _require_body(fetched))
-    records = _payload(filings.map_sec_edgar, payload, collected_at, cfg["sec_cik"])
+    payload = await _payload_async(decode_json, _require_body(fetched))
+    records = await _payload_async(filings.map_sec_edgar, payload, collected_at, cfg["sec_cik"])
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
@@ -1571,7 +1701,7 @@ async def _run_openalex(run: Run) -> None:
     request = _payload(scholarly.openalex_request, (run.attempt.source.configuration or {}).get("scholarly_query"))
     lease = await _lease(run)
     fetched = await _get_body(run, request, max_bytes=scholarly.OPENALEX_MAX_BODY)
-    records = _payload(scholarly.map_openalex, _require_body(fetched), collected_at)
+    records = await _payload_async(scholarly.map_openalex, _require_body(fetched), collected_at)
     await _accept_native(run, lease, records, _coverage(records), collected_at)
 
 
@@ -1702,7 +1832,7 @@ async def _google_access_token(run: Run) -> tuple[str, tuple[UUID, int]]:
             access = tokens.get("access_token")
             refresh = tokens.get("refresh_token")
             if not isinstance(access, str) or not isinstance(refresh, str):
-                raise ValueError("google_token_missing")  # noqa: TRY004
+                raise ValueError("google_token_missing")
             expiry = grant.token_expires_at
             if expiry is not None and expiry > datetime.now(UTC) + timedelta(seconds=60):
                 binding = (grant.operation_id, grant.token_revision)
@@ -1840,6 +1970,7 @@ async def _run_github(run: Run) -> None:
     held = False
 
     async def before_send() -> None:
+        """Gate, fence the GitHub binding and take the cluster-wide single GitHub network slot before each send."""
         nonlocal held
         await run.gate()
         await _credential_fence(run, github=(fence, binding))
@@ -1896,6 +2027,7 @@ async def _run_telegram(run: Run) -> None:
     allowed = frozenset(cast("list[str]", source.configuration["telegram_chat_ids"]))
 
     async def before_send() -> None:
+        """Gate and fence the Telegram snapshot before each Bot API send."""
         await run.gate()
         await _credential_fence(run, telegram=snapshot)
 
@@ -1982,8 +2114,8 @@ def _classify(exc: BaseException, *, keyless: bool = False) -> dict[str, Any]:
                 "retryable": exc.retryable}
     if isinstance(exc, (TimeoutError, httpx.HTTPError, OSError)):
         return {"outcome": "failed", "error_code": "provider_timeout", "retryable": True}
-    if isinstance(exc, HTTPException):
-        return {"outcome": "failed", "error_code": "ingestion_conflict", "retryable": exc.status_code == 409}
+    if is_http_error(exc):
+        return {"outcome": "failed", "error_code": "ingestion_conflict", "retryable": error_status(exc) == 409}
     if isinstance(exc, ValueError):
         return {"outcome": "failed", "error_code": "provider_response_invalid"}
     return {"outcome": "failed", "error_code": "executor_error", "retryable": True}
@@ -2017,6 +2149,7 @@ async def _release_lease(run: Run, error_code: str) -> None:
 
 
 def _adapter_for(source: ConnectorSource) -> Adapter | None:
+    """Resolve the collection adapter for a source: type-based for provider-less sources, else registered or native; ``None`` if unsupported."""
     provider = source.provider
     if provider is None:
         return {"api": _run_rest, "rss": _run_rss, "web": _run_web, "mcp": _run_mcp}.get(source.type)
@@ -2055,7 +2188,7 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
     run = Run(ctx=ctx, factory=factory, settings=settings, attempt=attempt, gate=gate)
     lost = asyncio.Event()
     main = asyncio.current_task()
-    assert main is not None
+    assert main is not None  # noqa: S101  # mypy narrowing invariant
     beat = asyncio.create_task(_heartbeat(factory, attempt, main, lost))
     settle: dict[str, Any] | None = None
     try:

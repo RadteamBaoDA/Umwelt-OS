@@ -8,13 +8,14 @@ no personal data and is not tied to an account or workspace, so account erasure 
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from fastapi import HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
+from core.errors import ConflictError
 from core.system.health import system_health
+from core.worker_context import worker_session_factory
 from modules.observability.database_stats import read_database_stats
 from modules.observability.models import SystemHealthSample, SystemHistorySettings
 from modules.observability.operations import queue_summary
@@ -66,7 +67,7 @@ async def save_history_settings(
     )
     row = result.first()
     if row is None:
-        raise HTTPException(status_code=409, detail="History settings changed; reload and retry")
+        raise ConflictError(detail="History settings changed; reload and retry")
     return HistorySettingsRead(
         retention_days=row.retention_days, sample_interval_minutes=row.sample_interval_minutes, revision=row.revision,
     )
@@ -111,7 +112,7 @@ async def sample_system_health(ctx: dict[str, object]) -> int:
     The queue backlog (active ingestion stages) is best effort and 0 when unreadable.
     Returns the number of purged rows.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     now = datetime.now(UTC)
     async with factory() as session:
         cfg = await read_history_settings(session)

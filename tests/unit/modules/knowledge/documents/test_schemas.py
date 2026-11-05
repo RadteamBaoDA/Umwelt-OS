@@ -238,7 +238,7 @@ class TestProviderMetadataAndTelegram:
         assert tg_meta.update_id == 10
 
         # Naive datetime rejected
-        naive_now = datetime(2026, 1, 1, 12, 0, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
+        naive_now = datetime(2026, 1, 1, 12, 0, 0)
         with pytest.raises(ValidationError, match="Telegram timestamps must include a timezone"):
             ProviderTelegramMetadata(
                 bot_id="123456",

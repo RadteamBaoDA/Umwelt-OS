@@ -11,6 +11,7 @@ import { archiveSource, sourceKeys, type Source } from './api';
 import { ConnectorEditor, type EditorActions, type EditorSnapshot, type EditorStep } from './connector-editor';
 import { GitHubWebhookStatus } from './github-summary';
 import type { DataShape } from '@/core/data-shapes';
+import { BareButton } from '@/components/bare-button';
 
 /** One wizard step: stable id, display title, and whether the owner may leave it forward in add mode. */
 export type WizardStepDef = { id: string; title: string; valid: boolean };
@@ -92,11 +93,11 @@ export function WizardShell({ title, mode, steps, stepIndex, onStepChange, busy,
               // Add mode never lets the owner skip ahead of validated steps; edit mode is free navigation.
               const reachable = mode === 'edit' || index <= stepIndex;
               return <li key={step.id}>
-                <button type="button" disabled={!reachable || locked} aria-current={index === stepIndex ? 'step' : undefined} onClick={() => onStepChange(index)}
+                <BareButton type="button" disabled={!reachable || locked} aria-current={index === stepIndex ? 'step' : undefined} onClick={() => onStepChange(index)}
                   className={`flex min-h-9 pointer-coarse:min-h-11 w-full items-center gap-3 rounded-lg border px-3 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-50 ${index === stepIndex ? 'border-primary bg-card' : 'border-border bg-transparent'}`}>
                   <span className={`flex size-6 shrink-0 items-center justify-center rounded-full text-xs ${index === stepIndex ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{index + 1}</span>
                   <strong className="whitespace-nowrap text-sm">{step.title}</strong>
-                </button>
+                </BareButton>
               </li>;
             })}
           </ol>
@@ -126,6 +127,11 @@ export function WizardShell({ title, mode, steps, stepIndex, onStepChange, busy,
   </>;
 }
 
+/** Editor snapshot before the editor reports anything: the existing source's identity (edit) or empty (add). */
+function initialSnapshot(source: Source | null): EditorSnapshot {
+  return { sourceId: source?.id ?? '', provider: source?.provider ?? '', busy: false, providerOk: false, connectOk: true, chooseOk: true, verify: { phase: 'idle' } };
+}
+
 type ConnectorWizardProps = {
   source: Source | null;
   onClose: () => void;
@@ -148,11 +154,10 @@ function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard, 
   const queryClient = useQueryClient();
   const edit = source !== null;
   const actionsRef = useRef<EditorActions | null>(null);
-  const [snapshot, setSnapshot] = useState<EditorSnapshot>({ sourceId: source?.id ?? '', provider: source?.provider ?? '', busy: false, providerOk: false, connectOk: true, chooseOk: true, verify: { phase: 'idle' } });
+  const [snapshot, setSnapshot] = useState<EditorSnapshot>(() => initialSnapshot(source));
   const [index, setIndex] = useState(0);
   const mcp = snapshot.provider === 'mcp';
-  const google = ['google_mail', 'google_calendar', 'google_drive'].includes(snapshot.provider);
-  const ids: EditorStep[] = mcp ? ['connect', 'verify'] : google ? ['connect', 'choose', 'collect', 'verify'] : ['connect', 'choose', 'collect', 'verify'];
+  const ids: EditorStep[] = mcp ? ['connect', 'verify'] : ['connect', 'choose', 'collect', 'verify']; // Google providers share the generic step list.
   if (!edit) ids.unshift('provider');
   const titles: Record<EditorStep, string> = { provider: t('stepProviderName'), connect: mcp ? t('stepMcpConfigure') : t('wizConnect'), choose: t('wizChooseData'), collect: t('stepSchedule'), verify: t('stepVerify') };
   const valid: Record<EditorStep, boolean> = { provider: snapshot.providerOk || Boolean(snapshot.sourceId), connect: snapshot.connectOk, choose: snapshot.chooseOk, collect: true, verify: true };

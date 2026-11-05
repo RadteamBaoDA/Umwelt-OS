@@ -229,7 +229,7 @@ class TestTimezoneAwarenessAndInstants:
 
     def test_instant_rejects_naive_timestamp(self) -> None:
         """Verify naive datetime without timezone raises ValidationError."""
-        naive = datetime(2025, 6, 1, 12, 0, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
+        naive = datetime(2025, 6, 1, 12, 0, 0)
         with pytest.raises(ValidationError, match="Timestamp must be timezone-aware"):
             Instant(timestamp=naive)
 
@@ -274,7 +274,7 @@ class TestTimezoneAwarenessAndInstants:
             TemporalAnchor(
                 source_id=uuid4(),
                 source_generation=1,
-                anchor_time=datetime(2025, 3, 15, 10, 0),  # naive rejected  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
+                anchor_time=datetime(2025, 3, 15, 10, 0),  # naive rejected  # intentionally naive: wall-clock/DST math or naive-rejection test
             )
 
 
@@ -283,7 +283,7 @@ class TestEpisodeRequestTemporalAnchoring:
 
     def test_episode_request_rejects_naive_reference_time(self) -> None:
         """Verify EpisodeRequest rejects naive reference_time."""
-        naive_time = datetime(2025, 1, 1, 12, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
+        naive_time = datetime(2025, 1, 1, 12, 0)
         with pytest.raises(ValueError, match="Graph episode is invalid or exceeds its bounds"):
             EpisodeRequest(
                 episode_id=uuid4(),

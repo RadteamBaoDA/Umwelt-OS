@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { FieldGrid } from './settings-layout';
+import { FieldGrid } from '@/components/settings-layout';
 
 export const providerKinds = ['openai', 'openrouter', 'groq', 'gemini', 'anthropic', 'ollama', 'lmstudio', 'custom'] as const;
 export type ProviderKind = (typeof providerKinds)[number];
@@ -125,6 +125,7 @@ export function ProviderEditor({ providers, savedIds, secrets, disabled, discove
   const patch = (id: string, change: Partial<ProviderRead>) => onChange(providers.map((item) => (item.id === id ? { ...item, ...change } : item)));
   return <div className="flex flex-col gap-4">
     {providers.length === 0 && <p className="text-muted-foreground m-0">{t('providersEmpty')}</p>}
+    {/* eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this row; it holds no branching business logic, so splitting would only relocate the same render conditions */}
     {providers.map((provider) => {
       const secret = secrets[provider.id] ?? { key: '', action: 'unchanged' as const };
       const isNew = !savedIds.includes(provider.id);

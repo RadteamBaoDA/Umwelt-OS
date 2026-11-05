@@ -23,6 +23,49 @@ const failureMessages = {
  * Unknown server values never become message keys or visible account/error content.
  */
 export function AccountDeletionStatus() {
+  const s0 = useAccountDeletionStatusController();
+
+  const vm: AccountDeletionStatusVm = s0;
+  return <main className="mx-auto grid min-h-dvh max-w-2xl content-start gap-6 px-6 py-12">
+<AccountDeletionStatusHeader vm={vm} />
+<AccountDeletionStatusDetails vm={vm} />
+  </main>;
+}
+
+type AccountDeletionStatusVm = ReturnType<typeof useAccountDeletionStatusController>;
+
+/** Heading, help text and the live progress region. */
+function AccountDeletionStatusHeader({ vm }: { vm: AccountDeletionStatusVm }) {
+  const { t, query, statusKey, phaseKey, failureKey } = vm;
+  return (
+<>
+    <h1 className="text-2xl font-semibold">{t('statusTitle')}</h1>
+    <p className="text-muted-foreground">{t('statusHelp')}</p>
+    <div role="status" aria-live="polite">
+      <p>{query.isPending ? t('checking') : statusKey ? t(statusKey) : query.data ? t('statusUnavailable') : null}</p>
+      {query.data && <p>{t('phaseLabel', { phase: t(phaseKey) })}</p>}
+      {query.data?.status === 'failed' && <p>{t('failureLabel', { category: t(failureKey) })}</p>}
+    </div>
+</>
+  );
+}
+
+/** Failure, progress, limits and the retry and privacy actions. */
+function AccountDeletionStatusDetails({ vm }: { vm: AccountDeletionStatusVm }) {
+  const { t, query } = vm;
+  return (
+<>
+    {query.isError && <p role="alert">{query.error instanceof ApiError && query.error.status === 404 ? t('noReceipt') : t('statusUnavailable')}</p>}
+    {query.data && <p>{t('progress')}</p>}
+    <p className="text-sm text-muted-foreground">{t('limits')}</p>
+    {query.data?.status !== 'succeeded' && <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>{t('retry')}</Button>}
+    <Button asChild variant="link"><Link href="/privacy">{t('privacy')}</Link></Button>
+</>
+  );
+}
+
+/** Holds the state, queries and derived values of AccountDeletionStatus. */
+function useAccountDeletionStatusController() {
   const t = useTranslations('accountDeletion');
   const query = useQuery({
     queryKey: ['account-deletion-status'],
@@ -36,18 +79,6 @@ export function AccountDeletionStatus() {
     ? phaseMessages[query.data.phase as keyof typeof phaseMessages] : 'phaseUnknown';
   const failureKey = query.data?.error_code && Object.hasOwn(failureMessages, query.data.error_code)
     ? failureMessages[query.data.error_code as keyof typeof failureMessages] : 'failureUnknown';
-  return <main className="mx-auto grid min-h-dvh max-w-2xl content-start gap-6 px-6 py-12">
-    <h1 className="text-2xl font-semibold">{t('statusTitle')}</h1>
-    <p className="text-muted-foreground">{t('statusHelp')}</p>
-    <div role="status" aria-live="polite">
-      <p>{query.isPending ? t('checking') : statusKey ? t(statusKey) : query.data ? t('statusUnavailable') : null}</p>
-      {query.data && <p>{t('phaseLabel', { phase: t(phaseKey) })}</p>}
-      {query.data?.status === 'failed' && <p>{t('failureLabel', { category: t(failureKey) })}</p>}
-    </div>
-    {query.isError && <p role="alert">{query.error instanceof ApiError && query.error.status === 404 ? t('noReceipt') : t('statusUnavailable')}</p>}
-    {query.data && <p>{t('progress')}</p>}
-    <p className="text-sm text-muted-foreground">{t('limits')}</p>
-    {query.data?.status !== 'succeeded' && <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>{t('retry')}</Button>}
-    <Button asChild variant="link"><Link href="/privacy">{t('privacy')}</Link></Button>
-  </main>;
+
+  return { t, query, statusKey, phaseKey, failureKey };
 }

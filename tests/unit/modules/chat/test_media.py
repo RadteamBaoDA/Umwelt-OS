@@ -151,7 +151,7 @@ def test_tile_url_bounds() -> None:
 
 
 def test_tool_spec_and_prompt_gated() -> None:
-    names = lambda specs: {s["function"]["name"] for s in specs}
+    names = lambda specs: {s["function"]["name"] for s in specs}  # noqa: E731  # terse test stub
     assert TOOL_TRIP_IMAGES not in names(build_chat_tool_specs(include_read_skill=False))
     assert TOOL_TRIP_IMAGES in names(build_chat_tool_specs(include_read_skill=False, include_trip_images=True))
     assert TOOL_TRIP_IMAGES not in build_generative_ui_system_prompt(locale="en-US")

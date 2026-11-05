@@ -235,7 +235,7 @@ class McpInboundLease:
         client_key = f"{_NAMESPACE}client:{client_id}"
         try:
             result = await asyncio.wait_for(
-                _redis_eval(self.admission.redis, 
+                _redis_eval(self.admission.redis,
                     _BIND_CLIENT, 2, self.global_key, client_key, self.token,
                 ), timeout=min(_REDIS_PHASE_SECONDS, remaining),
             )

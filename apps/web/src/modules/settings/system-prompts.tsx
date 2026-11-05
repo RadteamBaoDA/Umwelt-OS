@@ -8,7 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
+import { SettingsActions, SettingsPageHeader, SettingsSection } from '@/components/settings-layout';
 
 type Entry = { key: string; value: string; default: string; customized: boolean };
 type Prompts = { configuration_revision: number; prompts: Entry[] };

@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core import worker_cursors
 from core.config import Settings
+from core.errors import DomainError
+from core.worker_context import worker_session_factory
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope
 from modules.agents import public as agents
@@ -58,7 +60,7 @@ async def _redact_workspace_traces(
             )
             await session.commit()
             return redacted
-        except HTTPException as exc:
+        except (DomainError, HTTPException) as exc:
             if exc.status_code in {401, 403, 404, 409}:
                 await session.rollback()
                 return 0
@@ -74,7 +76,7 @@ async def run_retention_maintenance(ctx: dict[str, object]) -> int:
     outcomes, approval/effect IDs, browser idempotency tombstones, source data, document history,
     and Chat messages remain owned by their original modules.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
     now = datetime.now(UTC)
     cursor = await worker_cursors.read_cursor(ctx, TRACE_CURSOR_KEY, _CURSOR_KEYS)

@@ -470,7 +470,7 @@ async def test_peer_workspace_reference_cleanup_is_bounded_to_departing_identity
                   for call in session.execute.await_args_list]
     assert statements == [
         "DELETE FROM workspace_shares WHERE workspace_shares.member_user_id = 7",
-        f"DELETE FROM workspace_memberships WHERE workspace_memberships.user_id = 7 AND workspace_memberships.workspace_id != '{scope.workspace_id}'",
+        f"DELETE FROM workspace_memberships WHERE workspace_memberships.user_id = 7 AND workspace_memberships.workspace_id != '{scope.workspace_id}'",  # noqa: S608  # test-only SQL built from constants
         "DELETE FROM workspace_invitations WHERE workspace_invitations.accepted_by_user_id = 7",
         "DELETE FROM workspace_invitations WHERE workspace_invitations.email = 'departing@example.test'",
     ]

@@ -93,7 +93,7 @@ async def collect_github_segment(
         scan_floor = scan_upper = collected_at
         sweep_revision = hint_claim.dirty_revision
     await before_request()
-    async with httpx.AsyncClient(timeout=httpx.Timeout(20), follow_redirects=False, trust_env=False) as client:  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+    async with httpx.AsyncClient(timeout=httpx.Timeout(20), follow_redirects=False, trust_env=False) as client:
         async with client.stream("GET", f"{API}{path}", headers={**HEADERS, "Authorization": f"Bearer {access_token}"}) as response:
             try:
                 await _raise_for_provider_limit(response)
@@ -198,7 +198,7 @@ def _target_items(
             raise ValueError("github_response_invalid")
         return payload[:1], "found" if payload else "not_found"
     if not isinstance(payload, dict):
-        raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("github_response_invalid")
     return [payload], "found"
 
 
@@ -299,7 +299,7 @@ async def validate_github_scope(config: GitHubSourceConfig, access_token: str) -
         user = await _read_json(client, "/user", access_token)
         installations = await _read_json(client, "/user/installations?per_page=100", access_token)
         if not isinstance(installations, dict) or not isinstance(installations.get("installations"), list):
-            raise ValueError("github_installations_unavailable")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("github_installations_unavailable")
         response = None
         for installation in installations["installations"][:100]:
             installation_id = installation.get("id") if isinstance(installation, dict) else None
@@ -355,10 +355,10 @@ async def collect_github_repository(config: GitHubSourceConfig, access_token: st
                         raise ValueError("github_response_too_large")
                 raw_items = httpx.Response(200, content=bytes(data)).json()
             if not isinstance(raw_items, list):
-                raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+                raise ValueError("github_response_invalid")
             for raw in raw_items:
                 if not isinstance(raw, dict):
-                    raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+                    raise ValueError("github_response_invalid")
                 # GitHub issue lists also include pull request-shaped objects; prevent duplicates.
                 if kind == "issue" and "pull_request" in raw:
                     continue

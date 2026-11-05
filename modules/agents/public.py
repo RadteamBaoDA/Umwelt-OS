@@ -1,7 +1,6 @@
 """Owner-scoped agent run creation, lookup, and cancellation contracts."""
 
 import asyncio
-import base64
 import binascii
 import hashlib
 import json
@@ -17,8 +16,16 @@ from fastapi import HTTPException
 from sqlalchemy import and_, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.errors import (
+    ConflictError,
+    DomainError,
+    NotFoundError,
+    UnavailableError,
+    ValidationFailedError,
+    error_status,
+)
 from core.ids import uuid7
-from core.pagination import decode_cursor, encode_cursor
+from core.pagination import b64url_decode, b64url_encode, decode_cursor, encode_cursor
 from core.realtime import commit_with_replay
 from core.telemetry import RunMeta as _RunMeta
 from core.tools import ToolRegistry, ToolRisk
@@ -39,9 +46,15 @@ from modules.agents.models import (
     AgentToolCall,
 )
 from modules.agents.schemas import (
+    AgentActivity,
+    AgentProfilePatch,
+    AgentProfileRead,
+    AgentProfileTool,
     AgentRunPage,
     AgentRunRead,
     AgentRunStart,
+    ApprovalDecisionRead,
+    ApprovalDecisionRequest,
     ApprovalRead,
     ProfileRunStart,
 )
@@ -201,8 +214,8 @@ async def reserve_browser_run_budget_in_uow(
     raw_sources = (run.profile_snapshot or {}).get("source_ids")
     try:
         source_ids = frozenset(UUID(item) for item in raw_sources) if isinstance(raw_sources, list) else frozenset()
-    except (TypeError, ValueError):
-        raise PermissionError("Browser profile source scope is invalid")
+    except (TypeError, ValueError) as exc:
+        raise PermissionError("Browser profile source scope is invalid") from exc
     profile = await session.scalar(select(AgentProfile).where(
         AgentProfile.workspace_id == scope.workspace_id, AgentProfile.profile_id == profile_id,
     ))
@@ -272,8 +285,8 @@ async def revalidate_browser_run_authority(
 
     try:
         fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    except HTTPException as exc:
-        if exc.status_code in {401, 403, 404, 409}:
+    except (HTTPException, DomainError) as exc:
+        if error_status(exc) in {401, 403, 404, 409}:
             return False
         raise
     if authorization.owner_id != actor(scope):
@@ -393,7 +406,7 @@ async def create_profile_run_in_uow(
     fence = await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True)
     owner_id = actor(scope)
     if request.token_budget is not None:
-        raise HTTPException(status_code=422, detail="token_budget_unavailable")
+        raise ValidationFailedError("token_budget_unavailable")
     request_body = {
         "profile_id": profile_id, "prompt": request.prompt,
         "expected_profile_revision": request.expected_profile_revision,
@@ -414,11 +427,11 @@ async def create_profile_run_in_uow(
     ))
     if existing is not None:
         if existing.request_hash != request_hash:
-            raise HTTPException(status_code=409, detail="Client request ID was already used for another run")
+            raise ConflictError("Client request ID was already used for another run")
         from modules.chat.public import has_live_agent_run_link
 
         if not await has_live_agent_run_link(session, existing.id, owner_id, auth_session_hash):
-            raise HTTPException(status_code=404, detail="Agent run not found")
+            raise NotFoundError("Agent run not found")
         retry_factory = async_sessionmaker(session.bind) if session.bind is not None else None
         return await _read_current_result(
             existing, retry_factory, multi_workspace_enabled=multi_workspace_enabled,
@@ -435,9 +448,9 @@ async def create_profile_run_in_uow(
             AgentProfileRevision.revision == revision,
         ))
         if revision_row is None:
-            raise HTTPException(status_code=409, detail="Agent profile revision is unavailable")
+            raise ConflictError("Agent profile revision is unavailable")
         if revision_row.snapshot_hash != snapshot_hash:
-            raise HTTPException(status_code=409, detail="Agent profile revision no longer matches its stored snapshot")
+            raise ConflictError("Agent profile revision no longer matches its stored snapshot")
     allowed = [item["name"] for item in snapshot["allowed_tools"]]
     contracts = {item["name"]: {"version": item["version"], "fingerprint": item["fingerprint"]}
                  for item in snapshot["allowed_tools"]}
@@ -483,7 +496,7 @@ async def list_runs(
     await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     owner_id = actor(scope)
     if not 1 <= limit <= 25:
-        raise HTTPException(status_code=422, detail="Run history page size is outside its supported bound")
+        raise ValidationFailedError("Run history page size is outside its supported bound")
     from modules.memory.public import bind_page_cursor, page_cursor_binding, unbind_page_cursor
 
     binding = page_cursor_binding(
@@ -581,7 +594,7 @@ async def create_run(
     }
     allowed = sorted(definitions)
     if not allowed:
-        raise HTTPException(status_code=503, detail="Agent tools are unavailable")
+        raise UnavailableError("Agent tools are unavailable")
     run = AgentRun(
         id=uuid7(), workspace_id=scope.workspace_id, owner_id=owner_id,
         membership_revision=fence.membership_revision,
@@ -622,7 +635,7 @@ async def get_run(
         AgentRun.owner_id == actor(scope),
     ))
     if row is None:
-        raise HTTPException(status_code=404, detail="Agent run not found")
+        raise NotFoundError("Agent run not found")
     return await _read_current_result(row, session_factory, multi_workspace_enabled=multi_workspace_enabled)
 
 
@@ -646,7 +659,7 @@ async def get_run_for_owner(
         AgentRun.owner_id == owner_id,
     ))
     if row is None:
-        raise HTTPException(status_code=404, detail="Agent run not found")
+        raise NotFoundError("Agent run not found")
     if row.chat_link_required:
         from modules.chat.public import authorize_agent_run_access
 
@@ -654,7 +667,7 @@ async def get_run_for_owner(
             session, run_id, owner_id, auth_session_hash, lock_conversation=True,
         )
         if not allowed:
-            raise HTTPException(status_code=404, detail="Agent run not found")
+            raise NotFoundError("Agent run not found")
     return await get_run(
         session, run_id, session_factory, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
@@ -817,7 +830,7 @@ def _encode_agent_cleanup_cursor(
         "after": str(after) if after else None, "unavailable": unavailable,
     }
     raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_agent_cleanup_cursor(
@@ -827,7 +840,7 @@ def _decode_agent_cleanup_cursor(
     try:
         if not cursor or len(cursor) > 1024 or "=" in cursor:
             raise ValueError("Invalid Agent copied-evidence cursor")
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
+        raw = b64url_decode(cursor)
         payload = json.loads(raw)
         if (
             not isinstance(payload, dict)
@@ -950,7 +963,7 @@ async def _admit_cleanup_evidence(
     """Admit the owner (members denied before SQL) and bind the detached page to this workspace."""
     await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if evidence.workspace_id != scope.workspace_id or evidence.actor_user_id != actor(scope):
-        raise HTTPException(status_code=409, detail="Document cleanup evidence belongs to another workspace")
+        raise ConflictError("Document cleanup evidence belongs to another workspace")
 
 
 async def preflight_document_copied_evidence_lease(
@@ -1060,7 +1073,7 @@ def _scrub_agent_scope_payloads(
             approval_fences = _strict_agent_fences(approval.source_fences) if approval is not None else None
             if approval_fences is not None:
                 classified = True
-                assert approval is not None
+                assert approval is not None  # noqa: S101  # mypy narrowing invariant
                 matched = _fences_match_agent_scope(approval.source_fences, records)
         if matched:
             # Input provenance justifies clearing derived arguments. Output references may identify
@@ -1116,6 +1129,315 @@ def _agent_cleanup_marker_state(marker: AgentEvidenceCleanup | None) -> str:
     return "finalized" if marker.finalized_at is not None else marker.state
 
 
+@dataclass
+class _CleanupPass:
+    """Mutable state of one Agent copied-evidence cleanup transaction (at most one run per page).
+
+    The caller owns the unit of work: no method here commits. ``last_processed``/``processed``/
+    ``unavailable`` accumulate across the (single) run so every early return reports the same
+    cursor and counters the monolithic loop did.
+    """
+
+    session: AsyncSession
+    evidence: DocumentCleanupEvidenceScope
+    records: list[dict[str, object]]
+    workspace_id: UUID
+    owner_id: int
+    page_fingerprint: str
+    scope_fingerprint: str
+    preflight: AgentCleanupLeasePreflight
+    cursor: str | None
+    last_processed: UUID | None
+    unavailable: bool
+    processed: int = 0
+
+    async def progress(
+        self, next_cursor: str | None, complete: bool, rows_processed: int, unavailable_result: bool,
+        lease_pending: bool = False, preflight_stale: bool = False,
+    ) -> AgentCopiedEvidenceCleanupProgress:
+        """Count operation-wide unique unavailable receipts; leave flush and commit to the caller's UoW."""
+        return AgentCopiedEvidenceCleanupProgress(
+            next_cursor, complete, rows_processed, unavailable_result,
+            await _agent_unavailable_run_count(self.session, self.evidence.operation_id, self.workspace_id),
+            lease_pending, preflight_stale,
+        )
+
+    def encode(self, unavailable_flag: bool) -> str:
+        """Encode the opaque resume cursor after the last fully processed run."""
+        return _encode_agent_cleanup_cursor(
+            self.evidence, self.page_fingerprint, self.last_processed, unavailable_flag,
+        )
+
+    async def stale(self) -> AgentCopiedEvidenceCleanupProgress:
+        """Report that the detached preflight no longer matches durable state (caller rolls back)."""
+        return await self.progress(self.cursor, False, self.processed, self.unavailable, preflight_stale=True)
+
+    def advance(self, run_id: UUID) -> None:
+        """Mark ``run_id`` as fully processed for the cursor and row counters."""
+        self.last_processed, self.processed = run_id, self.processed + 1
+
+    async def lock_run(self, run_id: UUID) -> AgentRun | None:
+        """Take the AgentRun row lock (after Memory privacy) scoped to this workspace and owner."""
+        return await self.session.scalar(select(AgentRun).where(
+            AgentRun.id == run_id,
+            AgentRun.workspace_id == self.workspace_id, AgentRun.owner_id == self.owner_id,
+        ).with_for_update())
+
+    async def load_marker(
+        self, run_id: UUID, *, lock: bool, populate: bool = False,
+    ) -> AgentEvidenceCleanup | None:
+        """Read this operation's cleanup marker for ``run_id``, optionally locked and refreshed."""
+        statement = select(AgentEvidenceCleanup).where(
+            AgentEvidenceCleanup.operation_id == self.evidence.operation_id,
+            AgentEvidenceCleanup.workspace_id == self.workspace_id,
+            AgentEvidenceCleanup.run_id == run_id,
+        )
+        if lock:
+            statement = statement.with_for_update()
+        if populate:
+            statement = statement.execution_options(populate_existing=True)
+        return await self.session.scalar(statement)
+
+    def new_marker(
+        self, run_id: UUID, state: str, matched_identity: dict[str, object] | None,
+    ) -> AgentEvidenceCleanup:
+        """Build and add a cleanup marker bound to this operation's source/document scope."""
+        marker = AgentEvidenceCleanup(
+            workspace_id=self.workspace_id, operation_id=self.evidence.operation_id, run_id=run_id,
+            source_id=self.evidence.source_id, document_id=self.evidence.document_id,
+            scope_fingerprint=self.scope_fingerprint, matched_identity=matched_identity, state=state,
+        )
+        self.session.add(marker)
+        return marker
+
+    def scrub(
+        self, approvals: Any, effects: Any, calls: Any, now: datetime | None = None,
+    ) -> bool:
+        """Scrub exact-match action payloads; return whether any identity stayed unresolved."""
+        return _scrub_agent_scope_payloads(approvals, effects, calls, self.records, now or datetime.now(UTC))
+
+
+def _revoke_run_for_cleanup(run: AgentRun) -> None:
+    """Revoke a matched run's evidence: cancel, bump dispatch generation, clear the answer.
+
+    Queued and waiting runs become ``cancelled`` immediately; running ones are stopped by the worker
+    observing ``cancel_requested``.
+    """
+    run.evidence_revoked = True
+    run.cancel_requested = True
+    run.dispatch_generation += 1
+    run.answer = None
+    if run.status in {"queued", "waiting_approval"}:
+        run.status, run.completed_at = "cancelled", datetime.now(UTC)
+    run.updated_at = datetime.now(UTC)
+
+
+async def _cleanup_finalized_marker(
+    work: _CleanupPass, run_id: UUID,
+) -> AgentCopiedEvidenceCleanupProgress | None:
+    """Scrub a later reference page for a run whose checkpoint was already erased.
+
+    Documents may deliver later reference pages for the same operation/run. The opaque checkpoint
+    is already gone, but each page still needs its own selective ledger scrub. Lock order: privacy,
+    run, marker, then ledgers. Returns a stale-preflight progress or ``None`` to continue.
+    """
+    from modules.memory.public import lock_export_privacy
+
+    await lock_export_privacy(work.session, work.workspace_id)
+    run = await work.lock_run(run_id)
+    marker = await work.load_marker(run_id, lock=True, populate=True)
+    if _agent_cleanup_marker_state(marker) != work.preflight.marker_state:
+        return await work.stale()
+    if run is not None:
+        approvals, effects, calls = await _agent_cleanup_ledgers(
+            work.session, run_id, workspace_id=work.workspace_id,
+        )
+        unresolved = work.scrub(approvals, effects, calls)
+        assert marker is not None  # noqa: S101  # mypy narrowing invariant
+        marker.state = "unavailable" if unresolved else "finalized"
+        work.unavailable = work.unavailable or unresolved or marker.state == "unavailable"
+    work.advance(run_id)
+    return None
+
+
+async def _cleanup_unavailable_marker(
+    work: _CleanupPass, run_id: UUID,
+) -> AgentCopiedEvidenceCleanupProgress | None:
+    """Re-test an ``unavailable`` receipt against this page's exact identities.
+
+    An unassociated legacy active row is a coverage gate, not permission to cancel or erase an
+    unrelated run. A later reference page may prove a real match and promote the receipt into the
+    ordinary revoke/finalize sequence (``pending`` plus a lease-pending cursor).
+    """
+    from modules.memory.public import lock_export_privacy
+
+    await lock_export_privacy(work.session, work.workspace_id)
+    run = await work.lock_run(run_id)
+    marker = await work.load_marker(run_id, lock=True, populate=True)
+    if _agent_cleanup_marker_state(marker) != work.preflight.marker_state:
+        return await work.stale()
+    if run is None:
+        work.advance(run_id)
+        work.unavailable = True
+        return None
+    approvals, _effects, calls = await _agent_cleanup_ledgers(work.session, run_id, workspace_id=work.workspace_id)
+    matching = _find_agent_scope_match(run, approvals, calls, work.records)
+    if matching is None:
+        work.advance(run_id)
+        work.unavailable = True
+        return None
+    assert marker is not None  # noqa: S101  # mypy narrowing invariant
+    marker.matched_identity = matching
+    marker.state = "pending"
+    _revoke_run_for_cleanup(run)
+    await work.session.flush()
+    return await work.progress(work.encode(True), False, work.processed + 1, True, lease_pending=True)
+
+
+async def _cleanup_existing_marker_phase_a(
+    work: _CleanupPass, run_id: UUID, run: AgentRun, marker: AgentEvidenceCleanup,
+) -> AgentCopiedEvidenceCleanupProgress | None:
+    """Handle a marker that appeared between the unlocked read and the locked re-read (Phase A)."""
+    approvals, effects, calls = await _agent_cleanup_ledgers(work.session, run_id, workspace_id=work.workspace_id)
+    if marker.state == "unavailable" and marker.finalized_at is None:
+        matching = _find_agent_scope_match(run, approvals, calls, work.records)
+        if matching is None:
+            work.advance(run_id)
+            work.unavailable = True
+            return None
+        marker.matched_identity, marker.state = matching, "pending"
+        _revoke_run_for_cleanup(run)
+        await work.session.flush()
+        return await work.progress(work.encode(True), False, work.processed + 1, True)
+    unresolved = work.scrub(approvals, effects, calls)
+    if unresolved:
+        marker.state = "unavailable"
+    work.unavailable = work.unavailable or unresolved or marker.state == "unavailable"
+    work.advance(run_id)
+    return None
+
+
+async def _cleanup_phase_a(work: _CleanupPass, run_id: UUID) -> AgentCopiedEvidenceCleanupProgress | None:
+    """Phase A: commit an operation-scoped denial before attempting physical saver erasure.
+
+    No lease is awaited or held while the transaction takes owner rows. A run with no exact match is
+    persisted once as an ``unavailable`` coverage gate (keyset replay stays finite) and never mutated;
+    a matching run gets a ``pending`` marker, revocation and a lease-pending cursor.
+    """
+    from modules.memory.public import lock_export_privacy
+
+    await lock_export_privacy(work.session, work.workspace_id)
+    run = await work.lock_run(run_id)
+    if run is None:
+        work.advance(run_id)
+        return None
+    marker = await work.load_marker(run_id, lock=True)
+    if _agent_cleanup_marker_state(marker) != work.preflight.marker_state:
+        return await work.stale()
+    if marker is not None and marker.scope_fingerprint != work.scope_fingerprint:
+        return await work.progress(work.encode(True), False, work.processed, True)
+    if marker is not None and marker.state == "pending":
+        return await work.progress(work.encode(work.unavailable), False, work.processed, work.unavailable)
+    if marker is not None:
+        return await _cleanup_existing_marker_phase_a(work, run_id, run, marker)
+    approvals, _effects, calls = await _agent_cleanup_ledgers(work.session, run_id, workspace_id=work.workspace_id)
+    matching = _find_agent_scope_match(run, approvals, calls, work.records)
+    if matching is None:
+        # An unclassified active legacy row is only a coverage gate. Persist it once so
+        # keyset replay is finite, but never revoke, erase, or otherwise mutate that run.
+        work.new_marker(run_id, "unavailable", None)
+        await work.session.flush()
+        work.advance(run_id)
+        work.unavailable = True
+        return None
+    work.new_marker(run_id, "pending", matching)
+    _revoke_run_for_cleanup(run)
+    await work.session.flush()
+    return await work.progress(
+        work.encode(work.unavailable), False, work.processed + 1, work.unavailable, lease_pending=True,
+    )
+
+
+async def _cleanup_phase_b(work: _CleanupPass, run_id: UUID) -> AgentCopiedEvidenceCleanupProgress | None:
+    """Phase B: erase opaque saver state for a ``pending`` marker once the run lease is held.
+
+    The detached try-lock conflicts with the worker's session lease and was acquired before Memory
+    privacy or Agent rows; contention leaves this run at the current cursor position. Lock order:
+    privacy, run, marker, then ledgers; checkpoint tables are deleted for the run's thread.
+    """
+    from modules.memory.public import lock_export_privacy
+
+    preflight = work.preflight
+    if preflight.blocked or (preflight.lease_required and not preflight.lease_acquired):
+        return await work.progress(work.encode(work.unavailable), False, work.processed, work.unavailable)
+    await lock_export_privacy(work.session, work.workspace_id)
+    run = await work.lock_run(run_id)
+    marker = await work.load_marker(run_id, lock=True)
+    if (_agent_cleanup_marker_state(marker) != preflight.marker_state
+            or (_agent_cleanup_marker_state(marker) == "pending" and (
+                not preflight.lease_required or not preflight.lease_acquired
+            ))):
+        return await work.stale()
+    if run is None or marker is None or marker.scope_fingerprint != work.scope_fingerprint:
+        return await work.progress(work.encode(True), False, work.processed, True)
+    approvals, effects, calls = await _agent_cleanup_ledgers(work.session, run_id, workspace_id=work.workspace_id)
+    now = datetime.now(UTC)
+    unresolved = work.scrub(approvals, effects, calls, now)
+    if marker.state == "finalized" or marker.finalized_at is not None:
+        marker.state = "unavailable" if unresolved else "finalized"
+        work.unavailable = work.unavailable or unresolved or marker.state == "unavailable"
+        work.advance(run_id)
+        return None
+    if marker.state != "pending":
+        return await work.progress(work.encode(True), False, work.processed, True)
+    run.answer = None
+    run.evidence_revoked = True
+    run.cancel_requested = True
+    if run.status in {"queued", "waiting_approval"}:
+        run.status = "cancelled"
+        run.completed_at = run.completed_at or now
+    run.updated_at = now
+    for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+        await work.session.execute(
+            text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
+            {"thread_id": run.checkpoint_thread_id},
+        )
+    marker.state = "unavailable" if unresolved else "finalized"
+    marker.finalized_at = now
+    work.unavailable = work.unavailable or unresolved
+    work.advance(run_id)
+    return None
+
+
+async def _cleanup_one_run(work: _CleanupPass, run_id: UUID) -> AgentCopiedEvidenceCleanupProgress | None:
+    """Dispatch one candidate run to the phase its durable marker state calls for.
+
+    The marker is read unlocked first; its state is re-checked after lease acquisition and before
+    locking mutable Agent rows. A pending marker always needs an affirmative lease for this exact
+    run before any privacy/receipt locks. Returns a progress to return immediately, or ``None``.
+    """
+    preflight, evidence = work.preflight, work.evidence
+    marker = await work.load_marker(run_id, lock=False)
+    current_marker_state = _agent_cleanup_marker_state(marker)
+    if (current_marker_state != preflight.marker_state
+            or (current_marker_state == "pending" and (
+                not preflight.lease_required or not preflight.lease_acquired
+            ))):
+        return await work.progress(work.cursor, False, 0, work.unavailable, preflight_stale=True)
+    if marker is not None and (
+        marker.source_id != evidence.source_id or marker.document_id != evidence.document_id
+        or marker.scope_fingerprint != work.scope_fingerprint
+    ):
+        return await work.progress(work.encode(True), False, work.processed, True)
+    if marker is not None and (marker.state == "finalized" or marker.finalized_at is not None):
+        return await _cleanup_finalized_marker(work, run_id)
+    if marker is not None and marker.state == "unavailable":
+        return await _cleanup_unavailable_marker(work, run_id)
+    if marker is None:
+        return await _cleanup_phase_a(work, run_id)
+    return await _cleanup_phase_b(work, run_id)
+
+
 async def purge_document_copied_evidence_page(
     session: AsyncSession,
     evidence: DocumentCleanupEvidenceScope,
@@ -1145,18 +1467,10 @@ async def purge_document_copied_evidence_page(
     after, unavailable = (
         _decode_agent_cleanup_cursor(cursor, evidence, page_fingerprint) if cursor else (None, False)
     )
-    async def progress(
-        next_cursor: str | None, complete: bool, rows_processed: int, unavailable_result: bool,
-        lease_pending: bool = False,
-        preflight_stale: bool = False,
-    ) -> AgentCopiedEvidenceCleanupProgress:
-        """Count operation-wide unique unavailable receipts; leave flush and commit to the caller's UoW."""
-        return AgentCopiedEvidenceCleanupProgress(
-            next_cursor, complete, rows_processed, unavailable_result,
-            await _agent_unavailable_run_count(session, evidence.operation_id, workspace_id), lease_pending,
-            preflight_stale,
-        )
-
+    work = _CleanupPass(
+        session, evidence, records, workspace_id, owner_id, page_fingerprint, scope_fingerprint,
+        preflight, cursor, after, unavailable,
+    )
     # One run per transaction keeps the caller's detached lease preflight aligned with the
     # exact candidate whose Agent rows this hook may lock. Later runs use this opaque cursor.
     if preflight.operation_id != evidence.operation_id or preflight.agent_cursor != cursor:
@@ -1164,264 +1478,20 @@ async def purge_document_copied_evidence_page(
     if preflight.scope_fingerprint != page_fingerprint:
         raise ValueError("Agent cleanup lease preflight does not match the Documents evidence scope")
     if preflight.blocked:
-        return await progress(cursor, False, 0, unavailable)
+        return await work.progress(cursor, False, 0, unavailable)
     candidate_ids = await _agent_cleanup_candidate_ids(
         session, evidence, records, after, 1, workspace_id=workspace_id, owner_id=owner_id,
     )
     more_candidates = len(candidate_ids) > 1
     page = candidate_ids[:1]
     if (page[0] if page else None) != preflight.candidate_run_id:
-        return await progress(cursor, False, 0, unavailable, preflight_stale=True)
-    last_processed = after
-    processed = 0
-    from modules.memory.public import lock_export_privacy
-
+        return await work.progress(cursor, False, 0, unavailable, preflight_stale=True)
     for run_id in page:
-        # Marker read is intentionally unlocked. Its durable state is checked again after lease
-        # acquisition and before locking mutable Agent rows.
-        marker = await session.scalar(select(AgentEvidenceCleanup).where(
-            AgentEvidenceCleanup.operation_id == evidence.operation_id,
-            AgentEvidenceCleanup.workspace_id == workspace_id,
-            AgentEvidenceCleanup.run_id == run_id,
-        ))
-        current_marker_state = _agent_cleanup_marker_state(marker)
-        # A pending marker always needs an affirmative lease for this exact run before any
-        # privacy/receipt locks. If the detached read is stale, the caller must roll back.
-        if (current_marker_state != preflight.marker_state
-                or (current_marker_state == "pending" and (
-                    not preflight.lease_required or not preflight.lease_acquired
-                ))):
-            return await progress(cursor, False, 0, unavailable, preflight_stale=True)
-        if marker is not None and (
-            marker.source_id != evidence.source_id or marker.document_id != evidence.document_id
-            or marker.scope_fingerprint != scope_fingerprint
-        ):
-            return await progress(
-                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
-                False, processed, True,
-            )
-        if marker is not None and (marker.state == "finalized" or marker.finalized_at is not None):
-            # Documents may deliver later reference pages for the same operation/run. The opaque
-            # checkpoint is already gone, but each page still needs its own selective ledger scrub.
-            await lock_export_privacy(session)
-            run = await session.scalar(select(AgentRun).where(
-                AgentRun.id == run_id,
-                AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
-            ).with_for_update())
-            marker = await session.scalar(select(AgentEvidenceCleanup).where(
-                AgentEvidenceCleanup.operation_id == evidence.operation_id,
-                AgentEvidenceCleanup.workspace_id == workspace_id,
-                AgentEvidenceCleanup.run_id == run_id,
-            ).with_for_update().execution_options(populate_existing=True))
-            if _agent_cleanup_marker_state(marker) != preflight.marker_state:
-                return await progress(cursor, False, processed, unavailable, preflight_stale=True)
-            if run is not None:
-                approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
-                unresolved = _scrub_agent_scope_payloads(
-                    approvals, effects, calls, records, datetime.now(UTC),
-                )
-                assert marker is not None
-                marker.state = "unavailable" if unresolved else "finalized"
-                unavailable = unavailable or unresolved or marker.state == "unavailable"
-            last_processed, processed = run_id, processed + 1
-            continue
-        if marker is not None and marker.state == "unavailable":
-            # An unassociated legacy active row is a coverage gate, not permission to cancel or
-            # erase an unrelated run. Recheck exact identities so a later reference page can prove
-            # a real match and promote this receipt into the ordinary revoke/finalize sequence.
-            await lock_export_privacy(session)
-            run = await session.scalar(select(AgentRun).where(
-                AgentRun.id == run_id,
-                AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
-            ).with_for_update())
-            marker = await session.scalar(select(AgentEvidenceCleanup).where(
-                AgentEvidenceCleanup.operation_id == evidence.operation_id,
-                AgentEvidenceCleanup.workspace_id == workspace_id,
-                AgentEvidenceCleanup.run_id == run_id,
-            ).with_for_update().execution_options(populate_existing=True))
-            if _agent_cleanup_marker_state(marker) != preflight.marker_state:
-                return await progress(cursor, False, processed, unavailable, preflight_stale=True)
-            if run is None:
-                last_processed, processed = run_id, processed + 1
-                unavailable = True
-                continue
-            approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
-            matching = _find_agent_scope_match(run, approvals, calls, records)
-            if matching is None:
-                last_processed, processed = run_id, processed + 1
-                unavailable = True
-                continue
-            assert marker is not None
-            marker.matched_identity = matching
-            marker.state = "pending"
-            run.evidence_revoked = True
-            run.cancel_requested = True
-            run.dispatch_generation += 1
-            run.answer = None
-            if run.status in {"queued", "waiting_approval"}:
-                run.status, run.completed_at = "cancelled", datetime.now(UTC)
-            run.updated_at = datetime.now(UTC)
-            await session.flush()
-            return await progress(
-                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
-                False, processed + 1, True, lease_pending=True,
-            )
-
-        if marker is None:
-            # Phase A: commit an operation-scoped denial before attempting physical saver erasure.
-            # No lease is awaited or held while the transaction takes owner rows.
-            await lock_export_privacy(session)
-            run = await session.scalar(select(AgentRun).where(
-                AgentRun.id == run_id,
-                AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
-            ).with_for_update())
-            if run is None:
-                last_processed, processed = run_id, processed + 1
-                continue
-            marker = await session.scalar(select(AgentEvidenceCleanup).where(
-                AgentEvidenceCleanup.operation_id == evidence.operation_id,
-                AgentEvidenceCleanup.workspace_id == workspace_id,
-                AgentEvidenceCleanup.run_id == run_id,
-            ).with_for_update())
-            if _agent_cleanup_marker_state(marker) != preflight.marker_state:
-                return await progress(cursor, False, processed, unavailable, preflight_stale=True)
-            if marker is not None and marker.scope_fingerprint != scope_fingerprint:
-                return await progress(
-                        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
-                        False, processed, True,
-                )
-            if marker is not None and marker.state == "pending":
-                return await progress(
-                        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable),
-                        False, processed, unavailable,
-                )
-            if marker is not None:
-                approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
-                if marker.state == "unavailable" and marker.finalized_at is None:
-                    matching = _find_agent_scope_match(run, approvals, calls, records)
-                    if matching is None:
-                        last_processed, processed = run_id, processed + 1
-                        unavailable = True
-                        continue
-                    marker.matched_identity, marker.state = matching, "pending"
-                    run.evidence_revoked = True
-                    run.cancel_requested = True
-                    run.dispatch_generation += 1
-                    run.answer = None
-                    if run.status in {"queued", "waiting_approval"}:
-                        run.status, run.completed_at = "cancelled", datetime.now(UTC)
-                    run.updated_at = datetime.now(UTC)
-                    await session.flush()
-                    return await progress(
-                        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
-                        False, processed + 1, True,
-                    )
-                unresolved = _scrub_agent_scope_payloads(
-                    approvals, effects, calls, records, datetime.now(UTC),
-                )
-                if unresolved:
-                    marker.state = "unavailable"
-                unavailable = unavailable or unresolved or marker.state == "unavailable"
-                last_processed, processed = run_id, processed + 1
-                continue
-            approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
-            matching = _find_agent_scope_match(run, approvals, calls, records)
-            if matching is None:
-                # An unclassified active legacy row is only a coverage gate. Persist it once so
-                # keyset replay is finite, but never revoke, erase, or otherwise mutate that run.
-                marker = AgentEvidenceCleanup(
-                    workspace_id=workspace_id, operation_id=evidence.operation_id, run_id=run_id,
-                    source_id=evidence.source_id, document_id=evidence.document_id,
-                    scope_fingerprint=scope_fingerprint,
-                    matched_identity=None, state="unavailable",
-                )
-                session.add(marker)
-                await session.flush()
-                last_processed, processed = run_id, processed + 1
-                unavailable = True
-                continue
-            marker = AgentEvidenceCleanup(
-                workspace_id=workspace_id, operation_id=evidence.operation_id, run_id=run_id,
-                source_id=evidence.source_id, document_id=evidence.document_id,
-                scope_fingerprint=scope_fingerprint, matched_identity=matching, state="pending",
-            )
-            session.add(marker)
-            run.evidence_revoked = True
-            run.cancel_requested = True
-            run.dispatch_generation += 1
-            run.answer = None
-            if run.status in {"queued", "waiting_approval"}:
-                run.status = "cancelled"
-                run.completed_at = datetime.now(UTC)
-            run.updated_at = datetime.now(UTC)
-            await session.flush()
-            return await progress(
-                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable),
-                False, processed + 1, unavailable, lease_pending=True,
-            )
-
-        # Phase B: this try-lock conflicts with the worker's session lease and is acquired before
-        # Memory privacy or Agent rows. Contention leaves this run at the current cursor position.
-        if preflight.blocked or (preflight.lease_required and not preflight.lease_acquired):
-            return await progress(
-                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable),
-                False, processed, unavailable,
-            )
-        await lock_export_privacy(session)
-        run = await session.scalar(select(AgentRun).where(
-            AgentRun.id == run_id,
-            AgentRun.workspace_id == workspace_id, AgentRun.owner_id == owner_id,
-        ).with_for_update())
-        marker = await session.scalar(select(AgentEvidenceCleanup).where(
-            AgentEvidenceCleanup.operation_id == evidence.operation_id,
-            AgentEvidenceCleanup.workspace_id == workspace_id,
-            AgentEvidenceCleanup.run_id == run_id,
-        ).with_for_update())
-        if (_agent_cleanup_marker_state(marker) != preflight.marker_state
-                or (_agent_cleanup_marker_state(marker) == "pending" and (
-                    not preflight.lease_required or not preflight.lease_acquired
-                ))):
-            return await progress(cursor, False, processed, unavailable, preflight_stale=True)
-        if run is None or marker is None or marker.scope_fingerprint != scope_fingerprint:
-            return await progress(
-                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
-                False, processed, True,
-            )
-        approvals, effects, calls = await _agent_cleanup_ledgers(session, run_id, workspace_id=workspace_id)
-        now = datetime.now(UTC)
-        unresolved = _scrub_agent_scope_payloads(approvals, effects, calls, records, now)
-        if marker.state == "finalized" or marker.finalized_at is not None:
-            marker.state = "unavailable" if unresolved else "finalized"
-            unavailable = unavailable or unresolved or marker.state == "unavailable"
-            last_processed, processed = run_id, processed + 1
-            continue
-        if marker.state != "pending":
-            return await progress(
-                _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, True),
-                False, processed, True,
-            )
-        run.answer = None
-        run.evidence_revoked = True
-        run.cancel_requested = True
-        if run.status in {"queued", "waiting_approval"}:
-            run.status = "cancelled"
-            run.completed_at = run.completed_at or now
-        run.updated_at = now
-        for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
-            await session.execute(
-                text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),
-                {"thread_id": run.checkpoint_thread_id},
-            )
-        marker.state = "unavailable" if unresolved else "finalized"
-        marker.finalized_at = now
-        unavailable = unavailable or unresolved
-        last_processed, processed = run_id, processed + 1
-
-    next_cursor = (
-        _encode_agent_cleanup_cursor(evidence, page_fingerprint, last_processed, unavailable)
-        if more_candidates else None
-    )
-    return await progress(next_cursor, not more_candidates, processed, unavailable)
+        early = await _cleanup_one_run(work, run_id)
+        if early is not None:
+            return early
+    next_cursor = work.encode(work.unavailable) if more_candidates else None
+    return await work.progress(next_cursor, not more_candidates, work.processed, work.unavailable)
 
 
 async def list_conversation_approvals(
@@ -1517,7 +1587,7 @@ async def get_approval(
     await admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     owner_id = actor(scope)
     if not await revalidate_account_session(session, auth_session_hash, owner_id, multi_workspace_enabled=multi_workspace_enabled):
-        raise HTTPException(status_code=404, detail="Approval not found")
+        raise NotFoundError("Approval not found")
     item = await session.scalar(select(AgentApproval).where(
         AgentApproval.id == approval_id, AgentApproval.workspace_id == scope.workspace_id,
         AgentApproval.owner_id == owner_id,
@@ -1529,7 +1599,7 @@ async def get_approval(
         if item is not None else None
     )
     if item is None or conversation_id is None or item.arguments is None:
-        raise HTTPException(status_code=404, detail="Approval not found")
+        raise NotFoundError("Approval not found")
     run_revoked = await _approval_run_is_revoked(session_factory, item.run_id, scope.workspace_id)
     fences_current = not run_revoked and await _approval_fences_current(
         session_factory, item, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
@@ -1538,7 +1608,7 @@ async def get_approval(
             or not await live_agent_conversation_id(
                 session, item.run_id, owner_id, auth_session_hash,
             )):
-        raise HTTPException(status_code=404, detail="Approval not found")
+        raise NotFoundError("Approval not found")
     if not fences_current and not run_revoked:
         await _invalidate_stale_approval(session, item)
     effect = await session.scalar(select(AgentEffect).where(
@@ -1700,7 +1770,7 @@ async def purge_agent_runs(
             run.completed_at = datetime.now(UTC)
         for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
             await session.execute(
-                text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),
+                text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
                 {"thread_id": run.checkpoint_thread_id},
             )
     await purge_browser_results_in_uow(
@@ -1732,7 +1802,7 @@ async def request_cancel(
         ).with_for_update()
     )
     if row is None:
-        raise HTTPException(status_code=404, detail="Agent run not found")
+        raise NotFoundError("Agent run not found")
     if row.status not in TERMINAL_STATUSES:
         row.cancel_requested = True
         approvals = list((await session.scalars(select(AgentApproval).where(
@@ -1765,7 +1835,7 @@ async def request_cancel(
             row.error_code = None
             for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
                 await session.execute(
-                    text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),
+                    text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
                     {"thread_id": row.checkpoint_thread_id},
                 )
         await commit_with_replay(
@@ -1815,7 +1885,7 @@ async def request_cancel_for_owner(
         AgentRun.owner_id == owner_id,
     ))
     if row is None or row.auth_session_hash != auth_session_hash:
-        raise HTTPException(status_code=404, detail="Agent run not found")
+        raise NotFoundError("Agent run not found")
     if row.chat_link_required:
         from modules.chat.public import authorize_agent_run_access
 
@@ -1824,7 +1894,7 @@ async def request_cancel_for_owner(
             require_original_session=True, lock_conversation=True,
         )
         if not allowed:
-            raise HTTPException(status_code=404, detail="Agent run not found")
+            raise NotFoundError("Agent run not found")
     result = await request_cancel(
         session, run_id, session_factory, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
@@ -1835,7 +1905,7 @@ async def request_cancel_for_owner(
             require_original_session=True, lock_conversation=True,
         )
         if not allowed:
-            raise HTTPException(status_code=404, detail="Agent run not found")
+            raise NotFoundError("Agent run not found")
     return result
 
 
@@ -1866,8 +1936,18 @@ __all__ = [
     "SPECIALIST_WORKFLOW_VERSION",
     "WORKFLOW_TOOLS",
     "WORKFLOW_VERSION",
+    "AgentActivity",
     "AgentCleanupLeasePreflight",
     "AgentCopiedEvidenceCleanupProgress",
+    "AgentProfilePatch",
+    "AgentProfileRead",
+    "AgentProfileTool",
+    "AgentRunPage",
+    "AgentRunRead",
+    "AgentRunStart",
+    "ApprovalDecisionRead",
+    "ApprovalDecisionRequest",
+    "ApprovalRead",
     "BrowserRunAuthorization",
     "ProfileRunStart",
     "create_profile_run_in_uow",
@@ -1990,7 +2070,7 @@ async def redact_expired_agent_traces(
         row.trace_redacted_at = now
         eligible_ids.append(row.id)
         for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
-            await session.execute(text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),
+            await session.execute(text(f"DELETE FROM {table} WHERE thread_id = :thread_id"),  # noqa: S608  # table name comes from a pinned literal tuple; thread id is bound
                                   {"thread_id": row.checkpoint_thread_id})
         redacted += 1
     if eligible_ids:

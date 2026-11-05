@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class NotificationsDescriptor:
+class NotificationsDescriptor(ModuleDescriptor):
     """Declare notifications module metadata, routes and events."""
 
     id: str = "notifications"
@@ -21,6 +23,11 @@ class NotificationsDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.notifications.routes", 370),
+    )
+    erasure_module: str | None = "modules.notifications.erasure"
+    erasure_order: int = 150
 
 
 descriptor = NotificationsDescriptor()

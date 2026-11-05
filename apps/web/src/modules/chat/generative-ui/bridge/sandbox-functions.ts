@@ -105,6 +105,40 @@ export function validateBridgeMessage(
   event: { data: unknown; source?: unknown; origin?: string } | null | undefined,
   options: ValidateBridgeMessageOptions = {},
 ): ValidatedBridgeMessage | null {
+  const record = authenticateBridgeEvent(event, options);
+  if (!record) return null;
+  const rawType = record.type;
+  if (rawType === 'umwelt:send-prompt' || rawType === 'sendPrompt' || rawType === 'opengenui:send-prompt') {
+    return parseSendPrompt(record, rawType);
+  }
+  if (rawType === 'umwelt:resize' || rawType === 'resize' || rawType === '__ogui_resize') {
+    return parseResize(record, rawType);
+  }
+  if (rawType === 'umwelt:open-link' || rawType === 'openLink') {
+    return parseOpenLink(record, rawType);
+  }
+  if (rawType === 'umwelt:load-image') {
+    return parseLoadImage(record, rawType);
+  }
+  return null;
+}
+
+/** The opaque `'null'` origin (sandboxed srcdoc) or the host origin; an unknown host origin rejects everything else. */
+function isTrustedOrigin(origin: string | undefined, configuredHostOrigin: string | undefined): boolean {
+  const hostOrigin = configuredHostOrigin ?? (typeof window !== 'undefined' ? window.location.origin : '');
+  return origin === 'null' || (Boolean(hostOrigin) && origin === hostOrigin);
+}
+
+/**
+ * Fail-closed frame authentication: the source must be a registered sandbox window, the origin the opaque `'null'`
+ * (sandboxed srcdoc) or the host origin, and `data.nonce` must equal that frame's nonce.
+ *
+ * @returns The message payload as a record, or null when any check fails.
+ */
+function authenticateBridgeEvent(
+  event: { data: unknown; source?: unknown; origin?: string } | null | undefined,
+  options: ValidateBridgeMessageOptions,
+): Record<string, unknown> | null {
   if (!event || typeof event !== 'object') {
     return null;
   }
@@ -113,9 +147,7 @@ export function validateBridgeMessage(
   if (!frames || frames.size === 0 || !event.source || !frames.has(event.source)) {
     return null;
   }
-  const hostOrigin =
-    options.hostOrigin ?? (typeof window !== 'undefined' ? window.location.origin : '');
-  if (event.origin !== 'null' && (!hostOrigin || event.origin !== hostOrigin)) {
+  if (!isTrustedOrigin(event.origin, options.hostOrigin)) {
     return null;
   }
 
@@ -127,75 +159,70 @@ export function validateBridgeMessage(
   if (!expectedNonce || (data as Record<string, unknown>).nonce !== expectedNonce) {
     return null;
   }
+  return data as Record<string, unknown>;
+}
 
-  const record = data as Record<string, unknown>;
-  const rawType = record.type;
+/** Raw wire `type` strings accepted for one normalized message kind. */
+type BridgeRaw<K extends ValidatedBridgeMessage['type']> = Extract<ValidatedBridgeMessage, { type: K }>['rawType'];
 
-  if (
-    rawType === 'umwelt:send-prompt' ||
-    rawType === 'sendPrompt' ||
-    rawType === 'opengenui:send-prompt'
-  ) {
-    const candidate =
-      typeof record.prompt === 'string'
-        ? record.prompt
-        : typeof record.text === 'string'
-          ? record.text
-          : null;
-    if (candidate === null) {
-      return null;
-    }
-    const parsed = sendPromptParameters.safeParse({ text: candidate });
-    if (!parsed.success) {
-      return null;
-    }
-    return {
-      type: 'send-prompt',
-      prompt: parsed.data.text,
-      id: typeof record.id === 'string' && record.id.length <= 64 ? record.id : undefined,
-      rawType,
-    };
+/** Prompt request: text comes from `prompt` or `text` and must satisfy the shared send-prompt schema (1..4000 chars). */
+function parseSendPrompt(record: Record<string, unknown>, rawType: BridgeRaw<'send-prompt'>): ValidatedBridgeMessage | null {
+  const candidate =
+    typeof record.prompt === 'string'
+      ? record.prompt
+      : typeof record.text === 'string'
+        ? record.text
+        : null;
+  if (candidate === null) {
+    return null;
   }
-
-  if (
-    rawType === 'umwelt:resize' ||
-    rawType === 'resize' ||
-    rawType === '__ogui_resize'
-  ) {
-    const rawHeight = record.height;
-    if (typeof rawHeight !== 'number' || !Number.isFinite(rawHeight) || rawHeight <= 0) {
-      return null;
-    }
-    const clampedHeight = Math.max(
-      MIN_SANDBOX_HEIGHT,
-      Math.min(MAX_SANDBOX_HEIGHT, Math.ceil(rawHeight)),
-    );
-    return {
-      type: 'resize',
-      height: clampedHeight,
-      rawType,
-    };
+  const parsed = sendPromptParameters.safeParse({ text: candidate });
+  if (!parsed.success) {
+    return null;
   }
+  return {
+    type: 'send-prompt',
+    prompt: parsed.data.text,
+    id: typeof record.id === 'string' && record.id.length <= 64 ? record.id : undefined,
+    rawType,
+  };
+}
 
-  if (rawType === 'umwelt:open-link' || rawType === 'openLink') {
-    const rawUrl = record.url;
-    if (typeof rawUrl !== 'string' || !isAllowedLinkUrl(rawUrl)) {
-      return null;
-    }
-    return {
-      type: 'open-link',
-      url: rawUrl,
-      rawType,
-    };
+/** Resize request: a finite positive height, clamped to the sandbox bounds. */
+function parseResize(record: Record<string, unknown>, rawType: BridgeRaw<'resize'>): ValidatedBridgeMessage | null {
+  const rawHeight = record.height;
+  if (typeof rawHeight !== 'number' || !Number.isFinite(rawHeight) || rawHeight <= 0) {
+    return null;
   }
+  const clampedHeight = Math.max(
+    MIN_SANDBOX_HEIGHT,
+    Math.min(MAX_SANDBOX_HEIGHT, Math.ceil(rawHeight)),
+  );
+  return {
+    type: 'resize',
+    height: clampedHeight,
+    rawType,
+  };
+}
 
-  if (rawType === 'umwelt:load-image') {
-    const { url, id } = record;
-    if (typeof url !== 'string' || typeof id !== 'string' || !id || id.length > 64) {
-      return null;
-    }
-    return { type: 'load-image', url, id, rawType };
+/** Open-link request: only URLs accepted by `isAllowedLinkUrl` pass (the host still asks the owner to confirm). */
+function parseOpenLink(record: Record<string, unknown>, rawType: BridgeRaw<'open-link'>): ValidatedBridgeMessage | null {
+  const rawUrl = record.url;
+  if (typeof rawUrl !== 'string' || !isAllowedLinkUrl(rawUrl)) {
+    return null;
   }
+  return {
+    type: 'open-link',
+    url: rawUrl,
+    rawType,
+  };
+}
 
-  return null;
+/** Image request: a string URL (validated later by the media loader) and a non-empty id of at most 64 chars. */
+function parseLoadImage(record: Record<string, unknown>, rawType: BridgeRaw<'load-image'>): ValidatedBridgeMessage | null {
+  const { url, id } = record;
+  if (typeof url !== 'string' || typeof id !== 'string' || !id || id.length > 64) {
+    return null;
+  }
+  return { type: 'load-image', url, id, rawType };
 }

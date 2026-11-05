@@ -16,8 +16,9 @@ import React, { useMemo, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { entityKeys, listEntities, type Entity } from '@/modules/knowledge/api';
+import { entityKeys, listEntities, type Entity } from '@/modules/knowledge';
 import type { GadgetInstance } from '../api';
+import { BareButton } from '@/components/bare-button';
 
 /** Props for the EntityGadget component. */
 export interface EntityGadgetProps {
@@ -48,6 +49,39 @@ export function getEntityIcon(type: string): React.ReactElement {
   }
 }
 
+/** One compact entity row: linked name, type with aliases (or revision), optional description and last-seen time. */
+function EntityRow({ entity }: { entity: Entity }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const lastSeen = entity.last_seen_at
+    ? formatDateTime(entity.last_seen_at, display.locale, display.timezone)
+    : null;
+  return (
+    <li className="flex items-baseline justify-between gap-3 py-2">
+      <div className="min-w-0">
+        <Link
+          href={`/knowledge/entities/${entity.id}`}
+          className="block truncate text-sm font-semibold text-foreground hover:underline"
+        >
+          {entity.name || entity.canonical_name || t('entityUnnamed')}
+        </Link>
+        <p className="truncate text-xs text-muted-foreground">
+          {[
+            entity.type,
+            entity.aliases && entity.aliases.length > 0
+              ? t('entityAliases', { aliases: entity.aliases.map((a) => a.alias).join(', ') })
+              : t('entityRevision', { revision: entity.revision }),
+          ].join(' · ')}
+        </p>
+        {entity.description && (
+          <p className="line-clamp-1 text-xs text-muted-foreground">{entity.description}</p>
+        )}
+      </div>
+      {lastSeen && <span className="shrink-0 text-xs tabular-nums text-muted-foreground" title={t('entitySeen', { time: lastSeen })}>{lastSeen}</span>}
+    </li>
+  );
+}
+
 /**
  * Standard Entity Spotlight gadget template.
  * Highlights tracked persons, companies, and projects extracted by the Phase 4 Entity Knowledge API,
@@ -58,9 +92,7 @@ export function getEntityIcon(type: string): React.ReactElement {
  * @returns Accessible entity spotlight gadget component.
  */
 export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
-  const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
-  const display = useDisplayPreferences();
 
   const definition = instance.definition;
   const [filterQuery, setFilterQuery] = useState<string>('');
@@ -100,7 +132,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
             className="h-7 text-xs pl-7 bg-muted/20"
           />
         </div>
-        <button
+        <BareButton
           type="button"
           onClick={() => entitiesQuery.refetch()}
           disabled={entitiesQuery.isFetching}
@@ -109,7 +141,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
           aria-label={ts('entRefresh')}
         >
           <RotateCw className={`w-3.5 h-3.5 ${entitiesQuery.isFetching ? 'animate-spin' : ''}`} />
-        </button>
+        </BareButton>
         <Link
           href="/knowledge/entities"
           className="p-1 text-muted-foreground hover:text-foreground"
@@ -141,36 +173,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
       {/* Compact rows: name (14px) left, last-seen right and tabular; type and aliases stay muted. */}
       {entities.length > 0 && (
         <ul className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto pr-0.5">
-          {entities.map((entity) => {
-            const lastSeen = entity.last_seen_at
-              ? formatDateTime(entity.last_seen_at, display.locale, display.timezone)
-              : null;
-
-            return (
-              <li key={entity.id} className="flex items-baseline justify-between gap-3 py-2">
-                <div className="min-w-0">
-                  <Link
-                    href={`/knowledge/entities/${entity.id}`}
-                    className="block truncate text-sm font-semibold text-foreground hover:underline"
-                  >
-                    {entity.name || entity.canonical_name || t('entityUnnamed')}
-                  </Link>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {[
-                      entity.type,
-                      entity.aliases && entity.aliases.length > 0
-                        ? t('entityAliases', { aliases: entity.aliases.map((a) => a.alias).join(', ') })
-                        : t('entityRevision', { revision: entity.revision }),
-                    ].join(' · ')}
-                  </p>
-                  {entity.description && (
-                    <p className="line-clamp-1 text-xs text-muted-foreground">{entity.description}</p>
-                  )}
-                </div>
-                {lastSeen && <span className="shrink-0 text-xs tabular-nums text-muted-foreground" title={t('entitySeen', { time: lastSeen })}>{lastSeen}</span>}
-              </li>
-            );
-          })}
+          {entities.map((entity) => <EntityRow key={entity.id} entity={entity} />)}
         </ul>
       )}
     </div>

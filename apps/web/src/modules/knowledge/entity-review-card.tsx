@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useTranslations } from 'next-intl';
@@ -41,6 +41,7 @@ function conflictDetails(error: unknown): string[] {
 }
 
 /** Renders an entity or relationship review candidate and submits its supported resolution actions. */
+// eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this panel; it holds no branching business logic, so splitting would only relocate the same render conditions
 export function EntityReviewCard({ item }: { item: ReviewItem }) {
   const t = useTranslations('entities');
   const display = useDisplayPreferences();
@@ -48,9 +49,9 @@ export function EntityReviewCard({ item }: { item: ReviewItem }) {
   const client = useQueryClient();
   const [query, setQuery] = useState('');
   const form = useForm<Values>({ resolver: zodResolver(schema), defaultValues: { targetId: '', reason: 'owner_review', confirmed: false } });
-  const targetId = form.watch('targetId');
-  const reason = form.watch('reason');
-  const confirmed = form.watch('confirmed');
+  const targetId = useWatch({ control: form.control, name: 'targetId' });
+  const reason = useWatch({ control: form.control, name: 'reason' });
+  const confirmed = useWatch({ control: form.control, name: 'confirmed' });
   const targets = useInfiniteQuery({
     queryKey: ['entities', 'review-target', item.candidate_id, query, item.candidate_type],
     initialPageParam: undefined as string | undefined,

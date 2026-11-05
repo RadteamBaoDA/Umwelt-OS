@@ -1,105 +1,58 @@
 import asyncio
 import os
-from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from typing import Any, cast
 
 from arq.connections import ArqRedis
+from arq.constants import default_queue_name
 from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import Route
 
-from core.auth.deletion_routes import router as account_deletion_router
+from core.async_runtime import configure_default_executor
 from core.auth.dependencies import session_middleware_secret
-from core.auth.routes import router as auth_router
 from core.body_limit import BodyLimitMiddleware
 from core.config import Settings
-from core.database import make_session_factory
+from core.cron import CRON_QUEUE, set_wake_hook, wake
+from core.database import dispose_engine, make_session_factory_for_role
 from core.errors import install_error_handling
-from core.modules import register_modules
+from core.metrics import monitor_event_loop_lag, run_sampler_loop, spawn_background, stop_background
+from core.metrics_http import MetricsMiddleware, metrics_enabled
+from core.model_gateway.pool import close_pinned_clients
+from core.modules import ModuleRegistry, ordered_router_specs, register_modules
 from core.publication import PublicationGateMiddleware
-from core.realtime_routes import MAX_STREAMS_PER_API_PROCESS
-from core.realtime_routes import router as realtime_router
-from core.system.routes import router as system_router
+from core.realtime.routes import MAX_STREAMS_PER_API_PROCESS
+from core.redis_client import create_api_redis
 from core.telemetry import install_log_redaction
 from core.tools import ToolRegistry
-from core.workspaces.routes import router as workspaces_router
+from core.tracing import TracingArqRedis, configure_tracing, instrument_engine, instrument_fastapi
+from core.worker_queues import MODEL_QUEUE
 from modules.agents.handoff import register_handoff_tool
-from modules.agents.routes import router as agents_router
-from modules.automations.routes import router as automations_router
-from modules.automations.routes import webhook_router as automation_webhook_router
 from modules.automations.tools import register_automation_tools
-from modules.chat.media_routes import router as chat_media_router
 from modules.chat.routes import MAX_CHAT_STREAMS_PER_API_PROCESS
-from modules.chat.routes import router as chat_router
-from modules.chat.templates_routes import router as chat_templates_router
-from modules.chat.todos_routes import router as chat_todos_router
-from modules.connectors.builtins import router as connector_builtins_router
-from modules.connectors.github.routes import router as github_oauth_router
-from modules.connectors.oauth_routes import router as connector_oauth_router
-from modules.connectors.provisioning_routes import router as connector_provisioning_router
-from modules.connectors.reddit_oauth_routes import router as reddit_oauth_router
-from modules.connectors.routes import operator_router as connectors_operator_router
-from modules.connectors.routes import router as connectors_router
-from modules.dashboard.live_config_routes import operator_router as live_map_operator_router
-from modules.dashboard.live_config_routes import router as live_map_config_router
+from modules.chat.worker import CHAT_QUEUE
 from modules.dashboard.live_map_routes import LiveMapHeadersMiddleware
-from modules.dashboard.live_map_routes import router as live_map_router
-from modules.dashboard.routes import router as dashboard_router
-from modules.export.routes import router as export_router
-from modules.goals.routes import router as goals_router
 from modules.goals.tools import register_goal_tools
-from modules.ingestion.routes import documents_router as document_upload_router
-from modules.ingestion.routes import router as ingestion_router
-from modules.knowledge.documents.routes import router as documents_router
-from modules.knowledge.entities.routes import router as entities_router
-from modules.knowledge.observations.routes import router as observations_router
-from modules.knowledge.relationships.routes import router as relationships_router
-from modules.knowledge.temporal.routes import router as temporal_router
 from modules.mcp_widgets.server import RootPath
 from modules.mcp_widgets.server import create_http_app as create_widgets_mcp_app
-from modules.memory.routes import router as memory_router
-from modules.model_gateway.routes import router as model_gateway_router
-from modules.news.routes import router as news_router
-from modules.news.topics import router as topics_router
-from modules.notifications.routes import router as notifications_router
-from modules.observability.operations_routes import router as operations_router
-from modules.observability.routes import router as observability_router
-from modules.pick.routes import router as pick_router
-from modules.search.routes import router as search_router
-from modules.settings.onboarding_routes import router as onboarding_router
-from modules.settings.routes import router as settings_router
-from modules.sources.routes import router as sources_router
-from modules.tasks.routes import router as tasks_router
+from modules.observability.metrics_sampler import build_api_samplers
 from modules.tasks.tools import register_task_tools
-from modules.timeline.routes import router as timeline_router
 from modules.tools.browser import register_browser_tool
-from modules.tools.browser_control import router as browser_control_router
 from modules.tools.builtins import register_builtin_tools
-from modules.tools.mcp_management_routes import router as mcp_management_router
 from modules.tools.public import McpAdmission, McpRuntime, create_inbound_mcp_bundle
-from modules.tools.routes import browser_jobs_router
-from modules.tools.routes import router as tools_router
 from modules.tools.webhook import register_webhook_tool
-from modules.translations.routes import router as translations_router
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    """Compose account/workspace identity routes, owner security and domain/tool services.
+def _validated_csrf_secret(app_settings: Settings) -> str:
+    """Return the configured CSRF signing secret after API-only startup validation.
 
-    Args:
-        settings: Optional settings override; absent uses validated process configuration.
-    Returns:
-        FastAPI application with lifespan-owned database/Redis clients and app-scoped modules.
-    Side effects:
-        Creates clients and registers only tool names contributed by enabled descriptors. When
-        agents has one fixed owner-authenticated REST workflow; when tools is enabled, it composes
-        shared admission/runtime callbacks, owner routes before the
-        exact slash-terminated inbound mount, and one root-managed SDK session manager. Lifespan
-        hydrates at most the runtime's bounded owner catalog and drains admission before manager
-        exit; Redis and SQLAlchemy disposal run even when startup hydration fails.
+    Raises:
+        RuntimeError: If a worker-count variable is not a positive integer, or several API
+            workers would each sign with a different generated secret.
     """
-    app_settings = settings or Settings()
+    app_settings.require_trusted_client_ip_source()  # API-only: workers never key on client IP
     csrf_secret = app_settings.csrf_signing_secret.get_secret_value()
     worker_counts = []
     for name in ("WEB_CONCURRENCY", "UVICORN_WORKERS"):  # uvicorn honours both (click auto_envvar_prefix)
@@ -109,30 +62,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         worker_counts.append(int(workers_raw))
     if not csrf_secret and max(worker_counts) > 1:
         raise RuntimeError("CSRF_SIGNING_SECRET is required when WEB_CONCURRENCY or UVICORN_WORKERS > 1 (each worker would sign with a different secret)")
-    engine, session_factory = make_session_factory(
-        app_settings.database_url,
-        pool_size=app_settings.db_pool_size,
-        max_overflow=app_settings.db_max_overflow,
-        statement_timeout_ms=app_settings.db_statement_timeout_ms,
-        idle_tx_timeout_ms=app_settings.db_idle_tx_timeout_ms,
-    )
-    # ArqRedis subclasses Redis, so existing callers work and enqueue_job exists for chat/agent dispatch.
-    redis = ArqRedis.from_url(
-        app_settings.redis_url,
-        decode_responses=True,
-        socket_timeout=5,
-        socket_connect_timeout=2,
-        health_check_interval=30,
-        max_connections=100,
-    )
+    return csrf_secret
+
+
+def _make_lifespan(redis: ArqRedis, engine: AsyncEngine) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    """Build the lifespan context that runs the SDK managers and always closes shared clients.
+
+    Admission is stopped before the SDK manager drains; Redis and SQLAlchemy are closed even
+    when manager entry or sequential owner hydration fails during startup.
+    """
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         """Run the SDK manager once, hydrate bounded owner state, and always close shared clients.
 
         Admission is stopped before the SDK manager drains; Redis and SQLAlchemy are closed even
-        when manager entry or sequential owner hydration fails during startup.
+        when manager entry or sequential owner hydration fails during startup. The loop's default
+        thread executor is given an explicit size first (see ``core.async_runtime``).
         """
+        configure_default_executor()
+        metrics_tasks = _start_metrics_tasks(_app)
+
+        async def wake_poller(job_name: str, defer_seconds: float = 1.0) -> None:
+            """Enqueue an immediate run of a worker poller after an API commit (best-effort)."""
+            await wake(redis, job_name, defer_seconds=defer_seconds)
+
+        set_wake_hook(wake_poller)  # lets outbox publishers wake the dispatcher; cleared on exit
         try:
             async with AsyncExitStack() as stack:
                 try:
@@ -149,11 +104,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if admission is not None:
                         admission.stop()
         finally:
+            set_wake_hook(None)  # no more wake-ups once the Redis client is about to close
+            await stop_background(metrics_tasks)
             try:
+                await close_pinned_clients()  # pooled model-gateway HTTP clients
                 await redis.aclose()
             finally:
-                await engine.dispose()
+                await dispose_engine(engine)
 
+    return lifespan
+
+
+def _start_metrics_tasks(app: FastAPI) -> list[asyncio.Task[None]]:
+    """Start the event-loop-lag monitor and the shared-state sampler loop when ``/metrics`` can be served.
+
+    Returns the tasks so the lifespan can cancel them before closing Redis and the engine. Nothing
+    runs (no Redis or database traffic) when metrics are disabled for this deployment.
+    """
+    app_settings: Settings = app.state.settings
+    if not metrics_enabled(app_settings):
+        return []
+    samplers = build_api_samplers(app.state.redis, app.state.session_factory, (default_queue_name, MODEL_QUEUE, CHAT_QUEUE, CRON_QUEUE),
+    )
+    return [
+        spawn_background(monitor_event_loop_lag(), "metrics-loop-lag"),
+        spawn_background(run_sampler_loop(samplers), "metrics-samplers"),
+    ]
+
+
+def _new_app(
+    app_settings: Settings, csrf_secret: str, session_factory: async_sessionmaker[AsyncSession], redis: ArqRedis,
+    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]],
+) -> FastAPI:
+    """Create the FastAPI instance with app state and middleware in the historical order.
+
+    Middleware registration order is significant (later registrations wrap earlier ones), so it
+    is kept exactly: session, log redaction + error handling, publication gate, live-map
+    headers, then body limit.
+    """
     # Hardening: interactive API docs expose the full schema; serve them only in dev/test.
     app = FastAPI(
         title="Umwelt-OS",
@@ -182,107 +170,131 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         default_limit=app_settings.max_request_body_bytes,
         upload_limit=app_settings.upload_max_bytes + 1024 * 1024,
     )
-    app.include_router(auth_router)
-    app.include_router(account_deletion_router)
-    app.include_router(workspaces_router)
-    app.include_router(export_router)
-    app.include_router(system_router)
-    app.include_router(sources_router)
-    app.include_router(documents_router)
-    app.include_router(observations_router)
-    app.include_router(entities_router)
-    app.include_router(relationships_router)
-    app.include_router(timeline_router)
-    app.include_router(temporal_router)
-    app.include_router(document_upload_router)
-    app.include_router(ingestion_router)
-    app.include_router(connectors_router)
-    app.include_router(connectors_operator_router)
-    app.include_router(browser_control_router)
-    app.include_router(connector_builtins_router)
-    app.include_router(connector_provisioning_router)
-    app.include_router(github_oauth_router)
-    app.include_router(connector_oauth_router)
-    app.include_router(reddit_oauth_router)
-    app.include_router(settings_router)
-    app.include_router(translations_router)
-    app.include_router(onboarding_router)
-    app.include_router(model_gateway_router)
-    app.include_router(search_router)
-    app.include_router(dashboard_router)
-    app.include_router(live_map_router)
-    app.include_router(live_map_config_router)
-    app.include_router(live_map_operator_router)
-    app.include_router(realtime_router)
-    app.include_router(tasks_router)
-    app.include_router(goals_router)
-    app.include_router(topics_router)
-    app.include_router(news_router)
-    app.include_router(notifications_router)
-    app.include_router(pick_router)
-    app.include_router(automations_router)
-    app.include_router(automation_webhook_router)
-    app.include_router(chat_router)
-    app.include_router(chat_media_router)
-    app.include_router(chat_todos_router)
-    app.include_router(chat_templates_router)
-    app.include_router(memory_router)
-    app.include_router(agents_router)
-    app.include_router(observability_router)
-    app.include_router(operations_router)
-    app.include_router(browser_jobs_router)
+    # Outermost: times every request (including rejections by inner middleware) and serves /metrics.
+    app.add_middleware(MetricsMiddleware, settings=app_settings)
+    return app
+
+
+def _include_descriptor_routers(app: FastAPI, registry: ModuleRegistry) -> None:
+    """Mount every core and descriptor-declared router in ascending ``RouterSpec.order``.
+
+    Order is first-match-wins for route resolution and is guarded by the route-table baseline
+    test. Routers flagged ``when_enabled`` are skipped when their owning descriptor is disabled
+    (today only the tools management API); all others mount regardless, with per-route module
+    gates enforcing availability.
+    """
+    for spec, owner in ordered_router_specs(registry):
+        if spec.when_enabled and (owner is None or not owner.enabled):
+            continue
+        app.include_router(spec.load())
+
+
+def _register_native_tools(tool_registry: ToolRegistry, app_settings: Settings, declared_tools: frozenset[str]) -> None:
+    """Register the native tool handlers contributed by enabled module descriptors."""
+    register_builtin_tools(tool_registry, declared_tools)
+    register_webhook_tool(tool_registry, app_settings)
+    register_browser_tool(tool_registry)
+    register_handoff_tool(tool_registry, declared_tools)
+    register_task_tools(tool_registry, declared_tools)
+    register_goal_tools(tool_registry, declared_tools)
+    register_automation_tools(tool_registry, declared_tools)
+
+
+def _compose_tools_module(app: FastAPI, app_settings: Settings, redis: ArqRedis) -> None:
+    """Create the shared MCP admission/runtime and mount the guarded inbound server.
+
+    Owner routes (mounted earlier by order) precede the exact slash-terminated inbound mount;
+    the lifespan enters one root-managed SDK session manager and drains admission on exit.
+    """
+    tool_registry = app.state.tool_registry
+    admission = McpAdmission(redis)
+    runtime = McpRuntime(
+        tool_registry,
+        app.state.session_factory,
+        redis,
+        app_settings,
+        admission,
+        approved_destination_cidrs=app_settings.mcp_allowed_endpoint_cidrs,
+    )
+    audience, authority, origin = runtime.audience, runtime.authority, runtime.origin
+    bundle = create_inbound_mcp_bundle(
+        registry=tool_registry,
+        session_factory=app.state.session_factory,
+        redis=redis,
+        settings=app_settings,
+        admission=admission,
+        audience=audience,
+        expected_host=authority,
+        allowed_origins=frozenset({origin}),
+        authenticate_inbound=runtime.authenticate_inbound,
+        authorize_inbound=runtime.authorize_inbound,
+        revalidate_inbound=runtime.revalidate_inbound,
+        revalidate_inbound_output=runtime.revalidate_inbound_output,
+    )
+    app.state.mcp_admission = admission
+    app.state.mcp_runtime = runtime
+    app.state.mcp_bundle = bundle
+    app.mount("/api/v1/mcp", bundle.guarded_asgi_app)
+
+
+def _mount_widgets_server(app: FastAPI, app_settings: Settings) -> None:
+    """Mount the optional widget MCP server when enabled.
+
+    Raises when the bearer token is unset, so a misconfigured deployment fails at startup.
+    """
+    widgets_server, widgets_app = create_widgets_mcp_app(app_settings)
+    app.state.mcp_widgets_server = widgets_server
+    # Exact `/mcp` first so clients need no trailing slash (a Mount would 307-redirect it).
+    app.router.routes.append(Route("/mcp", cast(Any, RootPath(widgets_app)), include_in_schema=False))
+    app.mount("/mcp", widgets_app)
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Compose account/workspace identity routes, owner security and domain/tool services.
+
+    Args:
+        settings: Optional settings override; absent uses validated process configuration.
+    Returns:
+        FastAPI application with lifespan-owned database/Redis clients and app-scoped modules.
+    Side effects:
+        Creates clients and registers only tool names contributed by enabled descriptors. Routers
+        come from module descriptors in their declared global order. When tools is enabled, it
+        composes shared admission/runtime callbacks, owner routes before the exact
+        slash-terminated inbound mount, and one root-managed SDK session manager. Lifespan
+        hydrates at most the runtime's bounded owner catalog and drains admission before manager
+        exit; Redis and SQLAlchemy disposal run even when startup hydration fails.
+    """
+    app_settings = settings or Settings()
+    csrf_secret = _validated_csrf_secret(app_settings)
+    engine, session_factory = make_session_factory_for_role(
+        app_settings,
+        pool_size=app_settings.db_pool_size,
+        max_overflow=app_settings.db_max_overflow,
+        statement_timeout_ms=app_settings.db_statement_timeout_ms,
+    )
+    tracing_on = configure_tracing(
+        app_settings.otel_exporter_otlp_endpoint, service_name="umwelt-api",
+        sample_ratio=app_settings.otel_traces_sample_ratio,
+    )
+    if tracing_on:
+        instrument_engine(engine)
+    # ArqRedis subclasses Redis, so existing callers work and enqueue_job exists for chat/agent dispatch.
+    # TracingArqRedis adds the caller's trace context to job kwargs only while tracing is on; the factory keeps
+    # the Sentinel-aware connection setup (direct or Sentinel-resolved master).
+    redis = create_api_redis(app_settings, redis_class=TracingArqRedis)
+    app = _new_app(app_settings, csrf_secret, session_factory, redis, _make_lifespan(redis, engine))
+    instrument_fastapi(app)  # no-op unless tracing is on
     app.state.modules = register_modules()
+    _include_descriptor_routers(app, app.state.modules)
     tool_registry = ToolRegistry(module_registry=app.state.modules)
-    enabled_descriptors = [item for item in app.state.modules.values() if item.enabled]
-    declared_tools = {name for item in enabled_descriptors for name in item.tools}
+    declared_tools = frozenset(name for item in app.state.modules.values() if item.enabled for name in item.tools)
     if app.state.modules["tools"].enabled and declared_tools:
-        register_builtin_tools(tool_registry, frozenset(declared_tools))
-        register_webhook_tool(tool_registry, app_settings)
-        register_browser_tool(tool_registry)
-        register_handoff_tool(tool_registry, frozenset(declared_tools))
-        register_task_tools(tool_registry, frozenset(declared_tools))
-        register_goal_tools(tool_registry, frozenset(declared_tools))
-        register_automation_tools(tool_registry, frozenset(declared_tools))
+        _register_native_tools(tool_registry, app_settings, declared_tools)
     app.state.tool_registry = tool_registry
     if app.state.modules["tools"].enabled:
-        app.include_router(tools_router)
-        app.include_router(mcp_management_router)
-        admission = McpAdmission(redis)
-        runtime = McpRuntime(
-            tool_registry,
-            app.state.session_factory,
-            redis,
-            app_settings,
-            admission,
-            approved_destination_cidrs=app_settings.mcp_allowed_endpoint_cidrs,
-        )
-        audience, authority, origin = runtime.audience, runtime.authority, runtime.origin
-        bundle = create_inbound_mcp_bundle(
-            registry=tool_registry,
-            session_factory=app.state.session_factory,
-            redis=redis,
-            settings=app_settings,
-            admission=admission,
-            audience=audience,
-            expected_host=authority,
-            allowed_origins=frozenset({origin}),
-            authenticate_inbound=runtime.authenticate_inbound,
-            authorize_inbound=runtime.authorize_inbound,
-            revalidate_inbound=runtime.revalidate_inbound,
-            revalidate_inbound_output=runtime.revalidate_inbound_output,
-        )
-        app.state.mcp_admission = admission
-        app.state.mcp_runtime = runtime
-        app.state.mcp_bundle = bundle
-        app.mount("/api/v1/mcp", bundle.guarded_asgi_app)
-
+        _compose_tools_module(app, app_settings, redis)
     if app_settings.mcp_widgets_enabled:
-        # Raises when the bearer token is unset, so a misconfigured deployment fails at startup.
-        widgets_server, widgets_app = create_widgets_mcp_app(app_settings)
-        app.state.mcp_widgets_server = widgets_server
-        # Exact `/mcp` first so clients need no trailing slash (a Mount would 307-redirect it).
-        app.router.routes.append(Route("/mcp", cast(Any, RootPath(widgets_app)), include_in_schema=False))
-        app.mount("/mcp", widgets_app)
+        _mount_widgets_server(app, app_settings)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

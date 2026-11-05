@@ -26,6 +26,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.errors import DomainError, error_status
 from core.realtime import commit_with_replay
 from core.workspaces.schemas import AccessFence, Scope
 from modules.automations import execution
@@ -53,7 +54,12 @@ class _Reader(Protocol):
     def __call__(
         self, session: AsyncSession, position: tuple[datetime, UUID] | None, limit: int, /,
         *, scope: Scope, multi_workspace_enabled: bool,
-    ) -> Awaitable[Sequence[tuple[datetime, UUID, str, Mapping[str, Any] | None]]]: ...
+    ) -> Awaitable[Sequence[tuple[datetime, UUID, str, Mapping[str, Any] | None]]]:
+        """Return up to ``limit`` items strictly after ``position`` as ``(ts, id, key, payload)`` rows.
+
+        A ``None`` payload marks a malformed or soft-deleted item that still advances the cursor.
+        """
+        ...
 
 
 
@@ -63,6 +69,58 @@ _CURSORS: dict[str, _Reader] = {
     "new_event": timeline.list_changed_events_after,
     "entity_changed": entities.list_changed_entities_after,
 }
+
+
+async def _document_event_sources(
+    session: AsyncSession, items: Sequence[tuple[datetime, UUID, str, Any]], sk: dict[str, Any],
+) -> set[UUID]:
+    """Resolve the Source of every well-formed ready-document event in a cursor page.
+
+    Items with no payload, a non-canonical key or a key different from the item ID are ignored;
+    the rest are proved through ingestion provenance. Read-only, no locks are taken.
+    """
+    source_ids: set[UUID] = set()
+    for _ts, item_id, key, payload in items:
+        if payload is None:
+            continue
+        try:
+            event_id = UUID(key)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if str(event_id) != key or event_id != item_id:
+            continue
+        proof = await ingestion.resolve_ready_event_provenance(session, event_id, **sk)
+        if proof is not None:
+            source_ids.add(proof.source_id)
+    return source_ids
+
+
+async def _offer_items(
+    session: AsyncSession, name: str, offerable: list[tuple[datetime, UUID, str, Mapping[str, Any]]],
+    document_items: list[tuple[datetime, UUID, str, dict[str, Any], UUID, UUID]] | None, sk: dict[str, Any],
+) -> int:
+    """Offer each item to the trigger inbox and return how many were enqueued.
+
+    An item with an undeclared shape (``ValueError``) is skipped, never retried forever. Document
+    items carry their enriched document and version identity; other cursors pass the payload only.
+    """
+    offered = 0
+    if document_items is not None:
+        for _ts, _item_id, key, payload, document_id, version_id in document_items:
+            try:
+                offered += await execution.enqueue_trigger(
+                    session, name, key, payload,
+                    document_id=document_id, document_version_id=version_id, **sk,
+                )
+            except ValueError:
+                pass  # an item with an undeclared shape is skipped, never retried forever
+        return offered
+    for _ts, _item_id, key, plain_payload in offerable:
+        try:
+            offered += await execution.enqueue_trigger(session, name, key, plain_payload, **sk)
+        except ValueError:
+            pass  # an item with an undeclared shape is skipped, never retried forever
+    return offered
 
 
 async def _cursor_sweep(
@@ -99,20 +157,9 @@ async def _cursor_sweep(
         items = await reader(session, current, BATCH, **sk)
     # Publication fences precede the mutable cursor row. Prelock every source represented by this
     # bounded detached page in UUID order, then revalidate each event during enrichment/admission.
+    source_ids: set[UUID] = set()
     if name == "new_document":
-        source_ids: set[UUID] = set()
-        for _ts, item_id, key, payload in items:
-            if payload is None:
-                continue
-            try:
-                event_id = UUID(key)
-            except (KeyError, TypeError, ValueError):
-                continue
-            if str(event_id) != key or event_id != item_id:
-                continue
-            proof = await ingestion.resolve_ready_event_provenance(session, event_id, **sk)
-            if proof is not None:
-                source_ids.add(proof.source_id)
+        source_ids = await _document_event_sources(session, items, sk)
         for source_id in sorted(source_ids, key=str):
             await sources.lock_retained_evidence_source(session, source_id, **sk, expected_access_fence=access_fence)
     cursor = await session.scalar(
@@ -127,19 +174,7 @@ async def _cursor_sweep(
     if len(items) == BATCH and (items[-1][0], items[-1][1]) <= current:
         items = await reader(session, current, BATCH, **sk)
     if name == "new_document":
-        reread_sources: set[UUID] = set()
-        for _ts, item_id, key, payload in items:
-            if payload is None:
-                continue
-            try:
-                event_id = UUID(key)
-            except (KeyError, TypeError, ValueError):
-                continue
-            if str(event_id) != key or event_id != item_id:
-                continue
-            proof = await ingestion.resolve_ready_event_provenance(session, event_id, **sk)
-            if proof is not None:
-                reread_sources.add(proof.source_id)
+        reread_sources = await _document_event_sources(session, items, sk)
         if not reread_sources.issubset(source_ids):
             # Acquiring a newly discovered lower UUID here could invert the already-held lock order.
             return 0
@@ -150,22 +185,7 @@ async def _cursor_sweep(
     document_items: list[tuple[datetime, UUID, str, dict[str, Any], UUID, UUID]] | None = None
     if name == "new_document":
         document_items = await _enrich_documents(session, offerable, **sk)
-    offered = 0
-    if document_items is not None:
-        for _ts, _item_id, key, payload, document_id, version_id in document_items:
-            try:
-                offered += await execution.enqueue_trigger(
-                    session, name, key, payload,
-                    document_id=document_id, document_version_id=version_id, **sk,
-                )
-            except ValueError:
-                pass  # an item with an undeclared shape is skipped, never retried forever
-    else:
-        for _ts, _item_id, key, payload in offerable:
-            try:
-                offered += await execution.enqueue_trigger(session, name, key, payload, **sk)
-            except ValueError:
-                pass  # an item with an undeclared shape is skipped, never retried forever
+    offered = await _offer_items(session, name, offerable, document_items, sk)
     if last is not None and last > current:
         cursor.ts, cursor.item_id = last
     return offered
@@ -286,8 +306,8 @@ async def sweep(
                 total += await run(session, fence)
                 await commit_with_replay(
                     session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=fence)
-        except HTTPException as exc:
-            if exc.status_code in DENIED_STATUSES:
+        except (HTTPException, DomainError) as exc:
+            if error_status(exc) in DENIED_STATUSES:
                 raise
             logger.warning("automation producer sweep %s failed (%s)", name, type(exc).__name__)
         except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues

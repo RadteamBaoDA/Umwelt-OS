@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from pydantic import SecretStr
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from core.tools.schemas import ToolExecutionPrincipal
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.tools import mcp_repository, mcp_runtime
@@ -63,7 +64,7 @@ async def test_get_connection_select_carries_workspace_and_owner() -> None:
 @pytest.mark.asyncio
 async def test_member_denied_before_any_query() -> None:
     session = _session()
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await mcp_repository.list_connections(session, scope=MEMBER_A)
     assert exc.value.status_code == 403
     session.scalar.assert_not_awaited()
@@ -396,7 +397,7 @@ async def test_member_gets_403_not_503_on_draft_check_and_discover(route: str) -
     from modules.tools import mcp_management_routes as routes
     session = _session()
     session.rollback = AsyncMock()
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await getattr(routes, route)(uuid4(), _route_request(), session, SimpleNamespace(token_hash="t"), MEMBER_A)
     assert exc.value.status_code == 403
     session.rollback.assert_not_awaited()

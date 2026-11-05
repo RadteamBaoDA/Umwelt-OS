@@ -215,7 +215,7 @@ class N8nUpdate(BaseModel):
     service_url: AnyHttpUrl | None = None
     api_key_action: CredentialAction = "unchanged"
     api_key: str | None = Field(default=None, max_length=4096, repr=False)
-    webhook_token_action: CredentialAction = "unchanged"
+    webhook_token_action: CredentialAction = "unchanged"  # noqa: S105  # label/URL/enum value, not a credential
     webhook_token: str | None = Field(default=None, max_length=4096, repr=False)
     enabled: bool | None = None  # None leaves the stored kill switch unchanged
 

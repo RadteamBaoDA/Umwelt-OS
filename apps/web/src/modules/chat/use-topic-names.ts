@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { fetchTopics } from '@/modules/news/api';
+import { fetchTopics } from '@/modules/news';
 
 /**
  * Loads up to `limit` active owner topic names for chat suggestion chips.

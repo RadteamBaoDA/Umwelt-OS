@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class NewsDescriptor:
+class NewsDescriptor(ModuleDescriptor):
     """Declare news intelligence module metadata, routes, events, and tools."""
 
     id: str = "news"
@@ -28,6 +30,12 @@ class NewsDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.news.topics", 350),
+        RouterSpec("modules.news.routes", 360),
+    )
+    erasure_module: str | None = "modules.news.erasure"
+    erasure_order: int = 140
 
 
 descriptor = NewsDescriptor()

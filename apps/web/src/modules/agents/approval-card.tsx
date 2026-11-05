@@ -6,7 +6,7 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 import type { AgentApproval } from './api';
 
 export interface ApprovalCardProps {

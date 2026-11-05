@@ -12,12 +12,13 @@ from sqlalchemy import Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.schemas import AccountSessionRef
+from core.errors import DomainError
 from core.ids import uuid7
 from core.workspaces.access import (
-    authorize_internal_job as authorize_internal_job,  # noqa: PLC0414  # deliberate public re-export for mypy/ruff
+    authorize_internal_job as authorize_internal_job,
 )
 from core.workspaces.access import (
-    lock_access_fence as lock_access_fence,  # noqa: PLC0414  # deliberate public re-export for mypy/ruff
+    lock_access_fence as lock_access_fence,
 )
 from core.workspaces.access import (
     lock_owner_management,
@@ -25,7 +26,7 @@ from core.workspaces.access import (
     lock_workspace_memberships,
 )
 from core.workspaces.access import (
-    read_access_fence as read_access_fence,  # noqa: PLC0414  # deliberate public re-export for mypy/ruff
+    read_access_fence as read_access_fence,
 )
 from core.workspaces.models import (
     Workspace,
@@ -189,7 +190,7 @@ async def resolve_workspace_owner_context(
         return None
     try:
         await read_access_fence(session, scope=context, multi_workspace_enabled=multi_workspace_enabled)
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code in {401, 404}:
             return None
         raise
@@ -397,7 +398,7 @@ async def invitation_target(session: AsyncSession, digest: str) -> InvitationTar
                                .execution_options(populate_existing=True))
     if not _invitation_live(row, digest):
         raise HTTPException(status_code=410, detail="Invitation is no longer available")
-    assert row is not None
+    assert row is not None  # noqa: S101  # mypy narrowing invariant
     return InvitationTarget(row.id, row.workspace_id, row.invited_by_user_id, row.email)
 
 
@@ -465,7 +466,7 @@ async def accept_invitation_in_uow(
     if (not _invitation_live(invitation, digest) or issuer is None or issuer.role != "owner"
             or issuer.owner_user_id != target.owner_user_id or workspace.owner_user_id != target.owner_user_id):
         raise HTTPException(status_code=410, detail="Invitation is no longer available")
-    assert invitation is not None
+    assert invitation is not None  # noqa: S101  # mypy narrowing invariant
     if invitation.email != target.email or invitation.invited_by_user_id != target.owner_user_id:
         raise HTTPException(status_code=410, detail="Invitation is no longer available")
     if email != invitation.email:

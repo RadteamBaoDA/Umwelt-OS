@@ -246,13 +246,13 @@ def validate_renderer_configuration(
     for field_name, values in configuration.scope.model_dump().items():
         if field_name not in allowed_scope and values:
             raise ValueError(f"{field_name} is not valid for renderer {renderer_id}")
-    if renderer_id == "map":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
+    if renderer_id == "map":
         if set(configuration.scope.map_layer_ids) - {
             "world_observations", "military", "economic", "disaster", "escalation",
         }:
             raise GadgetConfigError("Map layer is not in the bounded catalog",
                                     code="map_layer_unavailable", field="map_layer_ids")
-    if renderer_id == "intelligence_panel":  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
+    if renderer_id == "intelligence_panel":
         if configuration.scope.map_layer_ids or configuration.scope.metrics or configuration.scope.symbols:
             raise ValueError("Map and measurement selectors are not valid for the intelligence panel")
     if renderer_id != "map" and (

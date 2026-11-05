@@ -101,6 +101,51 @@ class MeetingTimePickerPayload(BaseModel):
     a2ui_surface: list[dict[str, Any]] = Field(default_factory=list)
 
 
+def _default_slots(timezone: str) -> list[TimeSlot]:
+    """The three fixed fallback slots (morning recommended) in ``timezone``."""
+    return [
+        TimeSlot(
+            id="slot-1", label="Morning Slot (Recommended)", date="2026-10-20",
+            start_time="09:30", end_time="10:00", timezone=timezone, available=True, recommended=True,
+        ),
+        TimeSlot(
+            id="slot-2", label="Midday Slot", date="2026-10-20",
+            start_time="13:00", end_time="13:30", timezone=timezone, available=True, recommended=False,
+        ),
+        TimeSlot(
+            id="slot-3", label="Afternoon Slot", date="2026-10-20",
+            start_time="15:30", end_time="16:00", timezone=timezone, available=True, recommended=False,
+        ),
+    ]
+
+
+def _resolve_slots(slots: Sequence[dict[str, Any] | TimeSlot] | None, timezone: str) -> list[TimeSlot]:
+    """Normalize caller slots into ``TimeSlot`` models, filling defaults per field; no slots yields the defaults.
+
+    The first supplied slot is recommended unless the caller says otherwise.
+    """
+    if not slots:
+        return _default_slots(timezone)
+    resolved_slots: list[TimeSlot] = []
+    for idx, raw_slot in enumerate(slots, 1):
+        if isinstance(raw_slot, TimeSlot):
+            resolved_slots.append(raw_slot)
+        else:
+            resolved_slots.append(
+                TimeSlot(
+                    id=str(raw_slot.get("id") or f"slot-{idx}"),
+                    label=str(raw_slot.get("label") or f"Option {idx}"),
+                    date=str(raw_slot.get("date") or "2026-10-20"),
+                    start_time=str(raw_slot.get("start_time") or "09:00"),
+                    end_time=str(raw_slot.get("end_time") or "09:30"),
+                    timezone=str(raw_slot.get("timezone") or timezone),
+                    available=bool(raw_slot.get("available", True)),
+                    recommended=bool(raw_slot.get("recommended", idx == 1)),
+                )
+            )
+    return resolved_slots
+
+
 def build_meeting_time_picker_payload(
     title: str = "Select a Meeting Time",
     *,
@@ -121,57 +166,7 @@ def build_meeting_time_picker_payload(
     Returns:
         Validated `MeetingTimePickerPayload` instance.
     """
-    resolved_slots: list[TimeSlot] = []
-    if slots:
-        for idx, raw_slot in enumerate(slots, 1):
-            if isinstance(raw_slot, TimeSlot):
-                resolved_slots.append(raw_slot)
-            else:
-                resolved_slots.append(
-                    TimeSlot(
-                        id=str(raw_slot.get("id") or f"slot-{idx}"),
-                        label=str(raw_slot.get("label") or f"Option {idx}"),
-                        date=str(raw_slot.get("date") or "2026-10-20"),
-                        start_time=str(raw_slot.get("start_time") or "09:00"),
-                        end_time=str(raw_slot.get("end_time") or "09:30"),
-                        timezone=str(raw_slot.get("timezone") or timezone),
-                        available=bool(raw_slot.get("available", True)),
-                        recommended=bool(raw_slot.get("recommended", idx == 1)),
-                    )
-                )
-    else:
-        resolved_slots = [
-            TimeSlot(
-                id="slot-1",
-                label="Morning Slot (Recommended)",
-                date="2026-10-20",
-                start_time="09:30",
-                end_time="10:00",
-                timezone=timezone,
-                available=True,
-                recommended=True,
-            ),
-            TimeSlot(
-                id="slot-2",
-                label="Midday Slot",
-                date="2026-10-20",
-                start_time="13:00",
-                end_time="13:30",
-                timezone=timezone,
-                available=True,
-                recommended=False,
-            ),
-            TimeSlot(
-                id="slot-3",
-                label="Afternoon Slot",
-                date="2026-10-20",
-                start_time="15:30",
-                end_time="16:00",
-                timezone=timezone,
-                available=True,
-                recommended=False,
-            ),
-        ]
+    resolved_slots = _resolve_slots(slots, timezone)
 
     selected_id = next((s.id for s in resolved_slots if s.recommended and s.available), resolved_slots[0].id)
     a2ui_surface = [

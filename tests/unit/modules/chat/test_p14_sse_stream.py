@@ -55,7 +55,7 @@ class _Session:
             return SimpleNamespace(id=CID, ephemeral=False, expires_at=None)
         if entity is ResponseRun:
             return SimpleNamespace(
-                id=RID, conversation_id=CID, status=self.store.status, actor_user_id=1,
+                id=RID, conversation_id=CID, status=self.store.status, actor_user_id=1, workspace_id=CID,
                 retrieval_context={"_chat_privacy_fence": {}},
             )
         raise AssertionError(stmt)
@@ -80,7 +80,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, store: _Store, *, auth: list[bool]
     async def current(_request: Any) -> int:
         return 1
 
-    async def lock(_session: Any) -> None:
+    async def lock(_session: Any, *_a: Any, **_k: Any) -> None:
         store.log.append("lock")
 
     async def fence(_session: Any, _stamp: Any, **_kw: Any) -> None:

@@ -1,4 +1,4 @@
-.PHONY: setup dev stop migrate seed workspace-up workspace-stop workspace-seed reset-preview reset lint typecheck test e2e build
+.PHONY: setup dev stop migrate seed workspace-up workspace-stop workspace-seed reset-preview reset lint typecheck test e2e load-test build audit
 export WORKSPACE CONFIRM_FINGERPRINT
 
 setup:
@@ -34,8 +34,10 @@ reset:
 	python scripts/dev_workspace.py reset --name "$$WORKSPACE" --confirm "$$CONFIRM_FINGERPRINT"
 
 lint:
-	uv run ruff check core apps modules tests infrastructure/postgres/migrations
+	uv run ruff check core apps modules tests infrastructure/postgres/migrations scripts/check_function_length.py
 	uv run python scripts/check_genui_parity.py
+	uv run python scripts/check_function_length.py
+	@if [ -f .importlinter ]; then uv run lint-imports; fi
 	npm run lint
 
 typecheck:
@@ -44,6 +46,12 @@ typecheck:
 
 test:
 	PYTEST_TARGET="$(PYTEST_TARGET)" E2E_TARGET="$(E2E_TARGET)" bash scripts/test.sh
+
+load-test:
+	bash scripts/load-test.sh
+
+audit:
+	bash scripts/audit.sh
 
 build:
 	npm run build

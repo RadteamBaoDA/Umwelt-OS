@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { ChatContext } from '@/modules/chat/api';
+import type { ChatContext } from '@/modules/chat';
 import { uuid7 } from '@/core/uuid7';
 
 /** Immutable request identity retained until the server acknowledges a message revision. */
@@ -129,21 +129,10 @@ export function useChatController(): ChatControllerContextValue {
 }
 
 /**
- * Global chat state provider that manages in-memory conversation selection and its monotonic
- * selection generation for scoping asynchronous UI work, composer drafts, per-conversation
- * specialist/message mutation retry envelopes, and drawer presentation toggles. Private prompt
- * text remains in memory only; an unresolved mutation cannot be replaced by a different one.
- *
- * @param children - React child components wrapped by this provider.
- * @returns Context provider element.
+ * Holds the per-conversation message-mutation retry envelopes. The ref mirrors the state synchronously so a
+ * lost acknowledgement can retry with exactly the same client request id.
  */
-export function ChatControllerProvider({ children }: { children: ReactNode }) {
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-  const [activeConversationGeneration, setActiveConversationGeneration] = useState(0);
-  const [context, setContext] = useState<ChatContext | null>(null);
-  const [draft, setDraft] = useState<string>('');
-  const [pendingSpecialistRuns, setPendingSpecialistRuns] = useState<Record<string, PendingSpecialistRun>>({});
+function usePendingMessageMutations() {
   const [pendingMessageMutations, setPendingMessageMutations] = useState<Record<string, PendingMessageMutation>>({});
   const pendingMessageMutationsRef = useRef<Record<string, PendingMessageMutation>>({});
 
@@ -181,6 +170,48 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
     setPendingMessageMutations(next);
   }, []);
 
+  return { pendingMessageMutations, pendingMessageMutationsRef, getOrCreatePendingMessageMutation, clearPendingMessageMutation };
+}
+
+/** Holds the per-conversation specialist-run envelopes; clearing one leaves other conversations' retries intact. */
+function usePendingSpecialistRuns() {
+  const [pendingSpecialistRuns, setPendingSpecialistRuns] = useState<Record<string, PendingSpecialistRun>>({});
+
+  /**
+   * Stores a pending envelope by its immutable conversation identity for all Chat surfaces.
+   */
+  const setPendingSpecialistRun = useCallback((run: PendingSpecialistRun) => {
+    setPendingSpecialistRuns((current) => ({ ...current, [run.conversationId]: run }));
+  }, []);
+
+  /**
+   * Removes only the acknowledged pending envelope and leaves other conversations' retries intact.
+   */
+  const clearPendingSpecialistRun = useCallback((conversationId: string) => {
+    setPendingSpecialistRuns((current) => {
+      if (!current[conversationId]) return current;
+      const next = { ...current };
+      delete next[conversationId];
+      return next;
+    });
+  }, []);
+
+  return { pendingSpecialistRuns, setPendingSpecialistRun, clearPendingSpecialistRun };
+}
+
+/**
+ * Tracks the active conversation, its monotonic generation, the chat context and the day-to-conversation
+ * bindings; `clearPendingMessageMutation` and the ref let unbinding also drop a stale retry envelope.
+ */
+function useConversationSelection(
+  pendingMessageMutationsRef: React.MutableRefObject<Record<string, PendingMessageMutation>>,
+  clearPendingMessageMutation: (conversationId: string, clientRequestId: string) => void,
+) {
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeConversationGeneration, setActiveConversationGeneration] = useState(0);
+  const [context, setContext] = useState<ChatContext | null>(null);
+  const [draft, setDraft] = useState<string>('');
+
   /**
    * Selects a conversation and advances its generation even when the same ID is selected again.
    * The generation lets in-flight Chat work distinguish a later visit to the same conversation.
@@ -211,7 +242,7 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
     }
     const pending = pendingMessageMutationsRef.current[id];
     if (pending) clearPendingMessageMutation(id, pending.clientRequestId);
-  }, [clearPendingMessageMutation]);
+  }, [clearPendingMessageMutation, pendingMessageMutationsRef]);
 
   const selectHistoryConversation = useCallback((id: string) => {
     const now = contextRef.current;
@@ -221,24 +252,19 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
     selectConversationRaw(id);
   }, [selectConversationRaw]);
 
-  /**
-   * Stores a pending envelope by its immutable conversation identity for all Chat surfaces.
-   */
-  const setPendingSpecialistRun = useCallback((run: PendingSpecialistRun) => {
-    setPendingSpecialistRuns((current) => ({ ...current, [run.conversationId]: run }));
-  }, []);
+  return {
+    activeConversationId, activeConversationGeneration, context, draft, setContext, setDraft,
+    selectConversationRaw, bindDayConversation, selectDay, unbindConversation, selectHistoryConversation,
+  };
+}
 
-  /**
-   * Removes only the acknowledged pending envelope and leaves other conversations' retries intact.
-   */
-  const clearPendingSpecialistRun = useCallback((conversationId: string) => {
-    setPendingSpecialistRuns((current) => {
-      if (!current[conversationId]) return current;
-      const next = { ...current };
-      delete next[conversationId];
-      return next;
-    });
-  }, []);
+/** Drawer presentation state with open/close/toggle actions; opening may also focus a conversation or context. */
+function useChatDrawer(
+  selectConversationRaw: (id: string | null) => void,
+  setContext: (context: ChatContext | null) => void,
+  setDraft: (draft: string) => void,
+) {
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   /**
    * Opens the chat drawer and optionally focuses a specific conversation or context.
@@ -251,7 +277,7 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
       setContext(params.context);
     }
     setIsDrawerOpen(true);
-  }, [selectConversationRaw]);
+  }, [selectConversationRaw, setContext]);
 
   /**
    * Closes the drawer presentation only. Active generation runs continue on the server.
@@ -273,7 +299,28 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
   const resetConversation = useCallback(() => {
     selectConversationRaw(null);
     setDraft('');
-  }, [selectConversationRaw]);
+  }, [selectConversationRaw, setDraft]);
+
+  return { isDrawerOpen, openDrawer, closeDrawer, toggleDrawer, resetConversation };
+}
+
+/**
+ * Global chat state provider that manages in-memory conversation selection and its monotonic
+ * selection generation for scoping asynchronous UI work, composer drafts, per-conversation
+ * specialist/message mutation retry envelopes, and drawer presentation toggles. Private prompt
+ * text remains in memory only; an unresolved mutation cannot be replaced by a different one.
+ *
+ * @param children - React child components wrapped by this provider.
+ * @returns Context provider element.
+ */
+export function ChatControllerProvider({ children }: { children: ReactNode }) {
+  const { pendingMessageMutations, pendingMessageMutationsRef, getOrCreatePendingMessageMutation, clearPendingMessageMutation } = usePendingMessageMutations();
+  const { pendingSpecialistRuns, setPendingSpecialistRun, clearPendingSpecialistRun } = usePendingSpecialistRuns();
+  const {
+    activeConversationId, activeConversationGeneration, context, draft, setContext, setDraft,
+    selectConversationRaw, bindDayConversation, selectDay, unbindConversation, selectHistoryConversation,
+  } = useConversationSelection(pendingMessageMutationsRef, clearPendingMessageMutation);
+  const { isDrawerOpen, openDrawer, closeDrawer, toggleDrawer, resetConversation } = useChatDrawer(selectConversationRaw, setContext, setDraft);
 
   // Memoize the context value so consumers only re-render when chat state or stable callbacks change.
   const value = useMemo<ChatControllerContextValue>(() => ({
@@ -311,6 +358,8 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
     closeDrawer,
     toggleDrawer,
     selectConversationRaw,
+    setContext,
+    setDraft,
     setPendingSpecialistRun,
     clearPendingSpecialistRun,
     getOrCreatePendingMessageMutation,

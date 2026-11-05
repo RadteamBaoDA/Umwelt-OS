@@ -13,6 +13,7 @@ import pytest
 from fastapi import HTTPException
 from redis.exceptions import RedisError
 
+from core.errors import DomainError
 from core.model_gateway.schemas import ModelMapping
 from core.workspaces import public as workspaces_public
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
@@ -59,7 +60,7 @@ async def test_member_without_share_gets_nothing(call: str) -> None:
     from modules.search.schemas import SearchRequest
     from modules.tasks.schemas import TaskFilter
 
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises((DomainError, HTTPException)) as caught:
         if call == "search":
             await public.search(session, None, None, SearchRequest(query="secret"),  # type: ignore[arg-type]
                                 scope=member, multi_workspace_enabled=True)
@@ -81,7 +82,7 @@ async def test_member_without_share_gets_nothing(call: str) -> None:
 async def test_indexing_admit_rejects_member_for_both_modes() -> None:
     member = WorkspaceContext(user_id=9, workspace_id=WORKSPACE, role="member", membership_revision=1)
     for lock in (False, True):
-        with pytest.raises(HTTPException) as caught:
+        with pytest.raises((DomainError, HTTPException)) as caught:
             await indexing._admit(_ExplodingSession(), scope=member, multi_workspace_enabled=True,  # type: ignore[arg-type]
                                   lock=lock)
         assert caught.value.status_code == 403
@@ -98,7 +99,7 @@ async def test_nonlocking_admit_compares_expected(monkeypatch: pytest.MonkeyPatc
         return changed
 
     monkeypatch.setattr(workspaces_public, "read_access_fence", read)
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises((DomainError, HTTPException)) as caught:
         await indexing._admit(None, scope=scope, multi_workspace_enabled=True, expected=FENCE)  # type: ignore[arg-type]
     assert caught.value.status_code == 409
     assert await indexing._admit(None, scope=scope, multi_workspace_enabled=True) == changed  # type: ignore[arg-type]
@@ -149,7 +150,7 @@ async def test_publication_compares_original_under_mutex(monkeypatch: pytest.Mon
 async def test_publication_aborts_when_config_changed_under_mutex(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
     _patch_publication(monkeypatch, config_revision=6, events=events)
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises((DomainError, HTTPException)) as caught:
         await indexing.create_generation_for_authority(
             None, _authority(5), SETTINGS, None, scope=SCOPE,  # type: ignore[arg-type]
         )
@@ -733,7 +734,7 @@ async def test_reindex_maps_conflicts_to_409(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(indexing, "create_generation_for_authority", create)
 
     async def call() -> int:
-        with pytest.raises(HTTPException) as caught:
+        with pytest.raises((DomainError, HTTPException)) as caught:
             await routes.reindex(request, None, None)  # type: ignore[arg-type]
         return caught.value.status_code
 

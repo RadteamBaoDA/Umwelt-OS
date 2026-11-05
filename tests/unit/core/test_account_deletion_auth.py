@@ -116,7 +116,7 @@ async def test_host_status_redacts_identifiers_and_retry_requires_failure(
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     engine = MagicMock()
     engine.dispose = AsyncMock()
-    monkeypatch.setattr(host_deletion, "Settings", lambda: SimpleNamespace(database_url="unused"))
+    monkeypatch.setattr(host_deletion, "Settings", lambda: SimpleNamespace(database_url="unused", admin_database_url="unused"))
     monkeypatch.setattr(host_deletion, "make_session_factory", lambda _url: (engine, factory))
     await host_deletion.run("status", operation.id)
     output = capsys.readouterr().out

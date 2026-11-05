@@ -1,9 +1,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { useContentTranslation } from '@/modules/translations/use-content-translation';
-import { TranslatedBadge } from '@/modules/translations/translated-badge';
-import { TranslationNote } from '@/modules/translations/translation-note';
+import { useContentTranslation } from '@/modules/translations';
+import { TranslatedBadge } from '@/modules/translations';
+import { TranslationNote } from '@/modules/translations';
 import type { DailyBriefRevision } from './daily-api';
 
 /** Brief text with the automatic translation of this saved revision; the original is shown first. */

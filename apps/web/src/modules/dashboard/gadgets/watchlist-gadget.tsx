@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatDateTime } from '@/core/i18n';
-import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations/api';
+import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetInstance, HighlightRule } from '../api';
 import { evaluateGadgetHighlights } from '../api';
@@ -62,27 +62,50 @@ export interface WatchlistGadgetProps {
   onAddRule?: () => void;
 }
 
-/**
- * Standard Watchlist and Rules table gadget template.
- * Renders an alerting-count summary and rule rows sorted alerting first, with a 2px severity edge
- * (screen-reader text carries the severity), relative last-match time, tabular match count and
- * client-side search filtering.
- * The bounded root scrolls its controls and watchlist instead of clipping them in compact cards.
- *
- * @param props Gadget instance configuration and watchlist items.
- * @returns Accessible watchlist table gadget component.
- */
-export function WatchlistGadget({
-  instance,
-  initialItems = [],
-  onAddRule,
-}: WatchlistGadgetProps) {
+/** Case-insensitive search over target, condition and match reason; an empty query keeps every row. */
+function filterWatchItems(items: WatchlistItem[], filterQuery: string): WatchlistItem[] {
+  if (!filterQuery) return items;
+  const q = filterQuery.toLowerCase();
+  return items.filter((item) => item.target.toLowerCase().includes(q)
+    || item.condition.toLowerCase().includes(q)
+    || item.matchReason?.toLowerCase().includes(q));
+}
+
+/** Alerting first, then by severity, then most recently matched, so the rows that need attention lead. */
+function sortWatchItems(items: WatchlistItem[]): WatchlistItem[] {
+  return [...items].sort((a, b) =>
+    STATUS_RANK[a.status] - STATUS_RANK[b.status]
+    || SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
+    || (b.lastMatchedAt ?? '').localeCompare(a.lastMatchedAt ?? ''));
+}
+
+/** Loading skeleton, load error and the empty notice of the watchlist (mutually exclusive with the rule rows). */
+function WatchlistStatus({ definition, matchesQuery, highlightRuleCount, emptyResult, onAddRule }: {
+  definition: GadgetInstance['definition'];
+  matchesQuery: { isPending: boolean; isError: boolean };
+  highlightRuleCount: number;
+  emptyResult: boolean;
+  onAddRule?: () => void;
+}) {
   const t = useTranslations('dashboard');
   const daily = useTranslations('daily');
-  const display = useDisplayPreferences();
+  const loading = matchesQuery.isPending && highlightRuleCount > 0 && definition.source_ids.length > 0;
+  return (
+    <>
+      {loading && <GadgetSkeleton variant="table" className="p-0" label={t('gadgetDataLoading')} />}
+      {matchesQuery.isError && <GadgetNotice kind="error" className="p-0" message={t('gadgetDataLoadFailed')} />}
+      {!loading && !matchesQuery.isError && emptyResult && (
+        <GadgetNotice kind="empty" className="p-0" message={definition.renderer === 'highlights' ? daily('highlightsEmpty') : `${daily('watchlistEmpty')}. ${daily('watchlistEmptyDetail')}`} action={onAddRule ? { label: daily('addRule'), onClick: onAddRule } : { href: '/settings/sources', label: t('gadgetConfigureAction') }} />
+      )}
+    </>
+  );
+}
 
-  const [filterQuery, setFilterQuery] = useState<string>('');
-
+/**
+ * Resolves the watchlist rows: preloaded items win; otherwise the highlight rule matches of the gadget's definition
+ * (evaluated only for highlight renderers with sources and rules) are mapped to rows (critical matches alert).
+ */
+function useWatchlistItems(instance: GadgetInstance, initialItems: WatchlistItem[]) {
   const definition = instance.definition;
   const highlightRules: HighlightRule[] = definition.highlight_rules ?? [];
   const matchesQuery = useQuery({
@@ -103,6 +126,17 @@ export function WatchlistGadget({
     matchCount: 1,
   }));
 
+  return { matchesQuery, items };
+}
+
+/**
+ * One batched observations query for every symbol target (never per row), plus a case-insensitive lookup of the
+ * latest observation per series symbol so rows match by alias.
+ *
+ * @returns Per-series history and `matchFor(item)` (undefined for non-symbol rows or rows without observations).
+ */
+function useWatchlistSpark(instance: GadgetInstance, items: WatchlistItem[]) {
+  const definition = instance.definition;
   // One batched observations query for every symbol target (never per row); sorted so the key is stable.
   const symbolTargets = [...new Set(items.filter((i) => i.targetType === 'symbol').flatMap((i) => symbolCandidates(i.target)))].sort();
   const sourceIds = definition.source_ids ?? [];
@@ -130,21 +164,85 @@ export function WatchlistGadget({
     ? symbolCandidates(item.target).map((c) => latestBySymbol.get(c)).find(Boolean)
     : undefined;
 
-  // Filter items by search query
-  const filteredItems = items.filter((item) => {
-    if (!filterQuery) return true;
-    const q = filterQuery.toLowerCase();
+  return { history, matchFor };
+}
+
+/** Severity edge classes of a row: critical is destructive, warning a muted ink edge. */
+function severityEdge(severity: WatchlistItem['severity']): string {
+  return severity === 'critical' ? 'border-destructive' : severity === 'warning' ? 'border-foreground/50' : 'border-transparent';
+}
+
+/** One rule row: a symbol row with sparkline when live observations exist, otherwise the target/condition/time row. */
+function WatchlistRow({ item, obs, history }: {
+  item: WatchlistItem;
+  obs: WorldObservation | undefined;
+  history: ReturnType<typeof historyPerSeries>;
+}) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const edge = severityEdge(item.severity);
+  const srSeverity = <span className="sr-only">{t(`watchlistSeverity_${item.severity}`)} · {t(`watchlistStatus_${item.status}`)}</span>;
+  // Symbol with live observations: label | sparkline | value | % change, direction-aware delta colour.
+  if (obs) {
+    const points = history.get(seriesKey(obs));
     return (
-      item.target.toLowerCase().includes(q) ||
-      item.condition.toLowerCase().includes(q) ||
-      item.matchReason?.toLowerCase().includes(q)
+      <li className={`border-l-2 pl-3 ${edge}`} data-testid="watchlist-symbol-row">
+        <SeriesRow label={item.target} value={obs.value} currency={obs.currency ?? undefined} series={points}
+          format={(v) => formatObservationValue(obs, v, display.locale)} deltaPercent={deltaVsPrevious(points)} better={metricBetterDirection(obs.metric)} />
+        {srSeverity}
+      </li>
     );
-  });
-  // Alerting first, then by severity, then most recently matched, so the rows that need attention lead.
-  const sortedItems = [...filteredItems].sort((a, b) =>
-    STATUS_RANK[a.status] - STATUS_RANK[b.status]
-    || SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
-    || (b.lastMatchedAt ?? '').localeCompare(a.lastMatchedAt ?? ''));
+  }
+  return (
+    <li className={`flex items-start justify-between gap-3 border-l-2 py-2 pl-3 ${edge}`}>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-foreground">{item.target}</p>
+        <p className="truncate text-xs text-muted-foreground">{item.condition}</p>
+        {item.matchReason && <p className="line-clamp-1 text-xs text-muted-foreground">{item.matchReason}</p>}
+        {srSeverity}
+      </div>
+      <div className="shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+        <p className={item.status === 'alert' ? 'font-semibold text-destructive' : undefined}>
+          {item.lastMatchedAt ? (
+            <time
+              dateTime={item.lastMatchedAt}
+              title={t('watchlistMatchedTitle', { time: formatDateTime(item.lastMatchedAt, display.locale, display.timezone) })}
+            >{formatRelativeTime(item.lastMatchedAt, display.locale)}</time>
+          ) : t('watchlistNever')}
+        </p>
+        <p>{t('watchlistMatchCount', { count: item.matchCount })}</p>
+      </div>
+    </li>
+  );
+}
+
+/**
+ * Standard Watchlist and Rules table gadget template.
+ * Renders an alerting-count summary and rule rows sorted alerting first, with a 2px severity edge
+ * (screen-reader text carries the severity), relative last-match time, tabular match count and
+ * client-side search filtering.
+ * The bounded root scrolls its controls and watchlist instead of clipping them in compact cards.
+ *
+ * @param props Gadget instance configuration and watchlist items.
+ * @returns Accessible watchlist table gadget component.
+ */
+export function WatchlistGadget({
+  instance,
+  initialItems = [],
+  onAddRule,
+}: WatchlistGadgetProps) {
+  const t = useTranslations('dashboard');
+  const daily = useTranslations('daily');
+
+  const [filterQuery, setFilterQuery] = useState<string>('');
+
+  const definition = instance.definition;
+  const highlightRules: HighlightRule[] = definition.highlight_rules ?? [];
+  const { matchesQuery, items } = useWatchlistItems(instance, initialItems);
+  const { history, matchFor } = useWatchlistSpark(instance, items);
+
+  const filteredItems = filterWatchItems(items, filterQuery);
+  const sortedItems = sortWatchItems(filteredItems);
   const alertingCount = items.filter((item) => item.status === 'alert').length;
   // The latest match time is the newest real data timestamp this gadget knows about.
   useReportGadgetFreshness(items.reduce<string | null>((max, i) => (i.lastMatchedAt && (!max || i.lastMatchedAt > max) ? i.lastMatchedAt : max), null));
@@ -182,58 +280,15 @@ export function WatchlistGadget({
         </div>
       )}
 
-      {/* Empty State */}
-      {matchesQuery.isPending && highlightRules.length > 0 && definition.source_ids.length > 0 && <GadgetSkeleton variant="table" className="p-0" label={t('gadgetDataLoading')} />}
-      {matchesQuery.isError && <GadgetNotice kind="error" className="p-0" message={t('gadgetDataLoadFailed')} />}
-      {!(matchesQuery.isPending && highlightRules.length > 0 && definition.source_ids.length > 0)
-        && !matchesQuery.isError && filteredItems.length === 0 && (
-        <GadgetNotice kind="empty" className="p-0" message={definition.renderer === 'highlights' ? daily('highlightsEmpty') : `${daily('watchlistEmpty')}. ${daily('watchlistEmptyDetail')}`} action={onAddRule ? { label: daily('addRule'), onClick: onAddRule } : { href: '/settings/sources', label: t('gadgetConfigureAction') }} />
-      )}
+      <WatchlistStatus
+        definition={definition} matchesQuery={matchesQuery} highlightRuleCount={highlightRules.length}
+        emptyResult={filteredItems.length === 0} onAddRule={onAddRule}
+      />
 
       {/* Rule rows: severity is a 2px left edge (plus screen-reader text), time and count sit right, tabular. */}
       {sortedItems.length > 0 && (
         <ul className="min-h-0 flex-1 divide-y divide-border/50">
-          {sortedItems.map((item) => {
-            const obs = matchFor(item);
-            const edge = item.severity === 'critical' ? 'border-destructive' : item.severity === 'warning' ? 'border-foreground/50' : 'border-transparent';
-            // Symbol with live observations: label | sparkline | value | % change, direction-aware delta colour.
-            if (obs) {
-              const points = history.get(seriesKey(obs));
-              return (
-                <li key={item.id} className={`border-l-2 pl-3 ${edge}`} data-testid="watchlist-symbol-row">
-                  <SeriesRow label={item.target} value={obs.value} currency={obs.currency ?? undefined} series={points}
-                    format={(v) => formatObservationValue(obs, v, display.locale)} deltaPercent={deltaVsPrevious(points)} better={metricBetterDirection(obs.metric)} />
-                  <span className="sr-only">{t(`watchlistSeverity_${item.severity}`)} · {t(`watchlistStatus_${item.status}`)}</span>
-                </li>
-              );
-            }
-            return (
-            <li
-              key={item.id}
-              className={`flex items-start justify-between gap-3 border-l-2 py-2 pl-3 ${
-                item.severity === 'critical' ? 'border-destructive' : item.severity === 'warning' ? 'border-foreground/50' : 'border-transparent'
-              }`}
-            >
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">{item.target}</p>
-                <p className="truncate text-xs text-muted-foreground">{item.condition}</p>
-                {item.matchReason && <p className="line-clamp-1 text-xs text-muted-foreground">{item.matchReason}</p>}
-                <span className="sr-only">{t(`watchlistSeverity_${item.severity}`)} · {t(`watchlistStatus_${item.status}`)}</span>
-              </div>
-              <div className="shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                <p className={item.status === 'alert' ? 'font-semibold text-destructive' : undefined}>
-                  {item.lastMatchedAt ? (
-                    <time
-                      dateTime={item.lastMatchedAt}
-                      title={t('watchlistMatchedTitle', { time: formatDateTime(item.lastMatchedAt, display.locale, display.timezone) })}
-                    >{formatRelativeTime(item.lastMatchedAt, display.locale)}</time>
-                  ) : t('watchlistNever')}
-                </p>
-                <p>{t('watchlistMatchCount', { count: item.matchCount })}</p>
-              </div>
-            </li>
-            );
-          })}
+          {sortedItems.map((item) => <WatchlistRow key={item.id} item={item} obs={matchFor(item)} history={history} />)}
         </ul>
       )}
     </div>

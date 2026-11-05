@@ -1,0 +1,8 @@
+import { MemoryList } from '@/modules/knowledge';
+
+/** Renders the selective memory management route inside the workspace shell. */
+export default function MemoryPage() {
+  return (
+    <MemoryList />
+  );
+}

@@ -15,6 +15,7 @@ import {
 import type { AppLocaleId } from '@/core/i18n';
 import { INPUT_DECLINE } from '../../api';
 import { genUiCopy, INPUT_COPY, MEETING_COPY, resolveWidgetLocale } from '../copy';
+import { BareButton } from '@/components/bare-button';
 
 /** Candidate meeting time slot descriptor. */
 export interface MeetingTimeSlot {
@@ -117,6 +118,238 @@ function normalizeSlots(
   });
 }
 
+/** Resolved copy bundles of the picker. */
+type MeetingCopy = (typeof MEETING_COPY)[keyof typeof MEETING_COPY];
+type InputCopy = (typeof INPUT_COPY)[keyof typeof INPUT_COPY];
+
+/** Border/background classes of a slot button by availability and selection. */
+function slotClass(isAvailable: boolean, isSelected: boolean): string {
+  if (!isAvailable) return 'cursor-not-allowed border-border bg-muted/30 opacity-60';
+  return isSelected
+    ? 'border-primary bg-primary/10 text-foreground'
+    : 'border-border bg-background hover:bg-muted/50 text-foreground';
+}
+
+/** One selectable slot: date, time and the recommended / label / availability badges. */
+function SlotButton({ slot, isSelected, isRecommended, disabled, copy, onSelect }: {
+  slot: NormalizedMeetingTimeSlot;
+  isSelected: boolean;
+  isRecommended: boolean;
+  disabled: boolean;
+  copy: MeetingCopy;
+  onSelect: (slot: NormalizedMeetingTimeSlot) => void;
+}) {
+  const isAvailable = slot.available !== false;
+  return (
+    <BareButton
+      type="button"
+      disabled={!isAvailable || disabled}
+      aria-pressed={isSelected}
+      data-testid={`meeting-slot-${slot.id}`}
+      onClick={() => onSelect(slot)}
+      className={`flex w-full items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${slotClass(isAvailable, isSelected)}`}
+    >
+      <div className="min-w-0">
+        <div className="text-sm font-semibold text-foreground">{slot.date}</div>
+        <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <ClockIcon className="size-3.5 shrink-0" aria-hidden="true" />
+          <span className="tabular-nums">{slot.time}</span>
+        </div>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-1.5">
+        {isRecommended && isAvailable && (
+          <Badge variant="outline" className="border-primary/40 text-primary text-[11px]">
+            {copy.recommendedBadge}
+          </Badge>
+        )}
+        {slot.label && (
+          <Badge variant="secondary" className="text-[11px]">
+            {slot.label}
+          </Badge>
+        )}
+        <Badge
+          variant={!isAvailable ? 'outline' : isSelected ? 'default' : 'secondary'}
+          className="text-[11px]"
+        >
+          {isAvailable ? copy.availableBadge : copy.unavailableBadge}
+        </Badge>
+      </div>
+    </BareButton>
+  );
+}
+
+/** Status banners under the slot list: confirmed, request closed, send failed and declined. */
+function MeetingBanners({ confirmedSlot, showClosed, inputState, submitFailed, isDeclined, copy, inputCopy }: {
+  confirmedSlot: NormalizedMeetingTimeSlot | null;
+  /** Request path only: the request expired/was cancelled without an accepted answer. */
+  showClosed: boolean;
+  inputState: 'pending' | 'expired' | 'cancelled';
+  submitFailed: boolean;
+  isDeclined: boolean;
+  copy: MeetingCopy;
+  inputCopy: InputCopy;
+}) {
+  return (
+    <>
+      {confirmedSlot && (
+        <p
+          role="status"
+          data-testid="meeting-confirmed-banner"
+          className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-medium text-primary"
+        >
+          <CheckCircle2Icon className="size-4 shrink-0" aria-hidden="true" />
+          <span>{copy.confirmedStatus(confirmedSlot.date, confirmedSlot.time)}</span>
+        </p>
+      )}
+
+      {showClosed && (
+        <p
+          role="status"
+          data-testid="meeting-input-state-banner"
+          className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
+        >
+          {inputState === 'expired' ? inputCopy.expired : inputCopy.cancelled}
+        </p>
+      )}
+
+      {submitFailed && (
+        <p role="alert" data-testid="meeting-input-failed" className="text-xs text-destructive">
+          {inputCopy.failed}
+        </p>
+      )}
+
+      {isDeclined && (
+        <p
+          role="status"
+          data-testid="meeting-declined-banner"
+          className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
+        >
+          {copy.declinedStatus}
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * Selection, confirm and decline state of the picker.
+ *
+ * Two answer paths: a parked `request_user_input` (`requestId` + `onSubmitInput`: locked from click until the server
+ * rejects, then retry is allowed, and permanently after acceptance) or a plain follow-up prompt through `onSendPrompt`.
+ *
+ * @returns State, derived flags and the select/confirm/decline handlers.
+ */
+function useMeetingSelection(args: {
+  normalizedSlots: NormalizedMeetingTimeSlot[];
+  copy: MeetingCopy;
+  displayTitle: string;
+  requestId?: string;
+  onSubmitInput?: MeetingTimePickerProps['onSubmitInput'];
+  onSendPrompt?: MeetingTimePickerProps['onSendPrompt'];
+  inputState: 'pending' | 'expired' | 'cancelled';
+}) {
+  const { normalizedSlots, copy, displayTitle, requestId, onSubmitInput, onSendPrompt, inputState } = args;
+  const viaRequest = Boolean(requestId && onSubmitInput);
+  const [selectedSlotId, setSelectedSlotId] = React.useState<string | null>(null);
+  const [confirmedSlot, setConfirmedSlot] = React.useState<NormalizedMeetingTimeSlot | null>(null);
+  const [isDeclined, setIsDeclined] = React.useState(false);
+  const [submitState, setSubmitState] = React.useState<'idle' | 'sending' | 'sent'>('idle');
+  const [submitFailed, setSubmitFailed] = React.useState(false);
+  const locked = viaRequest && (submitState !== 'idle' || inputState !== 'pending');
+
+  /** Sends the answer through the request path; on failure the card unlocks so the user can retry. */
+  const submitAnswer = React.useCallback(
+    async (answer: string, onAccepted: () => void) => {
+      if (!requestId || !onSubmitInput) return;
+      setSubmitState('sending');
+      setSubmitFailed(false);
+      try {
+        await onSubmitInput(requestId, answer);
+        setSubmitState('sent');
+        onAccepted();
+      } catch {
+        setSubmitState('idle');
+        setSubmitFailed(true);
+      }
+    },
+    [onSubmitInput, requestId],
+  );
+
+  const selectedSlot = React.useMemo(
+    () => normalizedSlots.find((slot) => slot.id === selectedSlotId) ?? null,
+    [normalizedSlots, selectedSlotId],
+  );
+
+  /** Selects a candidate available slot prior to final confirmation. */
+  const handleSelectSlot = React.useCallback((slot: NormalizedMeetingTimeSlot) => {
+    if (slot.available === false) return;
+    setIsDeclined(false);
+    setConfirmedSlot(null);
+    setSelectedSlotId(slot.id);
+  }, []);
+
+  /** Confirms the currently selected time slot and dispatches a follow-up prompt. */
+  const handleConfirm = React.useCallback(() => {
+    if (!selectedSlot || selectedSlot.available === false) return;
+    if (viaRequest) {
+      void submitAnswer(selectedSlot.id, () => setConfirmedSlot(selectedSlot));
+      return;
+    }
+    setConfirmedSlot(selectedSlot);
+    setIsDeclined(false);
+    onSendPrompt?.(
+      copy.confirmPrompt(displayTitle, selectedSlot.date, selectedSlot.time, selectedSlot.label),
+    );
+  }, [copy, displayTitle, onSendPrompt, selectedSlot, submitAnswer, viaRequest]);
+
+  /** Declines the proposed slots and asks the assistant for alternative times. */
+  const handleDecline = React.useCallback(() => {
+    if (viaRequest) {
+      void submitAnswer(INPUT_DECLINE, () => {
+        setIsDeclined(true);
+        setConfirmedSlot(null);
+      });
+      return;
+    }
+    setIsDeclined(true);
+    setConfirmedSlot(null);
+    onSendPrompt?.(copy.declinePrompt(displayTitle));
+  }, [copy, displayTitle, onSendPrompt, submitAnswer, viaRequest]);
+
+  return { viaRequest, selectedSlotId, selectedSlot, confirmedSlot, isDeclined, submitState, submitFailed, locked, handleSelectSlot, handleConfirm, handleDecline };
+}
+
+/** Card header: calendar glyph, title, optional description and the timezone badge. */
+function PickerHeader({ title, description, timezone }: { title: string; description?: string; timezone?: string }) {
+  return (
+    <CardHeader className="gap-1.5 border-b border-border pb-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <CalendarIcon className="size-4" aria-hidden="true" />
+          </span>
+          <div>
+            <CardTitle className="text-base font-semibold text-foreground">
+              {title}
+            </CardTitle>
+            {description && (
+              <CardDescription className="mt-0.5 text-xs text-muted-foreground">
+                {description}
+              </CardDescription>
+            )}
+          </div>
+        </div>
+        {timezone && (
+          <Badge variant="outline" className="tabular-nums text-xs">
+            {timezone}
+          </Badge>
+        )}
+      </div>
+    </CardHeader>
+  );
+}
+
 /**
  * Native structured MeetingTimePicker widget ported from OpenIntelligentUI and adapted to
  * Umwelt-OS shadcn primitives. Allows the user to select an available time slot, confirm their
@@ -146,7 +379,6 @@ export function MeetingTimePicker({
   const copy = MEETING_COPY[resolvedLocale];
   const catalog = genUiCopy(resolvedLocale);
   const inputCopy = INPUT_COPY[resolvedLocale];
-  const viaRequest = Boolean(requestId && onSubmitInput);
 
   const resolvedDuration = meetingDuration ?? duration_minutes;
   const displayTitle = title || reasonForScheduling || copy.defaultTitle;
@@ -157,203 +389,40 @@ export function MeetingTimePicker({
     () => normalizeSlots(slots, timeSlots, resolvedDuration),
     [resolvedDuration, slots, timeSlots],
   );
-
-  const [selectedSlotId, setSelectedSlotId] = React.useState<string | null>(null);
-  const [confirmedSlot, setConfirmedSlot] = React.useState<NormalizedMeetingTimeSlot | null>(null);
-  const [isDeclined, setIsDeclined] = React.useState(false);
-  // Request path only: locked from click until the server rejects (then retry is allowed) and after acceptance.
-  const [submitState, setSubmitState] = React.useState<'idle' | 'sending' | 'sent'>('idle');
-  const [submitFailed, setSubmitFailed] = React.useState(false);
-  const locked = viaRequest && (submitState !== 'idle' || inputState !== 'pending');
-
-  /**
-   * Sends the answer through the request path; on failure the card unlocks so the user can retry.
-   */
-  const submitAnswer = React.useCallback(
-    async (answer: string, onAccepted: () => void) => {
-      if (!requestId || !onSubmitInput) return;
-      setSubmitState('sending');
-      setSubmitFailed(false);
-      try {
-        await onSubmitInput(requestId, answer);
-        setSubmitState('sent');
-        onAccepted();
-      } catch {
-        setSubmitState('idle');
-        setSubmitFailed(true);
-      }
-    },
-    [onSubmitInput, requestId],
-  );
-
-  const selectedSlot = React.useMemo(
-    () => normalizedSlots.find((slot) => slot.id === selectedSlotId) ?? null,
-    [normalizedSlots, selectedSlotId],
-  );
-
-  /**
-   * Selects a candidate available slot prior to final confirmation.
-   */
-  const handleSelectSlot = React.useCallback((slot: NormalizedMeetingTimeSlot) => {
-    if (slot.available === false) return;
-    setIsDeclined(false);
-    setConfirmedSlot(null);
-    setSelectedSlotId(slot.id);
-  }, []);
-
-  /**
-   * Confirms the currently selected time slot and dispatches a follow-up prompt.
-   */
-  const handleConfirm = React.useCallback(() => {
-    if (!selectedSlot || selectedSlot.available === false) return;
-    if (viaRequest) {
-      void submitAnswer(selectedSlot.id, () => setConfirmedSlot(selectedSlot));
-      return;
-    }
-    setConfirmedSlot(selectedSlot);
-    setIsDeclined(false);
-    onSendPrompt?.(
-      copy.confirmPrompt(displayTitle, selectedSlot.date, selectedSlot.time, selectedSlot.label),
-    );
-  }, [copy, displayTitle, onSendPrompt, selectedSlot, submitAnswer, viaRequest]);
-
-  /**
-   * Declines the proposed slots and asks the assistant for alternative times.
-   */
-  const handleDecline = React.useCallback(() => {
-    if (viaRequest) {
-      void submitAnswer(INPUT_DECLINE, () => {
-        setIsDeclined(true);
-        setConfirmedSlot(null);
-      });
-      return;
-    }
-    setIsDeclined(true);
-    setConfirmedSlot(null);
-    onSendPrompt?.(copy.declinePrompt(displayTitle));
-  }, [copy, displayTitle, onSendPrompt, submitAnswer, viaRequest]);
+  const sel = useMeetingSelection({ normalizedSlots, copy, displayTitle, requestId, onSubmitInput, onSendPrompt, inputState });
+  const { selectedSlot, locked } = sel;
 
   return (
     <Card
       data-testid="generative-meeting-time-picker"
       className="my-2 w-full max-w-md border-border bg-surface text-foreground"
     >
-      <CardHeader className="gap-1.5 border-b border-border pb-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <CalendarIcon className="size-4" aria-hidden="true" />
-            </span>
-            <div>
-              <CardTitle className="text-base font-semibold text-foreground">
-                {displayTitle}
-              </CardTitle>
-              {displayDescription && (
-                <CardDescription className="mt-0.5 text-xs text-muted-foreground">
-                  {displayDescription}
-                </CardDescription>
-              )}
-            </div>
-          </div>
-          {timezone && (
-            <Badge variant="outline" className="tabular-nums text-xs">
-              {timezone}
-            </Badge>
-          )}
-        </div>
-      </CardHeader>
+      <PickerHeader title={displayTitle} description={displayDescription} timezone={timezone} />
 
       <CardContent className="space-y-2.5 pt-4">
         <div role="group" aria-label={displayTitle} className="space-y-2">
-          {normalizedSlots.map((slot) => {
-            const isSelected = selectedSlotId === slot.id;
-            const isAvailable = slot.available !== false;
-            const isRecommended =
-              slot.recommended === true || (Boolean(selected_slot_id) && slot.id === selected_slot_id);
-
-            return (
-              <button
-                key={slot.id}
-                type="button"
-                disabled={!isAvailable || locked}
-                aria-pressed={isSelected}
-                data-testid={`meeting-slot-${slot.id}`}
-                onClick={() => handleSelectSlot(slot)}
-                className={`flex w-full items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  !isAvailable
-                    ? 'cursor-not-allowed border-border bg-muted/30 opacity-60'
-                    : isSelected
-                      ? 'border-primary bg-primary/10 text-foreground'
-                      : 'border-border bg-background hover:bg-muted/50 text-foreground'
-                }`}
-              >
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-foreground">{slot.date}</div>
-                  <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <ClockIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                    <span className="tabular-nums">{slot.time}</span>
-                  </div>
-                </div>
-
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {isRecommended && isAvailable && (
-                    <Badge variant="outline" className="border-primary/40 text-primary text-[11px]">
-                      {copy.recommendedBadge}
-                    </Badge>
-                  )}
-                  {slot.label && (
-                    <Badge variant="secondary" className="text-[11px]">
-                      {slot.label}
-                    </Badge>
-                  )}
-                  <Badge
-                    variant={!isAvailable ? 'outline' : isSelected ? 'default' : 'secondary'}
-                    className="text-[11px]"
-                  >
-                    {isAvailable ? copy.availableBadge : copy.unavailableBadge}
-                  </Badge>
-                </div>
-              </button>
-            );
-          })}
+          {normalizedSlots.map((slot) => (
+            <SlotButton
+              key={slot.id}
+              slot={slot}
+              isSelected={sel.selectedSlotId === slot.id}
+              isRecommended={slot.recommended === true || (Boolean(selected_slot_id) && slot.id === selected_slot_id)}
+              disabled={locked}
+              copy={copy}
+              onSelect={sel.handleSelectSlot}
+            />
+          ))}
         </div>
 
-        {confirmedSlot && (
-          <p
-            role="status"
-            data-testid="meeting-confirmed-banner"
-            className="flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs font-medium text-primary"
-          >
-            <CheckCircle2Icon className="size-4 shrink-0" aria-hidden="true" />
-            <span>{copy.confirmedStatus(confirmedSlot.date, confirmedSlot.time)}</span>
-          </p>
-        )}
-
-        {viaRequest && inputState !== 'pending' && submitState !== 'sent' && (
-          <p
-            role="status"
-            data-testid="meeting-input-state-banner"
-            className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
-          >
-            {inputState === 'expired' ? inputCopy.expired : inputCopy.cancelled}
-          </p>
-        )}
-
-        {submitFailed && (
-          <p role="alert" data-testid="meeting-input-failed" className="text-xs text-destructive">
-            {inputCopy.failed}
-          </p>
-        )}
-
-        {isDeclined && (
-          <p
-            role="status"
-            data-testid="meeting-declined-banner"
-            className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
-          >
-            {copy.declinedStatus}
-          </p>
-        )}
+        <MeetingBanners
+          confirmedSlot={sel.confirmedSlot}
+          showClosed={sel.viaRequest && inputState !== 'pending' && sel.submitState !== 'sent'}
+          inputState={inputState}
+          submitFailed={sel.submitFailed}
+          isDeclined={sel.isDeclined}
+          copy={copy}
+          inputCopy={inputCopy}
+        />
       </CardContent>
 
       <CardFooter className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4">
@@ -361,7 +430,7 @@ export function MeetingTimePicker({
           type="button"
           variant="outline"
           size="sm"
-          onClick={handleDecline}
+          onClick={sel.handleDecline}
           disabled={locked}
           data-testid="meeting-decline-button"
         >
@@ -372,7 +441,7 @@ export function MeetingTimePicker({
           variant="default"
           size="sm"
           disabled={!selectedSlot || selectedSlot.available === false || locked}
-          onClick={handleConfirm}
+          onClick={sel.handleConfirm}
           data-testid="meeting-confirm-button"
         >
           {catalog.genUiTimeConfirm}
@@ -381,4 +450,3 @@ export function MeetingTimePicker({
     </Card>
   );
 }
-

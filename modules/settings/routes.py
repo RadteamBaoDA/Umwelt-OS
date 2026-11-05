@@ -1,6 +1,6 @@
 import hashlib
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -27,7 +27,7 @@ from core.workspaces.schemas import WorkspaceContext
 from modules.chat import web_search as web
 from modules.chat.generative_ui import external_router as viz
 from modules.settings import lifecycle, models, public
-from modules.settings.openrouter_models import parse_openrouter_models, to_query_params
+from modules.settings.openrouter_models import parse_openrouter_page, to_query_params
 from modules.settings.schemas import (
     ConnectionTestResult,
     ModuleLifecycleRead,
@@ -344,6 +344,28 @@ async def save_viz_router(value: VizRouterUpdate, session: Session, request: Req
     return saved
 
 
+async def _test_typesafe_router(
+    session: AsyncSession, settings: Any, resolved: Any, window: list[dict[str, str]],
+) -> VizRouterTestResult:
+    """Run the synthetic TypeSafe classification and map failures to short error codes.
+
+    Rolls back first so no SQL transaction is held across egress. Missing credential, denied network
+    egress and router errors are reported as ``ok=False`` results rather than HTTP errors.
+    """
+    await session.rollback()  # no SQL held across egress
+    if not resolved.typesafe_key:
+        return VizRouterTestResult(ok=False, error="credential_required")
+    try:
+        transport = approved_web_search_transport(
+            viz.TYPESAFE_URL, settings.ai_allowed_endpoint_hosts, settings.web_search_allowed_cidrs)
+        category, _ = await viz.classify_typesafe(resolved.typesafe_key, window, transport)
+    except EndpointNetworkPolicyError:
+        return VizRouterTestResult(ok=False, error="network_denied")
+    except viz.VisualizationRouterError as exc:
+        return VizRouterTestResult(ok=False, error=exc.code)
+    return VizRouterTestResult(ok=True, category=category)
+
+
 @router.post("/viz-router/test", response_model=VizRouterTestResult,
              dependencies=[Depends(require_budget("model_probe", 10, 60))])
 async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite) -> VizRouterTestResult:
@@ -364,18 +386,7 @@ async def test_viz_router(session: Session, request: Request, _owner: OwnerWrite
         return VizRouterTestResult(ok=False, error="consent_required")
     window = [{"role": "user", "content": "Plot our monthly revenue for 2024 as a trend over time."}]
     if resolved.kind == "typesafe":
-        await session.rollback()  # no SQL held across egress
-        if not resolved.typesafe_key:
-            return VizRouterTestResult(ok=False, error="credential_required")
-        try:
-            transport = approved_web_search_transport(
-                viz.TYPESAFE_URL, settings.ai_allowed_endpoint_hosts, settings.web_search_allowed_cidrs)
-            category, _ = await viz.classify_typesafe(resolved.typesafe_key, window, transport)
-        except EndpointNetworkPolicyError:
-            return VizRouterTestResult(ok=False, error="network_denied")
-        except viz.VisualizationRouterError as exc:
-            return VizRouterTestResult(ok=False, error=exc.code)
-        return VizRouterTestResult(ok=True, category=category)
+        return await _test_typesafe_router(session, settings, resolved, window)
 
     base = await public.get_ai_execution_config(session, settings, redis, scope=_owner)
     config, mapping = public.viz_router_gateway_config(base, resolved)
@@ -539,7 +550,7 @@ async def browse_openrouter_models(
         payload = await gateway.list_openrouter_models(to_query_params(body.filters, body.offset, body.limit))
     except ModelGatewayError as exc:
         return OpenRouterBrowseResult(ok=False, error=viz.error_from_gateway(exc).code)
-    models, total, has_next = parse_openrouter_models(payload, body.limit)
+    models, total, has_next, consumed = parse_openrouter_page(payload, body.limit)
     return OpenRouterBrowseResult(
         ok=True, models=[OpenRouterModelRead(**m) for m in models], total_count=total,
-        next_offset=body.offset + len(models) if has_next else None)
+        next_offset=body.offset + consumed if has_next else None)

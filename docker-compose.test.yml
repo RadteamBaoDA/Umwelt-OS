@@ -82,6 +82,23 @@ services:
       # Owner-entered provider API keys (CoinGecko, FRED, ...) are encrypted with this; without it the credential PUT returns 503.
       CONNECTOR_CREDENTIAL_ENCRYPTION_KEY: ${TEST_CONNECTOR_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1jb25uZWN0b3ItdGVzdC1rZXktMDAwMDAwMDA=}
 
+  cron-worker:
+    # Same disposable-stack environment as the worker; runs the recurring jobs (queue arq:cron).
+    env_file: !reset []
+    environment:
+      DATABASE_URL: postgresql+asyncpg://bbd_test:bbd-os-test-db-only@postgres:5432/bbd_test
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: test
+      SETUP_TOKEN: bbd-os-disposable-test-token
+      CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
+      POSTGRES_PASSWORD: bbd-os-test-db-only
+      AI_ALLOWED_ENDPOINT_HOSTS: '["fake-model:8000"]'
+      AI_ALLOW_PUBLIC_PROVIDERS: ${E2E_ALLOW_PUBLIC_PROVIDERS:-false}
+      AI_ALLOWED_ENDPOINT_CIDRS: '["172.16.0.0/12","192.168.0.0/16","10.0.0.0/8"]'
+      MCP_ALLOWED_ENDPOINT_CIDRS: '{"http://fake-local:8000":["172.16.0.0/12","192.168.0.0/16","10.0.0.0/8"]}'
+      AI_CREDENTIAL_ENCRYPTION_KEY: ${TEST_AI_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1tb2RlbC10ZXN0LWtleS0wMDAwMDAwMDAwMDA=}
+      CONNECTOR_CREDENTIAL_ENCRYPTION_KEY: ${TEST_CONNECTOR_CREDENTIAL_ENCRYPTION_KEY:-ZmFrZS1jb25uZWN0b3ItdGVzdC1rZXktMDAwMDAwMDA=}
+
   chat-worker:
     # Never read a developer's real .env into the disposable test stack.
     env_file: !reset []
@@ -143,6 +160,24 @@ services:
     volumes:
       - ./tests/integration/fake_local_services.py:/fake/fake_local_services.py:ro
     restart: unless-stopped
+
+  minio:
+    # Optional S3-compatible store for tests/integration/test_storage_s3_minio.py; start with
+    # `docker compose --profile minio ...`. Disposable credentials, loopback-only port, no volume.
+    profiles: ["minio"]
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data"]
+    env_file: !reset []
+    environment:
+      MINIO_ROOT_USER: bbd-os-test-minio
+      MINIO_ROOT_PASSWORD: bbd-os-test-minio-only
+    ports:
+      - "127.0.0.1:${TEST_MINIO_PORT:-39000}:9000"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
 volumes:
   test-postgres-data:

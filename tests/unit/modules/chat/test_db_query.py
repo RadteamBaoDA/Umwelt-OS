@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from core.realtime_routes import _wait_for_realtime_wakeup, notify_realtime_wakeup
+from core.realtime.routes import _wait_for_realtime_wakeup, notify_realtime_wakeup
 from modules.chat.db_query import (
     TOOL_QUERY_COLLECTED_DATA,
     build_db_query_tool_spec,

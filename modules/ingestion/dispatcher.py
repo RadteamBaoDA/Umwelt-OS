@@ -2,8 +2,9 @@
 
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid5
 
 from arq.connections import ArqRedis
@@ -12,6 +13,8 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import DomainError
+from core.worker_context import worker_session_factory
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import InternalJobScope, Scope
 from modules.ingestion import public
@@ -48,6 +51,60 @@ PRODUCERS_BY_EVENT = {
 }
 
 
+def _valid_cleanup_envelope(
+    event: EventOutbox | EventDelivery, scope: InternalJobScope, payload: dict[str, Any],
+) -> bool:
+    """Validate the operation-only ``document.cleanup.requested`` envelope.
+
+    Principal is proven on the outbox columns (and by the receipt owner), never by payload keys; legacy
+    identity-in-payload shapes are rejected, and the event id must be the deterministic id of its operation.
+    """
+    if (event.workspace_id != scope.workspace_id or event.actor_user_id != scope.actor_user_id
+            or event.membership_revision != scope.membership_revision or scope.source_id is None
+            or set(payload) != {"operation_id"} or not isinstance(payload["operation_id"], str)):
+        return False
+    try:
+        operation_id = UUID(payload["operation_id"])
+    except ValueError:
+        return False
+    return (str(operation_id) == payload["operation_id"]
+            and event.id == uuid5(operation_id, "document-cleanup-requested"))
+
+
+def _envelope_uuid_fields(
+    event: EventOutbox | EventDelivery, payload: dict[str, Any], principal: dict[str, Any],
+) -> list[str] | None:
+    """Validate the per-type payload shape and return the fields that must be canonical UUID strings.
+
+    ``None`` means the shape is invalid. Purge events carry exactly the principal plus ``operation_id``; ready
+    events are a finite 1024-byte contract with bounded integers; every other supported event names its
+    run/stage (and document / connector revision / normalization version where its type requires them).
+    """
+    if event.type.startswith("source.purge."):
+        return ["operation_id"] if set(payload) == set(principal) | {"operation_id"} else None
+    if event.type in {"document.version.ready", "news.document.ready"}:
+        if set(payload) != set(principal) | {"document_id", "document_version_id", "version_number"}:
+            return None
+        if (type(payload.get("version_number")) is not int or not 1 <= payload["version_number"] <= 2_147_483_647
+                or not 1 <= payload["source_generation"] <= 2_147_483_647):
+            return None
+        if len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) > 1024:
+            return None
+        return ["document_id", "document_version_id"]
+    uuid_fields = ["run_id", "stage_id"]
+    if event.type == "document.file.uploaded":
+        uuid_fields.append("document_id")
+    if event.type == "ingestion.normalize.requested" and (
+        type(payload.get("normalization_version")) is not int or payload["normalization_version"] != 1
+    ):
+        return None
+    if event.type == "connector.crawl.requested" and (
+        type(payload.get("connector_revision")) is not int or payload["connector_revision"] < 1
+    ):
+        return None
+    return uuid_fields
+
+
 def valid_event_envelope(event: EventOutbox | EventDelivery, scope: InternalJobScope) -> bool:
     """Validate exact retained principal/type/version/producer before worker content use.
 
@@ -60,18 +117,7 @@ def valid_event_envelope(event: EventOutbox | EventDelivery, scope: InternalJobS
             or event.producer not in PRODUCERS_BY_EVENT[event.type] or not isinstance(payload, dict)):
         return False
     if event.type == "document.cleanup.requested":
-        # Operation-only envelope: principal is proven on the outbox columns (and by the receipt
-        # owner), never by payload keys; legacy identity-in-payload shapes are rejected.
-        if (event.workspace_id != scope.workspace_id or event.actor_user_id != scope.actor_user_id
-                or event.membership_revision != scope.membership_revision or scope.source_id is None
-                or set(payload) != {"operation_id"} or not isinstance(payload["operation_id"], str)):
-            return False
-        try:
-            operation_id = UUID(payload["operation_id"])
-        except ValueError:
-            return False
-        return (str(operation_id) == payload["operation_id"]
-                and event.id == uuid5(operation_id, "document-cleanup-requested"))
+        return _valid_cleanup_envelope(event, scope, payload)
     principal = {"workspace_id": str(scope.workspace_id), "actor_user_id": scope.actor_user_id,
                  "membership_revision": scope.membership_revision,
                  "source_id": str(scope.source_id), "source_generation": scope.source_generation}
@@ -81,32 +127,9 @@ def valid_event_envelope(event: EventOutbox | EventDelivery, scope: InternalJobS
     if any(type(payload.get(key)) is not type(value) or payload.get(key) != value
            for key, value in principal.items()):
         return False
-    uuid_fields = []
-    if event.type.startswith("source.purge."):
-        if set(payload) != set(principal) | {"operation_id"}:
-            return False
-        uuid_fields = ["operation_id"]
-    elif event.type in {"document.version.ready", "news.document.ready"}:
-        if set(payload) != set(principal) | {"document_id", "document_version_id", "version_number"}:
-            return False
-        if (type(payload.get("version_number")) is not int or not 1 <= payload["version_number"] <= 2_147_483_647
-                or not 1 <= payload["source_generation"] <= 2_147_483_647):
-            return False
-        if len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) > 1024:
-            return False
-        uuid_fields = ["document_id", "document_version_id"]
-    else:
-        uuid_fields = ["run_id", "stage_id"]
-        if event.type == "document.file.uploaded":
-            uuid_fields.append("document_id")
-        if event.type == "ingestion.normalize.requested" and (
-            type(payload.get("normalization_version")) is not int or payload["normalization_version"] != 1
-        ):
-            return False
-        if event.type == "connector.crawl.requested" and (
-            type(payload.get("connector_revision")) is not int or payload["connector_revision"] < 1
-        ):
-            return False
+    uuid_fields = _envelope_uuid_fields(event, payload, principal)
+    if uuid_fields is None:
+        return False
     try:
         return all(isinstance(payload.get(key), str) and str(UUID(payload[key])) == payload[key]
                    for key in uuid_fields)
@@ -150,25 +173,31 @@ def _dispatch_scan_cursor(value: object) -> tuple[datetime, UUID, datetime] | No
         return None
 
 
-async def dispatch_pending_work(ctx: dict[str, object]) -> int:
-    """Scan at most100 identities, admit each original subject and commit before Redis.
+@dataclass
+class _DispatchClaim:
+    """Mutable record of one dispatch attempt, filled as the claim transaction progresses.
 
-    The committed queued timestamp is the dispatch claim. Recovery and failure compare
-    that exact timestamp under current original admission, so successor attempts survive.
-    No SQL locks span enqueue; absent Redis acknowledgements remain recoverable durable rows.
-    Malformed envelopes quarantine; lost access never acquires another actor or epoch.
-    A shared nested ctx full-key checkpoint advances even on denied/skipped identities.
-    ARQ copies invocation ctx, so startup owns this shared scheduling dict and lock.
-    The lock only reserves one bounded identity page and advances its checkpoint before
-    per-job admission; overlapping cron calls cannot regress or race a sweep wrap.
-    Each finite creation-time sweep wraps once after exhaustion, revisiting its prefix;
-    worker restart resets scheduling only, with no durability or admission claim.
+    It is read by the failure handler even when the claim transaction raised after setting ``claimed_at``
+    (for example a failed commit), so the exact original attempt can be returned to ``pending``.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
-    redis = cast(ArqRedis, ctx["redis"])
-    enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
-    if type(enabled) is not bool:
-        raise TypeError("Actual workspace rollout flag required")
+
+    claimed_at: datetime | None = None
+    job_name: str = ""
+    scope: InternalJobScope | None = None
+    access_fence: Any = None
+
+
+async def _reserve_dispatch_page(
+    ctx: dict[str, object], factory: async_sessionmaker[AsyncSession],
+) -> tuple[list[Any], datetime]:
+    """Reserve one bounded page (at most 100 identities) of dispatchable events and advance the shared cursor.
+
+    Runs under the shared scheduling lock so overlapping cron calls cannot regress or race a sweep wrap. The
+    checkpoint advances before any per-job admission, even for identities that are later denied or skipped. An
+    empty page wraps the sweep once (at most 100 candidates across both reads). Redis and original-subject
+    admission happen after the lock is released. Returns the identities and the evaluation instant ``now``
+    that also governs the per-identity lease comparison.
+    """
     scan_state = ctx.get(DISPATCH_SCAN_STATE)
     if (not isinstance(scan_state, dict) or set(scan_state) != {"cursor", "lock"}
             or not isinstance(scan_state["lock"], asyncio.Lock)):
@@ -204,103 +233,173 @@ async def dispatch_pending_work(ctx: dict[str, object]) -> int:
             scan_state["cursor"] = (
                 last_identity.created_at.astimezone(UTC).isoformat(), str(last_identity.id), ceiling.isoformat(),
             )
+    return list(identities), now
+
+
+async def _validate_dispatchable(
+    session: AsyncSession, event: EventOutbox, scope: InternalJobScope, *, now: datetime, enabled: bool,
+) -> bool:
+    """Decide whether a locked, envelope-valid event may be claimed now; ``False`` means skip it.
+
+    A missing stage or a receipt/purge identity that no longer matches the scope fails the event (committed
+    here); an in-flight running stage with an unexpired lease is skipped to preserve the worker's original
+    timestamp.
+    """
+    if "run_id" in event.payload and "stage_id" in event.payload:
+        stage = (await session.execute(select(IngestionStage.status, IngestionStage.lease_expires_at)
+            .join(IngestionRun, IngestionRun.id == IngestionStage.run_id).where(
+                IngestionStage.id == UUID(event.payload["stage_id"]),
+                IngestionRun.id == UUID(event.payload["run_id"]),
+                IngestionRun.workspace_id == scope.workspace_id,
+                IngestionRun.actor_user_id == scope.actor_user_id,
+                IngestionRun.membership_revision == scope.membership_revision,
+                IngestionRun.source_id == scope.source_id,
+            ))).one_or_none()
+        if stage is None:
+            event.status = "failed"
+            await session.commit()
+            return False
+        # Preserve an in-flight worker's original timestamp until its stage lease expires.
+        if stage.status == "running" and stage.lease_expires_at and stage.lease_expires_at > now:
+            return False
+    if event.type == "document.cleanup.requested":
+        receipt = await documents.read_document_cleanup_job_identity(
+            session, UUID(event.payload["operation_id"]), scope=scope, multi_workspace_enabled=enabled,
+        )
+        if receipt is None or (receipt.source_id, receipt.source_generation) != (
+            scope.source_id, scope.source_generation,
+        ):
+            event.status = "failed"
+            await session.commit()
+            return False
+    if event.type.startswith("source.purge."):
+        retained = await sources.read_source_purge_job_identity(
+            session, UUID(event.payload["operation_id"]), scope=scope, multi_workspace_enabled=enabled,
+        )
+        if retained != scope:
+            event.status = "failed"
+            await session.commit()
+            return False
+    return True
+
+
+async def _claim_for_dispatch(
+    factory: async_sessionmaker[AsyncSession], claim: _DispatchClaim, identifier: UUID, original_status: str,
+    original_dispatch: datetime | None, *, now: datetime, enabled: bool,
+) -> bool:
+    """Admit one original subject and commit the ``queued`` dispatch claim; ``False`` means nothing to enqueue.
+
+    Resolves the retained scope (unresolvable identities are quarantined), rechecks the original access fence,
+    locks the outbox row with ``SKIP LOCKED`` against the exact original status/timestamp, validates the
+    envelope and lease, then stamps ``claim`` and commits before Redis is touched. ``claim.claimed_at`` is set
+    just before the commit so a failed commit is still visible to the recovery handler.
+    """
+    async with factory() as session:
+        scope = await public.resolve_ingestion_event_scope(session, identifier, multi_workspace_enabled=enabled)
+        if scope is None:
+            await session.rollback()
+            await _quarantine_event_identity(session, identifier, original_status, original_dispatch)
+            return False
+        claim.scope = scope
+        claim.access_fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=enabled)
+        event = await session.scalar(select(EventOutbox).where(
+            EventOutbox.id == identifier, EventOutbox.workspace_id == scope.workspace_id,
+            EventOutbox.actor_user_id == scope.actor_user_id,
+            EventOutbox.membership_revision == scope.membership_revision,
+            EventOutbox.status == original_status, EventOutbox.dispatched_at == original_dispatch,
+        ).with_for_update(skip_locked=True).execution_options(populate_existing=True))
+        if event is None:
+            return False
+        if not valid_event_envelope(event, scope):
+            event.status = "failed"
+            await session.commit()
+            return False
+        if not await _validate_dispatchable(session, event, scope, now=now, enabled=enabled):
+            return False
+        claim.claimed_at = datetime.now(UTC)
+        event.status = "queued"
+        event.dispatched_at = claim.claimed_at
+        claim.job_name = WORKER_BY_EVENT[event.type]
+        await session.commit()
+    return True
+
+
+async def _return_claim_to_pending(
+    factory: async_sessionmaker[AsyncSession], identifier: UUID, claim: _DispatchClaim, *, enabled: bool,
+) -> None:
+    """After a failed enqueue, return only the exact original attempt to ``pending`` under current admission.
+
+    The queued row stays durable after a lost enqueue reply and the stale scan recovers it; this compare-and-set
+    merely speeds that up. A changed scope or lost authorization does nothing.
+    """
+    try:
+        async with factory() as session:
+            current_scope = await public.resolve_ingestion_event_scope(session, identifier,
+                                                                     multi_workspace_enabled=enabled)
+            if current_scope != claim.scope:
+                return
+            from core.workspaces.public import lock_access_fence
+            # claimed_at is set only after scope resolved, so scope is non-None here.
+            owner_scope = cast(InternalJobScope, claim.scope)
+            await lock_access_fence(session, scope=owner_scope, expected=claim.access_fence,
+                                    multi_workspace_enabled=enabled)
+            await session.execute(update(EventOutbox).where(
+                EventOutbox.id == identifier, EventOutbox.workspace_id == owner_scope.workspace_id,
+                EventOutbox.actor_user_id == owner_scope.actor_user_id,
+                EventOutbox.membership_revision == owner_scope.membership_revision,
+                EventOutbox.status == "queued", EventOutbox.dispatched_at == claim.claimed_at,
+            ).values(status="pending", next_attempt_at=datetime.now(UTC) + DISPATCH_STALE_AFTER))
+            await session.commit()
+    except (HTTPException, DomainError):
+        return
+
+
+async def dispatch_pending_work(ctx: dict[str, object]) -> int:
+    """Scan at most100 identities, admit each original subject and commit before Redis.
+
+    The committed queued timestamp is the dispatch claim. Recovery and failure compare
+    that exact timestamp under current original admission, so successor attempts survive.
+    No SQL locks span enqueue; absent Redis acknowledgements remain recoverable durable rows.
+    Malformed envelopes quarantine; lost access never acquires another actor or epoch.
+    A shared nested ctx full-key checkpoint advances even on denied/skipped identities.
+    ARQ copies invocation ctx, so startup owns this shared scheduling dict and lock.
+    The lock only reserves one bounded identity page and advances its checkpoint before
+    per-job admission; overlapping cron calls cannot regress or race a sweep wrap.
+    Each finite creation-time sweep wraps once after exhaustion, revisiting its prefix;
+    worker restart resets scheduling only, with no durability or admission claim.
+
+    Phases: ``_reserve_dispatch_page`` (under the scheduling lock) -> per identity ``_claim_for_dispatch``
+    (committed claim) -> Redis enqueue -> on failure ``_return_claim_to_pending``.
+    """
+    factory = worker_session_factory(ctx)
+    redis = cast(ArqRedis, ctx["redis"])
+    enabled = cast(Settings, ctx["settings"]).multi_workspace_enabled
+    if type(enabled) is not bool:
+        raise TypeError("Actual workspace rollout flag required")
+    identities, now = await _reserve_dispatch_page(ctx, factory)
     # Scheduling lock is released before any original-subject admission, mutation or Redis.
     enqueued = 0
-    for identifier, original_status, original_dispatch, created_at in identities:
-        claimed_at = None
+    for identifier, original_status, original_dispatch, _created_at in identities:
+        claim = _DispatchClaim()
         try:
-            async with factory() as session:
-                scope = await public.resolve_ingestion_event_scope(session, identifier, multi_workspace_enabled=enabled)
-                if scope is None:
-                    await session.rollback()
-                    await _quarantine_event_identity(session, identifier, original_status, original_dispatch)
-                    continue
-                access_fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=enabled)
-                event = await session.scalar(select(EventOutbox).where(
-                    EventOutbox.id == identifier, EventOutbox.workspace_id == scope.workspace_id,
-                    EventOutbox.actor_user_id == scope.actor_user_id,
-                    EventOutbox.membership_revision == scope.membership_revision,
-                    EventOutbox.status == original_status, EventOutbox.dispatched_at == original_dispatch,
-                ).with_for_update(skip_locked=True).execution_options(populate_existing=True))
-                if event is None:
-                    continue
-                if not valid_event_envelope(event, scope):
-                    event.status = "failed"
-                    await session.commit()
-                    continue
-                if "run_id" in event.payload and "stage_id" in event.payload:
-                    stage = (await session.execute(select(IngestionStage.status, IngestionStage.lease_expires_at)
-                        .join(IngestionRun, IngestionRun.id == IngestionStage.run_id).where(
-                            IngestionStage.id == UUID(event.payload["stage_id"]),
-                            IngestionRun.id == UUID(event.payload["run_id"]),
-                            IngestionRun.workspace_id == scope.workspace_id,
-                            IngestionRun.actor_user_id == scope.actor_user_id,
-                            IngestionRun.membership_revision == scope.membership_revision,
-                            IngestionRun.source_id == scope.source_id,
-                        ))).one_or_none()
-                    if stage is None:
-                        event.status = "failed"
-                        await session.commit()
-                        continue
-                    # Preserve an in-flight worker's original timestamp until its stage lease expires.
-                    if stage.status == "running" and stage.lease_expires_at and stage.lease_expires_at > now:
-                        continue
-                if event.type == "document.cleanup.requested":
-                    receipt = await documents.read_document_cleanup_job_identity(
-                        session, UUID(event.payload["operation_id"]), scope=scope, multi_workspace_enabled=enabled,
-                    )
-                    if receipt is None or (receipt.source_id, receipt.source_generation) != (
-                        scope.source_id, scope.source_generation,
-                    ):
-                        event.status = "failed"
-                        await session.commit()
-                        continue
-                if event.type.startswith("source.purge."):
-                    retained = await sources.read_source_purge_job_identity(
-                        session, UUID(event.payload["operation_id"]), scope=scope, multi_workspace_enabled=enabled,
-                    )
-                    if retained != scope:
-                        event.status = "failed"
-                        await session.commit()
-                        continue
-                claimed_at = datetime.now(UTC)
-                event.status = "queued"
-                event.dispatched_at = claimed_at
-                job_name = WORKER_BY_EVENT[event.type]
-                await session.commit()
+            if not await _claim_for_dispatch(
+                    factory, claim, identifier, original_status, original_dispatch, now=now, enabled=enabled):
+                continue
+            claimed_at = cast(datetime, claim.claimed_at)
             # Redis carries only identity; each consumer re-resolves the durable envelope.
-            job = await redis.enqueue_job(job_name, str(identifier),
+            job = await redis.enqueue_job(claim.job_name, str(identifier),
                 _job_id=f"ingestion:{identifier}:{claimed_at.isoformat()}", _defer_until=claimed_at)
             if job is not None:
                 enqueued += 1
-        except HTTPException:
+        except (HTTPException, DomainError):
             # Lost original authorization cannot expose payload or repair a successor claim.
             continue
         except Exception:
             # The queued row remains durable after a lost enqueue reply; the stale scan recovers it.
             # Only an exact original attempt can return to pending now.
-            if claimed_at is None:
+            if claim.claimed_at is None:
                 raise
-            try:
-                async with factory() as session:
-                    current_scope = await public.resolve_ingestion_event_scope(session, identifier,
-                                                                             multi_workspace_enabled=enabled)
-                    if current_scope != scope:
-                        continue
-                    from core.workspaces.public import lock_access_fence
-                    # claimed_at is set only after scope resolved, so scope is non-None here.
-                    owner_scope = cast(InternalJobScope, scope)
-                    await lock_access_fence(session, scope=owner_scope, expected=access_fence,
-                                            multi_workspace_enabled=enabled)
-                    await session.execute(update(EventOutbox).where(
-                        EventOutbox.id == identifier, EventOutbox.workspace_id == owner_scope.workspace_id,
-                        EventOutbox.actor_user_id == owner_scope.actor_user_id,
-                        EventOutbox.membership_revision == owner_scope.membership_revision,
-                        EventOutbox.status == "queued", EventOutbox.dispatched_at == claimed_at,
-                    ).values(status="pending", next_attempt_at=datetime.now(UTC) + DISPATCH_STALE_AFTER))
-                    await session.commit()
-            except HTTPException:
-                continue
+            await _return_claim_to_pending(factory, identifier, claim, enabled=enabled)
     return enqueued
 
 

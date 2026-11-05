@@ -1,6 +1,6 @@
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from modules.settings import public
 from tests.unit.modules.settings.test_providers import (
     GW,
@@ -63,6 +63,6 @@ async def test_switching_hosted_kind_moves_to_new_fixed_endpoint_and_drops_key()
 
 
 async def test_hosted_fixed_endpoint_still_obeys_deployment_policy():
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await _save(_row(), _update(providers=[_provider("default", kind="openai", url=None)]), _settings(public_ok=False))
     assert exc.value.status_code == 422

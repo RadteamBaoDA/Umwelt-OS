@@ -1,4 +1,5 @@
 import { apiRequest, csrfHeaders } from '@/core/api';
+import type { ApiBody, ApiResponse } from '@/core/api-contract';
 
 export type ObservedRun = {
   kind: 'ingestion' | 'agent' | 'automation' | 'chat';
@@ -13,12 +14,8 @@ export type ObservedRun = {
   trace: { request_id: string | null; ingestion_run_id: string | null; agent_run_id: string | null; tool_call_id: string | null };
 };
 
-export type Metrics = {
-  generated_at: string;
-  processes: string[];
-  counters: { name: string; labels: Record<string, string>; value: number }[];
-  histograms: { name: string; labels: Record<string, string>; count: number; sum_ms: number; p95_ms: number | null }[];
-};
+/** Process-local counters and histograms; derived from the backend OpenAPI schema (reference typed contract). */
+export type Metrics = ApiResponse<'/api/v1/system/metrics'>;
 
 export type Quality = {
   document_count: number;
@@ -74,9 +71,10 @@ export type SystemHistory = {
   buckets: HistoryBucket[];
 };
 
-export type HistorySettings = { retention_days: number; sample_interval_minutes: number; revision: number };
+/** History retention/collection settings plus the revision fencing the next write; derived from the OpenAPI schema. */
+export type HistorySettings = ApiResponse<'/api/v1/system/history/settings'>;
 /** Fields a settings PATCH may change; only the supplied ones are sent. */
-export type HistorySettingsPatch = { retention_days?: number; sample_interval_minutes?: number };
+export type HistorySettingsPatch = Omit<ApiBody<'/api/v1/system/history/settings', 'patch'>, 'expected_revision'>;
 
 /**
  * Fetch the owner-protected newest-run window, capped at 100 metadata-only summaries.

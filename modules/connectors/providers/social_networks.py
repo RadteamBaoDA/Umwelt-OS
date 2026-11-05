@@ -6,7 +6,6 @@ send-fence; returned cursors must be committed with the same durable ingestion r
 """
 
 # ValueError is the executor's stable classification for invalid provider payloads and scopes.
-# ruff: noqa: TRY004
 
 import json
 import re
@@ -42,6 +41,7 @@ class _HtmlText(HTMLParser):
     """Collect visible text nodes from provider HTML while ignoring markup and comments."""
 
     def __init__(self) -> None:
+        """Initialise the text accumulator and hidden-element depth."""
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.hidden_depth = 0
@@ -212,6 +212,33 @@ def _timestamp(value: object) -> datetime:
     raise ValueError("social_timestamp_invalid")
 
 
+def _mastodon_status_record(status: object, collected_at: datetime) -> IngestionRecord | None:
+    """Map one public Mastodon status to a record; non-public or non-object entries yield ``None``.
+
+    Raises:
+        ValueError: ``mastodon_response_invalid`` / ``social_link_invalid`` / timestamp errors.
+    """
+    if not isinstance(status, dict) or status.get("visibility") != "public":
+        return None
+    identifier, url, created = status.get("id"), status.get("url"), _timestamp(status.get("created_at"))
+    content_html = status.get("content")
+    if not isinstance(identifier, str) or not identifier.isdigit() or not isinstance(content_html, str):
+        raise ValueError("mastodon_response_invalid")
+    parsed_url = _validated_public_link(url)
+    raw_account = status.get("account")
+    account_obj: dict[str, Any] = raw_account if isinstance(raw_account, dict) else {}
+    raw_acct = account_obj.get("acct")
+    acct: str = raw_acct if isinstance(raw_acct, str) else ""
+    text = _plain_text(content_html)
+    return _record(
+        provider="mastodon", identity=identifier,
+        version=status.get("edited_at") if isinstance(status.get("edited_at"), str) else identifier,
+        content=text, observed_at=created, collected_at=collected_at,
+        source_fields={"author": acct[:255], "canonical_url": parsed_url,
+                       "created_at": created.isoformat()},
+    )
+
+
 async def collect_mastodon_scope(
     instance_url: str, *, account: str | None, hashtag: str | None, access_token: str | None,
     cursor: str | None, collected_at: datetime,
@@ -269,43 +296,26 @@ async def collect_mastodon_scope(
         raise ValueError("mastodon_response_invalid")
     records: list[IngestionRecord] = []
     for status in payload[:MASTODON_PAGE]:
-        if not isinstance(status, dict) or status.get("visibility") != "public":
-            continue
-        identifier, url, created = status.get("id"), status.get("url"), _timestamp(status.get("created_at"))
-        content_html = status.get("content")
-        if not isinstance(identifier, str) or not identifier.isdigit() or not isinstance(content_html, str):
-            raise ValueError("mastodon_response_invalid")
-        parsed_url = _validated_public_link(url)
-        raw_account = status.get("account")
-        account_obj: dict[str, Any] = raw_account if isinstance(raw_account, dict) else {}
-        raw_acct = account_obj.get("acct")
-        acct: str = raw_acct if isinstance(raw_acct, str) else ""
-        text = _plain_text(content_html)
-        records.append(_record(
-            provider="mastodon", identity=identifier,
-            version=status.get("edited_at") if isinstance(status.get("edited_at"), str) else identifier,
-            content=text, observed_at=created, collected_at=collected_at,
-            source_fields={"author": acct[:255], "canonical_url": parsed_url,
-                           "created_at": created.isoformat()},
-        ))
+        record = _mastodon_status_record(status, collected_at)
+        if record is not None:
+            records.append(record)
     # Never trust provider pagination URLs; continue only with the validated status ID.
     next_id = payload[-1].get("id") if payload and isinstance(payload[-1], dict) else None
     next_cursor = f"account:{account_id}|{next_id}" if account and isinstance(next_id, str) else next_id
     return _finish("mastodon", records, next_cursor if len(payload) >= MASTODON_PAGE else None, prior)
 
 
-async def collect_x_scope(
-    *, account: str | None, query: str | None, access_token: str, cursor: str | None,
-    collected_at: datetime, fetch_bytes: Callable[..., Awaitable[rest.Fetched]],
-) -> SocialCollectionResult:
-    """Collect one read-only X account-timeline or recent-search page using app bearer access."""
-    if bool(account) == bool(query) or not access_token:
-        raise ValueError("x_scope_invalid")
-    if collected_at.tzinfo is None or collected_at.utcoffset() is None:
-        raise ValueError("collection_time_invalid")
-    prior = _walk(cursor, "x")
-    token = prior.page
-    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+async def _x_fetch_page(
+    account: str | None, query: str | None, token: str | None, headers: dict[str, str],
+    fetch_bytes: Callable[..., Awaitable[rest.Fetched]],
+) -> tuple[rest.Fetched, str | None]:
+    """Fetch one X timeline page (resolving the user ID first when needed) or one recent-search page.
+
+    Returns the page response and the resolved account ID (``None`` for searches).
+
+    Raises:
+        ValueError: ``x_account_invalid`` or ``x_query_invalid``.
+    """
     common = {"max_results": "100", "tweet.fields": "author_id,created_at,lang,edit_history_tweet_ids"}
     account_id: str | None = None
     if account:
@@ -341,6 +351,46 @@ async def collect_x_scope(
             f"{_X_ORIGIN}/2/tweets/search/recent?{urlencode(params)}",
             headers=headers, max_bytes=rest.MAX_PAGE_BYTES,
         )
+    return response, account_id
+
+
+def _x_tweet_record(tweet: object, account_id: str | None, collected_at: datetime) -> IngestionRecord:
+    """Validate one X tweet object and map it to a record with bounded provenance fields.
+
+    Raises:
+        ValueError: ``x_response_invalid`` or a timestamp error.
+    """
+    if not isinstance(tweet, dict) or not isinstance(tweet.get("id"), str) or not isinstance(tweet.get("text"), str):
+        raise ValueError("x_response_invalid")
+    identifier = tweet["id"]
+    created = _timestamp(tweet.get("created_at"))
+    raw_author_id = tweet.get("author_id")
+    author_id = raw_author_id if isinstance(raw_author_id, str) else account_id or ""
+    url = f"https://x.com/i/web/status/{quote(identifier, safe='')}"
+    source_fields: dict[str, object] = {
+        "author_id": author_id[:255], "canonical_url": url, "created_at": created.isoformat(),
+    }
+    if isinstance(tweet.get("lang"), str):
+        source_fields["language"] = tweet["lang"][:64]
+    return _record(
+        provider="x", identity=identifier, version=identifier, content=tweet["text"],
+        observed_at=created, collected_at=collected_at, source_fields=source_fields,
+    )
+
+
+async def collect_x_scope(
+    *, account: str | None, query: str | None, access_token: str, cursor: str | None,
+    collected_at: datetime, fetch_bytes: Callable[..., Awaitable[rest.Fetched]],
+) -> SocialCollectionResult:
+    """Collect one read-only X account-timeline or recent-search page using app bearer access."""
+    if bool(account) == bool(query) or not access_token:
+        raise ValueError("x_scope_invalid")
+    if collected_at.tzinfo is None or collected_at.utcoffset() is None:
+        raise ValueError("collection_time_invalid")
+    prior = _walk(cursor, "x")
+    token = prior.page
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+    response, account_id = await _x_fetch_page(account, query, token, headers, fetch_bytes)
     payload = _json(response, "x")
     if not isinstance(payload, dict):
         raise ValueError("x_response_invalid")
@@ -349,22 +399,7 @@ async def collect_x_scope(
         raise ValueError("x_response_invalid")
     records: list[IngestionRecord] = []
     for tweet in data[:MAX_RECORDS]:
-        if not isinstance(tweet, dict) or not isinstance(tweet.get("id"), str) or not isinstance(tweet.get("text"), str):
-            raise ValueError("x_response_invalid")
-        identifier = tweet["id"]
-        created = _timestamp(tweet.get("created_at"))
-        raw_author_id = tweet.get("author_id")
-        author_id = raw_author_id if isinstance(raw_author_id, str) else account_id or ""
-        url = f"https://x.com/i/web/status/{quote(identifier, safe='')}"
-        source_fields: dict[str, object] = {
-            "author_id": author_id[:255], "canonical_url": url, "created_at": created.isoformat(),
-        }
-        if isinstance(tweet.get("lang"), str):
-            source_fields["language"] = tweet["lang"][:64]
-        records.append(_record(
-            provider="x", identity=identifier, version=identifier, content=tweet["text"],
-            observed_at=created, collected_at=collected_at, source_fields=source_fields,
-        ))
+        records.append(_x_tweet_record(tweet, account_id, collected_at))
     meta = payload.get("meta", {})
     next_token = meta.get("next_token") if isinstance(meta, dict) else None
     if next_token is not None and (not isinstance(next_token, str) or len(next_token) > MAX_CURSOR_BYTES):

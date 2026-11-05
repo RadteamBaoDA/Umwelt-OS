@@ -1,43 +1,29 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { createContext, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, type ComponentProps, type RefObject, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
-import { LayoutDashboard, MessageSquare, PanelLeftClose, PanelLeftOpen, Settings, type LucideIcon } from 'lucide-react';
 import { UmweltLogo, UmweltMark } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { ApiError, apiRequest, csrfHeaders, retrySessionConflict } from '@/core/api';
+import { ApiError } from '@/core/api';
 import { CommandPalette } from '@/core/command-palette';
 import { ConnectionFooter } from '@/core/app-shell/connection-footer';
 import { useChatController } from '@/core/app-shell/chat-controller';
-import { SettingsPanel, SourcesSubNav, groupActive } from '@/core/app-shell/settings-nav';
+import { ShellNav } from '@/core/app-shell/shell-nav';
+import { activeNavigationId, computeShellRedirects, visibleMainNavigationFor } from '@/core/app-shell/shell-redirects';
+import { SettingsPanel, SourcesSubNav } from '@/core/app-shell/settings-nav';
+import { useShellSession, type Session } from '@/core/app-shell/use-shell-session';
 import { WorkspaceSwitcher } from '@/core/app-shell/workspace-switcher';
 import { useWorkspace } from '@/core/workspace-context';
-import { destinationEnabled, destinationForRole, mainNavigation, settingsExtraLinks, settingsGroups, type ModuleAvailability } from '@/core/module-registry';
+import { destinationEnabled, destinationForRole, mainNavigation, settingsExtraLinks, settingsGroups } from '@/core/module-registry';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { useRealtime } from '@/core/realtime-provider';
-import { ChangePasswordDialog } from '@/modules/account/change-password-dialog';
-import { GoogleLink } from '@/modules/account/google-link';
-import { AccountDeletionSection } from '@/modules/account/account-deletion';
-import { LegalLinks } from '@/modules/legal/legal-links';
-import { UserMenu } from '@/modules/account/user-menu';
-import { syncServerAccent } from '@/core/accent';
-import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
-import { PreferencesDialog } from '@/modules/account/preferences-dialog';
-import { ChatDrawer } from '@/modules/chat/chat-drawer';
-import { NotificationBell } from '@/modules/notifications/notification-bell';
-
-type Session = { authenticated: true; csrfToken: string; isInstanceAdmin: boolean };
-
-const navigationIcons: Record<string, LucideIcon> = {
-  dashboard: LayoutDashboard,
-  chat: MessageSquare,
-  settings: Settings,
-};
+import { AccountDeletionSection, ChangePasswordDialog, GoogleLink, PreferencesDialog, UserMenu } from '@/modules/account';
+import { LegalLinks } from '@/modules/legal';
+import { ChatDrawer } from '@/modules/chat';
+import { NotificationBell } from '@/modules/notifications';
 
 /** Browser connectivity (navigator.onLine); assumed online during server render. */
 function useBrowserOnline() {
@@ -105,12 +91,157 @@ function QuickChatShortcut() {
   return null;
 }
 
+type ApiHealth = { isFetching: boolean; isError: boolean; isPending: boolean; refetch: () => unknown };
+
+/** Maps the health query and browser connectivity to the top-bar API status. */
+function apiStatusOf(online: boolean, health: ApiHealth) {
+  if (!online) return 'clientOffline';
+  if (health.isFetching && health.isError) return 'reconnecting';
+  if (health.isPending) return 'connecting';
+  return health.isError ? 'unavailable' : 'connected';
+}
+
+/** Minimal shell frame used while the session loads or is unavailable: brand, connection status and main content. */
+function ShellFrame({ apiStatus, health, children }: {
+  apiStatus: Parameters<typeof ConnectionFooter>[0]['apiStatus'];
+  health: ApiHealth;
+  children: ReactNode;
+}) {
+  const realtime = useRealtime();
+  return <div className="shell">
+    <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link><ConnectionFooter apiStatus={apiStatus} realtimeStatus={realtime.status} onRetry={() => health.refetch()} retrying={health.isFetching} /></header>
+    {children}
+  </div>;
+}
+
+/** Full-page error state shown when the session cannot be read; a 401 reads as an expired session. */
+function SessionUnavailable({ error, online, health, onRetry }: {
+  error: unknown; online: boolean; health: ApiHealth; onRetry: () => void;
+}) {
+  const t = useTranslations('shell');
+  const expired = error instanceof ApiError && error.status === 401;
+  return <ShellFrame apiStatus={expired ? 'expired' : online ? 'unavailable' : 'clientOffline'} health={health}>
+    <main id="main-content" tabIndex={-1} className="page"><section className="status-panel">
+    <h1>{expired ? t('expiredTitle') : t('workspaceUnavailable')}</h1>
+    <p className="text-muted-foreground">{expired ? t('expiredHelp') : t('workspaceUnavailableHelp')}</p>
+    <Button variant="outline" onClick={onRetry}>{t('retry')}</Button>
+    </section></main>
+  </ShellFrame>;
+}
+
+/** Top bar: brand mark (phones), connection status and the action cluster (search, notifications, workspace, user menu). */
+function ShellTopbar({ apiStatus, health, quickChat, menuTriggerRef, onOpenPreferences, onOpenAccount, onOpenChangePassword, onSignOut, signOutPending }: {
+  apiStatus: Parameters<typeof ConnectionFooter>[0]['apiStatus'];
+  health: ApiHealth;
+  /** Registers the Ctrl/Cmd+J drawer shortcut (dashboard detail routes when chat is available). */
+  quickChat: boolean;
+  menuTriggerRef: RefObject<HTMLButtonElement | null>;
+  onOpenPreferences: () => void;
+  onOpenAccount: () => void;
+  onOpenChangePassword: () => void;
+  onSignOut: () => void;
+  signOutPending: boolean;
+}) {
+  const realtime = useRealtime();
+  return <header className="topbar">
+    <Link href="/dashboard" className="brand-name sm:hidden" aria-label="Umwelt-OS"><UmweltMark /></Link>
+    <ConnectionFooter
+      apiStatus={apiStatus}
+      realtimeStatus={realtime.status}
+      onRetry={() => health.refetch()}
+      retrying={health.isFetching}
+    />
+    <div className="top-actions">
+      {quickChat && <QuickChatShortcut />}
+      <CommandPalette />
+      {/* Phones (<640px) get these inside the avatar menu to keep the header to logo, search and avatar. */}
+      <div className="hidden sm:contents"><NotificationBell /></div>
+      <div className="hidden sm:contents"><WorkspaceSwitcher /></div>
+      <UserMenu triggerRef={menuTriggerRef} onOpenPreferences={onOpenPreferences} onOpenAccount={onOpenAccount} onOpenChangePassword={onOpenChangePassword} onSignOut={onSignOut} signOutPending={signOutPending} />
+    </div>
+  </header>;
+}
+
+/** Replaces the current route with `target` once it is defined (role-based confinement); no-op otherwise. */
+function useReplaceRoute(target: string | undefined): void {
+  const router = useRouter();
+  useEffect(() => {
+    if (target) router.replace(target);
+  }, [router, target]);
+}
+
+/** Settings page body: the sources sub-navigation (only under /settings/sources) followed by the route content. */
+function SettingsBody({ pathname, children }: { pathname: string; children: ReactNode }) {
+  return <>{pathname.startsWith('/settings/sources') && <SourcesSubNav pathname={pathname} />}{children}</>;
+}
+
 /**
- * Module-scope latch: true from the owner's logout request until the next successful session read.
- * It outlives the auth-keyed remount of the shell, whose fresh refs would otherwise report the post-logout 401
- * as `?reason=expired`.
+ * Scrolling main region. Renders nothing while a role redirect is pending (avoids flashing a forbidden page),
+ * wraps /settings routes in the settings panel (extra links filtered by admin/role) and passes other routes through.
  */
-let ownerSignOutInFlight = false;
+function ShellMain({ role, pathname, redirecting, settingsGroups: groups, isInstanceAdmin, children }: {
+  role: Parameters<typeof destinationForRole>[1];
+  pathname: string;
+  redirecting: boolean;
+  settingsGroups: typeof settingsGroups;
+  isInstanceAdmin: boolean;
+  children: ReactNode;
+}) {
+  let content = children;
+  if (redirecting) content = null;
+  else if (pathname.startsWith('/settings')) {
+    const extra = settingsExtraLinks.filter((item) => item.adminOnly ? isInstanceAdmin : destinationForRole(item, role));
+    content = <SettingsPanel links={[...groups, ...extra]} pathname={pathname}><SettingsBody pathname={pathname}>{children}</SettingsBody></SettingsPanel>;
+  }
+  return <main id="main-content" tabIndex={-1} className="workspace-main" data-workspace-readonly={role === 'admin_viewer' || undefined}>{content}</main>;
+}
+
+type ShellPreferencesProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  query: ReturnType<typeof useShellSession>['preferences'];
+  onRetry: ComponentProps<typeof PreferencesDialog>['onRetry'];
+  csrfToken: string;
+  authGeneration: number;
+  onCloseAutoFocus: (event: Event) => void;
+};
+
+/**
+ * Preferences dialog wired to the owner-preferences query. Shows the saved value (query data, else the last confirmed
+ * preferences, else null); loading/error states apply only while no data exists, and saving is disabled until the
+ * query has loaded so a stale confirmed value can never be overwritten blindly.
+ */
+function ShellPreferences({ open, onOpenChange, query, onRetry, csrfToken, authGeneration, onCloseAutoFocus }: ShellPreferencesProps) {
+  const display = useDisplayPreferences();
+  return <PreferencesDialog
+    open={open}
+    onOpenChange={onOpenChange}
+    preferences={query.data ?? display.confirmedPreferences ?? null}
+    loading={query.isPending && !query.data}
+    loadError={query.isError && !query.data}
+    retrying={query.isFetching}
+    onRetry={onRetry}
+    csrfToken={csrfToken}
+    savingDisabled={!query.data}
+    authGeneration={authGeneration}
+    onCloseAutoFocus={onCloseAutoFocus}
+  />;
+}
+
+/** Account-settings dialog: Google link, account deletion and legal links. */
+function AccountDialog({ open, onOpenChange, csrfToken, onCloseAutoFocus }: {
+  open: boolean; onOpenChange: (open: boolean) => void; csrfToken: string; onCloseAutoFocus: (event: Event) => void;
+}) {
+  const t = useTranslations('shell');
+  return <Dialog open={open} onOpenChange={onOpenChange}>
+    <DialogContent closeLabel={t('close')} onCloseAutoFocus={onCloseAutoFocus}>
+      <DialogHeader><DialogTitle>{t('accountSettings')}</DialogTitle><DialogDescription>{t('googleAccountDescription')}</DialogDescription></DialogHeader>
+      <GoogleLink />
+      <AccountDeletionSection csrfToken={csrfToken} />
+      <LegalLinks />
+    </DialogContent>
+  </Dialog>;
+}
 
 /**
  * Render the authenticated app shell with session, route, and responsive main-navigation state.
@@ -121,12 +252,8 @@ let ownerSignOutInFlight = false;
  * @param children The current route content rendered inside the main scroll region.
  */
 export function WorkspaceShell({ children }: { children: ReactNode }) {
-  const router = useRouter();
   const pathname = usePathname();
-  const client = useQueryClient();
   const t = useTranslations('shell');
-  const display = useDisplayPreferences();
-  const realtime = useRealtime();
   const role = useWorkspace().selection?.role;
   const online = useBrowserOnline();
   const [navExpanded, toggleNav] = useNavExpanded();
@@ -134,141 +261,28 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
-  const sessionEndedRef = useRef(false);
-  /** Set while the owner's own logout is in flight: the server has revoked the session, so 401s are expected. */
-  const signingOutRef = useRef(false);
-  const session = useQuery({
-    queryKey: ['session'],
-    queryFn: () => apiRequest<Session>('/api/v1/auth/session'),
-    // The server answers 409 ("retry the request") when concurrent tabs/requests hold its NOWAIT owner lock while the
-    // CSRF token rotates; one transient conflict must not turn the whole shell into "Workspace is unavailable".
-    retry: retrySessionConflict,
-    retryDelay: (attempt) => 150 * (attempt + 1),
-  });
-  const moduleAvailability = useQuery({
-    queryKey: ['module-lifecycle'],
-    queryFn: () => apiRequest<ModuleAvailability>('/api/v1/settings/modules'),
-    refetchOnWindowFocus: true,
-  });
-  const generation = display.authGeneration;
-  const preferences = useQuery({
-    queryKey: OWNER_PREFERENCES_KEY,
-    enabled: Boolean(session.data),
-    queryFn: async ({ signal }) => {
-      const value = await fetchOwnerPreferences(signal);
-      if (!display.isCurrentGeneration(generation)) throw new Error('Stale preference response');
-      return value;
-    },
-  });
-  const apiHealth = useQuery({ queryKey: ['shell-api-health'], queryFn: () => apiRequest<unknown>('/health'), refetchInterval: 30_000 });
-
-  useEffect(() => {
-    if (session.data && preferences.data && display.isCurrentGeneration(generation)) {
-      display.confirmPreferences(preferences.data, generation);
-      syncServerAccent(preferences.data.accent);
-    }
-  }, [session.data, preferences.data, generation, display.confirmPreferences, display.isCurrentGeneration]);
-
-  /** Clears authenticated workspace state and ends the current client session. */
-  const endSession = useCallback((expired = false) => {
-    if (sessionEndedRef.current) return;
-    sessionEndedRef.current = true;
-    window.dispatchEvent(new Event('bbd:auth-ending'));
-    void client.cancelQueries();
-    client.clear();
-    display.endAuthSession();
-    setPreferencesOpen(false);
-    setAccountOpen(false);
-    // Auth-keyed remounts create a fresh shell with signingOutRef=false; the module latch keeps the owner's
-    // sign-out from being re-reported as an expiry by that shell's own 401.
-    router.replace(expired && !signingOutRef.current && !ownerSignOutInFlight ? '/login?reason=expired' : '/login');
-  }, [client, display.endAuthSession, router]);
-
-  useEffect(() => {
-    /** Routes an unauthorized event through the shared session-ending handler. */
-    const unauthorized = () => endSession(true);
-    /** Updates the cached session from the detail of a session-refresh event. */
-    const refreshed = (event: Event) => client.setQueryData(['session'], (event as CustomEvent<Session>).detail);
-    window.addEventListener('bbd:unauthorized', unauthorized);
-    window.addEventListener('bbd:session-refreshed', refreshed);
-    return () => {
-      window.removeEventListener('bbd:unauthorized', unauthorized);
-      window.removeEventListener('bbd:session-refreshed', refreshed);
-    };
-  }, [client, endSession]);
-
-  useEffect(() => {
-    if (session.error instanceof ApiError && session.error.status === 401) endSession(true);
-  }, [endSession, session.error]);
-
-  useEffect(() => {
-    // A successful session read proves a new login: later 401s are genuine expiries again.
-    // The ended shell is excluded: it can still re-emit its stale cached session after client.clear().
-    if (session.data && !sessionEndedRef.current) ownerSignOutInFlight = false;
-  }, [session.data]);
-
-  const logout = useMutation({
-    mutationFn: () => {
-      signingOutRef.current = true;
-      ownerSignOutInFlight = true;
-      return apiRequest<void>('/api/v1/auth/logout', {
-        method: 'POST',
-        headers: csrfHeaders(session.data?.csrfToken ?? ''),
-      });
-    },
-    onSuccess: () => endSession(),
-    onError: () => { signingOutRef.current = false; ownerSignOutInFlight = false; },
-  });
-
-  /** Loads owner preferences for the dialog retry; returns null on request failure, abort, or stale auth generation. */
-  const reloadPreferences = useCallback(async (signal: AbortSignal) => {
-    try {
-      const value = await fetchOwnerPreferences(signal);
-      return signal.aborted || !display.isCurrentGeneration(generation) ? null : value;
-    } catch {
-      return null;
-    }
-  }, [display.isCurrentGeneration, generation]);
+  /** Closes the dialogs owned by the shell when the session ends (setters are stable). */
+  const resetOverlays = useCallback(() => { setPreferencesOpen(false); setAccountOpen(false); }, []);
+  const { session, moduleAvailability, preferences, apiHealth, logout, reloadPreferences, generation } = useShellSession(resetOverlays);
 
   const visibleSettingsGroups = settingsGroups.filter((item) => destinationEnabled(item, moduleAvailability.data) && destinationForRole(item, role));
-  // A member deep-linking to an owner settings page is sent to the first settings group they may see.
-  const memberSettingsRedirect = role === 'member' && pathname.startsWith('/settings') && !visibleSettingsGroups.some((g) => groupActive(pathname, g.href)) ? visibleSettingsGroups[0]?.href : undefined;
-  const adminViewerSettingsRedirect = role === 'admin_viewer' && pathname.startsWith('/settings') && pathname !== '/settings/global'
-    ? session.data?.isInstanceAdmin ? '/settings/global' : '/dashboard'
-    : undefined;
-  const adminViewerPrivateRedirect = role === 'admin_viewer' && (pathname === '/chat' || pathname.startsWith('/chat/') || pathname.startsWith('/knowledge/memory'))
-    ? '/dashboard'
-    : undefined;
-  useEffect(() => {
-    const redirect = memberSettingsRedirect ?? adminViewerSettingsRedirect ?? adminViewerPrivateRedirect;
-    if (redirect) router.replace(redirect);
-  }, [adminViewerPrivateRedirect, adminViewerSettingsRedirect, memberSettingsRedirect, router]);
+  const { memberSettingsRedirect, adminViewerSettingsRedirect, adminViewerPrivateRedirect } = computeShellRedirects(
+    role, pathname, visibleSettingsGroups, session.data?.isInstanceAdmin,
+  );
+  useReplaceRoute(memberSettingsRedirect ?? adminViewerSettingsRedirect ?? adminViewerPrivateRedirect);
 
-  if (session.isPending) return <div className="shell">
-    <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link><ConnectionFooter apiStatus="connecting" realtimeStatus={realtime.status} onRetry={() => apiHealth.refetch()} retrying={apiHealth.isFetching} /></header>
+  if (session.isPending) return <ShellFrame apiStatus="connecting" health={apiHealth}>
     <main id="main-content" tabIndex={-1} className="page"><div className="status-panel skeleton" aria-label={t('loadingWorkspace')} /></main>
-  </div>;
+  </ShellFrame>;
   if (session.isError || !session.data) {
-    const expired = session.error instanceof ApiError && session.error.status === 401;
-    return <div className="shell">
-      <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link><ConnectionFooter apiStatus={expired ? 'expired' : online ? 'unavailable' : 'clientOffline'} realtimeStatus={realtime.status} onRetry={() => apiHealth.refetch()} retrying={apiHealth.isFetching} /></header>
-      <main id="main-content" tabIndex={-1} className="page"><section className="status-panel">
-      <h1>{expired ? t('expiredTitle') : t('workspaceUnavailable')}</h1>
-      <p className="text-muted-foreground">{expired ? t('expiredHelp') : t('workspaceUnavailableHelp')}</p>
-      <Button variant="outline" onClick={() => session.refetch()}>{t('retry')}</Button>
-      </section></main>
-    </div>;
+    return <SessionUnavailable error={session.error} online={online} health={apiHealth} onRetry={() => session.refetch()} />;
   }
 
-  const savedPreferences = preferences.data ?? display.confirmedPreferences ?? null;
   // Members see only the read-only translation settings group; their Settings entry opens it directly.
-  const visibleMainNavigation = mainNavigation.filter((item) => destinationEnabled(item, moduleAvailability.data)
-    && (destinationForRole(item, role) || item.id === 'settings' && session.data.isInstanceAdmin)
-    && !(role === 'admin_viewer' && item.id === 'chat')
-    && (item.id !== 'settings' || visibleSettingsGroups.length > 0 || session.data.isInstanceAdmin));
-  const settingsActive = pathname.startsWith('/settings');
-  // A member deep-linking to an owner settings page is sent to the first group they may see.
-  const active = visibleMainNavigation.find((item) => item.id !== 'settings' && ((item.id === 'dashboard' && pathname.startsWith('/dashboard/')) || pathname === item.href || pathname.startsWith(`${item.href}/`)))?.id ?? (settingsActive ? 'settings' : '');
+  const visibleMainNavigation = visibleMainNavigationFor(
+    mainNavigation, moduleAvailability.data, role, visibleSettingsGroups.length, session.data.isInstanceAdmin,
+  );
+  const active = activeNavigationId(visibleMainNavigation, pathname);
   /** Returns focus to the triggering menu control after a dialog closes. */
   const restoreMenuFocus = (event: Event) => {
     event.preventDefault();
@@ -279,86 +293,47 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
       <div className="shell">
         <a href="#main-content" className="skip-link">{t('skipToContent')}</a>
         <div className="workspace">
-          <TooltipProvider delayDuration={300}>
-            <nav id="workspace-nav" className="workspace-nav" data-expanded={navExpanded || undefined} aria-label={t('mainNavigation')}>
-              <div className="workspace-nav-header">
-                <Link href="/dashboard" className="brand-name workspace-brand" aria-label="Umwelt-OS">{navExpanded ? <UmweltLogo /> : <UmweltMark />}</Link>
-              </div>
-              <div className="workspace-nav-links">
-                {visibleMainNavigation.map((item) => {
-                  const Icon = navigationIcons[item.id];
-                  const link = <Link
-                    key={item.id}
-                    href={item.id === 'dashboard' && pathname.startsWith('/dashboard/') ? pathname : item.id === 'settings' && role === 'admin_viewer' ? '/settings/global' : item.id === 'settings' && role === 'member' ? visibleSettingsGroups[0].href : item.href}
-                    aria-current={active === item.id ? 'page' : undefined}
-                    className="workspace-nav-link"
-                  >
-                    <Icon className="size-[18px] shrink-0" aria-hidden="true" />
-                    <span className="workspace-nav-label">{t(item.messageKey)}</span>
-                  </Link>;
-                  // Expanded rail shows the label itself, so the tooltip would only repeat it.
-                  return navExpanded ? link : <Tooltip key={item.id}>
-                    <TooltipTrigger asChild>{link}</TooltipTrigger>
-                    <TooltipContent className="workspace-nav-tooltip" side="right">{t(item.messageKey)}</TooltipContent>
-                  </Tooltip>;
-                })}
-              </div>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button type="button" className="workspace-nav-link workspace-nav-toggle" onClick={toggleNav} aria-expanded={navExpanded} aria-controls="workspace-nav">
-                    {navExpanded ? <PanelLeftClose className="size-[18px] shrink-0" aria-hidden="true" /> : <PanelLeftOpen className="size-[18px] shrink-0" aria-hidden="true" />}
-                    <span className="workspace-nav-label">{t(navExpanded ? 'collapseSidebar' : 'expandSidebar')}</span>
-                  </button>
-                </TooltipTrigger>
-                {!navExpanded && <TooltipContent className="workspace-nav-tooltip" side="right">{t('expandSidebar')}</TooltipContent>}
-              </Tooltip>
-            </nav>
-          </TooltipProvider>
+          <ShellNav
+            items={visibleMainNavigation}
+            activeId={active}
+            pathname={pathname}
+            role={role}
+            firstSettingsHref={visibleSettingsGroups[0]?.href}
+            expanded={navExpanded}
+            onToggle={toggleNav}
+          />
           <div className="workspace-column">
-          <header className="topbar">
-            <Link href="/dashboard" className="brand-name sm:hidden" aria-label="Umwelt-OS"><UmweltMark /></Link>
-            <ConnectionFooter
-              apiStatus={!online ? 'clientOffline' : apiHealth.isFetching && apiHealth.isError ? 'reconnecting' : apiHealth.isPending ? 'connecting' : apiHealth.isError ? 'unavailable' : 'connected'}
-              realtimeStatus={realtime.status}
-              onRetry={() => apiHealth.refetch()}
-              retrying={apiHealth.isFetching}
-            />
-            <div className="top-actions">
-              {pathname.startsWith('/dashboard/') && visibleMainNavigation.some((item) => item.id === 'chat') && <QuickChatShortcut />}
-              <CommandPalette />
-              {/* Phones (<640px) get these inside the avatar menu to keep the header to logo, search and avatar. */}
-              <div className="hidden sm:contents"><NotificationBell /></div>
-              <div className="hidden sm:contents"><WorkspaceSwitcher /></div>
-              <UserMenu triggerRef={menuTriggerRef} onOpenPreferences={() => setPreferencesOpen(true)} onOpenAccount={() => setAccountOpen(true)} onOpenChangePassword={() => setPasswordOpen(true)} onSignOut={() => logout.mutate()} signOutPending={logout.isPending} />
-            </div>
-          </header>
-          <main id="main-content" tabIndex={-1} className="workspace-main" data-workspace-readonly={role === 'admin_viewer' || undefined}>{memberSettingsRedirect || adminViewerSettingsRedirect ? null : settingsActive
-            ? <SettingsPanel links={[...visibleSettingsGroups, ...settingsExtraLinks.filter((item) => item.adminOnly ? session.data.isInstanceAdmin : destinationForRole(item, role))]} pathname={pathname}>{pathname.startsWith('/settings/sources') && <SourcesSubNav pathname={pathname} />}{children}</SettingsPanel>
-            : children}</main>
+          <ShellTopbar
+            apiStatus={apiStatusOf(online, apiHealth)}
+            health={apiHealth}
+            quickChat={pathname.startsWith('/dashboard/') && visibleMainNavigation.some((item) => item.id === 'chat')}
+            menuTriggerRef={menuTriggerRef}
+            onOpenPreferences={() => setPreferencesOpen(true)}
+            onOpenAccount={() => setAccountOpen(true)}
+            onOpenChangePassword={() => setPasswordOpen(true)}
+            onSignOut={() => logout.mutate()}
+            signOutPending={logout.isPending}
+          />
+          <ShellMain
+            role={role}
+            pathname={pathname}
+            redirecting={Boolean(memberSettingsRedirect || adminViewerSettingsRedirect)}
+            settingsGroups={visibleSettingsGroups}
+            isInstanceAdmin={session.data.isInstanceAdmin}
+          >{children}</ShellMain>
           </div>
         </div>
         {logout.error && <p className="error" role="alert">{t('signOutFailed')}</p>}
-        <PreferencesDialog
+        <ShellPreferences
           open={preferencesOpen}
           onOpenChange={setPreferencesOpen}
-          preferences={savedPreferences}
-          loading={preferences.isPending && !preferences.data}
-          loadError={preferences.isError && !preferences.data}
-          retrying={preferences.isFetching}
+          query={preferences}
           onRetry={reloadPreferences}
           csrfToken={session.data.csrfToken}
-          savingDisabled={!preferences.data}
           authGeneration={generation}
           onCloseAutoFocus={restoreMenuFocus}
         />
-        <Dialog open={accountOpen} onOpenChange={setAccountOpen}>
-          <DialogContent closeLabel={t('close')} onCloseAutoFocus={restoreMenuFocus}>
-            <DialogHeader><DialogTitle>{t('accountSettings')}</DialogTitle><DialogDescription>{t('googleAccountDescription')}</DialogDescription></DialogHeader>
-            <GoogleLink />
-            <AccountDeletionSection csrfToken={session.data.csrfToken} />
-            <LegalLinks />
-          </DialogContent>
-        </Dialog>
+        <AccountDialog open={accountOpen} onOpenChange={setAccountOpen} csrfToken={session.data.csrfToken} onCloseAutoFocus={restoreMenuFocus} />
         <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} csrfToken={session.data.csrfToken} closeLabel={t('close')} onCloseAutoFocus={restoreMenuFocus} />
         {role !== 'admin_viewer' && <ChatDrawer />}
       </div>

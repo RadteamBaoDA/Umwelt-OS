@@ -12,10 +12,10 @@ Covers:
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 from pydantic import ValidationError
 
 from core.config import Settings
+from core.errors import DomainError
 from modules.settings.models import OwnerPreferencesRecord
 from modules.settings.public import (
     _privacy,
@@ -172,7 +172,7 @@ class TestSaveOwnerPreferences:
             timezone="UTC",
         )
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(DomainError) as exc_info:
             await save_owner_preferences(session, update, actor_user_id=1, multi_workspace_enabled=False)
         assert exc_info.value.status_code == 409
         assert "Preferences changed; reload before saving" in exc_info.value.detail
@@ -230,7 +230,7 @@ class TestEndpointAndPrivacyValidation:
     def test_validate_endpoint_disallowed_host_raises_422(self) -> None:
         """validate_endpoint raises 422 if endpoint host is not allowed by deployment policy."""
         settings = self._sample_settings(allowed_hosts=("api.openai.com",))
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(DomainError) as exc_info:
             validate_endpoint("https://evil-site.com/v1", settings)
         assert exc_info.value.status_code == 422
         assert "Endpoint address is not allowed by deployment policy" in exc_info.value.detail
@@ -238,7 +238,7 @@ class TestEndpointAndPrivacyValidation:
     def test_validate_endpoint_rejects_credentials(self) -> None:
         """validate_endpoint raises 422 if endpoint contains embedded credentials."""
         settings = self._sample_settings()
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(DomainError) as exc_info:
             validate_endpoint("https://user:pass@api.openai.com/v1", settings)
         assert exc_info.value.status_code == 422
         assert "Invalid gateway endpoint" in exc_info.value.detail

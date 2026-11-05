@@ -122,13 +122,12 @@ def _raw_patches(receipt, *, claim=True, referenced=False, calls=None):
 async def _run_raw(receipt, session=None, **kwargs):
     session = session or _session(receipt, receipt)
     calls, patches = _raw_patches(receipt, **kwargs)
-    unlink = MagicMock()
-    path = MagicMock()
-    path.unlink = unlink
+    unlink = AsyncMock()
+    backend = SimpleNamespace(delete=unlink)
     for item in patches:
         item.start()
     try:
-        with patch.object(worker, "storage_path", MagicMock(return_value=path)):
+        with patch.object(worker, "get_storage_backend", MagicMock(return_value=backend)):
             proceed = await worker._advance_raw_document_cleanup(
                 _factory(session), SimpleNamespace(data_dir="d"), False, EVENT,
             )
@@ -173,7 +172,7 @@ async def test_raw_traversal_uri_fails_closed() -> None:
     for item in patches:
         item.start()
     try:
-        with patch.object(worker, "storage_path", MagicMock(side_effect=ValueError("outside"))):
+        with patch.object(worker, "get_storage_backend", MagicMock(return_value=SimpleNamespace(delete=AsyncMock(side_effect=ValueError("outside"))))):
             await worker._advance_raw_document_cleanup(_factory(session), SimpleNamespace(data_dir="d"), False, EVENT)
     finally:
         for item in reversed(patches):
@@ -407,7 +406,7 @@ async def test_wakeups_publish_per_observer_in_separate_sessions_after_commit() 
 
 async def test_cleanup_is_not_module_gated() -> None:
     # Cleanup must finish even for a disabled module: the worker never consults the module gate.
-    source = Path(worker.__file__).read_text(encoding="utf-8")
+    source = Path(worker.__file__).read_text(encoding="utf-8")  # noqa: ASYNC240  # test fixture file access
     assert "module_is_enabled" not in source.replace("``module_is_enabled``", "")
     with patch("modules.settings.public.module_is_enabled", AsyncMock()) as gate, \
             patch.object(worker, "_admit_cleanup", AsyncMock(return_value=None)):

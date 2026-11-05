@@ -9,21 +9,32 @@ import { TablePagination } from '@/components/ui/pagination';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
+import { AppLocaleId } from '@/core/i18n';
+import { formatDateTime as formatDate } from '@/core/format';
 import { isStale } from './freshness';
 import { useErrorCodeLabel } from '@/core/error-codes';
 import { CollectionStats, connectorKeys, getSourceIngestion, IngestionRun, IngestionRunStatus, retryRun, Source, sourceKeys } from './api';
 
-/** Formats an ISO timestamp with the supplied application locale and time zone. */
-function formatDate(value: string, locale: AppLocaleId, timezone: string): string {
-  return new Intl.DateTimeFormat(normalizeFormattingLocale(locale), {
-    dateStyle: 'medium', timeStyle: 'short', timeZone: timezone,
-  }).format(new Date(value));
-}
-
 /** Maps run and stage states to their translated message keys. */
 function statusKey(status: string): 'runQueued' | 'runRunning' | 'runSucceeded' | 'runNeedsOcr' | 'runFailed' {
   return status === 'running' ? 'runRunning' : status === 'succeeded' ? 'runSucceeded' : status === 'needs_ocr' ? 'runNeedsOcr' : status === 'failed' ? 'runFailed' : 'runQueued';
+}
+
+/** Source timestamps (last success, collected, indexed, next due, retry), stale notice and last collection error code. */
+function SourceFreshness({ source, intervalMinutes }: { source: Source; intervalMinutes?: number }) {
+  const t = useTranslations('sources');
+  const display = useDisplayPreferences();
+  /** One muted "label: date" line, omitted when the timestamp is absent. */
+  const dated = (key: 'collectedAt' | 'indexedAt' | 'nextDueAt' | 'retryAt', value: string | null | undefined) => value && <p className="m-0 text-muted-foreground">{t(key)}: {formatDate(value, display.locale, display.timezone)}</p>;
+  return <div className="grid gap-1 text-sm sm:grid-cols-2">
+    <p className="m-0 text-muted-foreground">{t('lastSuccess')}: {source.last_success_at ? formatDate(source.last_success_at, display.locale, display.timezone) : t('never')}</p>
+    {dated('collectedAt', source.collected_at)}
+    {dated('indexedAt', source.indexed_at)}
+    {dated('nextDueAt', source.next_due_at)}
+    {dated('retryAt', source.retry_at)}
+    {isStale(source.last_success_at, intervalMinutes) && <p className="m-0 text-muted-foreground" role="status">{t('stale')}</p>}
+    {source.collection_error_code && <p className="m-0 text-destructive" role="alert">{t('collectionError')}: {source.collection_error_code}</p>}
+  </div>;
 }
 
 /** Shows source freshness and a filterable, cursor-paginated run table; retry reuses the ingestion API and refreshes source history. */
@@ -67,15 +78,7 @@ export function SyncHistory({ source, intervalMinutes }: { source: Source; inter
     ...runs.filter((run) => run.run_id !== current?.run_id),
   ];
   return <section className="grid gap-4" aria-label={t('recentRuns')}>
-    <div className="grid gap-1 text-sm sm:grid-cols-2">
-      <p className="m-0 text-muted-foreground">{t('lastSuccess')}: {source.last_success_at ? formatDate(source.last_success_at, display.locale, display.timezone) : t('never')}</p>
-      {source.collected_at && <p className="m-0 text-muted-foreground">{t('collectedAt')}: {formatDate(source.collected_at, display.locale, display.timezone)}</p>}
-      {source.indexed_at && <p className="m-0 text-muted-foreground">{t('indexedAt')}: {formatDate(source.indexed_at, display.locale, display.timezone)}</p>}
-      {source.next_due_at && <p className="m-0 text-muted-foreground">{t('nextDueAt')}: {formatDate(source.next_due_at, display.locale, display.timezone)}</p>}
-      {source.retry_at && <p className="m-0 text-muted-foreground">{t('retryAt')}: {formatDate(source.retry_at, display.locale, display.timezone)}</p>}
-      {isStale(source.last_success_at, intervalMinutes) && <p className="m-0 text-muted-foreground" role="status">{t('stale')}</p>}
-      {source.collection_error_code && <p className="m-0 text-destructive" role="alert">{t('collectionError')}: {source.collection_error_code}</p>}
-    </div>
+    <SourceFreshness source={source} intervalMinutes={intervalMinutes} />
     <label className="flex items-center gap-2 text-sm">
       <span>{t('runFilterStatus')}</span>
       <Select value={status} onValueChange={changeStatus}>

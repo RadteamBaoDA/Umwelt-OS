@@ -11,6 +11,7 @@ from core.auth.dependencies import require_owner
 from core.auth.models import AuthSession
 from core.auth.routes import get_auth_redis
 from core.database import get_session
+from core.errors import DomainError
 from core.system.health import system_health
 from modules.sources.public import read_source_purge_operation, resolve_source_purge_job_scope
 from modules.sources.schemas import OperationRead
@@ -68,7 +69,7 @@ async def get_operation(
             None if scope is None
             else await read_source_purge_operation(session, operation_id, scope=scope, multi_workspace_enabled=enabled)
         )
-    except HTTPException as exc:
+    except (HTTPException, DomainError) as exc:
         if exc.status_code in {401, 403, 409}:  # the job's actor lost access: indistinguishable from unknown
             raise HTTPException(status_code=404, detail="Operation not found") from exc
         raise

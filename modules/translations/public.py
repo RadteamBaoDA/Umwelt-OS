@@ -12,13 +12,20 @@ from datetime import UTC, datetime, timedelta
 from importlib import import_module
 from uuid import UUID
 
-from fastapi import HTTPException
 from pydantic import Field
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.schemas import AccountSessionRef
+from core.errors import (
+    ConflictError,
+    DomainError,
+    ForbiddenError,
+    NotFoundError,
+    RateLimitedError,
+    UnauthorizedError,
+)
 from core.telemetry import count
 from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import Scope, WorkspaceContext
@@ -36,6 +43,9 @@ from modules.translations.schemas import (
     TranslationItemRead,
     TranslationItemStatusRead,
     TranslationPayload,
+)
+from modules.translations.schemas import (
+    TranslationInput as TranslationInput,
 )
 
 PROMPT_VERSION = "v2"  # T2 owns prompt text; bumping it invalidates every cache fingerprint.
@@ -78,7 +88,7 @@ async def _authorize(
 def _member(scope: Scope) -> WorkspaceContext:
     """Translation requests are interactive member/owner actions only."""
     if not isinstance(scope, WorkspaceContext):
-        raise HTTPException(status_code=401, detail="Authentication required")
+        raise UnauthorizedError(detail="Authentication required")
     return scope
 
 
@@ -113,7 +123,7 @@ async def save_translation_settings(
     """
     owner = _member(scope)
     if owner.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError(detail="Workspace owner required")
     await lock_access_fence(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, auth_sessions=auth_sessions,
     )
@@ -125,7 +135,7 @@ async def save_translation_settings(
     if row is None:
         raise RuntimeError("Translation settings could not be initialized")
     if row.configuration_revision != value.expected_revision:
-        raise HTTPException(status_code=409, detail="Translation settings changed; reload before saving")
+        raise ConflictError(detail="Translation settings changed; reload before saving")
     if row.enabled == value.enabled and row.target_language == value.target_language:
         return _read(row)
     row.enabled = value.enabled
@@ -176,9 +186,9 @@ async def _policy_fingerprint(
     return (await reader(session, app_settings, redis, workspace_id=workspace_id, role="background")) or "none"
 
 
-def _too_many(detail: str) -> HTTPException:
+def _too_many(detail: str) -> DomainError:
     """429 with the contractual 60 second retry."""
-    return HTTPException(status_code=429, detail=detail, headers={"Retry-After": RETRY_AFTER_SECONDS})
+    return RateLimitedError(detail=detail, headers={"Retry-After": RETRY_AFTER_SECONDS})
 
 
 class TranslationBatchEnqueue(TranslationBatchAccepted):
@@ -197,6 +207,27 @@ async def submit_batch(
         session, _member(scope), request, multi_workspace_enabled=multi_workspace_enabled,
         auth_sessions=auth_sessions, app_settings=app_settings, redis=redis,
     )
+
+
+async def _enforce_translation_limits(
+    session: AsyncSession, actor: WorkspaceContext, now: datetime, *, new_work: int,
+) -> None:
+    """Reject new translation work beyond the per-minute batch and non-terminal queue bounds.
+
+    Counts the actor's batches created in the last minute and the workspace's pending rows (both
+    read under the caller's already-held settings/access locks); raises a 429 with ``Retry-After``
+    when ``MAX_BATCHES_PER_MINUTE`` or ``MAX_NONTERMINAL_PER_WORKSPACE`` would be exceeded.
+    """
+    recent = await session.scalar(select(func.count()).select_from(TranslationBatch).where(
+        TranslationBatch.workspace_id == actor.workspace_id,
+        TranslationBatch.actor_user_id == actor.user_id,
+        TranslationBatch.created_at > now - timedelta(minutes=1)))
+    if (recent or 0) >= MAX_BATCHES_PER_MINUTE:
+        raise _too_many("Too many translation batches")
+    pending = await session.scalar(select(func.count()).select_from(ContentTranslation).where(
+        ContentTranslation.workspace_id == actor.workspace_id, ContentTranslation.status == "pending"))
+    if (pending or 0) + new_work > MAX_NONTERMINAL_PER_WORKSPACE:
+        raise _too_many("Translation queue is full")
 
 
 async def request_translations(
@@ -227,10 +258,10 @@ async def request_translations(
             session, actor, item.resource_type, item.resource_id, multi_workspace_enabled=multi_workspace_enabled,
         )
         if verdict is None:
-            raise HTTPException(status_code=404, detail="Resource not found")
+            raise NotFoundError(detail="Resource not found")
         verdicts.append(verdict)
-    if any(v.resource_revision != i.resource_revision for v, i in zip(verdicts, request.items)):
-        raise HTTPException(status_code=409, detail="Resource revision changed")
+    if any(v.resource_revision != i.resource_revision for v, i in zip(verdicts, request.items, strict=False)):
+        raise ConflictError(detail="Resource revision changed")
     now = datetime.now(UTC)
     policy_fp = await _policy_fingerprint(session, app_settings, redis, actor.workspace_id)
     configs = [config_hash_for(
@@ -252,7 +283,7 @@ async def request_translations(
     rows: list[ContentTranslation] = []
     fresh: list[ContentTranslation] = []
     retry: list[ContentTranslation] = []
-    for item, verdict, config in zip(request.items, verdicts, configs):
+    for item, verdict, config in zip(request.items, verdicts, configs, strict=False):
         found = existing.get((item.resource_type, item.resource_id, verdict.resource_revision,
                               verdict.content_hash, verdict.visibility_hash, config))
         if found is None:
@@ -270,16 +301,9 @@ async def request_translations(
                   target_language=settings.target_language)
         rows.append(found)
     if fresh or retry:  # only new work counts against the limits
-        recent = await session.scalar(select(func.count()).select_from(TranslationBatch).where(
-            TranslationBatch.workspace_id == actor.workspace_id,
-            TranslationBatch.actor_user_id == actor.user_id,
-            TranslationBatch.created_at > now - timedelta(minutes=1)))
-        if (recent or 0) >= MAX_BATCHES_PER_MINUTE:
-            raise _too_many("Too many translation batches")
-        pending = await session.scalar(select(func.count()).select_from(ContentTranslation).where(
-            ContentTranslation.workspace_id == actor.workspace_id, ContentTranslation.status == "pending"))
-        if (pending or 0) + len(fresh) + len(retry) > MAX_NONTERMINAL_PER_WORKSPACE:
-            raise _too_many("Translation queue is full")
+        await _enforce_translation_limits(
+            session, actor, now, new_work=len(fresh) + len(retry),
+        )
     for found in retry:
         found.status, found.error_code, found.result = "pending", None, None
         found.attempt_count, found.completed_at, found.next_attempt_at = 0, None, None
@@ -294,12 +318,12 @@ async def request_translations(
     session.add_all(TranslationBatchItem(
         batch_id=batch.id, position=n, workspace_id=actor.workspace_id, resource_type=i.resource_type,
         resource_id=i.resource_id, resource_revision=i.resource_revision, translation_id=t.id)
-        for n, (i, t) in enumerate(zip(request.items, rows)))
+        for n, (i, t) in enumerate(zip(request.items, rows, strict=False)))
     await session.flush()
     return TranslationBatchEnqueue(batch_id=batch.id, settings=settings, items=[
         TranslationItemStatusRead(
             resource_type=i.resource_type, resource_id=i.resource_id, status=t.status)
-        for i, t in zip(request.items, rows)], enqueue_ids=[t.id for t in (*fresh, *retry)])
+        for i, t in zip(request.items, rows, strict=False)], enqueue_ids=[t.id for t in (*fresh, *retry)])
 
 
 async def read_batch(
@@ -312,7 +336,7 @@ async def read_batch(
         TranslationBatch.id == batch_id, TranslationBatch.workspace_id == actor.workspace_id,
         TranslationBatch.actor_user_id == actor.user_id).execution_options(populate_existing=True))
     if batch is None:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        raise NotFoundError(detail="Batch not found")
     settings_row = await session.scalar(select(TranslationSettingsRecord).where(
         TranslationSettingsRecord.workspace_id == actor.workspace_id).execution_options(populate_existing=True))
     settings = _read(settings_row)

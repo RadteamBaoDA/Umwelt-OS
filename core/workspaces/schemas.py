@@ -81,7 +81,7 @@ class InternalJobScope:
     def __post_init__(self) -> None:
         """Require positive actor/revision and paired valid source identity/generation."""
         if not isinstance(self.workspace_id, UUID):
-            raise ValueError("A valid workspace ID is required")  # noqa: TRY004  # ValueError is the documented contract for malformed snapshots
+            raise ValueError("A valid workspace ID is required")
         if type(self.actor_user_id) is not int or self.actor_user_id <= 0:
             raise ValueError("A positive actor ID is required")
         if type(self.membership_revision) is not int or self.membership_revision <= 0:
@@ -95,7 +95,7 @@ class InternalJobScope:
             raise ValueError("A valid source ID and positive generation are required")
 
 
-Scope: TypeAlias = WorkspaceContext | AdminWorkspaceReadContext | InternalJobScope  # noqa: UP040
+Scope: TypeAlias = WorkspaceContext | AdminWorkspaceReadContext | InternalJobScope  # noqa: UP040  # PEP 695 `type` statement would change runtime alias semantics for pydantic/typing consumers
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +111,7 @@ class AccessFence:
     def __post_init__(self) -> None:
         """Reject malformed revision snapshots; a valid snapshot is still not permission."""
         if not isinstance(self.workspace_id, UUID):
-            raise ValueError("A valid workspace ID is required")  # noqa: TRY004  # ValueError is the documented contract for malformed snapshots
+            raise ValueError("A valid workspace ID is required")
         if any(type(value) is not int or value <= 0 for value in (
             self.user_id, self.membership_revision, self.configuration_revision,
         )):
@@ -222,7 +222,7 @@ class InvitationTarget:
     email: str
 
 
-ShareKind: TypeAlias = Literal["document", "brief"]  # noqa: UP040
+ShareKind: TypeAlias = Literal["document", "brief"]  # noqa: UP040  # PEP 695 `type` statement would change runtime alias semantics for pydantic/typing consumers
 
 
 class ShareUpsert(BaseModel):

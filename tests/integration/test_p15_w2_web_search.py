@@ -183,7 +183,10 @@ async def test_end_to_end_search_sends_only_literal_query_and_persists_cited_res
         async with factory() as session:
             run = await session.get(ResponseRun, run_id)
             assert run is not None and run.status == "completed"
-            assert run.retrieval_context[WEB_SEARCH_OUTCOME_KEY] == {"status": "used", "reason": None, "result_count": 2}
+            # The rewritten literal query is persisted alongside the outcome (since 51887e69).
+            assert run.retrieval_context[WEB_SEARCH_OUTCOME_KEY] == {
+                "status": "used", "reason": None, "result_count": 2, "query": message,
+            }
             answer = await session.get(Message, run.assistant_message_id)
             assert answer is not None and answer.content == "News [1]"
             assert [c["url"] for c in answer.citations] == ["https://example.com/one"]  # uncited result dropped

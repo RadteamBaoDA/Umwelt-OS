@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { cn } from "cn"
+import { cn } from '@/lib/utils'
 
 /**
  * Renders the shadcn `Table` primitive inside a bounded scroll container (max height, scrolls on both axes so the

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
+import { formatDate } from '@/core/format';
+import { formatDateTime } from '@/core/i18n';
 import type { AppLocaleId } from '@/core/i18n';
 import type { TimelineEvent } from './api';
 
@@ -16,8 +17,7 @@ export function EventDetail({ event, locale, timezone, entityNames }: {
   /** Formats date-only values as calendar dates without converting their day through a local zone. */
   function formatCalendarDate(value: string) {
     const [year, month, day] = value.split('-').map(Number);
-    return new Intl.DateTimeFormat(normalizeFormattingLocale(locale), { dateStyle: 'medium', timeZone: 'UTC' })
-      .format(new Date(Date.UTC(year, month - 1, day)));
+    return formatDate(new Date(Date.UTC(year, month - 1, day)), locale, 'UTC');
   }
   /** Labels late arrival only when a derived event's precision supports a safe comparison. */
   function isLateArrival() {

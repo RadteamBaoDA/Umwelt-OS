@@ -12,10 +12,11 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { apiRequest, csrfHeaders } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { normalizeFormattingLocale } from '@/core/i18n';
+import { formatDate } from '@/core/format';
+import type { AppLocaleId } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { safeHttpUrl } from '@/core/safe-url';
-import { connectorKeys, getConnectorCatalog } from '@/modules/sources/api';
+import { connectorKeys, getConnectorCatalog } from '@/modules/sources';
 
 export type PendingReview = {
   workspace_id: string;
@@ -55,7 +56,7 @@ export function ProviderReviewTableRow({ row, locale, providerName }: { row: Pen
   const [open, setOpen] = useState(false);
   const termsUrl = safeHttpUrl(row.terms_url);
   const version = /^\d{4}-\d{2}-\d{2}$/.test(row.terms_version)
-    ? new Intl.DateTimeFormat(normalizeFormattingLocale(locale as never), { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(row.terms_version))
+    ? formatDate(row.terms_version, locale as AppLocaleId, 'UTC')
     : row.terms_version;
   const use = row.declared_use === 'personal' || row.declared_use === 'noncommercial' || row.declared_use === 'commercial' ? t(`use.${row.declared_use}`) : row.declared_use;
   return <TableRow>
@@ -74,54 +75,38 @@ export function ProviderReviewTableRow({ row, locale, providerName }: { row: Pen
 }
 
 /** Records an operator decision with its exact terms version and required evidence reference; `onDone` runs after a saved decision. */
-function ProviderReviewRow({ row, onDone }: { row: PendingReview; onDone?: () => void }) {
-  const t = useTranslations('globalSettings');
-  const session = useWorkspaceSession();
-  const client = useQueryClient();
-  const [evidence, setEvidence] = useState('');
-  const display = useDisplayPreferences();
-  const catalog = useQuery({ queryKey: connectorKeys.catalog, queryFn: ({ signal }) => getConnectorCatalog(signal), staleTime: 5 * 60_000 });
-  // Falls back to the raw provider id when the catalog has no entry, so unknown providers stay identifiable.
-  const providerName = catalog.data?.find((entry) => entry.provider_id === row.provider_id)?.label ?? row.provider_id;
-  // Terms versions are ISO dates (UTC midnight, so no zone shift); any other format is shown verbatim rather than guessed at.
-  const termsVersion = /^\d{4}-\d{2}-\d{2}$/.test(row.terms_version)
-    ? new Intl.DateTimeFormat(normalizeFormattingLocale(display.locale), { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(row.terms_version))
-    : row.terms_version;
-  const useLabel = (value: string) => (value === 'personal' || value === 'noncommercial' || value === 'commercial' ? t(`use.${value}`) : value);
-  const [allowedUse, setAllowedUse] = useState<ReviewDecision['allowed_use'] | ''>(
-    row.declared_use === 'personal' || row.declared_use === 'noncommercial' || row.declared_use === 'commercial' ? row.declared_use : '',
-  );
-  const mutation = useMutation({
-    mutationFn: ({ state, allowed_use, evidence_ref }: Omit<ReviewDecision, 'row'>) => apiRequest(
-      row.acknowledged_at
-        ? `/api/v1/operator/live-map/${encodeURIComponent(row.workspace_id)}/${encodeURIComponent(row.provider_id)}/terms-review`
-        : `/api/v1/operator/connectors/${encodeURIComponent(row.workspace_id)}/${encodeURIComponent(row.source_id ?? '')}/terms-review`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...csrfHeaders(session.csrfToken) },
-        body: JSON.stringify(row.acknowledged_at
-          ? { state, evidence_ref, version: row.terms_version, declared_use: row.declared_use, acknowledged_at: row.acknowledged_at }
-          : { state, ...(allowed_use ? { allowed_use } : {}), evidence_ref, reviewed_terms_version: row.terms_version }),
-      },
-    ),
-    onSuccess: () => { onDone?.(); void client.invalidateQueries({ queryKey: ['operator-live-map-terms-review'] }); return client.invalidateQueries({ queryKey: ['operator-provider-terms-review'] }); },
-  });
+function ProviderReviewRow(props: { row: PendingReview; onDone?: () => void }) {
+  const s0 = useProviderReviewController(props);
 
-  /** Submits one decision only when the required evidence and approval scope are present. */
-  const submit = (event: { preventDefault(): void }, state: ReviewDecision['state']) => {
-    event.preventDefault();
-    const evidence_ref = evidence.trim();
-    if (!evidence_ref || (state === 'approved' && !allowedUse)) return;
-    mutation.mutate({ state, ...(state === 'approved' && allowedUse ? { allowed_use: allowedUse } : {}), evidence_ref });
-  };
-
+  const vm: ProviderReviewRowVm = s0;
   return <article className="flex flex-col gap-3 border-b border-border pb-4 last:border-0 last:pb-0">
+<ProviderReviewSummary vm={vm} />
+<ProviderReviewForm vm={vm} />
+  </article>;
+}
+
+type ProviderReviewRowVm = ReturnType<typeof useProviderReviewController>;
+
+/** Provider facts shown for review. */
+function ProviderReviewSummary({ vm }: { vm: ProviderReviewRowVm }) {
+  const { t, providerName, termsVersion, useLabel, row } = vm;
+  return (
+<>
     <dl className="m-0 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
       <div><dt className="text-muted-foreground">{t('workspaces')}</dt><dd className="m-0 font-medium">{row.workspace_name}</dd></div>
       <div><dt className="text-muted-foreground">{t('provider')}</dt><dd className="m-0 flex flex-wrap items-center gap-2 font-medium">{providerName}{safeHttpUrl(row.terms_url) && <a href={safeHttpUrl(row.terms_url)} target="_blank" rel="noopener noreferrer" className="font-normal text-primary underline underline-offset-4">{t('termsLink')}</a>}</dd></div>
       <div><dt className="text-muted-foreground">{t('termsVersion')}</dt><dd className="m-0">{termsVersion}</dd></div>
       <div><dt className="text-muted-foreground">{t('declaredUse')}</dt><dd className="m-0">{useLabel(row.declared_use)}</dd></div>
     </dl>
+</>
+  );
+}
+
+/** Approve or deny form with its consent fields. */
+function ProviderReviewForm({ vm }: { vm: ProviderReviewRowVm }) {
+  const { t, mutation, submit, evidence, setEvidence, allowedUse, setAllowedUse, row } = vm;
+  return (
+<>
     <form className="flex flex-col gap-3" onSubmit={(event) => submit(event, 'approved')}>
       <div className="grid gap-2 sm:grid-cols-2">
         <div className="flex flex-col gap-2">
@@ -152,5 +137,52 @@ function ProviderReviewRow({ row, onDone }: { row: PendingReview; onDone?: () =>
         </Button>
       </div>
     </form>
-  </article>;
+</>
+  );
+}
+
+/** Holds the state, queries and derived values of ProviderReviewRow. */
+function useProviderReviewController(props: { row: PendingReview; onDone?: () => void }) {
+  const { row, onDone } = props;
+  const t = useTranslations('globalSettings');
+  const session = useWorkspaceSession();
+  const client = useQueryClient();
+  const [evidence, setEvidence] = useState('');
+  const display = useDisplayPreferences();
+  const catalog = useQuery({ queryKey: connectorKeys.catalog, queryFn: ({ signal }) => getConnectorCatalog(signal), staleTime: 5 * 60_000 });
+  // Falls back to the raw provider id when the catalog has no entry, so unknown providers stay identifiable.
+  const providerName = catalog.data?.find((entry) => entry.provider_id === row.provider_id)?.label ?? row.provider_id;
+  // Terms versions are ISO dates (UTC midnight, so no zone shift); any other format is shown verbatim rather than guessed at.
+  const termsVersion = /^\d{4}-\d{2}-\d{2}$/.test(row.terms_version)
+    ? formatDate(row.terms_version, display.locale, 'UTC')
+    : row.terms_version;
+  const useLabel = (value: string) => (value === 'personal' || value === 'noncommercial' || value === 'commercial' ? t(`use.${value}`) : value);
+  const [allowedUse, setAllowedUse] = useState<ReviewDecision['allowed_use'] | ''>(
+    row.declared_use === 'personal' || row.declared_use === 'noncommercial' || row.declared_use === 'commercial' ? row.declared_use : '',
+  );
+  const mutation = useMutation({
+    mutationFn: ({ state, allowed_use, evidence_ref }: Omit<ReviewDecision, 'row'>) => apiRequest(
+      row.acknowledged_at
+        ? `/api/v1/operator/live-map/${encodeURIComponent(row.workspace_id)}/${encodeURIComponent(row.provider_id)}/terms-review`
+        : `/api/v1/operator/connectors/${encodeURIComponent(row.workspace_id)}/${encodeURIComponent(row.source_id ?? '')}/terms-review`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...csrfHeaders(session.csrfToken) },
+        body: JSON.stringify(row.acknowledged_at
+          ? { state, evidence_ref, version: row.terms_version, declared_use: row.declared_use, acknowledged_at: row.acknowledged_at }
+          : { state, ...(allowed_use ? { allowed_use } : {}), evidence_ref, reviewed_terms_version: row.terms_version }),
+      },
+    ),
+    onSuccess: () => { onDone?.(); void client.invalidateQueries({ queryKey: ['operator-live-map-terms-review'] }); return client.invalidateQueries({ queryKey: ['operator-provider-terms-review'] }); },
+  });
+
+  /** Submits one decision only when the required evidence and approval scope are present. */
+  const submit = (event: { preventDefault(): void }, state: ReviewDecision['state']) => {
+    event.preventDefault();
+    const evidence_ref = evidence.trim();
+    if (!evidence_ref || (state === 'approved' && !allowedUse)) return;
+    mutation.mutate({ state, ...(state === 'approved' && allowedUse ? { allowed_use: allowedUse } : {}), evidence_ref });
+  };
+
+  return { t, session, client, display, catalog, providerName, termsVersion, useLabel, mutation, submit, evidence, setEvidence, allowedUse, setAllowedUse, row, onDone };
 }

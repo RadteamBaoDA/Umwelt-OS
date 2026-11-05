@@ -461,6 +461,7 @@ def _with_spec(entry: CatalogEntry, spec: FreeProviderSpec) -> CatalogEntry:
 
 
 def _free_entry(spec: FreeProviderSpec) -> CatalogEntry:
+    """Project a free-catalog spec into its catalog entry; unimplemented adapters stay ``planned``."""
     # Planned until the adapter is registered (spec.code_implemented): planned entries must never pass
     # the "available/implemented/requires_credentials" provider-scope gates.
     ready = spec.code_implemented

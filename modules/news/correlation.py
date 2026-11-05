@@ -1,8 +1,10 @@
 """Deterministic, evidence-only cross-domain temporal co-occurrence projection."""
 
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,33 +25,35 @@ from modules.timeline import public as timeline
 _DOMAINS = ("military", "economic", "disaster", "escalation")
 
 
-async def build_correlations(
-    session: AsyncSession, query: CorrelationQuery, *, scope: Scope, multi_workspace_enabled: bool,
-) -> CorrelationResult:
-    """Group a fixed number of live event/measurement evidence signals by region and UTC hour.
+@dataclass
+class _Coverage:
+    """Mutable per-domain admission counters shared by the event and observation stages."""
 
-    This method counts exact owner-public evidence identities only. It performs no
-    title matching, model inference, pairwise scoring, significance calculation,
-    causation claim, or prediction. Each domain receives its own finite event cap;
-    current Alpha Vantage observations are a separate economic evidence input.
+    counts: dict[str, int] = field(default_factory=lambda: dict.fromkeys(_DOMAINS, 0))
+    truncated: dict[str, bool] = field(default_factory=lambda: dict.fromkeys(_DOMAINS, False))
+    omitted: dict[str, int] = field(default_factory=lambda: dict.fromkeys(_DOMAINS, 0))
+
+
+async def _collect_event_signals(
+    session: AsyncSession, query: CorrelationQuery, coverage: _Coverage, *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[dict[str, Any]]:
+    """Read one bounded Timeline signal page per domain, in domain order.
+
+    An empty saved source selection performs no scan (never an implicit all-source scope).
+    Updates ``coverage.counts``/``coverage.truncated`` in place; read-only, no commit.
     """
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    coverage_counts = {domain: 0 for domain in _DOMAINS}
-    coverage_truncated = {domain: False for domain in _DOMAINS}
-    coverage_omitted = {domain: 0 for domain in _DOMAINS}
     signals: list[dict[str, Any]] = []
-
     for domain in _DOMAINS:
         if not query.source_ids:
-            # An empty saved source selection means no event scan, never an implicit all-source scope.
             continue
         page = await timeline.list_correlation_signals(
             session, domain=domain, from_at=query.from_at, to_at=query.to_at,
             regions=query.regions, source_ids=query.source_ids, limit=query.limit_per_domain,
             scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
-        coverage_counts[domain] = len(page.items)
-        coverage_truncated[domain] = page.truncated
+        coverage.counts[domain] = len(page.items)
+        coverage.truncated[domain] = page.truncated
         for item in page.items:
             signals.append({
                 "identity": f"event:{item.signal_id}", "domain": domain,
@@ -62,8 +66,18 @@ async def build_correlations(
                 "omitted_document_ids": item.omitted_document_ids,
                 "omitted_document_version_ids": item.omitted_document_version_ids,
             })
+    return signals
 
-    alpha_sources = []
+
+async def _alpha_vantage_sources(
+    session: AsyncSession, query: CorrelationQuery, coverage: _Coverage, *, scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[UUID]:
+    """Return selected sources whose current provider scope is Alpha Vantage.
+
+    Every other selected source increments ``coverage.omitted['economic']``. Read-only.
+    """
+    alpha_sources: list[UUID] = []
     for source_id in query.source_ids:
         source = await sources.get_connector_source(session, source_id, scope=scope,
             multi_workspace_enabled=multi_workspace_enabled)
@@ -75,9 +89,21 @@ async def build_correlations(
         if snapshot is not None and snapshot.provider_id == "alpha_vantage":
             alpha_sources.append(source_id)
         else:
-            coverage_omitted["economic"] += 1
+            coverage.omitted["economic"] += 1
+    return alpha_sources
 
-    remaining_economic = max(0, query.limit_per_domain - coverage_counts["economic"])
+
+async def _collect_observation_signals(
+    session: AsyncSession, query: CorrelationQuery, alpha_sources: list[UUID], coverage: _Coverage,
+    *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[dict[str, Any]]:
+    """Add current Alpha Vantage observations within the economic budget left by event evidence.
+
+    When event evidence already filled the shared economic budget no scan happens and the scope
+    omission is reported instead. Updates ``coverage`` in place; read-only.
+    """
+    signals: list[dict[str, Any]] = []
+    remaining_economic = max(0, query.limit_per_domain - coverage.counts["economic"])
     if alpha_sources and remaining_economic:
         observation_query = ObservationQuery(
             source_ids=alpha_sources, regions=query.regions, from_at=query.from_at,
@@ -86,17 +112,17 @@ async def build_correlations(
         points, next_cursor, scan_truncated, _ = await observations.list_observations(
             session, observation_query, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
-        coverage_truncated["economic"] = coverage_truncated["economic"] or bool(next_cursor) or scan_truncated
+        coverage.truncated["economic"] = coverage.truncated["economic"] or bool(next_cursor) or scan_truncated
         seen_observations: set[str] = set()
         for point in points:
             identity = f"observation:{point.id}"
             if identity in seen_observations or point.region not in query.regions:
                 continue
-            if coverage_counts["economic"] >= query.limit_per_domain:
-                coverage_truncated["economic"] = True
+            if coverage.counts["economic"] >= query.limit_per_domain:
+                coverage.truncated["economic"] = True
                 break
             seen_observations.add(identity)
-            coverage_counts["economic"] += 1
+            coverage.counts["economic"] += 1
             signals.append({
                 "identity": identity, "domain": "economic", "region": point.region,
                 "observed_at": point.observed_at, "event_id": None,
@@ -111,9 +137,17 @@ async def build_correlations(
     elif alpha_sources:
         # Event evidence filled the shared economic admission budget, so selected observation
         # sources were not scanned; report the scope omission without implying a signal existed.
-        coverage_truncated["economic"] = True
-        coverage_omitted["economic"] += len(alpha_sources)
+        coverage.truncated["economic"] = True
+        coverage.omitted["economic"] += len(alpha_sources)
+    return signals
 
+
+def _bucket_signals(signals: list[dict[str, Any]]) -> tuple[list[CorrelationBucketRead], bool]:
+    """Deduplicate signals by identity and group them into region/UTC-hour buckets.
+
+    Returns the buckets ordered by (hour, region) and whether any bucket omitted support
+    identifiers. Pure; no I/O.
+    """
     # Stable ID deduplication bounds counts even when the same source row arrives via overlapping scopes.
     by_identity: dict[str, dict[str, Any]] = {}
     for signal_row in signals:
@@ -127,7 +161,7 @@ async def build_correlations(
     buckets: list[CorrelationBucketRead] = []
     omitted_support = False
     for (region, bucket), rows in sorted(groups.items(), key=lambda pair: (pair[0][1], pair[0][0])):
-        counts = {domain: 0 for domain in _DOMAINS}
+        counts = dict.fromkeys(_DOMAINS, 0)
         for row in rows:
             counts[str(row["domain"])] += 1
         evidence_ids = sorted({value for item in rows for value in item["event_evidence_ids"]}, key=str)
@@ -152,17 +186,23 @@ async def build_correlations(
             omitted_document_version_ids=omitted_document_version_ids,
             omitted_event_evidence_ids=omitted_event_evidence_ids,
         ))
+    return buckets, omitted_support
 
+
+def _assemble_result(
+    query: CorrelationQuery, buckets: list[CorrelationBucketRead], omitted_support: bool, counters: _Coverage,
+) -> CorrelationResult:
+    """Build the per-domain coverage report, uncertainty reasons and final bounded result. Pure."""
     coverage = {
         domain: CorrelationCoverageRead(
-            signal_count=min(coverage_counts[domain], 100),
-            available=coverage_counts[domain] > 0,
-            truncated=coverage_truncated[domain],
-            omitted_source_count=coverage_omitted[domain],
+            signal_count=min(counters.counts[domain], 100),
+            available=counters.counts[domain] > 0,
+            truncated=counters.truncated[domain],
+            omitted_source_count=counters.omitted[domain],
         ) for domain in _DOMAINS
     }
-    included = [domain for domain in _DOMAINS if coverage_counts[domain] > 0]
-    missing = [domain for domain in _DOMAINS if coverage_counts[domain] == 0]
+    included = [domain for domain in _DOMAINS if counters.counts[domain] > 0]
+    missing = [domain for domain in _DOMAINS if counters.counts[domain] == 0]
     uncertainty = ["co_occurrence_is_not_causation"]
     if missing:
         uncertainty.append("insufficient_domain_evidence")
@@ -175,3 +215,30 @@ async def build_correlations(
         groups=buckets[:500], coverage=coverage, included_domains=included,
         missing_domains=missing, uncertainty_reasons=uncertainty,
     )
+
+
+async def build_correlations(
+    session: AsyncSession, query: CorrelationQuery, *, scope: Scope, multi_workspace_enabled: bool,
+) -> CorrelationResult:
+    """Group a fixed number of live event/measurement evidence signals by region and UTC hour.
+
+    This method counts exact owner-public evidence identities only. It performs no
+    title matching, model inference, pairwise scoring, significance calculation,
+    causation claim, or prediction. Each domain receives its own finite event cap;
+    current Alpha Vantage observations are a separate economic evidence input.
+    Read-only: admission snapshot, event pages, provider-scope lookups, then observations,
+    in that order; the caller owns the transaction.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    coverage = _Coverage()
+    signals = await _collect_event_signals(
+        session, query, coverage, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    alpha_sources = await _alpha_vantage_sources(
+        session, query, coverage, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    signals.extend(await _collect_observation_signals(
+        session, query, alpha_sources, coverage, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ))
+    buckets, omitted_support = _bucket_signals(signals)
+    return _assemble_result(query, buckets, omitted_support, coverage)

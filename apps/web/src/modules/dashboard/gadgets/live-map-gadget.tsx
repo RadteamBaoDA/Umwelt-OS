@@ -64,13 +64,86 @@ export function LiveMapGadget({ instance, isEditMode }: { instance: GadgetInstan
   return <div ref={setNode} className="h-full min-h-0">{visible && <LiveMapContent instance={instance} isEditMode={isEditMode} />}</div>;
 }
 
-/** Fetch bounded provider results while mounted; shared query observers deduplicate visible gadgets. */
-function LiveMapContent({ instance, isEditMode }: { instance: GadgetInstance; isEditMode: boolean }) {
+/** Live-map config response: revision plus the provider terms catalog (accepted flag and attribution). */
+type LiveConfig = { revision: number; terms_catalog: { id: string; attribution: string; accepted: boolean }[] };
+
+/** True when the config loaded without error and the owner accepted the provider's terms. */
+function termsAccepted(config: { isError: boolean; data?: LiveConfig }, id: string): boolean {
+  return !config.isError && Boolean(config.data?.terms_catalog.some((term) => term.id === id && term.accepted));
+}
+
+/** The "open event" link and provider source links of one event (only safe http(s) URLs render). */
+function EventLinks({ event, separator }: { event: { url?: string | null; sources?: { url: string }[] }; separator: boolean }) {
   const t = useTranslations('dashboard');
-  const display = useDisplayPreferences();
+  const href = safeLiveLink(event.url ?? null);
+  return <>
+    {href && (separator ? <> · <a className="underline" href={href} target="_blank" rel="noreferrer">{t('liveMapOpenEvent')}</a></> : <a className="underline" href={href} target="_blank" rel="noreferrer">{t('liveMapOpenEvent')}</a>)}
+    {event.sources?.map(({ url }) => safeLiveLink(url) && <a key={url} className="block underline" href={safeLiveLink(url) ?? undefined} target="_blank" rel="noreferrer">{t('liveMapProviderSource')}</a>)}
+  </>;
+}
+
+/**
+ * Loads the live-map terms config and one query per accepted provider (refreshing every minute, never in the
+ * background), merges and filters events by category and period, and keeps the projected point list referentially
+ * stable until its serialized geometry changes so map interaction is not reset.
+ */
+function useLiveMapData(instance: GadgetInstance, filters: { category: string; days: string; now: number }) {
   const workspace = useWorkspace();
   const scope = instance.definition.scope ?? {};
   const providers = scope.live_map_providers ?? DEFAULT_PROVIDERS;
+  const config = useQuery({ queryKey: ['live-map-config', workspace.selection?.id], queryFn: ({ signal }) => apiRequest<LiveConfig>('/api/v1/live-map/config', { signal }), enabled: Boolean(workspace.selection?.id), staleTime: 60_000, gcTime: 0, refetchInterval: 60_000, refetchIntervalInBackground: false });
+  const results = useQueries({ queries: providers.map((provider) => ({
+    queryKey: ['live-map', workspace.selection?.id, provider, scope.live_map_country, scope.live_map_github_owner, scope.live_map_github_repo, scope.live_map_sec_cik, config.data?.revision],
+    queryFn: ({ signal }: { signal: AbortSignal }) => fetchLiveEvents(provider, scope, signal),
+    enabled: Boolean(workspace.selection?.id) && termsAccepted(config, provider), staleTime: 60_000, gcTime: 0,
+    refetchInterval: 60_000, refetchIntervalInBackground: false, retry: false,
+  })) });
+  const entries = results.flatMap((result, index) => (termsAccepted(config, providers[index]) && !(result.error instanceof ApiError && result.error.status === 409) ? result.data?.items ?? [] : []).map((event) => ({ ...event, provider: providers[index], key: `${providers[index]}:${event.id}` })));
+  const cutoff = filters.now - Number(filters.days) * 86_400_000;
+  const filtered = entries.filter((event) => (filters.category === 'all' || CATEGORY[event.provider] === filters.category) && (!event.observed_at || !Number.isFinite(Date.parse(event.observed_at)) || Date.parse(event.observed_at) >= cutoff));
+  // Keep geometry identity stable across status updates so map interaction is not reset.
+  const pointJson = JSON.stringify(liveMapPoints(filtered));
+  // Keep the map's point identity stable until its serialized geometry changes.
+  const points = useMemo(() => JSON.parse(pointJson) as ReturnType<typeof liveMapPoints>, [pointJson]);
+  return { workspaceId: workspace.selection?.id, providers, config, results, filtered, points };
+}
+
+/** Event list: select button, source and time, links, plus the empty note. */
+function LiveEventList({ events, onSelect }: { events: ReturnType<typeof useLiveMapData>['filtered']; onSelect: (key: string) => void }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  return <div className="min-h-0 flex-1 overflow-y-auto"><ul aria-label={t('liveMapEvents')} className="divide-y divide-border">{events.map((event) => <li key={event.key} className="py-1 text-xs"><Button type="button" variant="ghost" className="h-auto w-full justify-start whitespace-normal p-1 text-left" onClick={() => onSelect(event.key)}>{event.title}</Button><span className="text-muted-foreground">{event.source} · {event.observed_at && Number.isFinite(Date.parse(event.observed_at)) ? <time dateTime={event.observed_at}>{formatDateTime(event.observed_at, display.locale, display.timezone)}</time> : t('liveMapTimeUnknown')}</span><EventLinks event={event} separator /></li>)}</ul>{events.length === 0 && <p className="text-xs text-muted-foreground">{t('liveMapEmpty')}</p>}</div>;
+}
+
+/** Per-provider attribution line with its status: config error, terms required, fetch error, last update or loading. */
+function LiveSourceStatus({ providers, config, results }: {
+  providers: string[];
+  config: ReturnType<typeof useLiveMapData>['config'];
+  results: ReturnType<typeof useLiveMapData>['results'];
+}) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  return <div className="max-h-20 shrink-0 overflow-y-auto text-xs text-muted-foreground" aria-label={t('liveMapSources')}>{providers.map((provider, index) => <p key={provider}><a className="underline" href={ATTRIBUTION[provider]} target="_blank" rel="noreferrer">{PROVIDER_NAME[provider] ?? provider}</a>: {config.isError ? t('liveMapConfigLoadError') : config.data && !config.data.terms_catalog.some((term) => term.id === provider && term.accepted) ? t('liveMapTermsRequired') : results[index].isError ? t(liveErrorKey(results[index].error, provider)) : results[index].data ? t('liveMapSourceUpdated', { when: formatDateTime(results[index].data.fetched_at, display.locale, display.timezone) }) : t('liveMapSourceLoading')}{config.data?.terms_catalog?.find((term) => term.id === provider)?.attribution && <span className="block">{config.data.terms_catalog.find((term) => term.id === provider)?.attribution}</span>}{results[index].data?.truncated ? ` · ${t('observationTruncated')}` : ''}</p>)}</div>;
+}
+
+/** Weather overlay notes: legend and credit when ready, terms-required and error notices. */
+function LiveWeatherNotes({ weatherLayer, weatherState, config }: {
+  weatherLayer: string | null;
+  weatherState: 'idle' | 'loading' | 'ready' | 'error';
+  config: ReturnType<typeof useLiveMapData>['config'];
+}) {
+  const t = useTranslations('dashboard');
+  if (!weatherLayer) return null;
+  return <>
+    {weatherState === 'ready' && <p className="text-xs text-muted-foreground">{t(`liveMapWeather_${weatherLayer}` as 'liveMapWeather_none')} · <a href="https://openweathermap.org/api/weathermaps" target="_blank" rel="noreferrer" className="underline">{t('liveMapWeatherLegend')}</a> · <a href="https://openweathermap.org/" target="_blank" rel="noreferrer" className="underline">{t('liveMapWeatherCredit')}</a> {config.data?.terms_catalog?.find((term) => term.id === 'openweather')?.attribution}</p>}
+    {config.data && !config.data.terms_catalog.some((term) => term.id === 'openweather' && term.accepted) && <p role="status" className="text-xs text-destructive">{t('liveMapTermsRequired')}</p>}
+    {(weatherState === 'error' || config.isError) && <p role="status" className="text-xs text-destructive">{t('liveMapWeatherError')}</p>}
+  </>;
+}
+
+/** Fetch bounded provider results while mounted; shared query observers deduplicate visible gadgets. */
+function LiveMapContent({ instance, isEditMode }: { instance: GadgetInstance; isEditMode: boolean }) {
+  const t = useTranslations('dashboard');
   const [node, setNode] = useState<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [category, setCategory] = useState('all');
@@ -87,24 +160,10 @@ function LiveMapContent({ instance, isEditMode }: { instance: GadgetInstance; is
   }, [node]);
   const visible = true;
   const weatherLayer = instance.definition.filters?.map_weather_layer ?? null;
-  const config = useQuery({ queryKey: ['live-map-config', workspace.selection?.id], queryFn: ({ signal }) => apiRequest<{ revision: number; terms_catalog: { id: string; attribution: string; accepted: boolean }[] }>('/api/v1/live-map/config', { signal }), enabled: visible && Boolean(workspace.selection?.id), staleTime: 60_000, gcTime: 0, refetchInterval: 60_000, refetchIntervalInBackground: false });
-  const results = useQueries({ queries: providers.map((provider) => ({
-    queryKey: ['live-map', workspace.selection?.id, provider, scope.live_map_country, scope.live_map_github_owner, scope.live_map_github_repo, scope.live_map_sec_cik, config.data?.revision],
-    queryFn: ({ signal }: { signal: AbortSignal }) => fetchLiveEvents(provider, scope, signal),
-    enabled: visible && Boolean(workspace.selection?.id) && !config.isError && Boolean(config.data?.terms_catalog.some((term) => term.id === provider && term.accepted)), staleTime: 60_000, gcTime: 0,
-    refetchInterval: visible ? 60_000 : false, refetchIntervalInBackground: false, retry: false,
-  })) });
-  const entries = results.flatMap((result, index) => (!config.isError && config.data?.terms_catalog.some((term) => term.id === providers[index] && term.accepted) && !(result.error instanceof ApiError && result.error.status === 409) ? result.data?.items ?? [] : []).map((event) => ({ ...event, provider: providers[index], key: `${providers[index]}:${event.id}` })));
-  const cutoff = now - Number(days) * 86_400_000;
-  const filtered = entries.filter((event) => (category === 'all' || CATEGORY[event.provider] === category) && (!event.observed_at || !Number.isFinite(Date.parse(event.observed_at)) || Date.parse(event.observed_at) >= cutoff));
-  // Keep geometry identity stable across status updates so map interaction is not reset.
-  const pointJson = JSON.stringify(liveMapPoints(filtered));
-  // Keep the map's point identity stable until its serialized geometry changes.
-  // eslint-disable-next-line react-hooks/preserve-manual-memoization
-  const points = useMemo(() => JSON.parse(pointJson) as ReturnType<typeof liveMapPoints>, [pointJson]);
+  const { workspaceId, providers, config, results, filtered, points } = useLiveMapData(instance, { category, days, now });
   const selectedEvent = filtered.find((event) => event.key === selected);
   const engine = instance.definition.filters?.map_engine ?? 'globe';
-  const mapProps = { focusSelected: true, features: points, selectedFeatureId: selected, onSelectFeature: setSelected, width: size.width, height: size.height, visible, interactive: !isEditMode, weatherLayer, weatherWorkspaceId: !config.isError && config.data?.terms_catalog.some((term) => term.id === 'openweather' && term.accepted) ? workspace.selection?.id : undefined, weatherRevision: config.data?.revision, onWeatherStateChange: setWeatherState };
+  const mapProps = { focusSelected: true, features: points, selectedFeatureId: selected, onSelectFeature: setSelected, width: size.width, height: size.height, visible, interactive: !isEditMode, weatherLayer, weatherWorkspaceId: termsAccepted(config, 'openweather') ? workspaceId : undefined, weatherRevision: config.data?.revision, onWeatherStateChange: setWeatherState };
   return <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
     <div className="flex shrink-0 flex-wrap gap-2">
       <Select value={category} onValueChange={setCategory}><SelectTrigger aria-label={t('liveMapCategory')} className="h-8 w-36"><SelectValue /></SelectTrigger><SelectContent>{(['all', 'geo', 'technology', 'finance'] as const).map((value) => <SelectItem key={value} value={value}>{t(`liveMapCategory_${value}`)}</SelectItem>)}</SelectContent></Select>
@@ -113,12 +172,10 @@ function LiveMapContent({ instance, isEditMode }: { instance: GadgetInstance; is
     </div>
     <div ref={setNode} role="group" aria-label={t('mapPlotLabel')} className="relative min-h-48 flex-[2] overflow-hidden rounded border border-border">
       {visible && size.width > 0 && size.height > 0 && <div className="absolute inset-0"><Suspense fallback={<p role="status">{t('mapRendererLoading')}</p>}>{engine === 'globe' ? <GlobeMap {...mapProps} /> : <FlatMap {...mapProps} />}</Suspense></div>}
-      {selectedEvent && <div className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 p-2 text-xs"><strong>{selectedEvent.title}</strong><p>{selectedEvent.summary}</p>{safeLiveLink(selectedEvent.url) && <a className="underline" href={safeLiveLink(selectedEvent.url) ?? undefined} target="_blank" rel="noreferrer">{t('liveMapOpenEvent')}</a>}{selectedEvent.sources?.map(({ url }) => safeLiveLink(url) && <a key={url} className="block underline" href={safeLiveLink(url) ?? undefined} target="_blank" rel="noreferrer">{t('liveMapProviderSource')}</a>)}</div>}
+      {selectedEvent && <div className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 p-2 text-xs"><strong>{selectedEvent.title}</strong><p>{selectedEvent.summary}</p><EventLinks event={selectedEvent} separator={false} /></div>}
     </div>
-    {weatherLayer && weatherState === 'ready' && <p className="text-xs text-muted-foreground">{t(`liveMapWeather_${weatherLayer}`)} · <a href="https://openweathermap.org/api/weathermaps" target="_blank" rel="noreferrer" className="underline">{t('liveMapWeatherLegend')}</a> · <a href="https://openweathermap.org/" target="_blank" rel="noreferrer" className="underline">{t('liveMapWeatherCredit')}</a> {config.data?.terms_catalog?.find((term) => term.id === 'openweather')?.attribution}</p>}
-    {weatherLayer && config.data && !config.data.terms_catalog.some((term) => term.id === 'openweather' && term.accepted) && <p role="status" className="text-xs text-destructive">{t('liveMapTermsRequired')}</p>}
-    {weatherLayer && (weatherState === 'error' || config.isError) && <p role="status" className="text-xs text-destructive">{t('liveMapWeatherError')}</p>}
-    <div className="min-h-0 flex-1 overflow-y-auto"><ul aria-label={t('liveMapEvents')} className="divide-y divide-border">{filtered.map((event) => <li key={event.key} className="py-1 text-xs"><Button type="button" variant="ghost" className="h-auto w-full justify-start whitespace-normal p-1 text-left" onClick={() => setSelected(event.key)}>{event.title}</Button><span className="text-muted-foreground">{event.source} · {event.observed_at && Number.isFinite(Date.parse(event.observed_at)) ? <time dateTime={event.observed_at}>{formatDateTime(event.observed_at, display.locale, display.timezone)}</time> : t('liveMapTimeUnknown')}</span>{safeLiveLink(event.url) && <> · <a className="underline" href={safeLiveLink(event.url) ?? undefined} target="_blank" rel="noreferrer">{t('liveMapOpenEvent')}</a></>}{event.sources?.map(({ url }) => safeLiveLink(url) && <a key={url} className="block underline" href={safeLiveLink(url) ?? undefined} target="_blank" rel="noreferrer">{t('liveMapProviderSource')}</a>)}</li>)}</ul>{filtered.length === 0 && <p className="text-xs text-muted-foreground">{t('liveMapEmpty')}</p>}</div>
-    <div className="max-h-20 shrink-0 overflow-y-auto text-xs text-muted-foreground" aria-label={t('liveMapSources')}>{providers.map((provider, index) => <p key={provider}><a className="underline" href={ATTRIBUTION[provider]} target="_blank" rel="noreferrer">{PROVIDER_NAME[provider] ?? provider}</a>: {config.isError ? t('liveMapConfigLoadError') : config.data && !config.data.terms_catalog.some((term) => term.id === provider && term.accepted) ? t('liveMapTermsRequired') : results[index].isError ? t(liveErrorKey(results[index].error, provider)) : results[index].data ? t('liveMapSourceUpdated', { when: formatDateTime(results[index].data.fetched_at, display.locale, display.timezone) }) : t('liveMapSourceLoading')}{config.data?.terms_catalog?.find((term) => term.id === provider)?.attribution && <span className="block">{config.data.terms_catalog.find((term) => term.id === provider)?.attribution}</span>}{results[index].data?.truncated ? ` · ${t('observationTruncated')}` : ''}</p>)}</div>
+    <LiveWeatherNotes weatherLayer={weatherLayer} weatherState={weatherState} config={config} />
+    <LiveEventList events={filtered} onSelect={setSelected} />
+    <LiveSourceStatus providers={providers} config={config} results={results} />
   </section>;
 }

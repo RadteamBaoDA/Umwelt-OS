@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modules.agents import harness
+from modules.agents import gateway_factory, harness
 
 THINKING = [{"type": "thinking", "thinking": "", "signature": "s"}]
 
@@ -27,14 +27,15 @@ async def _call_model(monkeypatch: pytest.MonkeyPatch, message: dict[str, Any]) 
     context.profile_snapshot = None
     context.prompt_version = "x"
     context.settings.ai_allowed_endpoint_cidrs = ()
+    context.scope = MagicMock()
     context._run_snapshot = AsyncMock(return_value=SimpleNamespace(token_budget=None, tool_calls=0))
     context.authorize_remote_send = AsyncMock(return_value=(config, MagicMock(), "chat", MagicMock()))
     gateway = MagicMock()
     gateway.tools = AsyncMock(return_value={"choices": [{"message": message}], "usage": {"total_tokens": 5}})
     monkeypatch.setattr(harness, "_reserve_step", AsyncMock())
     monkeypatch.setattr(harness, "_tool_specs", lambda _c: [spec])
-    monkeypatch.setattr(harness, "ModelGateway", lambda **_kw: gateway)
-    monkeypatch.setattr(harness.settings_public, "capability_evidence", lambda *_a: None)
+    monkeypatch.setattr(gateway_factory, "ModelGateway", lambda **_kw: gateway)
+    monkeypatch.setattr(gateway_factory.settings_public, "capability_evidence", lambda *_a: None)
     node = harness.build_workflow(context, None).nodes["call_model"].bound
     state = {"prompt": "p", "messages": [], "segment_steps": 0, "source_fences": [], "token_usage": None}
     return await node.ainvoke(state) if hasattr(node, "ainvoke") else await node(state)

@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from core.errors import ForbiddenError
 from modules.knowledge.documents.public import (
     ObservationEvidenceCandidate,
     current_observation_evidence_versions,
@@ -101,11 +102,10 @@ async def test_historical_mode_query_keeps_workspace_and_purge_fences() -> None:
 
 async def test_historical_mode_still_requires_owner_scope() -> None:
     """A non-owner workspace scope is refused before any query, history mode or not."""
-    from fastapi import HTTPException
 
     from core.workspaces.schemas import WorkspaceContext
 
     member = WorkspaceContext(user_id=2, workspace_id=SCOPE_KW["scope"].workspace_id, role="member", membership_revision=1)
     candidate, scopes, rows = _case()
-    with pytest.raises(HTTPException):
+    with pytest.raises(ForbiddenError):
         await _run(candidate, scopes, rows, True, scope=member)

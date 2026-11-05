@@ -9,7 +9,7 @@ from core.model_gateway.anthropic import (
     from_messages_response,
     to_messages_request,
 )
-from core.model_gateway.client import ModelGatewayError
+from core.model_gateway.client import CapabilityUnsupported, ModelGatewayError
 
 
 def test_system_tools_and_tool_results_translate() -> None:
@@ -46,11 +46,45 @@ def test_images_translate() -> None:
         {"type": "image", "source": {"type": "url", "url": "https://x/y.png"}}]
 
 
-def test_forced_tool_choice_degrades_to_auto() -> None:
-    base = {"model": "m", "messages": [{"role": "user", "content": "x"}]}
-    assert "tool_choice" not in to_messages_request({**base, "tool_choice": {"type": "function", "function": {"name": "f"}}}, stream=False)
-    assert "tool_choice" not in to_messages_request({**base, "tool_choice": "required"}, stream=False)
+def test_forced_tool_choice_maps_to_anthropic_any_and_tool() -> None:
+    """``required`` becomes ``any`` and a named function becomes ``tool``; ``none`` stays ``none``."""
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object"}}}]
+    base = {"model": "m", "messages": [{"role": "user", "content": "x"}], "tools": tools}
+    named = to_messages_request({**base, "tool_choice": {"type": "function", "function": {"name": "f"}}}, stream=False)
+    assert named["tool_choice"] == {"type": "tool", "name": "f"}
+    assert to_messages_request({**base, "tool_choice": "required"}, stream=False)["tool_choice"] == {"type": "any"}
+    assert "tool_choice" not in to_messages_request({**base, "tool_choice": "auto"}, stream=False)
     assert to_messages_request({**base, "tool_choice": "none"}, stream=False)["tool_choice"] == {"type": "none"}
+
+
+def test_forced_tool_choice_that_cannot_be_honoured_raises_capability_unsupported() -> None:
+    """No tools, or extended thinking on: raise so the router falls back visibly instead of running unforced."""
+    base = {"model": "m", "messages": [{"role": "user", "content": "x"}], "tool_choice": "required"}
+    with pytest.raises(CapabilityUnsupported):
+        to_messages_request(base, stream=False)
+    tools = [{"type": "function", "function": {"name": "f"}}]
+    with pytest.raises(CapabilityUnsupported, match="thinking"):
+        to_messages_request({**base, "tools": tools, "reasoning_effort": "high"}, stream=False)
+
+
+def test_tool_message_with_text_parts_is_flattened_not_json_dumped() -> None:
+    """A list-of-parts tool message becomes plain text; other shapes are still JSON-encoded."""
+    def result(content: object) -> object:
+        out = to_messages_request({"model": "m", "messages": [{"role": "tool", "tool_call_id": "c1", "content": content}]}, stream=False)
+        return out["messages"][0]["content"][0]["content"]
+
+    assert result([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]) == "ab"
+    assert result("plain") == "plain"
+    assert result({"k": 1}) == '{"k": 1}'
+
+
+def test_user_turn_without_usable_content_is_dropped() -> None:
+    """Empty string, empty list and unusable parts would be a 400 (empty content): the turn is omitted."""
+    messages = [{"role": "user", "content": ""}, {"role": "user", "content": []},
+                {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "ftp://x"}}]},
+                {"role": "user", "content": "kept"}]
+    out = to_messages_request({"model": "m", "messages": messages}, stream=False)
+    assert out["messages"] == [{"role": "user", "content": "kept"}]
 
 
 def test_structured_output_and_effort_map_to_output_config() -> None:

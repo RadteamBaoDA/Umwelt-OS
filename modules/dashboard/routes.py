@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core import publication
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.http_cache import set_private_no_store as _no_store
 from core.rate_limit import require_budget
 from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_observer_read, require_workspace_write
@@ -68,11 +69,6 @@ def _static_cache(response: Response) -> None:
     gadget dialog reopens instead of queueing it behind live gadget polling.
     """
     response.headers["Cache-Control"] = "private, max-age=3600"
-
-
-def _no_store(response: Response) -> None:
-    """Prevent private configuration and lifecycle metadata from entering shared caches."""
-    response.headers["Cache-Control"] = "private, no-store"
 
 
 async def _call[T](operation: Awaitable[T]) -> T:
@@ -403,7 +399,7 @@ async def list_brief_revisions(
     flag = request.app.state.settings.multi_workspace_enabled
     if scope.role in {"owner", "admin_viewer"}:
         return await briefs.list_briefs(session, date, _timezone(timezone), scope=scope, multi_workspace_enabled=flag)
-    assert isinstance(scope, WorkspaceContext)
+    assert isinstance(scope, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
     shared = await brief_sharing.list_shared_briefs(session, date, _timezone(timezone), scope=scope, multi_workspace_enabled=flag)
     await _gate_member(request, session, scope, shared, flag)
     return [item.brief for item in shared]

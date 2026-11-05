@@ -16,7 +16,69 @@ import { acceptAccountDeletion, type DeletionPreview } from './deletion-api';
  * The preview preissues an HttpOnly status receipt. Neither the password nor receipt is
  * stored in browser persistence, mutation variables, URLs or query-cache keys.
  */
-export function AccountDeletionSection({ csrfToken }: { csrfToken: string }) {
+export function AccountDeletionSection(props: { csrfToken: string }) {
+  const s0 = useAccountDeletionController(props);
+
+  const vm: AccountDeletionSectionVm = s0;
+  return <section className="grid gap-3 border-t border-border pt-4" aria-labelledby="account-deletion-title">
+<AccountDeletionIntro vm={vm} />
+<AccountDeletionDialog vm={vm} />
+  </section>;
+}
+
+type AccountDeletionSectionVm = ReturnType<typeof useAccountDeletionController>;
+
+/** Heading, help text and the data export link. */
+function AccountDeletionIntro({ vm }: { vm: AccountDeletionSectionVm }) {
+  const { t } = vm;
+  return (
+<>
+    <h2 id="account-deletion-title" className="font-semibold">{t('title')}</h2>
+    <p className="text-sm text-muted-foreground">{t('help')}</p>
+    <Button asChild variant="outline"><a href="/api/v1/exports/json" download="umwelt-os-export.json">{t('export')}</a></Button>
+</>
+  );
+}
+
+/** Password and DELETE confirmation dialog with the blocker preview. */
+function AccountDeletionDialog({ vm }: { vm: AccountDeletionSectionVm }) {
+  const { t, preview, deletion, ready, failure, changeOpen, submit, open, password, setPassword, confirmation, setConfirmation } = vm;
+  return (
+<>
+    <AlertDialog open={open} onOpenChange={changeOpen}>
+      <AlertDialogTrigger asChild><Button variant="destructive">{t('title')}</Button></AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle className="text-lg font-semibold">{t('confirmTitle')}</AlertDialogTitle>
+          <AlertDialogDescription className="text-sm text-muted-foreground">{t('help')}</AlertDialogDescription>
+        </AlertDialogHeader>
+        {preview.isPending && <p role="status">{t('checking')}</p>}
+        {preview.isError && <p role="alert">{t('failed')}</p>}
+        {preview.data && <div className="grid gap-2 text-sm">
+          <p>{t('scope', { count: preview.data.workspace_count })}</p>
+          {preview.data.blockers.map((blocker) => <p key={blocker} className="text-destructive" role="alert">{t(blocker)}</p>)}
+          {preview.data.instance_operator && <p>{t('operator')}</p>}
+        </div>}
+        <p className="text-sm text-muted-foreground">{t('limits')}</p>
+        <Button variant="outline" type="button" disabled={preview.isFetching || deletion.isPending} onClick={() => void preview.refetch()}>{t('retry')}</Button>
+        <form onSubmit={submit} className="grid gap-3">
+          <div className="grid gap-1"><Label htmlFor="delete-account-password">{t('password')}</Label><PasswordInput id="delete-account-password" autoComplete="current-password" maxLength={128} value={password} disabled={deletion.isPending} onChange={(event) => setPassword(event.target.value)} /></div>
+          <div className="grid gap-1"><Label htmlFor="delete-account-confirmation">{t('confirmation')}</Label><Input id="delete-account-confirmation" autoComplete="off" spellCheck={false} value={confirmation} disabled={deletion.isPending} onChange={(event) => setConfirmation(event.target.value)} /></div>
+          {deletion.isError && <p className="text-destructive text-sm" role="alert">{t(failure)}</p>}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletion.isPending}>{t('cancel')}</AlertDialogCancel>
+            <Button type="submit" variant="destructive" disabled={!ready || deletion.isPending}>{deletion.isPending ? t('deleting') : t('title')}</Button>
+          </AlertDialogFooter>
+        </form>
+      </AlertDialogContent>
+    </AlertDialog>
+</>
+  );
+}
+
+/** Holds the state, queries and derived values of AccountDeletionSection. */
+function useAccountDeletionController(props: { csrfToken: string }) {
+  const { csrfToken } = props;
   const t = useTranslations('accountDeletion');
   const [open, setOpen] = useState(false);
   const [password, setPassword] = useState('');
@@ -51,36 +113,5 @@ export function AccountDeletionSection({ csrfToken }: { csrfToken: string }) {
     if (ready && !deletion.isPending) deletion.mutate();
   };
 
-  return <section className="grid gap-3 border-t border-border pt-4" aria-labelledby="account-deletion-title">
-    <h2 id="account-deletion-title" className="font-semibold">{t('title')}</h2>
-    <p className="text-sm text-muted-foreground">{t('help')}</p>
-    <Button asChild variant="outline"><a href="/api/v1/exports/json" download="umwelt-os-export.json">{t('export')}</a></Button>
-    <AlertDialog open={open} onOpenChange={changeOpen}>
-      <AlertDialogTrigger asChild><Button variant="destructive">{t('title')}</Button></AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle className="text-lg font-semibold">{t('confirmTitle')}</AlertDialogTitle>
-          <AlertDialogDescription className="text-sm text-muted-foreground">{t('help')}</AlertDialogDescription>
-        </AlertDialogHeader>
-        {preview.isPending && <p role="status">{t('checking')}</p>}
-        {preview.isError && <p role="alert">{t('failed')}</p>}
-        {preview.data && <div className="grid gap-2 text-sm">
-          <p>{t('scope', { count: preview.data.workspace_count })}</p>
-          {preview.data.blockers.map((blocker) => <p key={blocker} className="text-destructive" role="alert">{t(blocker)}</p>)}
-          {preview.data.instance_operator && <p>{t('operator')}</p>}
-        </div>}
-        <p className="text-sm text-muted-foreground">{t('limits')}</p>
-        <Button variant="outline" type="button" disabled={preview.isFetching || deletion.isPending} onClick={() => void preview.refetch()}>{t('retry')}</Button>
-        <form onSubmit={submit} className="grid gap-3">
-          <div className="grid gap-1"><Label htmlFor="delete-account-password">{t('password')}</Label><PasswordInput id="delete-account-password" autoComplete="current-password" maxLength={128} value={password} disabled={deletion.isPending} onChange={(event) => setPassword(event.target.value)} /></div>
-          <div className="grid gap-1"><Label htmlFor="delete-account-confirmation">{t('confirmation')}</Label><Input id="delete-account-confirmation" autoComplete="off" spellCheck={false} value={confirmation} disabled={deletion.isPending} onChange={(event) => setConfirmation(event.target.value)} /></div>
-          {deletion.isError && <p className="text-destructive text-sm" role="alert">{t(failure)}</p>}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deletion.isPending}>{t('cancel')}</AlertDialogCancel>
-            <Button type="submit" variant="destructive" disabled={!ready || deletion.isPending}>{deletion.isPending ? t('deleting') : t('title')}</Button>
-          </AlertDialogFooter>
-        </form>
-      </AlertDialogContent>
-    </AlertDialog>
-  </section>;
+  return { t, preview, deletion, ready, failure, changeOpen, submit, open, setOpen, password, setPassword, confirmation, setConfirmation, csrfToken };
 }

@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import anyio
 from anyio.abc import (
@@ -25,6 +25,7 @@ from anyio.abc import (
     ObjectSendStream,
     Process,
 )
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp.shared.message import SessionMessage
 from mcp_types import jsonrpc_message_adapter
 
@@ -113,7 +114,7 @@ class _StdioReadPipe(ByteReceiveStream):
                 await anyio.wait_readable(self._fd)
                 await anyio.lowlevel.checkpoint()
                 if self._closed:
-                    raise anyio.ClosedResourceError
+                    raise anyio.ClosedResourceError from None
                 continue
             except InterruptedError:
                 await anyio.lowlevel.checkpoint()
@@ -169,7 +170,7 @@ class _StdioWritePipe(ByteSendStream):
                 await anyio.wait_writable(self._fd)
                 await anyio.lowlevel.checkpoint()
                 if self._closed:
-                    raise anyio.ClosedResourceError
+                    raise anyio.ClosedResourceError from None
                 continue
             except InterruptedError:
                 await anyio.lowlevel.checkpoint()
@@ -321,32 +322,47 @@ class _StdioProcess(asyncio.SubprocessProtocol, Process):
         return None
 
 
-@asynccontextmanager
-async def stdio_client_transport(
-    profile: StdioDeploymentProfile,
-    fence: Callable[[], Awaitable[bool]],
-) -> AsyncIterator[tuple[
-    ObjectReceiveStream[SessionMessage | Exception], ObjectSendStream[SessionMessage]
-]]:
-    """Yield bounded SDK streams for a reviewed POSIX subprocess.
+@dataclass(frozen=True, slots=True)
+class _LaunchPlan:
+    """Validated, canonical launch inputs derived from a ``StdioDeploymentProfile``."""
 
-    The fence checks current authority before launch, after launch, before each
-    outbound frame and before result egress. Cooperative work uses one absolute
-    deadline with reserved teardown time. Synchronous local filesystem calls
-    and an individual OS read cannot be interrupted. Only CPython 3.12's default
-    POSIX asyncio selector loop is source-reviewed; other backends fail closed.
+    argv: tuple[str, ...]
+    env: dict[str, str]
+    artifacts: dict[str, str]
+    root: Path
+    cwd: Path
+    exe: Path
+
+
+@dataclass
+class _StdioRun:
+    """Mutable ownership record for one transport: pipes, process, streams and cleanup flags.
+
+    ``owned`` holds raw FDs not yet wrapped by a pipe object; ``uncertain`` becomes True whenever a
+    close, reap or probe could not be verified, and turns into a final ``McpTransportError``.
     """
-    deadline = time.monotonic() + _OPERATION_SECONDS
-    work_deadline = deadline - _CLEANUP_RESERVE_SECONDS
-    if os.name != "posix":
-        raise McpTransportError("MCP stdio requires POSIX")
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError as exc:
-        raise McpTransportError("MCP stdio requires the supported asyncio loop") from exc
-    if type(loop) is not asyncio.SelectorEventLoop or os.geteuid() == 0:  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
-        raise McpTransportError("MCP stdio requires default selector loop and non-root service identity")
 
+    process: _StdioProcess
+    shutdown: anyio.Event
+    writer_done: anyio.Event
+    rs: MemoryObjectSendStream[SessionMessage | Exception]
+    rr: MemoryObjectReceiveStream[SessionMessage | Exception]
+    ws: MemoryObjectSendStream[SessionMessage]
+    wr: MemoryObjectReceiveStream[SessionMessage]
+    owned: list[int]
+    stdin: _StdioWritePipe | None = None
+    stdout: _StdioReadPipe | None = None
+    launched: bool = False
+    finished: bool = False
+    uncertain: bool = False
+
+
+def _validate_profile_fields(profile: StdioDeploymentProfile) -> tuple[tuple[str, ...], dict[str, str], dict[str, str]]:
+    """Check profile identity, argv, environment and manifest bounds; return copies of the mutable parts.
+
+    Raises ``McpTransportError`` for any malformed field, unreviewed hash, or value outside the exact
+    allowlists. Pure; no filesystem access.
+    """
     try:
         argv, env, artifacts = tuple(profile.argv), dict(profile.environment), dict(profile.artifact_sha256)
     except Exception as exc:
@@ -373,7 +389,18 @@ async def stdio_client_transport(
         raise McpTransportError("MCP stdio environment exceeds exact allowlist")
     if not (1 <= len(artifacts) <= 32):
         raise McpTransportError("MCP stdio artifact manifest is invalid")
+    return argv, env, artifacts
 
+
+def _resolve_launch_paths(
+    profile: StdioDeploymentProfile, argv: tuple[str, ...],
+) -> tuple[Path, Path, Path]:
+    """Resolve root/cwd/executable to canonical symlink-free paths and reject unsafe launchers.
+
+    Touches the filesystem (``resolve(strict=True)``) synchronously; raises ``McpTransportError`` for
+    relative, escaping, non-canonical paths, shell/package-manager launchers, interpreter entry
+    mismatches and command-evaluation or loader flags in ``argv``.
+    """
     if not all(isinstance(p, str) for p in (profile.immutable_root, profile.cwd, profile.executable)):
         raise McpTransportError("MCP stdio launch paths must be strings")
     root_in, cwd_in, exe_in = map(Path, (profile.immutable_root, profile.cwd, profile.executable))
@@ -405,15 +432,22 @@ async def stdio_client_transport(
         for arg in argv
     ):
         raise McpTransportError("MCP stdio command-evaluation and interpreter-loader options are unsupported")
+    return root, cwd, exe
 
-    # Stable identity covers all deployment inputs and quotas, excluding operation_kind.
+
+def _verify_policy_hash(profile: StdioDeploymentProfile, plan: _LaunchPlan) -> None:
+    """Recompute the canonical policy digest and require it to equal the reviewed ``profile_hash``.
+
+    The identity covers all deployment inputs and quotas, excluding ``operation_kind``. Raises
+    ``McpTransportError`` when the policy is not canonical JSON or the digest differs.
+    """
     policy = {
         "policy": "bbd-os-mcp-stdio-v1", "profile_id": profile.profile_id,
         "platform": profile.platform, "enabled": profile.enabled,
         "runtime_kind": profile.runtime_kind, "entry_script": profile.entry_script,
-        "executable": str(exe), "argv": argv, "cwd": str(cwd),
-        "environment": dict(sorted(env.items())), "immutable_root": str(root),
-        "artifact_sha256": dict(sorted(artifacts.items())),
+        "executable": str(plan.exe), "argv": plan.argv, "cwd": str(plan.cwd),
+        "environment": dict(sorted(plan.env.items())), "immutable_root": str(plan.root),
+        "artifact_sha256": dict(sorted(plan.artifacts.items())),
         "limits": {
             "ordinary_frame": _ORDINARY_FRAME_BYTES, "ordinary_total": _ORDINARY_TOTAL_BYTES,
             "ordinary_frames": _ORDINARY_FRAMES, "discovery_frame": _DISCOVERY_FRAME_BYTES,
@@ -430,74 +464,302 @@ async def stdio_client_transport(
     if calculated != profile.profile_hash:
         raise McpTransportError("MCP stdio profile hash mismatch")
 
+
+async def _verify_path_ancestry(path: Path, plan: _LaunchPlan, work_deadline: float) -> None:
+    """Require every directory from the filesystem root to the artifact and cwd to be root-owned and immutable.
+
+    Cooperatively checkpoints per directory; raises ``McpTransportError`` for a writable or
+    non-root directory and ``TimeoutError`` past the work deadline.
+    """
+    root, cwd = plan.root, plan.cwd
+    parts = path.relative_to(root).parts
+    dirs = (root, *(root.joinpath(*parts[:i]) for i in range(1, len(parts))))
+    cwd_dirs = tuple(reversed(cwd.parents[:-1])) + (cwd,)
+    for directory in (*root.parents, *dirs, *cwd_dirs):
+        await anyio.lowlevel.checkpoint()
+        item = directory.stat()
+        if not stat.S_ISDIR(item.st_mode) or item.st_uid != 0 or item.st_mode & 0o022 or os.access(directory, os.W_OK):
+            raise McpTransportError("MCP stdio path ancestry is not root-owned and immutable")
+        if time.monotonic() >= work_deadline:
+            raise TimeoutError
+    if not stat.S_ISDIR(cwd.stat().st_mode):
+        raise McpTransportError("MCP stdio cwd is not a directory")
+
+
+async def _digest_artifact(path: Path, work_deadline: float) -> str:
+    """Return the SHA-256 hex digest of ``path``, reading 64 KiB at a time against the work deadline."""
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while True:
+            await anyio.lowlevel.checkpoint()
+            chunk = source.read(64 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            if time.monotonic() >= work_deadline:
+                raise TimeoutError
+    return digest.hexdigest()
+
+
+async def _verify_one_artifact(
+    raw_path: str, expected: str, plan: _LaunchPlan, work_deadline: float, total_before: int,
+) -> tuple[str, int]:
+    """Verify one manifest artifact's location, ownership, immutability, ancestry and SHA-256.
+
+    Returns ``(canonical_path, running_total)``. The aggregate byte bound is checked right after the
+    per-file readability checks and before ancestry/digest work, as before. Reads cooperatively (checkpoint per chunk) against the work
+    deadline; raises ``McpTransportError`` for every unavailable, writable, non-root-owned, oversize,
+    changed or slow artifact. Synchronous ``stat``/read calls themselves cannot be interrupted.
+    """
+    root = plan.root
+    if not isinstance(raw_path, str) or not Path(raw_path).is_absolute() or not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+        raise McpTransportError("MCP stdio artifact manifest is invalid")
+    try:
+        path = Path(raw_path).resolve(strict=True)  # noqa: ASYNC240  # one resolve() of a reviewed manifest path during startup validation
+        path.relative_to(root)
+        if str(path) != raw_path:
+            raise ValueError("non-canonical")
+        info = path.stat()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise McpTransportError("MCP stdio artifact is unavailable or outside root") from exc
+    if not stat.S_ISREG(info.st_mode) or info.st_size > _ARTIFACT_BYTES_LIMIT:
+        raise McpTransportError("MCP stdio artifact is not a bounded regular file")
+    if info.st_uid != 0 or info.st_mode & 0o022 or os.access(path, os.W_OK):
+        raise McpTransportError("MCP stdio artifact is not root-owned and immutable")
+    if not os.access(path, os.R_OK):
+        raise McpTransportError("MCP stdio artifact is not readable")
+    total = total_before + info.st_size
+    if total > _ARTIFACTS_BYTES_LIMIT:
+        raise McpTransportError("MCP stdio manifest exceeds aggregate bound")
+    try:
+        await _verify_path_ancestry(path, plan, work_deadline)
+        digest = await _digest_artifact(path, work_deadline)
+    except McpTransportError:
+        raise
+    except (OSError, TimeoutError) as exc:
+        raise McpTransportError("MCP stdio artifact verification failed") from exc
+    if digest != expected:
+        raise McpTransportError("MCP stdio artifact digest changed")
+    return str(path), total
+
+
+async def _verify_artifacts(
+    profile: StdioDeploymentProfile, plan: _LaunchPlan, work_deadline: float,
+) -> None:
+    """Verify the whole immutable manifest plus the executable, absolute arguments and entry script.
+
+    Enforces the aggregate byte bound and that the executable, every absolute ``argv`` entry and a
+    non-native entry script are manifested artifacts. Raises ``McpTransportError`` on any failure or
+    when verification outlives the work deadline.
+    """
     paths: dict[str, str] = {}
     total = 0
-    for raw_path, expected in artifacts.items():
+    for raw_path, expected in plan.artifacts.items():
         await anyio.lowlevel.checkpoint()
-        if not isinstance(raw_path, str) or not Path(raw_path).is_absolute() or not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
-            raise McpTransportError("MCP stdio artifact manifest is invalid")
-        try:
-            path = Path(raw_path).resolve(strict=True)
-            path.relative_to(root)
-            if str(path) != raw_path:
-                raise ValueError("non-canonical")
-            info = path.stat()
-        except (OSError, RuntimeError, ValueError) as exc:
-            raise McpTransportError("MCP stdio artifact is unavailable or outside root") from exc
-        if not stat.S_ISREG(info.st_mode) or info.st_size > _ARTIFACT_BYTES_LIMIT:
-            raise McpTransportError("MCP stdio artifact is not a bounded regular file")
-        if info.st_uid != 0 or info.st_mode & 0o022 or os.access(path, os.W_OK):
-            raise McpTransportError("MCP stdio artifact is not root-owned and immutable")
-        if not os.access(path, os.R_OK):
-            raise McpTransportError("MCP stdio artifact is not readable")
-        total += info.st_size
-        if total > _ARTIFACTS_BYTES_LIMIT:
-            raise McpTransportError("MCP stdio manifest exceeds aggregate bound")
-        try:
-            parts = path.relative_to(root).parts
-            dirs = (root, *(root.joinpath(*parts[:i]) for i in range(1, len(parts))))
-            cwd_dirs = tuple(reversed(cwd.parents[:-1])) + (cwd,)
-            for directory in (*root.parents, *dirs, *cwd_dirs):
-                await anyio.lowlevel.checkpoint()
-                item = directory.stat()
-                if not stat.S_ISDIR(item.st_mode) or item.st_uid != 0 or item.st_mode & 0o022 or os.access(directory, os.W_OK):
-                    raise McpTransportError("MCP stdio path ancestry is not root-owned and immutable")
-                if time.monotonic() >= work_deadline:
-                    raise TimeoutError
-            if not stat.S_ISDIR(cwd.stat().st_mode):
-                raise McpTransportError("MCP stdio cwd is not a directory")
-            digest = hashlib.sha256()
-            with path.open("rb") as source:
-                while True:
-                    await anyio.lowlevel.checkpoint()
-                    chunk = source.read(64 * 1024)
-                    if not chunk:
-                        break
-                    digest.update(chunk)
-                    if time.monotonic() >= work_deadline:
-                        raise TimeoutError
-        except McpTransportError:
-            raise
-        except (OSError, TimeoutError) as exc:
-            raise McpTransportError("MCP stdio artifact verification failed") from exc
-        if digest.hexdigest() != expected:
-            raise McpTransportError("MCP stdio artifact digest changed")
-        paths[raw_path] = str(path)
-    if str(exe) not in paths or not os.access(exe, os.X_OK):
+        canonical, total = await _verify_one_artifact(raw_path, expected, plan, work_deadline, total)
+        paths[raw_path] = canonical
+    if str(plan.exe) not in paths or not os.access(plan.exe, os.X_OK):
         raise McpTransportError("MCP stdio executable is not a reviewed executable artifact")
-    for argument in argv:
+    for argument in plan.argv:
         if Path(argument).is_absolute() and argument not in paths:
             raise McpTransportError("MCP stdio absolute argument is outside the reviewed manifest")
     if profile.runtime_kind != "native":
         try:
-            entry = Path(cast("str", profile.entry_script)).resolve(strict=True)  # non-native profiles always carry a script
-            entry.relative_to(root)
+            entry = Path(cast("str", profile.entry_script)).resolve(strict=True)  # non-native profiles always carry a script  # noqa: ASYNC240  # one resolve() of a reviewed manifest path during startup validation
+            entry.relative_to(plan.root)
         except (OSError, RuntimeError, ValueError) as exc:
             raise McpTransportError("MCP stdio entry script is unavailable") from exc
         if str(entry) != profile.entry_script or profile.entry_script not in paths:
             raise McpTransportError("MCP stdio entry script is not canonical and manifested")
     if time.monotonic() >= work_deadline:
         raise McpTransportError("MCP stdio verification exceeded work deadline")
+
+
+async def _require_fence(fence: Callable[[], Awaitable[bool]], stale_message: str, failed_message: str) -> None:
+    """Run the authority fence under a 1 second cap.
+
+    A false result raises ``stale_message``; any other failure (including the timeout) is reported
+    as ``failed_message`` so internal exception text never reaches callers.
+    """
+    try:
+        with anyio.fail_after(1.0):
+            if not await fence():
+                raise McpTransportError(stale_message)
+    except McpTransportError:
+        raise
+    except Exception as exc:
+        raise McpTransportError(failed_message) from exc
+
+
+def _open_stdio_pipes(run: _StdioRun) -> tuple[int, int]:
+    """Create the child's stdin/stdout pipes and wrap the parent ends in owned pipe objects.
+
+    Ownership of every raw FD is recorded in ``run.owned`` before the next syscall, so a failure
+    between pipes still closes them. Returns the child-side ``(stdin_fd, stdout_fd)``.
+    """
+    # Ownership begins before the first pipe; child ends remain blocking.
+    child_in, parent_in = os.pipe()
+    run.owned.extend((child_in, parent_in))
+    parent_out, child_out = os.pipe()
+    run.owned.extend((parent_out, child_out))
+    os.set_blocking(parent_in, False)
+    os.set_blocking(parent_out, False)
+    run.stdin, run.stdout = _StdioWritePipe(parent_in), _StdioReadPipe(parent_out)
+    run.owned.remove(parent_in)
+    run.owned.remove(parent_out)
+    return child_in, child_out
+
+
+async def _spawn_stdio_child(
+    run: _StdioRun, loop: asyncio.AbstractEventLoop, plan: _LaunchPlan, child_fds: tuple[int, int],
+    work_deadline: float,
+) -> None:
+    """Launch the child in a new session and prove the process object captured its transport.
+
+    Aborts the process on timeout, mismatch or any other failure. The child-side FDs are always
+    closed afterwards; a close error marks the run uncertain rather than raising.
+    """
+    child_in, child_out = child_fds
+    try:
+        budget = min(_SPAWN_SECONDS, work_deadline - time.monotonic())
+        if budget <= 0:
+            raise TimeoutError
+        process = run.process
+        with anyio.fail_after(budget):
+            transport, _ = await loop.subprocess_exec(
+                lambda: process, str(plan.exe), *plan.argv,
+                stdin=child_in, stdout=child_out, stderr=subprocess.DEVNULL,
+                cwd=str(plan.cwd), env=plan.env, start_new_session=True,
+            )
+        run.launched = True
+        if process._transport is not transport or process._pid is None or process._aborted:
+            process.abort()
+            raise McpTransportError("MCP stdio process ownership was not captured")
+    except TimeoutError as exc:
+        run.process.abort()
+        raise McpTransportError("MCP stdio spawn exceeded its deadline") from exc
+    except BaseException:
+        run.process.abort()
+        raise
+    finally:
+        for fd in (child_in, child_out):
+            if fd in run.owned:
+                run.owned.remove(fd)
+                try:
+                    os.close(fd)
+                except OSError:
+                    run.uncertain = True
+
+
+async def _teardown_running_transport(run: _StdioRun, deadline: float) -> None:
+    """Shielded teardown after the consumer leaves the transport: stop pumps, reap, close pipes.
+
+    Waits briefly for the writer, then finishes the process; every failure is recorded as
+    uncertainty so the remaining closes still run. The final synchronous owner close runs even if
+    group probing or helper cleanup exits unexpectedly.
+    """
+    stdin, stdout = cast("_StdioWritePipe", run.stdin), cast("_StdioReadPipe", run.stdout)
+    run.shutdown.set()
+    run.ws.close()
+    run.rr.close()
+    with anyio.CancelScope(shield=True):
+        with anyio.move_on_after(0.5, shield=True):
+            await run.writer_done.wait()
+        try:
+            await _finish_stdio_process(run.process, stdin, stdout, deadline=deadline)
+        except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
+            run.uncertain = True
+        finally:
+            for pipe in (stdin, stdout):
+                try:
+                    await pipe.aclose()
+                except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
+                    run.uncertain = True
+            try:
+                await run.process.aclose()
+            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
+                run.uncertain = True
+
+
+async def _cleanup_unfinished_transport(run: _StdioRun, deadline: float) -> None:
+    """Release everything after a failure before the transport finished normally.
+
+    Closes the streams, aborts a never-launched process, finishes a launched one when both pipes
+    exist, closes unwrapped FDs and remaining pipes, and records any unverifiable step as
+    ``run.uncertain`` instead of raising.
+    """
+    run.shutdown.set()
+    for stream in (run.ws, run.rr, run.wr, run.rs):
+        stream.close()
+    if not run.launched:
+        run.process.abort()
+    if run.stdin is not None and run.stdout is not None:
+        with anyio.CancelScope(shield=True):
+            try:
+                await _finish_stdio_process(run.process, run.stdin, run.stdout, deadline=deadline)
+            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
+                run.uncertain = True
+    else:
+        run.uncertain = True
+        try:
+            await run.process.aclose()
+        except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
+            run.uncertain = True
+    for fd in tuple(run.owned):
+        run.owned.remove(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            run.uncertain = True
+    for open_pipe in (run.stdin, run.stdout):
+        if open_pipe is not None:
+            try:
+                await open_pipe.aclose()
+            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
+                run.uncertain = True
+    for stream in (run.wr, run.rs):
+        try:
+            await stream.aclose()
+        except Exception:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
+            run.uncertain = True
+
+
+def _require_posix_selector_loop() -> asyncio.AbstractEventLoop:
+    """Return the running loop after proving POSIX, the default selector loop and a non-root user."""
+    if os.name != "posix":
+        raise McpTransportError("MCP stdio requires POSIX")
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError as exc:
+        raise McpTransportError("MCP stdio requires the supported asyncio loop") from exc
+    if type(loop) is not asyncio.SelectorEventLoop or os.geteuid() == 0:  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
+        raise McpTransportError("MCP stdio requires default selector loop and non-root service identity")
+    return loop
+
+
+@asynccontextmanager
+async def stdio_client_transport(
+    profile: StdioDeploymentProfile,
+    fence: Callable[[], Awaitable[bool]],
+) -> AsyncIterator[tuple[
+    ObjectReceiveStream[SessionMessage | Exception], ObjectSendStream[SessionMessage]
+]]:
+    """Yield bounded SDK streams for a reviewed POSIX subprocess.
+
+    The fence checks current authority before launch, after launch, before each
+    outbound frame and before result egress. Cooperative work uses one absolute
+    deadline with reserved teardown time. Synchronous local filesystem calls
+    and an individual OS read cannot be interrupted. Only CPython 3.12's default
+    POSIX asyncio selector loop is source-reviewed; other backends fail closed.
+    """
+    deadline = time.monotonic() + _OPERATION_SECONDS
+    work_deadline = deadline - _CLEANUP_RESERVE_SECONDS
+    loop = _require_posix_selector_loop()
+    argv, env, artifacts = _validate_profile_fields(profile)
+    root, cwd, exe = _resolve_launch_paths(profile, argv)
+    plan = _LaunchPlan(argv, env, artifacts, root, cwd, exe)
+    _verify_policy_hash(profile, plan)
+    await _verify_artifacts(profile, plan, work_deadline)
 
     limits = (
         (_DISCOVERY_FRAME_BYTES, _DISCOVERY_TOTAL_BYTES, _DISCOVERY_FRAMES)
@@ -506,139 +768,98 @@ async def stdio_client_transport(
     )
     rs, rr = anyio.create_memory_object_stream[SessionMessage | Exception](0)
     ws, wr = anyio.create_memory_object_stream[SessionMessage](0)
-    shutdown, writer_done = anyio.Event(), anyio.Event()
+    run = _StdioRun(
+        _StdioProcess(spawn_deadline=min(work_deadline, time.monotonic() + _SPAWN_SECONDS)),
+        anyio.Event(), anyio.Event(), rs, rr, ws, wr, [],
+    )
     counters = [0, 0]  # Shared aggregate byte and complete-frame counters.
-    process = _StdioProcess(spawn_deadline=min(work_deadline, time.monotonic() + _SPAWN_SECONDS))
-    owned: list[int] = []
-    stdin = stdout = None
-    launched = finished = uncertain = False
     try:
         with anyio.fail_after(max(0.0, work_deadline - time.monotonic())):
-            try:
-                with anyio.fail_after(1.0):
-                    if not await fence():
-                        raise McpTransportError("MCP stdio fence is no longer current")
-            except McpTransportError:
-                raise
-            except Exception as exc:
-                raise McpTransportError("MCP stdio fence could not be verified") from exc
-            # Ownership begins before the first pipe; child ends remain blocking.
-            child_in, parent_in = os.pipe()
-            owned.extend((child_in, parent_in))
-            parent_out, child_out = os.pipe()
-            owned.extend((parent_out, child_out))
-            os.set_blocking(parent_in, False)
-            os.set_blocking(parent_out, False)
-            stdin, stdout = _StdioWritePipe(parent_in), _StdioReadPipe(parent_out)
-            owned.remove(parent_in)
-            owned.remove(parent_out)
-            try:
-                budget = min(_SPAWN_SECONDS, work_deadline - time.monotonic())
-                if budget <= 0:
-                    raise TimeoutError
-                with anyio.fail_after(budget):
-                    transport, _ = await loop.subprocess_exec(
-                        lambda: process, str(exe), *argv,
-                        stdin=child_in, stdout=child_out, stderr=subprocess.DEVNULL,
-                        cwd=str(cwd), env=env, start_new_session=True,
-                    )
-                launched = True
-                if process._transport is not transport or process._pid is None or process._aborted:
-                    process.abort()
-                    raise McpTransportError("MCP stdio process ownership was not captured")
-            except TimeoutError as exc:
-                process.abort()
-                raise McpTransportError("MCP stdio spawn exceeded its deadline") from exc
-            except BaseException:
-                process.abort()
-                raise
-            finally:
-                for fd in (child_in, child_out):
-                    if fd in owned:
-                        owned.remove(fd)
-                        try:
-                            os.close(fd)
-                        except OSError:
-                            uncertain = True
-            try:
-                with anyio.fail_after(1.0):
-                    if not await fence():
-                        raise McpTransportError("MCP stdio fence changed after spawn")
-            except McpTransportError:
-                raise
-            except Exception as exc:
-                raise McpTransportError("MCP stdio fence recheck failed") from exc
+            await _require_fence(
+                fence, "MCP stdio fence is no longer current", "MCP stdio fence could not be verified",
+            )
+            child_fds = _open_stdio_pipes(run)
+            await _spawn_stdio_child(run, loop, plan, child_fds, work_deadline)
+            await _require_fence(fence, "MCP stdio fence changed after spawn", "MCP stdio fence recheck failed")
+            stdin, stdout = cast("_StdioWritePipe", run.stdin), cast("_StdioReadPipe", run.stdout)
             async with anyio.create_task_group() as group:
-                group.start_soon(_read_stdio_stdout, stdout, rs, fence, counters, *limits, shutdown)
-                group.start_soon(_write_stdio_stdin, stdin, wr, fence, counters, limits[1], limits[2], writer_done)
+                group.start_soon(_read_stdio_stdout, stdout, rs, fence, counters, *limits, run.shutdown)
+                group.start_soon(
+                    _write_stdio_stdin, stdin, wr, fence, counters, limits[1], limits[2], run.writer_done,
+                )
                 try:
                     yield rr, ws
                 finally:
-                    shutdown.set()
-                    ws.close()
-                    rr.close()
-                    with anyio.CancelScope(shield=True):
-                        with anyio.move_on_after(0.5, shield=True):
-                            await writer_done.wait()
-                        try:
-                            await _finish_stdio_process(process, stdin, stdout, deadline=deadline)
-                        except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
-                            uncertain = True
-                        finally:
-                            # A final synchronous owner close runs even if group
-                            # probing or helper cleanup exits unexpectedly.
-                            for pipe in (stdin, stdout):
-                                try:
-                                    await pipe.aclose()
-                                except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
-                                    uncertain = True
-                            try:
-                                await process.aclose()
-                            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
-                                uncertain = True
+                    await _teardown_running_transport(run, deadline)
                     group.cancel_scope.cancel()
-                    finished = True
-        finished = True
+                    run.finished = True
+        run.finished = True
     except TimeoutError as exc:
         raise McpTransportError("MCP stdio work deadline expired") from exc
     finally:
-        if not finished:
-            shutdown.set()
-            for stream in (ws, rr, wr, rs):
-                stream.close()
-            if not launched:
-                process.abort()
-            if stdin is not None and stdout is not None:
-                with anyio.CancelScope(shield=True):
-                    try:
-                        await _finish_stdio_process(process, stdin, stdout, deadline=deadline)
-                    except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
-                        uncertain = True
-            else:
-                uncertain = True
-                try:
-                    await process.aclose()
-                except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
-                    uncertain = True
-            for fd in tuple(owned):
-                owned.remove(fd)
-                try:
-                    os.close(fd)
-                except OSError:
-                    uncertain = True
-            for open_pipe in (stdin, stdout):
-                if open_pipe is not None:
-                    try:
-                        await open_pipe.aclose()
-                    except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
-                        uncertain = True
-            for stream in (wr, rs):
-                try:
-                    await stream.aclose()
-                except Exception:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
-                    uncertain = True
-        if uncertain:
+        if not run.finished:
+            await _cleanup_unfinished_transport(run, deadline)
+        if run.uncertain:
             raise McpTransportError("MCP stdio cleanup ownership is uncertain")
+
+
+def _killpg_probe(process: _StdioProcess) -> tuple[bool, bool]:
+    """Probe the original process group once: ``(gone, uncertain)``.
+
+    ``ProcessLookupError`` means the group is gone; any other ``OSError`` leaves the answer unknown.
+    Signal 0 only tests existence; a ``setsid`` descendant is outside this group by design.
+    """
+    try:
+        os.killpg(process.pid, 0)  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
+    except ProcessLookupError:
+        return True, False
+    except OSError:
+        return False, True
+    return False, False
+
+
+async def _wait_for_exit(process: _StdioProcess, until: float) -> bool:
+    """Wait (shielded) for leader exit until the monotonic time ``until``; return True if the wait raised.
+
+    A no-op when the leader already has a status or the time has passed.
+    """
+    uncertain = False
+    if process.returncode is None and until > time.monotonic():
+        with anyio.move_on_after(until - time.monotonic(), shield=True):
+            try:
+                await process.wait()
+            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
+                uncertain = True
+    return uncertain
+
+
+async def _terminate_leader_tree(process: _StdioProcess, budget: float) -> bool:
+    """Run the SDK's TERM-then-KILL tree termination inside ``budget``; return True when unverified.
+
+    No PID, no POSIX helper or no budget left means termination could not be attempted, which is
+    uncertain. The helper's own TERM budget is shorter than this stage so its SIGKILL branch can run.
+    """
+    if process._pid is None or terminate_posix_process_tree is None or budget <= 0:
+        return True
+    uncertain = False
+    with anyio.move_on_after(budget, shield=True) as stage:
+        try:
+            await terminate_posix_process_tree(process, timeout_seconds=1.0)
+        except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
+            uncertain = True
+    return uncertain or stage.cancelled_caught
+
+
+async def _poll_group_gone(process: _StdioProcess, state_end: float) -> tuple[bool, bool]:
+    """Poll the original group until it disappears or ``state_end``: ``(gone, uncertain)``."""
+    while process._pid is not None and time.monotonic() < state_end:
+        gone, uncertain = _killpg_probe(process)
+        if gone:
+            return True, False
+        if uncertain:
+            return False, True
+        await anyio.sleep(min(0.05, state_end - time.monotonic()))
+    return False, False
 
 
 async def _finish_stdio_process(
@@ -661,52 +882,18 @@ async def _finish_stdio_process(
         await stdin.aclose()
     except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
         uncertain = True
-    grace = min(end - 1.0, time.monotonic() + 1.0)
-    if process.returncode is None and grace > time.monotonic():
-        with anyio.move_on_after(grace - time.monotonic(), shield=True):
-            try:
-                await process.wait()
-            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
-                uncertain = True
-    budget = min(1.5, max(0.0, end - time.monotonic() - 1.0))
-    if process._pid is not None and terminate_posix_process_tree is not None and budget > 0:
-        with anyio.move_on_after(budget, shield=True) as stage:
-            try:
-                await terminate_posix_process_tree(process, timeout_seconds=1.0)
-            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
-                uncertain = True
-        uncertain |= stage.cancelled_caught
-    else:
-        uncertain = True
-
+    uncertain |= await _wait_for_exit(process, min(end - 1.0, time.monotonic() + 1.0))
+    uncertain |= await _terminate_leader_tree(process, min(1.5, max(0.0, end - time.monotonic() - 1.0)))
     # Probe the original group only; a setsid descendant leaves this cleanup scope.
     state_end = min(end - 0.5, time.monotonic() + 1.0)
-    gone = False
-    while process._pid is not None and time.monotonic() < state_end:
-        try:
-            os.killpg(process.pid, 0)  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
-        except ProcessLookupError:
-            gone = True
-            break
-        except OSError:
-            uncertain = True
-            break
-        await anyio.sleep(min(0.05, state_end - time.monotonic()))
-    if process.returncode is None and state_end > time.monotonic():
-        with anyio.move_on_after(state_end - time.monotonic(), shield=True):
-            try:
-                await process.wait()
-            except Exception:  # noqa: BLE001  # cleanup boundary: records uncertainty and keeps tearing down
-                uncertain = True
+    gone, probe_uncertain = await _poll_group_gone(process, state_end)
+    uncertain |= probe_uncertain
+    uncertain |= await _wait_for_exit(process, state_end)
     if process.returncode is None:
         uncertain = True
     if not gone and process._pid is not None:
-        try:
-            os.killpg(process.pid, 0)  # type: ignore[attr-defined,unused-ignore]  # POSIX-only
-        except ProcessLookupError:
-            gone = True
-        except OSError:
-            uncertain = True
+        gone, probe_uncertain = _killpg_probe(process)
+        uncertain |= probe_uncertain
     if not gone:
         uncertain = True
     try:
@@ -719,6 +906,19 @@ async def _finish_stdio_process(
         uncertain = True
     if uncertain:
         raise McpTransportError("MCP stdio cleanup is uncertain")
+
+
+def _decode_jsonrpc_frame(frame: bytes) -> Any:
+    """Decode one newline-delimited child frame as strict UTF-8 JSON-RPC.
+
+    Raises a sanitized ``McpTransportError`` for invalid UTF-8 or any message the SDK adapter rejects;
+    the child-controlled text never appears in the error.
+    """
+    try:
+        text = frame.decode("utf-8", errors="strict")
+        return jsonrpc_message_adapter.validate_json(text, by_name=False)
+    except Exception as exc:
+        raise McpTransportError("MCP stdio server sent an invalid JSON-RPC frame") from exc
 
 
 async def _read_stdio_stdout(
@@ -773,26 +973,18 @@ async def _read_stdio_stdout(
                 counters[1] += 1
                 if counters[1] > max_frames:
                     raise McpTransportError("MCP stdio operation exceeded its message limit")
-                try:
-                    text = frame.decode("utf-8", errors="strict")
-                    message = jsonrpc_message_adapter.validate_json(text, by_name=False)
-                except Exception as exc:
-                    raise McpTransportError("MCP stdio server sent an invalid JSON-RPC frame") from exc
-                try:
-                    with anyio.fail_after(1.0):
-                        if not await fence():
-                            raise McpTransportError("MCP stdio execution fence changed before result delivery")
-                except McpTransportError:
-                    raise
-                except Exception as exc:
-                    raise McpTransportError("MCP stdio execution fence could not be rechecked") from exc
+                message = _decode_jsonrpc_frame(frame)
+                await _require_fence(
+                    fence, "MCP stdio execution fence changed before result delivery",
+                    "MCP stdio execution fence could not be rechecked",
+                )
                 await messages.send(SessionMessage(message))
     except anyio.EndOfStream:
         if shutdown.is_set():
             return
         if pending:
-            raise McpTransportError("MCP stdio server ended with a truncated frame")
-        raise McpTransportError("MCP stdio server closed stdout unexpectedly")
+            raise McpTransportError("MCP stdio server ended with a truncated frame") from None
+        raise McpTransportError("MCP stdio server closed stdout unexpectedly") from None
     except (anyio.ClosedResourceError, anyio.BrokenResourceError):
         # SDK shutdown closes the receive end; keep consuming without retaining
         # child output so a cooperative process can still finish its shutdown.
@@ -822,14 +1014,10 @@ async def _write_stdio_stdin(
     try:
         async with messages:
             async for session_message in messages:
-                try:
-                    with anyio.fail_after(1.0):
-                        if not await fence():
-                            raise McpTransportError("MCP stdio execution fence changed before request delivery")
-                except McpTransportError:
-                    raise
-                except Exception as exc:
-                    raise McpTransportError("MCP stdio execution fence could not be rechecked") from exc
+                await _require_fence(
+                    fence, "MCP stdio execution fence changed before request delivery",
+                    "MCP stdio execution fence could not be rechecked",
+                )
                 try:
                     wire_message = session_message.message.model_dump_json(by_alias=True, exclude_unset=True)
                     frame = (wire_message + "\n").encode("utf-8", errors="strict")

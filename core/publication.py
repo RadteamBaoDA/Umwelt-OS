@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from core.errors import DomainError
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import PublicationFence
 
@@ -51,7 +52,7 @@ class PublicationGateMiddleware:
             await self.app(scope, receive, send)
             return
         started = False
-        denied: HTTPException | None = None
+        denied: HTTPException | DomainError | None = None
 
         async def gated(message: Message) -> None:
             """Re-validate the request's PublicationFence in a bounded transaction before each protected send."""
@@ -67,7 +68,7 @@ class PublicationGateMiddleware:
                     started = True
                 await send(message)
                 return
-            assert fence is not None
+            assert fence is not None  # noqa: S101  # mypy narrowing invariant
             if kind == "http.response.body":
                 # Drain-before-lock: uvicorn drains its write buffer at the start of send(), so an
                 # empty more_body chunk forces any backpressure wait to happen here, before the
@@ -85,7 +86,7 @@ class PublicationGateMiddleware:
                             multi_workspace_enabled=app.state.settings.multi_workspace_enabled,
                             auth_sessions=(fence.auth_session,), read=True)
                         await workspaces.lock_resource_grants(session, scope=fence.scope, grants=fence.grants)
-                except HTTPException as exc:
+                except (HTTPException, DomainError) as exc:
                     denied = exc
                     if kind == "http.response.start":
                         return  # swallowed; the caller path below sends the 404/409

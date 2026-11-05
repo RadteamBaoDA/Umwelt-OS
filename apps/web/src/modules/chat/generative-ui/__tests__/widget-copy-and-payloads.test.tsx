@@ -61,16 +61,17 @@ describe('genUi i18n parity', () => {
 });
 
 describe('PromptBridgeProvider rejection', () => {
-  it('posts a retryable error back to the iframe when onSendPrompt rejects', async () => {
+  it('posts a retryable error back to the iframe when drafting the prompt fails', async () => {
     const frame = { postMessage: vi.fn() };
-    const onSendPrompt = vi.fn().mockRejectedValue(new Error('busy'));
+    const onSendPrompt = vi.fn();
+    const onDraftPrompt = vi.fn(() => { throw new Error('busy'); });
     function Registrar() {
       const { registerFrame } = usePromptBridge();
       React.useEffect(() => registerFrame(frame, 'n1'), [registerFrame]);
       return null;
     }
     render(
-      <PromptBridgeProvider onSendPrompt={onSendPrompt} cooldownMs={0}>
+      <PromptBridgeProvider onSendPrompt={onSendPrompt} onDraftPrompt={onDraftPrompt} cooldownMs={0}>
         <Registrar />
       </PromptBridgeProvider>,
     );

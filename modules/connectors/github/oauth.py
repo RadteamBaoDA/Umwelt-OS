@@ -19,7 +19,7 @@ from modules.connectors.credentials import CredentialEncryptionUnavailable
 from modules.connectors.github.schemas import GitHubSourceConfig
 
 AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
-TOKEN_URL = "https://github.com/login/oauth/access_token"
+TOKEN_URL = "https://github.com/login/oauth/access_token"  # noqa: S105  # label/URL/enum value, not a credential
 REVOKE_URL = "https://api.github.com/applications/{client_id}/grant"
 CALLBACK_PATH = "/api/v1/connectors/github/oauth/callback"
 
@@ -75,7 +75,7 @@ async def exchange_code(settings: Settings, callback_url: str, *, state: str, ve
     async with AsyncOAuth2Client(
         client_id=settings.github_app_client_id,
         client_secret=settings.github_app_client_secret.get_secret_value(),
-        token_endpoint_auth_method="client_secret_post",
+        token_endpoint_auth_method="client_secret_post",  # noqa: S106  # label/URL/enum value, not a credential
         timeout=httpx.Timeout(10),
         follow_redirects=False,
         trust_env=False,
@@ -95,7 +95,7 @@ async def refresh_github_grant(settings: Settings, refresh_token: str) -> dict[s
     async with AsyncOAuth2Client(
         client_id=settings.github_app_client_id,
         client_secret=settings.github_app_client_secret.get_secret_value(),
-        token_endpoint_auth_method="client_secret_post",
+        token_endpoint_auth_method="client_secret_post",  # noqa: S106  # label/URL/enum value, not a credential
         timeout=httpx.Timeout(10),
         follow_redirects=False,
         trust_env=False,
@@ -154,7 +154,7 @@ async def _get_json_payload(path: str, token: str) -> Any:
     """Fetch one bounded fixed GitHub API response without redirects or ambient proxies."""
     if not path.startswith(("/user", "/repositories/")) or ".." in path:
         raise ValueError("github_api_path_invalid")
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10), follow_redirects=False, trust_env=False) as client:  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10), follow_redirects=False, trust_env=False) as client:
         async with client.stream("GET", f"https://api.github.com{path}", headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}) as response:
             response.raise_for_status()
             body = bytearray()
@@ -170,7 +170,7 @@ async def get_json(path: str, token: str) -> dict[str, Any]:
     """Fetch one fixed GitHub API object used for identity and installation verification."""
     value = await _get_json_payload(path, token)
     if not isinstance(value, dict):
-        raise ValueError("github_response_invalid")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+        raise ValueError("github_response_invalid")
     return value
 
 

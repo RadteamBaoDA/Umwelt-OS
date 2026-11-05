@@ -3,10 +3,10 @@
 Full workspace conversion of Chat is slice A2; this only supplies the new required arguments.
 """
 
-from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import Settings
+from core.errors import NotFoundError
 from core.model_gateway.client import PrivacyPolicyDenied
 from core.workspaces.schemas import WorkspaceContext
 
@@ -17,7 +17,7 @@ def multi_workspace_enabled() -> bool:
 
 
 async def owner_default_scope(session: AsyncSession, owner_id: int = 1) -> WorkspaceContext:
-    """Resolve the owner's default-workspace context; 404 when the account has none."""
+    """Resolve the owner's default-workspace context; raises ``NotFoundError`` (404) when the account has none."""
     from core.auth.public import get_active_account
     from core.workspaces.public import resolve_workspace_context
 
@@ -27,7 +27,7 @@ async def owner_default_scope(session: AsyncSession, owner_id: int = 1) -> Works
         if account is not None else None
     )
     if context is None:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+        raise NotFoundError("Workspace not found")
     return context
 
 

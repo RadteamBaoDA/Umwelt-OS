@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from core.tools import ToolDefinition, ToolRegistry, ToolRisk
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.agents.models import (
@@ -74,7 +74,7 @@ class TestAgentRunDispatch:
         registry = ToolRegistry()
         request = AgentRunStart(prompt="Hello", conversation_id=None, token_budget=None)
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(DomainError) as exc_info:
             await create_run(session, "session_hash", request, registry, **CTX)
         assert exc_info.value.status_code == 503
         assert "Agent tools are unavailable" in exc_info.value.detail
@@ -128,7 +128,7 @@ class TestAgentRunDispatch:
         )
         registry = ToolRegistry()
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(DomainError) as exc_info:
             await create_profile_run_in_uow(
                 session, auth_session_hash="hash", profile_id="supervisor",
                 request=request, registry=registry, config=None, **CTX,
@@ -159,7 +159,7 @@ class TestAgentRunDispatch:
         )
         registry = ToolRegistry()
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(DomainError) as exc_info:
             await create_profile_run_in_uow(
                 session, auth_session_hash="hash", profile_id="supervisor",
                 request=request, registry=registry, config=None, **CTX,
@@ -403,7 +403,7 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
+             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
                     session, run_id=run_id, claim_generation=1,
@@ -443,7 +443,7 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
+             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
                     session, run_id=run_id, claim_generation=1,
@@ -484,7 +484,7 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with patch("modules.agents.public._browser_profile_current", return_value=True), \
-             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):  # noqa: SIM117  # style-only; nested with kept
+             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()):
             with pytest.raises(PermissionError, match="Browser run active-time budget is exhausted"):
                 await reserve_browser_run_budget_in_uow(
                     session, run_id=run_id, claim_generation=1,

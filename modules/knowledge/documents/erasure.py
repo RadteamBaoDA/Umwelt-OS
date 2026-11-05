@@ -5,20 +5,18 @@ delete bounded workspace rows in foreign-key order. No caller may infer authorit
 from this inventory; it must validate the persisted deletion operation first.
 """
 
-import os
-from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.auth.deletion_service import authorize_account_erasure
 from core.auth.erasure_contracts import AccountErasureScope
 from core.config import Settings
 from core.erasure_sql import AccountErasureOwner
-from core.storage import storage_path
-from core.storage_admission import workspace_filesystem_lease, workspace_storage_lease
+from core.storage import get_storage_backend
+from core.storage.admission import workspace_storage_lease
+from core.worker_context import worker_session_factory
 from modules.knowledge.documents.models import Document, DocumentCleanupOperation
 
 from . import models as _models  # noqa: F401 - register this owner's tables
@@ -52,50 +50,27 @@ async def erase_account_storage_page(
     """
     from modules.knowledge.documents.public import lock_raw_uri_identity
 
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     settings = cast(Settings, ctx["settings"])
     async with workspace_storage_lease(factory, scope.workspace_id, exclusive=True):
         async with factory() as session:
             await authorize_account_erasure(session, scope)
             await session.rollback()
         # SQL connection loss cannot release this destination lock or clear its erasure flag.
-        with workspace_filesystem_lease(Path(settings.data_dir), scope.workspace_id, erase=True):
+        storage = get_storage_backend(settings)
+        async with storage.fence.ahold(scope.workspace_id, erase=True):
             kind = cursor.get("kind", "documents")
             if kind not in {"documents", "receipts", "orphans"}:
                 raise ValueError("Invalid storage erasure checkpoint")
             after = UUID(cursor["after"]) if "after" in cursor else None
             if kind == "orphans":
-                root = Path(settings.data_dir).resolve()
-                lexical = root / "workspaces" / str(scope.workspace_id) / "documents"
-                if any(path.is_symlink() or path.is_junction()
-                       for path in (lexical, *lexical.parents) if path.is_relative_to(root)):
-                    raise ValueError("Scoped original storage directory contains a symlink")
-                directory = storage_path(root, f"workspaces/{scope.workspace_id}/documents")
-                if not directory.exists():
+                probe = await storage.aprobe_workspace_orphan(scope.workspace_id)
+                if probe.state in {"absent", "pruned_root"}:
                     return True, {}
-                if not directory.is_dir():
-                    raise ValueError("Scoped original storage root is not a directory")
-                # A recursive glob can list every sibling before finding a file. Read only one
-                # entry per level, so a large orphan tree cannot monopolize a worker invocation.
-                entry = directory
-                for _depth in range(16):
-                    if entry.is_symlink() or entry.is_junction():
-                        raise ValueError("Scoped original storage contains a symlink")
-                    if not entry.is_dir():
-                        break
-                    with os.scandir(entry) as entries:
-                        child = next(entries, None)
-                    if child is None:
-                        entry.rmdir()
-                        return (True, {}) if entry == directory else (False, {"kind": "orphans"})
-                    entry = Path(child.path)
-                else:
-                    raise ValueError("Scoped original storage exceeds the supported directory depth")
-                if entry.is_symlink() or entry.is_junction():
-                    raise ValueError("Scoped original storage contains a symlink")
-                if not entry.is_file():
-                    raise ValueError("Scoped original storage contains an unsupported entry")
-                uri = entry.relative_to(root).as_posix()
+                if probe.state == "pruned_subdir":
+                    return False, {"kind": "orphans"}
+                uri = probe.key
+                assert uri is not None  # "file" probes always carry a key  # noqa: S101  # mypy narrowing invariant
                 async with factory() as session:
                     await authorize_account_erasure(session, scope)
                     await lock_raw_uri_identity(session, uri)
@@ -108,9 +83,8 @@ async def erase_account_storage_page(
                     ).limit(1))
                     if peer is not None or peer_receipt is not None:
                         raise RuntimeError("Scoped original is referenced by another workspace")
-                    entry.unlink()
-                    if entry.exists():
-                        raise RuntimeError("Original storage unlink was not confirmed")
+                    # delete(missing_ok=False) confirms absence itself (Path.exists semantics).
+                    await storage.delete(uri, missing_ok=False)
                     await session.rollback()
                 return False, {"kind": "orphans"}
             model = Document if kind == "documents" else DocumentCleanupOperation
@@ -124,16 +98,7 @@ async def erase_account_storage_page(
                     return False, {"kind": "receipts" if kind == "documents" else "orphans"}
                 identifier, raw_uri = row
                 if raw_uri:
-                    root = Path(settings.data_dir).resolve()
-                    target = storage_path(root, raw_uri)
-                    lexical = root / raw_uri
-                    if any(path.is_symlink() or path.is_junction()
-                           for path in (lexical, *lexical.parents) if path.is_relative_to(root)):
-                        raise ValueError("Original storage path contains a symlink")
-                    if not (target.is_relative_to(root / "documents") or target.is_relative_to(
-                        root / "workspaces" / str(scope.workspace_id) / "documents",
-                    )):
-                        raise ValueError("Original storage path is outside the account workspace/document layouts")
+                    storage.check_erasable(raw_uri, scope.workspace_id)
                     await lock_raw_uri_identity(session, raw_uri)
                     shared = await session.scalar(select(Document.id).where(
                         Document.raw_uri == raw_uri, Document.workspace_id != scope.workspace_id,
@@ -143,8 +108,8 @@ async def erase_account_storage_page(
                         DocumentCleanupOperation.workspace_id != scope.workspace_id,
                     ).limit(1))
                     if shared is None and shared_receipt is None:
-                        target.unlink(missing_ok=True)
-                        if target.exists():
+                        await storage.delete(raw_uri)
+                        if await storage.exists(raw_uri):
                             raise RuntimeError("Original storage unlink was not confirmed")
                 await session.rollback()
             return False, {"kind": kind, "after": str(identifier)}

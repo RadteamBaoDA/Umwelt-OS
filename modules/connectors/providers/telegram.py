@@ -43,6 +43,30 @@ def _validate_token(token: str) -> None:
         raise ValueError("telegram_token_invalid")
 
 
+def _rate_limit_deadline(body: bytes | bytearray) -> datetime:
+    """Compute the retry deadline from a 429 body's ``parameters.retry_after`` (default 60 seconds).
+
+    Raises:
+        ValueError: ``telegram_rate_deadline_invalid`` for a non-positive/non-integer value,
+            unparseable body or an unrepresentable deadline.
+    """
+    try:
+        payload_json = json.loads(body)
+        retry_after = payload_json["parameters"]["retry_after"]
+        if isinstance(retry_after, bool) or not isinstance(retry_after, int):
+            raise ValueError
+        if retry_after <= 0:
+            raise ValueError
+    except KeyError:
+        retry_after = 60
+    except (ValueError, TypeError):
+        raise ValueError("telegram_rate_deadline_invalid") from None
+    try:
+        return datetime.now(UTC) + timedelta(seconds=retry_after)
+    except OverflowError:
+        raise ValueError("telegram_rate_deadline_invalid") from None
+
+
 async def _telegram_call(
     client: httpx.AsyncClient, token: str, method: str, payload: dict[str, object] | None = None,
     *, max_response_bytes: int = _MAX_RESPONSE_BYTES,
@@ -69,22 +93,7 @@ async def _telegram_call(
                     if len(body) > max_response_bytes:
                         raise _TelegramAPIError("telegram_response_too_large")
         if response.status_code == 429:
-            try:
-                payload_json = json.loads(body)
-                retry_after = payload_json["parameters"]["retry_after"]
-                if isinstance(retry_after, bool) or not isinstance(retry_after, int):
-                    raise ValueError  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
-                if retry_after <= 0:
-                    raise ValueError
-            except KeyError:
-                retry_after = 60
-            except (ValueError, TypeError):
-                raise ValueError("telegram_rate_deadline_invalid") from None
-            try:
-                deadline = datetime.now(UTC) + timedelta(seconds=retry_after)
-            except OverflowError:
-                raise ValueError("telegram_rate_deadline_invalid") from None
-            raise ProviderRateLimited(next_eligible_at=deadline)
+            raise ProviderRateLimited(next_eligible_at=_rate_limit_deadline(body))
         if response.status_code in {401, 403}:
             raise _TelegramAPIError("telegram_credentials_rejected")
         if not 200 <= response.status_code < 300:
@@ -204,52 +213,15 @@ async def fetch_telegram_updates(
     )
 
 
-def map_telegram_update(
-    update: dict[str, Any], *, allowed_chat_ids: frozenset[str],
-    proof: TelegramDeliveryProof, collected_at: datetime,
-) -> IngestionRecord | None:
-    """Map only proven authorized channel posts/edits; media stays descriptive placeholders."""
-    if collected_at.tzinfo is None or collected_at.utcoffset() is None:
-        raise ValueError("collected_at must be timezone-aware")
-    update_id = update.get("update_id")
-    if (
-        isinstance(update_id, bool) or not isinstance(update_id, int)
-        or update_id != proof.update_id or not 0 <= update_id <= 2**63 - 1
-    ):
-        raise ValueError("telegram_delivery_proof_mismatch")
-    raw = json.dumps(update, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    if sha256(raw).hexdigest() != proof.raw_update_sha256:
-        raise ValueError("telegram_delivery_proof_mismatch")
-    edited = "edited_channel_post" in update
-    message = update.get("edited_channel_post" if edited else "channel_post")
-    if not isinstance(message, dict):
-        return None
-    chat = message.get("chat")
-    if not isinstance(chat, dict) or chat.get("type") != "channel":
-        return None
-    chat_id = str(chat.get("id", ""))
-    if chat_id not in allowed_chat_ids:
-        return None
-    message_id = message.get("message_id")
-    date = message.get("date")
-    edited_date = message.get("edit_date")
-    if (
-        isinstance(message_id, bool) or not isinstance(message_id, int) or not 0 <= message_id < 10**20
-        or isinstance(date, bool) or not isinstance(date, int) or date < 0
-        or (edited_date is not None and (isinstance(edited_date, bool) or not isinstance(edited_date, int) or edited_date < 0))
-    ):
-        raise ValueError("telegram_message_invalid")
-    try:
-        published_at = datetime.fromtimestamp(date, UTC)
-        edited_at = datetime.fromtimestamp(edited_date, UTC) if edited_date is not None else None
-    except (OverflowError, OSError, ValueError):
-        raise ValueError("telegram_message_invalid") from None
-    observed_at = edited_at if edited and edited_at is not None else published_at
-    text = message.get("text") or message.get("caption") or ""
-    if not isinstance(text, str):
-        text = ""
+def _telegram_media(message: dict[str, Any]) -> tuple[list[dict[str, object]], bool, str]:
+    """Describe attached media as bounded placeholders without downloading anything.
+
+    Returns:
+        ``(media entries, whether any field was truncated, text suffix to append to the body)``.
+    """
     media: list[dict[str, object]] = []
     media_truncated = False
+    text_suffix = ""
     media_kinds = ("photo", "video", "audio", "voice", "document", "animation", "sticker", "video_note")
     for kind in media_kinds:
         value = message.get(kind)
@@ -269,7 +241,75 @@ def map_telegram_update(
             "count": min(max(count, 1), 100),
             "file_id": file_id[:512] if isinstance(file_id, str) else None,
         })
-        text += f"\n[Telegram {kind} attached; media was not downloaded]"
+        text_suffix += f"\n[Telegram {kind} attached; media was not downloaded]"
+    return media, media_truncated, text_suffix
+
+
+def _verify_update_proof(update: dict[str, Any], proof: TelegramDeliveryProof) -> None:
+    """Require the update ID and canonical-JSON SHA-256 to match the delivery proof.
+
+    Raises:
+        ValueError: ``telegram_delivery_proof_mismatch``.
+    """
+    update_id = update.get("update_id")
+    if (
+        isinstance(update_id, bool) or not isinstance(update_id, int)
+        or update_id != proof.update_id or not 0 <= update_id <= 2**63 - 1
+    ):
+        raise ValueError("telegram_delivery_proof_mismatch")
+    raw = json.dumps(update, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    if sha256(raw).hexdigest() != proof.raw_update_sha256:
+        raise ValueError("telegram_delivery_proof_mismatch")
+
+
+def _message_identity_and_times(message: dict[str, Any]) -> tuple[int, datetime, datetime | None]:
+    """Validate ``message_id``/``date``/``edit_date`` and return the ID with UTC publish and edit times.
+
+    Raises:
+        ValueError: ``telegram_message_invalid`` for out-of-range or non-integer values.
+    """
+    message_id = message.get("message_id")
+    date = message.get("date")
+    edited_date = message.get("edit_date")
+    if (
+        isinstance(message_id, bool) or not isinstance(message_id, int) or not 0 <= message_id < 10**20
+        or isinstance(date, bool) or not isinstance(date, int) or date < 0
+        or (edited_date is not None and (isinstance(edited_date, bool) or not isinstance(edited_date, int) or edited_date < 0))
+    ):
+        raise ValueError("telegram_message_invalid")
+    try:
+        published_at = datetime.fromtimestamp(date, UTC)
+        edited_at = datetime.fromtimestamp(edited_date, UTC) if edited_date is not None else None
+    except (OverflowError, OSError, ValueError):
+        raise ValueError("telegram_message_invalid") from None
+    return message_id, published_at, edited_at
+
+
+def map_telegram_update(
+    update: dict[str, Any], *, allowed_chat_ids: frozenset[str],
+    proof: TelegramDeliveryProof, collected_at: datetime,
+) -> IngestionRecord | None:
+    """Map only proven authorized channel posts/edits; media stays descriptive placeholders."""
+    if collected_at.tzinfo is None or collected_at.utcoffset() is None:
+        raise ValueError("collected_at must be timezone-aware")
+    _verify_update_proof(update, proof)
+    edited = "edited_channel_post" in update
+    message = update.get("edited_channel_post" if edited else "channel_post")
+    if not isinstance(message, dict):
+        return None
+    chat = message.get("chat")
+    if not isinstance(chat, dict) or chat.get("type") != "channel":
+        return None
+    chat_id = str(chat.get("id", ""))
+    if chat_id not in allowed_chat_ids:
+        return None
+    message_id, published_at, edited_at = _message_identity_and_times(message)
+    observed_at = edited_at if edited and edited_at is not None else published_at
+    text = message.get("text") or message.get("caption") or ""
+    if not isinstance(text, str):
+        text = ""
+    media, media_truncated, text_suffix = _telegram_media(message)
+    text += text_suffix
     if len(media) > 20:
         media = media[:20]
     if not text:

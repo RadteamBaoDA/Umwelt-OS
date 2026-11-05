@@ -1,5 +1,6 @@
 import ipaddress
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
@@ -34,7 +35,18 @@ class Settings(BaseSettings):
     # development when PUBLIC_ORIGIN is a local/LAN host and production otherwise. Unknown values fail closed to production.
     environment: str = Field(default="auto", validation_alias="ENVIRONMENT")
     database_url: str = Field(default="postgresql+asyncpg://bbd:bbd@postgres:5432/bbd", repr=False)
+    # Direct (non-pooled) PostgreSQL URL for migrations and session-level features (session advisory locks).
+    # Required when PGBOUNCER_ENABLED=true, where DATABASE_URL points at PgBouncer in transaction-pooling mode.
+    database_direct_url: str | None = Field(default=None, validation_alias="DATABASE_DIRECT_URL", repr=False)
+    pgbouncer_enabled: bool = Field(default=False, validation_alias="PGBOUNCER_ENABLED")
+    # Pool bound of the small direct engine that owns session advisory leases (only used in PgBouncer mode).
+    db_direct_pool_size: int = Field(default=4, ge=1, le=100, validation_alias="DB_DIRECT_POOL_SIZE")
     redis_url: str = Field(default="redis://redis:6379/0", repr=False)
+    # Redis Sentinel HA: "host1:26379,host2:26379". Unset keeps the single-instance redis_url. The password,
+    # username and database of redis_url still authenticate against the elected master.
+    redis_sentinels: str | None = Field(default=None, validation_alias="REDIS_SENTINELS")
+    redis_master_name: str = Field(default="mymaster", min_length=1, validation_alias="REDIS_MASTER_NAME")
+    redis_sentinel_password: SecretStr = Field(default=SecretStr(""), validation_alias="REDIS_SENTINEL_PASSWORD", repr=False)
     graph_enabled: bool = Field(default=False, validation_alias="GRAPH_ENABLED")
     graph_host: str = Field(default="graph", validation_alias="GRAPH_HOST", repr=False)
     graph_port: int = Field(default=7687, ge=1, le=65535, validation_alias="GRAPH_PORT")
@@ -46,21 +58,54 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(default=10, ge=0, le=100, validation_alias="DB_MAX_OVERFLOW")
     db_statement_timeout_ms: int = Field(default=60_000, ge=0, validation_alias="DB_STATEMENT_TIMEOUT_MS")
     db_idle_tx_timeout_ms: int = Field(default=240_000, ge=0, validation_alias="DB_IDLE_TX_TIMEOUT_MS")
+    # Worker roles run longer set-based maintenance statements than request handlers, but model/provider I/O never
+    # happens inside a DB statement, so a bounded timeout is safe and stops a runaway statement holding a slot.
+    db_worker_statement_timeout_ms: int = Field(default=120_000, ge=0, validation_alias="DB_WORKER_STATEMENT_TIMEOUT_MS")
+    db_model_worker_statement_timeout_ms: int = Field(
+        default=120_000, ge=0, validation_alias="DB_MODEL_WORKER_STATEMENT_TIMEOUT_MS",
+    )
     max_request_body_bytes: int = Field(default=5 * 1024 * 1024, gt=0, validation_alias="MAX_REQUEST_BODY_BYTES")
     # Most presentation widgets (parts) one assistant turn may carry; extra tool calls are ignored.
     generative_ui_max_parts: int = Field(default=4, ge=1, le=8, validation_alias="GENERATIVE_UI_MAX_PARTS")
     # Most model rounds of one turn that may add widgets (a round after widgets lets the model write text or add more).
     generative_ui_max_rounds: int = Field(default=3, ge=1, le=5, validation_alias="GENERATIVE_UI_MAX_ROUNDS")
     data_dir: Path = Path("/data")
+    # Original-file backend (core.storage.factory registry): the local filesystem, or S3-compatible object
+    # storage (AWS S3, MinIO) fenced by PostgreSQL. See docs/deployment.md "S3 / MinIO storage".
+    storage_backend: Literal["local", "s3"] = Field(default="local", validation_alias="STORAGE_BACKEND")
+    s3_endpoint_url: str | None = Field(default=None, validation_alias="S3_ENDPOINT_URL")  # MinIO / non-AWS endpoint
+    s3_bucket: str = Field(default="", validation_alias="S3_BUCKET")
+    s3_region: str = Field(default="us-east-1", validation_alias="S3_REGION")
+    s3_access_key_id: SecretStr = Field(default=SecretStr(""), validation_alias="S3_ACCESS_KEY_ID", repr=False)
+    s3_secret_access_key: SecretStr = Field(default=SecretStr(""), validation_alias="S3_SECRET_ACCESS_KEY", repr=False)
+    s3_prefix: str = Field(default="", validation_alias="S3_PREFIX")  # optional key prefix inside the bucket
+    # "", "AES256" (SSE-S3) or "aws:kms" (SSE-KMS, optionally with S3_SSE_KMS_KEY_ID).
+    s3_sse: Literal["", "AES256", "aws:kms"] = Field(default="", validation_alias="S3_SSE")
+    s3_sse_kms_key_id: str = Field(default="", validation_alias="S3_SSE_KMS_KEY_ID")
+    s3_path_style: bool = Field(default=True, validation_alias="S3_PATH_STYLE")  # MinIO needs path-style addressing
+    # If-None-Match: * conditional create; disable for stores without it (publication then uses a staging key + copy).
+    s3_conditional_put: bool = Field(default=True, validation_alias="S3_CONDITIONAL_PUT")
+    s3_part_size_bytes: int = Field(default=8 * 1024 * 1024, ge=5 * 1024 * 1024, le=512 * 1024 * 1024, validation_alias="S3_PART_SIZE_BYTES")
+    # Optional presigned downloads (default off: bytes stream through the API behind authorization + nosniff).
+    storage_presigned_downloads: bool = Field(default=False, validation_alias="STORAGE_PRESIGNED_DOWNLOADS")
+    storage_presigned_ttl_seconds: int = Field(default=60, ge=1, le=60, validation_alias="STORAGE_PRESIGNED_TTL_SECONDS")
+    s3_presign_endpoint_url: str | None = Field(default=None, validation_alias="S3_PRESIGN_ENDPOINT_URL")  # browser-reachable host
     upload_max_bytes: int = Field(default=25 * 1024 * 1024, gt=0, le=1024 * 1024 * 1024)
     parser_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     # How long a chat run parks on `request_user_input`; modules/chat/user_input.py clamps it to the worker job budget.
     chat_input_request_ttl_seconds: int = Field(default=900, ge=30, le=3600)
+    # Token flushes always re-lock the cited evidence (lock-only projection) but run the full revalidation
+    # (separate exact-selection pass + content-row reads) at most this often; 0 = every flush.
+    chat_flush_full_revalidate_seconds: float = Field(
+        default=2.0, ge=0.0, le=30.0, validation_alias="CHAT_FLUSH_FULL_REVALIDATE_SECONDS",
+    )
     docx_expanded_max_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     pdf_page_max: int = Field(default=500, gt=0)
     # 10 MiB of text chunks in ~1 s and ~0.3 GiB; the 100 MiB docx bound would need ~3 GiB on an 8 GiB host.
     parsed_text_max_chars: int = Field(default=10 * 1024 * 1024, gt=0)
     storage_orphan_grace_seconds: int = Field(default=3600, gt=0)
+    # Delivered/failed event_outbox rows of every type are purged after this many days (stage events: 7 days).
+    outbox_retention_days: int = Field(default=30, ge=7, le=3650)
     # Gates dispatch_due_collections (gate line applied in C5-api-web); existing constants stay constants.
     collector_scheduler_enabled: bool = Field(default=True, validation_alias="COLLECTOR_SCHEDULER_ENABLED")
     browser_service_url: AnyHttpUrl = AnyHttpUrl("http://browser:8001")
@@ -114,6 +159,8 @@ class Settings(BaseSettings):
     background_llm_timeout_seconds: int = Field(default=60, ge=5, le=600, validation_alias="BACKGROUND_LLM_TIMEOUT_SECONDS")
     # arq job_timeout of the dedicated model worker (extraction + translation).
     model_worker_job_timeout_seconds: int = Field(default=900, ge=60, le=3600, validation_alias="MODEL_WORKER_JOB_TIMEOUT_SECONDS")
+    # Chunks per embedding request in search indexing (1 = legacy one-chunk requests); clamped to 128.
+    search_embed_batch_size: int = Field(default=64, ge=1, le=128, validation_alias="SEARCH_EMBED_BATCH_SIZE")
     ai_credential_encryption_key: SecretStr = Field(
         default=SecretStr(""), validation_alias="AI_CREDENTIAL_ENCRYPTION_KEY", repr=False
     )
@@ -133,6 +180,15 @@ class Settings(BaseSettings):
     mcp_allowed_endpoint_cidrs: dict[tuple[str, str, int], tuple[str, ...]] = Field(
         default_factory=dict, validation_alias="MCP_ALLOWED_ENDPOINT_CIDRS", repr=False
     )
+    # Observability (docs/observability.md). /metrics: bearer METRICS_TOKEN when set; with no token it is served only
+    # to private/loopback direct clients outside production and is otherwise disabled (404).
+    metrics_token: SecretStr = Field(default=SecretStr(""), validation_alias="METRICS_TOKEN", repr=False)
+    # Worker /metrics HTTP port (0 = off). The chat worker uses port+1 and the model worker port+2.
+    metrics_worker_port: int = Field(default=0, ge=0, le=65533, validation_alias="METRICS_WORKER_PORT")
+    metrics_worker_bind: str = Field(default="127.0.0.1", validation_alias="METRICS_WORKER_BIND")
+    # OTLP/HTTP traces endpoint (e.g. http://otel-collector:4318); empty = tracing fully off (nothing imported or patched).
+    otel_exporter_otlp_endpoint: str = Field(default="", validation_alias="OTEL_EXPORTER_OTLP_ENDPOINT")
+    otel_traces_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0, validation_alias="OTEL_TRACES_SAMPLE_RATIO")
     # Widget MCP server (modules/mcp_widgets): off by default; when enabled a bearer token is mandatory.
     mcp_widgets_enabled: bool = Field(default=False, validation_alias="MCP_WIDGETS_ENABLED")
     mcp_widgets_token: SecretStr = Field(default=SecretStr(""), validation_alias="MCP_WIDGETS_TOKEN", repr=False)
@@ -210,13 +266,13 @@ class Settings(BaseSettings):
     def normalize_mcp_endpoint_origins(cls, values: object) -> object:
         """Convert deployment origin keys to the exact normalized tuple consumed by MCP transport."""
         if not isinstance(values, dict):
-            raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS must be a JSON object")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+            raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS must be a JSON object")
         if len(values) > 64:
             raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS supports at most 64 exact origins")
         normalized: dict[tuple[str, str, int], object] = {}
         for raw_origin, cidrs in values.items():
             if not isinstance(raw_origin, str):
-                raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS keys must be origin strings")  # noqa: TRY004  # ValueError is part of the contract; TypeError would change behavior
+                raise ValueError("MCP_ALLOWED_ENDPOINT_CIDRS keys must be origin strings")
             scheme, host, port, _path = normalize_mcp_url(raw_origin, origin_only=True)
             origin = (scheme, host, port)
             if origin in normalized:
@@ -320,6 +376,31 @@ class Settings(BaseSettings):
         return "production"
 
     @property
+    def has_trusted_client_ip_source(self) -> bool:
+        """Return True when a front proxy is declared as the source of the real client address.
+
+        Either AUTH_CLIENT_IP_HEADER names a non-blank header or AUTH_TRUST_FORWARDED_FOR is on.
+        """
+        return bool(self.auth_client_ip_header.strip()) or self.auth_trust_forwarded_for
+
+    def require_trusted_client_ip_source(self) -> None:
+        """Refuse API startup in production with a public origin and no trusted client-IP source.
+
+        uvicorn runs with --no-proxy-headers, so without AUTH_CLIENT_IP_HEADER / AUTH_TRUST_FORWARDED_FOR every
+        request appears to come from the web container and the per-IP login limit plus account lockout become
+        instance-global (one attacker could lock the owner out). Only the API keys on client IP, so this is called
+        from create_app and deliberately is NOT part of the Settings validator: workers, chat/model workers and
+        migrations build Settings too and never see client addresses.
+        Raises RuntimeError naming the missing variables. Secrets-relaxed (dev/test) and local origins are exempt.
+        """
+        if self.secrets_relaxed or self.is_dev or self.origin_is_local or self.has_trusted_client_ip_source:
+            return
+        raise RuntimeError(
+            "AUTH_CLIENT_IP_HEADER or AUTH_TRUST_FORWARDED_FOR=true must be configured for a public "
+            "production origin (see docs/deployment.md, Client IP)"
+        )
+
+    @property
     def is_dev(self) -> bool:
         """Return True in development or test mode (relaxed secrets/cookie rules, API docs enabled)."""
         return self.mode != "production"
@@ -332,6 +413,39 @@ class Settings(BaseSettings):
         on a real server must not silently accept template credentials. "auto" relaxes transport rules only.
         """
         return self.environment.strip().lower() in {"dev", "development", "test"}
+
+    @property
+    def admin_database_url(self) -> str:
+        """Return the URL for one-shot admin tools and migrations: the direct URL when set, else ``database_url``.
+
+        Admin processes are short-lived and may use session features, so they never go through a transaction pooler.
+        """
+        return self.database_direct_url or self.database_url
+
+    @model_validator(mode="after")
+    def require_direct_url_with_pgbouncer(self) -> "Settings":
+        """Require ``DATABASE_DIRECT_URL`` whenever PgBouncer mode is on.
+
+        Session advisory leases and migrations cannot run through a transaction pooler; falling back to the
+        pooled URL would silently break their mutual exclusion, so startup fails instead.
+        """
+        if self.pgbouncer_enabled and not self.database_direct_url:
+            raise ValueError("DATABASE_DIRECT_URL is required when PGBOUNCER_ENABLED is true")
+        return self
+
+    @model_validator(mode="after")
+    def require_s3_bucket_and_credentials(self) -> "Settings":
+        """Fail startup when ``STORAGE_BACKEND=s3`` lacks a bucket or only one half of the static key pair is set.
+
+        Both credentials empty is allowed: the AWS default credential chain (instance/role) then applies.
+        """
+        if self.storage_backend != "s3":
+            return self
+        if not self.s3_bucket:
+            raise ValueError("S3_BUCKET is required when STORAGE_BACKEND=s3")
+        if bool(self.s3_access_key_id.get_secret_value()) != bool(self.s3_secret_access_key.get_secret_value()):
+            raise ValueError("S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set together")
+        return self
 
     @model_validator(mode="after")
     def reject_insecure_production_config(self) -> "Settings":

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.timeline import public, worker
 from modules.timeline.models import Event
@@ -46,7 +46,7 @@ async def test_member_without_share_sees_nothing() -> None:
         public.export_page(session, owner_id=8, record_kind="events", **MKW),
     ]
     for call in calls:
-        with pytest.raises(HTTPException) as caught:
+        with pytest.raises(DomainError) as caught:
             await call
         assert caught.value.status_code == 403
     session.scalar.assert_not_called()
@@ -141,7 +141,7 @@ def test_export_cursor_is_bound_to_workspace() -> None:
 async def test_correction_event_ids_denies_member_before_query() -> None:
     """The public correction read applies the role-only owner guard without any I/O."""
     session = AsyncMock()
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await public.correction_event_ids(session, [uuid4()], scope=MEMBER)
     assert caught.value.status_code == 403
     session.scalars.assert_not_called()

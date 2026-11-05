@@ -10,12 +10,12 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.auth.deletion_service import authorize_account_erasure
 from core.auth.erasure_contracts import AccountErasureScope
 from core.config import Settings
 from core.erasure_sql import AccountErasureOwner
+from core.worker_context import worker_session_factory
 from modules.knowledge.temporal.graph_fence import (
     ERASE_PARTITION_FENCE,
     PARTITION_FENCE_CONSTRAINT,
@@ -60,7 +60,7 @@ async def erase_account_graph_page(
     """
     from neo4j import AsyncGraphDatabase, Query
 
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     settings = cast(Settings, ctx["settings"])
     after = UUID(cursor["after"]) if "after" in cursor else None
     async with factory() as session:

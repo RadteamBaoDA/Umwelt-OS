@@ -44,7 +44,7 @@ class DummyResult(BaseModel):
     is_error: bool = False
 
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime  # noqa: E402  # import order matters for this test module
 
 
 @pytest.fixture
@@ -572,7 +572,7 @@ class TestMcpSdkClientToolAndResourceCalls:
             yield mock_client
 
         with patch.object(client, "_open_client", side_effect=mock_open_client), \
-             patch.object(client, "_list_capability_pages", AsyncMock(return_value=([descriptor], 1, 1))):  # noqa: SIM117  # style-only; nested with kept
+             patch.object(client, "_list_capability_pages", AsyncMock(return_value=([descriptor], 1, 1))):
             with pytest.raises(mcp_repository.McpConflict, match="descriptor changed"):
                 await client.call_tool(
                     scope=SCOPE,

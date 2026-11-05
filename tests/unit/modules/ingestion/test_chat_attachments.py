@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
 
 from core.body_limit import BodyLimitMiddleware
+from core.errors import DomainError
+from core.storage import StoredObject
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import public as chat_public
 from modules.ingestion import routes
@@ -122,7 +124,7 @@ async def test_upload_disabled_during_validation_cannot_publish_late_bytes(monke
     session = _intake_session(monkeypatch)
     routes.lock_access_fence.side_effect = [SimpleNamespace(name="first"), HTTPException(status_code=401)]
     save = AsyncMock()
-    monkeypatch.setattr(routes, "save_upload", save)
+    monkeypatch.setattr(routes, "get_storage_backend", lambda _settings: SimpleNamespace(put_stream=save, delete=AsyncMock()))
     with pytest.raises(HTTPException) as caught:
         await routes._intake_upload(_request(), session, SCOPE, uuid4(), _upload("a.txt", b"hi", "text/plain"))
     assert caught.value.status_code == 401
@@ -154,9 +156,9 @@ async def test_intake_into_paused_attachments_source_stays_a_concealing_404(monk
 
 async def test_intake_dedupe_returns_existing_document_id_and_unlinks_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _intake_session(monkeypatch)
-    monkeypatch.setattr(routes, "save_upload", AsyncMock(return_value=("raw/x", 2, "abc")))
-    unlink = MagicMock()
-    monkeypatch.setattr(routes, "storage_path", MagicMock(return_value=SimpleNamespace(unlink=unlink)))
+    unlink = AsyncMock()
+    backend = SimpleNamespace(put_stream=AsyncMock(return_value=StoredObject("raw/x", 2, "abc")), delete=unlink)
+    monkeypatch.setattr(routes, "get_storage_backend", lambda _settings: backend)
     run = SimpleNamespace(id=uuid4())
     monkeypatch.setattr(routes.public, "receive_file", AsyncMock(return_value=(run, False)))
     existing = uuid4()
@@ -170,7 +172,7 @@ async def test_intake_dedupe_returns_existing_document_id_and_unlinks_bytes(monk
 
     assert got_run is run and document_id == existing
     assert find.await_args.args[1:] == (source_id, "file:abc") and find.await_args.kwargs == KW
-    unlink.assert_called_once()
+    unlink.assert_awaited_once_with("raw/x")
     find.return_value = None
     with pytest.raises(HTTPException) as caught:
         await routes._intake_upload(_request(), session, SCOPE, source_id, _upload("a.txt", b"hi", "text/plain"))
@@ -308,7 +310,7 @@ async def test_attachment_becomes_a_selection_reference_and_local_only_is_refuse
 
     monkeypatch.setattr(sources_public, "get_source", AsyncMock(return_value=Source(
         local_only=True, configuration={"chat_attachments": True})))
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await chat_public.reject_unsendable_selection(MagicMock(), resolved, **KW)
     assert caught.value.status_code == 409
     assert caught.value.detail["code"] == "selection_local_only"  # machine code the UI maps
@@ -319,7 +321,7 @@ async def test_per_message_attachment_count_is_capped(monkeypatch: pytest.Monkey
         local_only=False, configuration={"chat_attachments": True})))
     fences = [{"source_id": str(uuid4()), "local_only": False}
               for _ in range(chat_public.MAX_CHAT_ATTACHMENTS_PER_MESSAGE + 1)]
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await chat_public.reject_unsendable_selection(MagicMock(), {"selection_fences": fences}, **KW)
     assert caught.value.status_code == 422
     await chat_public.reject_unsendable_selection(MagicMock(), {"selection_fences": fences[:-1]}, **KW)
@@ -423,7 +425,7 @@ async def test_shared_attachment_is_sendable_and_private_one_is_refused(monkeypa
     # A stale fence snapshot is not trusted: the source's current local_only decides.
     monkeypatch.setattr(sources_public, "get_source", AsyncMock(return_value=Source(
         local_only=True, configuration={"chat_attachments": True})))
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await chat_public.reject_unsendable_selection(MagicMock(), fence, **KW)
     assert caught.value.status_code == 409
 
@@ -478,7 +480,7 @@ async def test_send_message_refuses_local_only_selection_before_any_run(monkeypa
     }))
     payload = SendMessageRequest(content="hi", client_request_id="r1")
 
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await chat_routes.send_message(uuid4(), payload, MagicMock(), session, MagicMock())
 
     assert caught.value.status_code == 409 and caught.value.detail["code"] == "selection_local_only"
@@ -506,7 +508,7 @@ async def test_mutate_message_rechecks_current_local_only(monkeypatch: pytest.Mo
         content="new" if action == "edit" else None,
     )
 
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await chat_routes.mutate_message(uuid4(), target.id, payload, MagicMock(), session, MagicMock())
 
     assert caught.value.status_code == 409 and caught.value.detail["code"] == "selection_local_only"

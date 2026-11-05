@@ -7,11 +7,12 @@ from uuid import UUID
 from fastapi import HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core import worker_cursors
 from core.config import Settings
+from core.errors import DomainError
 from core.realtime import commit_with_replay
+from core.worker_context import worker_session_factory
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import InternalJobScope
 from modules.dashboard import briefs, public
@@ -48,7 +49,7 @@ async def run_scheduled_highlights(ctx: dict[str, object]) -> int:
     session and current Recipe W admission; Redis is only an optimization over the shared
     ``ctx['w2_cursor_state']`` object installed at worker startup.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     cursor = await _read_workspace_cursor(ctx, HIGHLIGHT_CURSOR_KEY)
     async with factory() as session:
         statement = select(GadgetDefinition.id, GadgetDefinition.workspace_id, GadgetDefinition.owner_id).where(
@@ -95,7 +96,7 @@ async def run_scheduled_highlights(ctx: dict[str, object]) -> int:
                     multi_workspace_enabled=settings.multi_workspace_enabled,
                 )
                 evaluated += 1
-            except HTTPException as exc:
+            except (DomainError, HTTPException) as exc:
                 if exc.status_code in {401, 403, 404, 409}:
                     await session.rollback()
                     continue
@@ -112,7 +113,7 @@ async def run_scheduled_brief(ctx: dict[str, object]) -> bool:
     rows are preserved. Each page visits at most ten candidates in separate sessions, and denied or
     disabled subjects still advance the rotating cursor.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     settings = cast(Settings, ctx["settings"])
     cursor = await _read_workspace_cursor(ctx, BRIEF_CURSOR_KEY)
     async with factory() as session:
@@ -179,7 +180,7 @@ async def run_scheduled_brief(ctx: dict[str, object]) -> bool:
                         settings=settings, redis=cast(Redis, ctx["redis"]),
                     )
                     created_any = created is not None or created_any
-            except HTTPException as exc:
+            except (DomainError, HTTPException) as exc:
                 if exc.status_code in {401, 403, 404, 409}:
                     await session.rollback()
                     continue

@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from core.tools.schemas import ToolExecutionPrincipal, ToolOutputFence
 from core.workspaces.schemas import WorkspaceContext
 from modules.tools import builtins
@@ -133,7 +134,7 @@ def test_missing_flag_denies_handler_scope() -> None:
 @pytest.mark.asyncio
 async def test_purge_is_workspace_scoped_and_denies_member_before_query() -> None:
     session = AsyncMock()
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await purge_browser_results_in_uow(
             session, run_ids=[uuid4()], scope=MEMBER, multi_workspace_enabled=FLAG,
         )

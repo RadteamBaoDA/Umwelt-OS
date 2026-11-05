@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class SourceDescriptor:
+class SourceDescriptor(ModuleDescriptor):
     """Declare the source lifecycle module's public routes and capabilities."""
 
     id: str = "sources"
@@ -20,6 +22,11 @@ class SourceDescriptor:
     tools: tuple[str, ...] = ("sources.list_sources", "sources.get_source")
     navigation: tuple[dict[str, str], ...] = ({"label": "Sources", "href": "/sources"},)
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.sources.routes", 60),
+    )
+    erasure_module: str | None = "modules.sources.erasure"
+    erasure_order: int = 190
 
 
 descriptor = SourceDescriptor()

@@ -5,13 +5,14 @@ import { useTranslations } from 'next-intl';
 import { Bar, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations/api';
+import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations';
 import type { GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { Sparkline } from './sparkline';
 import { formatMetricLabel } from './metric-label';
 import { useSourceInfo } from './use-effective-lookback';
+import { getDateTimeFormat, getNumberFormat } from '@/modules/shared';
 
 const DAY_MS = 86_400_000;
 
@@ -96,7 +97,7 @@ function WeatherCityRow({ instanceId, sourceId, name, metrics, lookbackDays }: {
   const current = nearestReading(temps, now);
   const zone = current?.zone ?? display.timezone;
   /** Calendar-day key in the reading's timezone. */
-  const dayKey = (ts: number) => new Intl.DateTimeFormat('en-CA', { dateStyle: 'short', timeZone: zone }).format(new Date(ts));
+  const dayKey = (ts: number) => getDateTimeFormat('en-CA', { dateStyle: 'short', timeZone: zone }).format(new Date(ts));
   const todays = temps.filter((r) => dayKey(r.ts) === dayKey(now));
   const unit = current?.unit ?? '';
   const next24h = temps.filter((r) => r.ts >= now && r.ts <= now + DAY_MS).map((r) => ({ timestamp: r.ts, value: r.value }));
@@ -110,18 +111,142 @@ function WeatherCityRow({ instanceId, sourceId, name, metrics, lookbackDays }: {
   </li>;
 }
 
+/** Chart row per hour: temperature split into a solid past and a dashed forecast, plus precipitation. */
+type ChartRow = { ts: number; past: number | null; future: number | null; precip: number | null };
+/** Min/max temperature of one calendar day (in the reading's timezone). */
+type DayRange = { ts: number; min: number; max: number };
+
+/** Everything the weather panel renders, derived purely from the loaded readings. */
+interface WeatherModel {
+  heroTemp: Reading | undefined;
+  heroWind: Reading | undefined;
+  heroPrecip: Reading | undefined;
+  zone: string;
+  chartRows: ChartRow[];
+  dayRows: DayRange[];
+  spanMin: number;
+  span: number;
+  today: DayRange | undefined;
+  unit: string;
+  next24h: { timestamp: number; value: number }[];
+}
+
+/** Calendar-day key in a timezone, used to group readings into day rows. */
+function dayKeyIn(zone: string, ts: number): string {
+  return getDateTimeFormat('en-CA', { dateStyle: 'short', timeZone: zone }).format(new Date(ts));
+}
+
+/** One chart row per hour: temperature split at the forecast boundary (the shared point stays in both series). */
+function buildChartRows(temps: Reading[], precips: Reading[], now: number): ChartRow[] {
+  const rowsByTs = new Map<number, ChartRow>();
+  /** Existing chart row for an hour, or an empty row so temperature and precipitation merge per timestamp. */
+  const rowAt = (ts: number) => rowsByTs.get(ts) ?? { ts, past: null, future: null, precip: null };
+  const boundary = nearestReading(temps, now)?.ts ?? now;
+  for (const r of temps) rowsByTs.set(r.ts, { ...rowAt(r.ts), past: r.ts <= boundary ? r.value : null, future: r.ts >= boundary ? r.value : null });
+  for (const r of precips) rowsByTs.set(r.ts, { ...rowAt(r.ts), precip: r.value });
+  return [...rowsByTs.values()].sort((a, b) => a.ts - b.ts);
+}
+
+/** Per-day min/max temperature, from yesterday's end onward, oldest first. */
+function buildDayRows(temps: Reading[], zone: string, now: number): DayRange[] {
+  const days = new Map<string, DayRange>();
+  for (const r of temps) {
+    const key = dayKeyIn(zone, r.ts);
+    const day = days.get(key);
+    days.set(key, day ? { ts: day.ts, min: Math.min(day.min, r.value), max: Math.max(day.max, r.value) } : { ts: r.ts, min: r.value, max: r.value });
+  }
+  return [...days.values()].filter((day) => day.ts >= now - DAY_MS).sort((a, b) => a.ts - b.ts);
+}
+
 /**
- * Weather gadget: current temperature hero with wind/precipitation beside it, a combined timeline (temperature line
- * past solid / forecast dashed, precipitation bars, "now" marker) and per-day min-max rows. The window runs from 24h
- * back to the configured forecast horizon (max 3 days). Container width decides what shows: small = hero only,
- * medium = + timeline, large = + day rows. Open-Meteo attribution is the body link only.
+ * Derives hero readings, chart rows, day ranges and the next-24h series. Pure.
  *
- * @param props Gadget instance whose first source and metric scope select the Open-Meteo readings.
- * @returns Weather panel, or a setup/loading/error/empty notice.
+ * @param items Open-Meteo observations of the configured source.
+ * @param now Epoch ms of the data fetch (kept out of render so it stays pure).
+ * @param displayTimezone Fallback timezone when the hero reading carries none.
  */
-function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
+function buildWeatherModel(items: WorldObservation[], now: number, displayTimezone: string): WeatherModel {
+  const temps = readingsOf(items, (m) => m.startsWith('temperature'));
+  const precips = readingsOf(items, (m) => m.startsWith('precipitation'));
+  const winds = readingsOf(items, (m) => m.startsWith('wind_speed'));
+  const heroTemp = nearestReading(temps, now);
+  const zone = heroTemp?.zone ?? displayTimezone;
+  const dayRows = buildDayRows(temps, zone, now);
+  const spanMin = Math.min(...dayRows.map((d) => d.min));
+  const spanMax = Math.max(...dayRows.map((d) => d.max));
+  return {
+    heroTemp,
+    heroWind: nearestReading(winds, now),
+    heroPrecip: nearestReading(precips, now),
+    zone,
+    chartRows: buildChartRows(temps, precips, now),
+    dayRows,
+    spanMin,
+    span: spanMax - spanMin || 1,
+    // Compact strip: today's low/high (calendar day in the reading zone) and the next 24h for a sparkline.
+    today: dayRows.find((day) => dayKeyIn(zone, day.ts) === dayKeyIn(zone, now)),
+    unit: heroTemp?.unit ?? '',
+    next24h: temps.filter((r) => r.ts >= now && r.ts <= now + DAY_MS).map((r) => ({ timestamp: r.ts, value: r.value })),
+  };
+}
+
+/** Temperature line plus precipitation bars on one time axis (medium containers and up). */
+function WeatherTimeline({ rows, now, tickFormat }: { rows: ChartRow[]; now: number; tickFormat: (ts: number) => string }) {
   const t = useTranslations('dashboard');
-  const display = useDisplayPreferences();
+  return <div className="hidden h-36 shrink-0 @[24rem]/gadget:block" role="img" aria-label={t('weatherTimeline')} data-testid="weather-timeline">
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={rows} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+        <CartesianGrid vertical={false} stroke="var(--border)" />
+        <XAxis dataKey="ts" type="number" scale="time" domain={['dataMin', 'dataMax']} tickFormatter={tickFormat} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} minTickGap={32} />
+        <YAxis yAxisId="temp" width={32} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
+        <YAxis yAxisId="precip" orientation="right" hide domain={[0, (max: number) => Math.max(max * 3, 1)]} />
+        <Bar yAxisId="precip" dataKey="precip" fill="var(--muted-foreground)" fillOpacity={0.35} isAnimationActive={false} />
+        <Line yAxisId="temp" dataKey="past" stroke="var(--chart-1)" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
+        <Line yAxisId="temp" dataKey="future" stroke="var(--chart-1)" strokeWidth={1.5} strokeDasharray="3 3" dot={false} isAnimationActive={false} connectNulls />
+        <ReferenceLine yAxisId="temp" x={now} stroke="var(--muted-foreground)" strokeDasharray="2 2" />
+      </ComposedChart>
+    </ResponsiveContainer>
+  </div>;
+}
+
+/** Large containers: one min-max row per day, computed client-side from the hourly readings. */
+function WeatherDays({ model, weekday }: { model: WeatherModel; weekday: Intl.DateTimeFormat }) {
+  const t = useTranslations('dashboard');
+  const { dayRows, spanMin, span } = model;
+  return <ul className="hidden shrink-0 divide-y divide-border @[40rem]/gadget:block" aria-label={t('weatherDays')}>
+    {dayRows.map((day) => <li key={day.ts} className="flex items-center gap-3 py-1.5 text-sm tabular-nums" data-testid="weather-day">
+      <span className="w-12 shrink-0 text-muted-foreground">{weekday.format(new Date(day.ts))}</span>
+      <span className="w-10 shrink-0 text-right text-muted-foreground">{Math.round(day.min)}</span>
+      <span className="relative h-1.5 min-w-0 flex-1 rounded-full bg-muted" aria-hidden="true">
+        <span className="absolute inset-y-0 rounded-full bg-chart-1" style={{ left: `${((day.min - spanMin) / span) * 100}%`, width: `${Math.max(((day.max - day.min) / span) * 100, 4)}%` }} />
+      </span>
+      <span className="w-10 shrink-0 text-foreground">{Math.round(day.max)}</span>
+    </li>)}
+  </ul>;
+}
+
+/** Hero block: current temperature, with wind and precipitation beside it. */
+function WeatherHero({ model, number }: { model: WeatherModel; number: Intl.NumberFormat }) {
+  const t = useTranslations('dashboard');
+  const { heroTemp, heroWind, heroPrecip } = model;
+  /** Formats a reading as `value unit`, or the localized missing-value placeholder. */
+  const withUnit = (r: Reading | undefined) => (r ? `${number.format(r.value)} ${r.unit}` : t('weatherMissingValue'));
+  return <div className="flex flex-wrap items-end gap-x-4 gap-y-1" aria-label={t('weatherForecastReadings')} role="group">
+    <div className="min-w-0">
+      <div className="text-xs text-muted-foreground">{t('weatherNow')}</div>
+      <div className="text-figure text-foreground" data-testid="weather-hero">
+        {heroTemp ? <>{number.format(heroTemp.value)}<span className="ml-1 text-sm font-normal text-muted-foreground">{heroTemp.unit}</span></> : '—'}
+      </div>
+    </div>
+    <dl className="flex flex-col gap-0.5 pb-1 text-xs text-muted-foreground tabular-nums">
+      {heroWind && <div><dt className="inline">{formatMetricLabel('wind_speed_10m', t)}: </dt><dd className="inline">{withUnit(heroWind)}</dd></div>}
+      {heroPrecip && <div><dt className="inline">{formatMetricLabel('precipitation', t)}: </dt><dd className="inline">{withUnit(heroPrecip)}</dd></div>}
+    </dl>
+  </div>;
+}
+
+/** Loads the Open-Meteo readings of the first source and reports the newest collection time as freshness. */
+function useWeatherReadings(instance: GadgetInstance) {
   const definition = instance.definition;
   const sourceId = definition.source_ids?.[0] ?? '';
   const metrics = definition.scope?.metrics ?? [];
@@ -137,9 +262,24 @@ function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
   });
   const items = (query.data?.items ?? []).filter((item) => item.source_id === sourceId && item.provider === 'open_meteo');
   useReportGadgetFreshness(items.reduce<string | null>((max, item) => (!max || item.collected_at > max ? item.collected_at : max), null));
+  return { sourceId, query, items };
+}
 
+/**
+ * Weather gadget: current temperature hero with wind/precipitation beside it, a combined timeline (temperature line
+ * past solid / forecast dashed, precipitation bars, "now" marker) and per-day min-max rows. The window runs from 24h
+ * back to the configured forecast horizon (max 3 days). Container width decides what shows: small = hero only,
+ * medium = + timeline, large = + day rows. Open-Meteo attribution is the body link only.
+ *
+ * @param props Gadget instance whose first source and metric scope select the Open-Meteo readings.
+ * @returns Weather panel, or a setup/loading/error/empty notice.
+ */
+function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
+  const t = useTranslations('dashboard');
+  const display = useDisplayPreferences();
+  const { sourceId, query, items } = useWeatherReadings(instance);
   const formatLocale = normalizeFormattingLocale(display.locale);
-  const number = new Intl.NumberFormat(display.locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+  const number = getNumberFormat(display.locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 
   if (!sourceId) return <GadgetNotice kind="setup" message={t('weatherSourceRequired')} />;
   if (query.isPending) return <GadgetSkeleton variant="list" label={t('observationLoading')} />;
@@ -148,91 +288,25 @@ function SingleWeatherPanel({ instance }: { instance: GadgetInstance }) {
 
   // Fetch time of the data, not wall-clock in render: keeps render pure; falls back to the newest reading when unset.
   const now = query.dataUpdatedAt || Math.max(...items.map((item) => Date.parse(item.observed_at)).filter(Number.isFinite), 0);
-  const temps = readingsOf(items, (m) => m.startsWith('temperature'));
-  const precips = readingsOf(items, (m) => m.startsWith('precipitation'));
-  const winds = readingsOf(items, (m) => m.startsWith('wind_speed'));
-  const heroTemp = nearestReading(temps, now);
-  const heroWind = nearestReading(winds, now);
-  const heroPrecip = nearestReading(precips, now);
-  const zone = heroTemp?.zone ?? display.timezone;
-
-  // One chart row per hour: temperature split into a solid past and a dashed forecast sharing the boundary point.
-  const rowsByTs = new Map<number, { ts: number; past: number | null; future: number | null; precip: number | null }>();
-  /** Existing chart row for an hour, or an empty row so temperature and precipitation merge per timestamp. */
-  const rowAt = (ts: number) => rowsByTs.get(ts) ?? { ts, past: null, future: null, precip: null };
-  const boundary = nearestReading(temps, now)?.ts ?? now;
-  for (const r of temps) rowsByTs.set(r.ts, { ...rowAt(r.ts), past: r.ts <= boundary ? r.value : null, future: r.ts >= boundary ? r.value : null });
-  for (const r of precips) rowsByTs.set(r.ts, { ...rowAt(r.ts), precip: r.value });
-  const chartRows = [...rowsByTs.values()].sort((a, b) => a.ts - b.ts);
-
-  /** Calendar-day key in the reading's timezone, used to group readings into day rows. */
-  const dayKey = (ts: number) => new Intl.DateTimeFormat('en-CA', { dateStyle: 'short', timeZone: zone }).format(new Date(ts));
-  const days = new Map<string, { ts: number; min: number; max: number }>();
-  for (const r of temps) {
-    const key = dayKey(r.ts);
-    const day = days.get(key);
-    days.set(key, day ? { ts: day.ts, min: Math.min(day.min, r.value), max: Math.max(day.max, r.value) } : { ts: r.ts, min: r.value, max: r.value });
-  }
-  const dayRows = [...days.values()].filter((day) => day.ts >= now - DAY_MS).sort((a, b) => a.ts - b.ts);
-  const spanMin = Math.min(...dayRows.map((d) => d.min));
-  const spanMax = Math.max(...dayRows.map((d) => d.max));
-  const span = spanMax - spanMin || 1;
-  const weekday = new Intl.DateTimeFormat(formatLocale, { weekday: 'short', timeZone: zone });
+  const model = buildWeatherModel(items, now, display.timezone);
+  const { today, unit, next24h, chartRows, dayRows, zone } = model;
+  const weekday = getDateTimeFormat(formatLocale, { weekday: 'short', timeZone: zone });
   /** X-axis tick label: short weekday in the reading's timezone. */
   const tickFormat = (ts: number) => weekday.format(new Date(ts));
-  // Compact strip: today's low/high (calendar day in the reading zone) and the next 24h for a sparkline.
-  const today = dayRows.find((day) => dayKey(day.ts) === dayKey(now));
-  const unit = heroTemp?.unit ?? '';
-  const next24h = temps.filter((r) => r.ts >= now && r.ts <= now + DAY_MS).map((r) => ({ timestamp: r.ts, value: r.value }));
-  /** Formats a reading as `value unit`, or the localized missing-value placeholder. */
-  const withUnit = (r: Reading | undefined) => (r ? `${number.format(r.value)} ${r.unit}` : t('weatherMissingValue'));
 
   return <section className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
     {query.data?.truncated && <p role="status" className="text-xs text-muted-foreground">{t('observationTruncated')}</p>}
-    <div className="flex flex-wrap items-end gap-x-4 gap-y-1" aria-label={t('weatherForecastReadings')} role="group">
-      <div className="min-w-0">
-        <div className="text-xs text-muted-foreground">{t('weatherNow')}</div>
-        <div className="text-figure text-foreground" data-testid="weather-hero">
-          {heroTemp ? <>{number.format(heroTemp.value)}<span className="ml-1 text-sm font-normal text-muted-foreground">{heroTemp.unit}</span></> : '—'}
-        </div>
-      </div>
-      <dl className="flex flex-col gap-0.5 pb-1 text-xs text-muted-foreground tabular-nums">
-        {heroWind && <div><dt className="inline">{formatMetricLabel('wind_speed_10m', t)}: </dt><dd className="inline">{withUnit(heroWind)}</dd></div>}
-        {heroPrecip && <div><dt className="inline">{formatMetricLabel('precipitation', t)}: </dt><dd className="inline">{withUnit(heroPrecip)}</dd></div>}
-      </dl>
-    </div>
+    <WeatherHero model={model} number={number} />
 
     {/* All sizes: today's low/high; the sparkline fills in for small containers that lack the full timeline. */}
     {today && <p className="m-0 text-xs text-muted-foreground tabular-nums" data-testid="weather-minmax">{t('weatherLowHigh', { min: `${Math.round(today.min)}${unit}`, max: `${Math.round(today.max)}${unit}` })}</p>}
     {next24h.length >= 2 && <div className="shrink-0 @[24rem]/gadget:hidden" role="img" aria-label={t('weatherNext24h')} data-testid="weather-sparkline"><Sparkline data={next24h} height={40} forecastFrom={now} line /></div>}
 
     {/* Medium containers and up: temperature line + precipitation bars on one time axis. */}
-    {chartRows.length >= 2 && <div className="hidden h-36 shrink-0 @[24rem]/gadget:block" role="img" aria-label={t('weatherTimeline')} data-testid="weather-timeline">
-      <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={chartRows} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-          <CartesianGrid vertical={false} stroke="var(--border)" />
-          <XAxis dataKey="ts" type="number" scale="time" domain={['dataMin', 'dataMax']} tickFormatter={tickFormat} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} minTickGap={32} />
-          <YAxis yAxisId="temp" width={32} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
-          <YAxis yAxisId="precip" orientation="right" hide domain={[0, (max: number) => Math.max(max * 3, 1)]} />
-          <Bar yAxisId="precip" dataKey="precip" fill="var(--muted-foreground)" fillOpacity={0.35} isAnimationActive={false} />
-          <Line yAxisId="temp" dataKey="past" stroke="var(--chart-1)" strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
-          <Line yAxisId="temp" dataKey="future" stroke="var(--chart-1)" strokeWidth={1.5} strokeDasharray="3 3" dot={false} isAnimationActive={false} connectNulls />
-          <ReferenceLine yAxisId="temp" x={now} stroke="var(--muted-foreground)" strokeDasharray="2 2" />
-        </ComposedChart>
-      </ResponsiveContainer>
-    </div>}
+    {chartRows.length >= 2 && <WeatherTimeline rows={chartRows} now={now} tickFormat={tickFormat} />}
 
     {/* Large containers: one min-max row per day, computed client-side from the hourly readings. */}
-    {dayRows.length > 0 && <ul className="hidden shrink-0 divide-y divide-border @[40rem]/gadget:block" aria-label={t('weatherDays')}>
-      {dayRows.map((day) => <li key={day.ts} className="flex items-center gap-3 py-1.5 text-sm tabular-nums" data-testid="weather-day">
-        <span className="w-12 shrink-0 text-muted-foreground">{weekday.format(new Date(day.ts))}</span>
-        <span className="w-10 shrink-0 text-right text-muted-foreground">{Math.round(day.min)}</span>
-        <span className="relative h-1.5 min-w-0 flex-1 rounded-full bg-muted" aria-hidden="true">
-          <span className="absolute inset-y-0 rounded-full bg-chart-1" style={{ left: `${((day.min - spanMin) / span) * 100}%`, width: `${Math.max(((day.max - day.min) / span) * 100, 4)}%` }} />
-        </span>
-        <span className="w-10 shrink-0 text-foreground">{Math.round(day.max)}</span>
-      </li>)}
-    </ul>}
+    {dayRows.length > 0 && <WeatherDays model={model} weekday={weekday} />}
 
     <a className="mt-auto text-xs text-muted-foreground underline" href="https://open-meteo.com/" target="_blank" rel="noreferrer">{t('openMeteoAttribution')}</a>
   </section>;

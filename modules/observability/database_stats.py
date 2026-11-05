@@ -6,12 +6,15 @@ timed-out probe yields ``None`` for its fields) and each database gets a ~1.5s t
 """
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 DB_BUDGET_SECONDS = 1.5
 _PG_TABLE_LIMIT = 10
@@ -33,7 +36,7 @@ async def _safe_rollback(session: AsyncSession) -> None:
     """Clear an aborted transaction so later probes can run; a failing rollback is ignored."""
     try:
         await session.rollback()
-    except Exception:  # noqa: BLE001, S110
+    except Exception:  # noqa: BLE001, S110  # rollback of an already-broken session is best-effort; S110 pass is intentional
         pass
 
 
@@ -56,7 +59,7 @@ async def _pg_tables(session: AsyncSession) -> list[dict[str, Any]] | None:
             "SELECT relname, pg_total_relation_size(relid) AS total_bytes, n_live_tup, n_dead_tup, "
             "seq_scan, idx_scan, last_autovacuum, last_autoanalyze FROM pg_stat_user_tables "
             "WHERE schemaname = 'public' ORDER BY 2 DESC LIMIT :n"), {"n": _PG_TABLE_LIMIT})).all()
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # a failed stats section degrades to None, never a 500
         await _safe_rollback(session)
         return None
     return [{
@@ -162,7 +165,7 @@ async def read_database_stats(session: AsyncSession, redis: Redis) -> dict[str, 
         try:
             async with asyncio.timeout(DB_BUDGET_SECONDS):
                 return await _postgres(session)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # a failed postgres section degrades to status=unavailable
             await _safe_rollback(session)
             return {"status": "unavailable"}
 

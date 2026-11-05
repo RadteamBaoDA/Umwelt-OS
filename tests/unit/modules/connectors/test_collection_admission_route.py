@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from modules.connectors import routes
+from modules.connectors import native_fetch, routes
 from modules.connectors.collection_schemas import (
     CollectionAdmissionRead,
     CollectionAdmissionRequest,
@@ -136,7 +136,7 @@ def test_templates_admit_before_provider_io_and_carry_token(name: str, source_ty
 
 # --- remaining n8n collection paths: /rss, /crawl, /provider-fetch, /mcp-collect --------------------------------
 
-from modules.connectors.collection_schemas import ManagedCrawlRequest
+from modules.connectors.collection_schemas import ManagedCrawlRequest  # noqa: E402
 
 
 def test_remaining_requests_refuse_a_missing_admission() -> None:
@@ -272,11 +272,11 @@ async def test_mcp_bearer_fallback_only_for_mcp_sources(source_type: str, allowe
 
 
 def test_request_failure_keeps_auth_schema_terms_non_retryable() -> None:
-    assert routes._request_failure(HTTPException(409, "terms_not_accepted")) == ("terms_not_accepted", False)
-    assert routes._request_failure(HTTPException(422, "bad")) == ("schema_changed", False)
-    assert routes._request_failure(HTTPException(409, routes.GITHUB_RECONNECT_DETAIL)) == ("invalid_credential", False)
-    assert routes._request_failure(HTTPException(503, "x")) == ("provider_collection_failed", True)
-    assert routes._request_failure(TimeoutError()) == ("provider_collection_failed", True)
+    assert native_fetch.request_failure(HTTPException(409, "terms_not_accepted")) == ("terms_not_accepted", False)
+    assert native_fetch.request_failure(HTTPException(422, "bad")) == ("schema_changed", False)
+    assert native_fetch.request_failure(HTTPException(409, native_fetch.GITHUB_RECONNECT_DETAIL)) == ("invalid_credential", False)
+    assert native_fetch.request_failure(HTTPException(503, "x")) == ("provider_collection_failed", True)
+    assert native_fetch.request_failure(TimeoutError()) == ("provider_collection_failed", True)
 
 
 @pytest.mark.asyncio

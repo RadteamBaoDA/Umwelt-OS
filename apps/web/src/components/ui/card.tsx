@@ -1,5 +1,5 @@
 import * as React from "react"
-import { cn } from "cn"
+import { cn } from '@/lib/utils'
 
 /** Renders the shadcn `Card` primitive (card) with semantic tokens; forwards className and props to the underlying element. */
 function Card({ className, ...props }: React.ComponentProps<"div">) {

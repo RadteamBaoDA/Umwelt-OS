@@ -32,6 +32,220 @@ export interface ToolRenderingProps {
   locale?: AppLocaleId;
 }
 
+/** Everything a kind renderer needs (resolved once per render by the dispatcher). */
+interface RenderContext {
+  payload: GenerativeUIPayload;
+  /** The payload viewed as a plain record (top-level properties emitted by backend tools). */
+  raw: Record<string, unknown>;
+  locale: AppLocaleId;
+  catalog: ReturnType<typeof genUiCopy>;
+  onSendPrompt?: (prompt: string) => void | Promise<unknown>;
+}
+
+type SafeParser = { safeParse: (v: unknown) => { success: boolean } };
+
+/** Returns `obj[key]` when it is a string. */
+function str(obj: Record<string, unknown>, key: string): string | undefined {
+  return typeof obj[key] === 'string' ? (obj[key] as string) : undefined;
+}
+
+/** Returns `obj[key]` as an array of `T` (unchecked cast; shapes are validated by the kind schemas) or undefined. */
+function arr<T>(obj: Record<string, unknown>, key: string): T[] | undefined {
+  return Array.isArray(obj[key]) ? (obj[key] as T[]) : undefined;
+}
+
+/** Description precedence shared by all widgets: `description`, then `subtitle`. */
+function descriptionOf(obj: Record<string, unknown>): string | undefined {
+  return str(obj, 'description') ?? str(obj, 'subtitle');
+}
+
+/** Title precedence shared by all widgets: the object's non-empty title, then the payload title, then the fallback. */
+function titleOf<F extends string | undefined>(obj: Record<string, unknown>, payload: GenerativeUIPayload, fallback: F): string | F {
+  return (typeof obj.title === 'string' && obj.title) || payload.title || fallback;
+}
+
+/**
+ * Localized invalid-payload alert (never throws) shown when a widget payload fails its kind-specific schema, prompting
+ * the owner to ask the assistant to regenerate it.
+ */
+function InvalidPayload({ catalog }: { catalog: RenderContext['catalog'] }) {
+  return (
+    <div
+      role="alert"
+      data-testid="generative-ui-invalid-payload"
+      className="rounded-lg border border-destructive bg-surface p-3 text-sm text-destructive"
+    >
+      {catalog.genUiInvalidPayload}
+    </div>
+  );
+}
+
+/** True when `value` satisfies the kind schema. */
+function isValid(schema: SafeParser, value: unknown): boolean {
+  return schema.safeParse(value).success;
+}
+
+/** Sandboxed streaming UI. */
+function renderSandbox({ payload, catalog }: RenderContext): React.ReactNode {
+  if (payload.sandbox !== undefined && !isValid(sandboxPayloadSchema, payload.sandbox)) {
+    return <InvalidPayload catalog={catalog} />;
+  }
+  return (
+    <OpenGenerativeUIRenderer
+      payload={payload}
+      sandbox={payload.sandbox}
+      status={payload.status}
+      title={payload.title ?? payload.sandbox?.title}
+      labels={{
+        expand: catalog.genUiExpandFullscreen,
+        exportHtml: catalog.genUiExportHtml,
+      }}
+    />
+  );
+}
+
+/** Execution plan card. */
+function renderPlan({ payload, raw, catalog, locale, onSendPrompt }: RenderContext): React.ReactNode {
+  const planObj = (payload.plan ?? raw) as Record<string, unknown>;
+  if (!isValid(planPayloadSchema, planObj)) return <InvalidPayload catalog={catalog} />;
+  return (
+    <PlanCard
+      title={titleOf(planObj, payload, catalog.genUiTitlePlan)}
+      description={descriptionOf(planObj)}
+      steps={arr<PlanStep>(planObj, 'steps')}
+      todos={arr<PlanStep>(planObj, 'todos')}
+      approach={str(planObj, 'approach')}
+      technology={str(planObj, 'technology')}
+      keyElements={arr<string>(planObj, 'keyElements') ?? arr<string>(planObj, 'key_elements')}
+      source={str(planObj, 'source')}
+      locale={locale}
+      onSendPrompt={onSendPrompt}
+    />
+  );
+}
+
+/** Sortable, filterable table. */
+function renderTable({ payload, raw, catalog, locale, onSendPrompt }: RenderContext): React.ReactNode {
+  const tableObj = (payload.table ?? raw) as Record<string, unknown>;
+  if (!isValid(tablePayloadSchema, tableObj)) return <InvalidPayload catalog={catalog} />;
+  return (
+    <TableCatalog
+      title={titleOf(tableObj, payload, catalog.genUiTitleTable)}
+      description={descriptionOf(tableObj)}
+      columns={arr<TableColumn | string>(tableObj, 'columns') ?? []}
+      rows={arr<TableRowData>(tableObj, 'rows')}
+      records={arr<Record<string, unknown>>(tableObj, 'records')}
+      source={str(tableObj, 'source')}
+      isSample={tableObj.is_sample === true}
+      locale={locale}
+      onSendPrompt={onSendPrompt}
+    />
+  );
+}
+
+/** Fields shared by the bar and pie chart widgets. */
+function chartCommon(chartObj: Record<string, unknown>) {
+  return {
+    description: descriptionOf(chartObj),
+    categoryKey: str(chartObj, 'categoryKey') ?? str(chartObj, 'x_key'),
+    series: arr<ChartSeries>(chartObj, 'series'),
+    currency: str(chartObj, 'currency'),
+    unit: str(chartObj, 'unit'),
+    source: str(chartObj, 'source'),
+    isSample: chartObj.is_sample === true,
+  };
+}
+
+/** Bar / line / scatter / distribution chart (`chart_type`, default bar). */
+function renderBarChart({ payload, raw, catalog, locale }: RenderContext): React.ReactNode {
+  const chartObj = (payload.chart ?? raw) as Record<string, unknown>;
+  if (!isValid(chartPayloadSchema, chartObj)) return <InvalidPayload catalog={catalog} />;
+  const chartType = chartObj.chart_type;
+  return (
+    <GenerativeBarChart
+      title={titleOf(chartObj, payload, catalog.genUiTitleBar)}
+      data={arr<GenerativeBarDatum>(chartObj, 'data') ?? []}
+      {...chartCommon(chartObj)}
+      locale={locale}
+      chartType={chartType === 'line' || chartType === 'scatter' || chartType === 'distribution' ? chartType : 'bar'}
+    />
+  );
+}
+
+/** Pie chart. */
+function renderPieChart({ payload, raw, catalog, locale }: RenderContext): React.ReactNode {
+  const chartObj = (payload.chart ?? raw) as Record<string, unknown>;
+  if (!isValid(chartPayloadSchema, chartObj)) return <InvalidPayload catalog={catalog} />;
+  return (
+    <GenerativePieChart
+      title={titleOf(chartObj, payload, catalog.genUiTitlePie)}
+      data={arr<GenerativePieDatum>(chartObj, 'data') ?? []}
+      {...chartCommon(chartObj)}
+      locale={locale}
+    />
+  );
+}
+
+/** Duration precedence: `durationMinutes`, `meetingDuration`, then `duration_minutes` (numbers only). */
+function meetingDurationOf(formObj: Record<string, unknown>): number | undefined {
+  for (const key of ['durationMinutes', 'meetingDuration', 'duration_minutes']) {
+    if (typeof formObj[key] === 'number') return formObj[key] as number;
+  }
+  return undefined;
+}
+
+/** Meeting time picker (declarative payload; answers go through the prompt bridge). */
+function renderMeetingPicker({ payload, raw, catalog, locale, onSendPrompt }: RenderContext): React.ReactNode {
+  const formObj = (payload.form ?? raw) as Record<string, unknown>;
+  if (!isValid(formPayloadSchema, formObj)) return <InvalidPayload catalog={catalog} />;
+  return (
+    <MeetingTimePicker
+      title={titleOf(formObj, payload, undefined)}
+      description={descriptionOf(formObj)}
+      slots={arr<MeetingTimeSlot>(formObj, 'slots') ?? []}
+      meetingDuration={meetingDurationOf(formObj)}
+      selected_slot_id={str(formObj, 'selected_slot_id')}
+      timezone={str(formObj, 'timezone')}
+      locale={locale}
+      onSendPrompt={onSendPrompt}
+    />
+  );
+}
+
+/** Generic input form. Partial arguments are expected while streaming; only a completed payload is an error. */
+function renderForm({ payload, raw, catalog, locale, onSendPrompt }: RenderContext): React.ReactNode {
+  const parsed = inputFormPayloadSchema.safeParse(payload.form ?? raw);
+  if (!parsed.success) {
+    return payload.status === 'streaming' ? null : <InvalidPayload catalog={catalog} />;
+  }
+  return (
+    <InputForm
+      key={parsed.data.fields.map((f) => f.id).join('|')}
+      title={parsed.data.title}
+      description={parsed.data.description}
+      fields={parsed.data.fields}
+      submitLabel={parsed.data.submit_label}
+      disabled={payload.status === 'streaming'}
+      locale={locale}
+      onSendPrompt={onSendPrompt}
+    />
+  );
+}
+
+/**
+ * Renderer registry keyed by `payload.kind`. Add a new native widget by registering one entry here; unregistered kinds
+ * fall back to a collapsed tool-call summary.
+ */
+const KIND_RENDERERS: Record<string, (ctx: RenderContext) => React.ReactNode> = {
+  sandboxed_ui: renderSandbox,
+  plan: renderPlan,
+  table: renderTable,
+  bar_chart: renderBarChart,
+  pie_chart: renderPieChart,
+  meeting_time_picker: renderMeetingPicker,
+  form: renderForm,
+};
+
 /**
  * Unified Generative UI dispatcher that routes a `GenerativeUIPayload` by `payload.kind`
  * to either the Sandboxed Streaming UI renderer (`OpenGenerativeUIRenderer`) or one of the
@@ -56,278 +270,9 @@ export function ToolRendering({
     return null;
   }
 
-  const rawRecord = payload as unknown as Record<string, unknown>;
-
-  /**
-   * Renders the localized invalid-payload alert (never throws) when a widget payload fails its
-   * kind-specific schema, prompting the owner to ask the assistant to regenerate it.
-   */
-  const invalid = (
-    <div
-      role="alert"
-      data-testid="generative-ui-invalid-payload"
-      className="rounded-lg border border-destructive bg-surface p-3 text-sm text-destructive"
-    >
-      {catalog.genUiInvalidPayload}
-    </div>
-  );
-  /** Returns true when `value` satisfies the kind schema. */
-  const isValid = (schema: { safeParse: (v: unknown) => { success: boolean } }, value: unknown) =>
-    schema.safeParse(value).success;
-
-  switch (payload.kind) {
-    case 'sandboxed_ui': {
-      if (payload.sandbox !== undefined && !isValid(sandboxPayloadSchema, payload.sandbox)) {
-        return invalid;
-      }
-      return (
-        <OpenGenerativeUIRenderer
-          payload={payload}
-          sandbox={payload.sandbox}
-          status={payload.status}
-          title={payload.title ?? payload.sandbox?.title}
-          labels={{
-            expand: catalog.genUiExpandFullscreen,
-            exportHtml: catalog.genUiExportHtml,
-          }}
-        />
-      );
-    }
-
-    case 'plan': {
-      const planObj = (payload.plan ?? rawRecord) as Record<string, unknown>;
-      if (!isValid(planPayloadSchema, planObj)) return invalid;
-      const title =
-        (typeof planObj.title === 'string' && planObj.title) ||
-        payload.title ||
-        catalog.genUiTitlePlan;
-      const description =
-        typeof planObj.description === 'string'
-          ? planObj.description
-          : typeof planObj.subtitle === 'string'
-            ? planObj.subtitle
-            : undefined;
-      const steps = Array.isArray(planObj.steps) ? (planObj.steps as PlanStep[]) : undefined;
-      const todos = Array.isArray(planObj.todos) ? (planObj.todos as PlanStep[]) : undefined;
-      const approach = typeof planObj.approach === 'string' ? planObj.approach : undefined;
-      const technology = typeof planObj.technology === 'string' ? planObj.technology : undefined;
-      const keyElements = Array.isArray(planObj.keyElements)
-        ? (planObj.keyElements as string[])
-        : Array.isArray(planObj.key_elements)
-          ? (planObj.key_elements as string[])
-          : undefined;
-      const source = typeof planObj.source === 'string' ? planObj.source : undefined;
-
-      return (
-        <PlanCard
-          title={title}
-          description={description}
-          steps={steps}
-          todos={todos}
-          approach={approach}
-          technology={technology}
-          keyElements={keyElements}
-          source={source}
-          locale={resolvedLocale}
-          onSendPrompt={onSendPrompt}
-        />
-      );
-    }
-
-    case 'table': {
-      const tableObj = (payload.table ?? rawRecord) as Record<string, unknown>;
-      if (!isValid(tablePayloadSchema, tableObj)) return invalid;
-      const title =
-        (typeof tableObj.title === 'string' && tableObj.title) ||
-        payload.title ||
-        catalog.genUiTitleTable;
-      const description =
-        typeof tableObj.description === 'string'
-          ? tableObj.description
-          : typeof tableObj.subtitle === 'string'
-            ? tableObj.subtitle
-            : undefined;
-      const columns = Array.isArray(tableObj.columns)
-        ? (tableObj.columns as Array<TableColumn | string>)
-        : [];
-      const rows = Array.isArray(tableObj.rows) ? (tableObj.rows as TableRowData[]) : undefined;
-      const records = Array.isArray(tableObj.records)
-        ? (tableObj.records as Array<Record<string, unknown>>)
-        : undefined;
-      const source = typeof tableObj.source === 'string' ? tableObj.source : undefined;
-
-      return (
-        <TableCatalog
-          title={title}
-          description={description}
-          columns={columns}
-          rows={rows}
-          records={records}
-          source={source}
-          isSample={tableObj.is_sample === true}
-          locale={resolvedLocale}
-          onSendPrompt={onSendPrompt}
-        />
-      );
-    }
-
-    case 'bar_chart': {
-      const chartObj = (payload.chart ?? rawRecord) as Record<string, unknown>;
-      if (!isValid(chartPayloadSchema, chartObj)) return invalid;
-      const title =
-        (typeof chartObj.title === 'string' && chartObj.title) ||
-        payload.title ||
-        catalog.genUiTitleBar;
-      const description =
-        typeof chartObj.description === 'string'
-          ? chartObj.description
-          : typeof chartObj.subtitle === 'string'
-            ? chartObj.subtitle
-            : undefined;
-      const data = Array.isArray(chartObj.data) ? (chartObj.data as GenerativeBarDatum[]) : [];
-      const categoryKey =
-        typeof chartObj.categoryKey === 'string'
-          ? chartObj.categoryKey
-          : typeof chartObj.x_key === 'string'
-            ? chartObj.x_key
-            : undefined;
-      const series = Array.isArray(chartObj.series)
-        ? (chartObj.series as ChartSeries[])
-        : undefined;
-      const currency = typeof chartObj.currency === 'string' ? chartObj.currency : undefined;
-      const unit = typeof chartObj.unit === 'string' ? chartObj.unit : undefined;
-      const source = typeof chartObj.source === 'string' ? chartObj.source : undefined;
-
-      return (
-        <GenerativeBarChart
-          title={title}
-          description={description}
-          data={data}
-          categoryKey={categoryKey}
-          series={series}
-          currency={currency}
-          unit={unit}
-          source={source}
-          isSample={chartObj.is_sample === true}
-          locale={resolvedLocale}
-          chartType={
-            chartObj.chart_type === 'line' ||
-            chartObj.chart_type === 'scatter' ||
-            chartObj.chart_type === 'distribution'
-              ? chartObj.chart_type
-              : 'bar'
-          }
-        />
-      );
-    }
-
-    case 'pie_chart': {
-      const chartObj = (payload.chart ?? rawRecord) as Record<string, unknown>;
-      if (!isValid(chartPayloadSchema, chartObj)) return invalid;
-      const title =
-        (typeof chartObj.title === 'string' && chartObj.title) ||
-        payload.title ||
-        catalog.genUiTitlePie;
-      const description =
-        typeof chartObj.description === 'string'
-          ? chartObj.description
-          : typeof chartObj.subtitle === 'string'
-            ? chartObj.subtitle
-            : undefined;
-      const data = Array.isArray(chartObj.data) ? (chartObj.data as GenerativePieDatum[]) : [];
-      const categoryKey =
-        typeof chartObj.categoryKey === 'string'
-          ? chartObj.categoryKey
-          : typeof chartObj.x_key === 'string'
-            ? chartObj.x_key
-            : undefined;
-      const series = Array.isArray(chartObj.series)
-        ? (chartObj.series as ChartSeries[])
-        : undefined;
-      const currency = typeof chartObj.currency === 'string' ? chartObj.currency : undefined;
-      const unit = typeof chartObj.unit === 'string' ? chartObj.unit : undefined;
-      const source = typeof chartObj.source === 'string' ? chartObj.source : undefined;
-
-      return (
-        <GenerativePieChart
-          title={title}
-          description={description}
-          data={data}
-          categoryKey={categoryKey}
-          series={series}
-          currency={currency}
-          unit={unit}
-          source={source}
-          isSample={chartObj.is_sample === true}
-          locale={resolvedLocale}
-        />
-      );
-    }
-
-    case 'meeting_time_picker': {
-      const formObj = (payload.form ?? rawRecord) as Record<string, unknown>;
-      if (!isValid(formPayloadSchema, formObj)) return invalid;
-      const title =
-        (typeof formObj.title === 'string' && formObj.title) ||
-        payload.title ||
-        undefined;
-      const description =
-        typeof formObj.description === 'string'
-          ? formObj.description
-          : typeof formObj.subtitle === 'string'
-            ? formObj.subtitle
-            : undefined;
-      const slots = Array.isArray(formObj.slots) ? (formObj.slots as MeetingTimeSlot[]) : [];
-      const meetingDuration =
-        typeof formObj.durationMinutes === 'number'
-          ? formObj.durationMinutes
-          : typeof formObj.meetingDuration === 'number'
-            ? formObj.meetingDuration
-            : typeof formObj.duration_minutes === 'number'
-              ? formObj.duration_minutes
-              : undefined;
-      const selectedSlotId =
-        typeof formObj.selected_slot_id === 'string' ? formObj.selected_slot_id : undefined;
-      const timezone = typeof formObj.timezone === 'string' ? formObj.timezone : undefined;
-
-      return (
-        <MeetingTimePicker
-          title={title}
-          description={description}
-          slots={slots}
-          meetingDuration={meetingDuration}
-          selected_slot_id={selectedSlotId}
-          timezone={timezone}
-          locale={resolvedLocale}
-          onSendPrompt={onSendPrompt}
-        />
-      );
-    }
-
-    case 'form': {
-      const formObj = payload.form ?? rawRecord;
-      const parsed = inputFormPayloadSchema.safeParse(formObj);
-      if (!parsed.success) {
-        // Partial arguments are expected while streaming; only a completed payload is an error.
-        return payload.status === 'streaming' ? null : invalid;
-      }
-      return (
-        <InputForm
-          key={parsed.data.fields.map((f) => f.id).join('|')}
-          title={parsed.data.title}
-          description={parsed.data.description}
-          fields={parsed.data.fields}
-          submitLabel={parsed.data.submit_label}
-          disabled={payload.status === 'streaming'}
-          locale={resolvedLocale}
-          onSendPrompt={onSendPrompt}
-        />
-      );
-    }
-
-    default:
-      // No dedicated widget for this kind: show a collapsed, inspectable tool-call summary.
-      return <ToolReasoning name={String((payload as { kind?: unknown }).kind ?? 'tool')} data={rawRecord} locale={resolvedLocale} />;
-  }
+  const raw = payload as unknown as Record<string, unknown>;
+  const render = Object.hasOwn(KIND_RENDERERS, payload.kind) ? KIND_RENDERERS[payload.kind] : undefined;
+  if (render) return <>{render({ payload, raw, locale: resolvedLocale, catalog, onSendPrompt })}</>;
+  // No dedicated widget for this kind: show a collapsed, inspectable tool-call summary.
+  return <ToolReasoning name={String((payload as { kind?: unknown }).kind ?? 'tool')} data={raw} locale={resolvedLocale} />;
 }
-

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_session
+from core.http_cache import set_private_no_store as _no_store
 from core.workspaces.dependencies import require_workspace_observer_read, require_workspace_write
 from core.workspaces.schemas import AdminWorkspaceReadContext, WorkspaceContext
 from modules.settings.public import module_dependency
@@ -29,11 +30,6 @@ router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"], dependencies=[Depends
 Session = Annotated[AsyncSession, Depends(get_session)]
 WorkspaceRead = Annotated[WorkspaceContext | AdminWorkspaceReadContext, Depends(require_workspace_observer_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
-
-
-def _no_store(response: Response) -> None:
-    """Set standard no-store cache controls for private owner tasks."""
-    response.headers["Cache-Control"] = "private, no-store"
 
 
 async def _call[T](operation: Awaitable[T]) -> T:

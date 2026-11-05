@@ -31,15 +31,14 @@ async def test_purge_commits_between_items_and_locks_once_per_transaction() -> N
 
     session = MagicMock()
     session.scalar = scalar
-    session.scalars = AsyncMock(side_effect=[
-        SimpleNamespace(all=lambda: [uuid4(), uuid4()]),
-    ])
-    session.execute = AsyncMock(return_value=SimpleNamespace(all=list))
+    first_page = SimpleNamespace(all=lambda: [(uuid4(), uuid4()), (uuid4(), uuid4())])
+    session.execute = AsyncMock(side_effect=[first_page, *[SimpleNamespace(all=list)] * 10])
+    session.scalars = AsyncMock(return_value=SimpleNamespace(all=list))
     session.commit = AsyncMock(side_effect=lambda: events.append("commit"))
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
 
-    async def strict_lock(_s: object) -> None:
+    async def strict_lock(_s: object, _workspace_id: object = None, **_kw: object) -> None:
         """Fail if the privacy lock is requested twice without an intervening commit."""
         assert not events or events[-1] == "commit"
         events.append("lock")

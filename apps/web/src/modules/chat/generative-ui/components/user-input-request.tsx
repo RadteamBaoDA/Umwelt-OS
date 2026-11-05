@@ -27,6 +27,21 @@ export interface UserInputRequestProps {
 }
 
 /**
+ * Outcome banner for a locked request card.
+ *
+ * @param state - Request lifecycle state.
+ * @param copy - Localized copy.
+ * @param answeredLabel - Label of the accepted answer.
+ * @returns Banner text, or null while the request is still pending.
+ */
+function stateBanner(state: InputRequestState, copy: (typeof INPUT_COPY)[keyof typeof INPUT_COPY], answeredLabel?: string): string | null {
+  if (state === 'expired') return copy.expired;
+  if (state === 'cancelled') return copy.cancelled;
+  if (state === 'answered') return copy.answered(answeredLabel ?? '');
+  return null;
+}
+
+/**
  * Renders a human-in-the-loop `request_user_input` as the right control: the meeting time picker for
  * `time_slots` (answering through the request path, not a new message), option buttons for `choice`, a text
  * field for `text`. After an answer is accepted, or once the request expired or was cancelled, the card is
@@ -76,14 +91,7 @@ export function UserInputRequest({
     );
   }
 
-  const banner =
-    state === 'expired'
-      ? copy.expired
-      : state === 'cancelled'
-        ? copy.cancelled
-        : state === 'answered'
-          ? copy.answered(answeredLabel ?? '')
-          : null;
+  const banner = stateBanner(state, copy, answeredLabel);
 
   return (
     <Card data-testid="user-input-request" className="my-2 w-full max-w-md border-border bg-surface">

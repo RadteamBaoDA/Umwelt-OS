@@ -1,4 +1,4 @@
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 
 /**
  * Umwelt-OS functional-circle mark: two open arcs (perception in, action out) and a centre dot (the self).

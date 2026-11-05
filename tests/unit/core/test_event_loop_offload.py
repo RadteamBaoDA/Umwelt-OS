@@ -18,16 +18,17 @@ from fastapi import HTTPException, Response
 from pydantic import SecretStr
 from starlette.datastructures import UploadFile
 
-from core import storage
 from core.auth import routes as auth_routes
 from core.chunking import chunk_text
 from core.config import Settings
 from core.heavy_work import to_thread_joined
+from core.storage import local as storage
 from modules.connectors.providers import feed_catalog
 from modules.export import routes as export_routes
 from modules.ingestion import worker
 from modules.ingestion.parsers import ParsedDocument
 from modules.knowledge.documents import public as documents_public
+from tests.unit.modules._documents_patch import monkeypatch_documents
 
 GOLDEN_TEXTS = [
     "",
@@ -85,25 +86,31 @@ async def test_add_content_chunks_matches_direct_chunking(text: str) -> None:
 
 async def test_add_content_chunks_runs_off_loop_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[int] = []
-    real = documents_public.chunk_text
+    real = chunk_text
 
     def spy(text: str) -> Any:
         seen.append(threading.get_ident())
         return real(text)
 
-    monkeypatch.setattr(documents_public, "chunk_text", spy)
+    monkeypatch_documents(monkeypatch, "chunk_text", spy)
     await documents_public.add_content_chunks(_Session(), SimpleNamespace(id=uuid4(), content="a b c"))  # type: ignore[arg-type]
     assert seen and seen[0] != threading.get_ident()
 
 
-async def test_large_chunking_keeps_loop_responsive() -> None:
-    # ~9.5 MB: chunking it on the loop stalls ~0.7 s, so 0.25 s separates a regression from GIL
-    # scheduling noise in the worker thread (~0.13 s seen under a loaded host).
-    text = "lorem ipsum dolor sit amet " * 350_000
-    lag = await _lag_while(
-        documents_public.add_content_chunks(_Session(), SimpleNamespace(id=uuid4(), content=text))  # type: ignore[arg-type]
-    )
-    assert lag < 0.25
+async def test_large_chunking_runs_off_the_event_loop_thread(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Deterministic guard: a wall-clock lag threshold flaked under full-suite GIL contention, so
+    # assert the thread identity instead. Reverting the offload runs chunk_text on the loop thread.
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+
+    def recording_chunk_text(content: str) -> Any:
+        seen.append(threading.get_ident())
+        return chunk_text(content)
+
+    monkeypatch_documents(monkeypatch, "chunk_text", recording_chunk_text)
+    text = "lorem ipsum dolor sit amet " * 20_000
+    await documents_public.add_content_chunks(_Session(), SimpleNamespace(id=uuid4(), content=text))  # type: ignore[arg-type]
+    assert seen and all(ident != loop_thread for ident in seen)
 
 
 async def test_save_upload_oversize_removes_temp_file(tmp_path: Path) -> None:
@@ -215,7 +222,7 @@ async def test_feed_records_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> Non
 
 async def test_cleanup_orphans_run_off_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     idents: list[int] = []
-    monkeypatch.setattr(worker, "cleanup_orphaned_files", _slow(idents, 0))
+    monkeypatch.setattr(storage, "cleanup_orphaned_files", _slow(idents, 0))
 
     class Factory:
         def __call__(self) -> Any:
@@ -293,7 +300,7 @@ async def test_to_thread_joined_waits_for_thread_on_cancel() -> None:
         return 1
 
     task = asyncio.create_task(to_thread_joined(work))
-    while not started.is_set():
+    while not started.is_set():  # noqa: ASYNC110  # test polls a fake until it settles
         await asyncio.sleep(0.005)
     task.cancel()
     await asyncio.sleep(0.05)

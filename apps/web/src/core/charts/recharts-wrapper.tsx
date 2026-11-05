@@ -1,6 +1,5 @@
 'use client';
 
-import { useTheme } from 'next-themes';
 import { useTranslations } from 'next-intl';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
@@ -9,17 +8,16 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
-  type TooltipProps,
 } from 'recharts';
 import { BarChart3 } from 'lucide-react';
-import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
+import { formatCurrency, formatDateWith, formatNumber } from '@/core/format';
+import { type AppLocaleId } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 
 /** Single data point in a time-series or categorical chart. */
@@ -85,10 +83,9 @@ export interface ChartThemeColors {
 /**
  * Returns theme-aware CSS colors for SVG charts based on dark/light mode.
  *
- * @param _isDark Ignored; kept for call-site compatibility because CSS variables follow the theme.
  * @returns Set of color tokens compatible with SVG fills and strokes.
  */
-export function getChartColors(_isDark?: boolean): ChartThemeColors {
+export function getChartColors(): ChartThemeColors {
   // CSS variables resolve per theme in the browser, so no literal colors or dark/light branch is needed.
   return {
     primary: 'var(--chart-1)',
@@ -104,45 +101,36 @@ export function getChartColors(_isDark?: boolean): ChartThemeColors {
   };
 }
 
-/** Maximum cached Intl formatter instances per type to bound memory across locales and currencies. */
-const FORMAT_CACHE_LIMIT = 64;
-const NUMBER_FORMAT_CACHE = new Map<string, Intl.NumberFormat>();
-const DATE_FORMAT_CACHE = new Map<string, Intl.DateTimeFormat>();
-
-/**
- * Returns a cached Intl.NumberFormat instance keyed by canonical locale and options,
- * evicting the oldest entry when the cache reaches FORMAT_CACHE_LIMIT.
- */
-function getCachedNumberFormat(locale: string, options: Intl.NumberFormatOptions): Intl.NumberFormat {
-  const key = `${locale}:${JSON.stringify(options)}`;
-  let formatter = NUMBER_FORMAT_CACHE.get(key);
-  if (!formatter) {
-    formatter = new Intl.NumberFormat(locale, options);
-    if (NUMBER_FORMAT_CACHE.size >= FORMAT_CACHE_LIMIT) {
-      const oldestKey = NUMBER_FORMAT_CACHE.keys().next().value;
-      if (oldestKey !== undefined) NUMBER_FORMAT_CACHE.delete(oldestKey);
-    }
-    NUMBER_FORMAT_CACHE.set(key, formatter);
-  }
-  return formatter;
+/** Options accepted by `formatChartValue`. */
+export interface ChartValueFormatOptions {
+  currency?: string;
+  unit?: string;
+  locale?: AppLocaleId;
+  precision?: number;
+  compact?: boolean;
 }
 
 /**
- * Returns a cached Intl.DateTimeFormat instance keyed by canonical locale and options,
- * evicting the oldest entry when the cache reaches FORMAT_CACHE_LIMIT.
+ * Formats a currency amount; an invalid ISO currency code makes Intl throw, in which case the value falls back to
+ * `<fixed-precision number> <code>` instead of failing the chart render.
  */
-function getCachedDateFormat(locale: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
-  const key = `${locale}:${JSON.stringify(options)}`;
-  let formatter = DATE_FORMAT_CACHE.get(key);
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat(locale, options);
-    if (DATE_FORMAT_CACHE.size >= FORMAT_CACHE_LIMIT) {
-      const oldestKey = DATE_FORMAT_CACHE.keys().next().value;
-      if (oldestKey !== undefined) DATE_FORMAT_CACHE.delete(oldestKey);
-    }
-    DATE_FORMAT_CACHE.set(key, formatter);
+function formatChartCurrency(
+  value: number,
+  currency: string,
+  locale: AppLocaleId,
+  precision: number,
+  maximumFractionDigits: number,
+  compactNotation: { notation?: 'compact' },
+): string {
+  try {
+    return formatCurrency(value, locale, currency, {
+      ...compactNotation,
+      maximumFractionDigits,
+      minimumFractionDigits: 0,
+    });
+  } catch {
+    return `${value.toFixed(precision)} ${currency}`;
   }
-  return formatter;
 }
 
 /**
@@ -154,52 +142,35 @@ function getCachedDateFormat(locale: string, options: Intl.DateTimeFormatOptions
  */
 export function formatChartValue(
   value: number,
-  options?: {
-    currency?: string;
-    unit?: string;
-    locale?: AppLocaleId;
-    precision?: number;
-    compact?: boolean;
-  },
+  options?: ChartValueFormatOptions,
 ): string {
   if (value === null || value === undefined || isNaN(value)) {
     return '—';
   }
 
-  const locale = options?.locale ?? 'en-us';
-  const canonicalLocale = normalizeFormattingLocale(locale);
-  const precision = options?.precision ?? 2;
-  const compact = Boolean(options?.compact && Math.abs(value) >= 1000);
+  const { currency, unit, locale = 'en-us', precision = 2, compact: wantsCompact } = options ?? {};
+  const compact = Boolean(wantsCompact && Math.abs(value) >= 1000);
   const maximumFractionDigits = compact ? Math.min(precision, 1) : precision;
+  const compactNotation = compact ? { notation: 'compact' as const } : {};
 
-  if (options?.currency) {
-    try {
-      return getCachedNumberFormat(canonicalLocale, {
-        style: 'currency',
-        currency: options.currency,
-        ...(compact ? { notation: 'compact' as const } : {}),
-        maximumFractionDigits,
-        minimumFractionDigits: 0,
-      }).format(value);
-    } catch {
-      return `${value.toFixed(precision)} ${options.currency}`;
-    }
+  if (currency) {
+    return formatChartCurrency(value, currency, locale, precision, maximumFractionDigits, compactNotation);
   }
 
-  if (options?.unit === '%' || options?.unit === 'percent') {
-    return getCachedNumberFormat(canonicalLocale, {
+  if (unit === '%' || unit === 'percent') {
+    return formatNumber(value > 1 ? value / 100 : value, locale, {
       style: 'percent',
-      ...(compact ? { notation: 'compact' as const } : {}),
+      ...compactNotation,
       maximumFractionDigits,
-    }).format(value > 1 ? value / 100 : value);
+    });
   }
 
-  const formatted = getCachedNumberFormat(canonicalLocale, {
-    ...(compact ? { notation: 'compact' as const } : {}),
+  const formatted = formatNumber(value, locale, {
+    ...compactNotation,
     maximumFractionDigits,
-  }).format(value);
+  });
 
-  return options?.unit ? `${formatted} ${options.unit}` : formatted;
+  return unit ? `${formatted} ${unit}` : formatted;
 }
 
 /** Fixed Y-axis width (px): fits compact labels such as "-77.2K" at 11px so ticks never wrap or clip. */
@@ -282,11 +253,11 @@ export function formatYTick(value: number, locale: AppLocaleId, span?: number): 
   const scale = abs >= 1e9 ? 1e9 : abs >= 1e6 ? 1e6 : abs >= 1e3 ? 1e3 : 1;
   const step = span / Y_TICK_COUNT / scale;
   const digits = Math.min(4, Math.max(0, Math.ceil(-Math.log10(step) - 1e-9)));
-  return getCachedNumberFormat(normalizeFormattingLocale(locale), {
+  return formatNumber(value, locale, {
     ...(abs >= 1000 ? { notation: 'compact' as const } : {}),
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
-  }).format(value);
+  });
 }
 
 /**
@@ -318,21 +289,19 @@ export function formatChartTimestamp(
     const date = new Date(timestamp);
     if (isNaN(date.getTime())) return String(timestamp);
 
-    const canonicalLocale = normalizeFormattingLocale(locale);
-
     if (formatStyle === 'compact') {
-      return getCachedDateFormat(canonicalLocale, {
+      return formatDateWith(date, locale, {
         month: 'short',
         day: 'numeric',
         timeZone: timezone,
-      }).format(date);
+      });
     }
 
-    return getCachedDateFormat(canonicalLocale, {
+    return formatDateWith(date, locale, {
       dateStyle: 'medium',
       timeStyle: 'short',
       timeZone: timezone,
-    }).format(date);
+    });
   } catch {
     return String(timestamp);
   }
@@ -359,7 +328,7 @@ export function makeXTickFormatter(
   return (val) => {
     const date = new Date(val);
     const label = intraday && !isNaN(date.getTime())
-      ? getCachedDateFormat(normalizeFormattingLocale(locale), { hour: 'numeric', minute: '2-digit', timeZone: timezone }).format(date)
+      ? formatDateWith(date, locale, { hour: 'numeric', minute: '2-digit', timeZone: timezone })
       : formatChartTimestamp(val, locale, timezone, 'compact');
     if (label === last) return '';
     last = label;
@@ -593,11 +562,9 @@ export function BaseAreaChart({
   emptyMessage,
   showGrid = true,
 }: BaseAreaChartProps) {
-  const { resolvedTheme } = useTheme();
   const display = useDisplayPreferences();
 
-  const isDark = resolvedTheme === 'dark';
-  const colors = useMemo(() => getChartColors(isDark), [isDark]);
+  const colors = useMemo(() => getChartColors(), []);
   const yDomain = useMemo(() => paddedYDomain(data, series), [data, series]);
 
   if (!data || data.length === 0) {
@@ -698,10 +665,8 @@ export function BaseLineChart({
   showGrid = true,
   connectNulls = false,
 }: BaseLineChartProps) {
-  const { resolvedTheme } = useTheme();
   const display = useDisplayPreferences();
-  const isDark = resolvedTheme === 'dark';
-  const colors = useMemo(() => getChartColors(isDark), [isDark]);
+  const colors = useMemo(() => getChartColors(), []);
   const yDomain = useMemo(() => paddedYDomain(data, series), [data, series]);
 
   if (!data || data.length === 0) {
@@ -800,10 +765,8 @@ export function BaseBarChart({
   emptyMessage,
   showGrid = true,
 }: BaseBarChartProps) {
-  const { resolvedTheme } = useTheme();
   const display = useDisplayPreferences();
-  const isDark = resolvedTheme === 'dark';
-  const colors = useMemo(() => getChartColors(isDark), [isDark]);
+  const colors = useMemo(() => getChartColors(), []);
 
   if (!data || data.length === 0) {
     return <ChartEmptyState title={emptyTitle} message={emptyMessage} />;

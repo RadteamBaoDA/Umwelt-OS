@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class TimelineDescriptor:
+class TimelineDescriptor(ModuleDescriptor):
     """Declare canonical events and their exact document/entity dependencies."""
     id: str = "knowledge.timeline"
     name: str = "Timeline"
@@ -21,6 +23,11 @@ class TimelineDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.timeline.routes", 110),
+    )
+    erasure_module: str | None = "modules.timeline.erasure"
+    erasure_order: int = 210
 
 
 descriptor = TimelineDescriptor()

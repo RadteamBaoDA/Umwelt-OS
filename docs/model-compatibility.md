@@ -20,6 +20,20 @@ Gateway transports use the locked HTTPX 0.28.1 public transport API. Each reques
 | Embeddings capability | Unknown until a successful capability probe is recorded for the configured role/model/version and gateway identity | Model gateway requires supported Redis TTL evidence bound to endpoint/credential identity before requests |
 | Other capabilities (chat, streaming, structured output, tools, reranking) | Unknown until separately probed | Capabilities are recorded independently and expire after 24 hours |
 
+## Output limit (`max_tokens`)
+
+- Hosted clouds `anthropic`, `openai` and `groq` expose no setting: the server discards any `max_output_tokens` saved for them (`PROVIDER_KINDS_WITHOUT_MAX_TOKENS`). OpenAI-compatible calls send no `max_tokens` unless the caller passes one. Anthropic requires the field, so the gateway sends an internal default (4096, or 32000 when streaming).
+- Other kinds (`openrouter`, `gemini`, `ollama`, `lmstudio`, `custom`) accept an optional **Max output tokens** (1 to 1,000,000) per LLM role in Settings > Models. Resolution order: explicit internal caller value, then the role's `max_output_tokens`, then nothing is sent.
+- On Anthropic, a 400 naming `max_tokens` is retried once with 4096; the clamp is remembered per model identity for one hour. It is never recorded as an unsupported capability.
+
+## Capability evidence
+
+- Evidence is stored per workspace, provider, model, capability and model identity (credential/endpoint/default fingerprint).
+- `tools` is recorded `unsupported` only for an explicit statement (for example "does not support tools", "tool use is not supported", "function calling is not supported") or a 404/405 from the endpoint. Errors about `tool_use_id`, `tool_result`, `tool_call_id`, `tool_choice` or a tool's schema never mark a model unsupported.
+- A stored `unsupported` result short-circuits calls for one hour only; afterwards the provider is asked again.
+- Timeouts, connection faults, 429 and 5xx record nothing, so one blip never overwrites a recorded `supported`. Deterministic 4xx answers (400/401/403/404/422) are recorded `failed`.
+- Anthropic: `tool_choice` `required` maps to `any` and a named function to `tool`. A forced choice that cannot be honoured (no tools, or extended thinking enabled) raises a capability error, so the visualization router falls back visibly instead of running unforced.
+
 ## Compatibility rules
 
 - Pin embedding model identity and dimensions to each index generation. Reindex after model changes; do not mix models or silently fall back.

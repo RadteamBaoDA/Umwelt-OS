@@ -112,7 +112,7 @@ class McpSdkClient:
             terminate_on_close=True,
             max_sse_event_size=min(budget.max_response_bytes, 1_000_000),
         )
-        async with http_client:  # noqa: SIM117  # style-only rewrite skipped to avoid touching control flow
+        async with http_client:
             async with Client(
                 transport_context,
                 mode="auto",
@@ -188,6 +188,55 @@ class McpSdkClient:
         ) as client:
             yield client
 
+    @staticmethod
+    def _require_usable_connection(connection: Any, connection_id: UUID, bearer_token: str | None) -> None:
+        """Reject a mismatched loader result, stdio with bearer credentials and unsupported transports.
+
+        Raises ``McpTransportError`` for a record that is not the requested connection and
+        ``McpUnavailable`` for stdio-with-credentials or a transport other than HTTP/stdio.
+        """
+        if connection.id != connection_id:
+            raise McpTransportError("MCP connection loader returned a mismatched record")
+        if connection.transport == McpTransport.STDIO and (
+            connection.auth_method != "none" or bearer_token is not None
+        ):
+            raise mcp_repository.McpUnavailable("MCP stdio cannot use bearer credentials")
+        if connection.transport not in {McpTransport.STREAMABLE_HTTP, McpTransport.STDIO}:
+            raise mcp_repository.McpUnavailable("MCP transport is unavailable")
+
+    async def _probe_outcome(
+        self, scope: Scope, connection: Any, bearer_token: str | None, budget: McpOperationNetworkBudget,
+    ) -> str:
+        """Open one ordinary client and classify the negotiation as a persisted draft-check outcome.
+
+        ``connected`` requires the SDK to have selected a protocol version. Unavailable/conflict
+        errors propagate (denial is never an outcome). Timeouts, auth, transport and other failures
+        map to ``timeout``/``auth_error``/``unavailable``/``protocol_error`` unless the task is being
+        cancelled, in which case cancellation is re-raised instead of recorded.
+        """
+        try:
+            async with self._open_client(
+                scope, connection, bearer_token, budget, "ordinary",
+            ) as client:
+                # __aenter__ negotiates the protocol and assigns the session only on success.
+                if not client.protocol_version:
+                    raise McpTransportError("MCP SDK negotiation did not select a protocol version")
+            return "connected"
+        except (mcp_repository.McpUnavailable, mcp_repository.McpConflict):
+            raise
+        except TimeoutError:
+            outcome = "timeout"
+        except PermissionError:
+            outcome = "auth_error"
+        except McpTransportError:
+            outcome = "unavailable"
+        except Exception:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
+            outcome = "protocol_error"
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise asyncio.CancelledError from None
+        return outcome
+
     async def check_connection(
         self,
         scope: Scope,
@@ -215,14 +264,7 @@ class McpSdkClient:
                 ):
                     raise mcp_repository.McpConflict("MCP management authority changed while queued")
                 connection, bearer_token = await self._load_connection(scope, connection_id)
-                if connection.id != connection_id:
-                    raise McpTransportError("MCP connection loader returned a mismatched record")
-                if connection.transport == McpTransport.STDIO and (
-                    connection.auth_method != "none" or bearer_token is not None
-                ):
-                    raise mcp_repository.McpUnavailable("MCP stdio cannot use bearer credentials")
-                if connection.transport not in {McpTransport.STREAMABLE_HTTP, McpTransport.STDIO}:
-                    raise mcp_repository.McpUnavailable("MCP transport is unavailable")
+                self._require_usable_connection(connection, connection_id, bearer_token)
                 if not await self._management_request_is_current(
                     scope, connection_id, connection.revision, management_revalidator,
                     connection.deployment_profile_hash,
@@ -240,38 +282,7 @@ class McpSdkClient:
                     max_response_bytes=256_000,
                     before_request=before_request,
                 )
-                try:
-                    async with self._open_client(
-                        scope, connection, bearer_token, budget, "ordinary",
-                    ) as client:
-                        # __aenter__ negotiates the protocol and assigns the session only on success.
-                        if not client.protocol_version:
-                            raise McpTransportError("MCP SDK negotiation did not select a protocol version")
-                    outcome = "connected"
-                except mcp_repository.McpUnavailable:
-                    raise
-                except mcp_repository.McpConflict:
-                    raise
-                except TimeoutError:
-                    task = asyncio.current_task()
-                    if task is not None and task.cancelling():
-                        raise asyncio.CancelledError from None
-                    outcome = "timeout"
-                except PermissionError:
-                    task = asyncio.current_task()
-                    if task is not None and task.cancelling():
-                        raise asyncio.CancelledError from None
-                    outcome = "auth_error"
-                except McpTransportError:
-                    task = asyncio.current_task()
-                    if task is not None and task.cancelling():
-                        raise asyncio.CancelledError from None
-                    outcome = "unavailable"
-                except Exception:  # noqa: BLE001  # error boundary: re-mapped to a sanitized error
-                    task = asyncio.current_task()
-                    if task is not None and task.cancelling():
-                        raise asyncio.CancelledError from None
-                    outcome = "protocol_error"
+                outcome = await self._probe_outcome(scope, connection, bearer_token, budget)
                 if not await self._management_request_is_current(
                     scope, connection_id, connection.revision, management_revalidator,
                     connection.deployment_profile_hash,

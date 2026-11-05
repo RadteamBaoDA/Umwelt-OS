@@ -9,7 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { connectorKeys, createScopedSource, enableBuiltinSource, getConnectorCatalog, intervalBelowMinimum, listBuiltinSources, listSources, sourceKeys } from './api';
+import { connectorKeys, createScopedSource, enableBuiltinSource, getConnectorCatalog, intervalBelowMinimum, listBuiltinSources, listSources, sourceKeys, type BuiltinSource, type ConnectorCatalogEntry } from './api';
 import { builtinEnableErrorKey } from './builtin-sources';
 import { WizardShell } from './source-wizard';
 import { builtinOptionsFor, defaultEditText, editTextValid, scopedSpecFor, STARTER_PACKS, type PackItem } from './starter-packs';
@@ -22,6 +22,109 @@ function failureKey(cause: unknown): 'exists' | NonNullable<RowStatus['error']> 
   if (intervalBelowMinimum(cause)) return 'scheduleBelowMinimum';
   const key = builtinEnableErrorKey(cause);
   return key === 'builtinAlreadyAdded' ? 'exists' : key;
+}
+
+const FIELD_LABEL = { vn_symbols: 'starterFieldVnSymbols', job_keywords: 'starterFieldJobKeywords', crypto_symbols: 'starterFieldCrypto', github_repo: 'starterFieldRepo', arxiv_category: 'starterFieldArxiv', weather: 'starterFieldWeather' } as const;
+
+/** Badge message key per row state; rows without a status yet read as pending. */
+const STATUS_KEY = { creating: 'starterStatusCreating', done: 'starterStatusDone', exists: 'starterStatusExists', failed: 'starterStatusFailed' } as const;
+
+/** Everything needed to create one starter item; `name` is already trimmed. */
+interface CreateContext {
+  csrfToken: string;
+  builtinById: Map<string, BuiltinSource>;
+  catalog: ConnectorCatalogEntry[];
+  name: string;
+  text: string;
+}
+
+/**
+ * Creates one starter item: built-ins use the idempotent enable route (sending a custom name only when the built-in
+ * accepts one), scoped items go through `createScopedSource`. Throws whatever the API throws; the caller classifies it.
+ */
+async function createStarterItem(item: PackItem, { csrfToken, builtinById, catalog, name, text }: CreateContext): Promise<void> {
+  if (item.kind === 'builtin') {
+    const row = builtinById.get(item.provider);
+    const options = builtinOptionsFor(item, text);
+    const sendName = name && name !== row?.label && (row?.applicable_options?.includes('name') ?? true);
+    await enableBuiltinSource(item.provider, 'personal', csrfToken, undefined, { graph_enabled: false, rag_index_enabled: false, ...options, ...(sendName ? { name } : {}) });
+    return;
+  }
+  const entry = catalog.find((candidate) => candidate.provider_id === item.provider);
+  await createScopedSource(scopedSpecFor(item, text, name, entry), csrfToken);
+}
+
+/** One selectable starter row: checkbox, editable name and (when not yet added) the in-row value editor with validation. */
+function StarterItemRow({ item, added, name, checked, text, defaultName, locationError, onToggle, onName, onText, onUseLocation }: {
+  item: PackItem; added: boolean; name: string; checked: boolean; text: string; defaultName: string; locationError: boolean;
+  onToggle: (next: boolean) => void; onName: (value: string) => void; onText: (value: string) => void; onUseLocation: () => void;
+}) {
+  const t = useTranslations('sources');
+  const invalid = checked && !editTextValid(item, text);
+  return <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+    <div className="flex flex-wrap items-center gap-3">
+      <Checkbox aria-label={t('starterItemSelect', { name: defaultName })} checked={checked} disabled={added} onCheckedChange={(next) => onToggle(next === true)} />
+      <Input aria-label={t('starterNameLabel', { name: defaultName })} aria-invalid={checked && name.trim().length === 0} className="h-8 min-w-0 flex-1 basis-56" maxLength={200} disabled={added} value={name}
+        onChange={(event) => onName(event.target.value)} />
+      {added && <Badge variant="secondary">{t('starterAlreadyAdded')}</Badge>}
+    </div>
+    {item.edit && !added && <div className="field">
+      <Label htmlFor={`starter-${item.id}-value`}>{t(FIELD_LABEL[item.edit])}</Label>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input id={`starter-${item.id}-value`} className="min-w-0 flex-1 basis-56" aria-invalid={invalid} value={text} onChange={(event) => onText(event.target.value)} />
+        {item.edit === 'weather' && <Button type="button" variant="outline" size="sm" onClick={onUseLocation}>{t('starterUseMyLocation')}</Button>}
+      </div>
+      {invalid && <small className="text-destructive" role="alert">{t('starterFieldInvalid')}</small>}
+      {item.edit === 'weather' && locationError && <small className="text-destructive" role="alert">{t('starterLocationFailed')}</small>}
+    </div>}
+  </div>;
+}
+
+/** LinkedIn-via-Gmail guide card shown under the jobs pack; offers the generic connector wizard when available. */
+function LinkedinGuide({ onAddConnector }: { onAddConnector?: () => void }) {
+  const t = useTranslations('sources');
+  return <div className="flex flex-col gap-2 rounded-md border border-dashed border-border p-3" data-testid="starter-linkedin-guide">
+    <strong>{t('starterLinkedinTitle')}</strong>
+    <p className="m-0 text-sm text-muted-foreground">{t('starterLinkedinIntro')}</p>
+    <ol className="m-0 pl-5 text-sm"><li>{t('starterLinkedinStep1')}</li><li>{t('starterLinkedinStep2')}</li><li>{t('starterLinkedinStep3')}</li></ol>
+    {onAddConnector && <div><Button type="button" variant="outline" size="sm" onClick={onAddConnector}>{t('starterLinkedinAddGmail')}</Button></div>}
+  </div>;
+}
+
+/** Step 2: running/summary line, one status row per frozen item and a retry button for failed rows. */
+function StarterProgressStep({ running, runItems, statuses, nameOf, onRetry }: {
+  running: boolean; runItems: PackItem[]; statuses: Record<string, RowStatus>; nameOf: (item: PackItem) => string; onRetry: (items: PackItem[]) => void;
+}) {
+  const t = useTranslations('sources');
+  const failed = runItems.filter((item) => statuses[item.id]?.state === 'failed');
+  const doneCount = runItems.filter((item) => statuses[item.id]?.state === 'done' || statuses[item.id]?.state === 'exists').length;
+  return <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('stepStarterCreate')}>
+    {running && <p role="status">{t('starterRunning')}</p>}
+    {!running && <p role="status">{t('starterSummary', { done: doneCount, failed: failed.length })}</p>}
+    <ul className="m-0 flex list-none flex-col gap-2 p-0">
+      {runItems.map((item) => {
+        const status = statuses[item.id];
+        return <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-3" data-testid={`starter-row-${item.id}`}>
+          <span className="font-medium">{nameOf(item)}</span>
+          <span className="flex items-center gap-2 text-sm">
+            {status?.state === 'failed' && status.error && <span className="text-destructive" role="alert">{t(status.error)}</span>}
+            <Badge variant={status?.state === 'failed' ? 'outline' : 'secondary'}>{t(status ? STATUS_KEY[status.state] : 'starterStatusPending')}</Badge>
+          </span>
+        </li>;
+      })}
+    </ul>
+    {!running && failed.length > 0 && <div><Button type="button" variant="outline" onClick={() => onRetry(failed)}>{t('starterRetryFailed')}</Button></div>}
+  </section>;
+}
+
+/** Owner edits to the choose step, keyed by item id: unchecked set, custom names and custom edit texts. */
+function useStarterEdits() {
+  const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [texts, setTexts] = useState<Record<string, string>>({});
+  /** Checks or unchecks one item. */
+  const toggle = (id: string, on: boolean) => setUnchecked((current) => { const copy = new Set(current); if (on) copy.delete(id); else copy.add(id); return copy; });
+  return { unchecked, names, texts, toggle, setName: (id: string, value: string) => setNames((c) => ({ ...c, [id]: value })), setText: (id: string, value: string) => setTexts((c) => ({ ...c, [id]: value })) };
 }
 
 /**
@@ -41,9 +144,7 @@ export function StarterPackWizard({ onClose, onChanged, onAddConnector }: { onCl
   const existing = useQuery({ queryKey: sourceKeys.list, queryFn: () => listSources() });
   const catalog = useQuery({ queryKey: connectorKeys.catalog, queryFn: ({ signal }) => getConnectorCatalog(signal), staleTime: 5 * 60_000 });
   const [index, setIndex] = useState(0);
-  const [unchecked, setUnchecked] = useState<Set<string>>(new Set());
-  const [names, setNames] = useState<Record<string, string>>({});
-  const [texts, setTexts] = useState<Record<string, string>>({});
+  const edits = useStarterEdits();
   const [statuses, setStatuses] = useState<Record<string, RowStatus>>({});
   // Items frozen when creation starts: the refetched caches mark created items as added, which would otherwise drop their rows.
   const [runItems, setRunItems] = useState<PackItem[]>([]);
@@ -53,8 +154,8 @@ export function StarterPackWizard({ onClose, onChanged, onAddConnector }: { onCl
   const builtinById = new Map((builtins.data ?? []).map((row) => [row.id, row]));
   /** Default display name: the server label for built-ins, a message for scoped items. */
   const defaultName = (item: PackItem) => item.kind === 'builtin' ? builtinById.get(item.provider)?.label ?? item.provider : t(item.nameKey);
-  const nameOf = (item: PackItem) => names[item.id] ?? defaultName(item);
-  const textOf = (item: PackItem) => texts[item.id] ?? defaultEditText(item);
+  const nameOf = (item: PackItem) => edits.names[item.id] ?? defaultName(item);
+  const textOf = (item: PackItem) => edits.texts[item.id] ?? defaultEditText(item);
   /** True when the owner already has this item, so it is shown as added and not preselected. */
   const isAdded = (item: PackItem) => item.kind === 'builtin'
     ? builtinById.get(item.provider)?.source_id != null
@@ -62,8 +163,7 @@ export function StarterPackWizard({ onClose, onChanged, onAddConnector }: { onCl
   const loaded = builtins.isSuccess && existing.isSuccess;
   const packs = STARTER_PACKS.map((pack) => ({ ...pack, items: pack.items.filter((item) => item.kind === 'scoped' || builtinById.has(item.provider)) }))
     .filter((pack) => pack.items.length > 0 || pack.guide);
-  const allItems = packs.flatMap((pack) => pack.items);
-  const picked = allItems.filter((item) => !isAdded(item) && !unchecked.has(item.id));
+  const picked = packs.flatMap((pack) => pack.items).filter((item) => !isAdded(item) && !edits.unchecked.has(item.id));
   const ready = loaded && picked.length > 0 && picked.every((item) => nameOf(item).trim().length > 0 && editTextValid(item, textOf(item)));
 
   /** Creates the given items one after another, recording each outcome; one failure never stops the rest. */
@@ -73,16 +173,7 @@ export function StarterPackWizard({ onClose, onChanged, onAddConnector }: { onCl
       for (const item of targets) {
         setStatuses((current) => ({ ...current, [item.id]: { state: 'creating' } }));
         try {
-          const name = nameOf(item).trim();
-          if (item.kind === 'builtin') {
-            const row = builtinById.get(item.provider);
-            const options = builtinOptionsFor(item, textOf(item));
-            const sendName = name && name !== row?.label && (row?.applicable_options?.includes('name') ?? true);
-            await enableBuiltinSource(item.provider, 'personal', csrfToken, undefined, { graph_enabled: false, rag_index_enabled: false, ...options, ...(sendName ? { name } : {}) });
-          } else {
-            const entry = (catalog.data ?? []).find((candidate) => candidate.provider_id === item.provider);
-            await createScopedSource(scopedSpecFor(item, textOf(item), name, entry), csrfToken);
-          }
+          await createStarterItem(item, { csrfToken, builtinById, catalog: catalog.data ?? [], name: nameOf(item).trim(), text: textOf(item) });
           setStatuses((current) => ({ ...current, [item.id]: { state: 'done' } }));
         } catch (cause) {
           const key = failureKey(cause);
@@ -110,14 +201,11 @@ export function StarterPackWizard({ onClose, onChanged, onAddConnector }: { onCl
     setLocationError(false);
     if (!navigator.geolocation) { setLocationError(true); return; }
     navigator.geolocation.getCurrentPosition(
-      (position) => setTexts((current) => ({ ...current, [item.id]: `${position.coords.latitude.toFixed(4)}, ${position.coords.longitude.toFixed(4)}` })),
+      (position) => edits.setText(item.id, `${position.coords.latitude.toFixed(4)}, ${position.coords.longitude.toFixed(4)}`),
       () => setLocationError(true),
     );
   }
 
-  const failed = runItems.filter((item) => statuses[item.id]?.state === 'failed');
-  const doneCount = runItems.filter((item) => statuses[item.id]?.state === 'done' || statuses[item.id]?.state === 'exists').length;
-  const fieldLabel = { vn_symbols: 'starterFieldVnSymbols', job_keywords: 'starterFieldJobKeywords', crypto_symbols: 'starterFieldCrypto', github_repo: 'starterFieldRepo', arxiv_category: 'starterFieldArxiv', weather: 'starterFieldWeather' } as const;
   const steps = [
     { id: 'choose', title: t('stepStarterChoose'), valid: ready },
     { id: 'create', title: t('stepStarterCreate'), valid: true },
@@ -134,54 +222,14 @@ export function StarterPackWizard({ onClose, onChanged, onAddConnector }: { onCl
         <h3 className="m-0 text-sm font-semibold text-muted-foreground">{t(pack.labelKey)}</h3>
         {pack.items.map((item) => {
           const added = isAdded(item);
-          const name = nameOf(item);
-          const checked = !added && !unchecked.has(item.id);
-          const text = textOf(item);
-          return <div key={item.id} className="flex flex-col gap-2 rounded-md border border-border p-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <Checkbox aria-label={t('starterItemSelect', { name: defaultName(item) })} checked={checked} disabled={added}
-                onCheckedChange={(next) => setUnchecked((current) => { const copy = new Set(current); if (next === true) copy.delete(item.id); else copy.add(item.id); return copy; })} />
-              <Input aria-label={t('starterNameLabel', { name: defaultName(item) })} aria-invalid={checked && name.trim().length === 0} className="h-8 min-w-0 flex-1 basis-56" maxLength={200} disabled={added} value={name}
-                onChange={(event) => setNames((current) => ({ ...current, [item.id]: event.target.value }))} />
-              {added && <Badge variant="secondary">{t('starterAlreadyAdded')}</Badge>}
-            </div>
-            {item.edit && !added && <div className="field">
-              <Label htmlFor={`starter-${item.id}-value`}>{t(fieldLabel[item.edit])}</Label>
-              <div className="flex flex-wrap items-center gap-2">
-                <Input id={`starter-${item.id}-value`} className="min-w-0 flex-1 basis-56" aria-invalid={checked && !editTextValid(item, text)} value={text}
-                  onChange={(event) => setTexts((current) => ({ ...current, [item.id]: event.target.value }))} />
-                {item.edit === 'weather' && <Button type="button" variant="outline" size="sm" onClick={() => fillMyLocation(item)}>{t('starterUseMyLocation')}</Button>}
-              </div>
-              {checked && !editTextValid(item, text) && <small className="text-destructive" role="alert">{t('starterFieldInvalid')}</small>}
-              {item.edit === 'weather' && locationError && <small className="text-destructive" role="alert">{t('starterLocationFailed')}</small>}
-            </div>}
-          </div>;
+          return <StarterItemRow key={item.id} item={item} added={added} name={nameOf(item)} checked={!added && !edits.unchecked.has(item.id)} text={textOf(item)}
+            defaultName={defaultName(item)} locationError={locationError} onToggle={(on) => edits.toggle(item.id, on)}
+            onName={(value) => edits.setName(item.id, value)} onText={(value) => edits.setText(item.id, value)} onUseLocation={() => fillMyLocation(item)} />;
         })}
-        {pack.guide === 'linkedin' && <div className="flex flex-col gap-2 rounded-md border border-dashed border-border p-3" data-testid="starter-linkedin-guide">
-          <strong>{t('starterLinkedinTitle')}</strong>
-          <p className="m-0 text-sm text-muted-foreground">{t('starterLinkedinIntro')}</p>
-          <ol className="m-0 pl-5 text-sm"><li>{t('starterLinkedinStep1')}</li><li>{t('starterLinkedinStep2')}</li><li>{t('starterLinkedinStep3')}</li></ol>
-          {onAddConnector && <div><Button type="button" variant="outline" size="sm" onClick={onAddConnector}>{t('starterLinkedinAddGmail')}</Button></div>}
-        </div>}
+        {pack.guide === 'linkedin' && <LinkedinGuide onAddConnector={onAddConnector} />}
       </div>)}
       {loaded && !ready && picked.length === 0 && <p className="m-0 text-sm text-muted-foreground" role="status">{t('starterNothing')}</p>}
     </section>}
-    {index === 1 && <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('stepStarterCreate')}>
-      {running && <p role="status">{t('starterRunning')}</p>}
-      {!running && <p role="status">{t('starterSummary', { done: doneCount, failed: failed.length })}</p>}
-      <ul className="m-0 flex list-none flex-col gap-2 p-0">
-        {runItems.map((item) => {
-          const status = statuses[item.id];
-          return <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border p-3" data-testid={`starter-row-${item.id}`}>
-            <span className="font-medium">{nameOf(item)}</span>
-            <span className="flex items-center gap-2 text-sm">
-              {status?.state === 'failed' && status.error && <span className="text-destructive" role="alert">{t(status.error)}</span>}
-              <Badge variant={status?.state === 'failed' ? 'outline' : 'secondary'}>{t(status?.state === 'creating' ? 'starterStatusCreating' : status?.state === 'done' ? 'starterStatusDone' : status?.state === 'exists' ? 'starterStatusExists' : status?.state === 'failed' ? 'starterStatusFailed' : 'starterStatusPending')}</Badge>
-            </span>
-          </li>;
-        })}
-      </ul>
-      {!running && failed.length > 0 && <div><Button type="button" variant="outline" onClick={() => void run(failed)}>{t('starterRetryFailed')}</Button></div>}
-    </section>}
+    {index === 1 && <StarterProgressStep running={running} runItems={runItems} statuses={statuses} nameOf={nameOf} onRetry={(items) => void run(items)} />}
   </WizardShell>;
 }

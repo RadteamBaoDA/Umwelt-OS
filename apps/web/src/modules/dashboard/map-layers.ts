@@ -1,4 +1,4 @@
-import type { WorldObservation } from '@/modules/observations/api';
+import type { WorldObservation } from '@/modules/observations';
 
 /** Supported client renderers that share one selected feature and layer controller. */
 export type MapEngine = 'globe' | 'flat';

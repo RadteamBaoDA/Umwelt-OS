@@ -7,8 +7,8 @@ import json
 from types import SimpleNamespace
 from uuid import uuid4
 
-from core import realtime_routes
 from core.realtime import ReplayCursor
+from core.realtime import routes as realtime_routes
 
 
 def test_stale_epoch_cursor_first_frame_is_epoch_changed_resync(monkeypatch) -> None:
@@ -97,7 +97,7 @@ def test_polling_response_lets_inflight_db_call_finish_and_returns_connection_on
 
     from starlette.requests import Request
 
-    from core import realtime_routes
+    from core.realtime import routes as realtime_routes
 
     async def run() -> tuple[int, bool, int]:
         gone = asyncio.Event()

@@ -15,7 +15,7 @@ from modules.chat.models import Message, StreamEvent
 from modules.chat.retrieval import format_grounded_context
 from modules.chat.schemas import AnswerContext
 from tests.unit.modules.chat.test_p14_generation_worker import _Gen
-from tests.unit.test_b1c_regressions import _evidence, _factory
+from tests.unit.typing_regressions.test_none_handling_regressions import _evidence, _factory
 
 
 class _ThinkGen(_Gen):
@@ -77,7 +77,7 @@ def test_message_reasoning_dto_helper() -> None:
 
 
 async def _failed_event(exc: Exception) -> tuple[Any, Any]:
-    run = SimpleNamespace(status="streaming", conversation_id=uuid4())
+    run = SimpleNamespace(status="streaming", conversation_id=uuid4(), workspace_id=uuid4())
     session = MagicMock()
     session.scalar = AsyncMock(side_effect=[run, object(), run])
     session.add = MagicMock()

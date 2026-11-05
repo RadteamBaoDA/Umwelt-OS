@@ -343,6 +343,83 @@ class NativeCollectionReceipt(BaseModel):
     cursor_after: str | None = Field(default=None, max_length=16_384)
 
 
+def _stream_conflict(cursor: TelegramCursor | None) -> TelegramProbeClassification:
+    """Build the fail-closed ``telegram_stream_conflict`` classification that leaves the cursor unchanged."""
+    return TelegramProbeClassification(
+        epoch=cursor.epoch if cursor else None,
+        delivery_proofs=(), replay_update_ids=(), cursor_after=cursor,
+        conflict_code="telegram_stream_conflict",
+    )
+
+
+def _page_is_canonical(updates: tuple[TelegramRawDelivery, ...]) -> bool:
+    """Return whether the page is strictly increasing and every update matches its identity and digest."""
+    page_ids = [item.update_id for item in updates]
+    if page_ids != sorted(set(page_ids)):
+        return False
+    for item in updates:
+        update_id = item.update.get("update_id")
+        canonical = json.dumps(item.update, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        if (
+            isinstance(update_id, bool) or update_id != item.update_id
+            or sha256(canonical).hexdigest() != item.raw_update_sha256
+        ):
+            return False
+    return True
+
+
+def _page_ledger(items: list[TelegramRawDelivery]) -> list[TelegramPageDelivery]:
+    """Convert raw deliveries into retained ledger entries (id + digest)."""
+    return [TelegramPageDelivery(update_id=item.update_id, raw_update_sha256=item.raw_update_sha256) for item in items]
+
+
+def _delivery_proofs(
+    updates: tuple[TelegramRawDelivery, ...], bot_id: str, epoch: int,
+) -> tuple[TelegramDeliveryProof, ...]:
+    """Bind every page update to the verified bot and the stream epoch."""
+    return tuple(TelegramDeliveryProof(
+        bot_id=bot_id, epoch=epoch, update_id=item.update_id, raw_update_sha256=item.raw_update_sha256,
+    ) for item in updates)
+
+
+def _advance_cursor(
+    cursor: TelegramCursor, updates: tuple[TelegramRawDelivery, ...], received_at: datetime,
+) -> TelegramProbeClassification | tuple[int, list[int], list[TelegramPageDelivery]]:
+    """Classify a page against an existing cursor.
+
+    Returns a finished classification for conflicts and fresh exact replays, otherwise ``(epoch, replay_ids,
+    ledger)`` for the cursor that follows: a fresh suffix of higher unseen ids extends the retained ledger (cap
+    100) in the same epoch, while an expired or reset stream starts a new local epoch.
+    """
+    page_ids = [item.update_id for item in updates]
+    retained = {item.update_id: item.raw_update_sha256 for item in cursor.last_page_deliveries}
+    known = [item for item in updates if retained.get(item.update_id) == item.raw_update_sha256]
+    changed_known = [item for item in updates if item.update_id in retained and retained[item.update_id] != item.raw_update_sha256]
+    unknown = [item for item in updates if item.update_id not in retained]
+    replay_ids = [item.update_id for item in known]
+    age = received_at - cursor.last_nonduplicate_received_at
+    fresh = timedelta(0) <= age < timedelta(hours=24)
+    has_mixed_unknown_lower = bool(known and any(item.update_id <= cursor.last_update_id for item in unknown))
+    if has_mixed_unknown_lower or (known and changed_known):
+        return _stream_conflict(cursor)
+    if not unknown and not changed_known and fresh:
+        return TelegramProbeClassification(
+            epoch=cursor.epoch,
+            delivery_proofs=_delivery_proofs(updates, cursor.bot_id, cursor.epoch),
+            replay_update_ids=tuple(page_ids), cursor_after=cursor,
+        )
+    all_new_higher = bool(unknown) and all(item.update_id > cursor.last_update_id for item in unknown) and not changed_known
+    if all_new_higher and fresh:
+        return cursor.epoch, replay_ids, [*cursor.last_page_deliveries, *_page_ledger(unknown)][-100:]
+    if known and unknown and fresh:
+        # Retained known deliveries may prefix a newly delivered suffix; only that suffix is new.
+        if any(item.update_id <= cursor.last_update_id for item in unknown):
+            return _stream_conflict(cursor)
+        return cursor.epoch, replay_ids, [*cursor.last_page_deliveries, *_page_ledger(unknown)][-100:]
+    # Reset after retention expiry or changed/older IDs starts a new local ordinal epoch.
+    return cursor.epoch + 1, [], _page_ledger(list(updates))
+
+
 def classify_telegram_probe(
     cursor: TelegramCursor | None,
     updates: tuple[TelegramRawDelivery, ...],
@@ -355,104 +432,38 @@ def classify_telegram_probe(
     Exact duplicates within the retained 24-hour window keep the epoch and are
     marked as replay; expired deliveries begin a new local epoch. Unseen in-order
     suffixes extend a fresh durable ledger, while ambiguous mixed pages fail closed.
+    Pure and deterministic; raises ``ValueError`` only for an invalid verified bot id or a naive clock.
     """
     received_at = _require_aware_utc(received_at, "received_at")
     if not verified_bot_id.isdecimal() or len(verified_bot_id) > 20:
         raise ValueError("Verified Telegram bot identity is invalid")
     if cursor is not None and cursor.bot_id != verified_bot_id:
-        return TelegramProbeClassification(
-            epoch=cursor.epoch, delivery_proofs=(), replay_update_ids=(), cursor_after=cursor,
-            conflict_code="telegram_stream_conflict",
-        )
+        return _stream_conflict(cursor)
     if not updates:
         return TelegramProbeClassification(
             epoch=cursor.epoch if cursor else None,
             delivery_proofs=(), replay_update_ids=(), cursor_after=cursor,
         )
-    page_ids = [item.update_id for item in updates]
-    if page_ids != sorted(set(page_ids)):
-        return TelegramProbeClassification(
-            epoch=cursor.epoch if cursor else None,
-            delivery_proofs=(), replay_update_ids=(), cursor_after=cursor,
-            conflict_code="telegram_stream_conflict",
-        )
-    for item in updates:
-        update_id = item.update.get("update_id")
-        canonical = json.dumps(item.update, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        if (
-            isinstance(update_id, bool) or update_id != item.update_id
-            or sha256(canonical).hexdigest() != item.raw_update_sha256
-        ):
-            return TelegramProbeClassification(
-                epoch=cursor.epoch if cursor else None,
-                delivery_proofs=(), replay_update_ids=(), cursor_after=cursor,
-                conflict_code="telegram_stream_conflict",
-            )
+    if not _page_is_canonical(updates):
+        return _stream_conflict(cursor)
+    epoch: int
+    replay_ids: list[int]
+    ledger: list[TelegramPageDelivery]
     if cursor is None:
-        epoch = 1
-        replay_ids: list[int] = []
-        ledger = [TelegramPageDelivery(
-            update_id=item.update_id, raw_update_sha256=item.raw_update_sha256
-        ) for item in updates]
+        epoch, replay_ids, ledger = 1, [], _page_ledger(list(updates))
     else:
-        retained = {item.update_id: item.raw_update_sha256 for item in cursor.last_page_deliveries}
-        known = [item for item in updates if retained.get(item.update_id) == item.raw_update_sha256]
-        changed_known = [item for item in updates if item.update_id in retained and retained[item.update_id] != item.raw_update_sha256]
-        unknown = [item for item in updates if item.update_id not in retained]
-        replay_ids = [item.update_id for item in known]
-        age = received_at - cursor.last_nonduplicate_received_at
-        fresh = timedelta(0) <= age < timedelta(hours=24)
-        has_mixed_unknown_lower = bool(known and any(item.update_id <= cursor.last_update_id for item in unknown))
-        if has_mixed_unknown_lower or (known and changed_known):
-            return TelegramProbeClassification(
-                epoch=cursor.epoch, delivery_proofs=(), replay_update_ids=(), cursor_after=cursor,
-                conflict_code="telegram_stream_conflict",
-            )
-        if not unknown and not changed_known and fresh:
-            replay_ids = page_ids
-            return TelegramProbeClassification(
-            epoch=cursor.epoch,
-                delivery_proofs=tuple(TelegramDeliveryProof(
-                    bot_id=cursor.bot_id, epoch=cursor.epoch,
-                    update_id=item.update_id, raw_update_sha256=item.raw_update_sha256,
-                ) for item in updates),
-                replay_update_ids=tuple(replay_ids), cursor_after=cursor,
-            )
-        all_new_higher = bool(unknown) and all(item.update_id > cursor.last_update_id for item in unknown) and not changed_known
-        if all_new_higher and fresh:
-            epoch = cursor.epoch
-            ledger = [*cursor.last_page_deliveries, *(TelegramPageDelivery(
-                update_id=item.update_id, raw_update_sha256=item.raw_update_sha256
-            ) for item in unknown)][-100:]
-        elif known and unknown and fresh:
-            # Retained known deliveries may prefix a newly delivered suffix; only that suffix is new.
-            if any(item.update_id <= cursor.last_update_id for item in unknown):
-                return TelegramProbeClassification(
-                    epoch=cursor.epoch, delivery_proofs=(), replay_update_ids=(), cursor_after=cursor,
-                    conflict_code="telegram_stream_conflict",
-                )
-            epoch = cursor.epoch
-            ledger = [*cursor.last_page_deliveries, *(TelegramPageDelivery(
-                update_id=item.update_id, raw_update_sha256=item.raw_update_sha256
-            ) for item in unknown)][-100:]
-        else:
-            # Reset after retention expiry or changed/older IDs starts a new local ordinal epoch.
-            epoch = cursor.epoch + 1
-            replay_ids = []
-            ledger = [TelegramPageDelivery(update_id=item.update_id, raw_update_sha256=item.raw_update_sha256) for item in updates]
-    bot_id = verified_bot_id
+        advanced = _advance_cursor(cursor, updates, received_at)
+        if isinstance(advanced, TelegramProbeClassification):
+            return advanced
+        epoch, replay_ids, ledger = advanced
     cursor_after = TelegramCursor(
-        kind="telegram_getupdates_v1", bot_id=bot_id, epoch=epoch,
+        kind="telegram_getupdates_v1", bot_id=verified_bot_id, epoch=epoch,
         last_update_id=ledger[-1].update_id,
         last_nonduplicate_received_at=received_at,
         last_page_deliveries=ledger,
     )
     return TelegramProbeClassification(
-        epoch=epoch,
-        delivery_proofs=tuple(TelegramDeliveryProof(
-            bot_id=bot_id, epoch=epoch, update_id=item.update_id,
-            raw_update_sha256=item.raw_update_sha256,
-        ) for item in updates),
+        epoch=epoch, delivery_proofs=_delivery_proofs(updates, verified_bot_id, epoch),
         replay_update_ids=tuple(replay_ids), cursor_after=cursor_after,
     )
 

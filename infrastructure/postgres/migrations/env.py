@@ -10,14 +10,16 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import modules  # Domain model packages are imported here as they are added.
-import modules.translations.models  # noqa: F401
-import modules.dashboard.live_credentials  # noqa: F401 - register transient-map settings metadata
+import modules.dashboard.live_credentials  # import registers transient-map settings metadata
+import modules.translations.models  # noqa: F401  # import registers the translations tables on Base.metadata
 from core.auth.deletion_models import AccountDeletionOperation
 from core.auth.models import AuthSession, GoogleIdentity, Owner
 from core.database import Base
 from core.demo_seed import DemoSeedReceipt
+from core.heavy_work.models import RemoteHeavyGuard
+from core.migration_support import timeout_statements
 from core.realtime import ReplayHead, ReplayRecord
-from core.remote_heavy_models import RemoteHeavyGuard
+from core.worker_dlq import WorkerDeadLetter
 from core.workspaces.models import (
     Workspace,
     WorkspaceInvitation,
@@ -140,6 +142,7 @@ _auth_models = (AuthSession, GoogleIdentity, Owner, AccountDeletionOperation)
 _workspace_models = (Workspace, WorkspaceMembership, WorkspaceInvitation, WorkspaceShare)
 _demo_seed_models = (DemoSeedReceipt,)
 _core_remote_heavy_models = (RemoteHeavyGuard,)
+_core_worker_models = (WorkerDeadLetter,)
 _chat_models = (Conversation, Message, ResponseRun, StreamEvent, AgentActivityLink)
 _memory_models = (Memory, MemoryCandidate, MemoryPrivacyRecord)
 _browser_read_models = (BrowserReadJob, BrowserPageEvidence)
@@ -227,9 +230,22 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-database_url = os.environ.get("DATABASE_URL")
+# Migrations take DDL locks and may use session features: always the direct URL when one is configured.
+database_url = os.environ.get("DATABASE_DIRECT_URL") or os.environ.get("DATABASE_URL")
 if database_url:
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+
+
+# Indexes created only by migrations (online-safe FK indexes ``ix_fk_*``); the ORM models do not declare
+# them, so autogenerate must not propose dropping them. See versions/0014_perf_indexes_and_safety.py.
+MIGRATION_ONLY_INDEXES: frozenset[str] = frozenset({"ix_event_outbox_failed_created"})
+
+
+def include_object(obj: object, name: str | None, type_: str, reflected: bool, compare_to: object) -> bool:
+    """Alembic autogenerate filter: hide migration-only indexes (``MIGRATION_ONLY_INDEXES`` or the ``ix_fk_*`` family)."""
+    if type_ == "index" and name is not None and reflected:
+        return not (name in MIGRATION_ONLY_INDEXES or name.startswith("ix_fk_"))
+    return True
 
 
 def run_migrations_offline() -> None:
@@ -240,6 +256,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -247,6 +264,12 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection: Connection) -> None:
     """Run the Alembic migration context against the supplied database connection."""
+    # Fail fast instead of queueing behind application traffic: DDL that cannot get its lock within
+    # lock_timeout aborts (and is retried by the operator) rather than blocking every later query on the
+    # table. Session-level so every statement, including autocommit blocks, inherits them; the connection
+    # is dedicated (NullPool) so nothing leaks into application sessions.
+    for timeout_statement in timeout_statements():
+        connection.execute(text(timeout_statement))
     # Widen only databases created before the wide version table (read-only commands stay DDL-free).
     width = connection.execute(text(
         "SELECT character_maximum_length FROM information_schema.columns "
@@ -255,7 +278,9 @@ def do_run_migrations(connection: Connection) -> None:
     if width is not None and width < 255:
         connection.execute(text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
     connection.commit()
-    context.configure(connection=connection, target_metadata=Base.metadata, compare_type=True)
+    context.configure(
+        connection=connection, target_metadata=Base.metadata, compare_type=True, include_object=include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 

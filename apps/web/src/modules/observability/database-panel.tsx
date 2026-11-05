@@ -14,6 +14,7 @@ import {
 } from './database-model';
 import { StatusDot } from './status-row';
 import { fillBuckets, statusTone, type Tone } from './system-status-model';
+import { getDateTimeFormat, getNumberFormat } from '@/modules/shared';
 
 const DASH = <span className="text-muted-foreground" aria-label="—">—</span>;
 const TEXT: Record<Tone, string> = { success: '', muted: '', warning: 'text-[var(--status-warning)]', danger: 'text-destructive' };
@@ -69,10 +70,11 @@ function Trend({ title, data, keys, unit, empty }: { title: string; data: ChartD
 }
 
 /** Postgres column: finding sentence, live figures, trends and largest tables. */
+// eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this panel; it holds no branching business logic, so splitting would only relocate the same render conditions
 function PostgresColumn({ pg, buckets, bucketSeconds, locale }: { pg: PgStats | null | undefined; buckets: HistoryBucket[]; bucketSeconds: number; locale: string }) {
   const t = useTranslations('observability');
-  const num = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
-  const int = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });
+  const num = getNumberFormat(locale, { maximumFractionDigits: 1 });
+  const int = getNumberFormat(locale, { maximumFractionDigits: 0 });
   const n = (v: number | null | undefined, f = int) => (v == null ? null : f.format(v));
   const tablePager = usePagination(pg?.tables ?? []);
   const title = t('dbPostgres');
@@ -134,10 +136,11 @@ function PostgresColumn({ pg, buckets, bucketSeconds, locale }: { pg: PgStats | 
 }
 
 /** Redis column: live figures and memory/ops trends. */
+// eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this panel; it holds no branching business logic, so splitting would only relocate the same render conditions
 function RedisColumn({ redis, buckets, bucketSeconds, locale }: { redis: RedisStats | null | undefined; buckets: HistoryBucket[]; bucketSeconds: number; locale: string }) {
   const t = useTranslations('observability');
-  const num = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
-  const int = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });
+  const num = getNumberFormat(locale, { maximumFractionDigits: 1 });
+  const int = getNumberFormat(locale, { maximumFractionDigits: 0 });
   const title = t('dbRedis');
   if (!redis) return <Column title={title} tone="muted" meta={[]}><p className="m-0 text-sm text-muted-foreground">{t('dbUnavailable')}</p></Column>;
   const meta = [redis.version, formatUptime(redis.uptime_seconds, locale)].filter((v): v is string => !!v);
@@ -178,13 +181,13 @@ export function DatabasePanel({ buckets, bucketSeconds }: { buckets: HistoryBuck
   const display = useDisplayPreferences();
   const stats = useQuery({ queryKey: ['system-database'], queryFn: getDatabaseStats, refetchInterval: 15_000 });
   const updated = useMemo(() => stats.dataUpdatedAt
-    ? new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: display.timezone }).format(new Date(stats.dataUpdatedAt)) : null, [stats.dataUpdatedAt, locale, display.timezone]);
+    ? getDateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: display.timezone }).format(new Date(stats.dataUpdatedAt)) : null, [stats.dataUpdatedAt, locale, display.timezone]);
   return <section className="flex min-w-0 flex-col gap-3" aria-label={t('dbTitle')}>
     <div className="flex flex-wrap items-baseline justify-between gap-2">
       <h2 className="m-0 text-base font-semibold">{t('dbTitle')}</h2>
       {updated && <span className="text-sm tabular-nums text-muted-foreground">{t('dbUpdated', { time: updated })}</span>}
     </div>
-    {stats.isPending ? <div className="h-80 w-full animate-pulse rounded-md bg-rule" role="status" aria-label="loading" />
+    {stats.isPending ? <div className="h-80 w-full animate-pulse rounded-md bg-rule" role="status" aria-label={t('loadingStatus')} />
       : stats.isError ? <div role="alert" className="flex flex-col items-start gap-2 text-sm"><p className="m-0 text-destructive">{t('sysBlockFailed')}</p><Button type="button" variant="outline" onClick={() => void stats.refetch()}>{t('retry')}</Button></div>
         : <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
           <PostgresColumn pg={stats.data.postgres} buckets={buckets} bucketSeconds={bucketSeconds} locale={locale} />

@@ -40,7 +40,7 @@ def _bounded_json_counts(value: Any) -> tuple[int, int]:
             stack.extend((child, depth + 1) for child in current.values())
         elif isinstance(current, list):
             stack.extend((child, depth + 1) for child in current)
-        elif current is None or isinstance(current, (str, bool, int)) or isinstance(current, float) and current == current and abs(current) != float("inf"):  # noqa: PLR0124  # style-only rewrite skipped to avoid touching control flow
+        elif current is None or isinstance(current, (str, bool, int)) or isinstance(current, float) and current == current and abs(current) != float("inf"):
             continue
         else:
             raise ValueError("GitHub response contains a non-JSON value")

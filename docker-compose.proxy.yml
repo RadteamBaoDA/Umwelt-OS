@@ -9,6 +9,12 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
+  # The Caddyfile overwrites X-Forwarded-For with the real peer, and Next's /api rewrite forwards it unchanged, so the
+  # API can safely key its per-IP login limit/lockout on it. Without this a public production origin refuses to start.
+  api:
+    environment:
+      AUTH_TRUST_FORWARDED_FOR: "true"
+
   proxy:
     image: caddy:2.8.4-alpine
     environment:

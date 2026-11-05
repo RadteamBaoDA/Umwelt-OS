@@ -18,7 +18,11 @@ from modules.chat import routes, worker
 from modules.chat.models import Message, StreamEvent
 from modules.chat.schemas import AnswerContext
 from modules.settings.public import VizRouterResolved
-from tests.unit.test_b1c_regressions import _config, _evidence, _factory
+from tests.unit.typing_regressions.test_none_handling_regressions import (
+    _config,
+    _evidence,
+    _factory,
+)
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -195,7 +199,7 @@ async def test_recover_requeues_pending_and_fails_abandoned_streaming(monkeypatc
     session.execute = AsyncMock(return_value=SimpleNamespace(
         all=lambda: [(stale_id, {"_chat_privacy_fence": {"rev": 3}}, uuid4(), 1)]))
     session.scalar = AsyncMock(return_value=7)
-    run = SimpleNamespace(status="streaming", conversation_id=uuid4())
+    run = SimpleNamespace(status="streaming", conversation_id=uuid4(), workspace_id=uuid4())
     session.scalar = AsyncMock(side_effect=[7, run, object(), run, 7])
     session.add = MagicMock()
     session.commit = AsyncMock()
@@ -227,9 +231,9 @@ def _release_session(run: Any, published: Any, order: list[str], seq: int = 4) -
 
 async def test_shutdown_before_any_delta_returns_run_to_pending(monkeypatch: pytest.MonkeyPatch) -> None:
     order: list[str] = []
-    run = SimpleNamespace(status="streaming", conversation_id=uuid4())
+    run = SimpleNamespace(status="streaming", conversation_id=uuid4(), workspace_id=uuid4())
     session = _release_session(run, None, order)
-    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock(side_effect=lambda *_: order.append("privacy")))
+    monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock(side_effect=lambda *_a, **_k: order.append("privacy")))
     failed = AsyncMock()
     monkeypatch.setattr(worker, "_mark_failed", failed)
     await worker._release_on_shutdown(uuid4(), _factory(session), None)
@@ -243,7 +247,7 @@ async def test_shutdown_before_any_delta_returns_run_to_pending(monkeypatch: pyt
 
 
 async def test_cancel_near_job_timeout_fails_instead_of_pending(monkeypatch: pytest.MonkeyPatch) -> None:
-    run = SimpleNamespace(status="streaming", conversation_id=uuid4())
+    run = SimpleNamespace(status="streaming", conversation_id=uuid4(), workspace_id=uuid4())
     session = _release_session(run, None, [])
     monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
     failed = AsyncMock()
@@ -294,7 +298,7 @@ async def test_external_cancel_inside_session_call_still_releases_on_fresh_sessi
 
 
 async def test_shutdown_after_partial_deltas_fails_truthfully(monkeypatch: pytest.MonkeyPatch) -> None:
-    run = SimpleNamespace(status="streaming", conversation_id=uuid4())
+    run = SimpleNamespace(status="streaming", conversation_id=uuid4(), workspace_id=uuid4())
     session = _release_session(run, uuid4(), [])
     monkeypatch.setattr(worker, "lock_export_privacy", AsyncMock())
     failed = AsyncMock()
@@ -357,7 +361,7 @@ async def test_recover_fails_expired_pending_instead_of_requeueing(monkeypatch: 
     session.scalars = AsyncMock(side_effect=[[], [old_id]])
     session.execute = AsyncMock(return_value=SimpleNamespace(all=list))
     run = SimpleNamespace(
-        status="pending", conversation_id=uuid4(),
+        status="pending", conversation_id=uuid4(), workspace_id=uuid4(),
         updated_at=datetime.now(UTC) - worker.RECOVER_PENDING_MAX_AGE - timedelta(seconds=1),
     )
     session.scalar = AsyncMock(side_effect=[run, object(), run, 0])
@@ -440,7 +444,7 @@ async def test_recover_pending_age_uses_updated_at() -> None:
 
 async def test_fail_expired_pending_skips_run_released_to_pending_before_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     # listed as expired, then claimed and released back to pending (fresh updated_at) before the row lock
-    run = SimpleNamespace(status="pending", conversation_id=uuid4(), updated_at=datetime.now(UTC))
+    run = SimpleNamespace(status="pending", conversation_id=uuid4(), updated_at=datetime.now(UTC), workspace_id=uuid4())
     session = MagicMock()
     session.scalar = AsyncMock(side_effect=[run, object(), run])
     session.add = MagicMock()

@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from core.errors import ValidationFailedError
 from modules.knowledge.documents.models import DocumentChunk, DocumentVersion
 from modules.knowledge.documents.public import (
     EXTRACTION_CHUNK_LIMIT,
@@ -41,6 +42,7 @@ from modules.knowledge.documents.public import (
     news_retained_observation_allowed,
     read_extraction_input,
 )
+from tests.unit.modules._documents_patch import patch_documents
 from tests.unit.modules.knowledge.documents._scope import SCOPE_KW
 
 
@@ -188,7 +190,7 @@ class TestChunkingBounds:
         mock_draft1 = MagicMock(content="This is paragraph one.", token_count=5, metadata={})
         mock_draft2 = MagicMock(content="This is paragraph two.", token_count=5, metadata={})
 
-        with patch("modules.knowledge.documents.public.chunk_text", return_value=[mock_draft1, mock_draft2]):
+        with patch_documents("chunk_text", return_value=[mock_draft1, mock_draft2]):
             count = await add_content_chunks(session, version)
 
         assert count == 2
@@ -268,14 +270,13 @@ class TestCursorEncoding:
 
     def test_version_cursor_roundtrip_and_errors(self) -> None:
         """Verify encode_version_cursor and decode_version_cursor roundtrip."""
-        from fastapi import HTTPException
 
         v_num = 5
         cursor = encode_version_cursor(v_num)
         assert decode_version_cursor(cursor) == v_num
 
         # Negative or invalid values in decoded cursor raise HTTPException(422)
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValidationFailedError) as exc_info:
             decode_version_cursor("invalid=padded=")
         assert exc_info.value.status_code == 422
 
@@ -347,9 +348,9 @@ class TestRawlessExtractionLock:
     async def _lock(session, raw_uri, mime):
         from modules.knowledge.documents.public import lock_document_for_extraction
         from tests.unit.modules.knowledge.documents._scope import FENCE
-        with patch("modules.knowledge.documents.public._normalized_source_proof", AsyncMock()), \
-             patch("modules.knowledge.documents.public.lock_raw_uri_identity", AsyncMock()) as uri_lock, \
-             patch("modules.knowledge.documents.public.SourceFence", MagicMock):
+        with patch_documents("_normalized_source_proof", AsyncMock()), \
+             patch_documents("lock_raw_uri_identity", AsyncMock()) as uri_lock, \
+             patch_documents("SourceFence", MagicMock):
             ok = await lock_document_for_extraction(
                 session, uuid4(), uuid4(), access_fence=FENCE, source_fence=MagicMock(generation=1),
                 expected_raw_uri=raw_uri, expected_mime_type=mime, **SCOPE_KW,

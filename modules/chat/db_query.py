@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope
 from modules.chat.schemas import DB_QUERY_KEY, GADGET_SCOPE_KEY, EvidenceItem
+from modules.chat.sql_guard import check_select_policy
 from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
 from modules.knowledge.observations.models import Observation
 from modules.sources.models import Source
@@ -29,23 +30,6 @@ from modules.sources.models import Source
 TOOL_QUERY_COLLECTED_DATA = "query_collected_data"
 MAX_DB_QUERY_ROWS = 50
 MAX_SQL_LENGTH = 2000
-
-_FORBIDDEN_SQL_TOKENS = re.compile(
-    r"\b("
-    r"insert|update|delete|drop|alter|truncate|create|replace|grant|revoke|copy|"
-    r"execute|call|do|set|reset|show|lock|vacuum|analyze|explain|listen|notify|"
-    r"prepare|deallocate|begin|commit|rollback|savepoint|into|pg_sleep|pg_read_file|"
-    r"pg_ls_dir|pg_stat|information_schema|pg_catalog|dblink|lo_import|lo_export|"
-    r"owner|auth_sessions|users|workspaces|workspace_memberships|conversations|"
-    r"messages|response_runs|stream_events|connector_rest_credentials|"
-    r"connector_oauth_grants|collector_credentials|"
-    r"observations|documents|document_versions|document_chunks|sources"
-    r")\b",
-    re.IGNORECASE,
-)
-_FORBIDDEN_PREFIX_RE = re.compile(r"\b(pg_|connector_)", re.IGNORECASE)
-_ALLOWED_CTE_RE = re.compile(r"\b(scoped_observations|scoped_documents)\b", re.IGNORECASE)
-_FOR_LOCKING_RE = re.compile(r"\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b", re.IGNORECASE)
 
 _AUTO_DB_KEYWORDS_RE = re.compile(
     r"\b("
@@ -197,7 +181,14 @@ def should_auto_enable_db_query(
 
 
 def validate_readonly_sql(sql: str) -> str:
-    """Validate a model-generated SQL string to guarantee read-only SELECT execution on scoped CTEs.
+    """Validate a model-generated SQL string so only a read-only SELECT over the scoped views can run.
+
+    Layers applied here: length bound, comment/semicolon ban (keeps the ``SELECT * FROM (<sql>)``
+    wrapper intact), then the ``pglast`` default-deny allowlist in :mod:`modules.chat.sql_guard`. The
+    former keyword regex was removed on purpose: the parser rejects every relation/function it guarded
+    (and the ones it missed, e.g. ``chat_messages``, ``query_to_xml``) while the regex also refused
+    legitimate literals such as ``WHERE symbol = 'users'``. Execution adds two more layers (see
+    ``_execute_sql_mode``): a least-privilege role and a read-only transaction.
 
     Args:
         sql: Raw SQL string supplied by the model in ``mode='sql'``.
@@ -206,8 +197,7 @@ def validate_readonly_sql(sql: str) -> str:
         Cleaned single-statement SELECT query string without trailing semicolon.
 
     Raises:
-        ValueError: If the SQL is empty, not a SELECT/WITH query, contains comments/semicolons/DDL/DML,
-            or fails to reference ``scoped_observations`` or ``scoped_documents``.
+        ValueError: If the SQL is empty/too long, has comments or semicolons, or violates the allowlist.
     """
     cleaned = (sql or "").strip()
     if cleaned.endswith(";"):
@@ -216,14 +206,7 @@ def validate_readonly_sql(sql: str) -> str:
         raise ValueError("SQL query must be between 1 and 2000 characters")
     if ";" in cleaned or "--" in cleaned or "/*" in cleaned or "*/" in cleaned:
         raise ValueError("SQL query must be a single statement without comments or semicolons")
-    if not re.match(r"^\s*(select|with)\b", cleaned, re.IGNORECASE) or not re.search(r"\bselect\b", cleaned, re.IGNORECASE):
-        raise ValueError("SQL query must begin with SELECT or WITH ... SELECT")
-    if _FORBIDDEN_SQL_TOKENS.search(cleaned) or _FORBIDDEN_PREFIX_RE.search(cleaned):
-        raise ValueError("SQL query contains a forbidden keyword or system identifier")
-    if _FOR_LOCKING_RE.search(cleaned):
-        raise ValueError("SQL locking clauses are not allowed")
-    if not _ALLOWED_CTE_RE.search(cleaned):
-        raise ValueError("SQL query must reference scoped_observations or scoped_documents")
+    check_select_policy(cleaned)
     return cleaned
 
 
@@ -385,7 +368,7 @@ async def execute_db_query_tool(
 
     try:
         args = QueryCollectedDataArgs.model_validate(raw_arguments or {})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # tool argument validation failure is reported to the model as invalid_arguments
         return json.dumps({"error": f"invalid_arguments: {type(exc).__name__}", "rows": []})
 
     ctx = retrieval_context or {}
@@ -427,8 +410,108 @@ async def execute_db_query_tool(
             )
     except ValueError as exc:
         return json.dumps({"error": str(exc), "rows": []})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # any query failure is returned as a sanitized tool error (exception type only)
         return json.dumps({"error": f"query_execution_failed: {type(exc).__name__}", "rows": []})
+
+
+CHAT_SQL_READER_ROLE = "umwelt_chat_sql_reader"
+_SQL_SAVEPOINT = "chat_sql_reader"
+
+_SCOPED_OBSERVATIONS_VIEW = """
+CREATE TEMP VIEW scoped_observations WITH (security_barrier = true) AS
+SELECT o.id, o.source_id, o.provider, o.metric, o.symbol, o.region, o.value, o.unit, o.currency,
+       o.observed_at, o.published_at, o.quality, o.is_current, o.document_id, o.document_version_id
+FROM observations o
+WHERE o.workspace_id = CAST('{workspace_id}' AS uuid)
+  AND o.source_id = ANY(CAST(ARRAY[{source_ids}] AS uuid[]))
+"""
+_SCOPED_DOCUMENTS_VIEW = """
+CREATE TEMP VIEW scoped_documents WITH (security_barrier = true) AS
+SELECT d.id, d.source_id, s.provider, d.title, d.canonical_url, d.published_at, d.observed_at,
+       d.language, LEFT(dv.content, 600) AS content_excerpt, dv.id AS document_version_id
+FROM documents d
+JOIN sources s ON s.id = d.source_id AND s.workspace_id = d.workspace_id
+JOIN document_versions dv ON dv.document_id = d.id AND dv.version_number = d.current_version
+WHERE d.workspace_id = CAST('{workspace_id}' AS uuid)
+  AND d.source_id = ANY(CAST(ARRAY[{source_ids}] AS uuid[]))
+"""
+
+
+def build_scoped_view_statements(workspace_id: UUID, allowed_source_ids: list[UUID]) -> list[str]:
+    """Return the DDL that exposes the workspace-fenced views to the reader role.
+
+    The views are TEMP, ``security_barrier`` views owned by the session user, so the reader role can
+    SELECT them (after an explicit GRANT) without holding any privilege on ``observations`` /
+    ``documents`` / ``sources``; Postgres evaluates view bodies with the owner's rights, and the
+    barrier stops model predicates from being pushed below the workspace filter. Utility statements
+    cannot take bind parameters, so the ids are inlined; they are ``UUID`` instances rendered by
+    ``str()`` (hex and dashes only), never model text.
+
+    Raises:
+        TypeError: If ``workspace_id`` or any source id is not a ``uuid.UUID`` instance. The annotation is
+            not enough because the values are formatted straight into DDL; a plain ``str`` is refused so
+            quoting or SQL can never be smuggled in.
+    """
+    if not isinstance(workspace_id, UUID) or not all(isinstance(sid, UUID) for sid in allowed_source_ids):
+        raise TypeError("workspace_id and every allowed source id must be uuid.UUID instances")
+    ids = ", ".join(f"'{sid}'" for sid in allowed_source_ids)
+    fmt = {"workspace_id": str(workspace_id), "source_ids": ids}
+    return [
+        _SCOPED_OBSERVATIONS_VIEW.format(**fmt),
+        _SCOPED_DOCUMENTS_VIEW.format(**fmt),
+        f"GRANT SELECT ON scoped_observations, scoped_documents TO {CHAT_SQL_READER_ROLE}",
+    ]
+
+
+async def _run_sql_as_reader(
+    session: AsyncSession,
+    clean_sql: str,
+    *,
+    workspace_id: UUID,
+    allowed_source_ids: list[UUID],
+    max_rows: int,
+) -> list[Any]:
+    """Execute validated model SQL with least privilege and return fully-fetched row mappings.
+
+    Ordering (all inside one raw SAVEPOINT so nothing leaks into the caller's transaction):
+    1. create the TEMP scoped views and GRANT them to ``umwelt_chat_sql_reader`` as the session user;
+    2. ``SET LOCAL transaction_read_only = on`` then ``SET LOCAL ROLE`` the NOLOGIN reader, which owns
+       and may read nothing else, so even a parser-allowlist bypass cannot touch other tables;
+    3. run ``SELECT * FROM (<sql>) LIMIT :max_rows`` (the caller's 2000ms statement_timeout applies);
+    4. ``ROLLBACK TO SAVEPOINT`` which reverts the role, read-only flag and temp views (SET LOCAL
+       inside a released ORM savepoint would otherwise persist and make the turn's later writes fail).
+    Rows are fetched before the rollback. A raw savepoint is used because an ORM rollback would
+    expire the caller's loaded objects. On error the same ``ROLLBACK TO``/``RELEASE`` pair runs
+    best-effort (so role, read-only flag and temp views never outlive a failed query), then the original
+    exception propagates and the caller's own savepoint rollback discards everything else.
+
+    Raises:
+        TypeError: ``workspace_id``/source ids are not ``uuid.UUID`` (nothing is executed).
+    """
+    statements = build_scoped_view_statements(workspace_id, allowed_source_ids)  # validates ids before any I/O
+    await session.execute(text(f"SAVEPOINT {_SQL_SAVEPOINT}"))
+    try:
+        for statement in statements:
+            await session.execute(text(statement))
+        await session.execute(text("SET LOCAL transaction_read_only = on"))
+        await session.execute(text(f"SET LOCAL ROLE {CHAT_SQL_READER_ROLE}"))
+        res = await session.execute(
+            text("SELECT * FROM (" + clean_sql + ") AS _bounded_query LIMIT :max_rows"),  # noqa: S608  # clean_sql passed the read-only single-statement guard and runs under SET LOCAL ROLE
+            {"max_rows": max_rows},
+        )
+        mappings = list(res.mappings().all())
+    except Exception:
+        # A failing model query aborts the Postgres transaction and leaves the reader role / read-only flag
+        # active. Roll back to our savepoint so role, flag and temp views are reverted and the session is
+        # usable again even if the caller does not discard its own savepoint. A failure of the cleanup itself
+        # (e.g. lost connection) must not mask the original error.
+        with suppress(Exception):
+            await session.execute(text(f"ROLLBACK TO SAVEPOINT {_SQL_SAVEPOINT}"))
+            await session.execute(text(f"RELEASE SAVEPOINT {_SQL_SAVEPOINT}"))
+        raise
+    await session.execute(text(f"ROLLBACK TO SAVEPOINT {_SQL_SAVEPOINT}"))
+    await session.execute(text(f"RELEASE SAVEPOINT {_SQL_SAVEPOINT}"))
+    return mappings
 
 
 async def _execute_sql_mode(
@@ -440,66 +523,19 @@ async def _execute_sql_mode(
     limit: int,
     evidence_list: list[EvidenceItem],
 ) -> str:
-    """Run a validated read-only SELECT query inside pre-fenced CTE views."""
+    """Validate, run (least-privilege, read-only) and serialise a model-written SELECT.
+
+    Raises:
+        ValueError: when the SQL fails the parser allowlist (reported to the model, nothing executed).
+    """
     clean_sql = validate_readonly_sql(sql_query)
-    wrapped = text(
-        """
-        WITH scoped_observations AS (
-            SELECT
-                o.id,
-                o.source_id,
-                o.provider,
-                o.metric,
-                o.symbol,
-                o.region,
-                o.value,
-                o.unit,
-                o.currency,
-                o.observed_at,
-                o.published_at,
-                o.quality,
-                o.is_current,
-                o.document_id,
-                o.document_version_id
-            FROM observations o
-            WHERE o.workspace_id = :workspace_id
-              AND o.source_id = ANY(:source_ids)
-        ),
-        scoped_documents AS (
-            SELECT
-                d.id,
-                d.source_id,
-                s.provider,
-                d.title,
-                d.canonical_url,
-                d.published_at,
-                d.observed_at,
-                d.language,
-                LEFT(dv.content, 600) AS content_excerpt,
-                dv.id AS document_version_id
-            FROM documents d
-            JOIN sources s ON s.id = d.source_id AND s.workspace_id = d.workspace_id
-            JOIN document_versions dv ON dv.document_id = d.id AND dv.version_number = d.current_version
-            WHERE d.workspace_id = :workspace_id
-              AND d.source_id = ANY(:source_ids)
-        )
-        SELECT * FROM (
-        """
-        + clean_sql
-        + """
-        ) AS _bounded_query
-        LIMIT :max_rows
-        """
+    mappings = await _run_sql_as_reader(
+        session,
+        clean_sql,
+        workspace_id=workspace_id,
+        allowed_source_ids=allowed_source_ids,
+        max_rows=min(limit, MAX_DB_QUERY_ROWS),
     )
-    res = await session.execute(
-        wrapped,
-        {
-            "workspace_id": workspace_id,
-            "source_ids": allowed_source_ids,
-            "max_rows": min(limit, MAX_DB_QUERY_ROWS),
-        },
-    )
-    mappings = res.mappings().all()
     version_pairs: list[tuple[UUID, UUID]] = []
     for row in mappings:
         doc_id = row.get("document_id") or row.get("id")
@@ -534,6 +570,244 @@ async def _execute_sql_mode(
     )
 
 
+def _observation_filters(
+    args: QueryCollectedDataArgs,
+    *,
+    workspace_id: UUID,
+    allowed_source_ids: list[UUID],
+    date_from: datetime | None,
+    date_to: datetime | None,
+) -> list[Any]:
+    """Build the workspace/source-scoped SQLAlchemy filter list for observation queries.
+
+    Pure: builds expressions only, no I/O. The workspace and allowed-source predicates are
+    always first so the permission boundary can never be dropped by an optional filter.
+    """
+    obs_filters: list[Any] = [
+        Observation.workspace_id == workspace_id,
+        Observation.source_id.in_(allowed_source_ids),
+    ]
+    if args.current_only and args.aggregation not in ("timeseries", "avg", "min", "max", "sum", "count"):
+        obs_filters.append(Observation.is_current.is_(True))
+    if args.providers:
+        obs_filters.append(
+            func.lower(Observation.provider).in_([p.strip().lower() for p in args.providers if p.strip()])
+        )
+    if args.metrics:
+        obs_filters.append(
+            func.lower(Observation.metric).in_([m.strip().lower() for m in args.metrics if m.strip()])
+        )
+    if args.symbols:
+        obs_filters.append(
+            func.upper(Observation.symbol).in_([s.strip().upper() for s in args.symbols if s.strip()])
+        )
+    if args.region:
+        obs_filters.append(func.upper(Observation.region) == args.region.strip().upper())
+    if date_from is not None:
+        obs_filters.append(Observation.observed_at >= date_from)
+    if date_to is not None:
+        obs_filters.append(Observation.observed_at <= date_to)
+    return obs_filters
+
+
+async def _observation_aggregates(
+    session: AsyncSession, obs_filters: list[Any], limit: int
+) -> list[dict[str, Any]]:
+    """Run the grouped observation aggregate query and return JSON-ready aggregate rows.
+
+    Read-only; one SELECT on ``session`` ordered by latest observation, bounded by ``limit``.
+    """
+    agg_rows = (
+        await session.execute(
+            select(
+                Observation.provider,
+                Observation.metric,
+                Observation.symbol,
+                Observation.unit,
+                Observation.currency,
+                func.count(Observation.id).label("row_count"),
+                func.avg(Observation.value).label("avg_value"),
+                func.min(Observation.value).label("min_value"),
+                func.max(Observation.value).label("max_value"),
+                func.sum(Observation.value).label("sum_value"),
+                func.max(Observation.observed_at).label("latest_observed_at"),
+            )
+            .where(*obs_filters)
+            .group_by(
+                Observation.provider,
+                Observation.metric,
+                Observation.symbol,
+                Observation.unit,
+                Observation.currency,
+            )
+            .order_by(desc(func.max(Observation.observed_at)))
+            .limit(limit)
+        )
+    ).all()
+    return [
+        {
+            "provider": r.provider,
+            "metric": r.metric,
+            "symbol": r.symbol,
+            "unit": r.unit,
+            "currency": r.currency,
+            "count": int(r.row_count or 0),
+            "avg": float(r.avg_value) if r.avg_value is not None else None,
+            "min": float(r.min_value) if r.min_value is not None else None,
+            "max": float(r.max_value) if r.max_value is not None else None,
+            "sum": float(r.sum_value) if r.sum_value is not None else None,
+            "latest_observed_at": r.latest_observed_at.isoformat() if r.latest_observed_at else None,
+        }
+        for r in agg_rows
+    ]
+
+
+def _document_filters(
+    args: QueryCollectedDataArgs,
+    *,
+    workspace_id: UUID,
+    allowed_source_ids: list[UUID],
+    date_from: datetime | None,
+    date_to: datetime | None,
+) -> list[Any]:
+    """Build the workspace/source-scoped filter list (incl. full-text/ILIKE) for document queries.
+
+    Pure expression builder; the workspace and allowed-source predicates are always first.
+    """
+    doc_filters: list[Any] = [
+        Document.workspace_id == workspace_id,
+        Document.source_id.in_(allowed_source_ids),
+    ]
+    if args.providers:
+        doc_filters.append(
+            func.lower(Source.provider).in_([p.strip().lower() for p in args.providers if p.strip()])
+        )
+    if date_from is not None:
+        doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) >= date_from)
+    if date_to is not None:
+        doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) <= date_to)
+    if args.text_query and args.text_query.strip():
+        q = args.text_query.strip()
+        ts_query = func.websearch_to_tsquery("simple", q)
+        ts_vec = func.to_tsvector(
+            "simple",
+            func.concat(Document.title, " ", func.coalesce(DocumentVersion.content, "")),
+        )
+        pattern = f"%{q}%"
+        doc_filters.append(
+            or_(
+                ts_vec.op("@@")(ts_query),
+                Document.title.ilike(pattern),
+                DocumentVersion.content.ilike(pattern),
+            )
+        )
+    return doc_filters
+
+
+async def _select_structured_documents(
+    session: AsyncSession, doc_filters: list[Any], limit: int
+) -> list[Any]:
+    """Select the newest matching documents joined to source and current version (one SELECT)."""
+    return list(
+        (
+            await session.execute(
+                select(
+                    Document.id.label("document_id"),
+                    Document.source_id.label("source_id"),
+                    Source.provider.label("provider"),
+                    Source.name.label("source_name"),
+                    Document.title.label("title"),
+                    Document.canonical_url.label("url"),
+                    Document.published_at.label("published_at"),
+                    Document.observed_at.label("observed_at"),
+                    DocumentVersion.id.label("document_version_id"),
+                    func.left(DocumentVersion.content, 500).label("excerpt"),
+                )
+                .join(Source, and_(Source.id == Document.source_id, Source.workspace_id == Document.workspace_id))
+                .join(
+                    DocumentVersion,
+                    and_(
+                        DocumentVersion.document_id == Document.id,
+                        DocumentVersion.version_number == Document.current_version,
+                    ),
+                )
+                .where(*doc_filters)
+                .order_by(desc(func.coalesce(Document.observed_at, Document.created_at)), desc(Document.id))
+                .limit(limit)
+            )
+        ).all()
+    )
+
+
+async def _hot_cache_snapshots(
+    redis: Any, workspace_id: UUID, allowed_source_ids: list[UUID]
+) -> list[dict[str, Any]]:
+    """Read up to 8 connector hot-cache snapshots from Redis; any failure yields what was read.
+
+    The cache is a best-effort enrichment, so every error is suppressed (never raises).
+    """
+    hot_snapshots: list[dict[str, Any]] = []
+    with suppress(Exception):
+        for sid in allowed_source_ids[:8]:
+            raw_snap = await redis.get(f"connector:snapshot:{workspace_id}:{sid}")
+            if raw_snap:
+                snap = json.loads(raw_snap.decode("utf-8") if isinstance(raw_snap, bytes) else str(raw_snap))
+                if isinstance(snap, dict):
+                    hot_snapshots.append(
+                        {
+                            "provider": snap.get("provider"),
+                            "realtime_tier": snap.get("realtime_tier"),
+                            "collected_at": snap.get("collected_at"),
+                            "record_count": snap.get("record_count"),
+                        }
+                    )
+    return hot_snapshots
+
+
+def _serialize_observations(obs_rows: Any, citation_map: dict[UUID, int]) -> list[dict[str, Any]]:
+    """Serialise observation rows, attaching ``[n]`` citation markers from ``citation_map``."""
+    return [
+        {
+            "provider": obs.provider,
+            "metric": obs.metric,
+            "symbol": obs.symbol,
+            "region": obs.region,
+            "value": obs.value,
+            "unit": obs.unit,
+            "currency": obs.currency,
+            "observed_at": obs.observed_at.isoformat(),
+            "is_current": obs.is_current,
+            "citation": (
+                f"[{citation_map[obs.document_version_id]}]"
+                if obs.document_version_id in citation_map
+                else None
+            ),
+        }
+        for obs in obs_rows
+    ]
+
+
+def _serialize_documents(doc_rows: list[Any], citation_map: dict[UUID, int]) -> list[dict[str, Any]]:
+    """Serialise structured document rows, attaching ``[n]`` citation markers from ``citation_map``."""
+    return [
+        {
+            "provider": d.provider,
+            "source_name": d.source_name,
+            "title": d.title,
+            "url": d.url,
+            "published_at": d.published_at.isoformat() if d.published_at else None,
+            "observed_at": d.observed_at.isoformat() if d.observed_at else None,
+            "excerpt": d.excerpt,
+            "citation": (
+                f"[{citation_map[d.document_version_id]}]"
+                if d.document_version_id in citation_map
+                else None
+            ),
+        }
+        for d in doc_rows
+    ]
+
+
 async def _execute_structured_mode(
     session: AsyncSession,
     args: QueryCollectedDataArgs,
@@ -545,211 +819,55 @@ async def _execute_structured_mode(
     evidence_list: list[EvidenceItem],
     redis: Any = None,
 ) -> str:
-    """Execute parameterized SQLAlchemy queries for observations and/or documents."""
+    """Execute parameterized SQLAlchemy queries for observations and/or documents.
+
+    Query order is fixed: optional observation aggregate, observation rows, document rows, then
+    evidence registration (which appends to ``evidence_list``), then the best-effort Redis
+    hot-cache read. Read-only on ``session``; no commit. Returns the JSON payload string.
+    """
     out: dict[str, Any] = {"mode": "structured", "aggregation": args.aggregation}
     version_pairs: list[tuple[UUID, UUID]] = []
+    want_obs = args.target in ("observations", "both")
+    want_docs = args.target in ("documents", "both")
 
-    if args.target in ("observations", "both"):
-        obs_filters = [
-            Observation.workspace_id == workspace_id,
-            Observation.source_id.in_(allowed_source_ids),
-        ]
-        if args.current_only and args.aggregation not in ("timeseries", "avg", "min", "max", "sum", "count"):
-            obs_filters.append(Observation.is_current.is_(True))
-        if args.providers:
-            obs_filters.append(
-                func.lower(Observation.provider).in_([p.strip().lower() for p in args.providers if p.strip()])
-            )
-        if args.metrics:
-            obs_filters.append(
-                func.lower(Observation.metric).in_([m.strip().lower() for m in args.metrics if m.strip()])
-            )
-        if args.symbols:
-            obs_filters.append(
-                func.upper(Observation.symbol).in_([s.strip().upper() for s in args.symbols if s.strip()])
-            )
-        if args.region:
-            obs_filters.append(func.upper(Observation.region) == args.region.strip().upper())
-        if date_from is not None:
-            obs_filters.append(Observation.observed_at >= date_from)
-        if date_to is not None:
-            obs_filters.append(Observation.observed_at <= date_to)
-
+    obs_rows: list[Any] = []
+    if want_obs:
+        obs_filters = _observation_filters(
+            args, workspace_id=workspace_id, allowed_source_ids=allowed_source_ids,
+            date_from=date_from, date_to=date_to,
+        )
         if args.aggregation in ("avg", "min", "max", "sum", "count"):
-            agg_rows = (
-                await session.execute(
-                    select(
-                        Observation.provider,
-                        Observation.metric,
-                        Observation.symbol,
-                        Observation.unit,
-                        Observation.currency,
-                        func.count(Observation.id).label("row_count"),
-                        func.avg(Observation.value).label("avg_value"),
-                        func.min(Observation.value).label("min_value"),
-                        func.max(Observation.value).label("max_value"),
-                        func.sum(Observation.value).label("sum_value"),
-                        func.max(Observation.observed_at).label("latest_observed_at"),
-                    )
-                    .where(*obs_filters)
-                    .group_by(
-                        Observation.provider,
-                        Observation.metric,
-                        Observation.symbol,
-                        Observation.unit,
-                        Observation.currency,
-                    )
-                    .order_by(desc(func.max(Observation.observed_at)))
-                    .limit(args.limit)
-                )
-            ).all()
-            out["observation_aggregates"] = [
-                {
-                    "provider": r.provider,
-                    "metric": r.metric,
-                    "symbol": r.symbol,
-                    "unit": r.unit,
-                    "currency": r.currency,
-                    "count": int(r.row_count or 0),
-                    "avg": float(r.avg_value) if r.avg_value is not None else None,
-                    "min": float(r.min_value) if r.min_value is not None else None,
-                    "max": float(r.max_value) if r.max_value is not None else None,
-                    "sum": float(r.sum_value) if r.sum_value is not None else None,
-                    "latest_observed_at": r.latest_observed_at.isoformat() if r.latest_observed_at else None,
-                }
-                for r in agg_rows
-            ]
-
-        obs_rows = (
-            await session.execute(
-                select(Observation)
-                .where(*obs_filters)
-                .order_by(desc(Observation.observed_at), desc(Observation.id))
-                .limit(args.limit)
-            )
-        ).scalars().all()
-        for obs in obs_rows:
-            version_pairs.append((obs.document_id, obs.document_version_id))
-
-    doc_rows_raw: list[Any] = []
-    if args.target in ("documents", "both"):
-        doc_filters = [
-            Document.workspace_id == workspace_id,
-            Document.source_id.in_(allowed_source_ids),
-        ]
-        if args.providers:
-            doc_filters.append(
-                func.lower(Source.provider).in_([p.strip().lower() for p in args.providers if p.strip()])
-            )
-        if date_from is not None:
-            doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) >= date_from)
-        if date_to is not None:
-            doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) <= date_to)
-        if args.text_query and args.text_query.strip():
-            q = args.text_query.strip()
-            ts_query = func.websearch_to_tsquery("simple", q)
-            ts_vec = func.to_tsvector(
-                "simple",
-                func.concat(Document.title, " ", func.coalesce(DocumentVersion.content, "")),
-            )
-            pattern = f"%{q}%"
-            doc_filters.append(
-                or_(
-                    ts_vec.op("@@")(ts_query),
-                    Document.title.ilike(pattern),
-                    DocumentVersion.content.ilike(pattern),
-                )
-            )
-
-        doc_rows_raw = list(
+            out["observation_aggregates"] = await _observation_aggregates(session, obs_filters, args.limit)
+        obs_rows = list(
             (
                 await session.execute(
-                    select(
-                        Document.id.label("document_id"),
-                        Document.source_id.label("source_id"),
-                        Source.provider.label("provider"),
-                        Source.name.label("source_name"),
-                        Document.title.label("title"),
-                        Document.canonical_url.label("url"),
-                        Document.published_at.label("published_at"),
-                        Document.observed_at.label("observed_at"),
-                        DocumentVersion.id.label("document_version_id"),
-                        func.left(DocumentVersion.content, 500).label("excerpt"),
-                    )
-                    .join(Source, and_(Source.id == Document.source_id, Source.workspace_id == Document.workspace_id))
-                    .join(
-                        DocumentVersion,
-                        and_(
-                            DocumentVersion.document_id == Document.id,
-                            DocumentVersion.version_number == Document.current_version,
-                        ),
-                    )
-                    .where(*doc_filters)
-                    .order_by(desc(func.coalesce(Document.observed_at, Document.created_at)), desc(Document.id))
+                    select(Observation)
+                    .where(*obs_filters)
+                    .order_by(desc(Observation.observed_at), desc(Observation.id))
                     .limit(args.limit)
                 )
-            ).all()
+            ).scalars().all()
         )
-        for d in doc_rows_raw:
-            version_pairs.append((d.document_id, d.document_version_id))
+        version_pairs.extend((obs.document_id, obs.document_version_id) for obs in obs_rows)
+
+    doc_rows_raw: list[Any] = []
+    if want_docs:
+        doc_filters = _document_filters(
+            args, workspace_id=workspace_id, allowed_source_ids=allowed_source_ids,
+            date_from=date_from, date_to=date_to,
+        )
+        doc_rows_raw = await _select_structured_documents(session, doc_filters, args.limit)
+        version_pairs.extend((d.document_id, d.document_version_id) for d in doc_rows_raw)
 
     citation_map = await _register_evidence_for_versions(session, version_pairs, evidence_list)
 
-    if args.target in ("observations", "both"):
-        out["observations"] = [
-            {
-                "provider": obs.provider,
-                "metric": obs.metric,
-                "symbol": obs.symbol,
-                "region": obs.region,
-                "value": obs.value,
-                "unit": obs.unit,
-                "currency": obs.currency,
-                "observed_at": obs.observed_at.isoformat(),
-                "is_current": obs.is_current,
-                "citation": (
-                    f"[{citation_map[obs.document_version_id]}]"
-                    if obs.document_version_id in citation_map
-                    else None
-                ),
-            }
-            for obs in obs_rows
-        ]
-    if args.target in ("documents", "both"):
-        out["documents"] = [
-            {
-                "provider": d.provider,
-                "source_name": d.source_name,
-                "title": d.title,
-                "url": d.url,
-                "published_at": d.published_at.isoformat() if d.published_at else None,
-                "observed_at": d.observed_at.isoformat() if d.observed_at else None,
-                "excerpt": d.excerpt,
-                "citation": (
-                    f"[{citation_map[d.document_version_id]}]"
-                    if d.document_version_id in citation_map
-                    else None
-                ),
-            }
-            for d in doc_rows_raw
-        ]
+    if want_obs:
+        out["observations"] = _serialize_observations(obs_rows, citation_map)
+    if want_docs:
+        out["documents"] = _serialize_documents(doc_rows_raw, citation_map)
 
     if redis is not None and callable(getattr(redis, "get", None)):
-        hot_snapshots: list[dict[str, Any]] = []
-        with suppress(Exception):
-            for sid in allowed_source_ids[:8]:
-                raw_snap = await redis.get(f"connector:snapshot:{workspace_id}:{sid}")
-                if raw_snap:
-                    snap = json.loads(raw_snap.decode("utf-8") if isinstance(raw_snap, bytes) else str(raw_snap))
-                    if isinstance(snap, dict):
-                        hot_snapshots.append(
-                            {
-                                "provider": snap.get("provider"),
-                                "realtime_tier": snap.get("realtime_tier"),
-                                "collected_at": snap.get("collected_at"),
-                                "record_count": snap.get("record_count"),
-                            }
-                        )
+        hot_snapshots = await _hot_cache_snapshots(redis, workspace_id, allowed_source_ids)
         if hot_snapshots:
             out["hot_cache_snapshots"] = hot_snapshots
 

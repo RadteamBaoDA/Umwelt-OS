@@ -1,0 +1,169 @@
+"""PostgreSQL capacity for one awaited local heavy job, independent of remote graph uncertainty."""
+
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from functools import wraps
+from typing import ParamSpec, TypeVar, cast
+from uuid import UUID
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from core.ids import uuid7
+from core.worker_retry import retry_with_backoff
+
+P = ParamSpec("P")
+R = TypeVar("R")
+MAX_OPERATION_SECONDS = 150
+HEAVY_RETRY_DEFER_SECONDS = 5  # backoff base for slot contention; see HEAVY_RETRY_CAP_SECONDS
+HEAVY_RETRY_CAP_SECONDS = 15  # contention backoff ceiling: 5, 10, 15, 15... s (equal jitter halves the floor)
+HEAVY_BLOCKED_BASE_SECONDS = 30  # remote-guard block backoff base; guards expire on their own
+HEAVY_BLOCKED_CAP_SECONDS = 120
+# arq counts every Retry as a try and, once tries run out, stores the failure for the worker-level
+# keep_result_s (3600 s), which blocks re-enqueue of the same job id. A contended heavy job must
+# therefore outlast the longest slot hold. With equal-jitter backoff capped at 15 s the minimum delays
+# are 2.5 s (try 1), 5 s (try 2) and 7.5 s (tries 3+), so 60 tries wait >= ~435 s > MAX_OPERATION_SECONDS (150 s).
+HEAVY_JOB_MAX_TRIES = 60
+HEAVY_LOCK_KEY = 732941801
+
+
+async def to_thread_joined[T](fn: Callable[..., T], /, *args: object) -> T:
+    """Run fn in a thread; on cancellation wait for the thread to finish before re-raising, so a heavy slot is never released under live host work."""
+    task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.wait({task})
+        raise
+
+
+class HeavyWorkBusy(TimeoutError):
+    """Indicate cross-process contention before domain work is claimed."""
+
+
+class HeavyLeaseLost(RuntimeError):
+    """Reject continuing local work after its ownership connection fails."""
+
+
+class RemoteHeavyWorkBlocked(RuntimeError):
+    """Reject new local heavy work while an earlier remote job may still run."""
+
+
+@dataclass(frozen=True)
+class HeavyLease:
+    """Identify local operation and monotonic deadline, never remote cessation.
+
+    UUID is diagnostic identity; PostgreSQL transaction owns the advisory lock.
+    """
+
+    token: UUID
+    deadline: float
+
+
+@asynccontextmanager
+async def heavy_job_slot(
+    factory: async_sessionmaker[AsyncSession], *, timeout_seconds: float = 120,
+) -> AsyncIterator[HeavyLease]:
+    """Serialize awaited heavy work with a dedicated PostgreSQL transaction.
+
+    Acquire before domain claims/source/document fences, retain through awaited
+    coroutine cleanup/publication, then session rollback releases only this lock.
+    Existing workers default to 120 seconds. Temporal may explicitly reserve
+    150 seconds for its 120-second adapter deadline and 30-second owner overhead.
+    Acquisition and work share that fixed deadline. Cancellation cleanup can
+    exceed the deadline and retains capacity until complete. No detached host
+    work is permitted: parsers must terminate/join children before returning.
+    Connection death releases the server lock without a TTL takeover; it does
+    not prove remote cancellation. Model slots/graph partition uncertainty stay
+    under their respective owners. This helper never commits domain state.
+
+    Why a transaction stays open across I/O (deliberate): the slot IS the transaction-scoped advisory lock,
+    so the cluster-wide capacity is released by any rollback/crash/connection loss with no TTL takeover. It
+    pins one server connection for at most MAX_OPERATION_SECONDS (150 s), which is correct under PgBouncer
+    transaction pooling too (the pooler keeps the backend for the whole transaction). The 10 s ``SELECT 1``
+    heartbeat keeps the connection from ever idling longer than 10 s, far below
+    ``idle_in_transaction_session_timeout`` (240 s default), and holds no row locks; domain work runs on its
+    own sessions. The session is not a session-level lock, so it needs no direct connection.
+    """
+    if not 0 < timeout_seconds <= MAX_OPERATION_SECONDS:
+        raise ValueError("Heavy operation timeout must be within 150 seconds")
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    lease = HeavyLease(uuid7(), deadline)
+    async with factory() as session:
+        async with asyncio.timeout_at(deadline):
+            async with asyncio.timeout(5):
+                acquired = await session.scalar(text(
+                    "SELECT pg_try_advisory_xact_lock(:key)"
+                ), {"key": HEAVY_LOCK_KEY})
+            if not acquired:
+                raise HeavyWorkBusy("Another process owns heavy execution capacity")
+            # The remote guard is durable across loss of this local connection;
+            # a guard stops blocking once its expires_at passes (set just past the
+            # remote job's hard bound), which is the recovery path for a dead service.
+            from core.heavy_work.remote import has_blocking_remote_heavy_work
+
+            if await has_blocking_remote_heavy_work(session):
+                raise RemoteHeavyWorkBlocked(
+                    "Remote heavy work is active or uncertain; retry after its guard clears or expires"
+                )
+            owner = asyncio.current_task()
+            renewal_error: Exception | None = None
+
+            async def renew() -> None:
+                """Probe held connection periodically and cancel local work on loss.
+
+                Transaction locks need no expiry extension. Probe failure cannot
+                establish whether a dispatched remote operation has stopped.
+                """
+                nonlocal renewal_error
+                try:
+                    while True:
+                        await asyncio.sleep(10)
+                        async with asyncio.timeout(5):
+                            await session.execute(text("SELECT 1"))
+                except Exception as exc:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
+                    renewal_error = exc
+                    if owner is not None:
+                        owner.cancel()
+
+            heartbeat = asyncio.create_task(renew())
+            try:
+                yield lease
+                if renewal_error is not None:
+                    raise HeavyLeaseLost("Heavy ownership connection failed") from renewal_error
+            except asyncio.CancelledError:
+                if renewal_error is not None:
+                    raise HeavyLeaseLost("Heavy ownership connection failed") from renewal_error
+                raise
+            finally:
+                # Consumer finally blocks finish before ownership session closes.
+                heartbeat.cancel()
+                try:
+                    await heartbeat
+                except asyncio.CancelledError:
+                    pass
+
+
+def bounded_heavy_work(function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:  # noqa: UP047  # keep TypeVar/TypeAlias spelling; PEP 695 rewrite is style-only
+    """Wrap an ARQ consumer, preserving domain transaction/authorization fences.
+
+    Contention retries before claims; cancellation remains visible to durable
+    recovery and awaits consumer cleanup before releasing local capacity.
+    """
+    @wraps(function)
+    async def bounded(*args: P.args, **kwargs: P.kwargs) -> R:
+        """Acquire capacity before entering the worker and preserve its result."""
+        ctx = cast(dict[str, object], args[0])
+        factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+        try:
+            async with heavy_job_slot(factory):
+                return await function(*args, **kwargs)
+        except HeavyWorkBusy as exc:
+            raise retry_with_backoff(ctx, base=HEAVY_RETRY_DEFER_SECONDS, cap=HEAVY_RETRY_CAP_SECONDS) from exc
+        except RemoteHeavyWorkBlocked as exc:
+            # Guards expire on their own; defer instead of failing the job permanently.
+            raise retry_with_backoff(
+                ctx, base=HEAVY_BLOCKED_BASE_SECONDS, cap=HEAVY_BLOCKED_CAP_SECONDS) from exc
+    return bounded

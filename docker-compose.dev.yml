@@ -11,6 +11,11 @@ services:
       - ./apps:/app/apps
       - ./core:/app/core
 
+  cron-worker:
+    volumes:
+      - ./apps:/app/apps
+      - ./core:/app/core
+
   web:
     build:
       target: dependencies

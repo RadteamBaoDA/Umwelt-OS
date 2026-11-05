@@ -11,9 +11,11 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
 from modules.connectors import provisioning, provisioning_routes, public, routes, worker
 from modules.connectors.n8n import CALLBACK_BASE
+from modules.connectors.service import packaged as packaged_service
 from modules.sources.public import ConnectorStatusRead
 
 WS = uuid4()
@@ -28,7 +30,7 @@ def _http() -> SimpleNamespace:
 @pytest.mark.asyncio
 async def test_require_n8n_backend_rejects_when_disabled() -> None:
     session = SimpleNamespace(scalar=AsyncMock(return_value=None))
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await provisioning.require_n8n_backend(session, uuid4(), n8n_enabled=False)  # type: ignore[arg-type]
     assert exc.value.status_code == 409 and exc.value.detail == "n8n_disabled"
     await provisioning.require_n8n_backend(session, uuid4())  # type: ignore[arg-type]
@@ -42,7 +44,7 @@ async def test_collector_sync_gets_409_when_disabled() -> None:
          patch.object(routes, "_collector_current", AsyncMock()), \
          patch.object(routes.sources, "lock_source", AsyncMock(return_value=object())), \
          patch.object(routes, "n8n_enabled", AsyncMock(return_value=False)), \
-         pytest.raises(HTTPException) as exc:
+         pytest.raises(DomainError) as exc:
         await routes._collector(MagicMock(), uuid4(), "Bearer tok", multi_workspace_enabled=False)
     assert exc.value.status_code == 409 and exc.value.detail == "n8n_disabled"
 
@@ -74,11 +76,11 @@ async def test_wake_is_unavailable_when_disabled() -> None:
     session.rollback = AsyncMock()
     client = MagicMock(side_effect=AssertionError("disabled n8n must never be contacted"))
     n8n = SimpleNamespace(enabled=False, webhook_token="t", service_url="http://n8n:5678")
-    with patch.object(public, "_connector_access", AsyncMock(return_value=object())), \
+    with patch.object(packaged_service, "_connector_access", AsyncMock(return_value=object())), \
          patch("modules.sources.public.lock_source", AsyncMock(return_value=SimpleNamespace(local_only=False))), \
          patch("modules.sources.public.get_connector_source", AsyncMock(return_value=source)), \
          patch("modules.connectors.provisioning.activation_status", AsyncMock(return_value=prov)), \
-         patch.object(public, "require_collection_fence", AsyncMock(return_value=True)), \
+         patch.object(packaged_service, "require_collection_fence", AsyncMock(return_value=True)), \
          patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=True)), \
          patch("modules.settings.public.resolve_n8n", AsyncMock(return_value=n8n)), \
          patch("httpx.AsyncClient", client):

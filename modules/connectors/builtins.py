@@ -21,7 +21,7 @@ from core.auth.dependencies import is_instance_operator
 from core.database import get_session
 from core.realtime import commit_with_replay, make_source_change
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.schemas import WorkspaceContext
+from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.connectors import provider_terms, provisioning, registry, scheduler
 from modules.connectors.backends import PROVIDER_SOURCE_TYPES
 from modules.connectors.provider_options import (
@@ -326,99 +326,14 @@ async def enable_builtin(
     # Read before the first rollback: later rollbacks expire the auth ORM row, and reading it then raises MissingGreenlet.
     reviewer_user_id = request.state.auth_session.owner_id
     review_class = spec.eligibility == "review"
-    # Reject before creating anything so a refused toggle leaves no half-built Source behind.
-    if review_class:
-        if use not in _USES_WITH_REVIEW:
-            raise HTTPException(status_code=409, detail=TERMS_INELIGIBLE)
-        if not is_instance_operator(request.state.auth_session):
-            raise HTTPException(status_code=403, detail="operator_required")
-    elif not deployment_use_matches(spec.eligibility, use):
-        raise HTTPException(status_code=409, detail=TERMS_INELIGIBLE)
+    _require_eligible_use(spec, use, request, review_class=review_class)
     fence = await _owner_access(session, request, scope)
 
-    # 1-2. Source: reuse the oldest one, un-pause it, else create it.
-    found = await _oldest_source(session, provider, scope=scope, gate=gate)
-    await session.rollback()
-    if found is not None:
-        # rollback expires the ORM row; reload explicitly, since lazy attribute IO is illegal under asyncio.
-        await session.refresh(found)
-    if found is None:
-        found = await sources.create_source(
-            session, SourceCreate(
-                type=PROVIDER_SOURCE_TYPES[provider], name=payload.name or spec.label, provider=provider,
-                graph_enabled=bool(payload.graph_enabled),
-                rag_index_enabled=(
-                    payload.rag_index_enabled
-                    if payload.rag_index_enabled is not None
-                    else not spec.skip_embedding
-                )),
-            scope=scope, multi_workspace_enabled=gate, expected_access_fence=fence)
-    else:
-        # Re-enabling an existing Source: un-pause it and apply any explicitly sent switches in one patch.
-        patch: dict[str, Any] = {"status": "active"} if found.status == "paused" else {}
-        for flag in ("graph_enabled", "rag_index_enabled"):
-            wanted = getattr(payload, flag)
-            if wanted is not None and wanted != getattr(found, flag):
-                patch[flag] = wanted
-        if patch:
-            await sources.update_source(
-                session, found, SourcePatch(**patch), scope=scope, multi_workspace_enabled=gate,
-                expected_access_fence=fence)
-    source = await sources.get_connector_source(session, found.id, scope=scope, multi_workspace_enabled=gate)
-    if source is None or source.status != "active":
-        raise HTTPException(status_code=409, detail="Source is inactive; it cannot be enabled")
-
-    # 3. Desired settings: only rewritten when different, because every save bumps the revision and
-    # demotes an active connector. A paused->active Source has a new generation, so it must be re-saved.
-    saved_config = source.configuration
-
-    def pick(field: str, default: object = None) -> object:
-        """Request value, else the owner's saved value, else ``default`` (so Resume keeps settings)."""
-        value = getattr(payload, field)
-        if value is None and field in payload.model_fields_set:
-            return default  # explicit null clears the saved value (back to default); an absent field keeps it
-        return value if value is not None else saved_config.get(field, default)
-
-    # Only non-None filter values are passed so default sources serialise exactly as before.
-    options = {
-        field: value for field in (
-            "max_items", "include_keywords", "exclude_keywords", "max_age_days", "feed_sections",
-            *sorted(ALL_OPTION_NAMES - {"max_items"}),
-        )
-        if (value := pick(field)) is not None
-    }
-    floor = min_interval_minutes(provider)
-    interval = pick("schedule_interval_minutes", max(spec.default_interval_minutes, floor))
-    if isinstance(interval, int) and interval < floor:
-        raise HTTPException(status_code=422, detail=f"schedule_interval_below_minimum: minimum {floor} minutes")
-    try:
-        config = ConnectorConfig(
-            timeout_seconds=30, history_mode="returned_snapshot",
-            schedule_interval_minutes=interval,
-            realtime_mode=pick("realtime_mode"), **options)
-        source_configuration = serialize_source_configuration(source, config)
-        registry.validate(source.model_copy(update={"configuration": source_configuration}))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail="Provider configuration is invalid") from exc
-    desired = {**source_configuration, "auth_method": "none"}
-    row = _snapshot(await provisioning.activation_status(session, source.id, scope=scope, multi_workspace_enabled=gate))
-    if row is None or row.desired_configuration != desired or row.source_generation != source.generation:
-        await session.rollback()
-        fence = await _owner_access(session, request, scope, expected=fence)
-        saved = await save_connector_configuration(
-            session, source, row.desired_revision if row is not None else 0, source_configuration, desired,
-            scope=scope, multi_workspace_enabled=gate)
-        if saved is None:
-            raise HTTPException(status_code=409, detail="Source or connector revision changed while saving")
-        saved_source, saved_row = saved
-        saved_row.state = "saved_not_active"
-        await commit_with_replay(session, [
-            make_source_change(saved_source.id, saved_source.generation, saved_source.status,
-                               connector_state="saved_not_active", scope=scope),
-        ], access_fence=fence, multi_workspace_enabled=gate, scope=scope)
-        source = await sources.get_connector_source(session, source.id, scope=scope, multi_workspace_enabled=gate)
-        if source is None:
-            raise HTTPException(status_code=404, detail="Source not found")
+    source = await _ensure_active_source(session, provider, spec, payload, scope=scope, gate=gate, fence=fence)
+    source_configuration, desired = _desired_configuration(provider, spec, payload, source)
+    source, fence = await _save_desired_configuration(
+        session, request, source, source_configuration, desired, scope=scope, gate=gate, fence=fence,
+    )
 
     # 4-5. Terms: the owner toggle is the acknowledgement; review-class adds operator evidence for this version.
     await session.rollback()
@@ -449,6 +364,139 @@ async def enable_builtin(
             session, request, scope, source, ActivationRequest(expected_revision=row.desired_revision),
             access_fence=fence)
     return await _state(session, spec, scope=scope, gate=gate)
+
+
+def _require_eligible_use(spec: Any, use: Any, request: Request, *, review_class: bool) -> None:
+    """Reject an ineligible declared use before anything is created (409, or 403 for non-operators).
+
+    Pure: no session access, so a refused toggle leaves no half-built Source behind.
+    """
+    if review_class:
+        if use not in _USES_WITH_REVIEW:
+            raise HTTPException(status_code=409, detail=TERMS_INELIGIBLE)
+        if not is_instance_operator(request.state.auth_session):
+            raise HTTPException(status_code=403, detail="operator_required")
+    elif not deployment_use_matches(spec.eligibility, use):
+        raise HTTPException(status_code=409, detail=TERMS_INELIGIBLE)
+
+
+async def _ensure_active_source(
+    session: AsyncSession, provider: str, spec: Any, payload: BuiltinEnableRequest,
+    *, scope: WorkspaceContext, gate: bool, fence: AccessFence,
+) -> ConnectorSource:
+    """Reuse the oldest Source (un-pausing it and applying explicit switches) or create it.
+
+    Steps 1-2 of the enable flow. Rolls back after the lookup, so the found ORM row is
+    refreshed explicitly (lazy IO is illegal under asyncio). 409 when the resulting Source
+    is not active.
+    """
+    found = await _oldest_source(session, provider, scope=scope, gate=gate)
+    await session.rollback()
+    if found is not None:
+        # rollback expires the ORM row; reload explicitly, since lazy attribute IO is illegal under asyncio.
+        await session.refresh(found)
+    if found is None:
+        found = await sources.create_source(
+            session, SourceCreate(
+                type=PROVIDER_SOURCE_TYPES[provider], name=payload.name or spec.label, provider=provider,
+                graph_enabled=bool(payload.graph_enabled),
+                rag_index_enabled=(
+                    payload.rag_index_enabled
+                    if payload.rag_index_enabled is not None
+                    else not spec.skip_embedding
+                )),
+            scope=scope, multi_workspace_enabled=gate, expected_access_fence=fence)
+    else:
+        # Re-enabling an existing Source: un-pause it and apply any explicitly sent switches in one patch.
+        patch: dict[str, Any] = {"status": "active"} if found.status == "paused" else {}
+        for flag in ("graph_enabled", "rag_index_enabled"):
+            wanted = getattr(payload, flag)
+            if wanted is not None and wanted != getattr(found, flag):
+                patch[flag] = wanted
+        if patch:
+            await sources.update_source(
+                session, found, SourcePatch(**patch), scope=scope, multi_workspace_enabled=gate,
+                expected_access_fence=fence)
+    source = await sources.get_connector_source(session, found.id, scope=scope, multi_workspace_enabled=gate)
+    if source is None or source.status != "active":
+        raise HTTPException(status_code=409, detail="Source is inactive; it cannot be enabled")
+    return source
+
+
+def _desired_configuration(
+    provider: str, spec: Any, payload: BuiltinEnableRequest, source: ConnectorSource,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Merge request, saved and default settings into ``(source_configuration, desired)``.
+
+    Pure. Precedence per field: request value, else the Source's saved configuration, else the
+    spec default. 422 when the interval is below the provider floor or the merged configuration
+    fails validation.
+    """
+    saved_config = source.configuration
+
+    def pick(field: str, default: object = None) -> object:
+        """Request value, else the owner's saved value, else ``default`` (so Resume keeps settings)."""
+        value = getattr(payload, field)
+        if value is None and field in payload.model_fields_set:
+            return default  # explicit null clears the saved value (back to default); an absent field keeps it
+        return value if value is not None else saved_config.get(field, default)
+
+    # Only non-None filter values are passed so default sources serialise exactly as before.
+    options = {
+        field: value for field in (
+            "max_items", "include_keywords", "exclude_keywords", "max_age_days", "feed_sections",
+            *sorted(ALL_OPTION_NAMES - {"max_items"}),
+        )
+        if (value := pick(field)) is not None
+    }
+    floor = min_interval_minutes(provider)
+    interval = pick("schedule_interval_minutes", max(spec.default_interval_minutes, floor))
+    if isinstance(interval, int) and interval < floor:
+        raise HTTPException(status_code=422, detail=f"schedule_interval_below_minimum: minimum {floor} minutes")
+    try:
+        config = ConnectorConfig(
+            timeout_seconds=30, history_mode="returned_snapshot",
+            schedule_interval_minutes=interval,
+            realtime_mode=pick("realtime_mode"), **options)
+        source_configuration = serialize_source_configuration(source, config)
+        registry.validate(source.model_copy(update={"configuration": source_configuration}))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Provider configuration is invalid") from exc
+    return source_configuration, {**source_configuration, "auth_method": "none"}
+
+
+async def _save_desired_configuration(
+    session: AsyncSession, request: Request, source: ConnectorSource,
+    source_configuration: dict[str, Any], desired: dict[str, Any],
+    *, scope: WorkspaceContext, gate: bool, fence: AccessFence,
+) -> tuple[ConnectorSource, AccessFence]:
+    """Save ``desired`` only when it differs (every save bumps the revision and demotes an active connector).
+
+    A paused->active Source has a new generation, so it must be re-saved. On a save it rolls back,
+    re-admits with the original fence, commits with replay and reloads the Source. Returns the
+    (possibly reloaded) Source and the (possibly re-admitted) access fence. 409 when the
+    revision moved, 404 if the Source vanished.
+    """
+    row = _snapshot(await provisioning.activation_status(session, source.id, scope=scope, multi_workspace_enabled=gate))
+    if row is None or row.desired_configuration != desired or row.source_generation != source.generation:
+        await session.rollback()
+        fence = await _owner_access(session, request, scope, expected=fence)
+        saved = await save_connector_configuration(
+            session, source, row.desired_revision if row is not None else 0, source_configuration, desired,
+            scope=scope, multi_workspace_enabled=gate)
+        if saved is None:
+            raise HTTPException(status_code=409, detail="Source or connector revision changed while saving")
+        saved_source, saved_row = saved
+        saved_row.state = "saved_not_active"
+        await commit_with_replay(session, [
+            make_source_change(saved_source.id, saved_source.generation, saved_source.status,
+                               connector_state="saved_not_active", scope=scope),
+        ], access_fence=fence, multi_workspace_enabled=gate, scope=scope)
+        reloaded = await sources.get_connector_source(session, source.id, scope=scope, multi_workspace_enabled=gate)
+        if reloaded is None:
+            raise HTTPException(status_code=404, detail="Source not found")
+        source = reloaded
+    return source, fence
 
 
 @router.post("/{provider}/disable", response_model=BuiltinSourceRead)

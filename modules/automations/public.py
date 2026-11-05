@@ -50,9 +50,14 @@ from modules.automations.schemas import (
     AutomationUpdate,
     CapabilitiesRead,
     CapabilityItem,
+    DecisionRequest,
+    ManualRunRequest,
     PlannedAction,
     PreviewRequest,
     PreviewResult,
+    RunActionRead,
+    RunPage,
+    RunRead,
 )
 from modules.automations.scope import _actor, _admit
 from modules.chat.public import Conversation
@@ -185,7 +190,7 @@ async def _current_revision(session: AsyncSession, head: Automation) -> Automati
     snapshot = await session.scalar(select(AutomationRevision).where(
         AutomationRevision.automation_id == head.id, AutomationRevision.revision == head.revision,
     ))
-    assert snapshot is not None  # every head revision has its immutable snapshot
+    assert snapshot is not None  # every head revision has its immutable snapshot  # noqa: S101  # mypy narrowing invariant
     return snapshot
 
 
@@ -414,7 +419,7 @@ async def preview(
     if request.definition is not None:
         trigger, conditions, actions = _dump(request.definition)
     else:
-        assert request.automation_id is not None  # PreviewRequest validates exactly one of automation_id/definition
+        assert request.automation_id is not None  # PreviewRequest validates exactly one of automation_id/definition  # noqa: S101  # mypy narrowing invariant
         read = await get_automation(session, request.automation_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         trigger, conditions, actions = read.trigger, read.conditions, read.actions
         try:
@@ -432,11 +437,26 @@ async def preview(
 __all__ = [
     "AutomationCleanupProgress",
     "AutomationConflict",
+    "AutomationCreate",
+    "AutomationDefinition",
     "AutomationInvalid",
     "AutomationMissing",
+    "AutomationPage",
+    "AutomationRead",
+    "AutomationUpdate",
+    "CapabilitiesRead",
+    "CapabilityItem",
+    "DecisionRequest",
+    "ManualRunRequest",
     "PauseBeforeBriefEdit",
+    "PlannedAction",
+    "PreviewRequest",
+    "PreviewResult",
+    "RunActionRead",
     "RunConflict",
     "RunMissing",
+    "RunPage",
+    "RunRead",
     "capabilities",
     "create_automation",
     "decide_action",

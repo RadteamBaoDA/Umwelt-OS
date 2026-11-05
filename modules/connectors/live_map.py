@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -14,10 +15,11 @@ from uuid import UUID
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.heavy_work import to_thread_joined
 from modules.connectors import quota
 from modules.connectors.live_map_catalog import CATALOG_IDS
 from modules.connectors.live_map_catalog import (
-    live_cache_seconds as live_cache_seconds,  # noqa: PLC0414 - public re-export
+    live_cache_seconds as live_cache_seconds,
 )
 from modules.connectors.providers import news, rest, security
 from modules.connectors.providers.feed_catalog import _retry_deadline
@@ -121,66 +123,118 @@ def _endpoint(provider: str, country: str | None, owner: str | None, repo: str |
     raise ValueError("provider_scope_invalid")
 
 
+def _parse_xml_items(provider: str, body: bytes) -> tuple[Any, list[Any]]:
+    """Parse an RSS/Atom provider (business, fed, lobsters) into ``(rows, records)``."""
+    root = news.safe_xml_root(body, max_bytes=MAX_BYTES)
+    rows = news._scan_items(root)
+    records = []
+    for r in rows:
+        link = news._atom_link(r) if news._local(r.tag) == "entry" else news._child_text(r, "link")
+        records.append(_item(provider, news._child_text(r, "guid", "id") or link,
+                             news._child_text(r, "title"), news._child_text(r, "pubDate", "published", "updated"),
+                             url=link, summary=news._child_text(r, "description", "summary")))
+    return rows, records
+
+
+def _parse_firms(provider: str, body: bytes) -> tuple[Any, list[Any]]:
+    """Parse the NASA FIRMS CSV into ``(rows, records)`` of unconfirmed thermal detections."""
+    rows = list(csv.DictReader(io.StringIO(body.decode("utf-8-sig"))))
+    records = [_item(provider, f"{r.get('latitude')}:{r.get('longitude')}:{r.get('acq_date')}:{r.get('acq_time')}", "Thermal detection (not a confirmed fire)", f"{r.get('acq_date', '')} {r.get('acq_time', '').zfill(4)} UTC", lat=r.get("latitude"), lon=r.get("longitude"), summary=f"Satellite: {r.get('satellite', '')}") for r in rows]
+    return rows, records
+
+
+def _parse_usgs(provider: str, data: Any) -> tuple[Any, list[Any]]:
+    """Map a USGS GeoJSON feed into ``(rows, records)``."""
+    rows = data["features"]
+    records = []
+    for r in rows:
+        p, coords = r["properties"], r["geometry"]["coordinates"]
+        records.append(_item(provider, r.get("id"), p.get("title"), p.get("time"), lat=coords[1], lon=coords[0], url=p.get("url")))
+    return rows, records
+
+
+def _parse_eonet(provider: str, data: Any) -> tuple[Any, list[Any]]:
+    """Map NASA EONET events (latest dated point geometry, up to ten sources) into ``(rows, records)``."""
+    rows = data["events"]
+    records = []
+    for r in rows:
+        g = r.get("geometry") or []
+        dated = [entry for entry in g if isinstance(entry, dict) and _timestamp(entry.get("date"))]
+        point = max(dated, key=lambda entry: _timestamp(entry.get("date")) or "") if dated else {}
+        coords = point.get("coordinates") if point.get("type") == "Point" else None
+        record = _item(provider, r.get("id"), r.get("title"), point.get("date"), lat=coords[1] if coords and len(coords) >= 2 else None, lon=coords[0] if coords and len(coords) >= 2 else None, url=r.get("link"), summary=r.get("description"))
+        if record is not None:
+            sources = r.get("sources") if isinstance(r.get("sources"), list) else []
+            record["sources"] = [{"id": _text(source.get("id"), 100), "url": link} for source in sources[:10] if isinstance(source, dict) and (link := _url(source.get("url")))]
+        records.append(record)
+    return rows, records
+
+
+def _parse_sec(provider: str, data: Any) -> tuple[Any, list[Any]]:
+    """Map the SEC submissions index into ``(rows, records)`` of recent filings."""
+    recent = data["filings"]["recent"]
+    rows = recent["accessionNumber"]
+    records = []
+    for i, accession in enumerate(rows):
+        form = recent["form"][i]
+        records.append(_item(provider, accession, f"{data.get('name', 'SEC filing')}: {form}", recent["filingDate"][i], url=f"https://www.sec.gov/Archives/edgar/data/{int(data['cik'])}/{accession.replace('-', '')}/{recent['primaryDocument'][i]}"))
+    return rows, records
+
+
+def _json_list_record(provider: str, r: Any) -> Any:
+    """Map one row of the list-shaped JSON providers (HN, Lobsters, CISA KEV, NVD, GitHub releases)."""
+    if provider == "hackernews":
+        return _item(provider, r.get("objectID"), r.get("title"), r.get("created_at"), url=r.get("url") or f"https://news.ycombinator.com/item?id={r.get('objectID')}")
+    if provider == "lobsters":
+        return _item(provider, r.get("short_id"), r.get("title"), r.get("created_at"), url=r.get("url") or r.get("comments_url"))
+    if provider == "cisa_kev":
+        return _item(provider, r.get("cveID"), r.get("vulnerabilityName"), r.get("dateAdded"), url=f"https://nvd.nist.gov/vuln/detail/{r.get('cveID')}", summary=r.get("shortDescription"))
+    if provider == "nvd":
+        cve = r["cve"]
+        descriptions = cve.get("descriptions", [])
+        description = next((x.get("value") for x in descriptions if x.get("lang") == "en"), None)
+        return _item(provider, cve.get("id"), cve.get("id"), cve.get("published"), url=f"https://nvd.nist.gov/vuln/detail/{cve.get('id')}", summary=description)
+    return _item(provider, r.get("id"), r.get("name") or r.get("tag_name"), r.get("published_at"), url=r.get("html_url"), summary=r.get("body"))
+
+
+def _parse_json_list(provider: str, data: Any) -> tuple[Any, list[Any]]:
+    """Map the list-shaped JSON providers into ``(rows, records)``.
+
+    CISA KEV is sorted newest-first because the catalog is not guaranteed to arrive that way and
+    recent additions must survive the cap.
+    """
+    rows = data if isinstance(data, list) else data[{"hackernews": "hits", "cisa_kev": "vulnerabilities", "nvd": "vulnerabilities"}[provider]]
+    if provider == "cisa_kev":
+        # The catalog is not guaranteed to arrive newest first; retain recent additions when capped.
+        rows = sorted(rows, key=lambda row: row.get("dateAdded", "") if isinstance(row, dict) else "", reverse=True)
+    return rows, [_json_list_record(provider, r) for r in rows]
+
+
+# Provider -> JSON mapper; any provider absent here uses the list-shaped mapper.
+_JSON_PARSERS: dict[str, Callable[[str, Any], tuple[Any, list[Any]]]] = {
+    "usgs": _parse_usgs,
+    "eonet": _parse_eonet,
+    "sec": _parse_sec,
+}
+
+
 def _parse(provider: str, body: bytes) -> tuple[list[dict[str, Any]], bool]:
-    """Parse fixed provider formats and return at most 100 bounded display records."""
-    rows: Any
+    """Parse fixed provider formats and return at most 100 bounded display records.
+
+    Pure and thread-safe (runs off the event loop). Malformed rows raise ``KeyError`` /
+    ``IndexError`` / ``TypeError``, which ``fetch_events`` maps to ``provider_response_invalid``.
+    ``_item`` construction is not cut short at ``MAX_ITEMS``; NVD also truncates when the
+    provider reports more total results than were returned.
+    """
     if provider in {"business", "fed", "lobsters"}:
-        root = news.safe_xml_root(body, max_bytes=MAX_BYTES)
-        rows = news._scan_items(root)
-        records = []
-        for r in rows:
-            link = news._atom_link(r) if news._local(r.tag) == "entry" else news._child_text(r, "link")
-            records.append(_item(provider, news._child_text(r, "guid", "id") or link,
-                                 news._child_text(r, "title"), news._child_text(r, "pubDate", "published", "updated"),
-                                 url=link, summary=news._child_text(r, "description", "summary")))
+        rows, records = _parse_xml_items(provider, body)
+        data: Any = None
     elif provider == "firms":
-        rows = list(csv.DictReader(io.StringIO(body.decode("utf-8-sig"))))
-        records = [_item(provider, f"{r.get('latitude')}:{r.get('longitude')}:{r.get('acq_date')}:{r.get('acq_time')}", "Thermal detection (not a confirmed fire)", f"{r.get('acq_date', '')} {r.get('acq_time', '').zfill(4)} UTC", lat=r.get("latitude"), lon=r.get("longitude"), summary=f"Satellite: {r.get('satellite', '')}") for r in rows]
+        rows, records = _parse_firms(provider, body)
+        data = None
     else:
         data = json.loads(body)
-        records = []
-        if provider == "usgs":
-            rows = data["features"]
-            for r in rows:
-                p, coords = r["properties"], r["geometry"]["coordinates"]
-                records.append(_item(provider, r.get("id"), p.get("title"), p.get("time"), lat=coords[1], lon=coords[0], url=p.get("url")))
-        elif provider == "eonet":
-            rows = data["events"]
-            for r in rows:
-                g = r.get("geometry") or []
-                dated = [entry for entry in g if isinstance(entry, dict) and _timestamp(entry.get("date"))]
-                point = max(dated, key=lambda entry: _timestamp(entry.get("date")) or "") if dated else {}
-                coords = point.get("coordinates") if point.get("type") == "Point" else None
-                record = _item(provider, r.get("id"), r.get("title"), point.get("date"), lat=coords[1] if coords and len(coords) >= 2 else None, lon=coords[0] if coords and len(coords) >= 2 else None, url=r.get("link"), summary=r.get("description"))
-                if record is not None:
-                    sources = r.get("sources") if isinstance(r.get("sources"), list) else []
-                    record["sources"] = [{"id": _text(source.get("id"), 100), "url": link} for source in sources[:10] if isinstance(source, dict) and (link := _url(source.get("url")))]
-                records.append(record)
-        elif provider == "sec":
-            recent = data["filings"]["recent"]
-            rows = recent["accessionNumber"]
-            for i, accession in enumerate(rows):
-                form = recent["form"][i]
-                records.append(_item(provider, accession, f"{data.get('name', 'SEC filing')}: {form}", recent["filingDate"][i], url=f"https://www.sec.gov/Archives/edgar/data/{int(data['cik'])}/{accession.replace('-', '')}/{recent['primaryDocument'][i]}"))
-        else:
-            rows = data if isinstance(data, list) else data[{"hackernews": "hits", "cisa_kev": "vulnerabilities", "nvd": "vulnerabilities"}[provider]]
-            if provider == "cisa_kev":
-                # The catalog is not guaranteed to arrive newest first; retain recent additions when capped.
-                rows = sorted(rows, key=lambda row: row.get("dateAdded", "") if isinstance(row, dict) else "", reverse=True)
-            for r in rows:
-                if provider == "hackernews":
-                    records.append(_item(provider, r.get("objectID"), r.get("title"), r.get("created_at"), url=r.get("url") or f"https://news.ycombinator.com/item?id={r.get('objectID')}"))
-                elif provider == "lobsters":
-                    records.append(_item(provider, r.get("short_id"), r.get("title"), r.get("created_at"), url=r.get("url") or r.get("comments_url")))
-                elif provider == "cisa_kev":
-                    records.append(_item(provider, r.get("cveID"), r.get("vulnerabilityName"), r.get("dateAdded"), url=f"https://nvd.nist.gov/vuln/detail/{r.get('cveID')}", summary=r.get("shortDescription")))
-                elif provider == "nvd":
-                    cve = r["cve"]
-                    descriptions = cve.get("descriptions", [])
-                    description = next((x.get("value") for x in descriptions if x.get("lang") == "en"), None)
-                    records.append(_item(provider, cve.get("id"), cve.get("id"), cve.get("published"), url=f"https://nvd.nist.gov/vuln/detail/{cve.get('id')}", summary=description))
-                else:
-                    records.append(_item(provider, r.get("id"), r.get("name") or r.get("tag_name"), r.get("published_at"), url=r.get("html_url"), summary=r.get("body")))
+        rows, records = _JSON_PARSERS.get(provider, _parse_json_list)(provider, data)
     truncated = len(rows) > MAX_ITEMS or (provider == "nvd" and data.get("totalResults", 0) > len(rows))
     return [r for r in records[:MAX_ITEMS] if r is not None], truncated
 
@@ -218,7 +272,11 @@ async def fetch_events(provider: str, *, country: str | None, owner: str | None,
     if body is None:
         raise ValueError("provider_empty_response")
     try:
-        return _parse(provider, body)
+        # CSV/JSON/XML parse + _item() for up to 4 MB runs on the API loop otherwise (A2). Exceptions
+        # raised in the thread propagate unchanged, so the KeyError/IndexError/TypeError mapping holds.
+        # _item() construction is deliberately NOT cut short at MAX_ITEMS: a malformed row past the
+        # cap currently raises provider_response_invalid, which an early stop would silently change.
+        return await to_thread_joined(_parse, provider, body)
     except (KeyError, IndexError, TypeError) as exc:
         raise ValueError("provider_response_invalid") from exc
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { formatDateTime } from '@/core/i18n';
@@ -12,8 +12,10 @@ import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescript
 import { deleteTask, getTask } from './api';
 import { TaskForm } from './task-form';
 import type { Task } from './types';
+import { useResetOnChange, ownerFailureKey } from '@/modules/shared';
 
 /** Shows task details with retained refetch drafts; administrator viewers can read but cannot edit or delete. */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function TaskDetail({ task, csrfToken, onClose, onTaskChanged }: {
   task: Task;
   csrfToken: string;
@@ -49,8 +51,7 @@ export function TaskDetail({ task, csrfToken, onClose, onTaskChanged }: {
     onError: () => { setConfirmDelete(false); setDeleteIntent(null); },
   });
   const conflict = remove.error instanceof ApiError && remove.error.status === 409;
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
-  useEffect(() => { if (ownerVerified && current && !conflict && !confirmDelete) setExpectedRevision(current.revision); }, [ownerVerified, current, conflict, confirmDelete]);
+  useResetOnChange([ownerVerified, current, conflict, confirmDelete], () => { if (ownerVerified && current && !conflict && !confirmDelete) setExpectedRevision(current.revision); });
   /** Fetches the current owner projection for review without advancing a pending deletion revision. */
   const refreshCurrentTask = async () => {
     setRefreshing(true);
@@ -58,14 +59,14 @@ export function TaskDetail({ task, csrfToken, onClose, onTaskChanged }: {
     setCurrentTask(null);
     try { setCurrentTask(await getTask(task.id)); }
     catch (error) {
-      setRefreshError(error instanceof ApiError && error.status === 404 ? t('taskOwnerMissing') : error instanceof ApiError && [401, 403].includes(error.status) ? t('ownerAccessDenied') : t('taskReadFailed'));
+      setRefreshError(t(ownerFailureKey(error, 'taskOwnerMissing', 'taskReadFailed')));
     } finally { setRefreshing(false); }
   };
   const statusLabels = { inbox: t('statusInbox'), todo: t('statusTodo'), in_progress: t('statusInProgress'), blocked: t('statusBlocked'), done: t('statusDone'), cancelled: t('statusCancelled') };
   return <section className="flex flex-col gap-4 rounded-lg border border-border p-4">
     <header className="flex items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">{ownerVerified ? current.title : t('taskDetailTitle')}</h2>{ownerVerified && <p className="text-xs text-muted-foreground">{statusLabels[current.status]} · {t('revisionNumber', { revision: current.revision })}</p>}</div>{onClose && <Button type="button" variant="outline" disabled={formPending || remove.isPending} onClick={onClose}>{t('back')}</Button>}</header>
     {taskQuery.isFetching && <p role="status" className="text-sm text-muted-foreground">{t('loadingTask')}</p>}
-    {taskQuery.isError && <div role="alert" className="text-sm text-destructive"><p>{taskQuery.error instanceof ApiError && taskQuery.error.status === 404 ? t('taskOwnerMissing') : taskQuery.error instanceof ApiError && [401, 403].includes(taskQuery.error.status) ? t('ownerAccessDenied') : t('taskReadFailed')}</p><Button type="button" variant="outline" size="sm" disabled={taskQuery.isFetching} onClick={() => void taskQuery.refetch()}>{taskQuery.isFetching ? t('loading') : t('retry')}</Button></div>}
+    {taskQuery.isError && <div role="alert" className="text-sm text-destructive"><p>{t(ownerFailureKey(taskQuery.error, 'taskOwnerMissing', 'taskReadFailed'))}</p><Button type="button" variant="outline" size="sm" disabled={taskQuery.isFetching} onClick={() => void taskQuery.refetch()}>{taskQuery.isFetching ? t('loading') : t('retry')}</Button></div>}
     {editing && !isAdminViewer && current
       ? <TaskForm key={current.id} task={current} csrfToken={csrfToken} canSave={ownerVerified} onPendingChange={setFormPending} onSuccess={(saved) => { queryClient.setQueryData(['task', saved.id], saved); setExpectedRevision(saved.revision); setEditing(false); onTaskChanged?.(saved); }} onCancel={() => { if (!formPending) setEditing(false); }} />
       : ownerVerified && (
@@ -78,7 +79,7 @@ export function TaskDetail({ task, csrfToken, onClose, onTaskChanged }: {
         {!isAdminViewer && <div className="flex gap-2"><Button type="button" disabled={conflict || remove.isPending} onClick={() => setEditing(true)}>{t('editTask')}</Button><Button type="button" variant="destructive" disabled={conflict || remove.isPending} onClick={() => { setExpectedRevision(current.revision); setDeleteIntent({ id: current.id, revision: current.revision, title: current.title }); setConfirmDelete(true); }}>{t('deleteTask')}</Button></div>}
       </>
       )}
-    {remove.error && <div role="alert" className="text-sm text-destructive"><p>{conflict ? t('taskDeleteConflict') : remove.error instanceof ApiError && remove.error.status === 404 ? t('taskOwnerMissing') : remove.error instanceof ApiError && [401, 403].includes(remove.error.status) ? t('ownerAccessDenied') : t('taskDeleteFailed')}</p>{conflict && <Button type="button" variant="outline" size="sm" disabled={refreshing} onClick={() => void refreshCurrentTask()}>{refreshing ? t('loading') : t('refreshCurrentTask')}</Button>}{refreshError && <p>{refreshError}</p>}{currentTask && <div className="rounded border border-border p-2"><p>{t('currentTaskRevision', { title: currentTask.title, status: statusLabels[currentTask.status], revision: currentTask.revision })}</p><p>{currentTask.description ?? t('none')} · {currentTask.due_at ?? currentTask.due_date ?? t('noDueDate')}</p><Button type="button" variant="outline" size="sm" onClick={() => { queryClient.setQueryData(['task', currentTask.id], currentTask); setExpectedRevision(currentTask.revision); setCurrentTask(null); remove.reset(); }}>{t('useCurrentRevisionForDelete', { revision: currentTask.revision })}</Button></div>}</div>}
+    {remove.error && <div role="alert" className="text-sm text-destructive"><p>{conflict ? t('taskDeleteConflict') : t(ownerFailureKey(remove.error, 'taskOwnerMissing', 'taskDeleteFailed'))}</p>{conflict && <Button type="button" variant="outline" size="sm" disabled={refreshing} onClick={() => void refreshCurrentTask()}>{refreshing ? t('loading') : t('refreshCurrentTask')}</Button>}{refreshError && <p>{refreshError}</p>}{currentTask && <div className="rounded border border-border p-2"><p>{t('currentTaskRevision', { title: currentTask.title, status: statusLabels[currentTask.status], revision: currentTask.revision })}</p><p>{currentTask.description ?? t('none')} · {currentTask.due_at ?? currentTask.due_date ?? t('noDueDate')}</p><Button type="button" variant="outline" size="sm" onClick={() => { queryClient.setQueryData(['task', currentTask.id], currentTask); setExpectedRevision(currentTask.revision); setCurrentTask(null); remove.reset(); }}>{t('useCurrentRevisionForDelete', { revision: currentTask.revision })}</Button></div>}</div>}
     {!isAdminViewer && <AlertDialog open={confirmDelete} onOpenChange={(open) => { if (remove.isPending || formPending) return; setConfirmDelete(open); if (!open) setDeleteIntent(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t('deleteTaskConfirmTitle')}</AlertDialogTitle><AlertDialogDescription>{t('deleteTaskConfirmDescription', { title: deleteIntent?.title ?? '' })} · {t('revisionNumber', { revision: deleteIntent?.revision ?? expectedRevision })}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={remove.isPending || formPending}>{t('cancel')}</AlertDialogCancel><Button type="button" variant="destructive" disabled={!ownerVerified || remove.isPending || formPending || !deleteIntent || deleteIntent.id !== current?.id || deleteIntent.revision !== current?.revision} onClick={() => { if (deleteIntent && ownerVerified && current && !remove.isPending && !formPending && deleteIntent.id === current.id && deleteIntent.revision === current.revision) remove.mutate(deleteIntent); }}>{remove.isPending ? t('deleting') : t('deleteTask')}</Button></AlertDialogFooter></AlertDialogContent></AlertDialog>}
   </section>;
 }

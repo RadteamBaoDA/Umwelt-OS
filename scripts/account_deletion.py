@@ -29,7 +29,7 @@ async def run(action: str, operation_id: UUID | None, *, password: str | None = 
     residue checks. Any error closes the session without committing its new workspace.
     """
     settings = Settings()
-    engine, factory = make_session_factory(settings.database_url)
+    engine, factory = make_session_factory(settings.admin_database_url)
     try:
         async with factory() as session:
             if action == "recover-bootstrap":

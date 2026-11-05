@@ -27,6 +27,7 @@ async def _load(
     session: AsyncSession, scope: WorkspaceContext, resource_type: str, resource_id: UUID,
     *, multi_workspace_enabled: bool,
 ) -> TranslationInput | None:
+    """Load the translation input for a resource through its owner module's public reader (lazy import avoids cycles); None unless it belongs to the scope's workspace and type."""
     module, reader, id_kw = _OWNERS[resource_type]
     read: Any = getattr(import_module(module), reader)  # lazy: avoids import cycles with owner modules
     found: TranslationInput | None = await read(
@@ -48,9 +49,11 @@ async def load_translation_input(
 
 
 def _adapter(resource_type: str) -> Any:
+    """Build the per-resource-type authorization adapter registered with the access layer."""
     async def authorize(
         session: AsyncSession, *, scope: WorkspaceContext, resource_id: UUID, multi_workspace_enabled: bool,
     ) -> ResourceAuthorization | None:
+        """Authorize one resource for the scope: its revision, content hash and visibility hash, or None when unreadable (uniform 404)."""
         source = await _load(
             session, scope, resource_type, resource_id, multi_workspace_enabled=multi_workspace_enabled,
         )

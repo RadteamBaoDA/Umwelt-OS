@@ -28,6 +28,9 @@ HOSTED_PROVIDER_ENDPOINTS: dict[str, str] = {
 HOSTED_PROVIDER_KINDS = frozenset(HOSTED_PROVIDER_ENDPOINTS)
 MAX_PROVIDERS = 8
 DEFAULT_PROVIDER_ID = "default"
+# Hosted clouds that choose their own output limit (Anthropic's required ``max_tokens`` is set internally by the
+# gateway), so the owner never configures ``ModelMapping.max_output_tokens`` for them.
+PROVIDER_KINDS_WITHOUT_MAX_TOKENS = frozenset({"anthropic", "openai", "groq"})
 ProviderId = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,31}$")]
 
 
@@ -64,6 +67,9 @@ class ModelMapping(BaseModel):
     # Chat role only. "off" sends nothing (providers that reject unknown params keep working); otherwise the
     # gateway adds ``reasoning_effort`` to streamed chat requests so request-gated models emit reasoning.
     reasoning_effort: ReasoningEffort = "off"
+    # LLM roles only, for providers outside PROVIDER_KINDS_WITHOUT_MAX_TOKENS. None sends no ``max_tokens`` (the
+    # provider default applies). The settings save path forces None for hosted kinds; the gateway re-checks.
+    max_output_tokens: int | None = Field(default=None, ge=1, le=1_000_000)
 
 
 class ModelDefaults(BaseModel):

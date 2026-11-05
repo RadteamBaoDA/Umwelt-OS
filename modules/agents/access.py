@@ -11,11 +11,14 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import ConflictError, ForbiddenError
 from core.workspaces import public as workspaces
+from core.workspaces.admission import actor_id
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
+
+actor = actor_id  # canonical helper; module-public name kept for agents callers
 
 
 class _EpochRow(Protocol):
@@ -25,11 +28,6 @@ class _EpochRow(Protocol):
     owner_id: int
     membership_revision: int | None
     configuration_revision: int | None
-
-
-def actor(scope: Scope) -> int:
-    """Return the principal recorded by a real workspace or durable job scope."""
-    return scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
 
 
 async def admit(
@@ -44,7 +42,7 @@ async def admit(
     if not isinstance(scope, (WorkspaceContext, InternalJobScope)):
         raise TypeError("An explicit Agents workspace scope is required")
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError("Workspace owner required")
     if type(multi_workspace_enabled) is not bool:
         raise TypeError("The configured multi-workspace feature flag must be a boolean")
     if lock:
@@ -95,7 +93,7 @@ async def admit_run(
         lock=lock, expected=original if lock else None,
     )
     if fence != original:
-        raise HTTPException(status_code=409, detail="Workspace access fence changed")
+        raise ConflictError("Workspace access fence changed")
     return scope, fence
 
 

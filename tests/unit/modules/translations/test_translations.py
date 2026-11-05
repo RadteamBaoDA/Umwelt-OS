@@ -5,11 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
 from core.auth.dependencies import require_account_write
+from core.errors import DomainError
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.schemas import WorkspaceContext
 from modules.settings.schemas import TranslationSettingsRead, TranslationSettingsUpdate
@@ -82,7 +82,7 @@ def test_batch_dto_rejects_unknown_duplicate_empty_and_oversize():
 
 
 async def test_member_cannot_save_settings(fences):
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await public.save_translation_settings(
             _session(), TranslationSettingsUpdate(enabled=True, target_language="vi", expected_revision=1),
             scope=_scope("member"), multi_workspace_enabled=True)
@@ -91,7 +91,7 @@ async def test_member_cannot_save_settings(fences):
 
 async def test_stale_revision_is_409():
     row = SimpleNamespace(enabled=False, target_language="vi", configuration_revision=3)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await public.save_translation_settings(
             _session(scalar=row), TranslationSettingsUpdate(enabled=True, target_language="vi", expected_revision=1),
             scope=_scope("owner"), multi_workspace_enabled=True)
@@ -130,7 +130,7 @@ async def test_disabled_returns_blocked_without_enqueue(fences):
 async def test_no_registered_authorizer_is_uniform_404():
     row = SimpleNamespace(enabled=True, target_language="vi", configuration_revision=1)
     request = TranslationBatchRequest.model_validate({"items": [_item()]})
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await public.submit_batch(_session(scalar=row), request, scope=_scope(), multi_workspace_enabled=True)
     assert exc.value.status_code == 404
 
@@ -143,14 +143,14 @@ async def test_stale_visible_revision_is_409_after_all_authorized():
 
     public.register_resource_authorizer("news_story", ok)
     request = TranslationBatchRequest.model_validate({"items": [_item()]})
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await public.submit_batch(_session(scalar=row), request, scope=_scope(), multi_workspace_enabled=True)
     assert exc.value.status_code == 409
 
 
 async def test_batch_read_is_actor_and_workspace_bound(fences):
     session = _session(scalar=None)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await public.read_batch(session, uuid4(), scope=_scope(user_id=7), multi_workspace_enabled=True)
     assert exc.value.status_code == 404 and fences == ["read"]
     sql = _sql(session.executed[0])

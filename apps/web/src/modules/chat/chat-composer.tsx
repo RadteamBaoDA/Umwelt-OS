@@ -8,9 +8,10 @@ import { useTranslations } from 'next-intl';
 import { ArrowUpIcon, CloudIcon, DatabaseIcon, FileTextIcon, GlobeIcon, PaperclipIcon, PlusIcon, SquareIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { COMPOSER_MENU_ID } from '@/modules/chat/chat-attachments';
-import { ModelPicker, type ChatModelPicker } from '@/modules/chat/model-picker';
+import { COMPOSER_MENU_ID } from './chat-attachments';
+import { ModelPicker, type ChatModelPicker } from './model-picker';
 
 /** Actions behind the full composer's + menu; the session owns the picker dialog and file input they drive. */
 export interface ComposerMenuProps {
@@ -65,50 +66,31 @@ export interface ChatComposerProps {
   modelPicker?: ChatModelPicker;
 }
 
-/**
- * Message input composer featuring multi-line auto-resizing textarea, clipboard file paste,
- * keyboard shortcut submission (Enter), separate Stop button during streaming, and in-memory
- * draft preservation across drawer toggles.
- *
- * @param props - ChatComposerProps interface.
- * @returns Accessible composer control component.
- */
-export function ChatComposer({
-  value,
-  onChange,
-  onSend,
-  onStop,
-  isStreaming,
-  disabled = false,
-  placeholder,
-  modelLabel = null,
-  sourcesCount = 0,
-  webSearch,
-  dbQuery,
-  attachments,
-  sendBlockedBy = null,
-  onAttachFiles,
-  attachmentBusy = false,
-  mode = 'drawer',
-  contextBar,
-  menu,
-  modelPicker,
-}: ChatComposerProps) {
-  const t = useTranslations('chat');
-  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+/** Pieces of composer state shared by the drawer and full layouts. */
+type ComposerShared = Pick<ChatComposerProps, 'isStreaming' | 'dbQuery' | 'modelPicker'> & {
+  disabled: boolean;
+  textarea: React.ReactNode;
+  action: React.ReactNode;
+};
 
-  /**
-   * Submits the trimmed draft message if non-empty and not currently streaming.
-   */
+/**
+ * Composer behaviour: trimmed send gate, Enter-to-send (IME safe), file paste forwarding and textarea auto-resize.
+ *
+ * @param props - Composer props (value, callbacks and the flags that block sending).
+ * @param textareaRef - Ref of the textarea being resized.
+ * @returns Event handlers and whether Send is currently allowed.
+ */
+function useComposerHandlers(props: ChatComposerProps, textareaRef: React.RefObject<HTMLTextAreaElement | null>) {
+  const { value, onChange, onSend, isStreaming, disabled = false, sendBlockedBy = null, onAttachFiles, attachmentBusy = false } = props;
+
+  /** Submits the trimmed draft message if non-empty and not currently streaming. */
   const handleSend = React.useCallback(() => {
     const trimmed = value.trim();
     if (!trimmed || isStreaming || disabled || sendBlockedBy) return;
     onSend(trimmed);
   }, [value, isStreaming, disabled, sendBlockedBy, onSend]);
 
-  /**
-   * Handles keyboard shortcuts in the textarea: Enter submits, Shift+Enter inserts newline.
-   */
+  /** Enter submits, Shift+Enter inserts a newline. */
   const handleKeyDown = React.useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       // Enter during IME composition commits text instead of submitting the chat turn.
@@ -135,9 +117,7 @@ export function ChatComposer({
     [onAttachFiles, attachmentBusy, disabled],
   );
 
-  /**
-   * Handles textarea input changes and adjusts row height dynamically up to 200px.
-   */
+  /** Handles textarea input changes and adjusts row height dynamically up to 200px. */
   const handleChange = React.useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       onChange(e.target.value);
@@ -153,13 +133,240 @@ export function ChatComposer({
     // Reset height before measuring scrollHeight so clearing the draft shrinks back to baseline.
     textarea.style.height = 'auto';
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-  }, [value]);
+  }, [value, textareaRef]);
 
   const canSend = value.trim().length > 0 && !isStreaming && !disabled && !sendBlockedBy;
+  return { handleSend, handleKeyDown, handlePaste, handleChange, canSend };
+}
 
-  const isFull = mode === 'full';
+/** Round stop button shared by the Chat page and the quick chat sheet; the aria-label keeps it named for assistive tech. */
+function StopButton({ onStop }: { onStop?: () => void }) {
+  const t = useTranslations('chat');
+  return (
+    <Button type="button" variant="outline" size="icon" onClick={onStop} className="border-negative text-negative hover:text-negative" data-testid="chat-stop" aria-label={t('stopGenerating')}>
+      <SquareIcon className="size-3.5 fill-current" aria-hidden="true" />
+    </Button>
+  );
+}
+
+/** Round send button; aria-disabled (not disabled) keeps it focusable while the reason is announced via `describedBy`. */
+function SendButton({ onClick, canSend, describedBy }: { onClick: () => void; canSend: boolean; describedBy: string | null }) {
+  const t = useTranslations('chat');
+  return (
+    <Button
+      type="button"
+      size="icon"
+      onClick={onClick}
+      aria-disabled={!canSend}
+      className="aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
+      data-testid="chat-send"
+      aria-label={t('send')}
+      aria-describedby={describedBy ?? undefined}
+    >
+      <ArrowUpIcon className="size-4" aria-hidden="true" />
+    </Button>
+  );
+}
+
+/** "Database query on" badge. */
+function DbQueryBadge() {
+  const t = useTranslations('chat');
+  return (
+    <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-db-query-badge">
+      <DatabaseIcon className="size-3" aria-hidden="true" />
+      {t('dbQueryBadge')}
+    </Badge>
+  );
+}
+
+/** The "+" trigger of the composer menu. */
+function MenuTrigger({ disabled }: { disabled: boolean }) {
+  const t = useTranslations('chat');
+  return (
+    <DropdownMenuTrigger asChild>
+      <Button id={COMPOSER_MENU_ID} type="button" variant="ghost" size="icon" className="text-muted-foreground" aria-label={t('composerMenu')} disabled={disabled}>
+        <PlusIcon className="size-4" aria-hidden="true" />
+      </Button>
+    </DropdownMenuTrigger>
+  );
+}
+
+/** Drawer layout: one bordered box with the borderless field on top and "+", model and send in a toolbar row. */
+function DrawerComposer({ dbQuery, modelPicker, isStreaming, disabled, textarea, action }: ComposerShared) {
+  const t = useTranslations('chat');
+  return (
+    <div className="relative shrink-0 border-t border-border bg-surface p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <div className="flex w-full flex-col gap-2 rounded-lg border border-control bg-surface p-3 focus-within:ring-2 focus-within:ring-data">
+        {textarea}
+        <div className="flex items-center gap-2">
+          {dbQuery && (
+            <DropdownMenu>
+              <MenuTrigger disabled={disabled} />
+              <DropdownMenuContent align="start" side="top">
+                <DropdownMenuCheckboxItem
+                  id="chat-db-query"
+                  checked={dbQuery.enabled}
+                  disabled={isStreaming || disabled}
+                  onSelect={(e) => e.preventDefault()}
+                  onCheckedChange={(checked) => dbQuery.onChange(checked === true)}
+                >
+                  <DatabaseIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+                  {t('dbQueryToggle')}
+                </DropdownMenuCheckboxItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          {dbQuery?.enabled && <DbQueryBadge />}
+          <span className="min-w-0 flex-1" />
+          {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} />}
+          {action}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Web-search checkbox of the full menu, with a hint explaining why it is disabled. */
+function WebSearchMenuItem({ webSearch, checked, busy }: { webSearch: NonNullable<ChatComposerProps['webSearch']>; checked: boolean; busy: boolean }) {
+  const t = useTranslations('chat');
+  const unavailable = !webSearch.available || webSearch.profileBlocked;
+  return (
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuCheckboxItem
+        id="chat-web-search"
+        checked={checked}
+        disabled={unavailable || busy}
+        onSelect={(e) => e.preventDefault()}
+        onCheckedChange={(next) => webSearch.onChange(next === true)}
+      >
+        <GlobeIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+        <span className="flex flex-col">
+          {t('webSearchToggle')}
+          {/* Disabled items give no reason; explain why so the owner knows what to fix. */}
+          {unavailable && (
+            <span className="text-xs text-muted-foreground" data-testid="chat-web-search-hint">
+              {webSearch.profileBlocked ? t('webSearchProfileOnly') : t('webSearchNotSetUp')}
+            </span>
+          )}
+        </span>
+      </DropdownMenuCheckboxItem>
+    </>
+  );
+}
+
+/** The full-page "+" menu: add context, attach, share toggle, web search and database query. */
+function FullMenu({ menu, webSearch, webSearchChecked, dbQuery, isStreaming, disabled }: {
+  menu: ComposerMenuProps;
+  webSearch: ChatComposerProps['webSearch'];
+  webSearchChecked: boolean;
+  dbQuery: ChatComposerProps['dbQuery'];
+  isStreaming: boolean;
+  disabled: boolean;
+}) {
+  const t = useTranslations('chat');
+  return (
+    <DropdownMenu>
+      <MenuTrigger disabled={disabled} />
+      <DropdownMenuContent align="start" side="top">
+        {menu.onAddContext && (
+          <DropdownMenuItem inset onSelect={menu.onAddContext}>
+            <FileTextIcon aria-hidden="true" />{t('addContext')}
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem inset disabled={menu.attachDisabled} onSelect={menu.onAttach}>
+          <PaperclipIcon aria-hidden="true" />{t('attach')}
+        </DropdownMenuItem>
+        <DropdownMenuCheckboxItem
+          checked={menu.share.checked}
+          disabled={menu.share.disabled}
+          // Keep the menu open so the owner sees the toggle change before attaching.
+          onSelect={(e) => e.preventDefault()}
+          onCheckedChange={(checked) => menu.share.onChange(checked === true)}
+        >
+          <CloudIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+          {t('attachmentShareToggle')}
+        </DropdownMenuCheckboxItem>
+        {webSearch && <WebSearchMenuItem webSearch={webSearch} checked={webSearchChecked} busy={isStreaming || disabled} />}
+        {dbQuery && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              id="chat-db-query"
+              checked={dbQuery.enabled}
+              disabled={isStreaming || disabled}
+              onSelect={(e) => e.preventDefault()}
+              onCheckedChange={(checked) => dbQuery.onChange(checked === true)}
+            >
+              <DatabaseIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+              {t('dbQueryToggle')}
+            </DropdownMenuCheckboxItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** Model line plus source count shown at the end of the full-page toolbar. */
+function ModelLine({ modelLabel, sourcesCount, hasPicker }: { modelLabel: string | null; sourcesCount: number; hasPicker: boolean }) {
+  const t = useTranslations('chat');
+  const modelText = modelLabel ? t('modelLine', { model: modelLabel }) : null;
+  return (
+    // Below sm the picker already names the model; a truncated "Mo…" line only steals width.
+    <span className={`min-w-0 flex-1 truncate text-xs text-muted-foreground ${hasPicker ? 'max-sm:invisible' : ''}`}>
+      {modelText}{sourcesCount > 0 ? `${modelText ? ' · ' : ''}${t('sourcesCount', { count: sourcesCount })}` : ''}
+    </span>
+  );
+}
+
+/**
+ * Full-page layout: the one floating element, a single bordered field with a 12px radius and the 720px measure
+ * matching the transcript.
+ */
+function FullComposer(props: ChatComposerProps & ComposerShared) {
+  const { contextBar, attachments, textarea, action, menu, webSearch, dbQuery, modelPicker, isStreaming, disabled, modelLabel = null, sourcesCount = 0 } = props;
+  const webSearchChecked = !!webSearch && webSearch.available && !webSearch.profileBlocked && webSearch.enabled;
+  const t = useTranslations('chat');
+  return (
+    <div className="relative shrink-0 bg-surface px-3 py-3 sm:px-5 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      <div className="mx-auto flex w-full max-w-[720px] flex-col gap-2 rounded-lg border border-control bg-surface p-3 focus-within:ring-2 focus-within:ring-data">
+        {contextBar}
+        {attachments}
+        {textarea}
+        <div className="flex items-center gap-2">
+          {menu && <FullMenu menu={menu} webSearch={webSearch} webSearchChecked={webSearchChecked} dbQuery={dbQuery} isStreaming={isStreaming} disabled={disabled} />}
+          {webSearchChecked && (
+            <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-web-search-badge">
+              <GlobeIcon className="size-3" aria-hidden="true" />
+              {t('webSearchBadge')}
+            </Badge>
+          )}
+          {dbQuery?.enabled && <DbQueryBadge />}
+          <ModelLine modelLabel={modelLabel} sourcesCount={sourcesCount} hasPicker={Boolean(modelPicker)} />
+          {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} />}
+          {action}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Message input composer featuring multi-line auto-resizing textarea, clipboard file paste,
+ * keyboard shortcut submission (Enter), separate Stop button during streaming, and in-memory
+ * draft preservation across drawer toggles.
+ *
+ * @param props - ChatComposerProps interface.
+ * @returns Accessible composer control component.
+ */
+export function ChatComposer(props: ChatComposerProps) {
+  const { value, onStop, isStreaming, disabled = false, placeholder, sendBlockedBy = null, mode = 'drawer', dbQuery, modelPicker } = props;
+  const t = useTranslations('chat');
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const { handleSend, handleKeyDown, handlePaste, handleChange, canSend } = useComposerHandlers(props, textareaRef);
   const textarea = (
-    <textarea
+    <Textarea
       ref={textareaRef}
       value={value}
       onChange={handleChange}
@@ -171,171 +378,11 @@ export function ChatComposer({
       aria-disabled={disabled || undefined}
       rows={2}
       // The surrounding box owns the border and focus ring in both layouts, so the field itself is borderless.
-      className="block max-h-[200px] min-h-14 w-full resize-none overflow-y-auto bg-transparent px-1 py-1 text-base text-foreground outline-none placeholder:text-muted-foreground aria-disabled:opacity-50 sm:text-[15px]"
+      className="block field-sizing-fixed max-h-[200px] min-h-14 w-full resize-none overflow-y-auto rounded-none border-0 bg-transparent px-1 py-1 text-base text-foreground shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 aria-disabled:opacity-50 sm:text-[15px] md:text-[15px] dark:bg-transparent"
       aria-label={t('composerPlaceholder')}
     />
   );
-  // Round icon-only controls shared by the Chat page and the quick chat sheet; the aria-labels keep them named for assistive tech.
-  const roundStop = (
-    <Button type="button" variant="outline" size="icon" onClick={onStop} className="border-negative text-negative hover:text-negative" data-testid="chat-stop" aria-label={t('stopGenerating')}>
-      <SquareIcon className="size-3.5 fill-current" aria-hidden="true" />
-    </Button>
-  );
-  const roundSend = (
-    <Button
-      type="button"
-      size="icon"
-      onClick={handleSend}
-      aria-disabled={!canSend}
-      className="aria-disabled:cursor-not-allowed aria-disabled:opacity-40"
-      data-testid="chat-send"
-      aria-label={t('send')}
-      aria-describedby={sendBlockedBy ?? undefined}
-    >
-      <ArrowUpIcon className="size-4" aria-hidden="true" />
-    </Button>
-  );
-  if (!isFull) {
-    // Drawer mirrors the Chat page: one bordered box with the borderless field on top and "+", model and send in a toolbar row.
-    return (
-      <div className="relative shrink-0 border-t border-border bg-surface p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-        <div className="flex w-full flex-col gap-2 rounded-lg border border-control bg-surface p-3 focus-within:ring-2 focus-within:ring-data">
-          {textarea}
-          <div className="flex items-center gap-2">
-            {dbQuery && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button id={COMPOSER_MENU_ID} type="button" variant="ghost" size="icon" className="text-muted-foreground" aria-label={t('composerMenu')} disabled={disabled}>
-                    <PlusIcon className="size-4" aria-hidden="true" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" side="top">
-                  <DropdownMenuCheckboxItem
-                    id="chat-db-query"
-                    checked={dbQuery.enabled}
-                    disabled={isStreaming || disabled}
-                    onSelect={(e) => e.preventDefault()}
-                    onCheckedChange={(checked) => dbQuery.onChange(checked === true)}
-                  >
-                    <DatabaseIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
-                    {t('dbQueryToggle')}
-                  </DropdownMenuCheckboxItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-            {dbQuery?.enabled && (
-              <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-db-query-badge">
-                <DatabaseIcon className="size-3" aria-hidden="true" />
-                {t('dbQueryBadge')}
-              </Badge>
-            )}
-            <span className="min-w-0 flex-1" />
-            {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} />}
-            {isStreaming ? roundStop : roundSend}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const modelText = modelLabel ? t('modelLine', { model: modelLabel }) : null;
-  const webSearchChecked = !!webSearch && webSearch.available && !webSearch.profileBlocked && webSearch.enabled;
-
-  return (
-    <div className="relative shrink-0 bg-surface px-3 py-3 sm:px-5 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-      {/* The one floating element: a single bordered field, 12px radius, 720px measure matching the transcript. */}
-      <div className="mx-auto flex w-full max-w-[720px] flex-col gap-2 rounded-lg border border-control bg-surface p-3 focus-within:ring-2 focus-within:ring-data">
-        {contextBar}
-        {attachments}
-        {textarea}
-        <div className="flex items-center gap-2">
-          {menu && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button id={COMPOSER_MENU_ID} type="button" variant="ghost" size="icon" className="text-muted-foreground" aria-label={t('composerMenu')} disabled={disabled}>
-                  <PlusIcon className="size-4" aria-hidden="true" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="top">
-                {menu.onAddContext && (
-                  <DropdownMenuItem inset onSelect={menu.onAddContext}>
-                    <FileTextIcon aria-hidden="true" />{t('addContext')}
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuItem inset disabled={menu.attachDisabled} onSelect={menu.onAttach}>
-                  <PaperclipIcon aria-hidden="true" />{t('attach')}
-                </DropdownMenuItem>
-                <DropdownMenuCheckboxItem
-                  checked={menu.share.checked}
-                  disabled={menu.share.disabled}
-                  // Keep the menu open so the owner sees the toggle change before attaching.
-                  onSelect={(e) => e.preventDefault()}
-                  onCheckedChange={(checked) => menu.share.onChange(checked === true)}
-                >
-                  <CloudIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-                  {t('attachmentShareToggle')}
-                </DropdownMenuCheckboxItem>
-                {webSearch && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuCheckboxItem
-                      id="chat-web-search"
-                      checked={webSearchChecked}
-                      disabled={!webSearch.available || webSearch.profileBlocked || isStreaming || disabled}
-                      onSelect={(e) => e.preventDefault()}
-                      onCheckedChange={(checked) => webSearch.onChange(checked === true)}
-                    >
-                      <GlobeIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-                      <span className="flex flex-col">
-                        {t('webSearchToggle')}
-                        {/* Disabled items give no reason; explain why so the owner knows what to fix. */}
-                        {(!webSearch.available || webSearch.profileBlocked) && (
-                          <span className="text-xs text-muted-foreground" data-testid="chat-web-search-hint">
-                            {webSearch.profileBlocked ? t('webSearchProfileOnly') : t('webSearchNotSetUp')}
-                          </span>
-                        )}
-                      </span>
-                    </DropdownMenuCheckboxItem>
-                  </>
-                )}
-                {dbQuery && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuCheckboxItem
-                      id="chat-db-query"
-                      checked={dbQuery.enabled}
-                      disabled={isStreaming || disabled}
-                      onSelect={(e) => e.preventDefault()}
-                      onCheckedChange={(checked) => dbQuery.onChange(checked === true)}
-                    >
-                      <DatabaseIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-                      {t('dbQueryToggle')}
-                    </DropdownMenuCheckboxItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-          {webSearchChecked && (
-            <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-web-search-badge">
-              <GlobeIcon className="size-3" aria-hidden="true" />
-              {t('webSearchBadge')}
-            </Badge>
-          )}
-          {dbQuery?.enabled && (
-            <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-db-query-badge">
-              <DatabaseIcon className="size-3" aria-hidden="true" />
-              {t('dbQueryBadge')}
-            </Badge>
-          )}
-          {/* Below sm the picker already names the model; a truncated "Mo…" line only steals width. */}
-          <span className={`min-w-0 flex-1 truncate text-xs text-muted-foreground ${modelPicker ? 'max-sm:invisible' : ''}`}>
-            {modelText}{sourcesCount > 0 ? `${modelText ? ' · ' : ''}${t('sourcesCount', { count: sourcesCount })}` : ''}
-          </span>
-          {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} />}
-          {isStreaming ? roundStop : roundSend}
-        </div>
-      </div>
-    </div>
-  );
+  const action = isStreaming ? <StopButton onStop={onStop} /> : <SendButton onClick={handleSend} canSend={canSend} describedBy={sendBlockedBy} />;
+  const shared: ComposerShared = { isStreaming, dbQuery, modelPicker, disabled, textarea, action };
+  return mode === 'full' ? <FullComposer {...props} {...shared} /> : <DrawerComposer {...shared} />;
 }

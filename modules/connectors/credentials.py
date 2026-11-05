@@ -149,6 +149,7 @@ def decrypt_native_token(key: str, credential: NativeCredentialSnapshot) -> str:
 
 
 def _rest_binding(source_generation: int, configuration_revision: int, header_name: str, key: str, secret: str) -> dict[str, object]:
+    """Return the resolved-binding record stored beside a REST header credential (fingerprint, never the secret)."""
     return {
         "provider": "rest_header", "source_generation": source_generation,
         "configuration_revision": configuration_revision, "header_name": header_name,

@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import ConflictError, DomainError, NotFoundError
 from core.ids import uuid7
 from core.realtime import ReplayDraft, commit_with_replay, make_source_change
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
@@ -52,7 +53,7 @@ def _bind_n8n_service(row: ConnectorProvisioning | ConnectorManagedCredential, s
     row.n8n_service_url = endpoint
 
 
-class RetainedEffectAdmissionDenied(HTTPException):
+class RetainedEffectAdmissionDenied(DomainError):
     """Identify definitive original admission denial at the retained Source boundary.
 
     Trusted drivers release the failed transaction before journal-only bookkeeping;
@@ -239,7 +240,7 @@ async def lock_retained_connector_effect(
             session, source_id, source_generation=cast(int, original_operation["source_generation"]),
             scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
         )
-    except HTTPException as exc:
+    except (DomainError, HTTPException) as exc:
         if exc.status_code not in {401, 403, 404, 409}:
             raise
         raise RetainedEffectAdmissionDenied(status_code=exc.status_code, detail=exc.detail) from exc
@@ -268,13 +269,13 @@ async def commit_retained_connector_effect(
     already proved operation/step/remote target CAS. No acquiring locks or network.
     """
     if before is None or before.access_fence != access_fence:
-        raise HTTPException(status_code=409, detail="Retained Connector observation unavailable")
+        raise ConflictError("Retained Connector observation unavailable")
     source = await sources.get_connector_retained_effect_anchor_in_uow(
         session, source_id, source_generation=cast(int, original_operation["source_generation"]),
         scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
     )
     if source != before.fence:
-        raise HTTPException(status_code=409, detail="Retained Connector Source changed")
+        raise ConflictError("Retained Connector Source changed")
     if source.generation == original_operation["source_generation"]:
         await commit_connector_observation(
             session, before, operation_id=UUID(cast(str, original_operation["id"])),
@@ -885,7 +886,7 @@ async def save_native_credential(
         .execution_options(populate_existing=True)
     )
     if (native.operation_id if native is not None else None) != expected_native_operation_id:
-        raise HTTPException(status_code=409, detail="Native credential operation changed")
+        raise ConflictError("Native credential operation changed")
     if native is not None and (
         native.bound_bot_id not in (None, verified_bot_id)
         or native.verified_bot_id not in (None, verified_bot_id)
@@ -961,7 +962,7 @@ async def revoke_native_credential_in_uow(
         .execution_options(populate_existing=True)
     )
     if (native.operation_id if native is not None else None) != expected_native_operation_id:
-        raise HTTPException(status_code=409, detail="Native credential operation changed")
+        raise ConflictError("Native credential operation changed")
     if native is None:
         return
     native.source_generation = source_generation
@@ -1064,7 +1065,7 @@ async def commit_connector_observation(
     """
     access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=before.access_fence if before is not None else None)
     if before is not None and await sources.get_source_fence(session, before.fence.id, scope=scope, multi_workspace_enabled=multi_workspace_enabled) != before.fence:
-        raise HTTPException(status_code=409, detail="Connector observation Source changed")
+        raise ConflictError("Connector observation Source changed")
     await session.flush()
     drafts: list[ReplayDraft] = []
     if before is not None:
@@ -1156,7 +1157,7 @@ async def get_managed_credential(
     """Read one credential slot without acquiring the provisioning lock chain."""
     source = await _read_scoped_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
+        raise NotFoundError("Source not found")
     return await session.scalar(
         select(ConnectorManagedCredential)
         .where(
@@ -1180,7 +1181,7 @@ async def activation_status(
     """
     source = await _read_scoped_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
+        raise NotFoundError("Source not found")
     return await session.scalar(
         select(ConnectorProvisioning)
         .where(ConnectorProvisioning.source_id == source_id)
@@ -1202,7 +1203,7 @@ async def activation_statuses(
     visible = await sources.get_connector_sources(
         session, source_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if visible.keys() != source_ids:
-        raise HTTPException(status_code=404, detail="Source not found")
+        raise NotFoundError("Source not found")
     if not source_ids:
         return {}
     rows = await session.scalars(
@@ -1331,6 +1332,80 @@ async def save_desired(
     )
 
 
+def _retire_activation_for_saved_configuration(
+    row: ConnectorProvisioning, slots: dict[str, ConnectorManagedCredential],
+) -> None:
+    """Retire a pending activation intent after the desired configuration changed.
+
+    Mutates ``row``/``slots`` in the caller's transaction without flushing. Prepared credential
+    operations of that activation are released; if any dispatched/unknown operation remains the
+    intent is kept as ``stale_unresolved`` and the row enters ``reconciliation_required`` with
+    ``activation_outcome_pending``, otherwise the intent is dropped.
+    """
+    activation = copy.deepcopy(row.activation_intent)
+    if isinstance(activation, dict):
+        required = activation.get("required_credentials")
+        unresolved = False
+        if isinstance(required, dict):
+            for slot_name in required:
+                credential = slots.get(str(slot_name))
+                envelope = credential.operation_envelope if credential is not None else None
+                if (
+                    isinstance(envelope, dict)
+                    and envelope.get("activation_id") == activation.get("id")
+                ):
+                    if envelope.get("state") == "prepared":
+                        assert credential is not None  # noqa: S101  # mypy narrowing invariant
+                        credential.operation_id = None
+                        credential.operation_envelope = None
+                        credential.state = "ready" if credential.credential_id else "queued"
+                    elif envelope.get("state") in {"dispatched", "unknown"}:
+                        unresolved = True
+        if unresolved:
+            activation["state"] = "stale_unresolved"
+            row.activation_intent = activation
+            row.state = "reconciliation_required"
+            row.error_code = "activation_outcome_pending"
+        else:
+            row.activation_intent = None
+
+
+def _retire_workflow_operation_for_saved_configuration(
+    row: ConnectorProvisioning, *, prior_enabled: bool, source_generation: int,
+    scope: Scope, access_fence: AccessFence,
+) -> None:
+    """Reconcile the pending workflow operation with a changed desired configuration.
+
+    Mutates ``row`` without flushing. A prepared/blocked step is discarded (replaced by a fresh
+    deactivation when the source was enabled), a prepared deactivation is kept pending, and an
+    already-dispatched operation is flagged for cleanup. With no operation, a previously enabled
+    source gets a new deactivation.
+    """
+    if row.workflow_operation is not None:
+        operation = copy.deepcopy(row.workflow_operation)
+        step = operation.get("step")
+        if operation.get("kind") == "deactivate" and isinstance(step, dict) and step.get("state") == "prepared":
+            row.error_code = "deactivation_pending"
+        elif isinstance(step, dict) and step.get("state") in {"prepared", "blocked"}:
+            row.workflow_operation = None
+            new_operation = _new_deactivation(row, source_generation, scope=scope, access_fence=access_fence) if prior_enabled else None
+            if new_operation is not None:
+                row.workflow_operation = new_operation
+                row.error_code = "deactivation_pending"
+            else:
+                row.error_code = None
+        else:
+            operation["cleanup_required"] = True
+            operation["error"] = "desired_state_changed_during_dispatch"
+            row.workflow_operation = operation
+            row.error_code = "workflow_operation_pending"
+    elif prior_enabled:
+        new_operation = _new_deactivation(row, source_generation, scope=scope, access_fence=access_fence)
+        if new_operation is not None:
+            row.workflow_operation = new_operation
+            row.error_code = "deactivation_pending"
+
+
 async def _save_desired_in_uow(
     session: AsyncSession,
     source_id: UUID,
@@ -1383,55 +1458,11 @@ async def _save_desired_in_uow(
     row.desired_enabled = False
     row.state = "saved_not_active"
     row.error_code = None
-    activation = copy.deepcopy(row.activation_intent)
-    if isinstance(activation, dict):
-        required = activation.get("required_credentials")
-        unresolved = False
-        if isinstance(required, dict):
-            for slot_name in required:
-                credential = slots.get(str(slot_name))
-                envelope = credential.operation_envelope if credential is not None else None
-                if (
-                    isinstance(envelope, dict)
-                    and envelope.get("activation_id") == activation.get("id")
-                ):
-                    if envelope.get("state") == "prepared":
-                        assert credential is not None
-                        credential.operation_id = None
-                        credential.operation_envelope = None
-                        credential.state = "ready" if credential.credential_id else "queued"
-                    elif envelope.get("state") in {"dispatched", "unknown"}:
-                        unresolved = True
-        if unresolved:
-            activation["state"] = "stale_unresolved"
-            row.activation_intent = activation
-            row.state = "reconciliation_required"
-            row.error_code = "activation_outcome_pending"
-        else:
-            row.activation_intent = None
-    if row.workflow_operation is not None:
-        operation = copy.deepcopy(row.workflow_operation)
-        step = operation.get("step")
-        if operation.get("kind") == "deactivate" and isinstance(step, dict) and step.get("state") == "prepared":
-            row.error_code = "deactivation_pending"
-        elif isinstance(step, dict) and step.get("state") in {"prepared", "blocked"}:
-            row.workflow_operation = None
-            new_operation = _new_deactivation(row, source_generation, scope=scope, access_fence=access_fence) if prior_enabled else None
-            if new_operation is not None:
-                row.workflow_operation = new_operation
-                row.error_code = "deactivation_pending"
-            else:
-                row.error_code = None
-        else:
-            operation["cleanup_required"] = True
-            operation["error"] = "desired_state_changed_during_dispatch"
-            row.workflow_operation = operation
-            row.error_code = "workflow_operation_pending"
-    elif prior_enabled:
-        new_operation = _new_deactivation(row, source_generation, scope=scope, access_fence=access_fence)
-        if new_operation is not None:
-            row.workflow_operation = new_operation
-            row.error_code = "deactivation_pending"
+    _retire_activation_for_saved_configuration(row, slots)
+    _retire_workflow_operation_for_saved_configuration(
+        row, prior_enabled=prior_enabled, source_generation=source_generation,
+        scope=scope, access_fence=access_fence,
+    )
     await session.flush()
     return row
 
@@ -1544,6 +1575,81 @@ async def begin_activation_bundle(
     )
 
 
+def _stage_credential_intent(
+    session: AsyncSession, source_id: UUID, slot: str, intent: dict[str, object],
+    existing: ConnectorManagedCredential | None, *, activation_id: UUID, source_generation: int,
+    revision: int, scope: Scope, access_fence: AccessFence,
+) -> None:
+    """Stage one prepared credential operation envelope on a (new or existing) managed slot.
+
+    Adds a new ``ConnectorManagedCredential`` to ``session`` or updates ``existing`` in place and
+    marks it ``queued``; performs no flush, I/O or commit. The caller has already verified the slot
+    is not mid-operation and that its target credential id matches the intent.
+    """
+    operation_id = UUID(str(intent["operation_id"]))
+    envelope = {
+        **_operation_identity(scope, access_fence),
+        "id": str(operation_id),
+        "activation_id": str(activation_id),
+        "kind": str(intent["kind"]),
+        "state": "prepared",
+        "source_generation": source_generation,
+        "revision": revision,
+        "credential_type": str(intent["credential_type"]),
+        "target_id": intent.get("target_id"),
+        "binding": copy.deepcopy(intent["binding"]),
+        "input_ciphertext": str(intent["input_ciphertext"]),
+        "dispatch_started_at": None,
+    }
+    if existing is None:
+        existing = ConnectorManagedCredential(
+            source_id=source_id,
+            slot=slot,
+            credential_id=intent.get("target_id"),
+            operation_id=operation_id,
+            operation_revision=revision,
+            source_generation=source_generation,
+            credential_type=str(intent["credential_type"]),
+            state="queued",
+            operation_envelope=envelope,
+        )
+        session.add(existing)
+    else:
+        existing.operation_id = operation_id
+        existing.operation_revision = revision
+        existing.source_generation = source_generation
+        existing.credential_type = str(intent["credential_type"])
+        existing.state = "queued"
+        existing.error_code = None
+        existing.operation_envelope = envelope
+
+
+def _bind_required_credentials(
+    required_credentials: dict[str, dict[str, object]], credential_intents: dict[str, dict[str, object]],
+    slots: dict[str, ConnectorManagedCredential],
+) -> bool:
+    """Attach operation/credential ids to every required slot of an activation bundle.
+
+    A slot with a staged intent takes the intent's operation and target ids; any other slot must
+    already hold a ready credential whose resolved binding equals the required one. Mutates
+    ``required_credentials``; returns False (caller rolls back) when a slot is not ready.
+    """
+    for slot, required in required_credentials.items():
+        if slot in credential_intents:
+            required["operation_id"] = str(credential_intents[slot]["operation_id"])
+            required["credential_id"] = credential_intents[slot].get("target_id")
+        else:
+            existing = slots.get(slot)
+            if (
+                existing is None or existing.state != "ready" or not existing.credential_id
+                or existing.resolved_binding != required.get("binding")
+            ):
+                return False
+            required["credential_id"] = existing.credential_id
+            required["operation_id"] = None
+    return True
+
+
 async def begin_activation_bundle_in_uow(
     session: AsyncSession,
     source_id: UUID,
@@ -1581,56 +1687,13 @@ async def begin_activation_bundle_in_uow(
             return False
         if (existing.credential_id if existing is not None else None) != intent.get("target_id"):
             return False
-        operation_id = UUID(str(intent["operation_id"]))
-        envelope = {
-            **_operation_identity(scope, access_fence),
-            "id": str(operation_id),
-            "activation_id": str(activation_id),
-            "kind": str(intent["kind"]),
-            "state": "prepared",
-            "source_generation": source_generation,
-            "revision": revision,
-            "credential_type": str(intent["credential_type"]),
-            "target_id": intent.get("target_id"),
-            "binding": copy.deepcopy(intent["binding"]),
-            "input_ciphertext": str(intent["input_ciphertext"]),
-            "dispatch_started_at": None,
-        }
-        if existing is None:
-            existing = ConnectorManagedCredential(
-                source_id=source_id,
-                slot=slot,
-                credential_id=intent.get("target_id"),
-                operation_id=operation_id,
-                operation_revision=revision,
-                source_generation=source_generation,
-                credential_type=str(intent["credential_type"]),
-                state="queued",
-                operation_envelope=envelope,
-            )
-            session.add(existing)
-        else:
-            existing.operation_id = operation_id
-            existing.operation_revision = revision
-            existing.source_generation = source_generation
-            existing.credential_type = str(intent["credential_type"])
-            existing.state = "queued"
-            existing.error_code = None
-            existing.operation_envelope = envelope
+        _stage_credential_intent(
+            session, source_id, slot, intent, existing, activation_id=activation_id,
+            source_generation=source_generation, revision=revision, scope=scope, access_fence=access_fence,
+        )
 
-    for slot, required in required_credentials.items():
-        if slot in credential_intents:
-            required["operation_id"] = str(credential_intents[slot]["operation_id"])
-            required["credential_id"] = credential_intents[slot].get("target_id")
-        else:
-            existing = slots.get(slot)
-            if (
-                existing is None or existing.state != "ready" or not existing.credential_id
-                or existing.resolved_binding != required.get("binding")
-            ):
-                return False
-            required["credential_id"] = existing.credential_id
-            required["operation_id"] = None
+    if not _bind_required_credentials(required_credentials, credential_intents, slots):
+        return False
 
     row.desired_enabled = True
     row.state = "provisioning"
@@ -1734,7 +1797,7 @@ async def clear_retired_source_credentials(session: AsyncSession, source_id: UUI
     """
     source = await _read_scoped_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
+        raise NotFoundError("Source not found")
     native = await session.scalar(
         select(ConnectorNativeCredential).where(ConnectorNativeCredential.source_id == source_id)
         .with_for_update().execution_options(populate_existing=True)
@@ -1763,7 +1826,7 @@ async def _clear_retired_source_credentials_held(
     ciphertext, an empty set retains pending last-source revoke. No provider I/O/commit occurs.
     """
     if any(item is not None and item.source_id != source_id for item in (native, grant)):
-        raise HTTPException(status_code=409, detail="Retired Source credential identity changed")
+        raise ConflictError("Retired Source credential identity changed")
     if native is not None and (native.state != "revoked" or native.verified_bot_id is not None):
         native.operation_id = uuid7()
         native.encrypted_token = None
@@ -1805,17 +1868,17 @@ async def github_grant_has_active_peer(session: AsyncSession, grant: Any, *, sco
     observed = tuple(getattr(grant, field, None) for field in identity_fields)
     source_id = observed[0]
     if not isinstance(source_id, UUID) or not isinstance(observed[1], UUID):
-        raise HTTPException(status_code=409, detail="GitHub retirement grant changed")
+        raise ConflictError("GitHub retirement grant changed")
     access_fence = await _connector_access(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     source = await _read_scoped_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     source_fence = await sources.get_source_fence(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None or source_fence is None:
-        raise HTTPException(status_code=409, detail="GitHub retirement Source changed")
+        raise ConflictError("GitHub retirement Source changed")
     current = await session.scalar(select(GithubOAuthGrant).where(
         GithubOAuthGrant.source_id == source_id,
     ).execution_options(populate_existing=True))
     if current is None or tuple(getattr(current, field) for field in identity_fields) != observed:
-        raise HTTPException(status_code=409, detail="GitHub retirement grant changed")
+        raise ConflictError("GitHub retirement grant changed")
     projection = (await sources.github_retirement_peer_projection_in_uow(
         session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence, source_fence=source_fence,
@@ -1844,7 +1907,7 @@ async def finish_deleted_source_grant_revoke(
 
     source = await _read_scoped_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
     if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
+        raise NotFoundError("Source not found")
     grant = await session.scalar(
         select(GithubOAuthGrant).where(GithubOAuthGrant.source_id == source_id)
         .with_for_update().execution_options(populate_existing=True)
@@ -1880,7 +1943,7 @@ async def _apply_collection_fence(
                     and envelope.get("activation_id") == activation.get("id")
                 ):
                     if envelope.get("state") == "prepared":
-                        assert credential is not None
+                        assert credential is not None  # noqa: S101  # mypy narrowing invariant
                         credential.operation_id = None
                         credential.operation_envelope = None
                         credential.state = "ready" if credential.credential_id else "queued"
@@ -1924,7 +1987,7 @@ async def fence_source_collection(
         scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )
     if current_source != source:
-        raise HTTPException(status_code=409, detail="Source lifecycle fence changed")
+        raise ConflictError("Source lifecycle fence changed")
     if row is None:
         return False
     if source.status == "archived":
@@ -1990,12 +2053,12 @@ async def require_n8n_backend(session: AsyncSession, source_id: UUID, *, n8n_ena
     Nonlocking read under the caller-held Source lock; a missing row is left to later fences.
     """
     if not n8n_enabled:
-        raise HTTPException(status_code=409, detail="n8n_disabled")
+        raise ConflictError("n8n_disabled")
     row = await session.scalar(
         select(ConnectorProvisioning).where(ConnectorProvisioning.source_id == source_id)
         .execution_options(populate_existing=True))
     if row is not None and (row.execution_backend != "n8n" or row.transition_phase != "idle"):
-        raise HTTPException(status_code=409, detail="backend_inactive")
+        raise ConflictError("backend_inactive")
 
 
 async def require_validation_fence(
@@ -2086,7 +2149,7 @@ async def claim_credential_operation(
         row.operation_id = None
         row.state = "ready" if row.credential_id else "queued"
         row.error_code = "prepared_credential_intent_stale"
-        if isinstance(activation_id, str) and desired is not None and isinstance(desired.activation_intent, dict):  # noqa: SIM102  # style-only rewrite skipped to avoid touching control flow
+        if isinstance(activation_id, str) and desired is not None and isinstance(desired.activation_intent, dict):
             if desired.activation_intent.get("id") == activation_id:
                 for sibling in slots.values():
                     sibling_envelope = sibling.operation_envelope
@@ -2573,70 +2636,41 @@ async def claim_workflow_step(
     return operation
 
 
-async def acknowledge_workflow_step(
-    session: AsyncSession,
-    source_id: UUID,
-    operation_id: UUID,
-    step_id: str,
-    *,
-    workflow_id: str | None = None,
-    scope: Scope, multi_workspace_enabled: bool,
-    original_operation: dict[str, object], access_fence: AccessFence,
+def _acknowledgement_matches(
+    row: ConnectorProvisioning, operation: dict[str, object], step: dict[str, object],
+    original_operation: dict[str, object], *, source_id: UUID, operation_id: UUID, step_id: str,
+    workflow_id: str | None, scope: Scope, access_fence: AccessFence,
 ) -> bool:
-    """Acknowledge a matching dispatched step and flush its workflow transition.
+    """Return whether a workflow acknowledgement names the retained dispatched step exactly.
 
-    Returns False for a stale operation/step identity. The driver performs the
-    final commit together with the safe source observation/event.
-
-    Caller holds original admission/retained Source/provisioning/all slots. Immutable
-    original envelope/step/request/target CAS precedes current activation-versus-cleanup
-    selection. Later generation/config never discards a known effect or publishes stale
-    activation. Flush-only; caller uses commit_retained_connector_effect after settlement.
+    Pure check: the stored operation must not already carry a retained result, must match the
+    immutable original envelope, and the step must be the dispatched one with the expected
+    target/workflow identity for its kind (create has no target and needs a workflow id;
+    update must repeat its target).
     """
-    from modules.settings.public import module_is_enabled
-
-    source, row, slots = await _read_retained_connector_rows(
-        session, source_id, original_operation=original_operation, scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-    )
-    operation = copy.deepcopy(row.workflow_operation) if row is not None else None
-    step = operation.get("step") if isinstance(operation, dict) else None
-    if (
-        row is None or not isinstance(operation, dict) or not isinstance(step, dict)
-        or operation.get("retained_effect_result")
+    return not (
+        operation.get("retained_effect_result")
         or not _retained_operation_matches(operation, original_operation, source_id=source_id, scope=scope, access_fence=access_fence)
-        or source is None
         or operation.get("id") != str(operation_id) or step.get("id") != step_id
         or step.get("state") != "dispatched"
         or step.get("kind") in {"update", "activate", "deactivate"}
         and (step.get("target") != operation.get("workflow_id") or step.get("target") != row.workflow_id)
         or step.get("kind") == "update" and workflow_id != step.get("target")
         or step.get("kind") == "create" and (step.get("target") is not None or not workflow_id)
-    ):
-        return False
-    step["state"] = "succeeded"
-    history = step.get("history")
-    if isinstance(history, list):
-        history.append({"id": step_id, "kind": step.get("kind"), "state": "succeeded"})
-    operation["step"] = step
-    if workflow_id is not None:
-        operation["workflow_id"] = workflow_id
-        row.workflow_id = workflow_id
-        row.workflow_name = str(operation.get("workflow_name") or row.workflow_name or "")
-    kind = step.get("kind")
-    current = bool(
-        await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        and source is not None and source.status == "active" and not source.local_only and row.desired_enabled
-        and not operation.get("cleanup_required")
-        and source.generation == operation.get("source_generation")
-        and row.source_generation == operation.get("source_generation")
-        and row.desired_revision == operation.get("revision")
-        and row.execution_backend == "n8n"
-        and row.transition_phase in ("idle", "activating_new")
-        and operation.get("backend_revision", row.backend_revision) == row.backend_revision
-        and _required_credentials_match(operation.get("required_credentials", {}), slots)
     )
-    target = str(operation.get("workflow_id") or row.workflow_id or "") or None
+
+
+def _apply_acknowledged_step(
+    row: ConnectorProvisioning, source: SourceFence | None, operation: dict[str, Any], *,
+    kind: object, current: bool, target: str | None,
+) -> None:
+    """Advance the provisioning row after an acknowledged step according to the step ``kind``.
+
+    ``current`` says the activation is still wanted (Source active, revisions and credentials
+    unchanged). A current create/update chains to activate; a stale one chains to deactivate
+    cleanup; a current activate finalizes the backend; deactivate clears the operation; an
+    unknown kind is recorded as unsupported. Mutates ``row``/``operation`` only (no flush).
+    """
     if kind in {"create", "update"}:
         operation["workflow_id"] = target
         if current:
@@ -2683,6 +2717,68 @@ async def acknowledge_workflow_step(
         row.workflow_operation = operation
         row.error_code = "workflow_operation_unsupported"
         row.state = "disabled" if not row.desired_enabled else "saved_not_active"
+
+
+async def acknowledge_workflow_step(
+    session: AsyncSession,
+    source_id: UUID,
+    operation_id: UUID,
+    step_id: str,
+    *,
+    workflow_id: str | None = None,
+    scope: Scope, multi_workspace_enabled: bool,
+    original_operation: dict[str, object], access_fence: AccessFence,
+) -> bool:
+    """Acknowledge a matching dispatched step and flush its workflow transition.
+
+    Returns False for a stale operation/step identity. The driver performs the
+    final commit together with the safe source observation/event.
+
+    Caller holds original admission/retained Source/provisioning/all slots. Immutable
+    original envelope/step/request/target CAS precedes current activation-versus-cleanup
+    selection. Later generation/config never discards a known effect or publishes stale
+    activation. Flush-only; caller uses commit_retained_connector_effect after settlement.
+    """
+    from modules.settings.public import module_is_enabled
+
+    source, row, slots = await _read_retained_connector_rows(
+        session, source_id, original_operation=original_operation, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+    )
+    operation = copy.deepcopy(row.workflow_operation) if row is not None else None
+    step = operation.get("step") if isinstance(operation, dict) else None
+    if (
+        row is None or not isinstance(operation, dict) or not isinstance(step, dict) or source is None
+        or not _acknowledgement_matches(
+            row, operation, step, original_operation, source_id=source_id, operation_id=operation_id,
+            step_id=step_id, workflow_id=workflow_id, scope=scope, access_fence=access_fence,
+        )
+    ):
+        return False
+    step["state"] = "succeeded"
+    history = step.get("history")
+    if isinstance(history, list):
+        history.append({"id": step_id, "kind": step.get("kind"), "state": "succeeded"})
+    operation["step"] = step
+    if workflow_id is not None:
+        operation["workflow_id"] = workflow_id
+        row.workflow_id = workflow_id
+        row.workflow_name = str(operation.get("workflow_name") or row.workflow_name or "")
+    kind = step.get("kind")
+    current = bool(
+        await module_is_enabled(session, "connectors", scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        and source is not None and source.status == "active" and not source.local_only and row.desired_enabled
+        and not operation.get("cleanup_required")
+        and source.generation == operation.get("source_generation")
+        and row.source_generation == operation.get("source_generation")
+        and row.desired_revision == operation.get("revision")
+        and row.execution_backend == "n8n"
+        and row.transition_phase in ("idle", "activating_new")
+        and operation.get("backend_revision", row.backend_revision) == row.backend_revision
+        and _required_credentials_match(operation.get("required_credentials", {}), slots)
+    )
+    target = str(operation.get("workflow_id") or row.workflow_id or "") or None
+    _apply_acknowledged_step(row, source, operation, kind=kind, current=current, target=target)
     await session.flush()
     return True
 
@@ -2791,7 +2887,7 @@ async def defer_unknown_workflow_create(
     now = datetime.now(UTC)
     if latest is not None and now <= latest:
         now = latest + timedelta(microseconds=1)
-    assert row is not None
+    assert row is not None  # noqa: S101  # mypy narrowing invariant
     row.updated_at = now
     await session.flush()
     return True
@@ -2883,6 +2979,94 @@ async def fail_workflow_step(
     return True
 
 
+async def _lookup_workflow_step(
+    session: AsyncSession, source_id: UUID, api: Any, operation: dict[str, Any], body: object,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+) -> tuple[str, str | None] | None:
+    """Run a ``lookup`` step: find the workflow by name and choose the follow-up step.
+
+    Returns ``("update", workflow_id)`` for exactly one verified match or ``("create", None)`` for
+    none. Returns ``None`` after journaling ``original_effect_send_fenced`` when the second send
+    fence (taken once transport is entered) denies the verification read. Several matches, a
+    missing ID, an invalid request body or a mismatched identity raise ``ValueError``; the caller
+    classifies it. Network calls hold no SQL lock beyond the caller's session state.
+    """
+    from modules.connectors.n8n import find_workflows_by_name, workflow_matches
+
+    matches = await find_workflows_by_name(api, str(operation["workflow_name"]))
+    if len(matches) > 1:
+        raise ValueError("n8n has multiple workflows for this connector operation")
+    if not matches:
+        return "create", None
+    workflow_id = matches[0].get("id")
+    if not isinstance(workflow_id, str) or not workflow_id:
+        raise ValueError("n8n workflow lookup response omitted its ID")
+    if not isinstance(body, dict):
+        raise ValueError("Prepared workflow request body is invalid")
+    if not await _workflow_send_allowed(
+        session, source_id, operation, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        transport_entered=True,
+    ):
+        await _settle_retained_workflow_after_io(
+            session, source_id, original_operation=operation, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+            outcome="not_sent", error_code="original_effect_send_fenced",
+        )
+        return None
+    candidate = await api.get_workflow(workflow_id)
+    if not workflow_matches(body, candidate):
+        raise ValueError("n8n workflow lookup returned a mismatched identity")
+    return "update", workflow_id
+
+
+async def _send_workflow_step(api: Any, kind: str, target: object, body: object) -> Any:
+    """Send one create/update/activate/deactivate step to n8n and return the resulting workflow ID.
+
+    Only ``create`` yields a new ID; ``update`` echoes its target; activation toggles return
+    ``None``. Raises ``ValueError`` for an invalid body or an unsupported step; transport errors
+    propagate for the caller to classify.
+    """
+    if not isinstance(body, dict) and kind in {"create", "update"}:
+        raise ValueError("Prepared workflow request body is invalid")
+    if kind == "create":
+        return await api.create_workflow(body)
+    if kind == "update" and isinstance(target, str):
+        await api.update_workflow(target, body)
+        return target
+    if kind == "activate" and isinstance(target, str):
+        await api.set_active(target, True)
+        return None
+    if kind == "deactivate" and isinstance(target, str):
+        await api.set_active(target, False)
+        return None
+    raise ValueError("Unsupported prepared workflow step")
+
+
+async def _settle_failed_workflow_step(
+    session: AsyncSession, source_id: UUID, operation: dict[str, Any], exc: Exception, kind: str,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+) -> None:
+    """Journal a finite transport failure of a workflow step as a rejection or an unknown outcome.
+
+    A 4xx response other than 408, and any failed ``lookup``, is a known rejection (nothing was
+    changed remotely); everything else is an unknown outcome that recovery must reconcile.
+    """
+    from httpx import HTTPStatusError
+
+    response = exc.response if isinstance(exc, HTTPStatusError) else None
+    known_rejection = (
+        response is not None and 400 <= response.status_code < 500
+        and response.status_code != 408
+    )
+    await _settle_retained_workflow_after_io(
+        session, source_id, original_operation=operation, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+        outcome="known_rejection" if known_rejection or kind == "lookup" else "unknown",
+        error_code="n8n_request_rejected" if known_rejection else "n8n_outcome_unknown",
+    )
+
+
 async def drive_workflow_operation(
     session: AsyncSession, source_id: UUID, api: Any,
     *, scope: Scope, multi_workspace_enabled: bool,
@@ -2895,8 +3079,6 @@ async def drive_workflow_operation(
     only; revoked access journals the transport and raises original permission loss.
     No dispatched/unknown replay, renewed epoch, upgraded Scope or publication after journal.
     """
-    from modules.connectors.n8n import find_workflows_by_name, workflow_matches
-
     for _ in range(4):
         operation = await claim_workflow_step(
             session, source_id, original_operation=original_operation, scope=scope,
@@ -2920,38 +3102,16 @@ async def drive_workflow_operation(
         if not isinstance(step, dict):
             return False
         kind = str(step["kind"])
-        target = step.get("target")
         body = step.get("request")
         try:
             if kind == "lookup":
-                matches = await find_workflows_by_name(api, str(operation["workflow_name"]))
-                if len(matches) > 1:
-                    raise ValueError("n8n has multiple workflows for this connector operation")
-                if matches:
-                    workflow_id = matches[0].get("id")
-                    if not isinstance(workflow_id, str) or not workflow_id:
-                        raise ValueError("n8n workflow lookup response omitted its ID")
-                    if not isinstance(body, dict):
-                        raise ValueError("Prepared workflow request body is invalid")
-                    if not await _workflow_send_allowed(
-                        session, source_id, operation, scope=scope,
-                        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-                        transport_entered=True,
-                    ):
-                        await _settle_retained_workflow_after_io(
-                            session, source_id, original_operation=operation, scope=scope,
-                            multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-                            outcome="not_sent", error_code="original_effect_send_fenced",
-                        )
-                        return False
-                    candidate = await api.get_workflow(workflow_id)
-                    if not workflow_matches(body, candidate):
-                        raise ValueError("n8n workflow lookup returned a mismatched identity")
-                    next_kind = "update"
-                    next_target = workflow_id
-                else:
-                    next_kind = "create"
-                    next_target = None
+                lookup = await _lookup_workflow_step(
+                    session, source_id, api, operation, body, scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+                )
+                if lookup is None:
+                    return False
+                next_kind, next_target = lookup
                 changed, next_operation = await _settle_retained_workflow_after_io(
                     session, source_id, original_operation=operation, scope=scope,
                     multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
@@ -2964,21 +3124,7 @@ async def drive_workflow_operation(
                     return True
                 original_operation = next_operation
                 continue
-            if not isinstance(body, dict) and kind in {"create", "update"}:
-                raise ValueError("Prepared workflow request body is invalid")
-            if kind == "create":
-                workflow_id = await api.create_workflow(body)
-            elif kind == "update" and isinstance(target, str):
-                await api.update_workflow(target, body)
-                workflow_id = target
-            elif kind == "activate" and isinstance(target, str):
-                await api.set_active(target, True)
-                workflow_id = None
-            elif kind == "deactivate" and isinstance(target, str):
-                await api.set_active(target, False)
-                workflow_id = None
-            else:
-                raise ValueError("Unsupported prepared workflow step")
+            workflow_id = await _send_workflow_step(api, kind, step.get("target"), body)
         except asyncio.CancelledError:
             await _settle_retained_workflow_after_io(
                 session, source_id, original_operation=operation, scope=scope,
@@ -2990,18 +3136,9 @@ async def drive_workflow_operation(
             # A journaled permission-loss response is never a provider rejection.
             raise
         except Exception as exc:  # noqa: BLE001  # finite transport failure is retained for recovery
-            from httpx import HTTPStatusError
-
-            response = exc.response if isinstance(exc, HTTPStatusError) else None
-            known_rejection = (
-                response is not None and 400 <= response.status_code < 500
-                and response.status_code != 408
-            )
-            await _settle_retained_workflow_after_io(
-                session, source_id, original_operation=operation, scope=scope,
+            await _settle_failed_workflow_step(
+                session, source_id, operation, exc, kind, scope=scope,
                 multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
-                outcome="known_rejection" if known_rejection or kind == "lookup" else "unknown",
-                error_code="n8n_request_rejected" if known_rejection else "n8n_outcome_unknown",
             )
             return False
         changed, next_operation = await _settle_retained_workflow_after_io(
@@ -3046,7 +3183,7 @@ async def unresolved_credential_error(session: AsyncSession, source_id: UUID, *,
     """Return a stable error code when any source credential operation needs recovery."""
     source = await _read_scoped_source(session, source_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
+        raise NotFoundError("Source not found")
     rows = await session.scalars(
         select(ConnectorManagedCredential).where(
             ConnectorManagedCredential.source_id == source_id,
@@ -3109,21 +3246,21 @@ async def begin_backend_transition_in_uow(
         session, source_id, _ALL_CREDENTIAL_SLOTS, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
     if source_fence is None:
-        raise HTTPException(status_code=404, detail="Source not found")
+        raise NotFoundError("Source not found")
     if source_fence.status != "active" or row is None or row.source_generation != source_fence.generation:
-        raise HTTPException(status_code=409, detail="Enable this source from connector settings first")
+        raise ConflictError("Enable this source from connector settings first")
     if row.desired_revision != expected_revision:
-        raise HTTPException(status_code=409, detail="Connector configuration revision is stale")
+        raise ConflictError("Connector configuration revision is stale")
     if row.transition_phase != "idle":
-        raise HTTPException(status_code=409, detail="A backend transition is already in progress")
+        raise ConflictError("A backend transition is already in progress")
     if (
         row.state == "provisioning" or row.workflow_operation is not None or row.activation_intent is not None
         or any(c.state in {"dispatching", "reconciliation_required", "delete_pending"} for c in slots.values())
     ):
-        raise HTTPException(status_code=409, detail="Resolve the pending connector operation first")
+        raise ConflictError("Resolve the pending connector operation first")
     stale_template = row.execution_backend == "n8n" and row.applied_template_revision < CURRENT_TEMPLATE_REVISION
     if target_backend == row.execution_backend and not stale_template:
-        raise HTTPException(status_code=409, detail="Source already uses this backend")
+        raise ConflictError("Source already uses this backend")
     row.backend_revision += 1
     row.target_backend = target_backend
     row.transition_phase = "draining"
@@ -3150,13 +3287,13 @@ async def resolve_backend_transition_in_uow(
         session, source_id, _ALL_CREDENTIAL_SLOTS, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, expected_access_fence=access_fence)
     if source_fence is None:
-        raise HTTPException(status_code=404, detail="Source not found")
+        raise NotFoundError("Source not found")
     if row is None or row.transition_phase != "reconciliation_required" or row.desired_revision != expected_revision:
-        raise HTTPException(status_code=409, detail="No reconciliation is pending for this revision")
+        raise ConflictError("No reconciliation is pending for this revision")
     if action == "retry":
         operation = _new_deactivation(row, row.source_generation, scope=scope, access_fence=access_fence)
         if operation is None:
-            raise HTTPException(status_code=409, detail="Old workflow is unknown; confirm it inactive instead")
+            raise ConflictError("Old workflow is unknown; confirm it inactive instead")
         row.workflow_operation = operation
         row.transition_phase = "deactivating_old"
     else:

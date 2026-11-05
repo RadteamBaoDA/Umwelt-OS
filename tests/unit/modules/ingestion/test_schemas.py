@@ -48,7 +48,7 @@ class TestIngestionRecord:
         assert rec.version == "v1.0"
 
     def test_observed_at_naive_rejected(self) -> None:
-        naive = datetime(2026, 1, 1, 12, 0, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
+        naive = datetime(2026, 1, 1, 12, 0, 0)
         with pytest.raises(ValidationError, match="observed_at must include a timezone"):
             IngestionRecord(
                 provider_id="item-123",
@@ -58,7 +58,7 @@ class TestIngestionRecord:
 
     def test_collected_at_naive_rejected(self) -> None:
         now = datetime.now(UTC)
-        naive = datetime(2026, 1, 1, 12, 0, 0)  # noqa: DTZ001  # intentionally naive: wall-clock/DST math or naive-rejection test
+        naive = datetime(2026, 1, 1, 12, 0, 0)
         with pytest.raises(ValidationError, match="collected_at must include a timezone"):
             IngestionRecord(
                 provider_id="item-123",

@@ -6,7 +6,7 @@ import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import { useQuery } from '@tanstack/react-query';
-import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge/api';
+import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
 
 /** Video media item representation. */
 /** Props for the VideoPanel gadget component. */

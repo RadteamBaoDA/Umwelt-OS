@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import ConflictError, ForbiddenError
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.knowledge.documents import public
 
@@ -28,7 +28,7 @@ def _session(row, referenced=None):
 
 
 async def _call(session, current=FENCE):
-    with patch.object(public, "read_access_fence", AsyncMock(return_value=current)):
+    with patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=current)):
         return await public.raw_uri_is_referenced_for_cleanup(
             session, OP, scope=SCOPE, multi_workspace_enabled=True, access_fence=FENCE,
         )
@@ -51,11 +51,11 @@ async def test_no_uri_means_no_reference_query() -> None:
 
 
 async def test_unfound_stale_or_fence_mismatched_receipt_raises() -> None:
-    with pytest.raises(HTTPException):
+    with pytest.raises(ConflictError):
         await _call(_session(None))
-    with pytest.raises(HTTPException):
+    with pytest.raises(ConflictError):
         await _call(_session(SimpleNamespace(raw_uri="u", configuration_revision=9)))
-    with pytest.raises(HTTPException):
+    with pytest.raises(ConflictError):
         await _call(_session(SimpleNamespace(raw_uri="u", configuration_revision=2)), current=AccessFence(WS, 7, 3, 3))
 
 
@@ -66,14 +66,14 @@ async def test_unfound_stale_or_fence_mismatched_receipt_raises() -> None:
 ])
 async def test_raw_uris_denial_raises_never_empty_set(kwargs) -> None:
     with patch("core.auth.public.get_active_account", AsyncMock(return_value=object())), \
-            pytest.raises(HTTPException) as caught:
+            pytest.raises(ForbiddenError) as caught:
         await public.raw_uris(MagicMock(), **kwargs)
     assert caught.value.status_code == 403
 
 
 async def test_raw_uris_requires_active_bootstrap_account() -> None:
     with patch("core.auth.public.get_active_account", AsyncMock(return_value=None)), \
-            pytest.raises(HTTPException):
+            pytest.raises(ForbiddenError):
         await public.raw_uris(MagicMock(), instance_operator=True, multi_workspace_enabled=False)
 
 

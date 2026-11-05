@@ -58,7 +58,7 @@ def _received(nonce: str) -> int:
     return int(_docker("exec", _service_container("fake-model"), "python", "-c", script, timeout=30))
 
 
-async def _wait_received(nonce: str, generate: asyncio.Task[Response], timeout: float = 30) -> None:
+async def _wait_received(nonce: str, generate: asyncio.Task[Response], timeout: float = 30) -> None:  # noqa: ASYNC109  # test double mirrors the production signature
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if generate.done():

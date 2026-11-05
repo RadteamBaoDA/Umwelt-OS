@@ -1,12 +1,13 @@
 """Source-bound Google OAuth routes for read-only Gmail, Calendar and Drive connectors."""
 
 # Boundary validation uses ValueError for malformed provider/cipher data to preserve stable API errors.
-# ruff: noqa: TRY004
 
 import hashlib
 import hmac
 import json
+import logging
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, cast
 from urllib.parse import urlsplit
@@ -26,6 +27,7 @@ from core.auth.models import AuthSession, Owner
 from core.auth.public import authenticated_session_ref
 from core.config import Settings
 from core.database import get_session
+from core.errors import DomainError
 from core.ids import uuid7
 from core.realtime import commit_with_replay
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
@@ -39,6 +41,7 @@ from modules.connectors.models import (
 )
 from modules.sources import public as sources
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/connectors", tags=["connector-oauth"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_account)]
@@ -46,7 +49,7 @@ OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 _AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105  # label/URL/enum value, not a credential
 _REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 _PROVIDER_SCOPES = {
     "google_mail": "https://www.googleapis.com/auth/gmail.readonly",
@@ -269,6 +272,100 @@ async def start_google_authorization(
     return {"authorization_url": _authorize_url(settings, provider, state, verifier), "attempt_id": str(operation_id), "token_revision": str(token_revision)}
 
 
+@dataclass(frozen=True)
+class _ConsumedAttempt:
+    """Immutable snapshot of a consumed OAuth attempt.
+
+    ORM values are copied before any commit/rollback because rollback expires persistent
+    objects in AsyncSession; the opened PKCE verifier travels with it.
+    """
+
+    source_id: UUID
+    operation_id: UUID
+    provider: str
+    source_generation: int
+    configuration_revision: int
+    credential_revision: int
+    expected_token_revision: int
+    verifier: str
+
+
+async def _consume_attempt(
+    session: AsyncSession, settings: Settings, state: str, owner_token_hash: str, owner_id: int,
+    scope: WorkspaceContext,
+) -> _ConsumedAttempt:
+    """Lock the state-bound attempt, verify ownership, open its verifier and mark it consumed.
+
+    Locks the attempt row (``FOR UPDATE``) under the caller's admission. 400 when it is
+    missing, used, expired, or bound to another session/owner/workspace/provider; 503 when
+    the verifier cannot be opened. Sets ``consumed_at`` (flushed by the caller's publish).
+    """
+    attempt = await session.scalar(select(ConnectorOAuthAttempt).where(
+        ConnectorOAuthAttempt.state_hash == _digest(state),
+    ).with_for_update())
+    now = datetime.now(UTC)
+    if (
+        attempt is None or attempt.consumed_at is not None or attempt.expires_at <= now
+        or attempt.session_hash != owner_token_hash or attempt.owner_id != owner_id
+        or attempt.workspace_id != scope.workspace_id or attempt.provider not in _PROVIDER_SCOPES
+    ):
+        raise HTTPException(status_code=400, detail="Google authorization expired or was already used")
+    source_id, operation_id = attempt.source_id, attempt.id
+    try:
+        verifier = _open_cipher(
+            settings.connector_credential_encryption_key.get_secret_value(), attempt.encrypted_verifier,
+            source_id, operation_id, attempt.source_generation, attempt.configuration_revision,
+        ).get("verifier")
+        if not isinstance(verifier, str):
+            raise ValueError("google_verifier_missing")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=503, detail="Google authorization attempt is unavailable") from exc
+    attempt.consumed_at = now
+    return _ConsumedAttempt(
+        source_id=source_id, operation_id=operation_id, provider=attempt.provider,
+        source_generation=attempt.source_generation,
+        configuration_revision=attempt.configuration_revision,
+        credential_revision=attempt.credential_revision,
+        expected_token_revision=attempt.expected_token_revision, verifier=verifier,
+    )
+
+
+def _write_grant(
+    session: AsyncSession, settings: Settings, grant: ConnectorOAuthGrant | None, source: Any, row: Any,
+    tokens: dict[str, Any], *, source_id: UUID, token_revision: int, operation_id: UUID, scope: WorkspaceContext,
+    owner_id: int, provider: str,
+) -> None:
+    """Encrypt the exchanged tokens and create or replace the source's grant.
+
+    Bumps ``row.credential_revision`` and the grant's token revision (monotonic) in the
+    caller's locked transaction; the caller publishes/commits. Never logs token material.
+    """
+    row.credential_revision += 1
+    next_token_revision = token_revision + 1
+    encrypted = _cipher(
+        settings.connector_credential_encryption_key.get_secret_value(), source_id, operation_id,
+        source.generation, row.desired_revision,
+        {**tokens, "credential_revision": row.credential_revision},
+    )
+    if grant is None:
+        grant = ConnectorOAuthGrant(
+            source_id=source_id, workspace_id=scope.workspace_id, owner_id=owner_id, provider=provider,
+            operation_id=operation_id, source_generation=source.generation,
+            configuration_revision=row.desired_revision, credential_revision=row.credential_revision,
+            token_revision=next_token_revision, encrypted_tokens=encrypted, granted_scopes=tokens["scopes"],
+            token_expires_at=datetime.fromisoformat(tokens["access_expires_at"]), state="ready",
+        )
+        session.add(grant)
+    else:
+        grant.workspace_id, grant.owner_id, grant.provider = scope.workspace_id, owner_id, provider
+        grant.operation_id, grant.source_generation = operation_id, source.generation
+        grant.configuration_revision, grant.credential_revision = row.desired_revision, row.credential_revision
+        grant.token_revision, grant.encrypted_tokens = next_token_revision, encrypted
+        grant.granted_scopes = tokens["scopes"]
+        grant.token_expires_at = datetime.fromisoformat(tokens["access_expires_at"])
+        grant.state, grant.error_code = "ready", None
+
+
 @router.get("/oauth/google/callback")
 async def complete_google_authorization(
     request: Request, session: Session, owner: OwnerWrite, scope: WorkspaceWrite,
@@ -290,31 +387,13 @@ async def complete_google_authorization(
         raise HTTPException(status_code=400, detail="Google authorization state is invalid")
     owner_token_hash, owner_id = owner.token_hash, owner.owner_id
     fence = await _admit(session, request, scope)
-    attempt = await session.scalar(select(ConnectorOAuthAttempt).where(
-        ConnectorOAuthAttempt.state_hash == _digest(state),
-    ).with_for_update())
-    now = datetime.now(UTC)
-    if (
-        attempt is None or attempt.consumed_at is not None or attempt.expires_at <= now
-        or attempt.session_hash != owner_token_hash or attempt.owner_id != owner_id
-        or attempt.workspace_id != scope.workspace_id or attempt.provider not in _PROVIDER_SCOPES
-    ):
-        raise HTTPException(status_code=400, detail="Google authorization expired or was already used")
-    source_id, operation_id, provider = attempt.source_id, attempt.id, attempt.provider
+    attempt = await _consume_attempt(session, settings, state, owner_token_hash, owner_id, scope)
+    source_id, operation_id, provider = attempt.source_id, attempt.operation_id, attempt.provider
+    verifier = attempt.verifier
     attempt_source_generation = attempt.source_generation
     attempt_configuration_revision = attempt.configuration_revision
     attempt_credential_revision = attempt.credential_revision
     attempt_expected_token_revision = attempt.expected_token_revision
-    try:
-        verifier = _open_cipher(
-            settings.connector_credential_encryption_key.get_secret_value(), attempt.encrypted_verifier,
-            source_id, operation_id, attempt_source_generation, attempt_configuration_revision,
-        ).get("verifier")
-        if not isinstance(verifier, str):
-            raise ValueError("google_verifier_missing")
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=503, detail="Google authorization attempt is unavailable") from exc
-    attempt.consumed_at = now
     await _publish(session, request, scope, fence)
     if "error" in request.query_params:
         return RedirectResponse(url="/settings/sources?oauth=denied", status_code=303)
@@ -355,33 +434,14 @@ async def complete_google_authorization(
         await session.rollback()
         try:
             await _revoke_token(tokens["refresh_token"])
-        except Exception:  # noqa: BLE001, S110
-            pass  # A stale callback can never be stored; an unconfirmed remote cleanup cannot restore local authority.
+        except Exception:  # best-effort remote cleanup; never masks the 409 below
+            # A stale callback can never be stored; an unconfirmed remote cleanup cannot restore local authority.
+            logger.debug("google_stale_token_revoke_failed", exc_info=True)
         raise HTTPException(status_code=409, detail="Connector changed during authorization; reconnect to continue")
-    row.credential_revision += 1
-    next_token_revision = token_revision + 1
-    encrypted = _cipher(
-        settings.connector_credential_encryption_key.get_secret_value(), source_id, operation_id,
-        source.generation, row.desired_revision,
-        {**tokens, "credential_revision": row.credential_revision},
+    _write_grant(
+        session, settings, grant, source, row, tokens, source_id=source_id, token_revision=token_revision,
+        operation_id=operation_id, scope=scope, owner_id=owner_id, provider=provider,
     )
-    if grant is None:
-        grant = ConnectorOAuthGrant(
-            source_id=source_id, workspace_id=scope.workspace_id, owner_id=owner_id, provider=provider,
-            operation_id=operation_id, source_generation=source.generation,
-            configuration_revision=row.desired_revision, credential_revision=row.credential_revision,
-            token_revision=next_token_revision, encrypted_tokens=encrypted, granted_scopes=tokens["scopes"],
-        token_expires_at=datetime.fromisoformat(tokens["access_expires_at"]), state="ready",
-        )
-        session.add(grant)
-    else:
-        grant.workspace_id, grant.owner_id, grant.provider = scope.workspace_id, owner_id, provider
-        grant.operation_id, grant.source_generation = operation_id, source.generation
-        grant.configuration_revision, grant.credential_revision = row.desired_revision, row.credential_revision
-        grant.token_revision, grant.encrypted_tokens = next_token_revision, encrypted
-        grant.granted_scopes = tokens["scopes"]
-        grant.token_expires_at = datetime.fromisoformat(tokens["access_expires_at"])
-        grant.state, grant.error_code = "ready", None
     await _publish(session, request, scope, fence)
     return RedirectResponse(url=f"/settings/sources?oauth=connected&source={source_id}", status_code=303)
 
@@ -477,7 +537,7 @@ async def _google_discovery_access(
             await _publish(session, request, scope, fence)
         else:
             await session.rollback()
-    except HTTPException:
+    except (DomainError, HTTPException):
         raise
     except Exception:  # noqa: BLE001  # Authlib transport/protocol failures have provider-specific types.
         await session.rollback()
@@ -576,7 +636,7 @@ async def discover_google_source_resources(
             provider, access, parent_id=parent_id, before_request=before_request,
         )
         await before_request()
-    except HTTPException:
+    except (DomainError, HTTPException):
         raise
     except Exception as exc:  # noqa: BLE001  # Normalize transport and provider failures before returning to the UI.
         from modules.connectors.providers import rest

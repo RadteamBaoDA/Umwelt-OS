@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class AgentDescriptor:
+class AgentDescriptor(ModuleDescriptor):
     """Expose bounded owner assistant and profile-run contracts through Agents."""
 
     id: str = "agents"
@@ -22,6 +24,11 @@ class AgentDescriptor:
     tools: tuple[str, ...] = ("agents.handoff",)
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.agents.routes", 460),
+    )
+    erasure_module: str | None = "modules.agents.erasure"
+    erasure_order: int = 10
 
 
 descriptor = AgentDescriptor()

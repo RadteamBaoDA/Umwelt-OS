@@ -4,7 +4,9 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from core.errors import ConflictError
 from modules.connectors import upgrade_templates as ut
+from modules.connectors.provider_specs import TERMS_INELIGIBLE
 
 
 class _Result:
@@ -103,7 +105,8 @@ def _wire(monkeypatch, *, phase="deactivating_old", source_status="active", term
 
     async def eligible(*_a, **_k):
         if terms:
-            raise HTTPException(status_code=409, detail="provider_terms_ineligible")
+            # ``terms`` selects the exception family: the real gate raises ConflictError (DomainError).
+            raise terms if isinstance(terms, Exception) else ConflictError(TERMS_INELIGIBLE)
 
     async def begin(_s, source_id, revision, target, **_k):
         calls.append(("begin", revision, target))
@@ -149,7 +152,10 @@ async def test_ambiguous_stop_is_reconciliation_required(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kwargs", [{"source_status": "paused"}, {"terms": True}])
+@pytest.mark.parametrize("kwargs", [
+    {"source_status": "paused"}, {"terms": True},
+    {"terms": HTTPException(status_code=409, detail="provider_terms_ineligible")},
+])
 async def test_ineligible_sources_are_skipped_untouched(monkeypatch, kwargs):
     calls, factory = _wire(monkeypatch, **kwargs)
     assert await ut._upgrade_one(factory, uuid4(), None, apply=True, flag=True) == "skipped"

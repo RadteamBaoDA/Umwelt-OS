@@ -17,6 +17,11 @@ export const commonMessages = {
       pageNumber: 'Page {page}',
       previousPage: 'Previous page',
       nextPage: 'Next page',
+      apiUnauthorized: 'Your session has ended. Sign in again.',
+      apiForbidden: 'You do not have permission to do that.',
+      apiConflict: 'This changed elsewhere. Reload and try again.',
+      apiServiceUnavailable: 'The service is unavailable. Try again shortly.',
+      apiRequestFailed: 'The request failed.',
   },
   'vi-vi': {
       retry: 'Thử lại',
@@ -35,5 +40,10 @@ export const commonMessages = {
       pageNumber: 'Trang {page}',
       previousPage: 'Trang trước',
       nextPage: 'Trang sau',
+      apiUnauthorized: 'Phiên đã kết thúc. Hãy đăng nhập lại.',
+      apiForbidden: 'Bạn không có quyền thực hiện thao tác này.',
+      apiConflict: 'Dữ liệu đã thay đổi ở nơi khác. Hãy tải lại và thử lại.',
+      apiServiceUnavailable: 'Dịch vụ không khả dụng. Hãy thử lại sau.',
+      apiRequestFailed: 'Yêu cầu không thành công.',
   },
 } as const;

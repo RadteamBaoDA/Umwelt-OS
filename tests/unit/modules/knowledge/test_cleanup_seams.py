@@ -8,7 +8,9 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.dialects import postgresql
 
+from core.errors import ConflictError, DomainError, error_status
 from core.workspaces.schemas import AccessFence, WorkspaceContext
+from modules.ingestion import _outbox as ingestion_outbox
 from modules.ingestion import public as ingestion
 from modules.knowledge.documents.schemas import DocumentCleanupPreparationLimitError
 from modules.knowledge.entities import public as entities
@@ -103,13 +105,13 @@ def _admit():
          patch.object(timeline, "_admit", AsyncMock(return_value=FENCE)), \
          patch.object(temporal, "_admit", AsyncMock(return_value=FENCE)), \
          patch.object(observations, "_admit", AsyncMock(return_value=FENCE)), \
-         patch.object(ingestion, "_admit_ingestion_scope", AsyncMock(return_value=FENCE)):
+         patch.object(ingestion_outbox, "_admit_ingestion_scope", AsyncMock(return_value=FENCE)):
         yield
 
 
 # ---------- owner closures built from discovery results ----------
 
-ENT_RESULTS = lambda: (
+ENT_RESULTS = lambda: (  # noqa: E731  # terse test stub
     [(M1, M2)], [(M1, M1)], [M2], [(M1, M2)],
 )
 
@@ -125,7 +127,7 @@ async def _relationship_closure(results=None, refs=(), document_id=None):
         document_id=document_id, membership_ids=[M1], **KW)
 
 
-TL_RESULTS = lambda: ([(M1, M2)], [M1], [M2])
+TL_RESULTS = lambda: ([(M1, M2)], [M1], [M2])  # noqa: E731  # terse test stub
 
 
 async def _timeline_closure(results=None, document_id=None):
@@ -166,14 +168,15 @@ async def test_discovery_sql_is_workspace_qualified() -> None:
 @pytest.mark.parametrize("module", [entities, relationships, timeline, temporal, observations])
 async def test_member_denied_before_any_query(module) -> None:
     rec = Rec()
-    with pytest.raises(HTTPException) as caught:
+    # Owners migrate to DomainError at their own pace; the invariant is a 403 before any SQL.
+    with pytest.raises((HTTPException, DomainError)) as caught:
         await _REAL_ADMIT[module](rec, scope=MEMBER, multi_workspace_enabled=False)
-    assert caught.value.status_code == 403 and rec.stmts == []
+    assert error_status(caught.value) == 403 and rec.stmts == []
 
 
 @pytest.mark.asyncio
 async def test_overflow_flag_without_raising() -> None:
-    big = lambda n: [(uuid4(), uuid4()) for _ in range(n)]
+    big = lambda n: [(uuid4(), uuid4()) for _ in range(n)]  # noqa: E731  # terse test stub
     assert (await entities.support_cleanup_ids(Rec(big(10_001)), source_id=SRC, **KW)).overflow
     assert (await relationships.support_cleanup_ids(
         Rec(big(10_001)), refs=[], source_id=SRC, membership_ids=[], **KW)).overflow
@@ -274,7 +277,7 @@ async def test_stale_fence_rejected_before_any_sql(name: str, change: str) -> No
     else:
         bad = {**HELD, "source_fence": SRC_FENCE.model_copy(update={"workspace_id": uuid4()})}
     rec = Rec()
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises((HTTPException, ConflictError)) as caught:
         await call(rec, bad)
     assert caught.value.status_code == 409 and rec.stmts == []
 

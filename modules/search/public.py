@@ -1,6 +1,3 @@
-import base64
-import binascii
-import hashlib
 import json
 import math
 import time
@@ -18,11 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from core.config import Settings
+from core.errors import ConflictError, DomainError, ForbiddenError, ValidationFailedError
 from core.model_gateway.client import ModelGatewayError, PrivacyPolicyDenied
 from core.model_gateway.policy import may_send
 from core.model_gateway.schemas import AIExecutionConfig, ModelMapping, RequestPolicy
+from core.pagination import decode_scoped_offset, encode_scoped_offset, fingerprint_payload
 from core.tools.schemas import ToolDestination, ToolOutputFence
 from core.workspaces import public as workspaces
+from core.workspaces.admission import admit_scope
 from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 from modules.goals.schemas import GoalFilter, GoalPage
 from modules.knowledge.documents.models import Document, DocumentChunk, DocumentVersion
@@ -37,9 +37,14 @@ from modules.search.schemas import (
     Citation,
     SearchHit,
     SearchIndexStatus,
-    SearchRequest,
     SearchResponse,
     SearchSource,
+)
+from modules.search.schemas import (
+    SearchFilters as SearchFilters,
+)
+from modules.search.schemas import (
+    SearchRequest as SearchRequest,
 )
 from modules.sources.models import Source
 from modules.tasks.schemas import TaskFilter, TaskPage
@@ -116,18 +121,21 @@ def is_member_scope(scope: Scope) -> bool:
 
 def _member_grants(scope: Scope) -> Select[Any]:
     """Document-id projection of this member's active grants (members are always WorkspaceContext)."""
-    assert isinstance(scope, WorkspaceContext)
+    assert isinstance(scope, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
     return workspaces.granted_resource_ids(scope=scope, kind="document")
 
 
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool, allow_member: bool = False,
 ) -> AccessFence:
-    """Admit Search access before candidates or generation rows are read; members only when allowed."""
-    if not allow_member and is_member_scope(scope):
-        raise HTTPException(status_code=403, detail="Workspace owner required")
-    return await workspaces.read_access_fence(
+    """Admit Search access before candidates or generation rows are read; members only when allowed.
+
+    Thin wrapper over ``admit_scope`` (read-only fence, no flag-type check, members denied unless
+    ``allow_member``).
+    """
+    return await admit_scope(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        owner_only=not allow_member, check_flag=False,
     )
 
 
@@ -242,7 +250,8 @@ def _cursor_scope(
     content["source_generations"] = sorted(
         ((str(source_id), generation) for source_id, generation in (source_generation_fences or {}).items())
     )
-    return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()[:16]
+    # Default json.dumps separators keep cursors issued before the shared helper valid.
+    return fingerprint_payload(content, length=16, separators=(", ", ": "))
 
 
 def _offset(
@@ -253,14 +262,12 @@ def _offset(
     if request.cursor is None:
         return 0
     try:
-        raw = base64.urlsafe_b64decode(request.cursor + "=" * (-len(request.cursor) % 4)).decode()
-        scope, position = raw.split(":", 1)
-        offset = int(position)
-        if scope != _cursor_scope(request, destination, source_generation_fences) or offset < 0 or offset > MAX_RANKED_CANDIDATES or _encode_cursor(request, offset, destination, source_generation_fences) != request.cursor:
-            raise ValueError
-        return offset
-    except (ValueError, UnicodeDecodeError, IndexError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Invalid search cursor") from exc
+        return decode_scoped_offset(
+            request.cursor, _cursor_scope(request, destination, source_generation_fences),
+            max_offset=MAX_RANKED_CANDIDATES,
+        )
+    except (HTTPException, DomainError) as exc:  # core helper raises the transport error; this module raises DomainError
+        raise ValidationFailedError(detail="Invalid search cursor") from exc
 
 
 def _encode_cursor(
@@ -268,9 +275,7 @@ def _encode_cursor(
     source_generation_fences: dict[UUID, int] | None = None,
 ) -> str:
     """Encode request/destination scope and ranked offset as unpadded URL-safe base64."""
-    return base64.urlsafe_b64encode(
-        f"{_cursor_scope(request, destination, source_generation_fences)}:{offset}".encode()
-    ).decode().rstrip("=")
+    return encode_scoped_offset(_cursor_scope(request, destination, source_generation_fences), offset)
 
 
 def _filters(
@@ -338,7 +343,9 @@ async def _lexical_ids(
     *, workspace_id: UUID, grants: Select[Any] | None = None,
 ) -> list[UUID]:
     """Retrieve bounded candidates after active/current, privacy and generation SQL filters."""
-    vector = func.to_tsvector(text("'simple'"), DocumentChunk.content)
+    # Stored generated column ``content_tsv`` (= to_tsvector('simple', content)) with a GIN index: identical
+    # match and ts_rank_cd scores to the former inline expression, without re-parsing every candidate.
+    vector = DocumentChunk.content_tsv
     query = func.websearch_to_tsquery(text("'simple'"), request.query)
     statement = _filters(
         _visible_rows(DocumentChunk.id, destination=destination, workspace_id=workspace_id, grants=grants), request, destination,
@@ -407,7 +414,7 @@ async def _vector_ids(
     # chunk_id sort key disables index ordering); all filters stay before the LIMIT. The outer sort
     # restores deterministic tie-breaking and order under relaxed iterative scans.
     statement = text(
-        "SELECT t.chunk_id FROM ("
+        "SELECT t.chunk_id FROM ("  # noqa: S608  # interpolates only an int dimension and fixed clause fragments; values are bound
         f"SELECT i.chunk_id AS chunk_id, {distance} AS dist FROM search_index_items i "
         "JOIN search_index_generations g ON g.id = i.generation_id "
         "JOIN document_chunks c ON c.id = i.chunk_id "
@@ -422,6 +429,176 @@ async def _vector_ids(
     await session.execute(text("SET LOCAL hnsw.iterative_scan = relaxed_order"))
     await session.execute(text("SET LOCAL hnsw.ef_search = 100"))
     return list((await session.scalars(statement, params)).all())
+
+
+async def _embed_query_vector(
+    session: AsyncSession, redis: Redis, settings: Settings, request: SearchRequest,
+    *, generation: IndexGeneration, config: AIExecutionConfig, mapping: ModelMapping,
+    policy: RequestPolicy, offset: int, admitted_fence: AccessFence,
+    source_generation_fences: dict[UUID, int] | None, scope: Scope, multi_workspace_enabled: bool,
+    before_embedding_send: Callable[[AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]] | None,
+    release_during_embed: bool,
+) -> list[float]:
+    """Return the query embedding, from the short-lived cache or a freshly authorized gateway call.
+
+    First-page requests (offset == 0) always verify live gateway embedding authority; paginated
+    continuation pages (offset > 0) reuse a fresh cached vector when authority matches (never when
+    ``before_embedding_send`` is supplied). Every gateway attempt first re-reads the access fence and
+    the embedding settings and raises ``PrivacyPolicyDenied`` on any change. With
+    ``release_during_embed`` the read-only transaction is committed before the call and after each
+    recheck. Raises ``ValueError`` when the response model identity differs from the generation's.
+    """
+    cache_key = _query_vector_cache_key(
+        scope.workspace_id, generation, config, mapping, request.query,
+    )
+    cached_values = (
+        _get_cached_query_vector(cache_key)
+        if offset > 0 and before_embedding_send is None
+        else None
+    )
+    if cached_values is not None:
+        return cached_values
+
+    async def recheck_send() -> None:
+        """Reload gateway and privacy state immediately before embedding the query."""
+        if await workspaces.read_access_fence(
+            session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        ) != admitted_fence:
+            raise PrivacyPolicyDenied("Search embedding denied: workspace access changed")
+        latest, latest_mapping, latest_policy = await configured_embedding(
+            session, settings, redis, scope=scope,
+        )
+        if (latest.configuration_revision != config.configuration_revision
+                or latest.endpoint_destination_id != config.endpoint_destination_id
+                or latest.gateway_identity != config.gateway_identity or latest_mapping != mapping
+                or not may_send(latest_policy, "embedding", latest_mapping,
+                                latest.endpoint_destination_id or "remote",
+                                bool(latest.gateway_api_key), "embeddings")):
+            raise PrivacyPolicyDenied("Search embedding denied by current settings")
+        if before_embedding_send is not None:
+            await before_embedding_send(
+                latest, latest_mapping, latest_policy, dict(source_generation_fences or {}),
+            )
+        if release_during_embed:
+            await session.commit()
+
+    if release_during_embed:
+        await session.commit()
+    response = await gateway(config, redis, recheck_send, scope=scope).embed("embedding", mapping, policy, [request.query])
+    values, returned_model = embedding_values(response, generation.dimensions)
+    if returned_model != generation.response_model_id:
+        raise ValueError("Embedding response identity changed")
+    _store_cached_query_vector(cache_key, values)
+    return values
+
+
+async def _hybrid_vector_candidates(
+    session: AsyncSession, redis: Redis, settings: Settings, request: SearchRequest,
+    *, destination: ToolDestination, source_generation_fences: dict[UUID, int] | None,
+    offset: int, admitted_fence: AccessFence, scope: Scope, multi_workspace_enabled: bool,
+    before_embedding_send: Callable[[AIExecutionConfig, ModelMapping | None, RequestPolicy, dict[UUID, int]], Awaitable[None]] | None,
+    release_during_embed: bool,
+) -> tuple[list[UUID], str, list[str]]:
+    """Run the vector leg of a hybrid search; return ``(vector_ids, effective_mode, warnings)``.
+
+    Any gateway/Redis/value/OS failure, a database error (after rollback) or an HTTP-shaped 503
+    degrades to lexical-only with ``FALLBACK_WARNING``; other HTTP-shaped errors propagate.
+    """
+    generation = await session.scalar(select(IndexGeneration).where(
+        IndexGeneration.workspace_id == scope.workspace_id, IndexGeneration.status == "active",
+    ))
+    try:
+        config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
+        if config.endpoint_policy_denied:
+            raise ValueError("Saved endpoint is denied by deployment network policy")
+        if (
+            generation is None or generation.dimensions is None or mapping is None
+            or mapping.model != generation.model_id or mapping.version != generation.model_version
+            or generation.gateway_identity != config.model_identity or not policy.embeddings_allowed
+        ):
+            raise ValueError("No permitted active embedding generation")
+        values = await _embed_query_vector(
+            session, redis, settings, request, generation=generation, config=config, mapping=mapping,
+            policy=policy, offset=offset, admitted_fence=admitted_fence,
+            source_generation_fences=source_generation_fences, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            before_embedding_send=before_embedding_send, release_during_embed=release_during_embed,
+        )
+        vector = await _vector_ids(
+            session, request, generation, values, destination, source_generation_fences,
+            workspace_id=scope.workspace_id,
+        )
+        return vector, "hybrid", []
+    except (ModelGatewayError, RedisError, ValueError, OSError):
+        return [], "lexical", [FALLBACK_WARNING]
+    except DBAPIError:
+        await session.rollback()
+        return [], "lexical", [FALLBACK_WARNING]
+    except (DomainError, HTTPException) as exc:
+        if exc.status_code != 503:
+            raise
+        return [], "lexical", [FALLBACK_WARNING]
+
+
+async def _hydrate_hits(
+    session: AsyncSession, request: SearchRequest, selected: list[UUID], ranked: dict[UUID, float],
+    *, destination: ToolDestination, source_generation_fences: dict[UUID, int] | None,
+    scope: Scope, grants: Any, member: bool,
+) -> tuple[list[SearchHit], dict[UUID, tuple[UUID, UUID, UUID, int]]]:
+    """Hydrate the selected page into hits plus the exact (document, version, source, generation) fences.
+
+    Only current/active rows allowed by the original source generations and destination are read.
+    A member page with any vanished chunk fails whole (409) instead of returning a partial page;
+    owners silently skip vanished chunks. The extra look-ahead chunk is never hydrated.
+    """
+    rows: Sequence[Any] = (await session.execute(_filters(
+        _visible_rows(
+            DocumentChunk.id,
+            DocumentChunk.content,
+            DocumentVersion.id,
+            DocumentVersion.version_number,
+            DocumentVersion.observed_at,
+            Document.id,
+            Document.title,
+            Document.observed_at,
+            Document.published_at,
+            Document.content_type,
+            Document.canonical_url,
+            Source.id,
+            Source.name,
+            Source.type,
+            Source.generation,
+            destination=destination,
+            source_generation_fences=source_generation_fences,
+            workspace_id=scope.workspace_id, grants=grants,
+        ), request, destination, source_generation_fences, workspace_id=scope.workspace_id,
+    ).where(DocumentChunk.id.in_(selected)))).all() if selected else []
+    visible = {row[0]: row for row in rows}
+    items: list[SearchHit] = []
+    expected_fences: dict[UUID, tuple[UUID, UUID, UUID, int]] = {}
+    for chunk_id in selected[:request.limit]:
+        if chunk_id not in visible:
+            if member:
+                raise _stale_member_read()
+            continue
+        (
+            chunk_id, content, version_id, version_number, version_observed, document_id,
+            title, document_observed, published_at, content_type, canonical_url,
+            source_id, source_name, source_type, source_generation,
+        ) = visible[chunk_id]
+        expected_fences[chunk_id] = (document_id, version_id, source_id, source_generation)
+        excerpt = content[:500]
+        items.append(SearchHit(
+            document_id=document_id, document_version_id=version_id, version_number=version_number, chunk_id=chunk_id,
+            title=title, excerpt=excerpt, score=ranked[chunk_id],
+            source=SearchSource(id=source_id, name=source_name, type=source_type),
+            observed_at=document_observed or version_observed,
+            published_at=published_at, content_type=content_type,
+            citation=Citation(sourceId=source_id, documentId=document_id, chunkId=chunk_id,
+                              title=title, url=canonical_url,
+                              observedAt=document_observed or version_observed, quote=excerpt),
+        ))
+    return items, expected_fences
 
 
 async def search(
@@ -453,7 +630,7 @@ async def search(
         raise ValueError("Remote search requires current source-generation fences")
     member = is_member_scope(scope)
     if member and (destination != ToolDestination.LOCAL or source_generation_fences is not None):
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError(detail="Workspace owner required")
     admitted_fence = await _admit(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, allow_member=True,
     )
@@ -467,130 +644,22 @@ async def search(
     warnings: list[str] = []
     # Members never rerank or embed: embeddings use the owner's AI config and global statistics.
     if request.mode == "hybrid" and not member:
-        generation = await session.scalar(select(IndexGeneration).where(
-            IndexGeneration.workspace_id == scope.workspace_id, IndexGeneration.status == "active",
-        ))
-        try:
-            config, mapping, policy = await configured_embedding(session, settings, redis, scope=scope)
-            if config.endpoint_policy_denied:
-                raise ValueError("Saved endpoint is denied by deployment network policy")
-            if (
-                generation is None or generation.dimensions is None or mapping is None
-                or mapping.model != generation.model_id or mapping.version != generation.model_version
-                or generation.gateway_identity != config.model_identity or not policy.embeddings_allowed
-            ):
-                raise ValueError("No permitted active embedding generation")
-            cache_key = _query_vector_cache_key(
-                scope.workspace_id, generation, config, mapping, request.query,
-            )
-            # First-page requests (offset == 0) always verify live gateway embedding authority;
-            # paginated continuation pages (offset > 0) reuse a fresh vector when authority matches.
-            cached_values = (
-                _get_cached_query_vector(cache_key)
-                if offset > 0 and before_embedding_send is None
-                else None
-            )
-            if cached_values is not None:
-                values = cached_values
-            else:
-                async def recheck_send() -> None:
-                    """Reload gateway and privacy state immediately before embedding the query."""
-                    if await workspaces.read_access_fence(
-                        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-                    ) != admitted_fence:
-                        raise PrivacyPolicyDenied("Search embedding denied: workspace access changed")
-                    latest, latest_mapping, latest_policy = await configured_embedding(
-                        session, settings, redis, scope=scope,
-                    )
-                    if (latest.configuration_revision != config.configuration_revision
-                            or latest.endpoint_destination_id != config.endpoint_destination_id
-                            or latest.gateway_identity != config.gateway_identity or latest_mapping != mapping
-                            or not may_send(latest_policy, "embedding", latest_mapping,
-                                            latest.endpoint_destination_id or "remote",
-                                            bool(latest.gateway_api_key), "embeddings")):
-                        raise PrivacyPolicyDenied("Search embedding denied by current settings")
-                    if before_embedding_send is not None:
-                        await before_embedding_send(
-                            latest, latest_mapping, latest_policy, dict(source_generation_fences or {}),
-                        )
-                    if release_during_embed:
-                        await session.commit()
-
-                if release_during_embed:
-                    await session.commit()
-                response = await gateway(config, redis, recheck_send, scope=scope).embed("embedding", mapping, policy, [request.query])
-                values, returned_model = embedding_values(response, generation.dimensions)
-                if returned_model != generation.response_model_id:
-                    raise ValueError("Embedding response identity changed")
-                _store_cached_query_vector(cache_key, values)
-            vector = await _vector_ids(
-                session, request, generation, values, destination, source_generation_fences,
-                workspace_id=scope.workspace_id,
-            )
-            effective_mode = "hybrid"
-        except (ModelGatewayError, RedisError, ValueError, OSError):
-            warnings.append(FALLBACK_WARNING)
-        except DBAPIError:
-            await session.rollback()
-            warnings.append(FALLBACK_WARNING)
-        except HTTPException as exc:
-            if exc.status_code != 503:
-                raise
-            warnings.append(FALLBACK_WARNING)
+        vector, effective_mode, warnings = await _hybrid_vector_candidates(
+            session, redis, settings, request, destination=destination,
+            source_generation_fences=source_generation_fences, offset=offset,
+            admitted_fence=admitted_fence, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+            before_embedding_send=before_embedding_send, release_during_embed=release_during_embed,
+        )
     ranked: dict[UUID, float] = {}
     for candidates in (lexical, vector) if effective_mode == "hybrid" else (lexical,):
         for rank, chunk_id in enumerate(candidates, 1):
             ranked[chunk_id] = ranked.get(chunk_id, 0.0) + 1 / (60 + rank)
     ordered = sorted(ranked, key=lambda chunk_id: (-ranked[chunk_id], str(chunk_id)))
     selected = ordered[offset:offset + request.limit + 1]
-    # Hydrate only current/active rows allowed by the original source generations and destination.
-    rows: Sequence[Any] = (await session.execute(_filters(
-        _visible_rows(
-            DocumentChunk.id,
-            DocumentChunk.content,
-            DocumentVersion.id,
-            DocumentVersion.version_number,
-            DocumentVersion.observed_at,
-            Document.id,
-            Document.title,
-            Document.observed_at,
-            Document.published_at,
-            Document.content_type,
-            Document.canonical_url,
-            Source.id,
-            Source.name,
-            Source.type,
-            Source.generation,
-            destination=destination,
-            source_generation_fences=source_generation_fences,
-            workspace_id=scope.workspace_id, grants=grants,
-        ), request, destination, source_generation_fences, workspace_id=scope.workspace_id,
-    ).where(DocumentChunk.id.in_(selected)))).all() if selected else []
-    visible = {row[0]: row for row in rows}
-    items = []
-    expected_fences: dict[UUID, tuple[UUID, UUID, UUID, int]] = {}
-    for chunk_id in selected[:request.limit]:
-        if chunk_id not in visible:
-            if member:
-                raise _stale_member_read()
-            continue
-        (
-            chunk_id, content, version_id, version_number, version_observed, document_id,
-            title, document_observed, published_at, content_type, canonical_url,
-            source_id, source_name, source_type, source_generation,
-        ) = visible[chunk_id]
-        expected_fences[chunk_id] = (document_id, version_id, source_id, source_generation)
-        excerpt = content[:500]
-        items.append(SearchHit(
-            document_id=document_id, document_version_id=version_id, version_number=version_number, chunk_id=chunk_id,
-            title=title, excerpt=excerpt, score=ranked[chunk_id],
-            source=SearchSource(id=source_id, name=source_name, type=source_type),
-            observed_at=document_observed or version_observed,
-            published_at=published_at, content_type=content_type,
-            citation=Citation(sourceId=source_id, documentId=document_id, chunkId=chunk_id,
-                              title=title, url=canonical_url,
-                              observedAt=document_observed or version_observed, quote=excerpt),
-        ))
+    items, expected_fences = await _hydrate_hits(
+        session, request, selected, ranked, destination=destination,
+        source_generation_fences=source_generation_fences, scope=scope, grants=grants, member=member,
+    )
     current_ids = await _revalidate_tool_result_fences(
         session, expected_fences, destination, source_generation_fences, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled, allow_member=member,
@@ -609,9 +678,9 @@ async def search(
     return SearchResponse(items=items, next_cursor=next_cursor, effective_mode=effective_mode, warnings=warnings)
 
 
-def _stale_member_read() -> HTTPException:
+def _stale_member_read() -> DomainError:
     """A changed fence or grant fails the whole member page, never a partial one."""
-    return HTTPException(status_code=409, detail="Search results changed; retry")
+    return ConflictError(detail="Search results changed; retry")
 
 
 async def _revalidate_tool_result_fences(

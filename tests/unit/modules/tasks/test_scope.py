@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.tasks import public
 from modules.tasks.models import Task
@@ -21,7 +21,7 @@ FLAG = False
 
 def _admitted() -> object:
     """Skip the workspace fence lookup while keeping the owner-role check under test elsewhere."""
-    return patch("modules.tasks.public.workspaces.read_access_fence", AsyncMock(return_value=MagicMock()))
+    return patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=MagicMock()))
 
 
 def _sql(statement: object) -> tuple[str, list[object]]:
@@ -35,7 +35,7 @@ def _sql(statement: object) -> tuple[str, list[object]]:
 async def test_member_without_share_sees_nothing(call: str) -> None:
     """A workspace member is denied before any task row is read."""
     session = AsyncMock()
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         if call == "get":
             await public.get_task(session, uuid4(), scope=MEMBER, multi_workspace_enabled=FLAG)
         else:

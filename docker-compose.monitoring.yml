@@ -1,0 +1,90 @@
+# Optional metrics stack: Prometheus + Grafana. Not part of the base deployment.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.monitoring.yml --profile monitoring up -d
+#
+# Prerequisites (see docs/observability.md):
+#   * METRICS_TOKEN=<random secret> in .env (the API refuses /metrics scrapes in production without it).
+#   * The same value in infrastructure/monitoring/metrics_token.local (git-ignored, no trailing newline),
+#     or point METRICS_TOKEN_FILE at another file.
+#   * GRAFANA_ADMIN_PASSWORD in .env (no default; Grafana will not start without one).
+# Prometheus and Grafana publish only on 127.0.0.1; reach them remotely through an SSH tunnel or the reverse proxy
+# with its own authentication. Worker metrics ports are internal to the compose network and never published.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # Enable the worker metrics HTTP servers (off by default in the application). worker=9100, chat-worker=9101, model-worker=9102, cron-worker=9103.
+  worker:
+    environment:
+      METRICS_WORKER_PORT: "9100"
+      METRICS_WORKER_BIND: "0.0.0.0"
+  chat-worker:
+    environment:
+      METRICS_WORKER_PORT: "9100"
+      METRICS_WORKER_BIND: "0.0.0.0"
+  model-worker:
+    environment:
+      METRICS_WORKER_PORT: "9100"
+      METRICS_WORKER_BIND: "0.0.0.0"
+  cron-worker:
+    environment:
+      METRICS_WORKER_PORT: "9100"
+      METRICS_WORKER_BIND: "0.0.0.0"
+
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.listen-address=:9090
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    secrets: [metrics_token]
+    deploy:
+      resources:
+        limits: {memory: 512M}
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - ./infrastructure/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus]
+    deploy:
+      resources:
+        limits: {memory: 512M}
+    restart: unless-stopped
+    logging: *default-logging
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+secrets:
+  metrics_token:
+    file: ${METRICS_TOKEN_FILE:-./infrastructure/monitoring/metrics_token.local}
+
+volumes:
+  prometheus-data:
+  grafana-data:

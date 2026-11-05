@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
-import { ChatComposer, type ChatComposerProps } from '@/modules/chat/chat-composer';
+import { ChatComposer, type ChatComposerProps } from './chat-composer';
 
 /** Renders the full composer with the + menu open so the web search item is queryable. */
 async function openMenu(webSearch: NonNullable<ChatComposerProps['webSearch']>) {

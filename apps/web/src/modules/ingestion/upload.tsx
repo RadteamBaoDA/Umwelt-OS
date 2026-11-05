@@ -8,7 +8,8 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { listSources, sourceKeys, getRun } from '@/modules/sources/api';
+import { listSources, sourceKeys, getRun } from '@/modules/sources';
+import { Input } from '@/components/ui/input';
 
 /** Sentinel Select value for "no explicit source": the server files the upload under its default Uploads source. */
 const DEFAULT_SOURCE = 'default';
@@ -19,6 +20,47 @@ const DEFAULT_SOURCE = 'default';
  * file in the server-owned "Uploads" source. Notes and finance modes only offer local-only manual sources.
  */
 export function Upload() {
+  const s0 = useUploadController();
+
+  const vm: UploadVm = s0;
+  return <section className="sub-panel">
+<UploadFormSection vm={vm} />
+<UploadProgress vm={vm} />
+  </section>;
+}
+
+type UploadVm = ReturnType<typeof useUploadController>;
+
+/** Title and file upload form. */
+function UploadFormSection({ vm }: { vm: UploadVm }) {
+  const { ts, available, sourceId, setSourceId, mode, setMode, setRunId, error, setError, upload } = vm;
+  return (
+<>
+    <h2>{ts('uploadTitle')}</h2>
+    <form className="form" onSubmit={upload}>
+      <div className="field"><Label htmlFor="upload-mode">{ts('uploadMode')}</Label><Select value={mode} onValueChange={(value) => { setMode(value as typeof mode); setSourceId(DEFAULT_SOURCE); setRunId(''); setError(''); }}><SelectTrigger id="upload-mode"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="document">{ts('uploadModeDocument')}</SelectItem><SelectItem value="notes">{ts('uploadModeNotes')}</SelectItem><SelectItem value="finance">{ts('uploadModeFinance')}</SelectItem></SelectContent></Select></div>
+      <div className="field"><Label htmlFor="upload-source">{ts('uploadSource')}</Label><Select value={sourceId} onValueChange={setSourceId}><SelectTrigger id="upload-source"><SelectValue /></SelectTrigger><SelectContent><SelectItem value={DEFAULT_SOURCE}>{ts('uploadDefaultSource')}</SelectItem>{available.map((source) => <SelectItem value={source.id} key={source.id}>{source.name}</SelectItem>)}</SelectContent></Select></div>
+      <div className="field"><Label htmlFor="upload-file">{ts('uploadFile')}</Label><Input id="upload-file" name="file" type="file" accept={mode === 'finance' ? '.csv,.ofx' : mode === 'notes' ? '.md,.markdown' : '.txt,.md,.json,.csv,.pdf,.docx'} required /><span className="muted">{mode === 'finance' ? ts('uploadFinanceHint') : mode === 'notes' ? ts('uploadNotesHint') : ts('uploadHint')}</span></div>
+      {error && <p className="error" role="alert">{error}</p>}
+      <Button type="submit">{ts('uploadButton')}</Button>
+    </form>
+</>
+  );
+}
+
+/** Ingestion run progress and failure notices. */
+function UploadProgress({ vm }: { vm: UploadVm }) {
+  const { ts, run, runId } = vm;
+  return (
+<>
+    {runId && run.data && <div aria-live="polite"><h3>{ts('uploadProgress')}</h3><p>{ts('uploadReceived')}</p><p>{ts('uploadParsed', { value: run.data.status === 'needs_ocr' ? ts('uploadNoText') : run.data.stages.find((stage) => stage.stage_key === 'parse_file')?.status ?? ts('uploadQueued') })}</p><p>{ts('uploadChunked', { value: run.data.stages.find((stage) => stage.stage_key === 'parse_file')?.result_count ?? (run.data.status === 'running' ? ts('uploadProcessing') : '0') })}</p><p>{ts('uploadEmbedded')}</p>{run.data.error_code && <p className="error">{ts('uploadError', { code: run.data.error_code })}</p>}</div>}
+    {run.isError && <p className="error" role="alert">{ts('uploadProgressFailed')}</p>}
+</>
+  );
+}
+
+/** Holds the state, queries and derived values of Upload. */
+function useUploadController() {
   const { csrfToken } = useWorkspaceSession();
   const ts = useTranslations('uiSweep');
   const [sourceId, setSourceId] = useState(DEFAULT_SOURCE);
@@ -46,16 +88,5 @@ export function Upload() {
     }
   }
 
-  return <section className="sub-panel">
-    <h2>{ts('uploadTitle')}</h2>
-    <form className="form" onSubmit={upload}>
-      <div className="field"><Label htmlFor="upload-mode">{ts('uploadMode')}</Label><Select value={mode} onValueChange={(value) => { setMode(value as typeof mode); setSourceId(DEFAULT_SOURCE); setRunId(''); setError(''); }}><SelectTrigger id="upload-mode"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="document">{ts('uploadModeDocument')}</SelectItem><SelectItem value="notes">{ts('uploadModeNotes')}</SelectItem><SelectItem value="finance">{ts('uploadModeFinance')}</SelectItem></SelectContent></Select></div>
-      <div className="field"><Label htmlFor="upload-source">{ts('uploadSource')}</Label><Select value={sourceId} onValueChange={setSourceId}><SelectTrigger id="upload-source"><SelectValue /></SelectTrigger><SelectContent><SelectItem value={DEFAULT_SOURCE}>{ts('uploadDefaultSource')}</SelectItem>{available.map((source) => <SelectItem value={source.id} key={source.id}>{source.name}</SelectItem>)}</SelectContent></Select></div>
-      <div className="field"><Label htmlFor="upload-file">{ts('uploadFile')}</Label><input id="upload-file" className="input" name="file" type="file" accept={mode === 'finance' ? '.csv,.ofx' : mode === 'notes' ? '.md,.markdown' : '.txt,.md,.json,.csv,.pdf,.docx'} required /><span className="muted">{mode === 'finance' ? ts('uploadFinanceHint') : mode === 'notes' ? ts('uploadNotesHint') : ts('uploadHint')}</span></div>
-      {error && <p className="error" role="alert">{error}</p>}
-      <Button type="submit">{ts('uploadButton')}</Button>
-    </form>
-    {runId && run.data && <div aria-live="polite"><h3>{ts('uploadProgress')}</h3><p>{ts('uploadReceived')}</p><p>{ts('uploadParsed', { value: run.data.status === 'needs_ocr' ? ts('uploadNoText') : run.data.stages.find((stage) => stage.stage_key === 'parse_file')?.status ?? ts('uploadQueued') })}</p><p>{ts('uploadChunked', { value: run.data.stages.find((stage) => stage.stage_key === 'parse_file')?.result_count ?? (run.data.status === 'running' ? ts('uploadProcessing') : '0') })}</p><p>{ts('uploadEmbedded')}</p>{run.data.error_code && <p className="error">{ts('uploadError', { code: run.data.error_code })}</p>}</div>}
-    {run.isError && <p className="error" role="alert">{ts('uploadProgressFailed')}</p>}
-  </section>;
+  return { ts, sources, run, available, sourceId, setSourceId, mode, setMode, runId, setRunId, error, setError, csrfToken, upload };
 }

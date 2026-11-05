@@ -34,12 +34,11 @@ async def test_review_routes_pass_scope_user(route: object, method: str) -> None
 @pytest.mark.parametrize("fn", ["assign_review_candidate", "resolve_relationship_review"])
 async def test_review_service_rejects_foreign_actor_before_any_read_or_write(fn: str) -> None:
     """A mismatching actor_id is a 403 straight after admission; the session is never touched."""
-    from fastapi import HTTPException
-
+    from core.errors import ForbiddenError
     from modules.knowledge.entities import public
 
     session = AsyncMock()
-    with patch.object(public, "_admit", AsyncMock(return_value=MagicMock())), pytest.raises(HTTPException) as err:
+    with patch.object(public, "_admit", AsyncMock(return_value=MagicMock())), pytest.raises(ForbiddenError) as err:
         await getattr(public, fn)(
             session, uuid4(), MagicMock(), scope=SCOPE, multi_workspace_enabled=False, actor_id=999,
         )

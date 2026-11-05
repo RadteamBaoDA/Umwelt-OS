@@ -30,8 +30,14 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run ruff check core apps modules tests infrastructure/postgres/migrations
+      - run: uv run ruff check core apps modules tests infrastructure/postgres/migrations scripts/check_function_length.py
       - run: uv run mypy core apps modules
+      - name: Function length gate (max 100 lines)
+        run: uv run python scripts/check_function_length.py
+      - name: GenUI parity
+        run: uv run python scripts/check_genui_parity.py
+      - name: Import contracts (when configured)
+        run: if [ -f .importlinter ]; then uv run lint-imports; else echo "no .importlinter; skipped"; fi
       # Non-docker unit tests: integration tests are gated by INTEGRATION (unset here).
       - run: uv run pytest -q
 
@@ -39,6 +45,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.20.0
@@ -46,8 +54,20 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      # Enforced for files changed in this push/PR: a repo-wide check is blocked until ~55-65 components
+      # are split (formatting pushes them over the 100-line eslint budget); see docs/IMPLEMENTATION_STATUS.md.
+      - name: Prettier check (changed files)
+        run: npm run format:check --workspace apps/web
+        env:
+          FORMAT_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
       - run: npm test --workspace apps/web
       - run: npm run build
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: OpenAPI types are current
+        run: npm run check:api-types
 
   build:
     needs: [backend, frontend]
@@ -118,6 +138,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
+
+  make-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.20.0
+          cache: npm
+      - run: npm ci
+      # npm audit --audit-level=high plus pip-audit over the locked production set (scripts/audit.sh).
+      - run: make audit
 
   pip-audit:
     runs-on: ubuntu-latest

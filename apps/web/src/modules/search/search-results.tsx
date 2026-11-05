@@ -3,9 +3,10 @@
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { formatNumber } from '@/core/format';
 import { normalizeFormattingLocale } from '@/core/i18n';
-import type { GoalStatus } from '@/modules/goals/types';
-import type { TaskStatus } from '@/modules/tasks/types';
+import type { GoalStatus } from '@/modules/goals';
+import type { TaskStatus } from '@/modules/tasks';
 import type { GoalSearchHit, SearchHit, TaskSearchHit } from './api';
 
 /** Formats date-only values in UTC while formatting instants in the owner's preferred time zone. */
@@ -78,13 +79,12 @@ export function GoalSearchResults({ items }: { items: GoalSearchHit[] }) {
   const t = useTranslations('entities');
   const { locale, timezone } = useDisplayPreferences();
   const formattingLocale = normalizeFormattingLocale(locale);
-  const numberFormat = new Intl.NumberFormat(formattingLocale, { maximumFractionDigits: 0 });
   return <ul className="record-list" aria-label={t('searchGoals')}>
     {items.map((item) => <li className="record-row border border-border bg-card text-card-foreground rounded-md p-4" key={item.id}>
       <strong>{item.title}</strong>
       {item.description && <p className="search-excerpt">{item.description}</p>}
       {item.desired_outcome && <p className="text-muted-foreground">{item.desired_outcome}</p>}
-      <p className="text-muted-foreground">{t(goalStatusKeys[item.status])} · {t('revision')} {item.revision} · {t('goalProgress', { progress: numberFormat.format(item.progress) })}
+      <p className="text-muted-foreground">{t(goalStatusKeys[item.status])} · {t('revision')} {item.revision} · {t('goalProgress', { progress: formatNumber(item.progress, locale, { maximumFractionDigits: 0 }) })}
         {item.deadline ? ` · ${t('goalDeadline')}: ${formatSearchDate(item.deadline, formattingLocale, timezone, true)}` : ''}
       </p>
     </li>)}

@@ -22,6 +22,14 @@ from core.auth.models import Owner
 from core.auth.public import get_active_account, lock_account_admission
 from core.auth.schemas import AccountSessionRef
 from core.config import Settings
+from core.errors import (
+    ConflictError,
+    DomainError,
+    ForbiddenError,
+    UnauthorizedError,
+    UnavailableError,
+    ValidationFailedError,
+)
 from core.model_gateway.client import effective_provider_kind, hosted_endpoint_equivalent
 from core.model_gateway.schemas import (
     DEFAULT_PROVIDER_ID,
@@ -30,6 +38,7 @@ from core.model_gateway.schemas import (
     LOCAL_PROVIDER_KINDS,
     MAX_PROVIDERS,
     MODEL_ROLES,
+    PROVIDER_KINDS_WITHOUT_MAX_TOKENS,
     AIExecutionConfig,
     AISettingsRead,
     AISettingsUpdate,
@@ -54,17 +63,20 @@ from modules.settings.display_name import derive_display_name, normalize_display
 from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
 
 # Re-exported for the model_gateway routes (strict mypy forbids implicit re-export, hence the aliases).
-from modules.settings.models import capability_evidence as capability_evidence  # noqa: PLC0414
-from modules.settings.models import list_capabilities as list_capabilities  # noqa: PLC0414
+from modules.settings.models import capability_evidence as capability_evidence
+from modules.settings.models import list_capabilities as list_capabilities
 from modules.settings.models import (
-    list_model_test_results as list_model_test_results,  # noqa: PLC0414
+    list_model_test_results as list_model_test_results,
 )
-from modules.settings.models import new_capability_result as new_capability_result  # noqa: PLC0414
-from modules.settings.models import save_capability as save_capability  # noqa: PLC0414
+from modules.settings.models import new_capability_result as new_capability_result
+from modules.settings.models import save_capability as save_capability
 from modules.settings.models import (
-    save_model_test_result as save_model_test_result,  # noqa: PLC0414
+    save_model_test_result as save_model_test_result,
 )
 from modules.settings.prompts import DEFAULT_SYSTEM_PROMPTS, MAX_PROMPT_CHARS
+from modules.settings.schemas import (
+    MaintenanceSummaryRead as MaintenanceSummaryRead,
+)
 from modules.settings.schemas import (
     ModuleLifecycleRead,
     N8nRead,
@@ -75,12 +87,17 @@ from modules.settings.schemas import (
     SystemPromptEntry,
     SystemPromptsRead,
     SystemPromptsUpdate,
-    TranslationSettingsRead,
     VizRouterRead,
     VizRouterUpdate,
     WebSearchEntryRead,
     WebSearchRead,
     WebSearchUpdate,
+)
+from modules.settings.schemas import (
+    TranslationSettingsRead as TranslationSettingsRead,
+)
+from modules.settings.schemas import (
+    TranslationSettingsUpdate as TranslationSettingsUpdate,
 )
 
 VIZ_TYPESAFE_DESTINATION = "typesafe:api.typesafe.ai"
@@ -107,13 +124,13 @@ def _endpoint(value: str | None, settings: Settings) -> str | None:
     parts = urlsplit(value)
     if (parts.scheme not in {"http", "https"} or not parts.hostname or parts.username
             or parts.password or parts.query or parts.fragment):
-        raise HTTPException(status_code=422, detail="Invalid gateway endpoint")
+        raise ValidationFailedError(detail="Invalid gateway endpoint")
     try:
         port = parts.port
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail="Invalid gateway endpoint") from exc
+        raise ValidationFailedError(detail="Invalid gateway endpoint") from exc
     if port == 0:
-        raise HTTPException(status_code=422, detail="Gateway endpoint port must be between 1 and 65535")
+        raise ValidationFailedError(detail="Gateway endpoint port must be between 1 and 65535")
     is_ip = True
     try:
         parsed_address = ipaddress.ip_address(parts.hostname)
@@ -122,7 +139,7 @@ def _endpoint(value: str | None, settings: Settings) -> str | None:
         is_ipv6 = is_ip = False
     else:
         if isinstance(parsed_address, ipaddress.IPv6Address) and parsed_address.scope_id is not None:
-            raise HTTPException(status_code=422, detail="Scoped IPv6 gateway endpoints are not allowed")
+            raise ValidationFailedError(detail="Scoped IPv6 gateway endpoints are not allowed")
         normalized_host = parsed_address.compressed.lower()
         is_ipv6 = isinstance(parsed_address, ipaddress.IPv6Address)
     default_port = 443 if parts.scheme.lower() == "https" else 80
@@ -134,7 +151,7 @@ def _endpoint(value: str | None, settings: Settings) -> str | None:
     public_ok = settings.ai_allow_public_providers and parts.scheme.lower() == "https" and not is_ip
     if (policy_authority not in settings.ai_allowed_endpoint_hosts
             and effective_authority not in settings.ai_allowed_endpoint_hosts and not public_ok):
-        raise HTTPException(status_code=422, detail="Endpoint address is not allowed by deployment policy")
+        raise ValidationFailedError(detail="Endpoint address is not allowed by deployment policy")
     return urlunsplit((parts.scheme.lower(), policy_authority, parts.path.rstrip("/"), "", ""))
 
 
@@ -158,7 +175,7 @@ def _cipher(settings: Settings) -> MultiFernet:
         return credential_cipher(settings.ai_credential_encryption_key.get_secret_value(),
                                  settings.ai_credential_encryption_key_secondary.get_secret_value())
     except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=503, detail="AI credential encryption is unavailable") from exc
+        raise UnavailableError(detail="AI credential encryption is unavailable") from exc
 
 
 def _decrypt(ciphertext: str | None, settings: Settings) -> str:
@@ -168,7 +185,7 @@ def _decrypt(ciphertext: str | None, settings: Settings) -> str:
     try:
         return _cipher(settings).decrypt(ciphertext.encode()).decode()
     except (InvalidToken, UnicodeDecodeError) as exc:
-        raise HTTPException(status_code=503, detail="Saved AI credentials cannot be decrypted") from exc
+        raise UnavailableError(detail="Saved AI credentials cannot be decrypted") from exc
 
 
 def scope_actor(scope: Scope) -> int:
@@ -177,7 +194,7 @@ def scope_actor(scope: Scope) -> int:
         return scope.actor_user_id
     if isinstance(scope, WorkspaceContext):
         return scope.user_id
-    raise HTTPException(status_code=401, detail="Authentication required")
+    raise UnauthorizedError(detail="Authentication required")
 
 
 async def require_settings_scope(
@@ -192,7 +209,7 @@ async def require_settings_scope(
     """
     scope_actor(scope)
     if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError(detail="Workspace owner required")
     if type(multi_workspace_enabled) is not bool:
         raise ValueError("Explicit configured multi-workspace flag is required")
     if locked:
@@ -200,7 +217,7 @@ async def require_settings_scope(
                                        expected=expected, auth_sessions=auth_sessions)
     fence = await read_access_fence(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
     if expected is not None and fence != expected:
-        raise HTTPException(status_code=409, detail="Workspace access fence changed")
+        raise ConflictError(detail="Workspace access fence changed")
     return fence
 
 
@@ -222,7 +239,7 @@ async def require_preferences_account(
     else:
         account = await get_active_account(session, actor_user_id, multi_workspace_enabled=multi_workspace_enabled)
     if account is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
+        raise UnauthorizedError(detail="Authentication required")
 
 
 async def _row(session: AsyncSession, *, scope: Scope, locked: bool = False) -> AISettingsRecord | None:
@@ -291,7 +308,7 @@ def _destination(record: dict[str, Any], settings: Settings) -> str | None:
     """Destination id of a stored provider without decrypting its key; None when unset or denied by policy."""
     try:
         endpoint = _endpoint(record.get("base_url"), settings)
-    except HTTPException as exc:
+    except (DomainError, HTTPException) as exc:
         if exc.status_code != 422:
             raise
         return None
@@ -304,7 +321,7 @@ def _resolve_provider(record: dict[str, Any], settings: Settings) -> ProviderCon
     denied = False
     try:
         endpoint = _endpoint(record.get("base_url"), settings)
-    except HTTPException as exc:
+    except (DomainError, HTTPException) as exc:
         if exc.status_code != 422:
             raise
         endpoint, denied = None, True
@@ -343,7 +360,7 @@ def resolve_draft_endpoint(
         raw = base_url
     endpoint = _endpoint(raw, settings)
     if endpoint is None:
-        raise HTTPException(status_code=422, detail="Gateway endpoint is required")
+        raise ValidationFailedError(detail="Gateway endpoint is required")
     return endpoint, resolved
 
 
@@ -432,7 +449,7 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         for item in row.web_search_fallbacks or []:
             try:
                 fallback_key = _decrypt(item.get("key_ciphertext"), settings)
-            except HTTPException as exc:
+            except (DomainError, HTTPException) as exc:
                 if exc.status_code != 503:
                     raise
                 fallback_key = ""  # A bad fallback secret must not disable unrelated capabilities.
@@ -448,7 +465,7 @@ async def get_ai_execution_config(session: AsyncSession, settings: Settings, red
         web_configured = bool(row.web_search_api_key_ciphertext)
         try:
             web_credential = _decrypt(row.web_search_api_key_ciphertext, settings)
-        except HTTPException as exc:
+        except (DomainError, HTTPException) as exc:
             if exc.status_code != 503:
                 raise
             # Web search is an independent capability; a broken web-search key
@@ -527,7 +544,7 @@ async def check_ai_execution_config(
     await _row(session, scope=scope, locked=True)
     latest = await get_ai_execution_config(session, settings, redis, scope=scope)
     if latest.gateway_identity != expected.gateway_identity or latest.configuration_revision != expected.configuration_revision:
-        raise HTTPException(status_code=409, detail="AI settings changed; prepare a fresh request")
+        raise ConflictError(detail="AI settings changed; prepare a fresh request")
 
 
 async def lock_ai_settings_for_share(session: AsyncSession, *, scope: Scope) -> bool:
@@ -569,9 +586,9 @@ async def save_system_prompts(session: AsyncSession, update: SystemPromptsUpdate
     Bumps ``configuration_revision`` so in-flight runs holding an older snapshot fail their pre-send check.
     """
     if any(key not in DEFAULT_SYSTEM_PROMPTS for key in update.prompts):
-        raise HTTPException(status_code=422, detail="Unknown system prompt")
+        raise ValidationFailedError(detail="Unknown system prompt")
     if any(value and len(value) > MAX_PROMPT_CHARS for value in update.prompts.values()):
-        raise HTTPException(status_code=422, detail="System prompt too long")
+        raise ValidationFailedError(detail="System prompt too long")
     await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
                                  locked=True, auth_sessions=auth_sessions)
     await session.execute(insert(AISettingsRecord).values(owner_id=scope_actor(scope), workspace_id=scope.workspace_id)
@@ -580,7 +597,7 @@ async def save_system_prompts(session: AsyncSession, update: SystemPromptsUpdate
     if row is None:
         raise RuntimeError("AI settings singleton could not be initialized")
     if row.configuration_revision != update.expected_revision:
-        raise HTTPException(status_code=409, detail="AI settings changed; reload before saving")
+        raise ConflictError(detail="AI settings changed; reload before saving")
     merged = dict(row.system_prompts or {})
     for key, value in update.prompts.items():
         text = (value or "").strip()
@@ -600,7 +617,7 @@ def _kept_ciphertext(previous: dict[str, Any] | None, endpoint: str | None, sett
         return None
     try:
         unchanged = _endpoint(previous.get("base_url"), settings) == endpoint
-    except HTTPException:
+    except (DomainError, HTTPException):
         unchanged = False
     return previous.get("key_ciphertext") if unchanged else None
 
@@ -642,83 +659,99 @@ def _provider_endpoint(item: ProviderUpdate, previous: dict[str, Any] | None) ->
     return item.kind, HOSTED_PROVIDER_ENDPOINTS[item.kind]
 
 
-async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, settings: Settings, *, scope: Scope,
-                           auth_sessions: tuple[AccountSessionRef, ...] = ()) -> AISettingsRead:
-    """Validate and persist an optimistic, revision-checked AI settings update.
+def _build_provider_records(
+    update: AISettingsUpdate, stored: dict[str, dict[str, Any]], settings: Settings,
+) -> dict[str, dict[str, Any]]:
+    """Validate the submitted provider list and build the records to store (pure, no I/O).
 
-    Locks admitted auth/workspace then matching owner settings, encrypts replacement credentials, and clears
-    destination-bound privacy consent when its endpoint changes; the caller owns
-    transaction commit/rollback. Chosen models must be discovered on their provider and match the role's model type
-    (see ``role_accepts``); the embedding role must carry the probed vector dimensions and no other role may.
+    Without a list the stored providers are kept (they are edited only as a full list). Otherwise
+    enforces the provider-count bound, unique provider and model ids and a resolvable endpoint, keeps
+    the stored ciphertext only for an unchanged endpoint and encrypts replacement credentials.
+    Raises ``ValidationFailedError`` (422).
     """
-    await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
-                                 locked=True, auth_sessions=auth_sessions)
-    # Composite schema ownership and scoped reread prevent borrowing another owner's PK.
-    await session.execute(insert(AISettingsRecord).values(owner_id=scope_actor(scope), workspace_id=scope.workspace_id)
-                          .on_conflict_do_nothing(index_elements=["owner_id"]))
-    row = await _row(session, scope=scope, locked=True)
-    if row is None:
-        raise RuntimeError("AI settings singleton could not be initialized")
-    if row.configuration_revision != update.expected_revision:
-        raise HTTPException(status_code=409, detail="AI settings changed; reload before saving")
-    stored = _stored_providers(row)
-    providers: dict[str, dict[str, Any]]
     if update.providers is None:
-        providers = dict(stored)  # providers are edited only by a full list
-    else:
-        if len(update.providers) > MAX_PROVIDERS:
-            raise HTTPException(status_code=422, detail="Too many providers")
-        if len({item.id for item in update.providers}) != len(update.providers):
-            raise HTTPException(status_code=422, detail="Duplicate provider id")
-        providers = {}
-        for item in update.providers:
-            kind_to_store, raw_url = _provider_endpoint(item, stored.get(item.id))
-            endpoint = _endpoint(raw_url, settings)
-            if endpoint is None:
-                raise HTTPException(status_code=422, detail="Provider endpoint is required")
-            ciphertext = _kept_ciphertext(stored.get(item.id), endpoint, settings)
-            if item.credential_action == "replaced":
-                if not item.api_key:
-                    raise HTTPException(status_code=422, detail="Replacement provider credential is required")
-                ciphertext = _cipher(settings).encrypt(item.api_key.encode()).decode()
-            elif item.credential_action == "removed":
-                ciphertext = None
-            if len({m.id for m in item.models}) != len(item.models):
-                raise HTTPException(status_code=422, detail="Duplicate model id")
-            providers[item.id] = {"kind": kind_to_store, "label": item.label or item.id, "base_url": endpoint,
-                                  "key_ciphertext": ciphertext, "local": kind_to_store in LOCAL_PROVIDER_KINDS,
-                                  "models": [m.model_dump(mode="json") for m in item.models]}
+        return dict(stored)  # providers are edited only by a full list
+    if len(update.providers) > MAX_PROVIDERS:
+        raise ValidationFailedError(detail="Too many providers")
+    if len({item.id for item in update.providers}) != len(update.providers):
+        raise ValidationFailedError(detail="Duplicate provider id")
+    providers: dict[str, dict[str, Any]] = {}
+    for item in update.providers:
+        kind_to_store, raw_url = _provider_endpoint(item, stored.get(item.id))
+        endpoint = _endpoint(raw_url, settings)
+        if endpoint is None:
+            raise ValidationFailedError(detail="Provider endpoint is required")
+        ciphertext = _kept_ciphertext(stored.get(item.id), endpoint, settings)
+        if item.credential_action == "replaced":
+            if not item.api_key:
+                raise ValidationFailedError(detail="Replacement provider credential is required")
+            ciphertext = _cipher(settings).encrypt(item.api_key.encode()).decode()
+        elif item.credential_action == "removed":
+            ciphertext = None
+        if len({m.id for m in item.models}) != len(item.models):
+            raise ValidationFailedError(detail="Duplicate model id")
+        providers[item.id] = {"kind": kind_to_store, "label": item.label or item.id, "base_url": endpoint,
+                              "key_ciphertext": ciphertext, "local": kind_to_store in LOCAL_PROVIDER_KINDS,
+                              "models": [m.model_dump(mode="json") for m in item.models]}
+    return providers
+
+
+def _validated_role_mapping(role: str, mapping: Any, providers: dict[str, dict[str, Any]]) -> Any:
+    """Validate one role's chosen model mapping against the provider list; return the mapping to store.
+
+    The model must come from the provider's discovered list and match the role's model type;
+    dimensions apply only to the embedding role (which requires them), reasoning effort only to chat
+    and max output tokens only to LLM roles. Hosted clouds that pick their own limit get a
+    client-sent ``max_output_tokens`` discarded (the server is authoritative). Raises 422.
+    """
+    provider = providers.get(mapping.provider_id or DEFAULT_PROVIDER_ID) or (
+        next(iter(providers.values()), None) if mapping.provider_id is None else None)
+    # A chosen model must come from the provider's discovered list and match the role's model type.
+    listed = {m.id: m for m in _models(provider)} if provider else {}
+    if mapping.model and not listed:
+        raise ValidationFailedError(detail="Discover models for this provider first")
+    if mapping.model and mapping.model not in listed:
+        raise ValidationFailedError(detail=f"Model {mapping.model} is not in the provider's model list")
+    chosen = listed.get(mapping.model) if mapping.model else None
+    if chosen is not None and not role_accepts(role, chosen):
+        raise ValidationFailedError(detail=f"Role {role} needs a {ROLE_MODEL_TYPE_LABEL[role]} model")
+    if mapping.dimensions is not None and role != "embedding":
+        raise ValidationFailedError(detail="Dimensions apply only to the embedding role")
+    if mapping.reasoning_effort != "off" and role != "chat":
+        raise ValidationFailedError(detail="Reasoning effort applies only to the chat role")
+    if mapping.max_output_tokens is not None:
+        if role not in {"chat", "brief", "background", "vision"}:
+            raise ValidationFailedError(detail="Max output tokens apply only to LLM roles")
+        if provider is not None and provider.get("kind") in PROVIDER_KINDS_WITHOUT_MAX_TOKENS:
+            # Server is authoritative: hosted clouds pick their own limit, so a client-sent value is discarded.
+            mapping = mapping.model_copy(update={"max_output_tokens": None})
+    if role == "embedding" and mapping.model and mapping.dimensions is None:
+        raise ValidationFailedError(detail="Embedding dimensions required; run the embeddings probe")
+    return mapping
+
+
+def _chosen_defaults(update: AISettingsUpdate, providers: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Collect and validate the roles the update maps to models (all provider ids checked first)."""
     chosen_defaults = {role: mapping for role in MODEL_ROLES if (mapping := getattr(update.defaults, role)) is not None}
     for mapping in chosen_defaults.values():
         if mapping.provider_id is not None and mapping.provider_id not in providers:
-            raise HTTPException(status_code=422, detail="Unknown model provider")
-    for role, mapping in chosen_defaults.items():
-        provider = providers.get(mapping.provider_id or DEFAULT_PROVIDER_ID) or (
-            next(iter(providers.values()), None) if mapping.provider_id is None else None)
-        # A chosen model must come from the provider's discovered list and match the role's model type.
-        listed = {m.id: m for m in _models(provider)} if provider else {}
-        if mapping.model and not listed:
-            raise HTTPException(status_code=422, detail="Discover models for this provider first")
-        if mapping.model and mapping.model not in listed:
-            raise HTTPException(status_code=422, detail=f"Model {mapping.model} is not in the provider's model list")
-        chosen = listed.get(mapping.model) if mapping.model else None
-        if chosen is not None and not role_accepts(role, chosen):
-            raise HTTPException(status_code=422, detail=f"Role {role} needs a {ROLE_MODEL_TYPE_LABEL[role]} model")
-        if mapping.dimensions is not None and role != "embedding":
-            raise HTTPException(status_code=422, detail="Dimensions apply only to the embedding role")
-        if mapping.reasoning_effort != "off" and role != "chat":
-            raise HTTPException(status_code=422, detail="Reasoning effort applies only to the chat role")
-        if role == "embedding" and mapping.model and mapping.dimensions is None:
-            raise HTTPException(status_code=422, detail="Embedding dimensions required; run the embeddings probe")
-    next_web_endpoint = _endpoint(str(update.web_search_endpoint) if update.web_search_endpoint else None, settings)
-    if (update.web_search_provider != "none" and next_web_endpoint
-            and any(item.get("endpoint") == next_web_endpoint for item in (row.web_search_fallbacks or []))):
-        raise HTTPException(status_code=422, detail="Web search endpoints must be unique")
-    current_web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
-    next_web_destination = f"web-search:{_fingerprint(next_web_endpoint or '')[:32]}" if next_web_endpoint else None
+            raise ValidationFailedError(detail="Unknown model provider")
+    return {role: _validated_role_mapping(role, mapping, providers) for role, mapping in chosen_defaults.items()}
+
+
+def _consented_privacy(
+    update: AISettingsUpdate, row: AISettingsRecord, providers: dict[str, dict[str, Any]],
+    stored: dict[str, dict[str, Any]], settings: Settings,
+    current_web_destination: str | None, next_web_destination: str | None,
+) -> dict[str, Any]:
+    """Return the privacy block with every consent re-bound to the destinations that survive this save.
+
+    Consent is bound to each remote provider's destination: a new provider or a changed endpoint/kind
+    never inherits it, and removed providers drop out. Existing web-search fallback grants survive model
+    saves but cannot be created through this legacy API; the primary web-search grant survives only when
+    its destination is unchanged. A flag with no surviving destination is switched off. Pure.
+    """
     privacy = update.privacy.model_dump(mode="json")
-    # Consent is bound to each remote provider's destination: a new provider or a changed endpoint/kind never inherits it,
-    # and removed providers drop out.
     grants: dict[str, list[str]] = {"reasoning_destinations": [], "embedding_destinations": []}
     for pid, record in providers.items():
         destination = _destination(record, settings)
@@ -741,6 +774,40 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
         web_grants.insert(0, next_web_destination)
     privacy["web_search_destinations"] = list(dict.fromkeys(web_grants)) if privacy["allow_remote_web_search"] else []
     privacy["allow_remote_web_search"] = bool(privacy["web_search_destinations"])
+    return privacy
+
+
+async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, settings: Settings, *, scope: Scope,
+                           auth_sessions: tuple[AccountSessionRef, ...] = ()) -> AISettingsRead:
+    """Validate and persist an optimistic, revision-checked AI settings update.
+
+    Locks admitted auth/workspace then matching owner settings, encrypts replacement credentials, and clears
+    destination-bound privacy consent when its endpoint changes; the caller owns
+    transaction commit/rollback. Chosen models must be discovered on their provider and match the role's model type
+    (see ``role_accepts``); the embedding role must carry the probed vector dimensions and no other role may.
+    """
+    await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
+                                 locked=True, auth_sessions=auth_sessions)
+    # Composite schema ownership and scoped reread prevent borrowing another owner's PK.
+    await session.execute(insert(AISettingsRecord).values(owner_id=scope_actor(scope), workspace_id=scope.workspace_id)
+                          .on_conflict_do_nothing(index_elements=["owner_id"]))
+    row = await _row(session, scope=scope, locked=True)
+    if row is None:
+        raise RuntimeError("AI settings singleton could not be initialized")
+    if row.configuration_revision != update.expected_revision:
+        raise ConflictError(detail="AI settings changed; reload before saving")
+    stored = _stored_providers(row)
+    providers = _build_provider_records(update, stored, settings)
+    chosen_defaults = _chosen_defaults(update, providers)
+    next_web_endpoint = _endpoint(str(update.web_search_endpoint) if update.web_search_endpoint else None, settings)
+    if (update.web_search_provider != "none" and next_web_endpoint
+            and any(item.get("endpoint") == next_web_endpoint for item in (row.web_search_fallbacks or []))):
+        raise ValidationFailedError(detail="Web search endpoints must be unique")
+    current_web_destination = f"web-search:{_fingerprint(row.web_search_endpoint or '')[:32]}" if row.web_search_endpoint else None
+    next_web_destination = f"web-search:{_fingerprint(next_web_endpoint or '')[:32]}" if next_web_endpoint else None
+    privacy = _consented_privacy(
+        update, row, providers, stored, settings, current_web_destination, next_web_destination,
+    )
     row.providers = providers
     row.privacy = privacy
     row.defaults = {role: mapping.model_dump(mode="json") for role, mapping in chosen_defaults.items()}
@@ -750,7 +817,7 @@ async def save_ai_settings(session: AsyncSession, update: AISettingsUpdate, sett
     row.web_search_endpoint = next_web_endpoint
     if update.web_search_credential_action == "replaced":
         if not update.web_search_api_key:
-            raise HTTPException(status_code=422, detail="Replacement search credential is required")
+            raise ValidationFailedError(detail="Replacement search credential is required")
         row.web_search_api_key_ciphertext = _cipher(settings).encrypt(update.web_search_api_key.encode()).decode()
     elif update.web_search_credential_action == "removed":
         row.web_search_api_key_ciphertext = None
@@ -789,7 +856,7 @@ async def save_web_search(session: AsyncSession, update: WebSearchUpdate, settin
     """
     endpoints = [_endpoint(str(item.endpoint), settings) for item in update.providers]
     if any(endpoint is None for endpoint in endpoints) or len(set(endpoints)) != len(endpoints):
-        raise HTTPException(status_code=422, detail="Web search endpoints must be present and unique")
+        raise ValidationFailedError(detail="Web search endpoints must be present and unique")
     await require_settings_scope(session, scope=scope, multi_workspace_enabled=settings.multi_workspace_enabled,
                                  locked=True, auth_sessions=auth_sessions)
     await session.execute(insert(AISettingsRecord).values(owner_id=scope_actor(scope), workspace_id=scope.workspace_id)
@@ -798,7 +865,7 @@ async def save_web_search(session: AsyncSession, update: WebSearchUpdate, settin
     if row is None:
         raise RuntimeError("AI settings singleton could not be initialized")
     if row.configuration_revision != update.expected_revision:
-        raise HTTPException(status_code=409, detail="AI settings changed; reload before saving")
+        raise ConflictError(detail="AI settings changed; reload before saving")
     stored = {row.web_search_endpoint: row.web_search_api_key_ciphertext}
     stored.update({item.get("endpoint"): item.get("key_ciphertext") for item in (row.web_search_fallbacks or [])})
     records = []
@@ -806,12 +873,12 @@ async def save_web_search(session: AsyncSession, update: WebSearchUpdate, settin
         ciphertext = stored.get(endpoint)
         if item.credential_action == "replaced":
             if not item.api_key:
-                raise HTTPException(status_code=422, detail="Replacement search credential is required")
+                raise ValidationFailedError(detail="Replacement search credential is required")
             ciphertext = _cipher(settings).encrypt(item.api_key.encode()).decode()
         elif item.credential_action == "removed":
             ciphertext = None
         if item.provider in ("tavily", "brave", "omniroute") and not ciphertext:
-            raise HTTPException(status_code=422, detail="Search credential is required for this provider")
+            raise ValidationFailedError(detail="Search credential is required for this provider")
         records.append({"provider": item.provider, "endpoint": endpoint, "key_ciphertext": ciphertext})
     if records:
         row.web_search_provider = update.providers[0].provider
@@ -836,7 +903,7 @@ class N8nResolved(BaseModel):
     webhook_token: str = Field(default="", repr=False)
     service_url_source: str = "environment"
     api_key_source: str = "none"
-    webhook_token_source: str = "none"
+    webhook_token_source: str = "none"  # noqa: S105  # label/URL/enum value, not a credential
     enabled: bool = True
 
 
@@ -882,11 +949,12 @@ async def resolve_n8n(session: AsyncSession, settings: Settings, *, workspace_id
     env_ok = not url or url.rstrip("/") == str(settings.n8n_service_url).rstrip("/")
 
     def pick(name: str, env: str) -> tuple[str, str]:
+        """Resolve one n8n secret as ``(value, source)``: the decrypted stored value first, else the environment value when allowed, else empty. An undecryptable stored value falls through to the environment."""
         ciphertext = stored.get(f"{name}_ciphertext")
         if ciphertext:
             try:
                 return _decrypt(ciphertext, settings), "database"
-            except HTTPException:
+            except (DomainError, HTTPException):
                 pass
         return (env, "environment") if env and env_ok else ("", "none")
 
@@ -961,7 +1029,7 @@ async def save_n8n(session: AsyncSession, update: N8nUpdate, settings: Settings,
     if row is None:
         raise RuntimeError("AI settings singleton could not be initialized")
     if _n8n_revision(row) != update.expected_revision:
-        raise HTTPException(status_code=409, detail="n8n settings changed; reload before saving")
+        raise ConflictError(detail="n8n settings changed; reload before saving")
     stored = dict(row.n8n or {})
     stored.pop("service_url", None)
     if service_url:
@@ -970,7 +1038,7 @@ async def save_n8n(session: AsyncSession, update: N8nUpdate, settings: Settings,
                                 ("webhook_token", update.webhook_token_action, update.webhook_token)):
         if action == "replaced":
             if not value:
-                raise HTTPException(status_code=422, detail=f"Replacement n8n {name.replace('_', ' ')} is required")
+                raise ValidationFailedError(detail=f"Replacement n8n {name.replace('_', ' ')} is required")
             stored[f"{name}_ciphertext"] = _cipher(settings).encrypt(value.encode()).decode()
         elif action == "removed":
             stored.pop(f"{name}_ciphertext", None)
@@ -1016,7 +1084,7 @@ def _viz_endpoint(stored: dict[str, Any], settings: Settings) -> str | None:
         url = stored.get("gateway_url") or (
             VIZ_CLOUDFLARE_URL.format(account_id=account) if VIZ_CLOUDFLARE_ACCOUNT.fullmatch(account) else None)
         if url is None or not url.lower().startswith("https://"):
-            raise HTTPException(status_code=422, detail="Cloudflare needs a 32-character account id or an https gateway URL")
+            raise ValidationFailedError(detail="Cloudflare needs a 32-character account id or an https gateway URL")
     else:
         return None
     return _endpoint(url, settings)
@@ -1033,7 +1101,7 @@ def _viz_destination(stored: dict[str, Any], providers: dict[str, dict[str, Any]
     if stored.get("kind") in VIZ_KEYED_KINDS:
         try:
             endpoint = _viz_endpoint(stored, settings)
-        except HTTPException as exc:
+        except (DomainError, HTTPException) as exc:
             if exc.status_code != 422:
                 raise
             return None
@@ -1067,13 +1135,13 @@ async def resolve_viz_router(session: AsyncSession, settings: Settings, *, scope
     if kind in {"typesafe", *VIZ_KEYED_KINDS} and ciphertext:
         try:
             key = _decrypt(ciphertext, settings)
-        except HTTPException:
+        except (DomainError, HTTPException):
             key = ""
     base_url = None
     if kind in VIZ_KEYED_KINDS:
         try:
             base_url = _viz_endpoint(stored, settings)
-        except HTTPException as exc:
+        except (DomainError, HTTPException) as exc:
             if exc.status_code != 422:
                 raise
     return VizRouterResolved(
@@ -1143,6 +1211,62 @@ async def read_viz_router(session: AsyncSession, settings: Settings, *, scope: S
         "allow_remote_visualization_routing": resolved.allow_remote, "destination_id": resolved.destination_id})
 
 
+def _apply_viz_kind_fields(
+    stored: dict[str, Any], update: VizRouterUpdate, providers: dict[str, dict[str, Any]], settings: Settings,
+) -> None:
+    """Add the kind-specific router fields to ``stored`` after validating them (mutates ``stored``).
+
+    ``llm`` needs an existing provider and a model from that provider's discovered ``decision`` (or
+    legacy ``llm``) list. Keyed kinds (openrouter, cloudflare) need a model; openrouter may select the
+    Decisions API and cloudflare carries a normalized account id and gateway URL. The resulting
+    endpoint is validated against deployment policy. Raises ``ValidationFailedError`` (422).
+    """
+    if update.kind == "llm":
+        pid = update.provider_id or DEFAULT_PROVIDER_ID
+        record = providers.get(pid)
+        if record is None:
+            raise ValidationFailedError(detail="Unknown model provider")
+        if not any(m.id == update.model and m.type in {"decision", "llm"} for m in _models(record)):
+            raise ValidationFailedError(detail="Choose a decision or language model discovered on this provider")
+        stored.update(provider_id=pid, model=update.model, mode=update.mode)
+    if update.kind in VIZ_KEYED_KINDS:
+        if not update.model.strip():
+            raise ValidationFailedError(detail="A router model is required")
+        stored.update(model=update.model.strip(), mode=update.mode)
+        if update.kind == "openrouter" and update.api == "decisions":
+            stored["api"] = "decisions"  # only openrouter has the Decisions API; omitted => chat
+        if update.kind == "cloudflare":
+            stored.update(account_id=(update.account_id or "").strip().lower() or None,
+                          gateway_url=(update.gateway_url or "").strip() or None)
+        _viz_endpoint(stored, settings)  # 422 on bad account id / non-https / deployment endpoint policy
+
+
+def _viz_key_ciphertexts(
+    update: VizRouterUpdate, previous: dict[str, Any], settings: Settings,
+) -> dict[str, Any]:
+    """Return the per-kind key ciphertexts after applying this save's credential action.
+
+    Starts from the stored ciphertext of every kind; for the selected kind a ``replaced`` action
+    encrypts the new key (required) and ``removed`` drops it. A keyed kind must end with a key.
+    Raises ``ValidationFailedError`` (422).
+    """
+    ciphertexts = {name: previous.get(f"{name}_key_ciphertext") for name in ("typesafe", *VIZ_KEYED_KINDS)}
+    if update.kind == "typesafe":
+        action, value, label = update.typesafe_key_action, update.typesafe_key, "TypeSafe"
+    else:
+        action, value, label = update.api_key_action, update.api_key, update.kind
+    if update.kind in {"typesafe", *VIZ_KEYED_KINDS}:
+        if action == "replaced":
+            if not value:
+                raise ValidationFailedError(detail=f"Replacement {label} key is required")
+            ciphertexts[update.kind] = _cipher(settings).encrypt(value.encode()).decode()
+        elif action == "removed":
+            ciphertexts[update.kind] = None
+    if update.kind in VIZ_KEYED_KINDS and not ciphertexts[update.kind]:
+        raise ValidationFailedError(detail=f"A {label} API key is required")
+    return ciphertexts
+
+
 async def save_viz_router(session: AsyncSession, update: VizRouterUpdate, settings: Settings, *, scope: Scope,
                           auth_sessions: tuple[AccountSessionRef, ...] = ()) -> VizRouterRead:
     """Revision-checked replace of the visualization router settings (own ``revision`` inside the JSON).
@@ -1160,41 +1284,11 @@ async def save_viz_router(session: AsyncSession, update: VizRouterUpdate, settin
         raise RuntimeError("AI settings singleton could not be initialized")
     previous = _viz_stored(row)
     if int(previous.get("revision", 1)) != update.expected_revision:
-        raise HTTPException(status_code=409, detail="Visualization router settings changed; reload before saving")
+        raise ConflictError(detail="Visualization router settings changed; reload before saving")
     providers = _stored_providers(row)
     stored: dict[str, Any] = {"kind": update.kind, "revision": int(previous.get("revision", 1)) + 1}
-    if update.kind == "llm":
-        pid = update.provider_id or DEFAULT_PROVIDER_ID
-        record = providers.get(pid)
-        if record is None:
-            raise HTTPException(status_code=422, detail="Unknown model provider")
-        if not any(m.id == update.model and m.type in {"decision", "llm"} for m in _models(record)):
-            raise HTTPException(status_code=422, detail="Choose a decision or language model discovered on this provider")
-        stored.update(provider_id=pid, model=update.model, mode=update.mode)
-    if update.kind in VIZ_KEYED_KINDS:
-        if not update.model.strip():
-            raise HTTPException(status_code=422, detail="A router model is required")
-        stored.update(model=update.model.strip(), mode=update.mode)
-        if update.kind == "openrouter" and update.api == "decisions":
-            stored["api"] = "decisions"  # only openrouter has the Decisions API; omitted => chat
-        if update.kind == "cloudflare":
-            stored.update(account_id=(update.account_id or "").strip().lower() or None,
-                          gateway_url=(update.gateway_url or "").strip() or None)
-        _viz_endpoint(stored, settings)  # 422 on bad account id / non-https / deployment endpoint policy
-    ciphertexts = {name: previous.get(f"{name}_key_ciphertext") for name in ("typesafe", *VIZ_KEYED_KINDS)}
-    if update.kind == "typesafe":
-        action, value, label = update.typesafe_key_action, update.typesafe_key, "TypeSafe"
-    else:
-        action, value, label = update.api_key_action, update.api_key, update.kind
-    if update.kind in {"typesafe", *VIZ_KEYED_KINDS}:
-        if action == "replaced":
-            if not value:
-                raise HTTPException(status_code=422, detail=f"Replacement {label} key is required")
-            ciphertexts[update.kind] = _cipher(settings).encrypt(value.encode()).decode()
-        elif action == "removed":
-            ciphertexts[update.kind] = None
-    if update.kind in VIZ_KEYED_KINDS and not ciphertexts[update.kind]:
-        raise HTTPException(status_code=422, detail=f"A {label} API key is required")
+    _apply_viz_kind_fields(stored, update, providers, settings)
+    ciphertexts = _viz_key_ciphertexts(update, previous, settings)
     for name, ciphertext in ciphertexts.items():
         if ciphertext:  # per-kind: a key is never reused for another kind's host; only "removed" drops it
             stored[f"{name}_key_ciphertext"] = ciphertext
@@ -1311,7 +1405,7 @@ async def save_owner_preferences(
     if row is None:
         raise RuntimeError("Owner preferences singleton could not be initialized")
     if row.configuration_revision != update.expected_revision:
-        raise HTTPException(status_code=409, detail="Preferences changed; reload before saving")
+        raise ConflictError(detail="Preferences changed; reload before saving")
     row.theme = update.theme
     row.locale = update.locale
     row.timezone = update.timezone

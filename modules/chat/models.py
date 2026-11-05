@@ -118,7 +118,11 @@ class ResponseRun(Base):
     __table_args__ = (
         Index("ix_chat_response_runs_conversation_id", "conversation_id"),
         Index("ix_chat_response_runs_client_request_id", "client_request_id"),
-        Index("ix_chat_response_runs_status", "status"),
+        # Active runs only (recovery/awaiting-input/dispatch filters); terminal rows use the partial below.
+        Index(
+            "ix_chat_response_runs_active_status", "status",
+            postgresql_where=text("status IN ('pending', 'streaming', 'awaiting_input')"),
+        ),
         Index("ix_chat_response_runs_created_at", "created_at"),
         Index("ix_chat_response_runs_user_message_id", "user_message_id"),
         Index("ix_chat_response_runs_assistant_message_id", "assistant_message_id"),

@@ -67,7 +67,7 @@ class Recorder:
 
     def assert_selects_bound(self, *values: object) -> None:
         """Every SELECT binds each of ``values`` (workspace id, actor id) as a parameter."""
-        pairs = [(t, p) for t, p in zip(self.sql, self.params) if t.lstrip().upper().startswith("SELECT")]
+        pairs = [(t, p) for t, p in zip(self.sql, self.params, strict=False) if t.lstrip().upper().startswith("SELECT")]
         assert pairs
         for _text, params in pairs:
             for value in values:

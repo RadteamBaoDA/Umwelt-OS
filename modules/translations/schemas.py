@@ -79,6 +79,7 @@ class TranslationBatchRead(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class TranslationInput:
+    """Immutable, owner-module-supplied snapshot of the exact text to translate plus the revision, visibility hash and source identities that bind it."""
     workspace_id: UUID
     actor_user_id: int
     resource_type: ResourceType

@@ -8,6 +8,8 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { LocalWeather } from './api';
+import { BareButton } from '@/components/bare-button';
+import { getDateTimeFormat, getNumberFormat } from '@/modules/shared';
 
 type ConditionKey = 'weatherClear' | 'weatherMainlyClear' | 'weatherPartlyCloudy' | 'weatherCloudy' | 'weatherFog'
   | 'weatherDrizzle' | 'weatherRain' | 'weatherSnow' | 'weatherShowers' | 'weatherThunder';
@@ -19,6 +21,16 @@ export const WEATHER_UNIT_KEY = 'umwelt.weather.unit';
 /** Hours between chart points: 24 forecast hours shown as 8 readable columns. */
 const STEP_HOURS = 3;
 
+/** Ordered WMO code rules for the non-clear conditions; the first match wins (unknown codes read as cloudy). */
+const CONDITION_RULES: { match: (code: number) => boolean; key: ConditionKey; Icon: LucideIcon }[] = [
+  { match: (code) => code === 45 || code === 48, key: 'weatherFog', Icon: CloudFog },
+  { match: (code) => code >= 51 && code <= 57, key: 'weatherDrizzle', Icon: CloudDrizzle },
+  { match: (code) => code >= 61 && code <= 67, key: 'weatherRain', Icon: CloudRain },
+  { match: (code) => (code >= 71 && code <= 77) || code === 85 || code === 86, key: 'weatherSnow', Icon: CloudSnow },
+  { match: (code) => code >= 80 && code <= 82, key: 'weatherShowers', Icon: CloudRain },
+  { match: (code) => code >= 95, key: 'weatherThunder', Icon: CloudLightning },
+];
+
 /**
  * Maps a WMO weather code (Open-Meteo `weather_code`) to a condition message key and icon; night swaps sun for moon.
  * Unknown codes read as cloudy rather than failing.
@@ -29,13 +41,8 @@ export function weatherCondition(code: number, isDay: boolean | null | undefined
   const night = isDay === false;
   if (code === 0) return { key: 'weatherClear', Icon: night ? Moon : Sun };
   if (code === 1 || code === 2) return { key: code === 1 ? 'weatherMainlyClear' : 'weatherPartlyCloudy', Icon: night ? CloudMoon : CloudSun };
-  if (code === 45 || code === 48) return { key: 'weatherFog', Icon: CloudFog };
-  if (code >= 51 && code <= 57) return { key: 'weatherDrizzle', Icon: CloudDrizzle };
-  if (code >= 61 && code <= 67) return { key: 'weatherRain', Icon: CloudRain };
-  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return { key: 'weatherSnow', Icon: CloudSnow };
-  if (code >= 80 && code <= 82) return { key: 'weatherShowers', Icon: CloudRain };
-  if (code >= 95) return { key: 'weatherThunder', Icon: CloudLightning };
-  return { key: 'weatherCloudy', Icon: Cloud };
+  const rule = CONDITION_RULES.find((candidate) => candidate.match(code));
+  return rule ? { key: rule.key, Icon: rule.Icon } : { key: 'weatherCloudy', Icon: Cloud };
 }
 
 /** Converts Celsius to the chosen unit. */
@@ -74,13 +81,13 @@ export function WeatherCard({ data }: { data: LocalWeather }) {
   const [unit, chooseUnit] = useWeatherUnit();
   const [metric, setMetric] = useState<Metric>('temperature');
   const formatLocale = normalizeFormattingLocale(locale);
-  const whole = new Intl.NumberFormat(formatLocale, { maximumFractionDigits: 0 });
+  const whole = getNumberFormat(formatLocale, { maximumFractionDigits: 0 });
   const { key, Icon } = weatherCondition(data.weather_code, data.is_day);
   const observed = Date.parse(data.observed_at);
   const when = Number.isFinite(observed)
-    ? new Intl.DateTimeFormat(formatLocale, { weekday: 'long', hour: '2-digit', minute: '2-digit', timeZone: timezone }).format(observed)
+    ? getDateTimeFormat(formatLocale, { weekday: 'long', hour: '2-digit', minute: '2-digit', timeZone: timezone }).format(observed)
     : null;
-  const hourFormat = new Intl.DateTimeFormat(formatLocale, { hour: '2-digit', minute: '2-digit', timeZone: timezone });
+  const hourFormat = getDateTimeFormat(formatLocale, { hour: '2-digit', minute: '2-digit', timeZone: timezone });
 
   // Each detail line renders only when the provider returned that reading.
   const details = [
@@ -117,10 +124,10 @@ export function WeatherCard({ data }: { data: LocalWeather }) {
             {(['c', 'f'] as const).map((option, index) => (
               <span key={option} className="flex items-center">
                 {index > 0 && <span className="px-0.5 text-muted-foreground" aria-hidden="true">|</span>}
-                <button type="button" aria-pressed={unit === option} onClick={() => chooseUnit(option)}
+                <BareButton type="button" aria-pressed={unit === option} onClick={() => chooseUnit(option)}
                   className="cursor-pointer rounded-sm border-0 bg-transparent p-0.5 text-muted-foreground hover:text-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
                   {option === 'c' ? '°C' : '°F'}
-                </button>
+                </BareButton>
               </span>
             ))}
           </div>

@@ -8,9 +8,9 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
-from fastapi import HTTPException
 from pydantic import SecretStr
 
+from core.errors import DomainError
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.settings import public
 from modules.settings.schemas import N8nUpdate
@@ -66,7 +66,7 @@ async def test_enabled_round_trips_and_none_leaves_it_unchanged() -> None:
 @pytest.mark.asyncio
 async def test_enabled_change_is_revision_checked() -> None:
     row = SimpleNamespace(configuration_revision=1, n8n={"revision": 4})
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await _save(row, N8nUpdate(expected_revision=1, enabled=False))
     assert exc.value.status_code == 409 and "enabled" not in row.n8n
 

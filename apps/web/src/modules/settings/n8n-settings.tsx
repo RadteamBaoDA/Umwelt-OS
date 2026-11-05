@@ -15,10 +15,10 @@ import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { StatusDot } from '@/modules/observability/status-row';
-import type { Tone } from '@/modules/observability/system-status-model';
-import { deactivateConnector, triggerCollection } from '@/modules/sources/api';
-import { SecretField, SettingsActions, SettingsPageHeader, SettingsSection } from './settings-layout';
+import { StatusDot } from '@/modules/observability';
+import type { Tone } from '@/modules/observability';
+import { deactivateConnector, triggerCollection } from '@/modules/sources';
+import { SecretField, SettingsActions, SettingsPageHeader, SettingsSection } from '@/components/settings-layout';
 
 type Source = 'database' | 'environment' | 'none';
 type N8n = { enabled: boolean; callback_base_url: string; configuration_revision: number; service_url: string | null; api_key_configured: boolean; webhook_token_configured: boolean; service_url_source: Source; api_key_source: Source; webhook_token_source: Source };
@@ -106,6 +106,7 @@ function WorkflowsSection({ enabled }: { enabled: boolean }) {
  * (enable switch, service URL, API key with a connection test, callback URL and webhook token).
  * The header states whether n8n is on and which server it points at; secrets stay write-only.
  */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function N8nSettingsWorkspace() {
   const t = useTranslations('n8n');
   const { csrfToken } = useWorkspaceSession();

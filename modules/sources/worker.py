@@ -15,8 +15,10 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
+from core.errors import DomainError, error_status
 from core.events import DomainEvent
 from core.realtime import ReplayDraft, commit_with_replay, make_knowledge_change, make_source_change
+from core.worker_context import worker_session_factory
 from core.worker_cursors import STATE_KEY, read_cursor, write_cursor
 from core.workspaces.access import read_access_fence
 from core.workspaces.schemas import AccessFence, InternalJobScope
@@ -318,7 +320,7 @@ async def process_source_purge(ctx: dict[str, object], event_id: str) -> None:
     unlink, Redis enqueue or external I/O. Copy continuation is five seconds; replay uses
     the early held AccessFence. Canonical capture and coverage arming commit atomically.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     flag = _configured_flag(ctx)
     identifier = UUID(event_id)
     async with factory() as session:
@@ -428,7 +430,7 @@ async def _evict_memory_cache_after_commit(
         await session.rollback()
     try:
         await memory.invalidate_memory_cache(redis, scope=scope)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # cache eviction is best-effort; the event is retried later
         logger.warning("Source Memory cache eviction deferred (%s)", type(exc).__name__)
         return
     async with factory() as session:
@@ -462,6 +464,66 @@ async def _evict_memory_cache_after_commit(
                                  multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence)
 
 
+class _MalformedMemoryCursorError(ValueError):
+    """The stored Source Memory continuation cursor is malformed; recovery must reset it."""
+
+
+async def _memory_coverage_step(
+    session: AsyncSession, operation: SourcePurgeOperation, source: Source | None, *, scope: InternalJobScope,
+    access_fence: AccessFence, flag: bool,
+) -> datetime | None:
+    """Advance one Source Memory coverage page on the locked operation; return the next attempt time or ``None``.
+
+    A missing/moved Source fails the operation (``evidence_identity_unavailable``); a pending cache eviction
+    only reschedules; otherwise one page of at most 100 copies is purged through the Memory owner under the
+    held fences, the unresolved count accumulates and the cursor/status are advanced (a final page with
+    unresolved copies fails as ``legacy_provenance_unresolved``). A malformed stored cursor raises
+    :class:`_MalformedMemoryCursorError`; an incomplete page without a continuation raises ``ValueError``.
+    Mutates ``operation`` only; the caller settles and commits.
+    """
+    next_attempt_at: datetime | None = None
+    if source is None or source.generation != operation.generation:
+        operation.memory_status = "failed"
+        operation.memory_error_code = "evidence_identity_unavailable"
+        operation.memory_cursor = None
+    elif operation.memory_cache_pending:
+        next_attempt_at = datetime.now(UTC) + _RETRY_DELAY
+    elif operation.memory_status != "succeeded" and not _memory_unavailable(operation):
+        cursor_state = operation.memory_cursor if operation.memory_cursor is not None else {}
+        if not isinstance(cursor_state, dict) or set(cursor_state) - {"owner_cursor"}:
+            raise _MalformedMemoryCursorError("Stored Source Memory cursor is malformed")
+        owner_cursor = cursor_state.get("owner_cursor")
+        if owner_cursor is not None and not isinstance(owner_cursor, str):
+            raise _MalformedMemoryCursorError("Stored Source Memory cursor is malformed")
+        operation.memory_status = "running"
+        operation.memory_error_code = None
+        progress = await memory.purge_source_copied_evidence_page_in_uow(
+            session, SourceCopiedEvidenceScope(operation_id=operation.id,
+                source_id=source.id, generation=operation.generation),
+            scope=scope, multi_workspace_enabled=flag, access_fence=access_fence,
+            source_fence=_source_fence(source), cursor=owner_cursor, limit=100,
+        )
+        operation.memory_unresolved_count += progress.unresolved_count
+        if progress.changed:
+            operation.memory_cache_pending = True
+        if not progress.complete:
+            if progress.next_cursor is None:
+                raise ValueError("Source Memory page is incomplete without a continuation cursor")
+            operation.memory_cursor = {"owner_cursor": progress.next_cursor}
+            next_attempt_at = datetime.now(UTC) + _MEMORY_PAGE_DELAY
+        else:
+            operation.memory_cursor = None
+            if operation.memory_unresolved_count:
+                operation.memory_status = "failed"
+                operation.memory_error_code = "legacy_provenance_unresolved"
+            else:
+                operation.memory_status = "succeeded"
+                operation.memory_error_code = None
+        if operation.memory_cache_pending:
+            next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
+    return next_attempt_at
+
+
 async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) -> None:
     """Sweep <=100 Source-local Memory copies per exact admitted delivery.
 
@@ -470,7 +532,7 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
     count/continuation commit atomically. Cache eviction follows with original epoch,
     generation, dispatch and stage CAS; success additionally waits all retained receipts.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     redis = cast(Redis, ctx["redis"])
     flag = _configured_flag(ctx)
     identifier = UUID(event_id)
@@ -505,48 +567,8 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
             attempt = _memory_snapshot(operation)
             before = (operation.status, operation.error_code, operation.pending_child_count,
                       operation.failed_child_count, list(operation.pending_owner_codes or []), attempt)
-            next_attempt_at: datetime | None = None
-            if source is None or source.generation != operation.generation:
-                operation.memory_status = "failed"
-                operation.memory_error_code = "evidence_identity_unavailable"
-                operation.memory_cursor = None
-            elif operation.memory_cache_pending:
-                next_attempt_at = datetime.now(UTC) + _RETRY_DELAY
-            elif operation.memory_status != "succeeded" and not _memory_unavailable(operation):
-                cursor_state = operation.memory_cursor if operation.memory_cursor is not None else {}
-                if not isinstance(cursor_state, dict) or set(cursor_state) - {"owner_cursor"}:
-                    reset_cursor = True
-                    raise ValueError("Stored Source Memory cursor is malformed")
-                owner_cursor = cursor_state.get("owner_cursor")
-                if owner_cursor is not None and not isinstance(owner_cursor, str):
-                    reset_cursor = True
-                    raise ValueError("Stored Source Memory cursor is malformed")
-                operation.memory_status = "running"
-                operation.memory_error_code = None
-                progress = await memory.purge_source_copied_evidence_page_in_uow(
-                    session, SourceCopiedEvidenceScope(operation_id=operation.id,
-                        source_id=source.id, generation=operation.generation),
-                    scope=scope, multi_workspace_enabled=flag, access_fence=access_fence,
-                    source_fence=_source_fence(source), cursor=owner_cursor, limit=100,
-                )
-                operation.memory_unresolved_count += progress.unresolved_count
-                if progress.changed:
-                    operation.memory_cache_pending = True
-                if not progress.complete:
-                    if progress.next_cursor is None:
-                        raise ValueError("Source Memory page is incomplete without a continuation cursor")
-                    operation.memory_cursor = {"owner_cursor": progress.next_cursor}
-                    next_attempt_at = datetime.now(UTC) + _MEMORY_PAGE_DELAY
-                else:
-                    operation.memory_cursor = None
-                    if operation.memory_unresolved_count:
-                        operation.memory_status = "failed"
-                        operation.memory_error_code = "legacy_provenance_unresolved"
-                    else:
-                        operation.memory_status = "succeeded"
-                        operation.memory_error_code = None
-                if operation.memory_cache_pending:
-                    next_attempt_at = next_attempt_at or datetime.now(UTC) + _RETRY_DELAY
+            next_attempt_at = await _memory_coverage_step(
+                session, operation, source, scope=scope, access_fence=access_fence, flag=flag)
             await _settle_operation(session, operation, scope=scope, multi_workspace_enabled=flag)
             await ingestion.set_event_delivery(session, identifier, "pending" if next_attempt_at is not None else "delivered",
                 next_attempt_at=next_attempt_at, scope=scope, multi_workspace_enabled=flag)
@@ -563,12 +585,13 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
             await _evict_memory_cache_after_commit(factory, redis, eviction[0], identifier, scope=scope,
                 multi_workspace_enabled=flag, dispatched_at=dispatched_at, attempt=eviction[1],
                 access_fence=snapshot_fence)
-    except HTTPException:
+    except (HTTPException, DomainError):
         # Permission loss is never rewritten as cursor failure or an upgraded job epoch.
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # coverage failure is recorded and recovered below; the worker must not crash
         logger.warning("Source Memory coverage deferred (%s)", type(exc).__name__)
-        reset_cursor = reset_cursor or isinstance(exc, ValueError) and str(exc) == "Source Memory cleanup cursor is invalid"
+        reset_cursor = reset_cursor or isinstance(exc, _MalformedMemoryCursorError) or (
+            isinstance(exc, ValueError) and str(exc) == "Source Memory cleanup cursor is invalid")
         await _recover_memory_coverage(factory, identifier, attempt, reset=reset_cursor, scope=scope,
                                        multi_workspace_enabled=flag, dispatched_at=dispatched_at,
                                        access_fence=snapshot_fence)
@@ -586,7 +609,7 @@ async def reconcile_source_coverage(ctx: dict[str, object]) -> int:
     IDs. Release each workspace transaction before the next. Only admitted scoped pending
     IDs/exact retained operations reach content/outbox locks. No Redis/network enqueue.
     """
-    factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
+    factory = worker_session_factory(ctx)
     flag = _configured_flag(ctx)
     # ARQ copies ctx per job: only the shared worker_cursors dict (Redis first) survives between passes.
     shared = isinstance(ctx.get(STATE_KEY), dict)
@@ -630,8 +653,8 @@ async def reconcile_source_coverage(ctx: dict[str, object]) -> int:
                     enqueued += 1
                 else:
                     await session.rollback()
-        except HTTPException as exc:
-            if exc.status_code not in {401, 403, 404, 409}:
+        except (HTTPException, DomainError) as exc:
+            if error_status(exc) not in {401, 403, 404, 409}:
                 raise
             # Denied old actor/epoch consumes a slot but cannot starve later operation IDs.
             continue

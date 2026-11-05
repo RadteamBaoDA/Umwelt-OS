@@ -72,6 +72,36 @@ export function slugify(text: string): string {
 }
 
 /**
+ * Builds the generated `<script>` block: `jsFunctions` at top level (so inline `onclick="fn()"` handlers work) followed
+ * by the non-blank `jsExpressions` lines inside an async IIFE. Script-closing sequences are escaped.
+ *
+ * @param content - Widget content.
+ * @returns The `<script>` markup with a leading newline, or an empty string when there is no script.
+ */
+function buildGeneratedScript(content: StandaloneActivityContent): string {
+  const expressionLines = Array.isArray(content.jsExpressions)
+    ? content.jsExpressions.filter((line) => line.trim().length > 0)
+    : typeof content.jsExpressions === 'string' && content.jsExpressions.trim().length > 0
+      ? [content.jsExpressions]
+      : [];
+
+  const scriptParts = [
+    ...(content.jsFunctions && content.jsFunctions.trim().length > 0
+      ? [escapeScriptClose(content.jsFunctions)]
+      : []),
+    ...(expressionLines.length > 0
+      ? [
+          `(async () => {\n${expressionLines.map(escapeScriptClose).join('\n')}\n})();`,
+        ]
+      : []),
+  ];
+
+  return scriptParts.length > 0
+    ? `\n  <script>\n${scriptParts.join('\n')}\n  </script>`
+    : '';
+}
+
+/**
  * Assembles a self-contained HTML5 document from sandboxed widget arguments (`SandboxedUiArgs`
  * or `StandaloneActivityContent`).
  *
@@ -101,28 +131,7 @@ export function buildStandaloneHtmlDocument(
   const body = Array.isArray(content.html)
     ? content.html.join('')
     : (content.html ?? '');
-
-  const expressionLines = Array.isArray(content.jsExpressions)
-    ? content.jsExpressions.filter((line) => line.trim().length > 0)
-    : typeof content.jsExpressions === 'string' && content.jsExpressions.trim().length > 0
-      ? [content.jsExpressions]
-      : [];
-
-  const scriptParts = [
-    ...(content.jsFunctions && content.jsFunctions.trim().length > 0
-      ? [escapeScriptClose(content.jsFunctions)]
-      : []),
-    ...(expressionLines.length > 0
-      ? [
-          `(async () => {\n${expressionLines.map(escapeScriptClose).join('\n')}\n})();`,
-        ]
-      : []),
-  ];
-
-  const generatedScript =
-    scriptParts.length > 0
-      ? `\n  <script>\n${scriptParts.join('\n')}\n  </script>`
-      : '';
+  const generatedScript = buildGeneratedScript(content);
 
   const themeClass = theme === 'dark' ? ' class="dark"' : '';
 

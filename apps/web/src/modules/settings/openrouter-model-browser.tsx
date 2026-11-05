@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ApiError } from '@/core/api';
 import { modelTypeForModality, type ModelType } from './provider-editor';
+import { BareButton } from '@/components/bare-button';
 
 type Translate = (key: string, values?: Record<string, string | number>) => string;
 
@@ -55,17 +56,8 @@ function parseList(raw: string, pattern: RegExp): string[] {
   return raw.split(',').map((item) => item.trim()).filter((item) => pattern.test(item)).slice(0, 20);
 }
 
-/** Builds the wire filter object from tab, sort and typed state, omitting every empty, out-of-range or inverted-pair field. */
-export function buildFilters(output: OpenRouterFilters['output_modalities'], sort: OpenRouterFilters['sort'], typed: Typed): OpenRouterFilters {
-  const f: OpenRouterFilters = { output_modalities: output, sort };
-  const q = typed.q.trim().slice(0, 100);
-  if (q) f.q = q;
-  if (typed.inputs.length) f.input_modalities = typed.inputs;
-  if (typed.category !== 'any') f.category = typed.category;
-  const params = parseList(typed.params, listPatterns.supported_parameters); if (params.length) f.supported_parameters = params;
-  const authors = parseList(typed.authors, listPatterns.model_authors); if (authors.length) f.model_authors = authors;
-  const providers = parseList(typed.providers, listPatterns.providers); if (providers.length) f.providers = providers;
-  if (typed.endpoints.length) f.endpoints = typed.endpoints;
+/** Parses the typed numeric bounds, keeping in-range values and dropping both sides of an inverted min/max pair (the server rejects it). */
+function numericFilters(typed: Typed): Record<string, number> {
   const nums: Record<string, number> = {};
   for (const [key] of numberFields) {
     const raw = typed.numbers[key]?.trim();
@@ -77,7 +69,21 @@ export function buildFilters(output: OpenRouterFilters['output_modalities'], sor
     const max = key.replace(/^min_/, 'max_');
     if (key.startsWith('min_') && max in nums && nums[key] > nums[max]) { delete nums[key]; delete nums[max]; }
   }
-  Object.assign(f, nums);
+  return nums;
+}
+
+/** Builds the wire filter object from tab, sort and typed state, omitting every empty, out-of-range or inverted-pair field. */
+export function buildFilters(output: OpenRouterFilters['output_modalities'], sort: OpenRouterFilters['sort'], typed: Typed): OpenRouterFilters {
+  const f: OpenRouterFilters = { output_modalities: output, sort };
+  const q = typed.q.trim().slice(0, 100);
+  if (q) f.q = q;
+  if (typed.inputs.length) f.input_modalities = typed.inputs;
+  if (typed.category !== 'any') f.category = typed.category;
+  const params = parseList(typed.params, listPatterns.supported_parameters); if (params.length) f.supported_parameters = params;
+  const authors = parseList(typed.authors, listPatterns.model_authors); if (authors.length) f.model_authors = authors;
+  const providers = parseList(typed.providers, listPatterns.providers); if (providers.length) f.providers = providers;
+  if (typed.endpoints.length) f.endpoints = typed.endpoints;
+  Object.assign(f, numericFilters(typed));
   if (/^[A-Za-z0-9 ._-]{1,40}$/.test(typed.arch)) f.arch = typed.arch;
   if (typed.region === 'eu' || typed.region === 'us') f.region = typed.region;
   if (typed.distillable !== 'any') f.distillable = typed.distillable === 'yes';
@@ -110,10 +116,11 @@ function perMillion(price: string | null, format: Intl.NumberFormat): string {
 
 /**
  * Browse and filter OpenRouter's catalogue and pick one model to prefill the Models add row.
- * Requests go through `browse` (rate limited server-side to 10 per minute), so only tab/sort changes fire
+ * Requests go through `browse` (rate limited server-side to 30 requests per 60 seconds), so only tab/sort changes fire
  * immediately; typed filters are debounced to 600 ms and superseded requests are discarded by query key.
  * Paging resets whenever the committed filters change. Models in `excluded` are listed but not pickable.
  */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function OpenRouterModelBrowser({ providerId, browse, excluded, disabled, onPick, t }: { providerId: string; browse: BrowseOpenRouter; excluded: Set<string>; disabled: boolean; onPick: (model: OpenRouterModel, type: ModelType) => void; t: Translate }) {
   const locale = useLocale();
   const money = useMemo(() => new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }), [locale]);
@@ -176,11 +183,11 @@ export function OpenRouterModelBrowser({ providerId, browse, excluded, disabled,
     {data?.ok && data.models.length > 0 && <ul className="m-0 flex max-h-96 list-none flex-col gap-1 overflow-y-auto p-0" aria-busy={result.isFetching}>
       {data.models.map((model) => {
         const taken = excluded.has(model.id);
-        return <li key={model.id}><button type="button" disabled={disabled || taken} className="flex w-full flex-col gap-0.5 rounded-md border border-border px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50" onClick={() => onPick(model, output === 'all' ? typeForModel(model) : modelTypeForModality(output))}>
+        return <li key={model.id}><BareButton type="button" disabled={disabled || taken} className="flex w-full flex-col gap-0.5 rounded-md border border-border px-3 py-2 text-left hover:bg-muted focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50" onClick={() => onPick(model, output === 'all' ? typeForModel(model) : modelTypeForModality(output))}>
           <span className="text-sm font-semibold">{model.name || model.id}{taken && <span className="text-muted-foreground font-normal"> · {t('orbAdded')}</span>}</span>
           <span className="text-muted-foreground break-all text-xs">{model.id}</span>
           <span className="text-muted-foreground text-xs">{model.context_length ? t('orbContextTokens', { count: model.context_length.toLocaleString(locale) }) : '–'} · {model.input_modalities.join(', ')} → {model.output_modalities.join(', ')} · {t('orbPriceIn')} {perMillion(model.pricing_prompt, money)} · {t('orbPriceOut')} {perMillion(model.pricing_completion, money)}</span>
-        </button></li>;
+        </BareButton></li>;
       })}
     </ul>}
     <div className="flex gap-2">

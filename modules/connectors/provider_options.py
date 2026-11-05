@@ -265,6 +265,53 @@ def _gdelt_query(cfg: Mapping[str, Any]) -> str:
     return " ".join(parts)
 
 
+def _usgs_url(cfg: Mapping[str, Any]) -> str | None:
+    """USGS summary feed for the chosen magnitude/period; ``None`` when both are unset (today's request)."""
+    mag, period = cfg.get("usgs_min_magnitude"), cfg.get("usgs_period")
+    if mag is None and period is None:
+        return None
+    return ("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/"
+            f"{mag or '4.5'}_{period or 'day'}.geojson")
+
+
+def _emsc_url(provider: str, cfg: Mapping[str, Any]) -> str | None:
+    """EMSC FDSN query for the chosen limit/magnitude; ``None`` when neither is set."""
+    if cfg.get("min_magnitude") is None and not cfg.get("max_items"):
+        return None
+    mag = cfg.get("min_magnitude")
+    return ("https://www.seismicportal.eu/fdsnws/event/1/query"
+            f"?limit={_count(provider, cfg)}&format=json&minmag={'4' if mag is None else format(mag, 'g')}")
+
+
+def _gdacs_url(cfg: Mapping[str, Any]) -> str | None:
+    """GDACS event-list query for the chosen types/alert levels; ``None`` when both are unset."""
+    if cfg.get("gdacs_event_types") is None and cfg.get("gdacs_alert_levels") is None:
+        return None
+    kinds = ";".join(_ordered(GdacsType, cfg.get("gdacs_event_types") or get_args(GdacsType)))
+    levels = ";".join(_ordered(GdacsAlert, cfg.get("gdacs_alert_levels") or ("Orange", "Red")))
+    return f"https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventlist={kinds}&alertlevel={levels}"
+
+
+def _nws_url(cfg: Mapping[str, Any]) -> str | None:
+    """NWS active-alerts query for the chosen severity/area; ``None`` when both are unset."""
+    if cfg.get("nws_severity") is None and cfg.get("nws_area") is None:
+        return None
+    severities = ",".join(_ordered(NwsSeverity, cfg.get("nws_severity") or ("Extreme", "Severe")))
+    area = f"&area={cfg['nws_area']}" if cfg.get("nws_area") else ""
+    return f"https://api.weather.gov/alerts/active?status=actual&message_type=alert&severity={severities}{area}"
+
+
+def _ioda_url(cfg: Mapping[str, Any], now: datetime) -> str | None:
+    """IODA outage-event query for the last 24 h in the chosen country; ``None`` when no country is set."""
+    if not cfg.get("ioda_country"):
+        return None
+    from modules.connectors.providers import security
+
+    start = int((now - timedelta(days=1)).timestamp())
+    return (f"{security.IODA_BASE}?from={start}&until={int(now.timestamp())}&entityType=country"
+            f"&entityCode={cfg['ioda_country']}&limit={security._IODA_MAX_EVENTS}")
+
+
 def build_url(provider: str, cfg: Mapping[str, Any], *, cursor: str | None, now: datetime) -> str | None:
     """Return the request URL for ``provider`` under ``cfg``, or ``None`` when today's request applies.
 
@@ -278,41 +325,19 @@ def build_url(provider: str, cfg: Mapping[str, Any], *, cursor: str | None, now:
     if provider == "gdelt_economy":
         return _gdelt_url(cfg, cursor)
     if provider == "usgs":
-        mag, period = cfg.get("usgs_min_magnitude"), cfg.get("usgs_period")
-        if mag is None and period is None:
-            return None
-        return ("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/"
-                f"{mag or '4.5'}_{period or 'day'}.geojson")
+        return _usgs_url(cfg)
     if provider == "emsc_quakes":
-        if cfg.get("min_magnitude") is None and not cfg.get("max_items"):
-            return None
-        mag = cfg.get("min_magnitude")
-        return ("https://www.seismicportal.eu/fdsnws/event/1/query"
-                f"?limit={_count(provider, cfg)}&format=json&minmag={'4' if mag is None else format(mag, 'g')}")
+        return _emsc_url(provider, cfg)
     if provider == "nasa_eonet":
         return _eonet_url(cfg)
     if provider == "gdacs_events":
-        if cfg.get("gdacs_event_types") is None and cfg.get("gdacs_alert_levels") is None:
-            return None
-        kinds = ";".join(_ordered(GdacsType, cfg.get("gdacs_event_types") or get_args(GdacsType)))
-        levels = ";".join(_ordered(GdacsAlert, cfg.get("gdacs_alert_levels") or ("Orange", "Red")))
-        return f"https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventlist={kinds}&alertlevel={levels}"
+        return _gdacs_url(cfg)
     if provider == "nws_alerts":
-        if cfg.get("nws_severity") is None and cfg.get("nws_area") is None:
-            return None
-        severities = ",".join(_ordered(NwsSeverity, cfg.get("nws_severity") or ("Extreme", "Severe")))
-        area = f"&area={cfg['nws_area']}" if cfg.get("nws_area") else ""
-        return f"https://api.weather.gov/alerts/active?status=actual&message_type=alert&severity={severities}{area}"
+        return _nws_url(cfg)
     if provider == "nvd":
         return _nvd_url(cfg, now)
     if provider == "ioda":
-        if not cfg.get("ioda_country"):
-            return None
-        from modules.connectors.providers import security
-
-        start = int((now - timedelta(days=1)).timestamp())
-        return (f"{security.IODA_BASE}?from={start}&until={int(now.timestamp())}&entityType=country"
-                f"&entityCode={cfg['ioda_country']}&limit={security._IODA_MAX_EVENTS}")
+        return _ioda_url(cfg, now)
     if provider == "launch_library":
         return _launch_url(cfg, cursor)
     return _wave_f_url(provider, cfg, now)

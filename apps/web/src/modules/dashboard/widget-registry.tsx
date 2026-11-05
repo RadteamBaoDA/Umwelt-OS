@@ -3,27 +3,7 @@
 import React from 'react';
 import type { GadgetInstance } from './api';
 import type { DashboardPlacement } from './api';
-import { BriefGadget } from './gadgets/brief-gadget';
-import { EntityGadget } from './gadgets/entity-gadget';
-import { FeedGadget } from './gadgets/feed-gadget';
-import { FinanceChart } from './gadgets/finance-chart';
-import { GithubProjectGadget } from './gadgets/github-project-gadget';
-import { IntelligencePanel } from './gadgets/intelligence-panel';
-import { MapGadget } from './gadgets/map-gadget';
-import { GoalsGadget } from './gadgets/goals-gadget';
-import { MetricsChart } from './gadgets/metrics-chart';
-import { NewsFeed } from './gadgets/news-feed';
-import { ProviderObservationGadget } from './gadgets/provider-observation-gadget';
-import { PersonalContext } from './gadgets/personal-context';
-import { JobListGadget } from './gadgets/job-list';
-import { TablePanel } from './gadgets/table-panel';
-import { TasksGadget } from './gadgets/tasks-gadget';
-import { TelegramFeed } from './gadgets/telegram-feed';
-import { TextPanel } from './gadgets/text-panel';
-import { TimelineGadget } from './gadgets/timeline-gadget';
-import { VideoPanel } from './gadgets/video-panel';
-import { WeatherPanel } from './gadgets/weather-panel';
-import { WatchlistGadget } from './gadgets/watchlist-gadget';
+import dynamic from 'next/dynamic';
 
 /** Standard props supplied to every resolved gadget renderer. */
 export interface GadgetRendererProps {
@@ -33,30 +13,58 @@ export interface GadgetRendererProps {
   isEditMode: boolean;
 }
 
-/** Static registry mapping each renderer ID to its component implementation. */
+/** Loading placeholder shown while a gadget chunk loads; mirrors the legacy `.skeleton` surface. */
+function GadgetChunkSkeleton(): React.ReactElement {
+  return <div className="skeleton" aria-hidden="true" />;
+}
+
+/** Component type produced by `next/dynamic` for a gadget that accepts an instance (and maybe edit mode). */
+type LazyGadget = React.ComponentType<{ instance: GadgetInstance; isEditMode?: boolean }>;
+
+/**
+ * Adapts a `next/dynamic` gadget component to GadgetRendererProps, forwarding only the props the gadget
+ * accepts. Chunks are split per gadget type; SSR stays enabled so markup and hydration are unchanged.
+ *
+ * @param Lazy The dynamically imported gadget component.
+ * @param forwardEditMode Whether the gadget also receives `isEditMode` (only the map gadget does).
+ * @returns A renderer component matching GadgetRendererProps.
+ */
+function adaptGadget(Lazy: LazyGadget, forwardEditMode = false): React.ComponentType<GadgetRendererProps> {
+  return function LazyGadgetRenderer(props: GadgetRendererProps) {
+    return forwardEditMode
+      ? <Lazy instance={props.instance} isEditMode={props.isEditMode} />
+      : <Lazy instance={props.instance} />;
+  };
+}
+
+/**
+ * Registry mapping each renderer ID to a lazily loaded component. A new gadget type is added by adding
+ * one entry here; no other code changes (open/closed). `dynamic()` calls stay inline so Next's compiler
+ * can register each chunk for server rendering.
+ */
 const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> = {
-  daily_brief: (props) => <BriefGadget instance={props.instance} />,
-  tasks: (props) => <TasksGadget instance={props.instance} />,
-  goals: (props) => <GoalsGadget instance={props.instance} />,
-  timeline: (props) => <TimelineGadget instance={props.instance} />,
-  entity: (props) => <EntityGadget instance={props.instance} />,
-  personal_context: (props) => <PersonalContext instance={props.instance} />,
-  news_feed: (props) => <NewsFeed instance={props.instance} />,
-  telegram_feed: (props) => <TelegramFeed instance={props.instance} />,
-  feed: (props) => <FeedGadget instance={props.instance} />,
-  text_panel: (props) => <TextPanel instance={props.instance} />,
-  table_panel: (props) => <TablePanel instance={props.instance} />,
-  job_list: (props) => <JobListGadget instance={props.instance} />,
-  video_panel: (props) => <VideoPanel instance={props.instance} />,
-  watch_rules: (props) => <WatchlistGadget instance={props.instance} />,
-  highlights: (props) => <WatchlistGadget instance={props.instance} />,
-  finance_chart: (props) => <FinanceChart instance={props.instance} />,
-  metrics_chart: (props) => <MetricsChart instance={props.instance} />,
-  github_project: (props) => <GithubProjectGadget instance={props.instance} />,
-  weather: (props) => <WeatherPanel instance={props.instance} />,
-  provider_observation: (props) => <ProviderObservationGadget instance={props.instance} />,
-  map: (props) => <MapGadget instance={props.instance} isEditMode={props.isEditMode} />,
-  intelligence_panel: (props) => <IntelligencePanel instance={props.instance} />,
+  daily_brief: adaptGadget(dynamic(() => import('./gadgets/brief-gadget').then((m) => m.BriefGadget), { loading: GadgetChunkSkeleton })),
+  tasks: adaptGadget(dynamic(() => import('./gadgets/tasks-gadget').then((m) => m.TasksGadget), { loading: GadgetChunkSkeleton })),
+  goals: adaptGadget(dynamic(() => import('./gadgets/goals-gadget').then((m) => m.GoalsGadget), { loading: GadgetChunkSkeleton })),
+  timeline: adaptGadget(dynamic(() => import('./gadgets/timeline-gadget').then((m) => m.TimelineGadget), { loading: GadgetChunkSkeleton })),
+  entity: adaptGadget(dynamic(() => import('./gadgets/entity-gadget').then((m) => m.EntityGadget), { loading: GadgetChunkSkeleton })),
+  personal_context: adaptGadget(dynamic(() => import('./gadgets/personal-context').then((m) => m.PersonalContext), { loading: GadgetChunkSkeleton })),
+  news_feed: adaptGadget(dynamic(() => import('./gadgets/news-feed').then((m) => m.NewsFeed), { loading: GadgetChunkSkeleton })),
+  telegram_feed: adaptGadget(dynamic(() => import('./gadgets/telegram-feed').then((m) => m.TelegramFeed), { loading: GadgetChunkSkeleton })),
+  feed: adaptGadget(dynamic(() => import('./gadgets/feed-gadget').then((m) => m.FeedGadget), { loading: GadgetChunkSkeleton })),
+  text_panel: adaptGadget(dynamic(() => import('./gadgets/text-panel').then((m) => m.TextPanel), { loading: GadgetChunkSkeleton })),
+  table_panel: adaptGadget(dynamic(() => import('./gadgets/table-panel').then((m) => m.TablePanel), { loading: GadgetChunkSkeleton })),
+  job_list: adaptGadget(dynamic(() => import('./gadgets/job-list').then((m) => m.JobListGadget), { loading: GadgetChunkSkeleton })),
+  video_panel: adaptGadget(dynamic(() => import('./gadgets/video-panel').then((m) => m.VideoPanel), { loading: GadgetChunkSkeleton })),
+  watch_rules: adaptGadget(dynamic(() => import('./gadgets/watchlist-gadget').then((m) => m.WatchlistGadget), { loading: GadgetChunkSkeleton })),
+  highlights: adaptGadget(dynamic(() => import('./gadgets/watchlist-gadget').then((m) => m.WatchlistGadget), { loading: GadgetChunkSkeleton })),
+  finance_chart: adaptGadget(dynamic(() => import('./gadgets/finance-chart').then((m) => m.FinanceChart), { loading: GadgetChunkSkeleton })),
+  metrics_chart: adaptGadget(dynamic(() => import('./gadgets/metrics-chart').then((m) => m.MetricsChart), { loading: GadgetChunkSkeleton })),
+  github_project: adaptGadget(dynamic(() => import('./gadgets/github-project-gadget').then((m) => m.GithubProjectGadget), { loading: GadgetChunkSkeleton })),
+  weather: adaptGadget(dynamic(() => import('./gadgets/weather-panel').then((m) => m.WeatherPanel), { loading: GadgetChunkSkeleton })),
+  provider_observation: adaptGadget(dynamic(() => import('./gadgets/provider-observation-gadget').then((m) => m.ProviderObservationGadget), { loading: GadgetChunkSkeleton })),
+  map: adaptGadget(dynamic(() => import('./gadgets/map-gadget').then((m) => m.MapGadget), { loading: GadgetChunkSkeleton }), true),
+  intelligence_panel: adaptGadget(dynamic(() => import('./gadgets/intelligence-panel').then((m) => m.IntelligencePanel), { loading: GadgetChunkSkeleton })),
 };
 
 /**
@@ -93,6 +101,45 @@ export function getGadgetReadingBodyFloor(rendererId: string): number {
   return GADGET_READING_BODY_FLOORS[rendererId] ?? 180;
 }
 
+/** True when the column count and measured sizes are usable (finite, positive, columns within 1..20). */
+function measurementsValid(columns: number, cellSize: number, stride: number, frameHeaderHeight: number): boolean {
+  return Number.isInteger(columns) && columns >= 1 && columns <= 20
+    && Number.isFinite(cellSize) && cellSize > 0 && Number.isFinite(stride) && stride > 0
+    && Number.isFinite(frameHeaderHeight) && frameHeaderHeight > 0;
+}
+
+/** True when one placement is an in-bounds integer rectangle (x/w within the columns, y/h within the row bound). */
+function placementInBounds(placement: DashboardPlacement, columns: number): boolean {
+  return Number.isInteger(placement.x) && Number.isInteger(placement.y)
+    && Number.isInteger(placement.w) && Number.isInteger(placement.h)
+    && placement.x >= 0 && placement.y >= 0 && placement.w >= 1 && placement.h >= 1
+    && placement.x + placement.w <= columns && placement.y + placement.h <= 100_000;
+}
+
+/** True when placements and instances correspond one-to-one and every placement is an in-bounds integer rectangle. */
+function placementsMatchInstances(
+  placements: DashboardPlacement[],
+  instances: GadgetInstance[],
+  byId: Map<string, GadgetInstance>,
+  columns: number,
+): boolean {
+  return placements.length === instances.length && byId.size === instances.length
+    && new Set(placements.map((placement) => placement.instance_id)).size === placements.length
+    && placements.every((placement) => byId.has(placement.instance_id) && placementInBounds(placement, columns));
+}
+
+/** Orders finite coordinates first; ties fall through y, then x, then instance id (deterministic reading order). */
+function compareReadingOrder(a: DashboardPlacement, b: DashboardPlacement): number {
+  const compare = (left: number, right: number) =>
+    Number.isFinite(left) && Number.isFinite(right) ? left - right : Number.isFinite(left) ? -1 : Number.isFinite(right) ? 1 : 0;
+  return compare(a.y, b.y) || compare(a.x, b.x) || a.instance_id.localeCompare(b.instance_id);
+}
+
+/** True when two rectangles overlap on a half-open basis. */
+function rectsOverlap(a: DashboardPlacement, b: DashboardPlacement): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
 /**
  * Converts saved square units to a readable local presentation without changing width or x.
  * Geometry is already contract-recovered by the page; failure leaves that saved layout visible.
@@ -105,22 +152,10 @@ export function projectReadableMobilePlacements(
   frameHeaderHeight: number,
 ): DashboardPlacement[] | null {
   const stride = cellSize + 12;
-  if (!Number.isInteger(columns) || columns < 1 || columns > 20
-    || !Number.isFinite(cellSize) || cellSize <= 0 || !Number.isFinite(stride) || stride <= 0
-    || !Number.isFinite(frameHeaderHeight) || frameHeaderHeight <= 0) return null;
+  if (!measurementsValid(columns, cellSize, stride, frameHeaderHeight)) return null;
   const byId = new Map(instances.map((instance) => [instance.id, instance]));
-  if (placements.length !== instances.length || byId.size !== instances.length
-    || new Set(placements.map((placement) => placement.instance_id)).size !== placements.length
-    || placements.some((placement) => !byId.has(placement.instance_id)
-      || !Number.isInteger(placement.x) || !Number.isInteger(placement.y)
-      || !Number.isInteger(placement.w) || !Number.isInteger(placement.h)
-      || placement.x < 0 || placement.y < 0 || placement.w < 1 || placement.h < 1
-      || placement.x + placement.w > columns || placement.y + placement.h > 100_000)) return null;
-  const ordered = [...placements].sort((a, b) =>
-    (Number.isFinite(a.y) && Number.isFinite(b.y) ? a.y - b.y : Number.isFinite(a.y) ? -1 : Number.isFinite(b.y) ? 1 : 0)
-    || (Number.isFinite(a.x) && Number.isFinite(b.x) ? a.x - b.x : Number.isFinite(a.x) ? -1 : Number.isFinite(b.x) ? 1 : 0)
-    || a.instance_id.localeCompare(b.instance_id),
-  );
+  if (!placementsMatchInstances(placements, instances, byId, columns)) return null;
+  const ordered = [...placements].sort(compareReadingOrder);
   const placed: DashboardPlacement[] = [];
   for (const source of ordered) {
     const renderer = byId.get(source.instance_id)?.definition.renderer ?? '';
@@ -128,14 +163,8 @@ export function projectReadableMobilePlacements(
     const floor = getGadgetReadingBodyFloor(renderer) + frameHeaderHeight + 2;
     const h = Math.max(source.h, Math.ceil((floor + 12) / stride));
     const candidate = { ...source, h };
-    while (placed.some((other) => candidate.x < other.x + other.w
-      && other.x < candidate.x + candidate.w
-      && candidate.y < other.y + other.h
-      && other.y < candidate.y + candidate.h)) {
-      const collisions = placed.filter((other) => candidate.x < other.x + other.w
-        && other.x < candidate.x + candidate.w
-        && candidate.y < other.y + other.h
-        && other.y < candidate.y + candidate.h);
+    while (placed.some((other) => rectsOverlap(candidate, other))) {
+      const collisions = placed.filter((other) => rectsOverlap(candidate, other));
       const nextY = Math.max(...collisions.map((other) => other.y + other.h));
       if (nextY <= candidate.y) return null;
       candidate.y = nextY;
@@ -218,4 +247,18 @@ export function resolveGadgetRenderer(
  */
 export function isGadgetRendererRegistered(rendererId: string): boolean {
   return rendererId in GADGET_REGISTRY;
+}
+
+/**
+ * Renders the registered gadget for a renderer id, or nothing for an unregistered (planned) renderer.
+ * Looking the component up inside a component of its own keeps each registry entry a stable, module-level
+ * component type, so gadget state is never reset by the parent re-rendering.
+ *
+ * @param rendererId Canonical identifier of the renderer.
+ * @param instance The gadget instance to render.
+ * @param isEditMode Whether the parent grid is in layout edit mode.
+ */
+export function RegisteredGadget({ rendererId, instance, isEditMode }: GadgetRendererProps & { rendererId: string }): React.ReactElement | null {
+  const Component = GADGET_REGISTRY[rendererId];
+  return Component ? <Component instance={instance} isEditMode={isEditMode} /> : null;
 }

@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class RelationshipDescriptor:
+class RelationshipDescriptor(ModuleDescriptor):
     """Declare relationship storage's dependencies, capabilities, and event."""
 
     id: str = "knowledge.relationships"
@@ -19,6 +21,11 @@ class RelationshipDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.knowledge.relationships.routes", 100),
+    )
+    erasure_module: str | None = "modules.knowledge.relationships.erasure"
+    erasure_order: int = 110
 
 
 descriptor = RelationshipDescriptor()

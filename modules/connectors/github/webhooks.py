@@ -6,6 +6,8 @@ import hashlib
 import hmac
 import json
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -100,7 +102,7 @@ def _json_shape(value: Any) -> None:
             stack.extend((child, depth + 1) for child in node.values())
         elif isinstance(node, list):
             stack.extend((child, depth + 1) for child in node)
-        elif node is None or isinstance(node, (str, bool, int)) or isinstance(node, float) and node == node and abs(node) != float("inf"):  # noqa: PLR0124  # style-only rewrite skipped to avoid touching control flow
+        elif node is None or isinstance(node, (str, bool, int)) or isinstance(node, float) and node == node and abs(node) != float("inf"):
             continue
         else:
             raise ValueError("Webhook JSON contains a non-JSON value")
@@ -117,6 +119,143 @@ def _provider_id(value: object) -> str | None:
 def _object(value: object) -> dict[str, Any] | None:
     """Narrow an untrusted JSON value to a plain string-keyed object."""
     return value if isinstance(value, dict) and all(isinstance(key, str) for key in value) else None
+
+
+@dataclass(frozen=True)
+class _EventContext:
+    """Already-validated envelope fields an event handler may use (payload content stays untrusted)."""
+
+    body: dict[str, Any]
+    action: str | None
+    repository_id: str | None
+    installation_id: str | None
+
+
+# A handler returns the bounded target hints for its event, or ``None`` when the event is ignored.
+_EventHandler = Callable[[_EventContext], "list[GitHubTargetHint] | None"]
+_RELEASE_REFRESH_ACTIONS = {"created", "edited", "published", "unpublished", "prereleased", "released"}
+_EVENT_HANDLERS: dict[str, _EventHandler] = {}
+
+
+def _handles(*events: str) -> Callable[[_EventHandler], _EventHandler]:
+    """Register the decorated function as the target-hint handler for each named GitHub event."""
+
+    def register(handler: _EventHandler) -> _EventHandler:
+        """Record ``handler`` in the event table and return it unchanged."""
+        for name in events:
+            _EVENT_HANDLERS[name] = handler
+        return handler
+
+    return register
+
+
+def _hint(
+    resource: Literal["issue", "pull", "commit", "release"],
+    locator_kind: Literal["number", "release_id", "sha", "ref", "repository", "installation"],
+    locator: str,
+    intent: Literal["refresh", "delete_candidate", "visibility_lost", "visibility_check", "reconcile"],
+) -> GitHubTargetHint:
+    """Build one target hint (thin positional wrapper keeping handler bodies short)."""
+    return GitHubTargetHint(resource=resource, locator_kind=locator_kind, locator=locator, intent=intent)
+
+
+def _number_hints(ctx: _EventContext, event: str) -> list[GitHubTargetHint] | None:
+    """Refresh one issue/pull by number for refreshing actions; otherwise ignore."""
+    item = _object(ctx.body.get("issue" if event == "issues" else "pull_request"))
+    number = _provider_id(item.get("number")) if item else None
+    if ctx.repository_id and number and ctx.action in _REFRESH_ACTIONS:
+        return [_hint("issue" if event == "issues" else "pull", "number", number, "refresh")]
+    return None
+
+
+@_handles("issues")
+def _issues_hints(ctx: _EventContext) -> list[GitHubTargetHint] | None:
+    """Hints for an ``issues`` event."""
+    return _number_hints(ctx, "issues")
+
+
+@_handles("pull_request")
+def _pull_request_hints(ctx: _EventContext) -> list[GitHubTargetHint] | None:
+    """Hints for a ``pull_request`` event."""
+    return _number_hints(ctx, "pull_request")
+
+
+@_handles("release")
+def _release_hints(ctx: _EventContext) -> list[GitHubTargetHint] | None:
+    """Refresh or delete-candidate one release by ID depending on the action."""
+    release = _object(ctx.body.get("release"))
+    release_id = _provider_id(release.get("id")) if release else None
+    if ctx.repository_id and release_id and ctx.action in _RELEASE_REFRESH_ACTIONS:
+        return [_hint("release", "release_id", release_id, "refresh")]
+    if ctx.repository_id and release_id and ctx.action == "deleted":
+        return [_hint("release", "release_id", release_id, "delete_candidate")]
+    return None
+
+
+@_handles("push")
+def _push_hints(ctx: _EventContext) -> list[GitHubTargetHint] | None:
+    """Reconcile a bounded branch/tag ref; ignore other refs."""
+    ref = ctx.body.get("ref")
+    if (
+        ctx.repository_id and isinstance(ref, str) and 1 <= len(ref.encode("utf-8")) <= 256
+        and ref.startswith(("refs/heads/", "refs/tags/"))
+    ):
+        return [_hint("commit", "ref", ref, "reconcile")]
+    return None
+
+
+@_handles("repository")
+def _repository_hints(ctx: _EventContext) -> list[GitHubTargetHint] | None:
+    """Re-check repository visibility for visibility-changing actions."""
+    if ctx.repository_id and ctx.action in {"publicized", "privatized", "edited", "renamed", "transferred"}:
+        return [_hint("issue", "repository", ctx.repository_id, "visibility_check")]
+    return None
+
+
+@_handles("public")
+def _public_hints(ctx: _EventContext) -> list[GitHubTargetHint] | None:
+    """Re-check repository visibility when a repository becomes public."""
+    if ctx.repository_id:
+        return [_hint("issue", "repository", ctx.repository_id, "visibility_check")]
+    return None
+
+
+@_handles("installation")
+def _installation_hints(ctx: _EventContext) -> list[GitHubTargetHint] | None:
+    """Mark the installation visibility lost (suspend/delete) or re-check it (unsuspend)."""
+    if ctx.installation_id and ctx.action in {"suspend", "deleted"}:
+        return [_hint("issue", "installation", ctx.installation_id, "visibility_lost")]
+    if ctx.installation_id and ctx.action == "unsuspend":
+        return [_hint("issue", "installation", ctx.installation_id, "visibility_check")]
+    return None
+
+
+@_handles("installation_repositories")
+def _installation_repositories_hints(ctx: _EventContext) -> list[GitHubTargetHint] | None:
+    """Mark each removed repository lost (at most 100) or re-check the installation on add/remove.
+
+    Raises:
+        ValueError: a removed-repository entry has no valid identity.
+    """
+    removed = ctx.body.get("repositories_removed")
+    if ctx.installation_id and isinstance(removed, list) and len(removed) <= 100:
+        hints: list[GitHubTargetHint] = []
+        for value in removed:
+            item = _object(value)
+            repository_key = _provider_id(item.get("id")) if item else None
+            if repository_key is None:
+                raise ValueError("Removed repository identity is invalid")
+            hints.append(_hint("issue", "repository", repository_key, "visibility_lost"))
+        return hints
+    if ctx.installation_id and ctx.action in {"added", "removed"}:
+        return [_hint("issue", "installation", ctx.installation_id, "visibility_check")]
+    return None
+
+
+def _event_hints(event: str, ctx: _EventContext) -> list[GitHubTargetHint] | None:
+    """Dispatch to the registered handler for ``event``; unknown events are ignored (``None``)."""
+    handler = _EVENT_HANDLERS.get(event)
+    return handler(ctx) if handler is not None else None
 
 
 def parse_github_delivery(
@@ -157,63 +296,12 @@ def parse_github_delivery(
     disposition: Literal["received", "ignored", "ping"] = "received"
     if event == "ping":
         disposition = "ping"
-    elif event in {"issues", "pull_request"}:
-        item = _object(body.get("issue" if event == "issues" else "pull_request"))
-        number = _provider_id(item.get("number")) if item else None
-        if repository_id and number and action in _REFRESH_ACTIONS:
-            targets.append(GitHubTargetHint(
-                resource="issue" if event == "issues" else "pull",
-                locator_kind="number", locator=number, intent="refresh",
-            ))
-        else:
-            disposition = "ignored"
-    elif event == "release":
-        release = _object(body.get("release"))
-        release_id = _provider_id(release.get("id")) if release else None
-        if repository_id and release_id and action in {"created", "edited", "published", "unpublished", "prereleased", "released"}:
-            targets.append(GitHubTargetHint(resource="release", locator_kind="release_id", locator=release_id, intent="refresh"))
-        elif repository_id and release_id and action == "deleted":
-            targets.append(GitHubTargetHint(resource="release", locator_kind="release_id", locator=release_id, intent="delete_candidate"))
-        else:
-            disposition = "ignored"
-    elif event == "push":
-        ref = body.get("ref")
-        if repository_id and isinstance(ref, str) and 1 <= len(ref.encode("utf-8")) <= 256 and ref.startswith(("refs/heads/", "refs/tags/")):
-            targets.append(GitHubTargetHint(resource="commit", locator_kind="ref", locator=ref, intent="reconcile"))
-        else:
-            disposition = "ignored"
-    elif event == "repository":
-        if repository_id and action in {"publicized", "privatized", "edited", "renamed", "transferred"}:
-            targets.append(GitHubTargetHint(resource="issue", locator_kind="repository", locator=repository_id, intent="visibility_check"))
-        else:
-            disposition = "ignored"
-    elif event == "public":
-        if repository_id:
-            targets.append(GitHubTargetHint(resource="issue", locator_kind="repository", locator=repository_id, intent="visibility_check"))
-        else:
-            disposition = "ignored"
-    elif event == "installation":
-        if installation_id and action in {"suspend", "deleted"}:
-            targets.append(GitHubTargetHint(resource="issue", locator_kind="installation", locator=installation_id, intent="visibility_lost"))
-        elif installation_id and action == "unsuspend":
-            targets.append(GitHubTargetHint(resource="issue", locator_kind="installation", locator=installation_id, intent="visibility_check"))
-        else:
-            disposition = "ignored"
-    elif event == "installation_repositories":
-        removed = body.get("repositories_removed")
-        if installation_id and isinstance(removed, list) and len(removed) <= 100:
-            for value in removed:
-                item = _object(value)
-                repository_key = _provider_id(item.get("id")) if item else None
-                if repository_key is None:
-                    raise ValueError("Removed repository identity is invalid")
-                targets.append(GitHubTargetHint(resource="issue", locator_kind="repository", locator=repository_key, intent="visibility_lost"))
-        elif installation_id and action in {"added", "removed"}:
-            targets.append(GitHubTargetHint(resource="issue", locator_kind="installation", locator=installation_id, intent="visibility_check"))
-        else:
-            disposition = "ignored"
     else:
-        disposition = "ignored"
+        hints = _event_hints(event, _EventContext(body, action, repository_id, installation_id))
+        if hints is None:
+            disposition = "ignored"
+        else:
+            targets = hints
 
     if len(targets) > 100:
         raise ValueError("Webhook target count exceeds 100")

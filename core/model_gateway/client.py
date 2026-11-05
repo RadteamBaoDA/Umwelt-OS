@@ -6,12 +6,13 @@ import random
 import re
 import secrets
 import time
+import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, aclosing, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, NoReturn, Protocol, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -22,22 +23,37 @@ from redis.exceptions import RedisError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from core.config import Settings
+from core.metrics import record_breaker_open
 from core.model_gateway import anthropic
 from core.model_gateway.policy import may_send
+from core.model_gateway.pool import pinned_client
 from core.model_gateway.schemas import (
     HOSTED_PROVIDER_ENDPOINTS,
     HOSTED_PROVIDER_KINDS,
+    PROVIDER_KINDS_WITHOUT_MAX_TOKENS,
     ModelMapping,
     ProviderKind,
     RequestPolicy,
 )
-from core.model_gateway.transport import EndpointNetworkPolicyError, approved_http_client, body_sent
+from core.model_gateway.transport import EndpointNetworkPolicyError, body_sent
+from core.model_gateway.wire import (
+    CHAT_PATH,
+    UnsupportedWireOperation,
+    WireProtocol,
+    WireSession,
+    wire_protocol_for,
+)
 from core.telemetry import record_model_call
 from core.workspaces.schemas import InternalJobScope, Scope, WorkspaceContext
 
 _LEASE_PREFIX = "bbd:model-gateway:slot:"
 _SLOTS = Settings().model_gateway_slots  # MODEL_GATEWAY_SLOTS, read once per process
 _LEASE_WAIT_SECONDS = 10.0
+# Connection-level Redis errors are retried this long (pool exhaustion is transient) before the lease
+# degrades to the per-process fallback semaphore.
+_REDIS_PROBE_SECONDS = 1.0
+# Weakly keyed by loop so entries vanish with a closed loop (no id() reuse, no leak).
+_LOCAL_SLOTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[int, asyncio.Semaphore]]" = weakref.WeakKeyDictionary()
 # A stream holds its slot for the whole generation, so it queues longer than short calls (no DB locks held while waiting).
 _STREAM_LEASE_WAIT_SECONDS = 120.0
 _CONNECT_TIMEOUT_SECONDS = 5.0
@@ -69,6 +85,15 @@ _BREAKER_RECORD = (
 )
 
 _LOG = logging.getLogger(__name__)
+
+
+def _local_semaphore() -> asyncio.Semaphore:
+    """Per-process (per event loop) fallback semaphore sized like ``MODEL_GATEWAY_SLOTS``; see ``_lease``."""
+    loop = asyncio.get_running_loop()
+    entry = _LOCAL_SLOTS.get(loop)
+    if entry is None or entry[0] != _SLOTS:
+        entry = _LOCAL_SLOTS[loop] = (_SLOTS, asyncio.Semaphore(_SLOTS))
+    return entry[1]
 
 
 def _api_base(url: str) -> str:
@@ -108,7 +133,7 @@ def _raise_if_policy_denied(exc: BaseException) -> None:
 
 def _retry_delay() -> float:
     """Jittered pause before the single retry so concurrent workers do not retry in lockstep."""
-    return random.uniform(0.25, 1.0)
+    return random.uniform(0.25, 1.0)  # noqa: S311  # retry jitter, not a security value
 
 
 def _retry_after_seconds(exc: APIStatusError) -> float | None:
@@ -205,6 +230,14 @@ class CapabilityUnsupported(ModelGatewayError):
     """Raised when the gateway rejects a requested model capability."""
 
 
+class LocalCapabilityError(CapabilityUnsupported):
+    """A request the gateway itself could not translate for the wire protocol (e.g. a forced ``tool_choice`` it cannot honour).
+
+    Callers still see ``CapabilityUnsupported`` and fall back, but no provider was asked, so it says nothing
+    about the model and is never recorded as capability evidence.
+    """
+
+
 class CapabilityEvidenceStore(Protocol):
     """Persistent per-model capability evidence supplied by the composing module (core never imports modules).
 
@@ -223,9 +256,70 @@ class CapabilityEvidenceStore(Protocol):
         ...
 
 
-# Words a provider uses when it rejects an optional request feature; an unrelated 400 (bad prompt, context
-# length) must not mark the model unsupported.
-_TOOL_REJECTION = re.compile(r"tool|function", re.IGNORECASE)
+# An explicit "this model/endpoint cannot do tools" statement. A bare mention of "tool"/"function" is not enough:
+# a 400 about a malformed tool schema, a bad tool_use_id pairing or a wrong argument must not mark the model
+# unsupported (the evidence has no other way back than the TTL).
+_TOOL_UNSUPPORTED_PHRASE = re.compile(
+    r"(?:does not|doesn't|do not|don't|cannot|can't) support\s+(?:the\s+)?"
+    r"(?:tools?\b|tool[ -]?(?:use|usage|calling|calls?)\b|function[ -]?(?:calling|calls?)\b|functions\b)"
+    r"|(?:tools?|tool[ -]?(?:use|usage|calling)|function[ -]?(?:calling|calls?))\s+(?:is|are)\s+(?:not\s+supported|unsupported|not\s+available)"
+    r"|support tool[ -]?use",
+    re.IGNORECASE,
+)
+# Messages that are about one specific tool turn or tool definition, never about the model's capability.
+_TOOL_MESSAGE_ERROR = re.compile(r"tool_use_id|tool_use_ids|tool_result|tool_call_id|tool_choice|input_schema|tools\.\d+|invalid[^.]{0,40}schema", re.IGNORECASE)
+_TOOL_UNSUPPORTED_STATUSES = frozenset({404, 405})
+# How long a recorded ``unsupported`` capability may short-circuit calls before the provider is asked again.
+UNSUPPORTED_EVIDENCE_TTL_SECONDS = 3600
+# Per-model memo that the provider rejected the large default ``max_tokens`` (see ModelGateway._remember_clamp).
+_CLAMP_PREFIX = "bbd:model-gateway:maxtok-clamp:"
+_CLAMP_TTL_SECONDS = 3600
+
+
+def _status_of(exc: BaseException) -> int | None:
+    """HTTP status of the upstream error behind a gateway error (cause chain, or the ``HTTP <n>:`` text)."""
+    cause: BaseException | None = exc
+    for _ in range(4):
+        if isinstance(cause, APIStatusError):
+            return cause.status_code
+        cause = cause.__cause__ if cause is not None else None
+    match = re.search(r"HTTP (\d{3})\b", str(exc))
+    return int(match[1]) if match else None
+
+
+def is_tool_capability_rejection(exc: BaseException) -> bool:
+    """True when a gateway error says the model/endpoint cannot do tool calling at all.
+
+    Only an explicit capability phrase (``does not support tools``, ``tool use is not supported``,
+    ``function calling is not supported`` ...) or a 404/405 from the endpoint qualifies. Messages about
+    ``tool_use_id``/``tool_result``/``tool_call_id`` pairing or a tool's schema never do.
+    """
+    text = str(exc)
+    if _TOOL_MESSAGE_ERROR.search(text):
+        return False
+    if _TOOL_UNSUPPORTED_PHRASE.search(text):
+        return True
+    return _status_of(exc) in _TOOL_UNSUPPORTED_STATUSES
+
+
+def _is_transient_failure(exc: BaseException) -> bool:
+    """True for timeouts, connection/Redis faults, 429 and 5xx: outcomes that say nothing about the model.
+
+    Walks the ``__cause__`` chain. Deterministic provider answers (400/401/403/404/422) are not transient.
+    """
+    cause: BaseException | None = exc
+    for _ in range(4):
+        if isinstance(cause, (APITimeoutError, APIConnectionError, TimeoutError, RedisError, _GatewayTimeout)):
+            return True
+        if isinstance(cause, APIStatusError):
+            return cause.status_code >= 500 or cause.status_code == 429
+        cause = cause.__cause__ if cause is not None else None
+    return False
+
+
+def _mentions_max_tokens(exc: APIStatusError) -> bool:
+    """True for a 400/422 whose provider message names ``max_tokens`` (output limit), not a capability."""
+    return exc.status_code in {400, 422} and "max_tokens" in str(exc.message or "").lower()
 
 
 # Obvious credential shapes that providers sometimes echo back in error text: "Bearer x", vendor
@@ -323,6 +417,17 @@ def _upstream_reason(exc: APIStatusError) -> str:
     return f"HTTP {exc.status_code}: {text[:300]}" if text else f"HTTP {exc.status_code}"
 
 
+@dataclass(slots=True)
+class _StreamState:
+    """Mutable retry bookkeeping of one streaming call (see ``ModelGateway._on_stream_status_error``)."""
+
+    extra: dict[str, Any]
+    attempt: int = 0  # transient-retry budget used (0 or 1); a clamp, effort drop or transient retry each consume it
+    effort_dropped: bool = False  # reasoning_effort was dropped; the clamp may still use the retry after it
+    emitted: bool = False  # a chunk reached the caller: nothing may be retried any more
+    clamped: bool = False  # the max_tokens clamp retry was used
+
+
 @dataclass(frozen=True, slots=True)
 class ModelGateway:
     """OpenAI-compatible client enforcing privacy policy, capability verification, bounded concurrency, and approved endpoint networking."""
@@ -343,6 +448,8 @@ class ModelGateway:
     allow_public_endpoints: bool = False
     # Provider kind selects the wire protocol: "anthropic" uses the native Messages API, everything else OpenAI-compatible.
     kind: ProviderKind = field(default="custom", kw_only=True)
+    # Wire strategy chosen once from ``kind`` (registry lookup in core.model_gateway.wire); never passed by callers.
+    protocol: WireProtocol = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Freeze resolved identity/credentials for one request; reject missing scope or fence.
@@ -355,7 +462,7 @@ class ModelGateway:
         # and indexed source text out of logs even when OPENAI_LOG=debug is set.
         logging.getLogger("openai").setLevel(logging.WARNING)
         if not isinstance(self.scope, (WorkspaceContext, InternalJobScope)) or not callable(self.before_send):
-            raise ValueError("Explicit scope and fresh before_send callback are required")  # noqa: TRY004  # constructor contract raises ValueError for bad wiring
+            raise ValueError("Explicit scope and fresh before_send callback are required")
         if isinstance(self.scope, WorkspaceContext) and self.scope.role != "owner":
             raise PrivacyPolicyDenied("Workspace owner required for model execution")
         if len(self.gateway_identity) != 64 or any(char not in "0123456789abcdef" for char in self.gateway_identity):
@@ -367,6 +474,7 @@ class ModelGateway:
         elif len(self.model_identity) != 64 or any(char not in "0123456789abcdef" for char in self.model_identity):
             raise ValueError("Model identity must be a nonsecret SHA256 digest")
         object.__setattr__(self, "base_url", self.base_url.rstrip("/") if self.base_url else None)
+        object.__setattr__(self, "protocol", wire_protocol_for(self.kind))
 
     def _policy_matches(self, policy: RequestPolicy) -> bool:
         """Compare typed principal/config identity before capability/cache/transport access."""
@@ -402,21 +510,99 @@ class ModelGateway:
 
     async def _record_failure(self, role: str, mapping: ModelMapping | None, capability: str, exc: BaseException,
                               *, rejected_tools: bool = False) -> None:
-        """Record a provider failure as ``failed``; ``unsupported`` only for a clear tool-calling rejection.
+        """Record a deterministic provider failure as ``failed``; ``unsupported`` only for a clear tool rejection.
 
-        Privacy denials and breaker-open errors are not provider outcomes and record nothing. Transient errors
-        (timeouts, 5xx, auth) are ``failed``, which never blocks later calls.
+        Privacy denials, breaker-open errors and local translation errors are not provider outcomes and record nothing. Transient errors
+        (timeouts, connection faults, 429, 5xx) record nothing either, so one blip never overwrites a stored
+        ``supported``. Deterministic errors (400/401/403/404/422) are ``failed``; ``unsupported`` for ``tools``
+        needs an explicit capability phrase or a 404/405 (see ``is_tool_capability_rejection``).
         """
-        if not isinstance(exc, ModelGatewayError) or isinstance(exc, (PrivacyPolicyDenied, ModelGatewayUnavailable)):
+        if not isinstance(exc, ModelGatewayError) or isinstance(
+                exc, (PrivacyPolicyDenied, ModelGatewayUnavailable, LocalCapabilityError)):
+            return
+        if _is_transient_failure(exc):
             return
         await self._record(role, mapping, capability, "failed")
-        if rejected_tools and isinstance(exc, CapabilityUnsupported) and _TOOL_REJECTION.search(str(exc)):
+        if rejected_tools and isinstance(exc, CapabilityUnsupported) and is_tool_capability_rejection(exc):
             await self._record(role, mapping, "tools", "unsupported")
 
-    def _http_client(self, base_url: str) -> httpx.AsyncClient:
-        """Create a redirect-disabled HTTP client pinned to an endpoint approved by network policy."""
+    def _configured_max_tokens(self, mapping: ModelMapping | None) -> int | None:
+        """Owner-configured output limit of the mapping, or None for hosted kinds (server-side re-check)."""
+        if mapping is None or self.kind in PROVIDER_KINDS_WITHOUT_MAX_TOKENS:
+            return None
+        return mapping.max_output_tokens
+
+    def _clamp_key(self, mapping: ModelMapping) -> str:
+        """Redis key of the "provider rejected the large default max_tokens" memo for this model identity."""
+        return f"{_CLAMP_PREFIX}{self.model_identity}:{mapping.model}"
+
+    async def _clamp_active(self, mapping: ModelMapping) -> bool:
+        """True while a recent Anthropic ``max_tokens`` 400 says the default must be lowered; Redis errors read as False."""
         try:
-            return approved_http_client(base_url, self.approved_endpoint_cidrs, allow_global=self.allow_public_endpoints)
+            exists = await self.redis.exists(self._clamp_key(mapping))
+        except RedisError:
+            return False
+        return isinstance(exists, int) and not isinstance(exists, bool) and exists > 0
+
+    async def _remember_clamp(self, mapping: ModelMapping) -> None:
+        """Remember for one hour that this model needs the lowered ``max_tokens``; best-effort, never raises."""
+        try:
+            await self.redis.set(self._clamp_key(mapping), "1", ex=_CLAMP_TTL_SECONDS)
+        except RedisError:
+            _LOG.debug("model gateway max_tokens clamp record failed", exc_info=True)
+
+    async def _initial_max_tokens(self, mapping: ModelMapping, explicit: int | None) -> int | None:
+        """Request ``max_tokens``: explicit caller value, else the configured limit, else (Anthropic, clamped) the low default.
+
+        None means "send nothing": OpenAI-compatible providers then use their own default and the Anthropic
+        translation uses its internal default.
+        """
+        if explicit is not None:
+            return explicit
+        configured = self._configured_max_tokens(mapping)
+        if configured is not None:
+            return configured
+        if self.protocol.requires_max_tokens and await self._clamp_active(mapping):
+            return anthropic.DEFAULT_MAX_TOKENS
+        return None
+
+    def _rejects_max_tokens(self, exc: APIStatusError) -> bool:
+        """True when ``exc`` is a ``max_tokens`` parameter 400 from a protocol that mandates ``max_tokens``.
+
+        OpenAI-compatible and OpenRouter/custom upstreams never get this reclassification: for them a 400
+        naming ``max_tokens`` keeps its normal capability mapping.
+        """
+        return self.protocol.requires_max_tokens and _mentions_max_tokens(exc)
+
+    async def _clamp_on_max_tokens_error(self, exc: APIStatusError, mapping: ModelMapping, current: int | None,
+                                         *, stream: bool) -> int | None:
+        """Lower value to retry once with after an Anthropic ``max_tokens`` 400, else None (no retry).
+
+        Applies only to protocols that require ``max_tokens`` (Anthropic) when the effective limit exceeds ``DEFAULT_MAX_TOKENS``; the clamp
+        is remembered per model identity for an hour. It is a parameter problem, never a capability verdict.
+        """
+        if not self._rejects_max_tokens(exc):
+            return None
+        effective = current or (anthropic.DEFAULT_STREAM_MAX_TOKENS if stream else anthropic.DEFAULT_MAX_TOKENS)
+        if effective <= anthropic.DEFAULT_MAX_TOKENS:
+            return None
+        _LOG.warning("Provider rejected max_tokens (%s); retrying with %d", _upstream_reason(exc), anthropic.DEFAULT_MAX_TOKENS)
+        await self._remember_clamp(mapping)
+        return anthropic.DEFAULT_MAX_TOKENS
+
+    def _http_client(self, base_url: str) -> httpx.AsyncClient:
+        """Return the per-process shared redirect-disabled HTTP client pinned to an approved endpoint.
+
+        One client per (origin, approved CIDRs, allow_global, protocol) is reused across calls
+        (``core.model_gateway.pool``); the pinned transport still resolves and validates DNS on every
+        request, so the SSRF/DNS-pinning guarantees equal those of a per-call client. Its ``aclose`` is a
+        no-op for the SDK's context exit; the pool closes it at shutdown.
+        """
+        try:
+            return pinned_client(
+                base_url, self.approved_endpoint_cidrs, allow_global=self.allow_public_endpoints,
+                protocol=type(self.protocol).__name__,
+            )
         except EndpointNetworkPolicyError as exc:
             raise ModelGatewayError("Model gateway network policy is unavailable") from exc
 
@@ -441,30 +627,50 @@ class ModelGateway:
     async def _lease(self, wait_seconds: float) -> AsyncIterator[None]:
         """Acquire one of the Redis-backed gateway leases (bounded wait), hold it with a refreshed TTL, release only our token.
 
-        The timeout bounds lease acquisition only; the body runs outside it.
+        The ``MODEL_GATEWAY_SLOTS`` limit is global across API/worker processes because the slots are
+        Redis keys. When Redis cannot serve the lease (a non-connection Redis error, or connection errors
+        persisting past ``_REDIS_PROBE_SECONDS``) the call degrades to a per-process semaphore of the same
+        size with a warning: the limit is then per process (up to processes x slots overall) until Redis
+        returns, instead of failing every model call. The timeout bounds lease acquisition only (Redis
+        probe plus local wait share ``wait_seconds``); the body runs outside it.
         """
         token = secrets.token_urlsafe(18)
         keys = [f"{_LEASE_PREFIX}{slot}" for slot in range(_SLOTS)]
         key = None
         attempted = False
+        degraded = False
         refresher: asyncio.Task[None] | None = None
+        started = time.monotonic()
         try:
             try:
                 async with asyncio.timeout(wait_seconds):
+                    probe_deadline = started + _REDIS_PROBE_SECONDS
                     while key is None:
                         attempted = True
                         try:
                             slot = int(await cast("Awaitable[Any]", self.redis.eval(
                                 _ACQUIRE, len(keys), *keys, token, str(_LEASE_TTL_SECONDS * 1000))))
                         except (RedisConnectionError, RedisTimeoutError):
-                            slot = -1  # transient (e.g. pool exhausted): retry until the lease deadline
+                            if time.monotonic() >= probe_deadline:
+                                degraded = True
+                                break
+                            slot = -1  # transient (e.g. pool exhausted): retry until the probe/lease deadline
+                        except RedisError:
+                            degraded = True
+                            break
                         if slot >= 0:
                             key = keys[slot]
                         else:
-                            await asyncio.sleep(0.1 + random.uniform(0, 0.05))
-            except (RedisError, TimeoutError) as exc:
+                            await asyncio.sleep(0.1 + random.uniform(0, 0.05))  # noqa: S311  # retry jitter, not a security value
+            except TimeoutError as exc:
                 raise ModelGatewayError("Model capacity is unavailable") from exc
-            refresher = asyncio.create_task(self._keep_lease(key, token))
+            if degraded:
+                _LOG.warning("Model gateway Redis unavailable; limiting slots per process")
+                remaining = max(wait_seconds - (time.monotonic() - started), 0.05)
+                async with self._local_slot(remaining):
+                    yield
+                return
+            refresher = asyncio.create_task(self._keep_lease(cast("str", key), token))
             yield
         finally:
             if refresher is not None:
@@ -476,6 +682,20 @@ class ModelGateway:
                     await asyncio.shield(cast("Awaitable[Any]", self.redis.eval(_RELEASE, len(held), *held, token)))
                 except RedisError:
                     pass
+
+    @asynccontextmanager
+    async def _local_slot(self, wait_seconds: float) -> AsyncIterator[None]:
+        """Hold one slot of the per-process fallback semaphore (degraded mode); raise when none frees in time."""
+        semaphore = _local_semaphore()
+        try:
+            async with asyncio.timeout(wait_seconds):
+                await semaphore.acquire()
+        except TimeoutError as exc:
+            raise ModelGatewayError("Model capacity is unavailable") from exc
+        try:
+            yield
+        finally:
+            semaphore.release()
 
     async def _with_slot[T](self, call: Callable[[], Awaitable[T]]) -> T:
         """Run one non-stream gateway operation under a lease with a total deadline (lease wait excluded)."""
@@ -509,6 +729,7 @@ class ModelGateway:
             _LOG.debug("model gateway breaker check failed; proceeding", exc_info=True)
             return
         remaining = pttl if isinstance(pttl, int) and pttl > 0 else _BREAKER_OPEN_MS
+        record_breaker_open(self.protocol.display_name, remaining / 1000)  # bounded label: protocol display name
         raise ModelGatewayUnavailable(remaining / 1000)
 
     async def _breaker_fail(self, open_ms: int = 0) -> None:
@@ -523,6 +744,21 @@ class ModelGateway:
                 str(_BREAKER_WINDOW_MS), str(_BREAKER_THRESHOLD), str(open_ms), str(_BREAKER_OPEN_MS)))
         except RedisError:
             _LOG.warning("model gateway breaker record failed", exc_info=True)
+            return
+        await self._record_breaker_state(open_key)
+
+    async def _record_breaker_state(self, open_key: str) -> None:
+        """Export the open window to metrics right after a failure may have tripped the breaker.
+
+        Without this the gauge only moved on rejected calls, so a freshly opened breaker with no traffic
+        stayed invisible. Best effort: Redis errors and non-integer replies (test doubles) are ignored.
+        """
+        try:
+            pttl = await self.redis.pttl(open_key)
+        except (RedisError, AttributeError):
+            return
+        if isinstance(pttl, int) and not isinstance(pttl, bool) and pttl > 0:
+            record_breaker_open(self.protocol.display_name, pttl / 1000, rejected=False)
 
     async def _breaker_ok(self) -> None:
         """Reset the failure counter after a successful call (plain delete); Redis errors are ignored."""
@@ -554,6 +790,123 @@ class ModelGateway:
         await self._breaker_fail()
         return False
 
+    def _wire_session(self, http: httpx.AsyncClient, client: AsyncOpenAI, base_url: str) -> WireSession:
+        """Bundle the per-call transport handles a ``WireProtocol`` needs (pinned http client, SDK client, credentials)."""
+        return WireSession(http=http, client=client, base_url=base_url, api_key=self.api_key, timeout=self._timeout())
+
+    def _raise_status_error(self, exc: APIStatusError, rejected: str) -> NoReturn:
+        """Map a terminal provider HTTP error to the gateway's exception types; never returns.
+
+        A ``max_tokens`` 400 from a protocol that requires it is a parameter problem (``ModelGatewayError``);
+        otherwise 400/404/405/422 mean the capability (``rejected``: "this capability" / "streaming") is
+        unsupported, and everything else is a plain gateway error.
+        """
+        if self._rejects_max_tokens(exc):
+            raise ModelGatewayError(f"Model gateway error ({_upstream_reason(exc)})") from exc
+        if exc.status_code in {400, 404, 405, 422}:
+            raise CapabilityUnsupported(f"Gateway rejected {rejected} ({_upstream_reason(exc)})") from exc
+        raise ModelGatewayError(f"Model gateway error ({_upstream_reason(exc)})") from exc
+
+    async def _check_request(self, role: str, mapping: ModelMapping | None, policy: RequestPolicy, capability: str,
+                             path: str, *, probe: bool, before_send: Callable[[], Awaitable[None]] | None) -> ModelMapping:
+        """Run the pre-I/O fences of one request and return the non-None mapping.
+
+        Order matters: per-call fence presence, privacy decision, configuration, protocol path support,
+        stored ``unsupported`` tools evidence, then the breaker (skipped for probes so a tripped upstream can be
+        re-verified). Raises ValueError/PrivacyPolicyDenied/ModelGatewayError/CapabilityUnsupported/Unavailable.
+        """
+        if not probe and before_send is None:
+            raise ValueError("before_send_required")  # fail closed: every non-probe call needs a per-call fence
+        if not self._policy_matches(policy) or not may_send(policy, role, mapping, self.destination_id, bool(self.api_key), capability):
+            raise PrivacyPolicyDenied("Model request denied by privacy policy")
+        if self.base_url is None or mapping is None:
+            raise ModelGatewayError("Model gateway is not configured")
+        if not self.protocol.supports_path(path):
+            # e.g. Anthropic has no embeddings, rerank or decisions API: report unsupported before any I/O.
+            raise CapabilityUnsupported(f"{self.protocol.display_name} does not offer {capability}")
+        if not probe and capability == "tools" and await self._known_unsupported(role, mapping, "tools"):
+            raise CapabilityUnsupported("Tool calling is recorded as unsupported for this model")
+        if not probe:
+            # Probes must be able to reach a tripped upstream, otherwise it could never be re-verified.
+            await self._breaker_check()
+        return mapping
+
+    async def _attempt_once(self, session: WireSession, path: str, body: dict[str, Any],
+                            after_send: Callable[[], Awaitable[None]] | None) -> Any:
+        """Execute one wire call, wiring the body-sent hook and always running the idempotent ``after_send`` fallback.
+
+        Gated (P2-3): with no ``after_send`` the ContextVar is never touched, so the transport sends
+        ``request.stream`` unwrapped. Raises ModelGatewayError for an operation the protocol lacks.
+        """
+        hook = body_sent.set(after_send) if after_send is not None else None
+        try:
+            return await self.protocol.create(session, path, body)
+        except UnsupportedWireOperation:
+            raise ModelGatewayError("Unsupported model gateway operation") from None
+        finally:
+            if hook is not None:
+                body_sent.reset(hook)
+            # Fallback release (connect/write failure, timeout); after_send is idempotent.
+            if after_send is not None:
+                await after_send()
+
+    @staticmethod
+    def _normalize_response(response: Any) -> Any:
+        """Return a plain dict for an SDK model or dict reply; anything else is an invalid gateway response."""
+        if hasattr(response, "model_dump"):
+            return response.model_dump(mode="json", exclude_none=True)
+        if isinstance(response, dict):
+            return response
+        raise ModelGatewayError("Model gateway returned an invalid response")
+
+    async def _send_with_retries(
+        self, role: str, mapping: ModelMapping, policy: RequestPolicy, capability: str, path: str,
+        body: dict[str, Any], base_url: str,
+        before_send: Callable[[], Awaitable[None]] | None, after_send: Callable[[], Awaitable[None]] | None,
+    ) -> Any:
+        """Execute a chat, embedding, or rerank call with at most two attempts and normalize its response.
+
+        Each attempt re-runs the gateway-owned ``before_send`` plus the caller's fence and re-checks policy.
+        A ``max_tokens`` 400 clamps once (mutating ``body``); transient statuses retry once via the shared
+        breaker logic. The protocol-specific wire call is delegated to ``self.protocol``.
+        """
+        http = self._http_client(base_url)
+        async with AsyncOpenAI(
+            base_url=base_url,
+            api_key=self.api_key or "not-configured",
+            timeout=self._timeout(),
+            max_retries=0,
+            http_client=http,
+        ) as client:
+            session = self._wire_session(http, client, base_url)
+            for attempt in range(2):
+                try:
+                    # Keep the gateway-owned settings check even when a scoped
+                    # operation adds its own source/evidence freshness fence.
+                    await self.before_send()
+                    if before_send is not None and before_send is not self.before_send:
+                        await before_send()
+                    if not self._policy_matches(policy) or not may_send(policy, role, mapping, self.destination_id, bool(self.api_key), capability):
+                        raise PrivacyPolicyDenied("Model request denied by privacy policy")
+                    response = await self._attempt_once(session, path, body, after_send)
+                except (APITimeoutError, APIConnectionError) as exc:
+                    _raise_if_policy_denied(exc)  # a policy denial is not an upstream fault: no retry, no count
+                    if attempt == 0:
+                        await asyncio.sleep(_retry_delay())
+                        continue
+                    await self._breaker_fail()
+                    raise ModelGatewayError("Model gateway request failed") from exc
+                except APIStatusError as exc:
+                    if attempt == 0 and (lowered := await self._clamp_on_max_tokens_error(
+                            exc, mapping, body.get("max_tokens"), stream=False)) is not None:
+                        body["max_tokens"] = lowered
+                        continue
+                    if _retryable_status(exc.status_code) and await self._on_retryable_status(exc, attempt):
+                        continue
+                    self._raise_status_error(exc, "this capability")
+                return self._normalize_response(response)
+        raise ModelGatewayError("Model gateway request failed")
+
     async def _request(
         self,
         role: str,
@@ -575,98 +928,21 @@ class ModelGateway:
         never blocks, real provider errors propagate with their redacted message. Only a stored ``unsupported``
         for ``tools`` short-circuits (the caller has a text-only fallback). The outcome is recorded as evidence
         under ``record_as`` (default ``capability``); ``record_failure=False`` leaves failures to the caller.
-        For the ``anthropic`` kind only ``chat/completions`` exists; any other path raises CapabilityUnsupported
-        before I/O. Anthropic errors are mapped to the same ``openai`` exception types, so retry handling is shared.
+        A protocol without the requested path (Anthropic: only ``chat/completions``) raises CapabilityUnsupported
+        before I/O. Protocol errors are mapped to the same ``openai`` exception types, so retry handling is shared.
         """
-        if not probe and before_send is None:
-            raise ValueError("before_send_required")  # fail closed: every non-probe call needs a per-call fence
-        if not self._policy_matches(policy) or not may_send(policy, role, mapping, self.destination_id, bool(self.api_key), capability):
-            raise PrivacyPolicyDenied("Model request denied by privacy policy")
-        if self.base_url is None or mapping is None:
-            raise ModelGatewayError("Model gateway is not configured")
-        if self.kind == "anthropic" and path != "chat/completions":
-            # Anthropic has no embeddings, rerank or decisions API: report unsupported before any I/O.
-            raise CapabilityUnsupported(f"Anthropic does not offer {capability}")
-        if not probe and capability == "tools" and await self._known_unsupported(role, mapping, "tools"):
-            raise CapabilityUnsupported("Tool calling is recorded as unsupported for this model")
-        if not probe:
-            # Probes must be able to reach a tripped upstream, otherwise it could never be re-verified.
-            await self._breaker_check()
+        mapping = await self._check_request(role, mapping, policy, capability, path, probe=probe, before_send=before_send)
         body = {**payload, "model": mapping.model}
-        base_url = _api_base(self.base_url)
+        if path == CHAT_PATH and body.get("max_tokens") is None:
+            body.pop("max_tokens", None)
+            if (limit := await self._initial_max_tokens(mapping, None)) is not None:
+                body["max_tokens"] = limit
+        base_url = _api_base(cast("str", self.base_url))  # non-None: guaranteed by _check_request
 
         async def send() -> Any:
-            """Execute a chat, embedding, or rerank call with bounded retries and normalize its response.
-
-            The Anthropic kind sends the native Messages request over the same pinned http client; the SDK
-            client is then only the owner that closes it.
-            """
-            http = self._http_client(base_url)
-            async with AsyncOpenAI(
-                base_url=base_url,
-                api_key=self.api_key or "not-configured",
-                timeout=self._timeout(),
-                max_retries=0,
-                http_client=http,
-            ) as client:
-                for attempt in range(2):
-                    try:
-                        # Keep the gateway-owned settings check even when a scoped
-                        # operation adds its own source/evidence freshness fence.
-                        await self.before_send()
-                        if before_send is not None and before_send is not self.before_send:
-                            await before_send()
-                        if not self._policy_matches(policy) or not may_send(policy, role, mapping, self.destination_id, bool(self.api_key), capability):
-                            raise PrivacyPolicyDenied("Model request denied by privacy policy")
-                        # Gated (P2-3): with no after_send the ContextVar is never touched, so the
-                        # transport sends request.stream unwrapped exactly as before.
-                        hook = body_sent.set(after_send) if after_send is not None else None
-                        response: Any
-                        try:
-                            if self.kind == "anthropic":
-                                response = await anthropic.create_message(
-                                    http, base_url, self.api_key, body, timeout=self._timeout())
-                            elif path == "chat/completions":
-                                response = await client.chat.completions.create(**body)
-                            elif path == "embeddings":
-                                response = await client.embeddings.create(**body)
-                            elif path == "embeddings-native":
-                                # Cohere-style upstreams reject the OpenAI `input` field; same URL, native body.
-                                response = await client.post("/embeddings", cast_to=dict[str, Any], body=body)
-                            elif path == "rerank":
-                                response = await client.post("/rerank", cast_to=dict[str, Any], body=body)
-                            elif path == "decisions":
-                                # OpenRouter Decisions (alpha) lives beside /api/v1 at /api/alpha; same host, so the
-                                # pinned http client and endpoint policy above already cover it.
-                                response = await client.post(
-                                    re.sub(r"/v1$", "/alpha", base_url) + "/decisions", cast_to=dict[str, Any], body=body)
-                            else:
-                                raise ModelGatewayError("Unsupported model gateway operation")
-                        finally:
-                            if hook is not None:
-                                body_sent.reset(hook)
-                            # Fallback release (connect/write failure, timeout); after_send is idempotent.
-                            if after_send is not None:
-                                await after_send()
-                    except (APITimeoutError, APIConnectionError) as exc:
-                        _raise_if_policy_denied(exc)  # a policy denial is not an upstream fault: no retry, no count
-                        if attempt == 0:
-                            await asyncio.sleep(_retry_delay())
-                            continue
-                        await self._breaker_fail()
-                        raise ModelGatewayError("Model gateway request failed") from exc
-                    except APIStatusError as exc:
-                        if _retryable_status(exc.status_code) and await self._on_retryable_status(exc, attempt):
-                            continue
-                        if exc.status_code in {400, 404, 405, 422}:
-                            raise CapabilityUnsupported(f"Gateway rejected this capability ({_upstream_reason(exc)})") from exc
-                        raise ModelGatewayError(f"Model gateway error ({_upstream_reason(exc)})") from exc
-                    if hasattr(response, "model_dump"):
-                        return response.model_dump(mode="json", exclude_none=True)
-                    if isinstance(response, dict):
-                        return response
-                    raise ModelGatewayError("Model gateway returned an invalid response")
-            raise ModelGatewayError("Model gateway request failed")
+            """Run the retried wire call for ``_with_slot`` (lease and total deadline are applied by the caller)."""
+            return await self._send_with_retries(
+                role, mapping, policy, capability, path, body, base_url, before_send, after_send)
 
         # Telemetry only: labels are capability and configured role; model name is identity, never a label.
         started = time.perf_counter()
@@ -692,7 +968,8 @@ class ModelGateway:
     async def discover_models(self) -> list[str]:
         """List model IDs from the configured gateway while holding capacity and enforcing endpoint policy.
 
-        The ``anthropic`` kind uses the native ``GET /models`` with ``x-api-key``; errors carry static reasons only.
+        The wire protocol decides the listing call (Anthropic: native ``GET /models`` with ``x-api-key``); errors
+        carry static reasons only.
         """
         if self.base_url is None or not (self.api_key or self.destination_id.startswith("local:")):
             raise ModelGatewayError("Model gateway is not configured")
@@ -706,9 +983,7 @@ class ModelGateway:
                                    timeout=self._timeout(), max_retries=0,
                                    http_client=http) as client:
                 try:
-                    if self.kind == "anthropic":
-                        return await anthropic.list_models(http, base_url, self.api_key, timeout=self._timeout())
-                    page = await client.models.list()
+                    return await self.protocol.list_models(self._wire_session(http, client, base_url))
                 except (APIConnectionError, APITimeoutError, APIStatusError) as exc:
                     _raise_if_policy_denied(exc)
                     # Static reason only (no upstream body/URL): lets the owner tell auth, timeout and DNS/TLS apart.
@@ -719,8 +994,6 @@ class ModelGateway:
                     else:
                         reason = f"could not connect to upstream ({type(exc.__cause__ or exc).__name__})"
                     raise ModelGatewayError(f"Model gateway discovery failed: {reason}") from exc
-                model_ids: list[str] = [item.id for item in page.data if isinstance(item.id, str) and item.id]
-                return model_ids
 
         models = await self._with_slot(send)
         # Discovery skips the open check (it is how a tripped upstream is re-verified) but success closes it.
@@ -853,6 +1126,120 @@ class ModelGateway:
             record_model_call("streaming", role, started, ok, {"usage": usage} if usage else None,
                               mapping.model if mapping else None, first_ms)
 
+    def _stream_allowed(self, policy: RequestPolicy, role: str, mapping: ModelMapping | None,
+                        capabilities: tuple[str, ...]) -> bool:
+        """True when the principal/config identity matches and privacy policy allows every streamed capability."""
+        return self._policy_matches(policy) and all(
+            may_send(policy, role, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities)
+
+    async def _stream_preflight(
+        self, role: str, mapping: ModelMapping | None, policy: RequestPolicy, probe: bool,
+        tools: list[dict[str, Any]] | None, tool_choice: Any, max_tokens: int | None, capabilities: tuple[str, ...],
+    ) -> tuple[ModelMapping, dict[str, Any]]:
+        """Run the pre-lease fences of a stream and build the protocol-neutral request extras.
+
+        Order: privacy/config denial, stored ``unsupported`` tools evidence, extras (tools, tool_choice, resolved
+        ``max_tokens``, owner-chosen ``reasoning_effort`` for the chat role), then the breaker (skipped for probes).
+        Raises PrivacyPolicyDenied/CapabilityUnsupported/ModelGatewayUnavailable before any provider I/O.
+        """
+        if not self._stream_allowed(policy, role, mapping, capabilities) or self.base_url is None or mapping is None:
+            raise PrivacyPolicyDenied("Model request denied by privacy policy")
+        if tools and not probe and await self._known_unsupported(role, mapping, "tools"):
+            raise CapabilityUnsupported("Tool calling is recorded as unsupported for this model")
+        extra: dict[str, Any] = {}
+        if tools:
+            extra["tools"] = tools
+        if tool_choice is not None:
+            extra["tool_choice"] = tool_choice
+        if (limit := await self._initial_max_tokens(mapping, max_tokens)) is not None:
+            extra["max_tokens"] = limit
+        # Owner-chosen reasoning effort (chat role only): request-gated models stream reasoning only when asked.
+        if role == "chat" and not probe and mapping.reasoning_effort != "off":
+            extra["reasoning_effort"] = mapping.reasoning_effort
+        if not probe:
+            await self._breaker_check()
+        return mapping, extra
+
+    async def _open_stream(self, session: WireSession, mapping: ModelMapping, messages: list[dict[str, Any]],
+                           extra: dict[str, Any], after_send: Callable[[], Awaitable[None]] | None) -> Any:
+        """Open one provider stream bounded by the header/first-byte timeout.
+
+        I6/T7: the transport releases the send fence once the body is handed to ``transport.write``;
+        publication is re-fenced per flush (T3). Gated (P2-3). Set/reset stay free of any ``yield`` (P3-2):
+        reset fails across a context switch. ``after_send`` (idempotent) always runs as the fallback release.
+        """
+        hook = body_sent.set(after_send) if after_send is not None else None
+        try:
+            async with asyncio.timeout(self.timeout_seconds):
+                return await self.protocol.open_stream(session, mapping.model, messages, extra)
+        finally:
+            if hook is not None:
+                body_sent.reset(hook)
+            if after_send is not None:
+                await after_send()
+
+    @staticmethod
+    def _chunk_line(chunk: Any, splitters: dict[int, _ThinkSplitter]) -> str:
+        """Encode one provider chunk (dict or SDK model) as an SSE ``data:`` line with reasoning split out."""
+        payload = chunk if isinstance(chunk, dict) else chunk.model_dump(mode="json", exclude_none=True)
+        _split_reasoning(payload, splitters)
+        return f"data: {json.dumps(payload)}"
+
+    @staticmethod
+    def _flush_lines(splitters: dict[int, _ThinkSplitter]) -> list[str]:
+        """SSE lines for text still held back by the think splitters at end of stream."""
+        lines: list[str] = []
+        for index, splitter in splitters.items():
+            held_think, held_answer = splitter.flush()
+            if held_think or held_answer:
+                tail = {"reasoning_content": held_think} if held_think else {"content": held_answer}
+                lines.append(f"data: {json.dumps({'choices': [{'index': index, 'delta': tail}]})}")
+        return lines
+
+    async def _on_stream_transport_error(self, exc: BaseException, state: _StreamState) -> None:
+        """Handle a timeout/connection failure: sleep and return to retry once, else raise ModelGatewayError.
+
+        A policy denial is raised without retry or breaker count. Mid-stream failures say little about
+        upstream health, so only pre-first-token ones are counted toward the breaker.
+        """
+        _raise_if_policy_denied(exc)
+        if state.attempt == 1 or state.emitted:
+            if not state.emitted:
+                await self._breaker_fail()
+            raise ModelGatewayError("Model gateway stream failed") from exc
+        await asyncio.sleep(_retry_delay())
+        state.attempt += 1
+
+    async def _on_stream_status_error(self, exc: APIStatusError, mapping: ModelMapping, state: _StreamState) -> None:
+        """Handle a provider HTTP error: return to retry the open, or raise the mapped gateway error.
+
+        Retries happen only before the first chunk. Dropping a rejected ``reasoning_effort`` shares the single
+        transient retry budget (so a 5xx after it fails); lowering a rejected ``max_tokens`` (protocols that
+        require it) also consumes it, except that it may follow an effort drop (at most three opens in total).
+        A status error after chunks were emitted is never retried or counted.
+        """
+        extra = state.extra
+        if (not state.emitted and state.attempt == 0 and "reasoning_effort" in extra and exc.status_code in {400, 422}
+                and any(w in str(exc.message or "").lower() for w in ("reasoning", "thinking", "effort"))):
+            # A wrong effort setting must never break chat: retry once without the parameter.
+            _LOG.warning("Provider rejected reasoning_effort (%s); retrying without it", _upstream_reason(exc))
+            del extra["reasoning_effort"]
+            state.attempt += 1  # consumes the single retry, as before the refactor
+            state.effort_dropped = True
+            return
+        # The clamp shares the single transient budget (attempt 0), except right after an effort drop (attempt 1).
+        if (not state.emitted and not state.clamped and (state.attempt == 0 or (state.effort_dropped and state.attempt == 1))
+                and (lowered := await self._clamp_on_max_tokens_error(
+                exc, mapping, extra.get("max_tokens"), stream=True)) is not None):
+            extra["max_tokens"] = lowered
+            state.clamped = True
+            state.attempt = 1  # the clamp consumes the transient retry, so clamp -> 503 fails after two opens
+            return
+        if not state.emitted and _retryable_status(exc.status_code) and await self._on_retryable_status(exc, state.attempt):
+            state.attempt += 1
+            return
+        self._raise_status_error(exc, "streaming")
+
     async def _stream_inner(
         self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,
         messages: list[dict[str, Any]], probe: bool = False, *,
@@ -870,28 +1257,16 @@ class ModelGateway:
         ``tool_choice`` and ``max_tokens`` are forwarded only when not None. A configured ``reasoning_effort``
         (chat role) is sent as the OpenAI-compatible ``reasoning_effort`` parameter; if the provider answers
         400/422 naming it (or ``thinking``/``effort``, as Anthropic does) before any chunk, it is dropped once with
-        a warning and the request is retried. The ``anthropic`` kind streams the native Messages SSE, translated
-        to OpenAI-shaped chunks by ``core.model_gateway.anthropic``.
+        a warning and the request is retried. A ``max_tokens`` 400 (protocols that require it) is clamped once
+        (sharing the transient retry, except directly after the effort drop). The wire format (OpenAI-compatible or native Anthropic Messages SSE) is
+        delegated to ``self.protocol``; chunks always leave as OpenAI-shaped SSE lines.
         """
         capabilities = ("streaming", "tools") if tools else ("streaming",)
-        if not self._policy_matches(policy) or not all(may_send(policy, role, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities) or self.base_url is None or mapping is None:
-            raise PrivacyPolicyDenied("Model request denied by privacy policy")
-        if tools and not probe and await self._known_unsupported(role, mapping, "tools"):
-            raise CapabilityUnsupported("Tool calling is recorded as unsupported for this model")
-        extra: dict[str, Any] = {}
-        if tools:
-            extra["tools"] = tools
-        if tool_choice is not None:
-            extra["tool_choice"] = tool_choice
-        if max_tokens is not None:
-            extra["max_tokens"] = max_tokens
-        # Owner-chosen reasoning effort (chat role only): request-gated models stream reasoning only when asked.
-        if role == "chat" and not probe and mapping.reasoning_effort != "off":
-            extra["reasoning_effort"] = mapping.reasoning_effort
-        if not probe:
-            await self._breaker_check()
+        mapping, extra = await self._stream_preflight(
+            role, mapping, policy, probe, tools, tool_choice, max_tokens, capabilities)
+        state = _StreamState(extra)
         async with self._lease(_STREAM_LEASE_WAIT_SECONDS):
-            base_url = _api_base(self.base_url)
+            base_url = _api_base(cast("str", self.base_url))  # non-None: guaranteed by _stream_preflight
             http = self._http_client(base_url)
             async with AsyncOpenAI(
                 base_url=base_url,
@@ -900,75 +1275,30 @@ class ModelGateway:
                 max_retries=0,
                 http_client=http,
             ) as client:
-                emitted = False
-                stream: Any
+                session = self._wire_session(http, client, base_url)
                 splitters: dict[int, _ThinkSplitter] = {}
-                for attempt in range(2):
+                while True:  # bounded: at most 3 opens (effort drop, then clamp, then success; otherwise one retry)
                     try:
                         await self.before_send()
                         if before_send is not None and before_send is not self.before_send:
                             await before_send()
-                        if not self._policy_matches(policy) or not all(may_send(policy, role, mapping, self.destination_id, bool(self.api_key), c) for c in capabilities):
+                        if not self._stream_allowed(policy, role, mapping, capabilities):
                             raise PrivacyPolicyDenied("Model request denied by privacy policy")
-                        # I6/T7: the transport releases the send fence once the body is handed to
-                        # transport.write; publication is re-fenced per flush (T3). Gated (P2-3).
-                        # Keep set/reset free of any `yield` (P3-2): reset fails across a context switch.
-                        hook = body_sent.set(after_send) if after_send is not None else None
-                        try:
-                            # Bound header/first-byte wait.
-                            async with asyncio.timeout(self.timeout_seconds):
-                                if self.kind == "anthropic":
-                                    stream = await anthropic.open_message_stream(
-                                        http, base_url, self.api_key,
-                                        {"model": mapping.model, "messages": messages, **extra}, timeout=self._timeout())
-                                else:
-                                    stream = await client.chat.completions.create(
-                                        model=mapping.model,
-                                        messages=cast("Any", messages),  # OpenAI param TypedDicts; built by prompt layer
-                                        stream=True,
-                                        **extra,
-                                    )
-                        finally:
-                            if hook is not None:
-                                body_sent.reset(hook)
-                            if after_send is not None:
-                                await after_send()
+                        stream = await self._open_stream(session, mapping, messages, state.extra, after_send)
                         async for chunk in stream:
-                            emitted = True
-                            payload = chunk if isinstance(chunk, dict) else chunk.model_dump(mode="json", exclude_none=True)
-                            _split_reasoning(payload, splitters)
-                            yield f"data: {json.dumps(payload)}"
-                        for index, splitter in splitters.items():
-                            held_think, held_answer = splitter.flush()
-                            if held_think or held_answer:
-                                tail = {"reasoning_content": held_think} if held_think else {"content": held_answer}
-                                yield f"data: {json.dumps({'choices': [{'index': index, 'delta': tail}]})}"
+                            state.emitted = True
+                            yield self._chunk_line(chunk, splitters)
+                        for line in self._flush_lines(splitters):
+                            yield line
                         yield "data: [DONE]"
                         await self._breaker_ok()
                         return
                     except (APITimeoutError, APIConnectionError, TimeoutError) as exc:
-                        _raise_if_policy_denied(exc)
-                        if attempt == 1 or emitted:
-                            # Mid-stream failures say little about upstream health; count only pre-first-token ones.
-                            if not emitted:
-                                await self._breaker_fail()
-                            raise ModelGatewayError("Model gateway stream failed") from exc
-                        await asyncio.sleep(_retry_delay())
+                        await self._on_stream_transport_error(exc, state)
                     except RedisError as exc:
                         raise ModelGatewayError("Model gateway request failed") from exc
                     except APIStatusError as exc:
-                        if (attempt == 0 and not emitted and "reasoning_effort" in extra and exc.status_code in {400, 422}
-                                and any(w in str(exc.message or "").lower() for w in ("reasoning", "thinking", "effort"))):
-                            # A wrong effort setting must never break chat: retry once without the parameter.
-                            _LOG.warning("Provider rejected reasoning_effort (%s); retrying without it", _upstream_reason(exc))
-                            del extra["reasoning_effort"]
-                            continue
-                        # A status error after chunks were emitted is never retried or counted.
-                        if not emitted and _retryable_status(exc.status_code) and await self._on_retryable_status(exc, attempt):
-                            continue
-                        if exc.status_code in {400, 404, 405, 422}:
-                            raise CapabilityUnsupported(f"Gateway rejected streaming ({_upstream_reason(exc)})") from exc
-                        raise ModelGatewayError(f"Model gateway error ({_upstream_reason(exc)})") from exc
+                        await self._on_stream_status_error(exc, mapping, state)
 
     async def embed(
         self, role: str, mapping: ModelMapping | None, policy: RequestPolicy,

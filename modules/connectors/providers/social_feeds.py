@@ -1,7 +1,6 @@
 """Bounded Bluesky public profile-feed mapping for the shared native executor."""
 
 # ValueError is the executor's stable classification for invalid provider payloads.
-# ruff: noqa: TRY004
 
 import json
 from collections.abc import Awaitable, Callable, Mapping

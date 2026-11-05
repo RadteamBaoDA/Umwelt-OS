@@ -113,7 +113,7 @@ export function useContentTranslation(type: ResourceType, targets: TranslationTa
     void Promise.all(chunk(todo).map((group) => run(group).catch(() => undefined)));
     return () => controller.abort();
     // `targets` is represented by `signature` inside scopeKey.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see the comment above: the omitted values are intentionally not triggers
   }, [enabled, scopeKey, csrfToken]);
 
   // Cheap to derive every render; entries are observers of the shared cache.

@@ -92,7 +92,7 @@ describe('AccountDeletionSection', () => {
     expect(submit).toBeEnabled();
     await userEvent.click(submit);
     await waitFor(() => expect(announceAccountErasure).toHaveBeenCalledOnce());
-    expect(fetcher.mock.calls.find(([, options]) => options?.method === 'POST')?.[1].headers).toMatchObject({ 'X-CSRF-Token': 'csrf' });
+    expect(new Headers(fetcher.mock.calls.find(([, options]) => options?.method === 'POST')?.[1].headers).get('X-CSRF-Token')).toBe('csrf');
     await waitFor(() => expect(dialog.getByLabelText('Current password')).toHaveValue(''));
   });
 });

@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -17,7 +17,8 @@ import { matchesShapes } from './shape-filter';
 import type { DataShape } from '@/core/data-shapes';
 import { WizardShell } from './source-wizard';
 import type { SourceAiOptions } from './source-ai-toggles';
-import { collectAndWait, waitForActivation } from './use-source-actions';
+import { useBuiltinTest, type TestState } from './use-builtin-test';
+import { BareButton } from '@/components/bare-button';
 
 const CATEGORY_ORDER: BuiltinCategory[] = ['news', 'economy', 'hazards', 'space', 'security', 'tech'];
 const CATEGORY_KEY = {
@@ -150,13 +151,102 @@ function applicableOptionPayload(builtin: BuiltinSource, values: BuiltinOptionVa
   // Per-type options: undefined, empty text and empty multi-selects are omitted so the server default applies.
   for (const spec of OPTION_SPECS) {
     const value = (values as Record<string, unknown>)[spec.key];
-    if (!allowed.has(spec.key) || value == null || value === '' || (Array.isArray(value) && value.length === 0)) continue;
-    payload[spec.key] = value;
+    if (allowed.has(spec.key) && !isEmptyOptionValue(value)) payload[spec.key] = value;
   }
   return payload;
 }
 
-type TestState = { phase: 'idle' | 'activating' | 'collecting' | 'succeeded' | 'no_changes' | 'failed'; code?: string | null; runId?: string | null };
+/** True when a per-type option value is "empty" (unset, blank text or an empty multi-select) and must be omitted from the body. */
+function isEmptyOptionValue(value: unknown): boolean {
+  return value == null || value === '' || (Array.isArray(value) && value.length === 0);
+}
+
+/** Shows the "all added / none compatible" status line when a shape filter leaves nothing pickable. */
+function ShapeFilterEmpty({ rows, shapeFilter, onClearFilter, onAddConnector }: { rows: BuiltinSource[]; shapeFilter: DataShape[] | undefined; onClearFilter?: () => void; onAddConnector?: () => void }) {
+  const t = useTranslations('sources');
+  if (!(Boolean(shapeFilter?.length) && !rows.some((row) => matchesShapes(row.data_shapes, shapeFilter) && row.source_id === null))) return null;
+  // Compatible built-ins that are all already added/paused read as "all added", not "none compatible".
+  const anyCompatible = rows.some((row) => matchesShapes(row.data_shapes, shapeFilter));
+  return <p role="status" className="text-muted-foreground">{anyCompatible ? t('addBuiltinAllAdded') : t('shapeFilterNoBuiltin')} {onAddConnector && !anyCompatible && <Button variant="outline" size="sm" onClick={onAddConnector}>{t('addConnector')}</Button>} {onClearFilter && <Button variant="outline" size="sm" onClick={onClearFilter}>{t('shapeFilterClear')}</Button>}</p>;
+}
+
+/** One selectable built-in row: realtime tier, Added/experimental/review badges and attribution; disabled once added. */
+function BuiltinPickRow({ row, selected, onPick }: { row: BuiltinSource; selected: boolean; onPick: (row: BuiltinSource) => void }) {
+  const t = useTranslations('sources');
+  const added = row.source_id !== null;
+  const tier = row.realtime_tier ?? 'near_realtime';
+  return <BareButton type="button" disabled={added} aria-pressed={selected} onClick={() => onPick(row)}
+    className={`flex w-full items-start justify-between gap-3 rounded-md border bg-transparent p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 ${selected ? 'border-primary' : 'border-border'}`}>
+    <span className="min-w-0">
+      <span className="m-0 flex flex-wrap items-center gap-2 font-medium">{row.label}
+        <Badge variant={tier === 'realtime' ? 'default' : 'secondary'}>{t(tier === 'realtime' ? 'badgeRealtime' : 'badgeNearRealtime')}</Badge>
+        {added && <Badge variant="secondary">{t('builtinAdded')}</Badge>}
+        {row.execution === 'experimental' && <Badge variant="outline">{t('builtinExperimental')}</Badge>}
+        {row.eligibility === 'review' && <Badge variant="secondary">{t('builtinReviewClass')}</Badge>}
+      </span>
+      <span className="block text-sm text-muted-foreground">{row.attribution}</span>
+    </span>
+  </BareButton>;
+}
+
+/** Step 1: loading/error/empty states plus the category-grouped list of pickable built-ins. */
+function BuiltinPickStep({ builtins, shapeFilter, selectedId, onPick, onClearFilter, onAddConnector }: {
+  builtins: { isPending: boolean; isError: boolean; isSuccess: boolean; data: BuiltinSource[] | undefined; refetch: () => unknown };
+  shapeFilter?: DataShape[];
+  selectedId: string | undefined;
+  onPick: (row: BuiltinSource) => void;
+  onClearFilter?: () => void;
+  onAddConnector?: () => void;
+}) {
+  const t = useTranslations('sources');
+  const rows = builtins.data ?? [];
+  return <section className="flex flex-col gap-3" aria-label={t('stepBuiltinPick')}>
+    <p className="text-muted-foreground">{t('builtinPickHint')}</p>
+    {builtins.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
+    {builtins.isError && <p className="text-destructive" role="alert">{t('builtinLoadFailed')} <Button variant="outline" onClick={() => builtins.refetch()}>{t('retry')}</Button></p>}
+    {builtins.isSuccess && <ShapeFilterEmpty rows={rows} shapeFilter={shapeFilter} onClearFilter={onClearFilter} onAddConnector={onAddConnector} />}
+    {groupByCategory(rows.filter((row) => matchesShapes(row.data_shapes, shapeFilter))).map(([category, group]) => <div key={category} className="flex flex-col gap-2" role="group" aria-label={t(CATEGORY_KEY[category])}>
+      <h3 className="m-0 text-sm font-semibold text-muted-foreground">{t(CATEGORY_KEY[category])}</h3>
+      {group.map((row) => <BuiltinPickRow key={row.id} row={row} selected={selectedId === row.id} onPick={onPick} />)}
+    </div>)}
+  </section>;
+}
+
+/** Step 3: live status of the verification fetch (activation, collection, outcome) with a retry once it failed. */
+function BuiltinVerifyStep({ test, createdId, onRetry }: { test: TestState; createdId: string; onRetry: () => void }) {
+  const t = useTranslations('sources');
+  return <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('verifyTitle')}>
+    <h3 className="m-0 text-base font-semibold">{t('verifyTitle')}</h3>
+    {test.phase === 'activating' && <p role="status">{t('verifyWaitingActivation')}</p>}
+    {test.phase === 'collecting' && <p role="status">{t('verifyCollecting')}</p>}
+    {test.phase === 'succeeded' && <p role="status">{t('verifySucceeded')}</p>}
+    {test.phase === 'no_changes' && <p role="status">{t('verifyNoChanges')}</p>}
+    {test.phase === 'failed' && <p className="error" role="alert">{t('verifyFailed', { code: test.code ?? 'unknown' })}</p>}
+    {test.runId && <p className="text-muted-foreground">{t('verifyRunId', { id: test.runId })}</p>}
+    {test.phase === 'failed' && createdId && <div><Button variant="outline" onClick={onRetry}>{t('verifyRetry')}</Button></div>}
+  </section>;
+}
+
+/**
+ * Wizard selection/enable state: picked built-in, declared use, realtime override, option values, AI options, error and
+ * created source id. `pick` resets the per-built-in fields exactly as choosing a row did inline.
+ */
+function useBuiltinWizardState() {
+  const [selected, setSelected] = useState<BuiltinSource | null>(null);
+  const [use, setUse] = useState<DeclaredUse>('personal');
+  const [realtimeModeOverride, setRealtimeModeOverride] = useState<RealtimeMode | null>(null);
+  const [optionValues, setOptionValues] = useState<BuiltinOptionValues>({});
+  const [aiOptions, setAiOptions] = useState<SourceAiOptions>({ graph_enabled: false, rag_index_enabled: false });
+  const [error, setError] = useState<string | null>(null);
+  const [createdId, setCreatedId] = useState('');
+  /** Selects a built-in row and resets use, realtime override, options (default section) and error. */
+  const pick = (row: BuiltinSource) => {
+    setSelected(row); setUse('personal'); setRealtimeModeOverride(null);
+    setOptionValues({ feed_sections: row.default_section ? [row.default_section] : undefined });
+    setError(null);
+  };
+  return { selected, use, setUse, realtimeModeOverride, setRealtimeModeOverride, optionValues, setOptionValues, aiOptions, setAiOptions, error, setError, createdId, setCreatedId, pick };
+}
 
 /**
  * Three-step dialog for adding one built-in source: pick, confirm terms and declared use, then enable and prove a fetch.
@@ -172,18 +262,8 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
   const queryClient = useQueryClient();
   const builtins = useQuery({ queryKey: connectorKeys.builtins, queryFn: ({ signal }) => listBuiltinSources(signal) });
   const [index, setIndex] = useState(0);
-  const [selected, setSelected] = useState<BuiltinSource | null>(null);
-  const [use, setUse] = useState<DeclaredUse>('personal');
-  const [realtimeModeOverride, setRealtimeModeOverride] = useState<RealtimeMode | null>(null);
-  const [optionValues, setOptionValues] = useState<BuiltinOptionValues>({});
-  const [aiOptions, setAiOptions] = useState<SourceAiOptions>({ graph_enabled: false, rag_index_enabled: false });
-  const [error, setError] = useState<string | null>(null);
-  const [createdId, setCreatedId] = useState('');
-  const [test, setTest] = useState<TestState>({ phase: 'idle' });
-  const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
-  const verified = test.phase === 'succeeded' || test.phase === 'no_changes';
-  const testing = test.phase === 'activating' || test.phase === 'collecting';
+  const state = useBuiltinWizardState();
+  const { selected, use, realtimeModeOverride, optionValues, aiOptions, error, createdId } = state;
 
   /** Refreshes the built-in availability and the source table after the server state changed. */
   const refresh = () => {
@@ -191,54 +271,31 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
     void queryClient.invalidateQueries({ queryKey: sourceKeys.all });
     onChanged();
   };
-  /** Maps a failed enable to the most specific localized message. */
-  const fail = (cause: unknown) => setError(t(builtinEnableErrorKey(cause)));
-
-  /** Waits for activation, runs one real collection and records the outcome; failures keep the dialog open for retry or discard. */
-  async function runTest(sourceId: string) {
-    controller.current?.abort();
-    const ctl = new AbortController();
-    controller.current = ctl;
-    /** True while this test run is still the active one (not superseded by a newer run and not aborted). */
-    const current = () => controller.current === ctl && !ctl.signal.aborted;
-    setTest({ phase: 'activating' });
-    try {
-      const activation = await waitForActivation(sourceId, ctl.signal);
-      if (!activation || !current()) return;
-      if (!activation.ok) { setTest({ phase: 'failed', code: activation.code }); return; }
-      setTest({ phase: 'collecting' });
-      const final = await collectAndWait(sourceId, csrfToken, { signal: ctl.signal });
-      if (!final || !current()) return;
-      if (final.status === 'succeeded' || final.status === 'no_changes') setTest({ phase: final.status, runId: final.ingestion_run_id });
-      else setTest({ phase: 'failed', code: final.error_code ?? final.status });
-      refresh();
-    } catch (cause) {
-      if (current()) setTest({ phase: 'failed', code: cause instanceof ApiError ? cause.message || `http_${cause.status}` : 'request_failed' });
-    }
-  }
+  const { test, runTest, abort, verified, testing } = useBuiltinTest(csrfToken, refresh);
 
   /** Enables the picked built-in when leaving the terms step, then starts the test fetch for the created source. */
   async function onNext(): Promise<boolean> {
     if (index !== 1 || !selected) return true;
     if (createdId) { void runTest(createdId); return true; }
-    setError(null);
+    state.setError(null);
     try {
       const options = { ...aiOptions, ...(realtimeModeOverride ? { realtime_mode: realtimeModeOverride } : {}), ...applicableOptionPayload(selected, optionValues) };
       const result = await enableBuiltinSource(selected.id, use, csrfToken, undefined, options);
-      if (!result.source_id) { setError(t('builtinErrorGeneric')); return false; }
-      setCreatedId(result.source_id);
+      if (!result.source_id) { state.setError(t('builtinErrorGeneric')); return false; }
+      state.setCreatedId(result.source_id);
       refresh();
       void runTest(result.source_id);
       return true;
     } catch (cause) {
-      fail(cause);
+      /** Maps a failed enable to the most specific localized message. */
+      state.setError(t(builtinEnableErrorKey(cause)));
       return false;
     }
   }
 
   /** Pauses and archives the unverified source this dialog created, then closes. */
   async function discard() {
-    controller.current?.abort();
+    abort();
     if (selected) await disableBuiltinSource(selected.id, csrfToken);
     await archiveSource(createdId, csrfToken);
     refresh();
@@ -253,44 +310,9 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
   return <WizardShell title={t('wizardTitleBuiltin')} mode="add" steps={steps} stepIndex={index} onStepChange={setIndex} busy={testing} onNext={onNext} onRequestClose={onClose}
     final={{ label: t('done'), disabled: !verified, onClick: onClose }}
     discard={createdId ? { needed: !verified, onConfirm: discard } : undefined}>
-    {index === 0 && <section className="flex flex-col gap-3" aria-label={t('stepBuiltinPick')}>
-      <p className="text-muted-foreground">{t('builtinPickHint')}</p>
-      {builtins.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
-      {builtins.isError && <p className="text-destructive" role="alert">{t('builtinLoadFailed')} <Button variant="outline" onClick={() => builtins.refetch()}>{t('retry')}</Button></p>}
-      {Boolean(shapeFilter?.length) && builtins.isSuccess && !(builtins.data ?? []).some((row) => matchesShapes(row.data_shapes, shapeFilter) && row.source_id === null)
-        // Compatible built-ins that are all already added/paused read as "all added", not "none compatible".
-        && <p role="status" className="text-muted-foreground">{(builtins.data ?? []).some((row) => matchesShapes(row.data_shapes, shapeFilter)) ? t('addBuiltinAllAdded') : t('shapeFilterNoBuiltin')} {onAddConnector && !(builtins.data ?? []).some((row) => matchesShapes(row.data_shapes, shapeFilter)) && <Button variant="outline" size="sm" onClick={onAddConnector}>{t('addConnector')}</Button>} {onClearFilter && <Button variant="outline" size="sm" onClick={onClearFilter}>{t('shapeFilterClear')}</Button>}</p>}
-      {groupByCategory((builtins.data ?? []).filter((row) => matchesShapes(row.data_shapes, shapeFilter))).map(([category, rows]) => <div key={category} className="flex flex-col gap-2" role="group" aria-label={t(CATEGORY_KEY[category])}>
-        <h3 className="m-0 text-sm font-semibold text-muted-foreground">{t(CATEGORY_KEY[category])}</h3>
-        {rows.map((row) => {
-          const added = row.source_id !== null;
-          const tier = row.realtime_tier ?? 'near_realtime';
-          return <button key={row.id} type="button" disabled={added} aria-pressed={selected?.id === row.id} onClick={() => { setSelected(row); setUse('personal'); setRealtimeModeOverride(null); setOptionValues({ feed_sections: row.default_section ? [row.default_section] : undefined }); setError(null); }}
-            className={`flex w-full items-start justify-between gap-3 rounded-md border bg-transparent p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 ${selected?.id === row.id ? 'border-primary' : 'border-border'}`}>
-            <span className="min-w-0">
-              <span className="m-0 flex flex-wrap items-center gap-2 font-medium">{row.label}
-                <Badge variant={tier === 'realtime' ? 'default' : 'secondary'}>{t(tier === 'realtime' ? 'badgeRealtime' : 'badgeNearRealtime')}</Badge>
-                {added && <Badge variant="secondary">{t('builtinAdded')}</Badge>}
-                {row.execution === 'experimental' && <Badge variant="outline">{t('builtinExperimental')}</Badge>}
-                {row.eligibility === 'review' && <Badge variant="secondary">{t('builtinReviewClass')}</Badge>}
-              </span>
-              <span className="block text-sm text-muted-foreground">{row.attribution}</span>
-            </span>
-          </button>;
-        })}
-      </div>)}
-    </section>}
-    {index === 1 && selected && <BuiltinTermsFields builtin={selected} use={use} onUseChange={setUse} realtimeMode={realtimeModeOverride ?? selected.realtime_tier ?? 'near_realtime'} onRealtimeModeChange={setRealtimeModeOverride} aiOptions={aiOptions} onAiOptionsChange={setAiOptions} error={error} />}
-    {index === 1 && selected && <BuiltinOptions builtin={selected} values={optionValues} showName showSchedule onChange={(key, value) => setOptionValues((current) => ({ ...current, [key]: value }))} />}
-    {index === 2 && <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('verifyTitle')}>
-      <h3 className="m-0 text-base font-semibold">{t('verifyTitle')}</h3>
-      {test.phase === 'activating' && <p role="status">{t('verifyWaitingActivation')}</p>}
-      {test.phase === 'collecting' && <p role="status">{t('verifyCollecting')}</p>}
-      {test.phase === 'succeeded' && <p role="status">{t('verifySucceeded')}</p>}
-      {test.phase === 'no_changes' && <p role="status">{t('verifyNoChanges')}</p>}
-      {test.phase === 'failed' && <p className="error" role="alert">{t('verifyFailed', { code: test.code ?? 'unknown' })}</p>}
-      {test.runId && <p className="text-muted-foreground">{t('verifyRunId', { id: test.runId })}</p>}
-      {test.phase === 'failed' && createdId && <div><Button variant="outline" onClick={() => void runTest(createdId)}>{t('verifyRetry')}</Button></div>}
-    </section>}
+    {index === 0 && <BuiltinPickStep builtins={builtins} shapeFilter={shapeFilter} selectedId={selected?.id} onPick={state.pick} onClearFilter={onClearFilter} onAddConnector={onAddConnector} />}
+    {index === 1 && selected && <BuiltinTermsFields builtin={selected} use={use} onUseChange={state.setUse} realtimeMode={realtimeModeOverride ?? selected.realtime_tier ?? 'near_realtime'} onRealtimeModeChange={state.setRealtimeModeOverride} aiOptions={aiOptions} onAiOptionsChange={state.setAiOptions} error={error} />}
+    {index === 1 && selected && <BuiltinOptions builtin={selected} values={optionValues} showName showSchedule onChange={(key, value) => state.setOptionValues((current) => ({ ...current, [key]: value }))} />}
+    {index === 2 && <BuiltinVerifyStep test={test} createdId={createdId} onRetry={() => void runTest(createdId)} />}
   </WizardShell>;
 }

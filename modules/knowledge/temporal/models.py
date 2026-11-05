@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -149,6 +150,11 @@ class GraphOperation(Base, CreatedAtMixin):
         ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], name="fk_w2_temporal_operations_workspace", ondelete="RESTRICT"),
         Index("ix_w2_temporal_operations_scope", 'workspace_id', 'id'),
         Index("ix_w2_temporal_operations_work", 'workspace_id', 'status', 'next_attempt_at', 'id'),
+        # Open work only (queries filter these statuses); terminal rows are the vast majority.
+        Index(
+            "ix_temporal_operations_open_status", "status",
+            postgresql_where=text("status IN ('pending', 'running', 'blocked', 'reconcile_needed')"),
+        ),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -160,7 +166,7 @@ class GraphOperation(Base, CreatedAtMixin):
     desired_revision: Mapped[int] = mapped_column(Integer)
     desired_digest: Mapped[str] = mapped_column(String(64))
     receipt_token: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), default=uuid7)
-    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
     phase: Mapped[str] = mapped_column(String(40), default="intent_committed")
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -272,6 +278,7 @@ class GraphReconcileRun(Base, CreatedAtMixin):
         ForeignKeyConstraint(["workspace_id", "actor_user_id"], ['workspaces.id', 'workspaces.owner_user_id'], name="fk_w2_temporal_reconcile_runs_principal", ondelete="RESTRICT"),
         Index("ix_w2_temporal_reconcile_runs_scope", 'workspace_id', 'id'),
         Index("ix_w2_temporal_reconcile_runs_work", "workspace_id", "created_at", "id"),
+        Index("ix_temporal_reconcile_runs_open_status", "status", postgresql_where=text("status IN ('pending', 'running')")),
     )
 
     workspace_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
@@ -281,7 +288,7 @@ class GraphReconcileRun(Base, CreatedAtMixin):
     scope: Mapped[dict[str, Any]] = mapped_column(JSONB)
     upper_mapping_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     cursor: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
-    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
     scanned: Mapped[int] = mapped_column(Integer, default=0)
     queued: Mapped[int] = mapped_column(Integer, default=0)
     converged: Mapped[int] = mapped_column(Integer, default=0)

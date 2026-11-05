@@ -6,6 +6,7 @@ import MarkdownIt from 'markdown-it';
 import type { LegalLocale, PolicyName } from './messages';
 
 const renderer = new MarkdownIt({ html: false, linkify: false, typographer: false });
+type Token = ReturnType<typeof renderer.parse>[number];
 // Explicit paths prevent user input from selecting arbitrary files, even at runtime.
 const policyFiles = {
   'en-us': { privacy: 'en-us/privacy.md', terms: 'en-us/terms.md', refunds: 'en-us/refunds.md' },
@@ -19,24 +20,36 @@ export function policyRoot(cwd: string): string {
   return path.resolve(root, 'docs/legal');
 }
 
-/** Reads only the six shipped policy files (or the published inventory); never accepts a filesystem path. */
-export async function loadPolicy(name: PolicyName | 'inventory', locale: LegalLocale): Promise<string> {
-  if (!Object.hasOwn(policyFiles, locale) || (name !== 'inventory' && !Object.hasOwn(policyFiles[locale], name))) {
-    throw new Error('Unknown legal document');
-  }
-  const relative = name === 'inventory' ? '../third-party-services.md' : policyFiles[locale][name];
-  const source = await readFile(path.resolve(policyRoot(process.cwd()), relative), 'utf8');
-  const tokens = renderer.parse(source, {});
+/** True when (locale, name) addresses one of the six shipped files or the inventory; guards against arbitrary keys. */
+function isKnownDocument(name: PolicyName | 'inventory', locale: LegalLocale): boolean {
+  if (!Object.hasOwn(policyFiles, locale)) return false;
+  return name === 'inventory' || Object.hasOwn(policyFiles[locale], name);
+}
+
+/** Slugifies heading text into a unicode-preserving anchor base (NFC, lowercase, punctuation stripped, dashes). */
+function headingSlug(text: string): string {
+  return text.normalize('NFC').toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s+/g, '-');
+}
+
+/** Assigns unique, stable `id`s to every heading token; repeated slugs get `-1`, `-2`, ... suffixes. */
+function assignHeadingIds(tokens: Token[]): void {
   const headings = new Map<string, number>();
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (token.type === 'heading_open') {
-      const base = (tokens[index + 1]?.content ?? '').normalize('NFC').toLowerCase()
-        .replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s+/g, '-');
-      const occurrence = headings.get(base) ?? 0;
-      headings.set(base, occurrence + 1);
-      token.attrSet('id', occurrence === 0 ? base : `${base}-${occurrence}`);
-    }
+  tokens.forEach((token, index) => {
+    if (token.type !== 'heading_open') return;
+    const base = headingSlug(tokens[index + 1]?.content ?? '');
+    const occurrence = headings.get(base) ?? 0;
+    headings.set(base, occurrence + 1);
+    token.attrSet('id', occurrence === 0 ? base : `${base}-${occurrence}`);
+  });
+}
+
+/**
+ * Turns repository-relative links (no public app URL) into inert spans while keeping their text; http(s), mailto,
+ * root-relative and fragment links stay clickable. Link open/close pairs are matched per token's inline children.
+ */
+function neutralizeRepositoryLinks(tokens: Token[]): void {
+  for (const token of tokens) {
     const repositoryLinks: boolean[] = [];
     for (const child of token.children ?? []) {
       if (child.type === 'link_open') {
@@ -53,5 +66,17 @@ export async function loadPolicy(name: PolicyName | 'inventory', locale: LegalLo
       }
     }
   }
+}
+
+/** Reads only the six shipped policy files (or the published inventory); never accepts a filesystem path. */
+export async function loadPolicy(name: PolicyName | 'inventory', locale: LegalLocale): Promise<string> {
+  if (!isKnownDocument(name, locale)) {
+    throw new Error('Unknown legal document');
+  }
+  const relative = name === 'inventory' ? '../third-party-services.md' : policyFiles[locale][name as PolicyName];
+  const source = await readFile(path.resolve(policyRoot(process.cwd()), relative), 'utf8');
+  const tokens = renderer.parse(source, {});
+  assignHeadingIds(tokens);
+  neutralizeRepositoryLinks(tokens);
   return renderer.renderer.render(tokens, renderer.options, {});
 }

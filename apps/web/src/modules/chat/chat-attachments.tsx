@@ -14,7 +14,7 @@ import {
   uploadChatAttachment,
   type ChatAttachment,
   type ChatContext,
-} from '@/modules/chat/api';
+} from './api';
 import { ChatDocumentPreview } from './chat-document-preview';
 
 type Item = NonNullable<ChatContext['items']>[number];
@@ -178,6 +178,51 @@ export function withAttachments(context: ChatContext | null, items: Item[]): Cha
 }
 
 /**
+ * Document a chip can preview: only ready (or oversized-but-stored) uploads with a persisted version are openable.
+ *
+ * @param e - Upload entry.
+ * @returns `documentId` (null while unavailable) and the exact `versionId` to compare against.
+ */
+function previewTarget(e: AttachmentEntry): { documentId: string | null; versionId: string | null | undefined } {
+  const previewable = e.state === 'ready' || e.state === 'too_large';
+  return {
+    documentId: e.doc?.document_version_id && previewable ? e.doc.document_id : null,
+    versionId: previewable ? e.doc?.document_version_id : undefined,
+  };
+}
+
+/**
+ * One attachment chip: a preview trigger (only openable once the document is ready), its status text and a remove button.
+ *
+ * @param props - The upload entry, its localized status text and the remove callback.
+ */
+function AttachmentChip({ entry: e, statusText: status, onRemove }: { entry: AttachmentEntry; statusText: string; onRemove: () => void }) {
+  const t = useTranslations('chat');
+  const problem = e.state === 'rejected' || e.state === 'failed' || e.state === 'too_large';
+  return (
+    <Badge variant="secondary" className={`min-h-8 max-w-full gap-1 py-1 pl-1 pr-0 text-xs ${problem ? 'border border-destructive' : ''}`}>
+      <ChatDocumentPreview
+        {...previewTarget(e)}
+        title={e.name}
+        unavailableMessage={e.state === 'uploading' || e.state === 'pending' ? t('attachmentPreviewWaiting') : t('previewUnavailable')}
+      >
+        <Button type="button" variant="ghost" className="h-7 min-w-0 gap-1 px-1 text-xs font-normal" aria-label={t('previewDocument', { title: e.name })}>
+          {e.doc?.local_only && e.state === 'ready'
+            ? <LockIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+            : <FileTextIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
+          <span className="max-w-48 truncate">{e.name}</span>
+        </Button>
+      </ChatDocumentPreview>
+      <span className={problem ? 'text-destructive' : 'text-muted-foreground'}>· {status}</span>
+      {/* 44px hit area; the negative margin keeps the chip's visual height. */}
+      <Button type="button" variant="ghost" size="icon" className="-my-1.5 rounded-full text-muted-foreground" data-attachment-remove onClick={onRemove} title={t('attachmentRemove', { name: e.name })} aria-label={t('attachmentRemove', { name: e.name })}>
+        <XIcon className="size-3.5" aria-hidden="true" />
+      </Button>
+    </Badge>
+  );
+}
+
+/**
  * Hidden file input, attachment text-preview badges and the live status line for the full Chat composer. The Attach
  * and cloud-sharing controls live in the composer's + menu, which opens the picker through `inputRef`.
  *
@@ -225,31 +270,9 @@ export function ChatAttachmentBar({ state, disabled, inputRef }: { state: Return
       />
       {state.entries.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          {state.entries.map((e, idx) => {
-            const problem = e.state === 'rejected' || e.state === 'failed' || e.state === 'too_large';
-            return (
-              <Badge key={e.key} variant="secondary" className={`min-h-8 max-w-full gap-1 py-1 pl-1 pr-0 text-xs ${problem ? 'border border-destructive' : ''}`}>
-                <ChatDocumentPreview
-                  documentId={e.doc?.document_version_id && (e.state === 'ready' || e.state === 'too_large') ? e.doc.document_id : null}
-                  versionId={e.state === 'ready' || e.state === 'too_large' ? e.doc?.document_version_id : undefined}
-                  title={e.name}
-                  unavailableMessage={e.state === 'uploading' || e.state === 'pending' ? t('attachmentPreviewWaiting') : t('previewUnavailable')}
-                >
-                  <Button type="button" variant="ghost" className="h-7 min-w-0 gap-1 px-1 text-xs font-normal" aria-label={t('previewDocument', { title: e.name })}>
-                    {e.doc?.local_only && e.state === 'ready'
-                      ? <LockIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
-                      : <FileTextIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
-                    <span className="max-w-48 truncate">{e.name}</span>
-                  </Button>
-                </ChatDocumentPreview>
-                <span className={problem ? 'text-destructive' : 'text-muted-foreground'}>· {statusText(e)}</span>
-                {/* 44px hit area; the negative margin keeps the chip's visual height. */}
-                <Button type="button" variant="ghost" size="icon" className="-my-1.5 rounded-full text-muted-foreground" data-attachment-remove onClick={() => removeEntry(e.key, e.name, idx)} title={t('attachmentRemove', { name: e.name })} aria-label={t('attachmentRemove', { name: e.name })}>
-                  <XIcon className="size-3.5" aria-hidden="true" />
-                </Button>
-              </Badge>
-            );
-          })}
+          {state.entries.map((e, idx) => (
+            <AttachmentChip key={e.key} entry={e} statusText={statusText(e)} onRemove={() => removeEntry(e.key, e.name, idx)} />
+          ))}
         </div>
       )}
       <span role="status" className="sr-only">{removedNote}</span>

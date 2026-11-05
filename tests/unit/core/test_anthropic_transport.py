@@ -46,7 +46,10 @@ def _gw(handler: Callable[[httpx.Request], httpx.Response], seen: list[httpx.Req
         seen.append(request)
         return handler(request)
 
-    gw = _gateway(MagicMock(), base_url=base_url, kind=kind, destination_id="d")
+    redis = MagicMock()
+    redis.exists = AsyncMock(return_value=0)  # no stored max_tokens clamp
+    redis.set = AsyncMock()
+    gw = _gateway(redis, base_url=base_url, kind=kind, destination_id="d")
     return gw, record
 
 
@@ -201,8 +204,10 @@ def test_default_max_tokens_is_larger_when_streaming() -> None:
     assert to_messages_request({**body, "max_tokens": 10}, stream=True)["max_tokens"] == 10
 
 
-@pytest.mark.parametrize("choice", ["required", {"type": "function", "function": {"name": "f"}}])
-def test_forced_tool_choice_is_downgraded_to_auto(choice: object) -> None:
+@pytest.mark.parametrize(("choice", "expected"), [
+    ("required", {"type": "any"}), ({"type": "function", "function": {"name": "f"}}, {"type": "tool", "name": "f"})])
+def test_forced_tool_choice_is_mapped(choice: object, expected: dict[str, Any]) -> None:
     from core.model_gateway.anthropic import to_messages_request
-    out = to_messages_request({"model": "m", "messages": [], "tool_choice": choice}, stream=False)
-    assert "tool_choice" not in out
+    tools = [{"type": "function", "function": {"name": "f"}}]
+    out = to_messages_request({"model": "m", "messages": [], "tools": tools, "tool_choice": choice}, stream=False)
+    assert out["tool_choice"] == expected

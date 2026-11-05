@@ -1218,3 +1218,20 @@ Docker integration/E2E, live providers, actual runtime erasure/recovery and depl
 
 Implemented (uncommitted, pending owner review/commit): gadget templates flow in the dashboard. Chart history now comes from observation revisions, with no new deletion job. Binance, CoinGecko (collection clock) and disease.sh keep one fixed external id per series, so each collection is a new revision with its own `observed_at`. `GET /api/v1/observations?history=true` (`ObservationQuery.history`, default false) also returns superseded revisions inside the window, de-duplicated per (source, provider, scope discriminator, metric, symbol, region, unit, coordinates, observed_at) keeping the latest accepted revision (ties use the current-selection key accepted_at, ingestion id), under the same authorization, scan and page caps and `observed_at desc` order; superseded document versions are accepted only in this mode. FinanceChart requests history; Metric and every other caller stay current-only. Existing retention (`purge_expired_datasource_data`) deletes non-current revisions past the source cutoff and keeps current rows; catalog default lookbacks keep history within the 500-row page cap (binance 15 min x 3 days = 288). Pre-existing growth, unchanged: coinpaprika, iss_position, openweathermap and openaq mint one current row (and document) per sample and are not purged. Validation: unit suites (history window executed on SQLite, evidence fences on a fake session), lint and typecheck; `tests/integration/test_observation_history.py` is collect-only. Residual risk: Docker integration/E2E and live providers were not run; the history-mode PostgreSQL plan is unverified at volume.
 
+
+
+## Follow-up: nonce-based script CSP - 2026-11-04
+
+Open item from F2.7. `script-src 'unsafe-inline'` remains in `apps/web/next.config.ts` and `infrastructure/proxy/Caddyfile` because generative-UI `srcdoc` sandbox frames inherit the host CSP (a nonce policy would block widget inline scripts and import maps) and Next's per-page inline hydration scripts cannot be covered by one hash. Planned removal path (see `docs/security.md`): serve widget frames from a dedicated route with their own CSP, then switch the host to a per-request nonce CSP set in `apps/web/src/proxy.ts` and used by the `app/layout.tsx` accent-init script.
+
+## Deferred: DomainError migration for remaining core non-route code
+
+`core/pagination.py` raises `DomainError`. These still raise `HTTPException` and are deferred to a
+cross-cutting wave after the parallel work packages merge (about 129 `except HTTPException` sites and
+315 `pytest.raises(HTTPException)` assertions live in modules owned by other packages): `core/workspaces/{access,admission,public,dependencies}.py`,
+`core/auth/public.py`, `core/rate_limit.py`, `core/realtime/service.py`. Plan: first move callers to
+`core.errors.is_http_error`, then convert the raisers.
+
+## Deferred: repo-wide Prettier enforcement (guardrails package)
+
+`npm run lint` and CI enforce Prettier only for files changed since `FORMAT_BASE` (`apps/web/scripts/format-check.mjs`). A repo-wide `prettier --write apps/web/src` was measured and reverted: 555 files differ, and the formatted tree fails the enforced ESLint `max-lines-per-function` (100) rule in 53 to 68 components regardless of printWidth (140, 160, 200, with `bracketSameLine`). Resolution path: split those components (owned by the UI packages), then run `prettier --write` in one formatting-only commit and switch lint/CI to `format:check:all`. Owner decision needed if the 100-line budget should instead be relaxed for JSX-heavy components.

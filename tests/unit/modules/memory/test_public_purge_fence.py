@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
 from modules.memory import public
 
@@ -42,7 +42,7 @@ async def test_source_only_provenance_passes_when_eligible_and_never_purged(sour
 
 async def test_prior_source_data_purge_rejects_even_when_export_eligible(sources) -> None:
     sources.purged.return_value = True  # a successful purge reopens export eligibility
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await public._lock_live_provenance_evidence(
             None, {"source_id": str(uuid4())}, require_copy_evidence=False, **CTX,
         )
@@ -51,14 +51,14 @@ async def test_prior_source_data_purge_rejects_even_when_export_eligible(sources
 
 async def test_missing_or_ineligible_source_is_rejected(sources) -> None:
     sources.eligible.return_value = []
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await public._lock_live_provenance_evidence(
             None, {"source_id": str(uuid4())}, require_copy_evidence=False, **CTX,
         )
     assert caught.value.status_code == 409
     sources.eligible.return_value = [1]
     sources.lock.return_value = None
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await public._lock_live_provenance_evidence(
             None, {"source_id": str(uuid4())}, require_copy_evidence=False, **CTX,
         )
@@ -72,7 +72,7 @@ async def test_missing_or_ineligible_source_is_rejected(sources) -> None:
     ({"source_id": str(uuid4())}, True),  # copied content needs Document or Chat evidence
 ])
 async def test_unverifiable_provenance_is_rejected(sources, provenance, copy) -> None:
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await public._lock_live_provenance_evidence(None, provenance, require_copy_evidence=copy, **CTX)
     assert caught.value.status_code == 409
 
@@ -81,6 +81,6 @@ async def test_vanished_evidence_source_hides_document_copy(sources) -> None:
     from modules.knowledge.documents import public as documents_public
 
     provenance = {"document_id": str(uuid4()), "document_version_id": str(uuid4()), "chunk_id": str(uuid4())}
-    with patch.object(documents_public, "read_evidence_refs", AsyncMock(side_effect=ValueError("gone"))),             pytest.raises(HTTPException) as caught:
+    with patch.object(documents_public, "read_evidence_refs", AsyncMock(side_effect=ValueError("gone"))),             pytest.raises(DomainError) as caught:
         await public._lock_live_provenance_evidence(None, provenance, require_copy_evidence=True, **CTX)
     assert caught.value.status_code == 409

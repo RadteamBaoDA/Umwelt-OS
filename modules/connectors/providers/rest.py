@@ -21,6 +21,8 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from core.async_runtime import run_dns_lookup
+from core.heavy_work import to_thread_joined
 from modules.connectors.providers.feed_catalog import _retry_deadline
 from modules.connectors.public import ProviderRateLimited, overlap_floor
 from modules.connectors.selection import SKEW
@@ -54,6 +56,7 @@ class ProviderHttpError(RuntimeError):
     """A non-success status without response text; 5xx and 408 are retryable."""
 
     def __init__(self, status_code: int) -> None:
+        """Record the HTTP status as the stable ``http_<status>`` error."""
         super().__init__(f"http_{status_code}")
         self.status_code = status_code
 
@@ -75,8 +78,9 @@ class Fetched:
 async def resolve_public(host: str, port: int) -> list[str]:
     """Resolve once and require every returned address to be globally routable."""
     try:
-        # wait_for bounds request latency only: a cancelled to_thread keeps running in the pool until the resolver returns.
-        infos = await asyncio.wait_for(asyncio.to_thread(getaddrinfo, host, port, 0, 0, 0), 5)
+        # wait_for bounds request latency only: a timed-out lookup keeps its thread until the resolver returns,
+        # so it runs on the dedicated DNS pool and cannot starve the shared default executor.
+        infos = await asyncio.wait_for(run_dns_lookup(getaddrinfo, host, port, 0, 0, 0), 5)
     except (OSError, TimeoutError) as exc:
         raise UnsafeDestination("host_unresolvable") from exc
     addresses = [str(item[4][0]) for item in infos]
@@ -86,6 +90,7 @@ async def resolve_public(host: str, port: int) -> list[str]:
 
 
 def _origin(url: str) -> tuple[str, str, int]:
+    """Return ``(scheme, lowercase host, port)`` with scheme-default ports for same-origin comparison."""
     parts = urlsplit(url)
     scheme = parts.scheme
     return scheme, (parts.hostname or "").lower(), parts.port or (443 if scheme == "https" else 80)
@@ -107,7 +112,7 @@ def _pinned_request(url: str, address: str, headers: dict[str, str]) -> tuple[st
 async def fetch_bounded(
     url: str, *, headers: dict[str, str] | None = None, before_send: BeforeSend,
     resolve: Resolver = resolve_public, transport: httpx.AsyncBaseTransport | None = None,
-    max_bytes: int = MAX_PAGE_BYTES, timeout: float = REQUEST_TIMEOUT_SECONDS, json_body: bytes | None = None,
+    max_bytes: int = MAX_PAGE_BYTES, timeout: float = REQUEST_TIMEOUT_SECONDS, json_body: bytes | None = None,  # noqa: ASYNC109  # forwarded to the HTTP client request timeout
 ) -> Fetched:
     """GET (or, with ``json_body``, POST that JSON to) one URL through the pinned public destination with byte, status and time bounds.
 
@@ -199,6 +204,7 @@ async def _read_capped(response: httpx.Response, max_bytes: int) -> bytes:
 
 
 def _walk(value: Any, path: str | None) -> Any:
+    """Follow a dotted ``path`` through nested dicts; missing steps give ``None`` and an empty path returns ``value``."""
     if not path:
         return value
     for key in path.split("."):
@@ -207,10 +213,11 @@ def _walk(value: Any, path: str | None) -> Any:
 
 
 def _parse_time(raw: Any) -> datetime | None:
+    """Parse an ISO-8601 value (``Z`` allowed) to UTC, treating naive times as UTC; invalid or empty gives ``None``."""
     if raw is None or raw == "":
         return None
     try:
-        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))  # noqa: FURB162  # exact 'Z' handling
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except ValueError:
         return None
     return (parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)).astimezone(UTC)
@@ -329,6 +336,43 @@ def map_page(payload: Any, config: Any, floor: datetime | None) -> list[tuple[di
     return mapped
 
 
+async def _map_new_page(
+    payload: Any, config: Any, floor: datetime | None, skip: set[str], seen_ids: set[str],
+) -> tuple[list[tuple[dict[str, Any], datetime | None]], int]:
+    """Map one decoded page (off the event loop) and drop rows already committed or already seen this walk.
+
+    Mutates ``seen_ids``. Returns the new rows with their moments and their serialized size.
+    """
+    page: list[tuple[dict[str, Any], datetime | None]] = []
+    page_size = 0
+    for record, moment in await to_thread_joined(map_page, payload, config, floor):
+        identifier = str(record["provider_id"])
+        if id_hash(identifier) in skip or identifier in seen_ids:
+            continue
+        seen_ids.add(identifier)
+        page.append((record, moment))
+        page_size += len(json.dumps(record, ensure_ascii=False))
+    return page, page_size
+
+
+def _next_page_url(payload: Any, url: str, origin: tuple[str, str, int]) -> str | None:
+    """Resolve the payload's ``next_url`` against ``url``; ``None`` ends the walk.
+
+    Raises:
+        RestSchemaChanged: ``next_url_invalid`` for a non-string value.
+        UnsafeDestination: ``cross_origin_pagination`` when the target leaves the configured origin.
+    """
+    next_url = payload.get("next_url") if isinstance(payload, dict) else None
+    if next_url in (None, ""):
+        return None
+    if not isinstance(next_url, str):
+        raise RestSchemaChanged("next_url_invalid")
+    resolved = urljoin(url, next_url)
+    if _origin(resolved) != origin:
+        raise UnsafeDestination("cross_origin_pagination")
+    return resolved
+
+
 async def collect_rest(
     config: Any, cursor: str | None, *, fetch: Callable[..., Awaitable[Fetched]],
     conditional: dict[str, str] | None = None, resume: Checkpoint | None = None,
@@ -375,18 +419,10 @@ async def collect_rest(
             result.etag, result.last_modified = fetched.etag, fetched.last_modified
         page_bytes = len(fetched.body)
         try:
-            payload = json.loads(fetched.body)
+            payload = await to_thread_joined(json.loads, fetched.body)  # up to 10 MB: keep it off the worker loop
         except (UnicodeDecodeError, ValueError) as exc:
             raise RestSchemaChanged("response_not_json") from exc
-        page: list[tuple[dict[str, Any], datetime | None]] = []
-        page_size = 0
-        for record, moment in map_page(payload, config, floor):
-            identifier = str(record["provider_id"])
-            if id_hash(identifier) in skip or identifier in seen_ids:
-                continue
-            seen_ids.add(identifier)
-            page.append((record, moment))
-            page_size += len(json.dumps(record, ensure_ascii=False))
+        page, page_size = await _map_new_page(payload, config, floor, skip, seen_ids)
         if (
             result.transport_bytes + page_bytes > MAX_TRANSPORT_BYTES
             or len(result.records) + len(page) > MAX_RECORDS or batch_bytes + page_size > MAX_BATCH_BYTES
@@ -401,15 +437,7 @@ async def collect_rest(
             result.records.append(record)
             if moment is not None:
                 result.max_time = later(result.max_time, moment.isoformat())
-        next_url = payload.get("next_url") if isinstance(payload, dict) else None
-        if next_url in (None, ""):
-            url = None
-            continue
-        if not isinstance(next_url, str):
-            raise RestSchemaChanged("next_url_invalid")
-        url = urljoin(url, next_url)
-        if _origin(url) != origin:
-            raise UnsafeDestination("cross_origin_pagination")
+        url = _next_page_url(payload, url, origin)
     result.cursor_after = cursor if result.continuation_url is not None or result.not_modified else (
         result.max_time or cursor)
     return result

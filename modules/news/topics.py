@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import base64
 import binascii
-import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, NoReturn
@@ -35,11 +33,16 @@ from sqlalchemy.types import Uuid
 from core.auth.dependencies import require_account, require_account_write
 from core.auth.models import AuthSession
 from core.database import Base, get_session
+from core.errors import ValidationFailedError
+from core.export_pages import content_digest, dto_digest, serialize_bounded_page
+from core.http_cache import set_private_no_store as _no_store
 from core.ids import uuid7
+from core.pagination import b64url_decode, b64url_encode
 from core.realtime import commit_with_replay
-from core.workspaces import public as workspaces
+from core.workspaces.admission import actor_id as _actor
+from core.workspaces.admission import admit_scope
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
-from core.workspaces.schemas import AccessFence, AdminWorkspaceReadContext, Scope, WorkspaceContext
+from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
 
 MAX_REVISION = 9_007_199_254_740_991
 MAX_KEYWORDS = 50
@@ -47,28 +50,18 @@ MAX_KEYWORD_LENGTH = 100
 MAX_ENTITIES = 100
 
 
-def _actor(scope: Scope) -> int:
-    """Return the admitted owner actor used by this workspace-local row."""
-    return scope.user_id if isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)) else scope.actor_user_id
-
-
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,
 ) -> AccessFence:
-    """Admit owner scope before topic or entity reads and return its publication fence."""
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
-    if lock and isinstance(scope, AdminWorkspaceReadContext):
-        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
-    if type(multi_workspace_enabled) is not bool:
-        raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    if lock:
-        return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
-        )
-    return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    """Admit owner scope before topic or entity reads and return its publication fence.
+
+    Thin wrapper over ``core.workspaces.admission.admit_scope`` (no scope-type check, admin viewers read-only
+    on lock). No commit; the caller owns the transaction.
+    """
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
+        admin_read_only_on_lock=True,
     )
 
 
@@ -406,7 +399,7 @@ def _encode_topic_cursor(
         {"is_active": is_active}, "created_at_asc_id_asc", snapshot_at.isoformat(),
         created_at.isoformat(), str(topic_id),
     ], separators=(",", ":"))
-    return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
+    return b64url_encode(value.encode())
 
 
 def _decode_topic_cursor(
@@ -416,8 +409,8 @@ def _decode_topic_cursor(
     try:
         if not cursor or len(cursor) > 2048 or "=" in cursor:
             raise ValueError("invalid size or padding")
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError("noncanonical")
         value = json.loads(raw)
         expected = [
@@ -527,7 +520,7 @@ def _encode_topic_export_cursor(
         access_fence.membership_revision, access_fence.configuration_revision,
         {}, "created_at_asc_id_asc", snapshot_at.isoformat(), created_at.isoformat(), str(topic_id),
     ], separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_topic_export_cursor(
@@ -537,8 +530,8 @@ def _decode_topic_export_cursor(
     try:
         if len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError
         value = json.loads(raw)
         expected_scope = [
@@ -558,7 +551,7 @@ def _decode_topic_export_cursor(
             raise ValueError
         return snapshot_at, created_at, topic_id
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Topic export cursor is invalid") from exc
+        raise ValidationFailedError("Topic export cursor is invalid") from exc
 
 
 def _topic_export_scope(owner_id: int, snapshot_at: datetime, scope: Scope) -> tuple[ColumnElement[bool], ...]:
@@ -592,13 +585,10 @@ async def export_page(
     )).all())
     has_more, rows = len(rows) > limit, rows[:limit]
     items = [await _topic_read(session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled) for row in rows]
-    encoded = [item.model_dump_json().encode("utf-8") for item in items]
-    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
-    if payload_bytes > 16_777_216:
-        raise HTTPException(status_code=413, detail="Topic export page exceeds its byte bound")
+    encoded, payload_bytes = serialize_bounded_page(items, label="Topic")
     fences = [TopicExportFence(
         id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
-        content_digest=hashlib.sha256(raw).hexdigest(),
+        content_digest=content_digest(raw),
     ) for row, raw in zip(rows, encoded, strict=True)]
     return TopicExportPage(
         owner_id=owner_id, record_kind="topics", snapshot_at=snapshot_at,
@@ -630,7 +620,7 @@ async def validate_export_fences(
         item = await _topic_read(session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
         if (item.created_at != fence.created_at or item.updated_at != fence.updated_at
                 or item.revision != fence.revision
-                or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest() != fence.content_digest):
+                or dto_digest(item) != fence.content_digest):
             return TopicExportValidation(valid=False, reason="record_changed", observed_snapshot_count=observed)
     return TopicExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
 
@@ -727,7 +717,7 @@ class TopicService:
         await delete_topic(self.session, topic_id, expected_revision, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
-from modules.settings.public import module_dependency
+from modules.settings.public import module_dependency  # noqa: E402  # deliberate late import
 
 router = APIRouter(prefix="/api/v1/topics", tags=["news"], dependencies=[Depends(module_dependency("news"))])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -744,11 +734,6 @@ OwnerRead = Annotated[AuthSession, Depends(require_account)]
 OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(_owner_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
-
-
-def _no_store(response: Response) -> None:
-    """Prevent shared or browser caches from retaining private topic profiles."""
-    response.headers["Cache-Control"] = "private, no-store"
 
 
 def _raise_topic_error(exc: Exception) -> NoReturn:

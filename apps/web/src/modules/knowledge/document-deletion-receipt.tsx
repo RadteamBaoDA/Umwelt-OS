@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { documentDeletionKeys, getDocumentDeletionOperation, type DocumentDeletionReceipt } from './api';
+import { useResetOnChange } from '@/modules/shared';
 
 type DocumentDeletionStageStatus =
   | DocumentDeletionReceipt['status']
@@ -19,16 +20,16 @@ type DocumentDeletionStageStatus =
   | DocumentDeletionReceipt['brief_status'];
 
 /** Shows the operation-only deletion receipt after its Document and content queries are gone. */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function DocumentDeletionReceiptPanel({ operationId }: { operationId: string }) {
   const t = useTranslations('shell');
   const pollUntil = useRef(0);
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => { headingRef.current?.focus(); }, []);
   const [automaticRefreshPaused, setAutomaticRefreshPaused] = useState(false);
+  useResetOnChange([operationId], () => { setAutomaticRefreshPaused(false); });
   useEffect(() => {
     pollUntil.current = Date.now() + 30_000;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
-    setAutomaticRefreshPaused(false);
     const timer = window.setTimeout(() => setAutomaticRefreshPaused(true), 30_000);
     return () => window.clearTimeout(timer);
   }, [operationId]);

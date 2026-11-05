@@ -10,10 +10,10 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
-from fastapi import HTTPException
 from pydantic import SecretStr
 
 from core.config import Settings
+from core.errors import DomainError
 from core.model_gateway.schemas import (
     AIExecutionConfig,
     AISettingsUpdate,
@@ -184,7 +184,7 @@ async def test_local_flag_is_derived_from_kind_not_stored_value() -> None:
     lambda: _update(providers=[_provider("a", credential_action="replaced")]),  # replace without key
 ])
 async def test_save_rejects_invalid_provider_sets(update) -> None:
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await _save(_row(), update())
     assert exc.value.status_code == 422
 
@@ -248,7 +248,7 @@ async def test_role_requires_matching_model_type(role: str, mtype: str, ok: bool
         assert row.providers["a"]["models"] == [{"id": "m1", "type": mtype, "vision": False}]
         assert row.defaults[role]["model"] == "m1"
     else:
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(DomainError) as exc:
             await _save(_row(), update)
         assert exc.value.status_code == 422
 
@@ -262,14 +262,14 @@ async def test_vision_flagged_llm_serves_vision_role_and_flag_round_trips() -> N
 
 @pytest.mark.asyncio
 async def test_unlisted_model_is_rejected_when_listed_and_duplicate_model_ids_rejected() -> None:
-    with pytest.raises(HTTPException) as exc:  # provider has a model list -> unlisted id is 422
+    with pytest.raises(DomainError) as exc:  # provider has a model list -> unlisted id is 422
         await _save(_row(), _update(providers=[_typed("a", m1="llm")], defaults=ModelDefaults(embedding=ModelMapping(model="other", provider_id="a"))))
     assert exc.value.status_code == 422
     # empty model list = not yet discovered -> a chosen model is rejected until discovery runs
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await _save(_row(), _update(providers=[_provider("a")], defaults=ModelDefaults(embedding=ModelMapping(model="other", provider_id="a", dimensions=8))))
     assert exc.value.status_code == 422 and "Discover" in exc.value.detail
-    with pytest.raises(HTTPException):
+    with pytest.raises(DomainError):
         await _save(_row(), _update(providers=[_provider("a", models=[{"id": "m", "type": "llm"}, {"id": "m", "type": "tts"}])]))  # type: ignore[arg-type]
 
 
@@ -278,7 +278,7 @@ async def test_embedding_dimensions_required_rejected_elsewhere_and_round_trip()
     providers = [_typed("a", e="embedding", c="llm")]
     for defaults in (ModelDefaults(embedding=ModelMapping(model="e", provider_id="a")),  # missing dimensions
                      ModelDefaults(chat=ModelMapping(model="c", provider_id="a", dimensions=8))):  # dimensions on non-embedding
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(DomainError) as exc:
             await _save(_row(), _update(providers=providers, defaults=defaults))
         assert exc.value.status_code == 422
     row = await _save(_row(), _update(providers=providers, defaults=ModelDefaults(embedding=ModelMapping(model="e", provider_id="a", dimensions=768))))
@@ -327,11 +327,11 @@ async def test_toggle_keeps_grant_for_unchanged_remote_provider_and_local_never_
 
 def test_public_providers_flag_admits_only_https_hostnames() -> None:
     off, on = _settings(False), _settings(True)
-    with pytest.raises(HTTPException):
+    with pytest.raises(DomainError):
         public._endpoint("https://api.openai.com/v1", off)
     assert public._endpoint("https://api.openai.com/v1", on) == "https://api.openai.com/v1"
     for blocked in ("http://api.openai.com/v1", "https://8.8.8.8/v1"):
-        with pytest.raises(HTTPException):
+        with pytest.raises(DomainError):
             public._endpoint(blocked, on)
 
 
@@ -375,10 +375,10 @@ async def test_list_capabilities_reads_postgres_rows_matching_current_identity()
 def test_every_model_gateway_construction_uses_a_derived_config() -> None:
     root = Path(__file__).resolve().parents[4] / "modules"
     offenders = []
-    for path in root.rglob("*.py"):
+    for path in [*root.rglob("*.py"), root.parent / "core" / "model_gateway" / "factory.py"]:
         text = path.read_text(encoding="utf-8")
         if re.search(r"(?<![A-Za-z_])ModelGateway\(", text) and not re.search(r"derive_for_role|derive_for_mapping|resolve_draft_provider", text):
-            offenders.append(str(path.relative_to(root)))
+            offenders.append(str(path.relative_to(root.parent)))
     assert not offenders, f"ModelGateway built without derive_for_role: {offenders}"
 
 
@@ -405,7 +405,7 @@ async def test_legacy_save_rejects_duplicate_fallback_and_clears_key_on_endpoint
     primary, fallback = "https://gw.example", "https://other.example"
     row = _row(web_search_provider="tavily", web_search_endpoint=primary, web_search_api_key_ciphertext=_enc("secret"),
                web_search_fallbacks=[{"provider": "searxng", "endpoint": fallback, "key_ciphertext": None}])
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await _save(row, _update(web_search_provider="searxng", web_search_endpoint=fallback))
     assert exc.value.status_code == 422
     assert row.web_search_api_key_ciphertext is not None
@@ -423,15 +423,38 @@ def test_derive_carries_provider_kind():
 def test_every_model_gateway_construction_passes_kind():
     root = Path(__file__).resolve().parents[4] / "modules"
     offenders = []
-    for path in root.rglob("*.py"):
+    for path in [*root.rglob("*.py"), root.parent / "core" / "model_gateway" / "factory.py"]:
         text = path.read_text(encoding="utf-8")
         for match in re.finditer(r"(?<![A-Za-z_])ModelGateway\(", text):
             call = text[match.end(): match.end() + 1200]
             depth, end = 1, 0
-            for end, ch in enumerate(call):
+            for end, ch in enumerate(call):  # noqa: B007  # `end` is read after the loop
                 depth += {"(": 1, ")": -1}.get(ch, 0)
                 if depth == 0:
                     break
             if "kind=" not in call[:end]:
-                offenders.append(f"{path.relative_to(root)}:{text[:match.start()].count(chr(10)) + 1}")
+                offenders.append(f"{path.relative_to(root.parent)}:{text[:match.start()].count(chr(10)) + 1}")
     assert not offenders, f"ModelGateway built without kind=: {offenders}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "url", "stored"), [
+    ("custom", GW, 4096), ("openrouter", None, 4096), ("ollama", OLLAMA, 4096),
+    ("anthropic", None, None), ("openai", None, None), ("groq", None, None)])
+async def test_save_max_output_tokens_is_kept_only_for_non_hosted_kinds(kind: str, url: str | None, stored: int | None) -> None:
+    """The server is authoritative: a hosted kind's client-sent max_output_tokens is discarded, others persist."""
+    provider = _provider("a", kind, url, models=[{"id": "m1", "type": "llm"}])  # type: ignore[list-item]
+    update = _update(providers=[provider],
+                     defaults=ModelDefaults(chat=ModelMapping(model="m1", provider_id="a", max_output_tokens=4096)))
+    row = await _save(_row(), update, _settings(True))
+    assert row.defaults["chat"]["max_output_tokens"] == stored
+
+
+@pytest.mark.asyncio
+async def test_save_max_output_tokens_rejected_for_non_llm_roles() -> None:
+    """Embedding/reranker roles have no output limit to configure."""
+    update = _update(providers=[_typed("a", m1="embedding")],
+                     defaults=ModelDefaults(embedding=ModelMapping(model="m1", provider_id="a", dimensions=8, max_output_tokens=10)))
+    with pytest.raises(DomainError) as exc:
+        await _save(_row(), update)
+    assert exc.value.status_code == 422

@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { getDateTimeFormat } from '@/modules/shared';
 
 /** Selected local calendar day shared by day-aware gadgets, in the owner's display timezone. */
 export type SelectedDay = {
@@ -19,7 +20,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Formats an instant as an ISO calendar date in the given IANA timezone. */
 export function isoDateInZone(value: Date, timezone: string): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
+  return getDateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
 }
 
 /** Adds whole calendar days to an ISO date without touching timezone or DST (pure date arithmetic). */
@@ -41,7 +42,7 @@ export function SelectedDayProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get('date');
     // Read after mount so server and client markup match.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- window.location is only readable after mount; reading it during render would break hydration parity.
     if (requested && ISO_DATE.test(requested)) setOverride(requested);
   }, []);
 

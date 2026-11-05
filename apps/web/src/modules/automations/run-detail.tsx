@@ -13,6 +13,7 @@ import { decideAction, getRuleConversationId, listRuns, type Automation, type Ru
 const activeStatuses = new Set(['queued', 'running', 'awaiting_approval']);
 
 /** Renders one action outcome; a pending approval shows its exact target and the owner decision buttons. */
+// eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this panel; it holds no branching business logic, so splitting would only relocate the same render conditions
 function ActionRow({ rule, run, action, csrfToken, onOpenChat }: {
   rule: Automation; run: Run; action: RunAction; csrfToken: string; onOpenChat: () => void;
 }) {

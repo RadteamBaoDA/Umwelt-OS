@@ -37,11 +37,12 @@ class FakeSession:
             return SimpleNamespace(id="c")
         return self.run
 
-    async def scalars(self, stmt: Any) -> list[Any]:
-        return [self.run.id] if self.run.status == "awaiting_input" else []
-
-    async def execute(self, stmt: Any) -> None:
+    async def execute(self, stmt: Any) -> Any:
+        if str(stmt).lstrip().upper().startswith("SELECT"):
+            rows = [(self.run.id, self.run.workspace_id)] if self.run.status == "awaiting_input" else []
+            return SimpleNamespace(all=lambda: rows)
         self.heartbeats += 1
+        return None
 
     def add(self, event: Any) -> None:
         self.events.append(event)
@@ -78,6 +79,7 @@ def _args(kind: str = "time_slots") -> RequestUserInputArgs:
 @pytest.fixture(autouse=True)
 def _no_privacy_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ui, "lock_export_privacy", AsyncMock())
+    monkeypatch.setattr(ui, "lock_export_privacy_workspaces", AsyncMock())
 
 
 async def _parked(kind: str = "time_slots") -> tuple[FakeSession, Any, str]:

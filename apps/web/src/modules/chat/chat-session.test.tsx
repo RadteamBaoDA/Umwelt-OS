@@ -6,7 +6,7 @@ import { NextIntlClientProvider } from 'next-intl';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/core/api';
 import { messages } from '@/core/messages';
-import type { StreamEventsOptions } from '@/modules/chat/api';
+import type { StreamEventsOptions } from './api';
 
 const h = vi.hoisted(() => ({
   setDraft: vi.fn(),
@@ -16,8 +16,8 @@ const h = vi.hoisted(() => ({
   cancelResponse: vi.fn(),
 }));
 
-vi.mock('@/modules/chat/api', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/modules/chat/api')>()),
+vi.mock('./api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./api')>()),
   sendMessage: h.sendMessage,
   streamResponseEvents: h.streamResponseEvents,
   getConversation: h.getConversation,

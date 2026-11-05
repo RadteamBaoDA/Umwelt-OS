@@ -36,6 +36,7 @@ class QuotaDeferred(Exception):  # a control-flow signal, not an error
     """No provider I/O may happen before ``defer_until``; counters were left unchanged."""
 
     def __init__(self, policy_key: str, defer_until: datetime) -> None:
+        """Capture the exhausted ``policy_key`` and the UTC instant before which no provider I/O may start."""
         super().__init__(f"Provider budget {policy_key} exhausted until {defer_until.isoformat()}")
         self.policy_key = policy_key
         self.defer_until = defer_until
@@ -85,6 +86,11 @@ def subject_hash(
 def _plan(
     provider_id: str, now: datetime, credential: str | None, egress: str | None,
 ) -> list[tuple[QuotaWindowPolicy, str, datetime, datetime]]:
+    """Resolve every quota window for ``provider_id`` into ``(policy, subject_hash, start, end)`` rows.
+
+    Sorted by the complete lexicographic key so concurrent debits always lock in one order. Raises
+    ``ValueError`` when the provider has no quota policy.
+    """
     policies = get_quota_policies(provider_id)
     if not policies:
         raise ValueError("Provider has no quota policy")

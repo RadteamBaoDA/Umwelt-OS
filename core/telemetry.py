@@ -27,6 +27,8 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field
 
+from core import metrics as prom
+
 logger = logging.getLogger("bbd.telemetry")
 
 # --------------------------------------------------------------------------- trace context
@@ -398,6 +400,7 @@ def record_model_call(capability: str, role: str | None, started: float, ok: boo
         registry.inc("model_calls_total", **labels, outcome="ok" if ok else "error")
         if first_token_ms is not None:
             registry.observe("model_first_token_ms", first_token_ms, **labels)
+            prom.record_first_token(capability, first_token_ms / 1000)
         if ok:
             usage = usage_from_response(response, model_identity=model_identity, latency_ms=latency)
             result[0] = usage
@@ -442,7 +445,7 @@ async def flush_metrics(redis: Any, *, force: bool = False) -> None:
                       ex=SNAPSHOT_TTL_SECONDS),
             timeout=_REDIS_TIMEOUT_SECONDS,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # best-effort telemetry; any Redis failure is logged at debug and dropped
         logger.debug("telemetry snapshot publish failed (%s)", type(exc).__name__)
 
 
@@ -463,7 +466,7 @@ async def read_snapshots(redis: Any) -> list[dict[str, Any]]:
                     data = json.loads(raw)
                     data["process"] = (key.decode() if isinstance(key, bytes) else key)[len(SNAPSHOT_KEY_PREFIX):]
                     out.append(data)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # best-effort telemetry read; failure yields an empty snapshot list
         logger.debug("telemetry snapshot read failed (%s)", type(exc).__name__)
     return out
 
@@ -502,6 +505,7 @@ def instrument_job(fn: F, *, run_id_kind: str | None = None, success_return_outc
             if outcome == "ok":
                 outcome = success_return_outcome
             observe_ms("job_duration_ms", started, job=name, outcome=outcome)
+            prom.record_job(name, outcome, time.perf_counter() - started)
             count("jobs_total", job=name, outcome=outcome)
             _trace.reset(token)
             redis = ctx.get("redis")

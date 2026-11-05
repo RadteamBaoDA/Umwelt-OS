@@ -9,6 +9,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 
+from core.errors import ConflictError, DomainError
 from modules.connectors import activation, backends, provisioning
 from modules.connectors.credentials import (
     CredentialEncryptionUnavailable,
@@ -16,6 +17,7 @@ from modules.connectors.credentials import (
     encrypt_rest_secret,
 )
 from modules.connectors.n8n import build_workflow
+from modules.connectors.provider_specs import TERMS_INELIGIBLE
 
 SOURCE_ID = uuid4()
 KEY = Fernet.generate_key().decode("ascii")
@@ -105,7 +107,7 @@ async def test_begin_from_native_has_no_old_workflow_to_stop():
     (row(state="provisioning"), "native", 3, 409),
 ])
 async def test_begin_rejects(r, target, revision, code):
-    with _Locks(r), pytest.raises(HTTPException) as caught:
+    with _Locks(r), pytest.raises(DomainError) as caught:
         await begin(r, target=target, revision=revision)
     assert caught.value.status_code == code and r.backend_revision == 1
 
@@ -121,9 +123,9 @@ async def test_begin_allows_template_upgrade_for_stale_n8n_template():
 @pytest.mark.asyncio
 async def test_begin_rejects_unresolved_credential_slot_and_inactive_source():
     r = row()
-    with _Locks(r, slots={"collector": SimpleNamespace(state="reconciliation_required")}), pytest.raises(HTTPException):
+    with _Locks(r, slots={"collector": SimpleNamespace(state="reconciliation_required")}), pytest.raises(DomainError):
         await begin(r)
-    with _Locks(r, status="paused"), pytest.raises(HTTPException):
+    with _Locks(r, status="paused"), pytest.raises(DomainError):
         await begin(r)
 
 
@@ -255,7 +257,7 @@ async def test_resolve_retry_and_confirm():
         r.transition_phase = "reconciliation_required"
         await provisioning.resolve_backend_transition_in_uow(session, SOURCE_ID, 3, "confirm_inactive", **kw)
         assert r.transition_phase == "activating_new" and r.workflow_operation is None
-        with pytest.raises(HTTPException):  # nothing to resolve any more
+        with pytest.raises(DomainError):  # nothing to resolve any more
             await provisioning.resolve_backend_transition_in_uow(session, SOURCE_ID, 3, "retry", **kw)
 
 
@@ -329,6 +331,8 @@ async def test_native_activation_refusals_change_nothing():
         ({"local_only": True}, "local_only_source"),
         ({"supported": False}, "native_unsupported"),
         ({"terms": [HTTPException(status_code=409, detail="provider_terms_ineligible")]}, "terms_not_accepted"),
+        # The real gate raises a DomainError (ConflictError), not an HTTPException.
+        ({"terms": [ConflictError(TERMS_INELIGIBLE)]}, "terms_not_accepted"),
     ]
     for kwargs, code in cases:
         r = row(execution_backend="n8n", state="saved_not_active", desired_enabled=False, applied_backend_revision=0)
@@ -437,7 +441,7 @@ async def test_bearer_routes_reject_native_and_transitioning_rows():
     ]:
         session = SimpleNamespace(scalar=AsyncMock(return_value=r))
         if rejected:
-            with pytest.raises(HTTPException) as caught:
+            with pytest.raises(DomainError) as caught:
                 await provisioning.require_n8n_backend(session, SOURCE_ID)
             assert caught.value.detail == "backend_inactive"
         else:

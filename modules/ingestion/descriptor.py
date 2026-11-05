@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from core.module_descriptor import ModuleDescriptor, RouterSpec
+
 
 @dataclass(frozen=True)
-class IngestionDescriptor:
+class IngestionDescriptor(ModuleDescriptor):
     """Describe ingestion contracts and the bounded worker entry points owned by this module."""
 
     id: str = "ingestion"
@@ -27,6 +29,12 @@ class IngestionDescriptor:
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()
     settings_schema: dict[str, object] | None = None
+    routers: tuple[RouterSpec, ...] = (
+        RouterSpec("modules.ingestion.routes:documents_router", 130),
+        RouterSpec("modules.ingestion.routes", 140),
+    )
+    erasure_module: str | None = "modules.ingestion.erasure"
+    erasure_order: int = 70
 
 
 descriptor = IngestionDescriptor()

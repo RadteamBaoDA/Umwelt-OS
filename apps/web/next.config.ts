@@ -6,8 +6,11 @@ const isDev = process.env.NODE_ENV !== 'production';
 /**
  * Content-Security-Policy. Audit of map/globe/video gadgets found no external origins: the globe uses bundled
  * geometry, video items are outbound links only, and realtime uses same-origin EventSource, so everything is 'self'.
- * Relaxations: 'unsafe-inline' for scripts because Next injects inline bootstrap/hydration scripts and a per-request
- * nonce would force every page dynamic; 'unsafe-inline' for styles (React style props, Recharts, Radix); 'unsafe-eval'
+ * Relaxations: 'unsafe-inline' for scripts, deliberately kept after review (F2.7). A nonce CSP (proxy.ts nonce + layout
+ * reading it) would force every page dynamic AND break generative-UI widgets: their srcdoc iframes inherit this policy
+ * (frame-content.ts) and run inline scripts/importmaps that cannot carry the host's per-request nonce. A hash is not an
+ * option either, because Next's inline hydration payloads differ per page. Revisit by serving widget frames from a
+ * separate route with its own CSP first (tracked in docs/security.md); 'unsafe-inline' for styles (React style props, Recharts, Radix); 'unsafe-eval'
  * only in dev (React refresh); data:/blob: images (globe canvas, inline icons); blob: workers (three.js/globe.gl).
  */
 const csp = [

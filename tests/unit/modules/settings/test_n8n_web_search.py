@@ -8,9 +8,9 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
-from fastapi import HTTPException
 from pydantic import SecretStr
 
+from core.errors import DomainError
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.settings import public
 from modules.settings.schemas import N8nUpdate, WebSearchUpdate
@@ -87,10 +87,10 @@ async def test_save_n8n_encrypts_secrets_and_applies_actions() -> None:
     assert row.n8n["revision"] == 2 and row.configuration_revision == 7 and row.n8n["service_url"] == "http://n8n:5678"
     assert "api_key_ciphertext" not in row.n8n and "s3cret-tok" not in str(row.n8n)
     assert Fernet(KEY.encode()).decrypt(row.n8n["webhook_token_ciphertext"].encode()).decode() == "s3cret-tok"
-    with pytest.raises(HTTPException) as exc:  # stale revision
+    with pytest.raises(DomainError) as exc:  # stale revision
         await _save(public.save_n8n, row, N8nUpdate(expected_revision=1), _settings())
     assert exc.value.status_code == 409
-    with pytest.raises(HTTPException) as exc:  # replace without a value
+    with pytest.raises(DomainError) as exc:  # replace without a value
         await _save(public.save_n8n, row, N8nUpdate(expected_revision=2, api_key_action="replaced"), _settings())
     assert exc.value.status_code == 422
 
@@ -98,7 +98,7 @@ async def test_save_n8n_encrypts_secrets_and_applies_actions() -> None:
 @pytest.mark.asyncio
 async def test_save_n8n_rejects_disallowed_host() -> None:
     row = SimpleNamespace(configuration_revision=1, n8n={})
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(DomainError) as exc:
         await _save(public.save_n8n, row, N8nUpdate(expected_revision=1, service_url="http://169.254.169.254"), _settings())
     assert exc.value.status_code == 422 and row.n8n == {}
     await _save(public.save_n8n, row, N8nUpdate(expected_revision=1, service_url="http://searx:8080"), _settings())
@@ -135,7 +135,7 @@ async def test_save_web_search_searxng_is_keyless_and_binds_consent_to_the_endpo
 async def test_save_web_search_validation_and_key_handling() -> None:
     settings = _settings()
     settings.ai_allowed_endpoint_hosts = {"searx:8080", "api.tavily.com"}
-    with pytest.raises(HTTPException) as exc:  # keyed provider without a key
+    with pytest.raises(DomainError) as exc:  # keyed provider without a key
         await _save(public.save_web_search, _web_row(), WebSearchUpdate(
             expected_revision=2, providers=[{"provider": "tavily", "endpoint": "http://api.tavily.com"}]), settings)
     assert exc.value.status_code == 422
@@ -161,6 +161,6 @@ async def test_fallback_reorder_retains_endpoint_keys_and_consent() -> None:
     assert row.web_search_api_key_ciphertext == fallback_key
     assert row.web_search_fallbacks[0]["key_ciphertext"] == old_key
     assert row.privacy["web_search_destinations"] == [public._web_destination(second), public._web_destination(first)]
-    with pytest.raises(HTTPException):
+    with pytest.raises(DomainError):
         await _save(public.save_web_search, row, WebSearchUpdate(expected_revision=3,
             providers=[{"provider": "searxng", "endpoint": first}, {"provider": "searxng", "endpoint": first}]), settings)

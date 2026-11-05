@@ -15,25 +15,28 @@ from fastapi import HTTPException
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core.errors import DomainError, error_status
+
 PERMISSION_LOST = "permission_lost"
 STALE_SCOPE = "stale_scope"
 
 
 def denial_code(exc: BaseException) -> str | None:
     """Map a typed admission denial to its terminal error code; None for anything else."""
-    if not isinstance(exc, HTTPException):
+    status = error_status(exc)
+    if status is None:
         return None
-    if exc.status_code in {401, 403, 404}:
+    if status in {401, 403, 404}:
         return PERMISSION_LOST
-    return STALE_SCOPE if exc.status_code == 409 else None
+    return STALE_SCOPE if status == 409 else None
 
 
 async def admit_retry_stale[T](admit: Callable[[], Awaitable[T]]) -> T:
     """Run ``admit``; a 409 is re-resolved exactly once (the second outcome is final)."""
     try:
         return await admit()
-    except HTTPException as exc:
-        if exc.status_code != 409:
+    except (HTTPException, DomainError) as exc:
+        if error_status(exc) != 409:
             raise
     return await admit()
 

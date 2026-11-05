@@ -11,6 +11,7 @@ from core.auth.deletion_models import AccountDeletionOperation
 from core.auth.deletion_service import authorize_account_erasure
 from core.auth.erasure_contracts import AccountErasureScope
 from core.auth.models import AuthSession, GoogleIdentity, Owner
+from core.database import direct_engine
 
 
 async def finalize_account_erasure(session: AsyncSession, operation: AccountDeletionOperation) -> None:
@@ -21,11 +22,11 @@ async def finalize_account_erasure(session: AsyncSession, operation: AccountDele
     """
     from core.workspaces.erasure import finalize_account_workspace_erasure
 
-    assert operation.account_id is not None and operation.workspace_id is not None
+    assert operation.account_id is not None and operation.workspace_id is not None  # noqa: S101  # mypy narrowing invariant
     scope = AccountErasureScope(operation.id, operation.account_id, operation.workspace_id)
     await authorize_account_erasure(session, scope)
     owner = await session.get(Owner, scope.account_id)
-    assert owner is not None
+    assert owner is not None  # noqa: S101  # mypy narrowing invariant
     owner.default_workspace_id = None
     await session.flush()
     await finalize_account_workspace_erasure(session, scope)
@@ -62,7 +63,8 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
     engine = cast(AsyncEngine, ctx["db_engine"])
     factory = cast(async_sessionmaker[AsyncSession], ctx["session_factory"])
     key = int.from_bytes(operation_id.bytes[:8], "big", signed=True)
-    async with engine.connect() as connection:
+    # Session advisory lease: must be a dedicated backend, never a transaction-pooled connection.
+    async with direct_engine(engine).connect() as connection:
         backend_pid = await connection.scalar(text("SELECT pg_backend_pid()"))
         acquired = await connection.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": key})
         await connection.commit()
@@ -75,7 +77,7 @@ async def process_account_deletion(ctx: dict[str, Any], operation_id: UUID) -> b
                 operation = await session.get(AccountDeletionOperation, operation_id)
                 if operation is None or operation.status == "succeeded":
                     return False
-                assert operation.account_id is not None and operation.workspace_id is not None
+                assert operation.account_id is not None and operation.workspace_id is not None  # noqa: S101  # mypy narrowing invariant
                 scope = AccountErasureScope(operation.id, operation.account_id, operation.workspace_id)
                 phase, cursor = operation.phase, dict(operation.cursor)
                 await authorize_account_erasure(session, scope)

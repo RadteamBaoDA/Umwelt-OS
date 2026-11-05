@@ -12,8 +12,8 @@ from datetime import UTC, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import ValidationFailedError
 from core.pagination import decode_cursor, encode_cursor
 
 
@@ -66,26 +66,26 @@ class TestPaginationCursor:
 
         # If padding happens to be present, test rejection directly
         cursor_with_padding = padded if padded.endswith("=") else padded + "="
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValidationFailedError) as exc_info:
             decode_cursor(cursor_with_padding)
         assert exc_info.value.status_code == 422
         assert exc_info.value.detail == "Invalid cursor"
 
     def test_decode_cursor_rejects_empty_string(self) -> None:
         """decode_cursor raises HTTP 422 on an empty string."""
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValidationFailedError) as exc_info:
             decode_cursor("")
         assert exc_info.value.status_code == 422
 
     def test_decode_cursor_rejects_invalid_base64(self) -> None:
         """decode_cursor raises HTTP 422 for invalid base64 characters."""
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValidationFailedError) as exc_info:
             decode_cursor("!@#$%^&*()")
         assert exc_info.value.status_code == 422
 
     def test_decode_cursor_rejects_standard_base64_chars(self) -> None:
         """decode_cursor raises HTTP 422 for standard base64 strings containing '+' or '/'."""
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValidationFailedError) as exc_info:
             decode_cursor("abc+def/123")
         assert exc_info.value.status_code == 422
 
@@ -94,7 +94,7 @@ class TestPaginationCursor:
         non_json = b"not a json string at all"
         cursor = base64.urlsafe_b64encode(non_json).decode().rstrip("=")
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValidationFailedError) as exc_info:
             decode_cursor(cursor)
         assert exc_info.value.status_code == 422
 
@@ -102,7 +102,7 @@ class TestPaginationCursor:
         """decode_cursor raises HTTP 422 if the JSON structure is a dict or primitive."""
         for payload in ({"ts": "2026-01-01T00:00:00Z", "id": str(uuid4())}, "single_string", 12345):
             encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ValidationFailedError) as exc_info:
                 decode_cursor(encoded)
             assert exc_info.value.status_code == 422
 
@@ -113,7 +113,7 @@ class TestPaginationCursor:
 
         for wrong_list in ([], [now], [now, uid, "extra_element"]):
             encoded = base64.urlsafe_b64encode(json.dumps(wrong_list).encode()).decode().rstrip("=")
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ValidationFailedError) as exc_info:
                 decode_cursor(encoded)
             assert exc_info.value.status_code == 422
 
@@ -124,7 +124,7 @@ class TestPaginationCursor:
 
         for invalid_items in ([12345, uid], [now, 67890], [None, None]):
             encoded = base64.urlsafe_b64encode(json.dumps(invalid_items).encode()).decode().rstrip("=")
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises(ValidationFailedError) as exc_info:
                 decode_cursor(encoded)
             assert exc_info.value.status_code == 422
 
@@ -133,7 +133,7 @@ class TestPaginationCursor:
         payload = ["invalid-date-string", str(uuid4())]
         encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValidationFailedError) as exc_info:
             decode_cursor(encoded)
         assert exc_info.value.status_code == 422
 
@@ -143,7 +143,7 @@ class TestPaginationCursor:
         payload = [naive_str, str(uuid4())]
         encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValidationFailedError) as exc_info:
             decode_cursor(encoded)
         assert exc_info.value.status_code == 422
 
@@ -153,6 +153,6 @@ class TestPaginationCursor:
         payload = [now, "not-a-valid-uuid-format"]
         encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ValidationFailedError) as exc_info:
             decode_cursor(encoded)
         assert exc_info.value.status_code == 422

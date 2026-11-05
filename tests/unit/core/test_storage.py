@@ -41,12 +41,15 @@ class TestStoragePathSecurity:
             "docs/../../etc/passwd",
             "docs/../secret.txt",
             "sub/../../escaping.txt",
+            "docs\\..\\secret.txt",
+            "D:relative.txt",
+            "ws\\doc.pdf",
         ],
     )
     def test_storage_path_rejects_traversal_and_absolute(
         self, tmp_path: Path, malicious_path: str
     ) -> None:
-        """storage_path raises ValueError for absolute paths, '..', and '.' traversal attempts."""
+        """storage_path raises ValueError for absolute, '..', backslash and drive-letter forms on every platform."""
         root = tmp_path / "storage"
         root.mkdir()
         with pytest.raises(ValueError, match="Invalid storage path"):

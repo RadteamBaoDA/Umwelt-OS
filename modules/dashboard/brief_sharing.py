@@ -15,10 +15,10 @@ from dataclasses import dataclass
 from datetime import date
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.errors import ConflictError, DomainError, ForbiddenError, NotFoundError
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import (
     AdminWorkspaceReadContext,
@@ -44,8 +44,9 @@ class SharedBrief:
     grants: tuple[GrantRef, ...]
 
 
-def _not_found() -> HTTPException:
-    return HTTPException(status_code=404, detail="Brief not found")
+def _not_found() -> DomainError:
+    """Build the uniform 404 used for missing, foreign and unshareable briefs alike (no existence oracle)."""
+    return NotFoundError(detail="Brief not found")
 
 
 async def _story_documents(session: AsyncSession, brief_id: UUID) -> frozenset[UUID] | None:
@@ -74,6 +75,7 @@ async def _is_current(
 
 
 async def _row(session: AsyncSession, brief_id: UUID, workspace_id: UUID) -> DailyBrief | None:
+    """Load one brief by id inside the workspace, refreshing any identity-map copy; None when absent."""
     return await session.scalar(select(DailyBrief).where(
         DailyBrief.id == brief_id, DailyBrief.workspace_id == workspace_id,
     ).execution_options(populate_existing=True))
@@ -102,14 +104,14 @@ async def check_brief_shareable(
 ) -> None:
     """404 invisible; 409 brief_not_shareable; 409 brief_evidence_not_shared (owner-visible IDs)."""
     if scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
+        raise ForbiddenError(detail="Workspace owner required")
     row = await _row(session, brief_id, scope.workspace_id)
     if row is None or row.owner_id != scope.user_id:
         raise _not_found()
     docs = await _story_documents(session, row.id)
     if (docs is None or len(docs) > briefs.MAX_BRIEF_EVIDENCE
             or not await _is_current(session, row, multi_workspace_enabled=multi_workspace_enabled)):
-        raise HTTPException(status_code=409, detail="brief_not_shareable")
+        raise ConflictError(detail="brief_not_shareable")
     granted = await workspaces.active_grant_ids(
         session, workspace_id=scope.workspace_id, member_user_id=member_user_id,
         kind="document", resource_ids=tuple(sorted(docs, key=str)),
@@ -119,7 +121,7 @@ async def check_brief_shareable(
         visible = await documents.existing_document_ids(
             session, missing, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
-        raise HTTPException(status_code=409, detail={
+        raise ConflictError(detail={
             "code": "brief_evidence_not_shared", "document_ids": [str(v) for v in visible],
         })
 
@@ -147,6 +149,7 @@ async def _member_grants(
 
 
 def _read(row: DailyBrief) -> BriefRead:
+    """Project a brief row to its public DTO, marked current with captured lineage (callers verified both)."""
     return BriefRead.model_validate(row).model_copy(
         update={"status": "current", "lineage_status": "captured"},
     )
@@ -193,7 +196,7 @@ async def read_shared_brief(
             session, [row], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
         )
         return SharedBrief(item, ())
-    assert isinstance(scope, WorkspaceContext)
+    assert isinstance(scope, WorkspaceContext)  # noqa: S101  # mypy narrowing invariant
     grants = await _member_grants(
         session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     )

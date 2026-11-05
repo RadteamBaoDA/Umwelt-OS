@@ -8,11 +8,12 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { ApiError, apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { listSources } from '@/modules/sources/api';
-import { getSearchIndexStatus } from '@/modules/search/api';
+import { listSources } from '@/modules/sources';
+import { getSearchIndexStatus } from '@/modules/search';
 import { AISettingsWorkspace } from './ai-settings';
 import { OnboardingTopics } from './onboarding-topics';
 import { getOnboardingState, saveOnboardingStep, type OnboardingStep } from './onboarding-api';
+import { BareButton } from '@/components/bare-button';
 
 type ReadinessAI = {
   providers: { base_url: string | null; credential_configured: boolean; local: boolean }[];
@@ -36,6 +37,7 @@ const steps: { id: OnboardingStep; label: 'stepAi' | 'stepCapability' | 'stepSou
  * The AI step embeds the Settings › Models workspace on demand (same save flow and query cache) and offers a
  * "skip, use local only" path that advances without a provider; the step rail omits the caption on upcoming steps.
  */
+// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
 export function OnboardingPage() {
   const t = useTranslations('onboarding');
   const { csrfToken } = useWorkspaceSession();
@@ -113,16 +115,17 @@ export function OnboardingPage() {
   return <div className="mx-auto flex w-full max-w-[1200px] flex-wrap items-start gap-6">
       <nav aria-label={t('currentStep')} className="flex-[0_0_260px] max-[720px]:flex-[1_1_100%]">
         <ol className="grid gap-1">
+          {/* eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this row; it holds no branching business logic, so splitting would only relocate the same render conditions */}
           {steps.map((step, position) => {
             const complete = done || position < currentIndex;
             const current = !done && step.id === currentStep.id;
             // On phones only completed and current steps are listed; "Step n of N" in the header covers the rest.
             return <li key={step.id} className={complete || current ? undefined : 'max-[720px]:hidden'}>
-              <button type="button" aria-current={current ? 'step' : undefined} disabled={save.isPending || done || position > currentIndex} onClick={() => move(step.id)}
+              <BareButton type="button" aria-current={current ? 'step' : undefined} disabled={save.isPending || done || position > currentIndex} onClick={() => move(step.id)}
                 className={`flex min-h-9 pointer-coarse:min-h-11 w-full items-start gap-3 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-default ${current ? 'border-border bg-card' : 'border-transparent hover:bg-secondary'}`}>
                 <span aria-hidden="true" className={`w-5 shrink-0 text-sm tabular-nums ${complete ? 'text-primary' : current ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>{complete ? <CheckIcon className="size-3.5" /> : position + 1}</span>
                 <span className="grid"><strong className={current ? 'font-semibold' : 'font-medium'}>{t(step.label)}</strong>{(complete || current) && <span className="text-muted-foreground text-xs">{t(complete ? 'stepDone' : 'stepCurrent')}</span>}</span>
-              </button>
+              </BareButton>
             </li>;
           })}
         </ol>

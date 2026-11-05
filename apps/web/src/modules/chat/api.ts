@@ -1,4 +1,5 @@
 import { apiRequest, csrfHeaders, workspaceHeaders, workspaceTargetFor } from '@/core/api';
+import type { ApiResponse } from '@/core/api-contract';
 
 /**
  * Citation evidence reference pointing to an exact grounded revision chunk.
@@ -85,17 +86,7 @@ export interface ChatContext {
 /**
  * Public summary of a chat conversation thread.
  */
-export interface Conversation {
-  id: string;
-  title: string;
-  context_kind: string | null;
-  context_resource_id: string | null;
-  pinned: boolean;
-  archived: boolean;
-  created_at: string;
-  updated_at: string;
-  metadata: Record<string, unknown>;
-}
+export type Conversation = Required<ApiResponse<'/api/v1/conversations'>[number]>;
 
 /**
  * Public representation of an individual message within a conversation.
@@ -469,19 +460,157 @@ export async function submitResponseInput(
 /** Reserved answer meaning "none of the offered options" (mirrors `INPUT_DECLINE` in tool_specs.py). */
 export const INPUT_DECLINE = '__decline__';
 
+/** Handler for one SSE event type: receives the raw `data:` payload and the caller's callbacks. */
+type SseHandler = (eventData: string, options: StreamEventsOptions) => void;
+
 /**
- * Consumes the SSE stream for a specific response run (/api/v1/responses/{id}/events).
- * Parses stream events ('message.delta', 'message.citations', 'message.done', 'status')
- * and dispatches typed callbacks. Supports reconnection using lastEventId.
+ * Parses a JSON payload for a handler whose failures are only logged (malformed or redacted payloads are skipped).
  *
- * @param responseId - UUID of the response run to stream.
- * @param options - Event listeners, abort signal, and resume cursor.
- * @returns Promise that resolves when the stream completes or is aborted.
+ * @param label - Event name used in the warning.
+ * @param eventData - Raw payload.
+ * @param apply - Invoked with the parsed value; runs inside the same guard as parsing, like the inline try/catch it replaced.
  */
-export async function streamResponseEvents(
-  responseId: string,
-  options: StreamEventsOptions = {},
-): Promise<void> {
+function withJsonPayload(label: string, eventData: string, apply: (parsed: any) => void): void { // eslint-disable-line @typescript-eslint/no-explicit-any
+  try {
+    apply(JSON.parse(eventData));
+  } catch (err) {
+    console.warn(`Failed to parse ${label} SSE payload`, err);
+  }
+}
+
+/** Typed SSE event handlers keyed by event name; unknown events are ignored (forward compatible). */
+const SSE_HANDLERS: Record<string, SseHandler> = {
+  'message.delta': (eventData, options) => {
+    try {
+      const parsed = JSON.parse(eventData);
+      if (typeof parsed?.text === 'string') {
+        options.onDelta?.(parsed.text);
+      }
+    } catch {
+      options.onDelta?.(eventData);
+    }
+  },
+  'message.reasoning.delta': (eventData, options) => withJsonPayload('message.reasoning.delta', eventData, (parsed) => {
+    if (typeof parsed?.text === 'string' && parsed.text) options.onReasoning?.(parsed.text);
+  }),
+  'message.citations': (eventData, options) => withJsonPayload('citations', eventData, (parsed) => {
+    const citationsList = Array.isArray(parsed?.citations) ? (parsed.citations as Citation[]) : [];
+    options.onCitations?.(citationsList);
+  }),
+  'message.ui.delta': (eventData, options) => withJsonPayload('message.ui.delta', eventData, (parsed) => {
+    if (parsed && typeof parsed === 'object') options.onUiDelta?.(parsed as Record<string, unknown>);
+  }),
+  'message.ui.done': (eventData, options) => withJsonPayload('message.ui.done', eventData, (parsed) => {
+    if (parsed && typeof parsed === 'object') options.onUiDone?.(parsed as Record<string, unknown>);
+  }),
+  'message.ui.discard': (eventData, options) => withJsonPayload('message.ui.discard', eventData, (parsed) => {
+    // Privacy redaction rewrites old events to `{}`; ignore anything without a part id.
+    if (typeof parsed?.part_id === 'string') options.onUiDiscard?.(parsed.part_id);
+  }),
+  'message.input.request': (eventData, options) => withJsonPayload('message.input.request', eventData, (parsed) => {
+    // Privacy redaction rewrites old events to `{}`; ignore anything without an id.
+    if (parsed && typeof parsed.request_id === 'string') {
+      options.onInputRequest?.({
+        ...parsed,
+        options: Array.isArray(parsed.options) ? parsed.options : [],
+        slots: Array.isArray(parsed.slots) ? parsed.slots : [],
+      } as InputRequest);
+    }
+  }),
+  'ui.theme': (eventData, options) => withJsonPayload('ui.theme', eventData, (parsed) => {
+    // Only the three known modes are ever applied; anything else (including redacted {}) is ignored.
+    if (parsed?.mode === 'light' || parsed?.mode === 'dark' || parsed?.mode === 'system') options.onThemeRequest?.(parsed.mode);
+  }),
+  'message.input.resolved': (eventData, options) => withJsonPayload('message.input.resolved', eventData, (parsed) => {
+    if (parsed && typeof parsed.request_id === 'string') options.onInputResolved?.(parsed as InputResolved);
+  }),
+  'message.done': handleDoneEvent,
+  web_search: (eventData, options) => withJsonPayload('web_search', eventData, (parsed) => {
+    if (parsed && typeof parsed.status === 'string') options.onWebSearch?.(parsed as WebSearchOutcome);
+  }),
+  'tool.status': (eventData, options) => withJsonPayload('tool.status', eventData, (parsed) => {
+    const known = parsed?.tool === 'web_search' || parsed?.tool === 'query_collected_data';
+    // Redacted/malformed payloads (`{}`) are ignored.
+    if (known && (parsed.state === 'running' || parsed.state === 'done')) {
+      options.onToolStatus?.({ tool: parsed.tool, state: parsed.state });
+    }
+  }),
+  status: (eventData, options) => {
+    try {
+      const parsed = JSON.parse(eventData);
+      const statusVal = parsed?.status || eventData;
+      options.onStatus?.(statusVal, parsed);
+    } catch {
+      options.onStatus?.(eventData);
+    }
+  },
+};
+
+/** Normalizes a parsed `message.done` payload into the typed result (missing fields get safe defaults). */
+function toDoneResult(parsed: any): Parameters<NonNullable<StreamEventsOptions['onDone']>>[0] { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const ui = parsed?.generative_ui;
+  const parts = parsed?.generative_ui_parts;
+  return {
+    text: parsed?.text ?? '',
+    citations: Array.isArray(parsed?.citations) ? parsed.citations : [],
+    model: parsed?.model,
+    status: parsed?.status ?? 'completed',
+    generative_ui: ui && typeof ui === 'object' ? (ui as Record<string, unknown>) : null,
+    generative_ui_parts: Array.isArray(parts) ? (parts as Record<string, unknown>[]) : undefined,
+  };
+}
+
+/** `message.done`: terminal result; an unparsable payload is delivered as plain completed text. */
+function handleDoneEvent(eventData: string, options: StreamEventsOptions): void {
+  try {
+    options.onDone?.(toDoneResult(JSON.parse(eventData)));
+  } catch {
+    options.onDone?.({
+      text: eventData,
+      citations: [],
+      status: 'completed',
+    });
+  }
+}
+
+/**
+ * Parses one SSE block (lines separated by `\n`): comments/heartbeats are skipped, multiple `data:` lines are joined
+ * with newlines, and the last `id:` wins.
+ *
+ * @param block - Text between two blank lines.
+ * @returns Event type (default `message`), joined data and the optional event id.
+ */
+function parseSseBlock(block: string): { eventType: string; eventData: string; eventId: string | null } {
+  let eventType = 'message';
+  let eventData = '';
+  let eventId: string | null = null;
+  for (const line of block.split('\n')) {
+    if (line.startsWith(':')) {
+      // SSE comment / heartbeat
+      continue;
+    }
+    if (line.startsWith('event:')) {
+      eventType = line.slice(6).trim();
+    } else if (line.startsWith('data:')) {
+      const dataSlice = line.slice(5).trimStart();
+      eventData += (eventData ? '\n' : '') + dataSlice;
+    } else if (line.startsWith('id:')) {
+      eventId = line.slice(3).trim();
+    }
+  }
+  return { eventType, eventData, eventId };
+}
+
+/**
+ * Opens the response event stream.
+ *
+ * @param responseId - Response run id.
+ * @param options - Resume cursor (sent as `last_event_id` and `Last-Event-ID`) and abort signal.
+ * @returns The response body reader.
+ * @throws Error (with `status` for HTTP failures) after reporting it through `options.onError`; a 401 also dispatches
+ * `umwelt:unauthorized`.
+ */
+async function openEventStream(responseId: string, options: StreamEventsOptions): Promise<ReadableStreamDefaultReader<Uint8Array>> {
   const query = new URLSearchParams();
   if (options.lastEventId) {
     query.set('last_event_id', options.lastEventId);
@@ -507,7 +636,7 @@ export async function streamResponseEvents(
 
   if (!response.ok) {
     if (response.status === 401 && typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('bbd:unauthorized'));
+      window.dispatchEvent(new Event('umwelt:unauthorized'));
     }
     const errText = await response.text().catch(() => 'Streaming request failed');
     // Status lets callers retry transient 5xx/network failures but not 4xx rejections.
@@ -522,7 +651,23 @@ export async function streamResponseEvents(
     options.onError?.(error);
     throw error;
   }
+  return reader;
+}
 
+/**
+ * Consumes the SSE stream for a specific response run (/api/v1/responses/{id}/events).
+ * Parses stream events ('message.delta', 'message.citations', 'message.done', 'status')
+ * and dispatches typed callbacks. Supports reconnection using lastEventId.
+ *
+ * @param responseId - UUID of the response run to stream.
+ * @param options - Event listeners, abort signal, and resume cursor.
+ * @returns Promise that resolves when the stream completes or is aborted.
+ */
+export async function streamResponseEvents(
+  responseId: string,
+  options: StreamEventsOptions = {},
+): Promise<void> {
+  const reader = await openEventStream(responseId, options);
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
 
@@ -538,159 +683,12 @@ export async function streamResponseEvents(
 
       for (const block of blocks) {
         if (!block.trim()) continue;
-
-        let eventType = 'message';
-        let eventData = '';
-        let eventId: string | null = null;
-
-        for (const line of block.split('\n')) {
-          if (line.startsWith(':')) {
-            // SSE comment / heartbeat
-            continue;
-          }
-          if (line.startsWith('event:')) {
-            eventType = line.slice(6).trim();
-          } else if (line.startsWith('data:')) {
-            const dataSlice = line.slice(5).trimStart();
-            eventData += (eventData ? '\n' : '') + dataSlice;
-          } else if (line.startsWith('id:')) {
-            eventId = line.slice(3).trim();
-          }
-        }
-
+        const { eventType, eventData, eventId } = parseSseBlock(block);
         if (eventId) {
           options.lastEventId = eventId;
         }
-
-        // Process typed events
-        if (eventType === 'message.delta') {
-          try {
-            const parsed = JSON.parse(eventData);
-            if (typeof parsed?.text === 'string') {
-              options.onDelta?.(parsed.text);
-            }
-          } catch {
-            options.onDelta?.(eventData);
-          }
-        } else if (eventType === 'message.reasoning.delta') {
-          try {
-            const parsed = JSON.parse(eventData);
-            if (typeof parsed?.text === 'string' && parsed.text) options.onReasoning?.(parsed.text);
-          } catch (err) {
-            console.warn('Failed to parse message.reasoning.delta SSE payload', err);
-          }
-        } else if (eventType === 'message.citations') {
-          try {
-            const parsed = JSON.parse(eventData);
-            const citationsList = Array.isArray(parsed?.citations) ? (parsed.citations as Citation[]) : [];
-            options.onCitations?.(citationsList);
-          } catch (err) {
-            console.warn('Failed to parse citations SSE payload', err);
-          }
-        } else if (eventType === 'message.ui.delta') {
-          try {
-            const parsed = JSON.parse(eventData);
-            if (parsed && typeof parsed === 'object') {
-              options.onUiDelta?.(parsed as Record<string, unknown>);
-            }
-          } catch (err) {
-            console.warn('Failed to parse message.ui.delta SSE payload', err);
-          }
-        } else if (eventType === 'message.ui.done') {
-          try {
-            const parsed = JSON.parse(eventData);
-            if (parsed && typeof parsed === 'object') {
-              options.onUiDone?.(parsed as Record<string, unknown>);
-            }
-          } catch (err) {
-            console.warn('Failed to parse message.ui.done SSE payload', err);
-          }
-        } else if (eventType === 'message.ui.discard') {
-          try {
-            const parsed = JSON.parse(eventData);
-            // Privacy redaction rewrites old events to `{}`; ignore anything without a part id.
-            if (typeof parsed?.part_id === 'string') options.onUiDiscard?.(parsed.part_id);
-          } catch (err) {
-            console.warn('Failed to parse message.ui.discard SSE payload', err);
-          }
-        } else if (eventType === 'message.input.request') {
-          try {
-            const parsed = JSON.parse(eventData);
-            // Privacy redaction rewrites old events to `{}`; ignore anything without an id.
-            if (parsed && typeof parsed.request_id === 'string') {
-              options.onInputRequest?.({
-                ...parsed,
-                options: Array.isArray(parsed.options) ? parsed.options : [],
-                slots: Array.isArray(parsed.slots) ? parsed.slots : [],
-              } as InputRequest);
-            }
-          } catch (err) {
-            console.warn('Failed to parse message.input.request SSE payload', err);
-          }
-        } else if (eventType === 'ui.theme') {
-          try {
-            const parsed = JSON.parse(eventData);
-            // Only the three known modes are ever applied; anything else (including redacted {}) is ignored.
-            if (parsed?.mode === 'light' || parsed?.mode === 'dark' || parsed?.mode === 'system') options.onThemeRequest?.(parsed.mode);
-          } catch (err) {
-            console.warn('Failed to parse ui.theme SSE payload', err);
-          }
-        } else if (eventType === 'message.input.resolved') {
-          try {
-            const parsed = JSON.parse(eventData);
-            if (parsed && typeof parsed.request_id === 'string') options.onInputResolved?.(parsed as InputResolved);
-          } catch (err) {
-            console.warn('Failed to parse message.input.resolved SSE payload', err);
-          }
-        } else if (eventType === 'message.done') {
-          try {
-            const parsed = JSON.parse(eventData);
-            options.onDone?.({
-              text: parsed?.text ?? '',
-              citations: Array.isArray(parsed?.citations) ? parsed.citations : [],
-              model: parsed?.model,
-              status: parsed?.status ?? 'completed',
-              generative_ui: parsed?.generative_ui && typeof parsed.generative_ui === 'object'
-                ? (parsed.generative_ui as Record<string, unknown>)
-                : null,
-              generative_ui_parts: Array.isArray(parsed?.generative_ui_parts)
-                ? (parsed.generative_ui_parts as Record<string, unknown>[])
-                : undefined,
-            });
-          } catch {
-            options.onDone?.({
-              text: eventData,
-              citations: [],
-              status: 'completed',
-            });
-          }
-        } else if (eventType === 'web_search') {
-          try {
-            const parsed = JSON.parse(eventData);
-            if (parsed && typeof parsed.status === 'string') options.onWebSearch?.(parsed as WebSearchOutcome);
-          } catch (err) {
-            console.warn('Failed to parse web_search SSE payload', err);
-          }
-        } else if (eventType === 'tool.status') {
-          try {
-            const parsed = JSON.parse(eventData);
-            const known = parsed?.tool === 'web_search' || parsed?.tool === 'query_collected_data';
-            // Redacted/malformed payloads (`{}`) are ignored.
-            if (known && (parsed.state === 'running' || parsed.state === 'done')) {
-              options.onToolStatus?.({ tool: parsed.tool, state: parsed.state });
-            }
-          } catch (err) {
-            console.warn('Failed to parse tool.status SSE payload', err);
-          }
-        } else if (eventType === 'status') {
-          try {
-            const parsed = JSON.parse(eventData);
-            const statusVal = parsed?.status || eventData;
-            options.onStatus?.(statusVal, parsed);
-          } catch {
-            options.onStatus?.(eventData);
-          }
-        }
+        // Own-property lookup so event names like "constructor" never resolve to Object.prototype members.
+        if (Object.hasOwn(SSE_HANDLERS, eventType)) SSE_HANDLERS[eventType](eventData, options);
       }
     }
   } catch (err: unknown) {

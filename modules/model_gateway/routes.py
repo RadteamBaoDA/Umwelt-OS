@@ -112,6 +112,86 @@ async def save_test_result(body: ModelTestResultBody, session: Session, _owner: 
     return out
 
 
+async def _collect_stream_text(
+    client: ModelGateway, role: str, mapping: ModelMapping, policy: RequestPolicy,
+) -> str:
+    """Stream a synthetic chat and return the concatenated delta text (bounded to ~16 KiB of lines).
+
+    ``aclosing`` guarantees a ``break`` closes the async generator immediately (``stream()`` is an
+    async generator at runtime, typed AsyncIterator), otherwise the model slot lease is held until
+    GC. Unparseable ``data:`` lines are skipped; gateway errors propagate to the caller.
+    """
+    message = [{"role": "user", "content": "Reply with the word ready."}]
+    text, total = "", 0
+    async with aclosing(cast("AsyncGenerator[str, None]", client.stream(role, mapping, policy, message, probe=True))) as lines:
+        async for line in lines:
+            total += len(line)
+            if line.startswith("data:"):
+                data = line.removeprefix("data:").strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    choices = chunk.get("choices", []) if isinstance(chunk, dict) else []
+                    if choices and isinstance(choices[0], dict):
+                        delta = choices[0].get("delta", {})
+                        if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                            text += delta["content"]
+                except (TypeError, json.JSONDecodeError):
+                    pass
+            if total >= 16384:
+                break
+    return text
+
+
+async def _run_capability_probe(
+    client: ModelGateway, capability: str, role: str, mapping: ModelMapping, policy: RequestPolicy,
+) -> Any:
+    """Send the synthetic request for one capability through the gateway and return its raw response.
+
+    Dispatches by ``capability`` (embeddings, reranking, streaming, structured, tools; anything else is
+    a chat probe). Streaming returns ``{"streamed": text}``. Performs provider I/O; every gateway or
+    policy exception propagates so the route can map it (403/503/unsupported/failed).
+    """
+    message = [{"role": "user", "content": "Reply with the word ready."}]
+    if capability == "embeddings":
+        return await client.embed(role, mapping, policy, ["Synthetic capability probe."], probe=True)
+    if capability == "reranking":
+        return await client.rerank(role, mapping, policy, "synthetic probe", ["synthetic probe document"], probe=True)
+    if capability == "streaming":
+        return {"streamed": await _collect_stream_text(client, role, mapping, policy)}
+    if capability == "structured":
+        return await client.structured(role, mapping, policy, message, {"name": "probe", "schema": {"type": "object"}}, probe=True)
+    if capability == "tools":
+        return await client.tools(role, mapping, policy, [{"role": "user", "content": "Call the probe tool now."}], [{"type": "function", "function": {"name": "probe", "description": "Return a synthetic readiness signal.", "parameters": {"type": "object", "properties": {}}}}], probe=True)
+    return await client.chat(role, mapping, policy, message, probe=True)
+
+
+def _resolve_probe_target(
+    base_config: Any, role: str, body: ProbeRequest,
+) -> tuple[Any, ModelMapping | None, ModelMapping | None]:
+    """Pick the config and mapping a role probe targets; return ``(config, mapping, configured_mapping)``.
+
+    With body ``provider_id`` + ``model`` (chat role only) the model must be an ``llm`` model listed on
+    that saved provider and the probe derives its config from the composer-override mapping
+    (``configured_mapping`` is that mapping); otherwise the role default is used. Raises 422 for a
+    non-chat override, 404 for an unknown provider/model and 409 for a non-llm model. Pure.
+    """
+    if body.provider_id is not None and body.model is not None:
+        if role != "chat":
+            raise HTTPException(status_code=422, detail="Provider model probes support the chat role only")
+        provider = base_config.providers.get(body.provider_id)
+        entry = next((m for m in provider.models if m.id == body.model), None) if provider else None
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Model is not configured on this provider")
+        if entry.type != "llm":
+            raise HTTPException(status_code=409, detail="Only chat (llm) models can be probed for chat")
+        configured_mapping = ai_settings.mapping_for_override(base_config, body.provider_id, body.model)
+        return ai_settings.derive_for_mapping(base_config, configured_mapping), configured_mapping, configured_mapping
+    config = ai_settings.derive_for_role(base_config, role)
+    return config, config.defaults.resolve(role), None
+
+
 @router.post("/draft-test", dependencies=[Depends(require_budget("model_probe", 10, 60))])
 async def probe_draft(
     request: Request, session: Session, _owner: OwnerWrite,
@@ -165,41 +245,9 @@ async def probe_draft(
     client = ModelGateway(redis, endpoint, credential, destination or "remote",
         timeout_seconds=float(config.request_timeout_seconds), scope=_owner, configuration_revision=0, gateway_identity=identity, before_send=recheck_send,
         approved_endpoint_cidrs=tuple(settings.ai_allowed_endpoint_cidrs), allow_public_endpoints=settings.ai_allow_public_providers, kind=kind)
-    message = [{"role": "user", "content": "Reply with the word ready."}]
     detail = ""  # real failure reason for the owner; empty when supported
     try:
-        if body.capability == "embeddings":
-            response = await client.embed(role, mapping, policy, ["Synthetic capability probe."], probe=True)
-        elif body.capability == "reranking":
-            response = await client.rerank(role, mapping, policy, "synthetic probe", ["synthetic probe document"], probe=True)
-        elif body.capability == "streaming":
-            chunks, total = "", 0
-            # aclosing (stream() is an async generator at runtime, typed AsyncIterator): a `break` must close the generator now, or the model slot lease is held until GC.
-            async with aclosing(cast("AsyncGenerator[str, None]", client.stream(role, mapping, policy, message, probe=True))) as lines:
-                async for line in lines:
-                    total += len(line)
-                    if line.startswith("data:"):
-                        data = line.removeprefix("data:").strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            item = json.loads(data)
-                            choices = item.get("choices", []) if isinstance(item, dict) else []
-                            if choices and isinstance(choices[0], dict):
-                                delta = choices[0].get("delta", {})
-                                if isinstance(delta, dict) and isinstance(delta.get("content"), str):
-                                    chunks += delta["content"]
-                        except (TypeError, json.JSONDecodeError):
-                            pass
-                    if total >= 16384:
-                        break
-            response = {"streamed": chunks}
-        elif body.capability == "structured":
-            response = await client.structured(role, mapping, policy, message, {"name": "probe", "schema": {"type": "object"}}, probe=True)
-        elif body.capability == "tools":
-            response = await client.tools(role, mapping, policy, [{"role": "user", "content": "Call the probe tool now."}], [{"type": "function", "function": {"name": "probe", "description": "Return a synthetic readiness signal.", "parameters": {"type": "object", "properties": {}}}}], probe=True)
-        else:
-            response = await client.chat(role, mapping, policy, message, probe=True)
+        response = await _run_capability_probe(client, body.capability, role, mapping, policy)
         result = "supported" if _capability_proved(body.capability, response) else "unsupported"
         if result == "unsupported":
             detail = _NOT_PROVED
@@ -235,22 +283,7 @@ async def probe_model(
     settings: Settings = request.app.state.settings
     redis: Redis = request.app.state.redis
     base_config = await ai_settings.get_ai_execution_config(session, settings, redis, scope=_owner)
-    configured_mapping: ModelMapping | None = None
-    if body.provider_id is not None and body.model is not None:
-        if role != "chat":
-            raise HTTPException(status_code=422, detail="Provider model probes support the chat role only")
-        provider = base_config.providers.get(body.provider_id)
-        entry = next((m for m in provider.models if m.id == body.model), None) if provider else None
-        if entry is None:
-            raise HTTPException(status_code=404, detail="Model is not configured on this provider")
-        if entry.type != "llm":
-            raise HTTPException(status_code=409, detail="Only chat (llm) models can be probed for chat")
-        configured_mapping = ai_settings.mapping_for_override(base_config, body.provider_id, body.model)
-        config = ai_settings.derive_for_mapping(base_config, configured_mapping)
-        mapping: ModelMapping | None = configured_mapping
-    else:
-        config = ai_settings.derive_for_role(base_config, role)
-        mapping = config.defaults.resolve(role)
+    config, mapping, configured_mapping = _resolve_probe_target(base_config, role, body)
     if mapping is None:
         raise HTTPException(status_code=409, detail="Configure this model role first")
     destination = config.endpoint_destination_id
@@ -291,40 +324,9 @@ async def probe_model(
         configuration_revision=config.configuration_revision, gateway_identity=config.gateway_identity, model_identity=config.model_identity,
         before_send=recheck_send, approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
         allow_public_endpoints=config.allow_public_providers, kind=config.gateway_kind)
-    message = [{"role": "user", "content": "Reply with the word ready."}]
     detail = ""  # real failure reason for the owner; empty when supported
     try:
-        if body.capability == "embeddings":
-            response = await client.embed(role, mapping, policy, ["Synthetic capability probe."], probe=True)
-        elif body.capability == "reranking":
-            response = await client.rerank(role, mapping, policy, "synthetic probe", ["synthetic probe document"], probe=True)
-        elif body.capability == "streaming":
-            text, total = "", 0
-            async with aclosing(cast("AsyncGenerator[str, None]", client.stream(role, mapping, policy, message, probe=True))) as lines:
-                async for line in lines:
-                    total += len(line)
-                    if line.startswith("data:"):
-                        data = line.removeprefix("data:").strip()
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            choices = chunk.get("choices", []) if isinstance(chunk, dict) else []
-                            if choices and isinstance(choices[0], dict):
-                                delta = choices[0].get("delta", {})
-                                if isinstance(delta, dict) and isinstance(delta.get("content"), str):
-                                    text += delta["content"]
-                        except (TypeError, json.JSONDecodeError):
-                            pass
-                    if total >= 16384:
-                        break
-            response = {"streamed": text}
-        elif body.capability == "structured":
-            response = await client.structured(role, mapping, policy, message, {"name": "probe", "schema": {"type": "object"}}, probe=True)
-        elif body.capability == "tools":
-            response = await client.tools(role, mapping, policy, [{"role": "user", "content": "Call the probe tool now."}], [{"type": "function", "function": {"name": "probe", "description": "Return a synthetic readiness signal.", "parameters": {"type": "object", "properties": {}}}}], probe=True)
-        else:
-            response = await client.chat(role, mapping, policy, message, probe=True)
+        response = await _run_capability_probe(client, body.capability, role, mapping, policy)
         proved = _capability_proved(body.capability, response)
         if not proved:
             detail = _NOT_PROVED

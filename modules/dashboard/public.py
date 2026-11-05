@@ -9,26 +9,32 @@ through the shared replay transaction.
 from __future__ import annotations
 
 import asyncio
-import base64
 import binascii
 import hashlib
 import json
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import HTTPException
 from sqlalchemy import ColumnElement, delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import Exists
 
+from core.errors import (
+    ConflictError,
+    GatewayTimeoutError,
+    ValidationFailedError,
+)
+from core.export_pages import serialize_bounded_page
+from core.pagination import b64url_decode, b64url_encode
 from core.realtime import commit_with_replay, make_dashboard_change
-from core.workspaces import public as workspaces
-from core.workspaces.schemas import AccessFence, AdminWorkspaceReadContext, Scope, WorkspaceContext
+from core.workspaces.admission import actor_id as _actor
+from core.workspaces.admission import admit_scope
+from core.workspaces.schemas import AccessFence, Scope
 from modules.connectors.public import metric_catalog, provider_metrics, source_data_shapes
 from modules.dashboard import briefs, gadgets, layouts
 from modules.dashboard.daily_schemas import (
@@ -117,266 +123,314 @@ PREVIEW_MAX_MATCHES = 100
 
 
 def _owner_tzinfo(name: str) -> tzinfo:
+    """Resolve an IANA timezone name, falling back to UTC for unknown, malformed or unreadable names. Pure."""
     try:
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError, OSError):
         return UTC
 
 
-def _actor(scope: Scope) -> int:
-    """Return the admitted owner actor used by dashboard-owned rows."""
-    return scope.user_id if isinstance(scope, (WorkspaceContext, AdminWorkspaceReadContext)) else scope.actor_user_id
-
-
 async def _admit(
     session: AsyncSession, *, scope: Scope, multi_workspace_enabled: bool,
     lock: bool = False, expected: AccessFence | None = None,
 ) -> AccessFence:
-    """Admit owner scope before reading or locking dashboard-owned data."""
-    if isinstance(scope, WorkspaceContext) and scope.role != "owner":
-        raise HTTPException(status_code=403, detail="Workspace owner required")
-    if lock and isinstance(scope, AdminWorkspaceReadContext):
-        raise HTTPException(status_code=403, detail="Admin workspace access is read-only")
-    if type(multi_workspace_enabled) is not bool:
-        raise TypeError("The configured multi-workspace feature flag must be a boolean")
-    if lock:
-        return await workspaces.lock_access_fence(
-            session, scope=scope, expected=expected, multi_workspace_enabled=multi_workspace_enabled,
-        )
-    return await workspaces.read_access_fence(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    """Admit owner scope before reading or locking dashboard-owned data.
+
+    Thin wrapper over ``core.workspaces.admission.admit_scope`` (owner only, admin viewers read-only); keeps this module's
+    private ``_admit`` name so call sites and tests are unchanged. No commit; the caller owns the
+    transaction and lock ordering.
+    """
+    return await admit_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=lock, expected=expected,
+        admin_read_only_on_lock=True,
     )
 
 
-async def evaluate_gadget_highlights(
-    session: AsyncSession, definition_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
-    emit_notifications: bool = False,
-) -> list[DashboardHighlightRead]:
-    """Evaluate current evidence and durably page scans with at most 96 rule/version matches.
+@dataclass
+class _HighlightScan:
+    """Unlocked snapshot of one definition's scan inputs, re-verified after the locks are taken."""
 
-    Scheduled pages hold at most three documents and the schema caps each definition at 32 rules.
-    The resulting 3-by-32 ceiling keeps every matching notification in the same cursor transaction.
-    Highlight notification titles carry exact private Document/version provenance; Notifications
-    rechecks the selected current version and keeps that provenance out of its public DTO.
+    definition_revision: int
+    source_ids: tuple[UUID, ...]
+    selected_source_snapshot: dict[UUID, Any]
+    scan_source_ids: tuple[UUID, ...]
+    raw_scope: Any
+    rules: list[HighlightRule]
+    item_scope: set[str]
+    compiled: Any
+    definition_snapshot: str
+    rules_fingerprint: str
+    progress_snapshot: tuple[Any, Any, Any, Any] | None
+    page: Any
+
+
+def _highlight_read(item: Any, match: Any) -> DashboardHighlightRead:
+    """Project one projection item and rule match onto the public highlight DTO."""
+    return DashboardHighlightRead(
+        document_id=item.document_id, document_version_id=item.document_version_id,
+        source_id=item.source_id, title=item.title, observed_at=item.observed_at,
+        rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
+        severity=match.severity, notify=match.notify, reason=match.reason,
+    )
+
+
+async def _snapshot_highlight_scan(
+    session: AsyncSession, definition_id: UUID, owner_id: int, *, scope: Scope, multi_workspace_enabled: bool,
+) -> _HighlightScan | None:
+    """Snapshot the owner definition, scan position and next evidence page without any row lock.
+
+    Sources and Documents must be settled before the Definition/Progress locks taken later. Returns
+    ``None`` when no selected Source is active or there are no rules (nothing to scan). Raises
+    ``DashboardMissing`` for an unknown definition, ``ValueError`` when the rule count exceeds the
+    validated bound and ``RuntimeError`` when the page could exceed the notification coverage bound.
     """
-    from modules.dashboard.highlights import compile_rules, match_compiled, notification_allowed
-    from modules.dashboard.models import GadgetHighlightProgress, GadgetHighlightSuppression
-    from modules.dashboard.schemas import HighlightRule
+    from modules.dashboard.highlights import compile_rules
+    from modules.dashboard.models import GadgetHighlightProgress
     from modules.knowledge.documents import public as documents
+
+    definition = await session.scalar(select(GadgetDefinition).where(
+        GadgetDefinition.id == definition_id,
+        GadgetDefinition.workspace_id == scope.workspace_id,
+        GadgetDefinition.owner_id == owner_id,
+    ).execution_options(populate_existing=True))
+    if definition is None:
+        raise DashboardMissing
+    definition_revision = definition.revision
+    source_ids = tuple(UUID(str(value)) for value in definition.source_ids[:32])
+    selected_sources = await sources.get_gadget_sources(
+        session, source_ids, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    ) if source_ids else []
+    selected_source_snapshot = {item.id: item for item in selected_sources}
+    scan_source_ids = tuple(item.id for item in selected_sources if item.status == "active")
+    raw_rules = json.loads(json.dumps(definition.highlight_rules, sort_keys=True))
+    raw_scope = json.loads(json.dumps(definition.scope, sort_keys=True))
+    rules = [HighlightRule.model_validate(rule) for rule in raw_rules]
+    if len(rules) > MAX_RULES_PER_DEFINITION:
+        raise ValueError("Highlight rule count exceeds the validated definition bound")
+    raw_item_scope = raw_scope.get("source_item_ids", []) if isinstance(raw_scope, dict) else []
+    item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
+    if not scan_source_ids or not rules:
+        return None
+    # Read-only topic resolution happens before any definition/progress lock is taken.
+    compiled = compile_rules(rules, await _rule_topic_terms(
+        session, rules, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ))
+    definition_snapshot = json.dumps(
+        {"revision": definition_revision, "source_ids": [str(value) for value in source_ids],
+         "scope": raw_scope, "rules": raw_rules},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    )
+    rules_fingerprint = hashlib.sha256(json.dumps(
+        {"source_ids": [str(value) for value in source_ids], "scope": sorted(item_scope),
+         "rules": [rule.model_dump(mode="json", exclude_defaults=True) for rule in rules]},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
+
+    progress_snapshot_row = await session.scalar(select(GadgetHighlightProgress).where(
+        GadgetHighlightProgress.definition_id == definition.id,
+    ).execution_options(populate_existing=True))
+    progress_snapshot = None if progress_snapshot_row is None else (
+        progress_snapshot_row.definition_revision, progress_snapshot_row.rules_fingerprint,
+        progress_snapshot_row.cursor_created_at, progress_snapshot_row.cursor_version_id,
+    )
+    progress_is_current = progress_snapshot is not None and (
+        progress_snapshot[0] == definition_revision
+        and progress_snapshot[1] == rules_fingerprint
+    )
+    page = await documents.list_gadget_highlight_projection_page(
+        session, source_ids=scan_source_ids, limit=HIGHLIGHT_SCAN_PAGE_LIMIT,
+        cursor_created_at=progress_snapshot[2] if progress_snapshot and progress_is_current else None,
+        cursor_version_id=progress_snapshot[3] if progress_snapshot and progress_is_current else None,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if len(page.items) * len(rules) > HIGHLIGHT_MATCHES_PER_PAGE_MAX:
+        raise RuntimeError("Highlight scan page exceeds its notification coverage bound")
+    return _HighlightScan(
+        definition_revision=definition_revision, source_ids=source_ids,
+        selected_source_snapshot=selected_source_snapshot, scan_source_ids=scan_source_ids,
+        raw_scope=raw_scope, rules=rules, item_scope=item_scope, compiled=compiled,
+        definition_snapshot=definition_snapshot, rules_fingerprint=rules_fingerprint,
+        progress_snapshot=progress_snapshot, page=page,
+    )
+
+
+async def _lock_highlight_scan(
+    session: AsyncSession, scan: _HighlightScan, definition_id: UUID, owner_id: int,
+    *, scope: Scope, multi_workspace_enabled: bool, access_fence: AccessFence,
+) -> tuple[GadgetDefinition, Any]:
+    """Lock Sources, Documents, Definition then Progress (in that order) and re-verify the snapshot.
+
+    Raises ``ConflictError`` (409) if the selected Sources, page evidence, definition or progress
+    changed since ``_snapshot_highlight_scan``. A new or stale-fingerprint progress row is created
+    or reset (cursor, cooldowns and suppressions cleared); the cursor is then advanced to the page's
+    next position. Returns the locked ``(definition, progress)`` rows; commit is the caller's.
+    """
+    from modules.dashboard.models import GadgetHighlightProgress, GadgetHighlightSuppression
+    from modules.knowledge.documents import public as documents
+
+    page = scan.page
+    # The page may contain only a subset of selected Sources. Lock all selected
+    # Source identities first, then let Documents lock and verify selected versions.
+    source_fences = {}
+    for source_id in sorted(scan.scan_source_ids, key=str):
+        source_fences[source_id] = await sources.lock_source(
+            session, source_id, scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            expected_access_fence=access_fence,
+        )
+    if any(
+        fence is None or fence.status != "active"
+        or fence.generation != scan.selected_source_snapshot[source_id].generation
+        or fence.local_only != scan.selected_source_snapshot[source_id].local_only
+        for source_id, fence in source_fences.items()
+    ):
+        raise ConflictError(detail="Highlight source selection changed")
+    if page.selection_fences and not await documents.validate_gadget_document_selection_fences(
+        session, tuple(page.selection_fences), lock_rows=True,
+        max_documents=HIGHLIGHT_SCAN_PAGE_LIMIT,
+        scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        raise ConflictError(detail="Dashboard highlight evidence changed during evaluation")
+
+    definition = await session.scalar(select(GadgetDefinition).where(
+        GadgetDefinition.id == definition_id,
+        GadgetDefinition.workspace_id == scope.workspace_id,
+        GadgetDefinition.owner_id == owner_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    if definition is None:
+        raise DashboardMissing
+    current_snapshot = json.dumps(
+        {"revision": definition.revision, "source_ids": definition.source_ids,
+         "scope": definition.scope, "rules": definition.highlight_rules},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    )
+    if current_snapshot != scan.definition_snapshot:
+        raise ConflictError(detail="Highlight definition changed during evaluation")
+
+    progress = await session.scalar(select(GadgetHighlightProgress).where(
+        GadgetHighlightProgress.definition_id == definition.id,
+    ).with_for_update().execution_options(populate_existing=True))
+    current_progress_snapshot = None if progress is None else (
+        progress.definition_revision, progress.rules_fingerprint,
+        progress.cursor_created_at, progress.cursor_version_id,
+    )
+    if current_progress_snapshot != scan.progress_snapshot:
+        raise ConflictError(detail="Highlight scan progress changed during evaluation")
+    if progress is None:
+        progress = GadgetHighlightProgress(
+            definition_id=definition.id, definition_revision=definition.revision,
+            rules_fingerprint=scan.rules_fingerprint, rule_last_notified={},
+        )
+        session.add(progress)
+        await session.flush()
+    elif (
+        progress.definition_revision != definition.revision
+        or progress.rules_fingerprint != scan.rules_fingerprint
+    ):
+        progress.definition_revision = definition.revision
+        progress.rules_fingerprint = scan.rules_fingerprint
+        progress.cursor_created_at = None
+        progress.cursor_version_id = None
+        progress.rule_last_notified = {}
+        await session.execute(delete(GadgetHighlightSuppression).where(
+            GadgetHighlightSuppression.definition_id == definition.id,
+        ))
+    progress.cursor_created_at = page.cursor_created_at if page.has_more else None
+    progress.cursor_version_id = page.cursor_version_id if page.has_more else None
+    return definition, progress
+
+
+async def _deliver_highlight_matches(
+    session: AsyncSession, scan: _HighlightScan, definition: GadgetDefinition, progress: Any,
+    *, owner_id: int, scope: Scope, multi_workspace_enabled: bool,
+) -> list[DashboardHighlightRead]:
+    """Match the locked page, apply the delivery policy and emit notifications in the same transaction.
+
+    Delivery policy (T6b) reads only the already-locked progress row plus an unlocked preferences
+    SELECT, so the definition -> progress lock order is unchanged. BM-34: quiet hours, cooldown and
+    expiry SUPPRESS; the decision is stored so a later rescan of the same version cannot deliver it
+    (writes happen under the definition lock). Updates ``progress.rule_last_notified``.
+    """
+    from modules.dashboard.highlights import match_compiled, notification_allowed
+    from modules.dashboard.models import GadgetHighlightSuppression
     from modules.notifications.public import NotificationEmit, NotificationEvidence, emit
 
-    access_fence = await _admit(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        lock=emit_notifications,
-    )
-    owner_id = _actor(scope)
-    if emit_notifications:
-        # Snapshot the owner definition and scan position without holding either row lock.
-        # Sources and Documents must be settled before the Definition/Progress locks below.
-        definition = await session.scalar(select(GadgetDefinition).where(
-            GadgetDefinition.id == definition_id,
-            GadgetDefinition.workspace_id == scope.workspace_id,
-            GadgetDefinition.owner_id == owner_id,
-        ).execution_options(populate_existing=True))
-        if definition is None:
-            raise DashboardMissing
-        definition_revision = definition.revision
-        source_ids = tuple(UUID(str(value)) for value in definition.source_ids[:32])
-        selected_sources = await sources.get_gadget_sources(
-            session, source_ids, scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        ) if source_ids else []
-        selected_source_snapshot = {item.id: item for item in selected_sources}
-        scan_source_ids = tuple(item.id for item in selected_sources if item.status == "active")
-        raw_rules = json.loads(json.dumps(definition.highlight_rules, sort_keys=True))
-        raw_scope = json.loads(json.dumps(definition.scope, sort_keys=True))
-        rules = [HighlightRule.model_validate(rule) for rule in raw_rules]
-        if len(rules) > MAX_RULES_PER_DEFINITION:
-            raise ValueError("Highlight rule count exceeds the validated definition bound")
-        raw_item_scope = raw_scope.get("source_item_ids", []) if isinstance(raw_scope, dict) else []
-        item_scope = {str(value) for value in raw_item_scope} if isinstance(raw_item_scope, list) else set()
-        if not scan_source_ids or not rules:
-            return []
-        # Read-only topic resolution happens before any definition/progress lock is taken.
-        compiled = compile_rules(rules, await _rule_topic_terms(
-            session, rules, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        ))
-        definition_snapshot = json.dumps(
-            {"revision": definition_revision, "source_ids": [str(value) for value in source_ids],
-             "scope": raw_scope, "rules": raw_rules},
-            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        )
-        rules_fingerprint = hashlib.sha256(json.dumps(
-            {"source_ids": [str(value) for value in source_ids], "scope": sorted(item_scope),
-             "rules": [rule.model_dump(mode="json", exclude_defaults=True) for rule in rules]},
-            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        ).encode("utf-8")).hexdigest()
+    now = datetime.now(UTC)
+    rules = scan.rules
+    rules_by_id = {rule.id: rule for rule in rules}
+    last_notified = {
+        key: datetime.fromisoformat(value) for key, value in progress.rule_last_notified.items()
+        if UUID(key) in rules_by_id
+    }
+    tz: tzinfo = UTC
+    if any(rule.quiet_start for rule in rules):
+        tz = _owner_tzinfo((await settings_public.read_owner_preferences(
+            session, actor_user_id=owner_id, multi_workspace_enabled=multi_workspace_enabled,
+        )).timezone)
+    found = [
+        (item, match) for item in scan.page.items
+        if not scan.item_scope or str(item.document_id) in scan.item_scope
+        for match in match_compiled(item.excerpt, scan.compiled, source_id=item.source_id)
+    ]
 
-        progress_snapshot_row = await session.scalar(select(GadgetHighlightProgress).where(
-            GadgetHighlightProgress.definition_id == definition.id,
-        ).execution_options(populate_existing=True))
-        progress_snapshot = None if progress_snapshot_row is None else (
-            progress_snapshot_row.definition_revision, progress_snapshot_row.rules_fingerprint,
-            progress_snapshot_row.cursor_created_at, progress_snapshot_row.cursor_version_id,
+    def key_of(item: Any, match: Any) -> str:
+        """Build the idempotent notification/suppression key for one (rule, version) match."""
+        return (
+            f"highlight:{definition.id}:{definition.revision}:"
+            f"{scan.rules_fingerprint}:{match.rule_id}:{item.document_version_id}"
         )
-        progress_is_current = progress_snapshot is not None and (
-            progress_snapshot[0] == definition_revision
-            and progress_snapshot[1] == rules_fingerprint
-        )
-        initial_cursor_created_at = progress_snapshot[2] if progress_snapshot and progress_is_current else None
-        initial_cursor_version_id = progress_snapshot[3] if progress_snapshot and progress_is_current else None
-        page = await documents.list_gadget_highlight_projection_page(
-            session, source_ids=scan_source_ids, limit=HIGHLIGHT_SCAN_PAGE_LIMIT,
-            cursor_created_at=initial_cursor_created_at,
-            cursor_version_id=initial_cursor_version_id,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        )
-        if len(page.items) * len(rules) > HIGHLIGHT_MATCHES_PER_PAGE_MAX:
-            raise RuntimeError("Highlight scan page exceeds its notification coverage bound")
 
-        # The page may contain only a subset of selected Sources. Lock all selected
-        # Source identities first, then let Documents lock and verify selected versions.
-        source_fences = {}
-        for source_id in sorted(scan_source_ids, key=str):
-            source_fences[source_id] = await sources.lock_source(
-                session, source_id, scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-                expected_access_fence=access_fence,
-            )
-        if any(
-            fence is None or fence.status != "active"
-            or fence.generation != selected_source_snapshot[source_id].generation
-            or fence.local_only != selected_source_snapshot[source_id].local_only
-            for source_id, fence in source_fences.items()
-        ):
-            raise HTTPException(status_code=409, detail="Highlight source selection changed")
-        if page.selection_fences and not await documents.validate_gadget_document_selection_fences(
-            session, tuple(page.selection_fences), lock_rows=True,
-            max_documents=HIGHLIGHT_SCAN_PAGE_LIMIT,
-            scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-        ):
-            raise HTTPException(status_code=409, detail="Dashboard highlight evidence changed during evaluation")
-
-        definition = await session.scalar(select(GadgetDefinition).where(
-            GadgetDefinition.id == definition_id,
-            GadgetDefinition.workspace_id == scope.workspace_id,
-            GadgetDefinition.owner_id == owner_id,
-        ).with_for_update().execution_options(populate_existing=True))
-        if definition is None:
-            raise DashboardMissing
-        current_snapshot = json.dumps(
-            {"revision": definition.revision, "source_ids": definition.source_ids,
-             "scope": definition.scope, "rules": definition.highlight_rules},
-            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-        )
-        if current_snapshot != definition_snapshot:
-            raise HTTPException(status_code=409, detail="Highlight definition changed during evaluation")
-
-        progress = await session.scalar(select(GadgetHighlightProgress).where(
-            GadgetHighlightProgress.definition_id == definition.id,
-        ).with_for_update().execution_options(populate_existing=True))
-        current_progress_snapshot = None if progress is None else (
-            progress.definition_revision, progress.rules_fingerprint,
-            progress.cursor_created_at, progress.cursor_version_id,
-        )
-        if current_progress_snapshot != progress_snapshot:
-            raise HTTPException(status_code=409, detail="Highlight scan progress changed during evaluation")
-        if progress is None:
-            progress = GadgetHighlightProgress(
-                definition_id=definition.id, definition_revision=definition.revision,
-                rules_fingerprint=rules_fingerprint, rule_last_notified={},
-            )
-            session.add(progress)
-            await session.flush()
-        elif (
-            progress.definition_revision != definition.revision
-            or progress.rules_fingerprint != rules_fingerprint
-        ):
-            progress.definition_revision = definition.revision
-            progress.rules_fingerprint = rules_fingerprint
-            progress.cursor_created_at = None
-            progress.cursor_version_id = None
-            progress.rule_last_notified = {}
-            await session.execute(delete(GadgetHighlightSuppression).where(
+    suppressed_keys: set[str] = set()
+    if found:
+        suppressed_keys = set((await session.execute(
+            select(GadgetHighlightSuppression.dedupe_key).where(
                 GadgetHighlightSuppression.definition_id == definition.id,
-            ))
-        progress.cursor_created_at = page.cursor_created_at if page.has_more else None
-        progress.cursor_version_id = page.cursor_version_id if page.has_more else None
-
-        # Delivery policy (T6b): reads only the already-locked progress row plus an unlocked
-        # preferences SELECT, so the definition -> progress lock order is unchanged.
-        now = datetime.now(UTC)
-        rules_by_id = {rule.id: rule for rule in rules}
-        last_notified = {
-            key: datetime.fromisoformat(value) for key, value in progress.rule_last_notified.items()
-            if UUID(key) in rules_by_id
-        }
-        tz: tzinfo = UTC
-        if any(rule.quiet_start for rule in rules):
-            tz = _owner_tzinfo((await settings_public.read_owner_preferences(
-                session, actor_user_id=owner_id, multi_workspace_enabled=multi_workspace_enabled,
-            )).timezone)
-        found = [
-            (item, match) for item in page.items
-            if not item_scope or str(item.document_id) in item_scope
-            for match in match_compiled(item.excerpt, compiled, source_id=item.source_id)
-        ]
-
-        def key_of(item: Any, match: Any) -> str:
-            return (
-                f"highlight:{definition.id}:{definition.revision}:"
-                f"{rules_fingerprint}:{match.rule_id}:{item.document_version_id}"
+                GadgetHighlightSuppression.dedupe_key.in_([key_of(i, m) for i, m in found]),
             )
+        )).scalars())
+    matches: list[DashboardHighlightRead] = []
+    for item, match in found:
+        dedupe_key = key_of(item, match)
+        deliver = False
+        if match.notify and dedupe_key not in suppressed_keys:
+            deliver = notification_allowed(
+                rules_by_id[match.rule_id], now, tz, last_notified.get(str(match.rule_id)),
+            )
+            expires = rules_by_id[match.rule_id].expires_at
+            # ponytail: quiet/cooldown rows grow unbounded; upgrade is version-based pruning (R1 option 2).
+            if not deliver and not (expires is not None and now >= expires):  # expiry is permanent until edit
+                # Keyed by the locked, scoped definition.id above; the table has no workspace column.
+                await session.execute(pg_insert(GadgetHighlightSuppression).values(
+                    definition_id=definition.id, dedupe_key=dedupe_key,
+                ).on_conflict_do_nothing())
+        matches.append(_highlight_read(item, match))
+        if deliver and await emit(session, NotificationEmit(
+            dedupe_key=dedupe_key,
+            kind="dashboard_highlight", title=item.title[:300],
+            body=match.reason[:1000],
+            params={"severity": match.severity, "definition_id": str(definition.id),
+                    "definition_revision": definition.revision},
+            link="/dashboard",
+        ), evidence=NotificationEvidence(
+            document_id=item.document_id, document_version_id=item.document_version_id,
+        ), scope=scope, multi_workspace_enabled=multi_workspace_enabled):
+            last_notified[str(match.rule_id)] = now
+    progress.rule_last_notified = {key: value.isoformat() for key, value in last_notified.items()}
+    return matches
 
-        # BM-34: quiet hours/cooldown/expiry SUPPRESS. The decision is stored so a later rescan of
-        # the same version cannot deliver it. Writes happen under the definition lock held above.
-        suppressed_keys: set[str] = set()
-        if found:
-            suppressed_keys = set((await session.execute(
-                select(GadgetHighlightSuppression.dedupe_key).where(
-                    GadgetHighlightSuppression.definition_id == definition.id,
-                    GadgetHighlightSuppression.dedupe_key.in_([key_of(i, m) for i, m in found]),
-                )
-            )).scalars())
-        matches: list[DashboardHighlightRead] = []
-        for item, match in found:
-            dedupe_key = key_of(item, match)
-            deliver = False
-            if match.notify and dedupe_key not in suppressed_keys:
-                deliver = notification_allowed(
-                    rules_by_id[match.rule_id], now, tz, last_notified.get(str(match.rule_id)),
-                )
-                expires = rules_by_id[match.rule_id].expires_at
-                # ponytail: quiet/cooldown rows grow unbounded; upgrade is version-based pruning (R1 option 2).
-                if not deliver and not (expires is not None and now >= expires):  # expiry is permanent until edit
-                    # Keyed by the locked, scoped definition.id above; the table has no workspace column.
-                    await session.execute(pg_insert(GadgetHighlightSuppression).values(
-                        definition_id=definition.id, dedupe_key=dedupe_key,
-                    ).on_conflict_do_nothing())
-            matches.append(DashboardHighlightRead(
-                document_id=item.document_id, document_version_id=item.document_version_id,
-                source_id=item.source_id, title=item.title, observed_at=item.observed_at,
-                rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
-                severity=match.severity, notify=match.notify, reason=match.reason,
-            ))
-            if deliver and await emit(session, NotificationEmit(
-                dedupe_key=dedupe_key,
-                kind="dashboard_highlight", title=item.title[:300],
-                body=match.reason[:1000],
-                params={"severity": match.severity, "definition_id": str(definition.id),
-                        "definition_revision": definition.revision},
-                link="/dashboard",
-            ), evidence=NotificationEvidence(
-                document_id=item.document_id, document_version_id=item.document_version_id,
-            ), scope=scope, multi_workspace_enabled=multi_workspace_enabled):
-                last_notified[str(match.rule_id)] = now
-        progress.rule_last_notified = {key: value.isoformat() for key, value in last_notified.items()}
-        # Progress and notifications commit together under the original access fence.
-        await commit_with_replay(
-            session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=access_fence,
-        )
-        return matches[:100]
+
+async def _evaluate_highlights_read_only(
+    session: AsyncSession, definition_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+) -> list[DashboardHighlightRead]:
+    """Evaluate a definition against the newest documents without locks, cursors or notifications.
+
+    Raises ``DashboardMissing`` for an unknown definition and ``ValueError`` for a renderer that
+    has no highlight evaluation. Regex matching runs in a worker thread (CPU-bound). At most 100
+    matches are returned.
+    """
+    from modules.dashboard.highlights import compile_rules
+    from modules.knowledge.documents import public as documents
 
     definition_read = await get_definition(session, definition_id, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled)
@@ -412,12 +466,53 @@ async def evaluate_gadget_highlights(
     per_item = await asyncio.to_thread(_match_items, scoped, compiled)
     for item, item_matches in zip(scoped, per_item, strict=True):
         for match in item_matches:
-            matches.append(DashboardHighlightRead(
-                document_id=item.document_id, document_version_id=item.document_version_id,
-                source_id=item.source_id, title=item.title, observed_at=item.observed_at,
-                rule_id=match.rule_id, matched_keywords=list(match.matched_keywords),
-                severity=match.severity, notify=match.notify, reason=match.reason,
-            ))
+            matches.append(_highlight_read(item, match))
+    return matches[:100]
+
+
+async def evaluate_gadget_highlights(
+    session: AsyncSession, definition_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
+    emit_notifications: bool = False,
+) -> list[DashboardHighlightRead]:
+    """Evaluate current evidence and durably page scans with at most 96 rule/version matches.
+
+    Scheduled pages hold at most three documents and the schema caps each definition at 32 rules.
+    The resulting 3-by-32 ceiling keeps every matching notification in the same cursor transaction.
+    Highlight notification titles carry exact private Document/version provenance; Notifications
+    rechecks the selected current version and keeps that provenance out of its public DTO.
+
+    With ``emit_notifications`` the scan is durable: snapshot (no locks) -> ordered locks
+    (Sources, Documents, Definition, Progress) with re-verification -> delivery, and progress plus
+    notifications commit together under the original access fence. Without it the call is a
+    read-only preview-style evaluation.
+    """
+    access_fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        lock=emit_notifications,
+    )
+    if not emit_notifications:
+        return await _evaluate_highlights_read_only(
+            session, definition_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        )
+    owner_id = _actor(scope)
+    scan = await _snapshot_highlight_scan(
+        session, definition_id, owner_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if scan is None:
+        return []
+    definition, progress = await _lock_highlight_scan(
+        session, scan, definition_id, owner_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled, access_fence=access_fence,
+    )
+    matches = await _deliver_highlight_matches(
+        session, scan, definition, progress, owner_id=owner_id, scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    # Progress and notifications commit together under the original access fence.
+    await commit_with_replay(
+        session, [], scope=scope, multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
     return matches[:100]
 
 
@@ -513,8 +608,8 @@ async def preview_highlights(
                 asyncio.to_thread(_match_items, items, compiled), PREVIEW_MATCH_TIMEOUT_SECONDS,
             )
         except TimeoutError as exc:
-            raise HTTPException(
-                status_code=504, detail={"code": "preview_timeout", "message": "Preview took too long", "details": {}},
+            raise GatewayTimeoutError(
+                detail={"code": "preview_timeout", "message": "Preview took too long", "details": {}},
             ) from exc
         for item, item_matches in zip(items, per_item, strict=True):
             for match in item_matches:
@@ -802,7 +897,7 @@ def _encode_dashboard_export_cursor(
         access_fence.membership_revision, access_fence.configuration_revision,
         {}, "created_at_asc_id_asc", snapshot_at.isoformat(), created_at.isoformat(), str(identifier),
     ], separators=(",", ":")).encode()
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_dashboard_export_cursor(
@@ -812,8 +907,8 @@ def _decode_dashboard_export_cursor(
     try:
         if len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode().rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError
         value = json.loads(raw)
         expected_scope = [
@@ -833,7 +928,7 @@ def _decode_dashboard_export_cursor(
             raise ValueError
         return snapshot_at, created_at, identifier
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Dashboard export cursor is invalid") from exc
+        raise ValidationFailedError(detail="Dashboard export cursor is invalid") from exc
 
 
 def _encode_owner_export_cursor(
@@ -847,7 +942,7 @@ def _encode_owner_export_cursor(
         access_fence.membership_revision, access_fence.configuration_revision,
         {}, sort, snapshot_at.isoformat(), position_at.isoformat(), str(identifier),
     ], separators=(",", ":")).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return b64url_encode(raw)
 
 
 def _decode_owner_export_cursor(
@@ -857,8 +952,8 @@ def _decode_owner_export_cursor(
     try:
         if len(cursor) > 1024 or "=" in cursor:
             raise ValueError
-        raw = base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True)
-        if base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != cursor:
+        raw = b64url_decode(cursor)
+        if b64url_encode(raw) != cursor:
             raise ValueError
         sort = "generated_at_asc_id_asc" if record_kind == "daily_briefs" else "created_at_asc_id_asc"
         expected_scope = [
@@ -879,7 +974,7 @@ def _decode_owner_export_cursor(
             raise ValueError
         return snapshot_at, position_at, identifier
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError, binascii.Error) as exc:
-        raise HTTPException(status_code=422, detail="Owner export cursor is invalid") from exc
+        raise ValidationFailedError(detail="Owner export cursor is invalid") from exc
 
 
 def _dashboard_export_scope(owner_id: int, snapshot_at: datetime, workspace_id: UUID) -> tuple[ColumnElement[bool], ...]:
@@ -950,10 +1045,7 @@ async def _definition_export_page(
     has_more, rows = len(rows) > limit, rows[:limit]
     eligible_rows = [row for row in rows if row.updated_at <= snapshot_at]
     items = [_definition_export_read(row) for row in eligible_rows]
-    encoded = [item.model_dump_json().encode("utf-8") for item in items]
-    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
-    if payload_bytes > 16_777_216:
-        raise HTTPException(status_code=413, detail="Gadget definition export page exceeds its byte bound")
+    _encoded, payload_bytes = serialize_bounded_page(items, label="Gadget definition")
     fences = [GadgetDefinitionExportFence(
         id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
         content_digest=_definition_export_row_digest(row), eligible=row.updated_at <= snapshot_at,
@@ -1116,17 +1208,14 @@ async def _brief_export_page(
             continue
         citations = _brief_export_citations(row)
         if citations is None:
-            raise HTTPException(status_code=409, detail="Daily brief changed during export; retry the download")
+            raise ConflictError(detail="Daily brief changed during export; retry the download")
         items.append(DailyBriefExport(
             id=row.id, brief_date=row.brief_date, timezone=row.timezone, revision=row.revision,
             status="current", content=row.content, citations=citations,
             model_alias=row.model_alias,
             generated_at=row.generated_at,
         ))
-    encoded = [item.model_dump_json().encode("utf-8") for item in items]
-    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
-    if payload_bytes > 16_777_216:
-        raise HTTPException(status_code=413, detail="Daily brief export page exceeds its byte bound")
+    _encoded, payload_bytes = serialize_bounded_page(items, label="Daily brief")
     return BriefExportPage(
         owner_id=owner_id, record_kind="daily_briefs", snapshot_at=snapshot_at,
         snapshot_count=snapshot_count, omitted_count=omitted_count, items=items, fences=fences,
@@ -1195,7 +1284,7 @@ async def _brief_schedule_export_page(
         BriefScheduleRow.workspace_id == scope.workspace_id, BriefScheduleRow.owner_id == owner_id,
     ))
     if row is not None and row.updated_at > snapshot_at:
-        raise HTTPException(status_code=409, detail="Brief schedule changed during export; retry the download")
+        raise ConflictError(detail="Brief schedule changed during export; retry the download")
     item = _brief_schedule_export_value(row)
     payload_bytes = 2 + len(item.model_dump_json().encode("utf-8"))
     return BriefScheduleExportPage(
@@ -1285,10 +1374,7 @@ async def export_page(
     has_more, rows = len(rows) > limit, rows[:limit]
     items = [await _dashboard_read(session, row, scope=scope,
         multi_workspace_enabled=multi_workspace_enabled) for row in rows]
-    encoded = [item.model_dump_json().encode("utf-8") for item in items]
-    payload_bytes = 2 + sum(map(len, encoded)) + max(0, len(items) - 1)
-    if payload_bytes > 16_777_216:
-        raise HTTPException(status_code=413, detail="Dashboard export page exceeds its byte bound")
+    encoded, payload_bytes = serialize_bounded_page(items, label="Dashboard")
     fences = [DashboardExportFence(
         id=row.id, created_at=row.created_at, updated_at=row.updated_at, revision=row.revision,
         content_digest=hashlib.sha256(raw).hexdigest(),
@@ -1930,6 +2016,50 @@ def preset_catalog() -> list[DashboardPresetRead]:
             for item in gadgets.PRESETS]
 
 
+def _preview_preset_slot(slot: Any, source_ids: list[UUID], states: dict[UUID, Any]) -> dict[str, Any]:
+    """Build one slot of a preset preview from its resolved source states. Pure (no I/O).
+
+    Adds ``source_unavailable``/``source_incompatible``/``missing_source``/``scope_required`` setup
+    warnings; a single bound measurement source seeds the chart scope, and live map slots are
+    provider-seeded with ``map_mode="live"`` instead of source-bound.
+    """
+    live = gadgets.preset_slot_is_live(slot)
+    descriptor = gadgets.renderer_descriptor(slot.renderer)
+    warnings = _renderer_warnings(slot.renderer)
+    resolved = []
+    for source_id in source_ids:
+        source = states.get(source_id)
+        if source is None or source.status != "active":
+            warnings.append({"code": "source_unavailable", "source_id": str(source_id), "setup_group": "data_sources"})
+        resolved.append({"id": source_id, "generation": source.generation if source else None, "status": source.status if source else "missing"})
+    known = [states[source_id] for source_id in source_ids if source_id in states]
+    if known:
+        try:
+            gadgets.validate_renderer_sources(slot.renderer, [(row.provider, row.type) for row in known])
+        except gadgets.GadgetConfigError:
+            warnings.append({"code": "source_incompatible", "setup_group": "data_sources"})
+    elif not source_ids and descriptor.source_mode != "none" and not live:
+        # Nothing was chosen and nothing compatible could be proposed: the owner must add a source.
+        warnings.append({"code": "missing_source", "setup_group": "data_sources"})
+    # A single bound measurement source seeds the chart scope; otherwise the gadget shows its setup message.
+    slot_scope = (gadgets.preset_slot_scope(slot.renderer, known[0].provider)
+                  if len(source_ids) == 1 and len(known) == 1 and not any(w["code"] == "source_incompatible" for w in warnings)
+                  else {})
+    bound_catalog = provider_metrics(known[0].provider) if len(known) == 1 and len(source_ids) == 1 else None
+    if (not slot_scope and bound_catalog is not None and slot.renderer == "finance_chart"
+            and (bound_catalog.symbol_keyed or bound_catalog.region_keyed)
+            and not any(w["code"] == "source_incompatible" for w in warnings)):
+        # Seeding found no suggested symbol/region: the chart cannot draw until one is chosen after apply.
+        warnings.append({"code": "scope_required", "setup_group": "data_sources"})
+    slot_filters: dict[str, Any] = {"keywords": [], "exclude_keywords": [], "limit": 25}
+    if live:  # live maps are provider-seeded, never source-bound
+        slot_scope = {"live_map_providers": list(gadgets.LIVE_MAP_DEFAULT_PROVIDERS)}
+        slot_filters["map_mode"] = "live"
+    return {"slot_id": slot.slot_id, "renderer": slot.renderer, "source_ids": source_ids,
+            "scope": slot_scope, "filters": slot_filters,
+            "highlight_rules": [], "sources": resolved, "warnings": warnings}
+
+
 async def preview_preset(
     session: AsyncSession, preset_id: str, payload: PresetPreviewRequest, *,
     scope: Scope, multi_workspace_enabled: bool,
@@ -1972,44 +2102,10 @@ async def preview_preset(
         if target is None:
             raise DashboardMissing
         target_revision = target.revision
-    slots: list[dict[str, Any]] = []
-    for slot in preset.slots:
-        live = gadgets.preset_slot_is_live(slot)
-        source_ids = slot_source_ids[slot.slot_id]
-        descriptor = gadgets.renderer_descriptor(slot.renderer)
-        warnings = _renderer_warnings(slot.renderer)
-        resolved = []
-        for source_id in source_ids:
-            source = states.get(source_id)
-            if source is None or source.status != "active":
-                warnings.append({"code": "source_unavailable", "source_id": str(source_id), "setup_group": "data_sources"})
-            resolved.append({"id": source_id, "generation": source.generation if source else None, "status": source.status if source else "missing"})
-        known = [states[source_id] for source_id in source_ids if source_id in states]
-        if known:
-            try:
-                gadgets.validate_renderer_sources(slot.renderer, [(row.provider, row.type) for row in known])
-            except gadgets.GadgetConfigError:
-                warnings.append({"code": "source_incompatible", "setup_group": "data_sources"})
-        elif not source_ids and descriptor.source_mode != "none" and not live:
-            # Nothing was chosen and nothing compatible could be proposed: the owner must add a source.
-            warnings.append({"code": "missing_source", "setup_group": "data_sources"})
-        # A single bound measurement source seeds the chart scope; otherwise the gadget shows its setup message.
-        slot_scope = (gadgets.preset_slot_scope(slot.renderer, known[0].provider)
-                      if len(source_ids) == 1 and len(known) == 1 and not any(w["code"] == "source_incompatible" for w in warnings)
-                      else {})
-        bound_catalog = provider_metrics(known[0].provider) if len(known) == 1 and len(source_ids) == 1 else None
-        if (not slot_scope and bound_catalog is not None and slot.renderer == "finance_chart"
-                and (bound_catalog.symbol_keyed or bound_catalog.region_keyed)
-                and not any(w["code"] == "source_incompatible" for w in warnings)):
-            # Seeding found no suggested symbol/region: the chart cannot draw until one is chosen after apply.
-            warnings.append({"code": "scope_required", "setup_group": "data_sources"})
-        slot_filters: dict[str, Any] = {"keywords": [], "exclude_keywords": [], "limit": 25}
-        if live:  # live maps are provider-seeded, never source-bound
-            slot_scope = {"live_map_providers": list(gadgets.LIVE_MAP_DEFAULT_PROVIDERS)}
-            slot_filters["map_mode"] = "live"
-        slots.append({"slot_id": slot.slot_id, "renderer": slot.renderer, "source_ids": source_ids,
-                      "scope": slot_scope, "filters": slot_filters,
-                      "highlight_rules": [], "sources": resolved, "warnings": warnings})
+    slots = [
+        _preview_preset_slot(slot, slot_source_ids[slot.slot_id], states)
+        for slot in preset.slots
+    ]
     minimums = {
         uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"):
         (gadgets.renderer_descriptor(slot["renderer"]).minimum_width,
@@ -2034,6 +2130,85 @@ async def preview_preset(
     return PresetPreviewRead.model_validate({**proposed, "preview_fingerprint": hashlib.sha256(canonical).hexdigest()})
 
 
+async def _prepare_apply_target(
+    session: AsyncSession, payload: PresetApplyRequest, current: dict[str, Any],
+    dashboard: Dashboard | None, *, owner_id: int, scope: Scope,
+) -> tuple[Dashboard, int, list[int]]:
+    """Create, extend or reset the target dashboard for ``apply_preset``; return its new revision.
+
+    ``create`` enforces the per-owner dashboard limit and inserts the dashboard plus empty desktop and
+    mobile layouts; ``append`` enforces the instance and group limits on the locked target and bumps
+    its revision (returning the existing group positions); ``replace`` bumps the revision, optionally
+    renames and clears the target's groups and layouts. Raises ``DashboardConflict`` on a limit. Runs
+    inside the caller's locked transaction (flushes only).
+    """
+    group_positions: list[int] = []
+    if payload.mode == "create":
+        count = await session.scalar(select(func.count()).select_from(Dashboard).where(
+            Dashboard.workspace_id == scope.workspace_id, Dashboard.owner_id == owner_id,
+        )) or 0
+        if count >= MAX_DASHBOARDS_PER_OWNER:
+            raise DashboardConflict("dashboard_limit", "Dashboard limit reached")
+        dashboard = Dashboard(workspace_id=scope.workspace_id, owner_id=owner_id, name=payload.name or current["name"])
+        session.add(dashboard)
+        await session.flush()
+        dashboard_revision = dashboard.revision
+        session.add_all([DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20) for bp in ("desktop", "mobile")])
+    elif payload.mode == "append":
+        assert dashboard is not None  # noqa: S101  # mypy narrowing invariant
+        instance_count = await session.scalar(select(func.count()).select_from(GadgetInstance).where(
+            GadgetInstance.dashboard_id == dashboard.id)) or 0
+        if instance_count + len(current["slots"]) > MAX_INSTANCES_PER_DASHBOARD:
+            raise DashboardConflict("instance_limit", "Instance limit reached", dashboard.revision)
+        group_positions = list((await session.scalars(select(DashboardGroup.position).where(
+            DashboardGroup.dashboard_id == dashboard.id))).all())
+        if len(group_positions) >= MAX_GROUPS_PER_DASHBOARD:
+            raise DashboardConflict("group_limit", "Group limit reached", dashboard.revision)
+        dashboard_revision = _bump(dashboard)
+    else:
+        assert dashboard is not None  # noqa: S101  # mypy narrowing invariant
+        dashboard_revision = _bump(dashboard)
+        if payload.name is not None:
+            dashboard.name = payload.name
+        await session.execute(delete(DashboardGroup).where(DashboardGroup.dashboard_id == dashboard.id))
+        await session.execute(delete(DashboardLayout).where(DashboardLayout.dashboard_id == dashboard.id))
+        session.add_all([DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20) for bp in ("desktop", "mobile")])
+    assert dashboard is not None  # noqa: S101  # mypy narrowing invariant
+    return dashboard, dashboard_revision, group_positions
+
+
+async def _place_applied_instances(
+    session: AsyncSession, dashboard: Dashboard, created_instances: list[tuple[GadgetInstance, GadgetDefinition, Any]],
+    preset_slots: Any, *, append: bool,
+) -> None:
+    """Insert desktop and mobile placements for the instances a preset created (flush-free ``add_all``).
+
+    Appended blocks keep the target's column count and start below its lowest placement, so nothing
+    overlaps; create/replace start from an empty layout at offset 0 with 20 columns.
+    """
+    minimums = {instance.id: (descriptor.minimum_width, descriptor.minimum_height) for instance, _, descriptor in created_instances}
+    defaults = {instance.id: gadgets.preset_slot_size(preset_slot)
+                for (instance, _, _), preset_slot in zip(created_instances, preset_slots, strict=True)}
+    offsets = {"desktop": 0, "mobile": 0}
+    columns = {"desktop": 20, "mobile": 20}
+    if append:
+        for breakpoint in offsets:
+            offsets[breakpoint] = await session.scalar(select(func.max(GadgetPlacement.y + GadgetPlacement.h)).where(
+                GadgetPlacement.dashboard_id == dashboard.id, GadgetPlacement.breakpoint == breakpoint)) or 0
+            columns[breakpoint] = await session.scalar(select(DashboardLayout.columns).where(
+                DashboardLayout.dashboard_id == dashboard.id, DashboardLayout.breakpoint == breakpoint)) or 20
+    desktop = layouts.default_desktop_layout(
+        {key: (min(width, columns["desktop"]), height) for key, (width, height) in defaults.items()},
+        columns["desktop"], minimum_sizes=minimums)
+    mobile = layouts.default_mobile_layout(defaults, columns["mobile"], minimum_sizes=minimums)
+    for breakpoint, items in (("desktop", desktop), ("mobile", mobile)):
+        session.add_all([
+            GadgetPlacement(dashboard_id=dashboard.id, breakpoint=breakpoint, instance_id=item.instance_id,
+                            x=item.x, y=item.y + offsets[breakpoint], w=item.w, h=item.h)
+            for item in items
+        ])
+
+
 async def apply_preset(
     session: AsyncSession, preset_id: str, payload: PresetApplyRequest, *,
     scope: Scope, multi_workspace_enabled: bool,
@@ -2055,9 +2230,8 @@ async def apply_preset(
         await _validate_selected_sources(session, slot.renderer, payload.slot_sources.get(slot.slot_id, ()), scope=scope,
             multi_workspace_enabled=multi_workspace_enabled)
     target_dashboard_id = payload.target_dashboard_id
-    group_positions: list[int] = []
     if payload.mode in ("replace", "append"):
-        assert target_dashboard_id is not None and payload.expected_revision is not None  # both modes require them
+        assert target_dashboard_id is not None and payload.expected_revision is not None  # both modes require them  # noqa: S101  # mypy narrowing invariant
         dashboard = await _lock_dashboard(session, target_dashboard_id, scope=scope)
         _check_revision(dashboard, payload.expected_revision)
     else:
@@ -2082,43 +2256,15 @@ async def apply_preset(
             await _validate_selected_sources(session, slot["renderer"], slot["source_ids"], scope=scope,
                 multi_workspace_enabled=multi_workspace_enabled, gadget_scope=GadgetScope(**slot["scope"]),
                 check_binding=False)
-    if payload.mode == "create":
-        count = await session.scalar(select(func.count()).select_from(Dashboard).where(
-            Dashboard.workspace_id == scope.workspace_id, Dashboard.owner_id == owner_id,
-        )) or 0
-        if count >= MAX_DASHBOARDS_PER_OWNER:
-            raise DashboardConflict("dashboard_limit", "Dashboard limit reached")
-        dashboard = Dashboard(workspace_id=scope.workspace_id, owner_id=owner_id, name=payload.name or current["name"])
-        session.add(dashboard)
-        await session.flush()
-        dashboard_revision = dashboard.revision
-        session.add_all([DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20) for bp in ("desktop", "mobile")])
-    elif payload.mode == "append":
-        assert dashboard is not None
-        instance_count = await session.scalar(select(func.count()).select_from(GadgetInstance).where(
-            GadgetInstance.dashboard_id == dashboard.id)) or 0
-        if instance_count + len(current["slots"]) > MAX_INSTANCES_PER_DASHBOARD:
-            raise DashboardConflict("instance_limit", "Instance limit reached", dashboard.revision)
-        group_positions = list((await session.scalars(select(DashboardGroup.position).where(
-            DashboardGroup.dashboard_id == dashboard.id))).all())
-        if len(group_positions) >= MAX_GROUPS_PER_DASHBOARD:
-            raise DashboardConflict("group_limit", "Group limit reached", dashboard.revision)
-        dashboard_revision = _bump(dashboard)
-    else:
-        assert dashboard is not None
-        dashboard_revision = _bump(dashboard)
-        if payload.name is not None:
-            assert dashboard is not None
-            dashboard.name = payload.name
-        await session.execute(delete(DashboardGroup).where(DashboardGroup.dashboard_id == dashboard.id))
-        await session.execute(delete(DashboardLayout).where(DashboardLayout.dashboard_id == dashboard.id))
-        session.add_all([DashboardLayout(dashboard_id=dashboard.id, breakpoint=bp, columns=20) for bp in ("desktop", "mobile")])
+    dashboard, dashboard_revision, group_positions = await _prepare_apply_target(
+        session, payload, current, dashboard, owner_id=owner_id, scope=scope,
+    )
     definition_count = await session.scalar(select(func.count()).select_from(GadgetDefinition).where(
         GadgetDefinition.workspace_id == scope.workspace_id, GadgetDefinition.owner_id == owner_id,
     )) or 0
     if definition_count + len(current["slots"]) > MAX_DEFINITIONS_PER_OWNER:
         raise DashboardConflict("definition_limit", "Definition limit reached", dashboard_revision)
-    assert dashboard is not None
+    assert dashboard is not None  # noqa: S101  # mypy narrowing invariant
     # Append puts the preset in its own group after the existing ones; create/replace start from an empty dashboard.
     group_position = max(group_positions, default=-1) + 1 if payload.mode == "append" else 0
     group = DashboardGroup(dashboard_id=dashboard.id, name=current["name"], position=group_position)
@@ -2133,34 +2279,14 @@ async def apply_preset(
             source_ids=[str(item) for item in slot["source_ids"]], scope=slot["scope"], filters=slot["filters"], highlight_rules=[])
         session.add(definition)
         await session.flush()
-        assert dashboard is not None
+        assert dashboard is not None  # noqa: S101  # mypy narrowing invariant
         instance = GadgetInstance(dashboard_id=dashboard.id, group_id=group.id, definition_id=definition.id, title=None, position=index)
         session.add(instance)
         await session.flush()
         created_instances.append((instance, definition, descriptor))
-    minimums = {instance.id: (descriptor.minimum_width, descriptor.minimum_height) for instance, _, descriptor in created_instances}
-    defaults = {instance.id: gadgets.preset_slot_size(preset_slot)
-                for (instance, _, _), preset_slot in zip(created_instances, preset_slots, strict=True)}
-    # Appended blocks keep the target's column count and start below its lowest placement, so nothing overlaps.
-    offsets = {"desktop": 0, "mobile": 0}
-    columns = {"desktop": 20, "mobile": 20}
-    if payload.mode == "append":
-        for breakpoint in offsets:
-            offsets[breakpoint] = await session.scalar(select(func.max(GadgetPlacement.y + GadgetPlacement.h)).where(
-                GadgetPlacement.dashboard_id == dashboard.id, GadgetPlacement.breakpoint == breakpoint)) or 0
-            columns[breakpoint] = await session.scalar(select(DashboardLayout.columns).where(
-                DashboardLayout.dashboard_id == dashboard.id, DashboardLayout.breakpoint == breakpoint)) or 20
-    desktop = layouts.default_desktop_layout(
-        {key: (min(width, columns["desktop"]), height) for key, (width, height) in defaults.items()},
-        columns["desktop"], minimum_sizes=minimums)
-    mobile = layouts.default_mobile_layout(defaults, columns["mobile"], minimum_sizes=minimums)
-    for breakpoint, items in (("desktop", desktop), ("mobile", mobile)):
-        assert dashboard is not None
-        session.add_all([
-            GadgetPlacement(dashboard_id=dashboard.id, breakpoint=breakpoint, instance_id=item.instance_id,
-                            x=item.x, y=item.y + offsets[breakpoint], w=item.w, h=item.h)
-            for item in items
-        ])
+    await _place_applied_instances(
+        session, dashboard, created_instances, preset_slots, append=payload.mode == "append",
+    )
     drafts = [make_dashboard_change("dashboard", dashboard.id, dashboard_revision, scope=scope)]
     drafts.extend(make_dashboard_change("definition", definition.id, definition.revision, scope=scope)
         for _, definition, _descriptor in created_instances)
@@ -2170,7 +2296,7 @@ async def apply_preset(
 
 
 # Stable seams for P10 automation: daily context and briefs are consumed through this module only.
-from modules.dashboard.brief_sharing import (
+from modules.dashboard.brief_sharing import (  # noqa: E402  # deliberate late import
     SharedBrief,
     check_brief_shareable,
     list_shared_briefs,
@@ -2178,7 +2304,7 @@ from modules.dashboard.brief_sharing import (
     read_brief_translation_input,
     read_shared_brief,
 )
-from modules.dashboard.briefs import (
+from modules.dashboard.briefs import (  # noqa: E402  # deliberate late import
     BriefEmpty,
     BriefEvidenceRevoked,
     BriefSlotOwned,
@@ -2193,8 +2319,11 @@ from modules.dashboard.briefs import (
     read_slot_owner,
     release_brief_slot,
 )
-from modules.dashboard.context import build_daily_context
-from modules.dashboard.daily_schemas import BriefRead, DailyContext
+from modules.dashboard.context import build_daily_context  # noqa: E402  # deliberate late import
+from modules.dashboard.daily_schemas import (  # noqa: E402  # deliberate late import
+    BriefRead,
+    DailyContext,
+)
 
 
 async def count_source_gadgets(

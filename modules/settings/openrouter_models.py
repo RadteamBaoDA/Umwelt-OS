@@ -116,14 +116,27 @@ def _modalities(value: Any) -> list[str]:
 def parse_openrouter_models(payload: Any, limit: int) -> tuple[list[dict[str, Any]], int, bool]:
     """Validate and bound an OpenRouter ``/models`` page into ``(models, total_count, has_next)``.
 
+    Thin wrapper over ``parse_openrouter_page`` for callers that do not page by upstream offset.
+    """
+    models, total_count, has_next, _consumed = parse_openrouter_page(payload, limit)
+    return models, total_count, has_next
+
+
+def parse_openrouter_page(payload: Any, limit: int) -> tuple[list[dict[str, Any]], int, bool, int]:
+    """Validate and bound an OpenRouter ``/models`` page into ``(models, total_count, has_next, consumed)``.
+
     At most ``limit`` unique models with strictly validated fields; malformed entries are skipped, never repaired.
     ``total_count`` is clamped to [0, 1_000_000] (falls back to the page size); ``has_next`` reflects ``links.next``.
+    ``consumed`` is how many raw upstream entries were examined (valid, malformed or duplicate): the next page's
+    offset must advance by this, not by ``len(models)``, or every skipped entry would be returned again.
     """
     body = payload if isinstance(payload, dict) else {}
     data = body.get("data")
     models: list[dict[str, Any]] = []
     seen: set[str] = set()
+    consumed = 0
     for item in data if isinstance(data, list) else []:
+        consumed += 1
         model_id = item.get("id") if isinstance(item, dict) else None
         if not isinstance(model_id, str) or not _MODEL_ID.fullmatch(model_id) or model_id in seen:
             continue
@@ -149,4 +162,4 @@ def parse_openrouter_models(payload: Any, limit: int) -> tuple[list[dict[str, An
     total = body.get("total_count")
     total_count = min(max(total, 0), _MAX_TOTAL) if isinstance(total, int) and not isinstance(total, bool) else len(models)
     links = body.get("links")
-    return models, total_count, bool(isinstance(links, dict) and links.get("next"))
+    return models, total_count, bool(isinstance(links, dict) and links.get("next")), consumed

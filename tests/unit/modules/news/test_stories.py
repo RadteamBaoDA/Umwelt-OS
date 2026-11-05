@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
 
+from core.errors import DomainError, ValidationFailedError
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.news.models import (
     NewsObservation,
@@ -161,7 +161,7 @@ class TestStoryCursorCodec:
             source_selection_incomplete=False,
         )
         encoded = _encode_cursor(cursor)
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(DomainError) as exc_info:
             _decode_cursor(encoded, AccessFence(workspace_id=FENCE.workspace_id, user_id=1, membership_revision=9,
                                                 configuration_revision=3), filters)  # stale revision
         assert exc_info.value.status_code == 422
@@ -366,7 +366,7 @@ class TestStoryDetailCursor:
         """Revision, actor or workspace drift rejects the token before any position is applied."""
         story_id, _s, _a, _t, token = self._token()
         other = dataclasses.replace(FENCE, **{field: value})
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(DomainError) as exc:
             _decode_detail_cursor(token, other, story_id, ())
         assert exc.value.status_code == 422
 
@@ -374,7 +374,7 @@ class TestStoryDetailCursor:
         """A token cannot be replayed on another story or a different explicit source selection."""
         story_id, _s, _a, _t, token = self._token()
         for sid, srcs in ((uuid4(), ()), (story_id, (uuid4(),))):
-            with pytest.raises(HTTPException):
+            with pytest.raises(ValidationFailedError):
                 _decode_detail_cursor(token, FENCE, sid, srcs)
 
     def test_legacy_six_field_token_rejected(self) -> None:
@@ -387,7 +387,7 @@ class TestStoryDetailCursor:
             "after": [str(uuid4())] * 3, "source_selection_incomplete": False,
         }, sort_keys=True, separators=(",", ":"))
         token = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(DomainError) as exc:
             _decode_detail_cursor(token, FENCE, story_id, ())
         assert exc.value.status_code == 422
 

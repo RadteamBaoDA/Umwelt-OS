@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from core import realtime
+from core.realtime import service as realtime
 
 
 class _Result:

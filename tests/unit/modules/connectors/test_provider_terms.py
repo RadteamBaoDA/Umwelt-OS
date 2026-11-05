@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
+from core.errors import DomainError
 from modules.connectors import provider_terms, scheduler
 from modules.connectors.models import ConnectorCollectionRequest, ConnectorProviderTerms
 
@@ -43,7 +43,7 @@ async def test_non_catalog_provider_has_no_terms_gate_and_no_query() -> None:
 
 
 async def test_catalog_provider_without_acknowledgement_is_denied() -> None:
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await provider_terms.require_terms_eligible(_session(None), _source("world_bank"))
     assert (caught.value.status_code, caught.value.detail) == (409, "provider_terms_ineligible")
 
@@ -54,14 +54,14 @@ async def test_open_provider_with_acknowledgement_returns_revision_to_capture() 
 
 async def test_incompatible_use_is_denied() -> None:
     row = _row(provider_id="alpha_vantage", declared_use="commercial")
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await provider_terms.require_terms_eligible(_session(row), _source("alpha_vantage"))
     assert caught.value.detail == "provider_terms_ineligible"
 
 
 async def test_review_provider_needs_operator_approval_for_acknowledged_version() -> None:
     pending = _row(provider_id="binance", declared_use="noncommercial")
-    with pytest.raises(HTTPException):
+    with pytest.raises(DomainError):
         await provider_terms.require_terms_eligible(_session(pending), _source("binance"))
     approved = _row(
         provider_id="binance", declared_use="noncommercial", operator_review_state="approved",
@@ -72,7 +72,7 @@ async def test_review_provider_needs_operator_approval_for_acknowledged_version(
         provider_id="binance", declared_use="noncommercial", terms_version="v2", operator_review_state="approved",
         reviewer_user_id=9, reviewed_at=datetime.now(UTC), reviewed_allowed_use="noncommercial",
         review_evidence_ref="ticket-1", reviewed_terms_version="v1")
-    with pytest.raises(HTTPException):
+    with pytest.raises(DomainError):
         await provider_terms.require_terms_eligible(_session(stale), _source("binance"))
 
 
@@ -106,13 +106,13 @@ async def test_operator_review_binds_to_acknowledged_version_and_bumps_revision(
     session = _session(row)
     wrong = provider_terms.OperatorTermsReview(
         state="approved", allowed_use="noncommercial", evidence_ref="t-1", reviewed_terms_version="v0")
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await provider_terms.record_operator_review(
             session, workspace_id=WORKSPACE_ID, source_id=SOURCE_ID, reviewer_user_id=9, body=wrong,
             instance_operator=True)
     assert caught.value.status_code == 409
     no_use = provider_terms.OperatorTermsReview(state="approved", evidence_ref="t-1", reviewed_terms_version="v1")
-    with pytest.raises(HTTPException):
+    with pytest.raises(DomainError):
         await provider_terms.record_operator_review(
             session, workspace_id=WORKSPACE_ID, source_id=SOURCE_ID, reviewer_user_id=9, body=no_use,
             instance_operator=True)
@@ -160,7 +160,7 @@ async def test_scheduler_denies_before_inserting_a_request_and_captures_revision
             return await scheduler._open_request(
                 session, scope, SOURCE_ID, "manual", 2, multi_workspace_enabled=True)  # type: ignore[arg-type]
 
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await run("world_bank", None)
     assert caught.value.detail == "provider_terms_ineligible"
     session.add.assert_not_called()
@@ -223,15 +223,14 @@ async def test_operator_review_foreign_workspace_source_is_404():
     from types import SimpleNamespace
     from uuid import uuid4
 
-    from fastapi import HTTPException
-
+    from core.errors import DomainError
     from modules.connectors import provider_terms
 
     class Session:
         async def scalar(self, stmt): return None
         async def rollback(self): pass
 
-    with pytest.raises(HTTPException) as caught:
+    with pytest.raises(DomainError) as caught:
         await provider_terms.record_operator_review(
             Session(), workspace_id=uuid4(), source_id=uuid4(), reviewer_user_id=1,
             body=SimpleNamespace(), instance_operator=True)

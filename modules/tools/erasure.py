@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.deletion_service import authorize_account_erasure
 from core.auth.erasure_contracts import AccountErasureScope
 from core.erasure_sql import AccountErasureOwner
-from core.remote_heavy_models import RemoteHeavyGuard
+from core.heavy_work.models import RemoteHeavyGuard
 from modules.tools.models import BrowserReadJob
 
 from . import models as _models  # noqa: F401 - register this owner's tables

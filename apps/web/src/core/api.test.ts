@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiRequest, configureWorkspace, StaleWorkspaceError } from '@/core/api';
+import { ApiError, apiRequest, apiRequestRaw, configureWorkspace, StaleWorkspaceError } from '@/core/api';
 
 const fetchMock = vi.fn();
 let generation = 1;
@@ -75,5 +75,32 @@ describe('retrySessionConflict', () => {
     expect(retrySessionConflict(3, conflict)).toBe(false);
     expect(retrySessionConflict(0, new ApiError(500, 'boom'))).toBe(false);
     expect(retrySessionConflict(0, new Error('x'))).toBe(false);
+  });
+});
+
+describe('apiRequestRaw', () => {
+  it('returns the raw response, scopes headers and dispatches unauthorized on 401', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('nope', { status: 401 }));
+    const seen = vi.fn();
+    window.addEventListener('umwelt:unauthorized', seen);
+    const response = await apiRequestRaw('/api/v1/documents/1/raw');
+    window.removeEventListener('umwelt:unauthorized', seen);
+    expect(response.status).toBe(401);
+    expect(sentHeaders().get('X-Workspace-ID')).toBe('ws-1');
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it('suppresses auth events on request and rejects stale workspaces', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 401 }));
+    const seen = vi.fn();
+    window.addEventListener('umwelt:unauthorized', seen);
+    await apiRequestRaw('/api/v1/documents', {}, { emitAuthEvents: false });
+    window.removeEventListener('umwelt:unauthorized', seen);
+    expect(seen).not.toHaveBeenCalled();
+    fetchMock.mockImplementationOnce(async () => {
+      generation = 2;
+      return new Response('x');
+    });
+    await expect(apiRequestRaw('/api/v1/documents')).rejects.toBeInstanceOf(StaleWorkspaceError);
   });
 });

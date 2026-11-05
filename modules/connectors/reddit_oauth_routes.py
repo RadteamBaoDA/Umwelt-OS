@@ -1,12 +1,12 @@
 """Source-bound OAuth lifecycle for read-only Reddit subreddit connectors."""
 
 # Boundary validation uses ValueError for malformed provider/cipher data to preserve stable API errors.
-# ruff: noqa: TRY004
 
 import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, cast
@@ -39,6 +39,8 @@ from modules.connectors.models import (
 )
 from modules.sources import public as sources
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/connectors", tags=["connector-oauth"])
 Session = Annotated[AsyncSession, Depends(get_session)]
 OwnerRead = Annotated[AuthSession, Depends(require_account)]
@@ -46,7 +48,7 @@ OwnerWrite = Annotated[AuthSession, Depends(require_account_write)]
 WorkspaceRead = Annotated[WorkspaceContext, Depends(require_workspace_read)]
 WorkspaceWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 _AUTHORIZE_URL = "https://www.reddit.com/api/v1/authorize"
-_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
+_TOKEN_URL = "https://www.reddit.com/api/v1/access_token"  # noqa: S105  # label/URL/enum value, not a credential
 _REVOKE_URL = "https://www.reddit.com/api/v1/revoke_token"
 _CALLBACK_PATH = "/api/v1/connectors/oauth/reddit/callback"
 _READ_SCOPE = "read"
@@ -393,8 +395,9 @@ async def complete_reddit_authorization(request: Request, session: Session, owne
         await session.rollback()
         try:
             await _revoke(settings, tokens["refresh_token"])
-        except Exception:  # noqa: BLE001, S110
-            pass
+        except Exception:  # best-effort remote cleanup; never masks the 409 below
+            # A stale callback can never be stored; an unconfirmed remote revoke cannot restore local authority.
+            logger.debug("reddit_stale_token_revoke_failed", exc_info=True)
         raise HTTPException(status_code=409, detail="Connector changed during authorization; reconnect to continue")
     row.credential_revision += 1
     token_revision = current_token_revision + 1
