@@ -6,15 +6,11 @@
  * `window.sendPrompt` postMessage bridge.
  */
 
-import {
-  buildSandboxStylesheet,
-  DESIGN_SYSTEM_CSS,
-  buildImportMapScriptTag,
-  type SandboxTheme,
-} from '../design-system';
+import { buildSandboxStylesheet, DESIGN_SYSTEM_CSS, buildImportMapScriptTag, type SandboxTheme } from '../design-system';
 import { IDIOMORPH_INLINE_SCRIPT } from './idiomorph-inline';
 import { processPartialHtml } from './process-partial-html';
 import { TRIP_ANIMATOR_SCRIPT } from './trip-animator';
+import { readHostNonce } from '@/core/csp';
 import { uuid7 } from '@/core/uuid7';
 
 /** Message type emitted by the sandboxed iframe when its content height changes. */
@@ -35,15 +31,27 @@ export const PREVIEW_FRAME_CONTENT = '<head></head><body><div id="umwelt-sandbox
  *   Defaults to `window.location.origin`; empty omits the vendored-library source.
  * @returns The `<meta http-equiv="Content-Security-Policy">` tag string.
  */
-export function buildCspMetaTag(
-  origin = typeof window !== 'undefined' ? window.location.origin : '',
-): string {
+export function buildCspMetaTag(origin = typeof window !== 'undefined' ? window.location.origin : ''): string {
   const vendor = origin ? ` ${origin}/vendor/genui/` : '';
   return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'${vendor}; style-src 'unsafe-inline'${vendor}; img-src data: blob:; font-src data:; connect-src 'none'">`;
 }
 
 /** Default CSP tag for the current origin (evaluated at import time; prefer `buildCspMetaTag` at render time). */
 export const CSP_META_TAG = buildCspMetaTag('');
+
+/**
+ * Tags every `<script` in trusted frame markup with the host page's CSP nonce. The srcdoc frame inherits the host's
+ * nonce + 'strict-dynamic' policy, so our own bootstrap scripts (import map, Idiomorph, bridge, user JS) need it; scripts
+ * they create (runScript, dynamic import) are then trusted transitively. The frame is opaque-origin and cannot reach
+ * the host DOM, so exposing the nonce to widget code does not widen host script execution.
+ *
+ * @param html - Trusted frame markup containing `<script` tags.
+ * @param nonce - Host nonce; empty returns the markup unchanged (tests, non-nonce pages).
+ * @returns Markup whose script tags carry `nonce="..."`.
+ */
+export function nonceScriptTags(html: string, nonce: string): string {
+  return nonce ? html.replace(/<script(?=[\s>])/g, `<script nonce="${nonce}"`) : html;
+}
 
 /**
  * Escapes closing `</style` sequences inside CSS strings to prevent tag breakout.
@@ -132,8 +140,8 @@ export const SANDBOX_BRIDGE_JS = `
   }
 
   // Runs model-authored code as an inline <script>, not eval(): the frame inherits the host page's CSP
-  // (script-src 'self' 'unsafe-inline', no 'unsafe-eval' in production), which blocks eval/new Function.
-  // Inline scripts stay allowed by 'unsafe-inline'; function declarations still become globals.
+  // (nonce + 'strict-dynamic', no 'unsafe-eval' in production), which blocks eval/new Function.
+  // A script created by this nonced bridge is trusted by 'strict-dynamic'; function declarations still become globals.
   function runScript(code) {
     var el = document.createElement('script');
     el.textContent = code;
@@ -360,11 +368,7 @@ export function buildPreviewBodyMorph(body: string): string {
  * @param theme - Active Umwelt-OS theme (`'light'` or `'dark'`).
  * @returns HTML string containing `<style>` blocks for the preview `<head>`.
  */
-export function buildPreviewHeadContent(
-  css?: string,
-  previewStyles?: string,
-  theme: SandboxTheme = 'light',
-): string {
+export function buildPreviewHeadContent(css?: string, previewStyles?: string, theme: SandboxTheme = 'light'): string {
   const parts = [
     '<style>html, body { overflow: hidden !important; }</style>',
     `<style id="umwelt-design-system">${escapeStyleTagContent(buildSandboxStylesheet(theme))}</style>`,
@@ -447,16 +451,15 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
       scriptParts.push(escapeScriptTagContent(jsFunctions));
     }
     if (jsExpressions.trim().length > 0) {
-      scriptParts.push(
-        `(async () => {\n${escapeScriptTagContent(jsExpressions)}\n})();`,
-      );
+      scriptParts.push(`(async () => {\n${escapeScriptTagContent(jsExpressions)}\n})();`);
     }
   }
 
+  const hostNonce = readHostNonce();
+  /** Nonces one trusted script tag (never the model-authored body). */
+  const n = (tag: string) => nonceScriptTags(tag, hostNonce);
   const userScriptTag =
-    scriptParts.length > 0
-      ? `\n  <script id="umwelt-widget-js">\n${scriptParts.join('\n')}\n  </script>`
-      : '';
+    scriptParts.length > 0 ? `\n  <script nonce="${hostNonce}" id="umwelt-widget-js">\n${scriptParts.join('\n')}\n  </script>` : '';
 
   return `<!DOCTYPE html>
 <html lang="en" data-theme="${theme}"${themeClass}>
@@ -464,18 +467,18 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   ${buildCspMetaTag()}
-  ${buildImportMapScriptTag()}
+  ${n(buildImportMapScriptTag())}
   <style>html, body { overflow: hidden !important; height: auto !important; min-height: 0 !important; }</style>
   <style id="umwelt-design-system">${stylesheet}</style>
   <style id="umwelt-widget-css">${customCss}</style>
-  <script>window.__umweltNonce=${JSON.stringify(nonce)};</script>
-  <script>${escapeScriptTagContent(IDIOMORPH_INLINE_SCRIPT)}</script>
-  ${TRIP_ANIMATOR_SCRIPT}
-  <script>${escapeScriptTagContent(SANDBOX_BRIDGE_JS)}</script>
+  <script nonce="${hostNonce}">window.__umweltNonce=${JSON.stringify(nonce)};</script>
+  <script nonce="${hostNonce}">${escapeScriptTagContent(IDIOMORPH_INLINE_SCRIPT)}</script>
+  ${n(TRIP_ANIMATOR_SCRIPT)}
+  <script nonce="${hostNonce}">${escapeScriptTagContent(SANDBOX_BRIDGE_JS)}</script>
 </head>
 <body>
   <div id="umwelt-sandbox-root" class="initial-render">${safeBody}</div>
-  <script>${escapeScriptTagContent(MEASUREMENT_JS)}</script>${userScriptTag}
+  <script nonce="${hostNonce}">${escapeScriptTagContent(MEASUREMENT_JS)}</script>${userScriptTag}
 </body>
 </html>`;
 }

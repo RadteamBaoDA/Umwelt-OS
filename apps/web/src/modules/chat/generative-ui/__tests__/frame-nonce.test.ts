@@ -31,3 +31,19 @@ describe('sandbox frame nonce + export origin', () => {
     expect(SANDBOX_BRIDGE_JS).toContain('runScript(data.jsFunctions)');
   });
 });
+
+describe('host CSP nonce on frame scripts', () => {
+  it('tags trusted scripts with the host nonce but never model-authored body scripts', async () => {
+    const { nonceScriptTags } = await import('../sandbox/frame-content');
+    expect(nonceScriptTags('<script>a</script><script type="importmap">{}</script>', 'N')).toBe(
+      '<script nonce="N">a</script><script nonce="N" type="importmap">{}</script>',
+    );
+    expect(nonceScriptTags('<script>a</script>', '')).toBe('<script>a</script>');
+    document.head.innerHTML = '<meta name="csp-nonce" content="HOSTN">';
+    const doc = buildFrameDocument({ html: '<script>evil()</script><p>x</p>', executeScripts: true, jsExpressions: 'go()' });
+    document.head.innerHTML = '';
+    expect(doc).toContain('<script nonce="HOSTN" id="umwelt-widget-js">');
+    expect(doc).toContain('<script nonce="HOSTN" type="importmap">');
+    expect(doc).not.toMatch(/nonce="HOSTN"[^>]*>\s*evil/);
+  });
+});
