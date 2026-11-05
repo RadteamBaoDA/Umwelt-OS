@@ -231,3 +231,37 @@ Root cause of the TTFT miss above (traced, then fixed in `4c61573b`): after the 
 | SLO-7 | checks | 100 % (1234) | 100 % (1208) | > 99 % | pass |
 
 All thresholds passed (k6 exit 0). `chat_completion_ms` avg fell from 2.5 s to 0.56 s. The ~2.2 s floor on ingest lag and queue age is unchanged, so it is a separate fixed dispatch delay on the ingestion path (not traced; within its SLO). Read-path latencies are slightly higher than the baseline run, within run-to-run noise on a shared development host. `tests/integration/test_p14_chat_sse.py` (4) and `test_p14_chat_worker.py` (5) passed on the same stack.
+
+### Re-run under a 2 CPU / 8 GiB application-tier budget (2026-11-06, `2176e4d5`)
+
+Same full `tests/load/all.js` run (`LOAD_DURATION_SCALE=1`, `grafana/k6:0.57.0`, fake model, 8 seed documents, 3 min 32 s, 21 VUs max) on the same 14 CPU / 31 GiB Docker Desktop host, but with a throwaway compose override (not committed) applying `deploy.resources.limits` through `scripts/load-test.sh`'s compose file chain (`-f docker-compose.yml -f docker-compose.test.yml -f <override>`; the script was run from a copy because the host has no working `python3`). Still not target-host evidence (`target_host_verified: false`).
+
+| Service | CPU limit | Memory limit |
+|---|---|---|
+| api | 0.6 | 1.5 GiB |
+| postgres | 0.6 | 2.5 GiB |
+| worker | 0.3 | 1.5 GiB |
+| chat-worker | 0.2 | 1.0 GiB |
+| model-worker | 0.1 | 768 MiB |
+| cron-worker | 0.1 | 512 MiB |
+| redis | 0.1 | 256 MiB |
+| Total | 2.0 | about 8.0 GiB |
+
+No pgbouncer in this stack. web, fake-model, fake-local and migrate (test scaffolding, not application tier) were left unconstrained.
+
+| SLO | Metric | Previous re-run | Under 2 CPU / 8 GiB | Threshold | Result |
+|---|---|---|---|---|---|
+| SLO-1 | `http_req_failed` | 0.00 % (0 of 1089) | 0.00 % (0 of 1139) | < 0.5 % | pass |
+| SLO-2a | dashboards p95 / p99 | 40.9 / 59.9 ms | 22.7 / 52.7 ms | 400 / 800 ms | pass |
+| SLO-2b | search p95 / p99 | 48.3 / 80.3 ms | 33.3 / 202.3 ms | 800 / 1500 ms | pass |
+| SLO-2c | documents p95 / p99 | 39.0 / 68.3 ms | 40.0 / 74.4 ms | 300 / 600 ms | pass |
+| SLO-3 | chat TTFT p50 / p95 / p99 | 544 / 714 / 948 ms | 738 / 3020 / 8120 ms | p95 < 2000, p99 < 4000 ms | **p95 FAIL, p99 FAIL** |
+| SLO-3b | chat send p95 | 64 ms | 43 ms | 500 ms | pass |
+| SLO-4 | ingest lag p95 / p99 | 2357 / 2394 ms | 9130 / 17540 ms | 30 / 60 s | pass |
+| SLO-5 | SSE open p95 | 49 ms | 86.7 ms | 500 ms | pass |
+| SLO-6 | ingest queue age p95 | 2338 ms | 8960 ms | 5 s | **FAIL** |
+| SLO-7 | checks | 100 % (1208) | 100 % (1226) | > 99 % | pass |
+
+k6 exit 99: `chat_ttft_ms` and `ingest_queue_age_ms` crossed. Read-path latencies are unaffected (the 0.6 CPU api handles 10 read VUs fine); the regressions are all in the asynchronous paths (chat worker dispatch, ingestion queue). `chat_completion_ms` avg rose from 0.56 s to 0.76 s.
+
+Peak `docker stats` samples (every 15 s, CPU % is of one core): api 60 % of its 0.6 cap (saturated, throttled), worker 31 % of 0.3 (saturated), chat-worker 20 % of 0.2 (saturated), cron-worker 10 % of 0.1, model-worker 11 % of 0.1, postgres 21 % of 0.6, redis 2 %. Peak memory: api 538 MiB, worker 283 MiB, chat-worker 268 MiB, model-worker 275 MiB, cron-worker 303 MiB, postgres 256 MiB, redis 4 MiB, far below the limits. The budget is CPU-bound, not memory-bound: the 0.2 CPU chat-worker and 0.3 CPU worker were pinned at their caps, which matches the TTFT and queue-age tails. Other splits (for example more CPU to chat-worker/worker, less to postgres) were not tried. Single run, so tail values carry run-to-run noise.
