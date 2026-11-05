@@ -186,3 +186,24 @@ async def test_initialization_pass_creates_checkpoints_for_legacy_workspaces() -
         "advisory_lock", "ensure_checkpoint", "commit",
     ]
     assert rec.order[9] == "write_cursor"
+
+
+async def test_ensure_recovery_checkpoint_inserts_on_conflict_then_locks() -> None:
+    """The checkpoint is created with ON CONFLICT DO NOTHING, then row-locked; never a plain ``add``."""
+    from sqlalchemy.dialects import postgresql
+
+    stmts: list[str] = []
+    session = MagicMock()
+
+    async def execute(stmt: object, *_a: object, **_k: object) -> None:
+        stmts.append(str(stmt.compile(dialect=postgresql.dialect())))  # type: ignore[attr-defined]
+
+    async def scalar(stmt: object, *_a: object, **_k: object) -> None:
+        stmts.append(str(stmt.compile(dialect=postgresql.dialect())))  # type: ignore[attr-defined]
+
+    session.execute, session.scalar, session.commit = execute, scalar, AsyncMock()
+    await worker._ensure_recovery_checkpoint(session, WS)
+    assert "INSERT INTO news_recovery_checkpoints" in stmts[0] and "ON CONFLICT (workspace_id) DO NOTHING" in stmts[0]
+    assert stmts[1].startswith("SELECT") and stmts[1].endswith("FOR UPDATE")
+    session.add.assert_not_called()
+    session.commit.assert_not_called()

@@ -8,7 +8,7 @@ Behaviour is identical to the former ``publish_event`` branch chain and dispatch
 
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
@@ -121,7 +121,7 @@ class IngestionStageEventHandler(_PrincipalEnvelopeHandler):
     async def validate_dispatch(
         self, session: AsyncSession, event: EventOutbox, scope: InternalJobScope, *, now: datetime, enabled: bool,
     ) -> bool:
-        """Fail an event whose stage is gone; skip one whose running stage still holds an unexpired lease.
+        """Fail an event whose stage or generation-bound Source is gone; skip one whose running stage still holds an unexpired lease.
 
         A missing stage fails the event (committed here); an in-flight running stage with an unexpired lease
         is skipped to preserve the worker's original timestamp.
@@ -137,6 +137,14 @@ class IngestionStageEventHandler(_PrincipalEnvelopeHandler):
                     IngestionRun.source_id == scope.source_id,
                 ))).one_or_none()
             if stage is None:
+                event.status = "failed"
+                await session.commit()
+                return False
+            # A Source whose generation advanced (pause/archive/purge/edit/config bump) can never satisfy the
+            # generation-bound scope again; fail the event here or the worker 404s and redispatch loops forever.
+            if await sources.get_source_fence(
+                session, cast(UUID, scope.source_id), scope=scope, multi_workspace_enabled=enabled,
+            ) is None:
                 event.status = "failed"
                 await session.commit()
                 return False

@@ -15,6 +15,7 @@ from core.events import dispatch as core_dispatch
 from core.workspaces.schemas import InternalJobScope
 from modules.ingestion import dispatcher
 from modules.ingestion.public import OUTBOX_RUNTIME
+from modules.sources import public as sources
 
 NOW = datetime.now(UTC)
 SCOPE = InternalJobScope(
@@ -180,6 +181,10 @@ def claim_env(monkeypatch, session: Session, *, scope: Any = SCOPE, valid: bool 
     async def quarantine(sess, identifier, status, dispatched):
         quarantined.append(identifier)
 
+    async def source_fence(*_a, **_k):
+        return "source-fence"  # live Source at the scoped generation
+
+    monkeypatch.setattr(sources, "get_source_fence", source_fence)
     monkeypatch.setattr(OUTBOX_RUNTIME, "resolve_scope", resolve)
     monkeypatch.setattr(core_dispatch, "read_access_fence", fence)
     monkeypatch.setattr(core_dispatch, "_quarantine_event_identity", quarantine)
