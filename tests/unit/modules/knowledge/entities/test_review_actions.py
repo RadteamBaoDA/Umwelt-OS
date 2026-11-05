@@ -19,6 +19,7 @@ from modules.knowledge.entities.schemas import (
     EntityRelationshipReviewRequest,
     EntityReviewAssignmentRequest,
 )
+from tests.unit.entity_patching import patch_entities
 
 WS, VERSION, DOC, SRC = uuid4(), uuid4(), uuid4(), uuid4()
 CHUNK = uuid4()
@@ -100,14 +101,14 @@ def _env(monkeypatch: pytest.MonkeyPatch, snapshot: dict[str, Any], *, generatio
     async def commit(*_a: Any, **_k: Any) -> None:
         log.append("commit")
 
-    monkeypatch.setattr(ent, "_admit", admit)
-    monkeypatch.setattr(ent, "_actor", lambda _scope: 7)
-    monkeypatch.setattr(ent, "get_document_correction_decisions", decisions)
-    monkeypatch.setattr(ent, "get_entity_refs", entity_refs)
-    monkeypatch.setattr(ent, "record_extraction_membership", membership)
-    monkeypatch.setattr(ent, "record_owner_action", audit)
-    monkeypatch.setattr(ent, "commit_with_replay", commit)
-    monkeypatch.setattr(ent, "make_graph_change", lambda **_k: "change")
+    patch_entities(monkeypatch, "_admit", admit)
+    patch_entities(monkeypatch, "_actor", lambda _scope: 7)
+    patch_entities(monkeypatch, "get_document_correction_decisions", decisions)
+    patch_entities(monkeypatch, "get_entity_refs", entity_refs)
+    patch_entities(monkeypatch, "record_extraction_membership", membership)
+    patch_entities(monkeypatch, "record_owner_action", audit)
+    patch_entities(monkeypatch, "commit_with_replay", commit)
+    patch_entities(monkeypatch, "make_graph_change", lambda **_k: "change")
     monkeypatch.setattr(ent.sources, "lock_source", lock_source)
     monkeypatch.setattr(documents_public, "review_version_locator", locator)
     monkeypatch.setattr(documents_public, "lock_review_version_evidence", lock_evidence)
@@ -216,7 +217,7 @@ async def test_resolve_relationship_success_publishes_after_row_locks(monkeypatc
         published.append(kwargs)
         return uuid4()
 
-    monkeypatch.setattr(ent, "get_membership_refs", membership_refs)
+    patch_entities(monkeypatch, "get_membership_refs", membership_refs)
     monkeypatch.setattr(relationships_public, "publish_extracted_relationship", publish)
     payload = EntityRelationshipReviewRequest(
         result_id=env.result.id, snapshot_digest=snapshot["snapshot_digest"], expected_source_generation=1,
