@@ -33,6 +33,33 @@ tests:
         alertname: UmweltOutboxLagHigh
         exp_alerts: []
 
+  - name: outbox purge backlog fires after 6h above zero
+    interval: 1m
+    input_series:
+      - series: 'umwelt_outbox_purge_backlog'
+        values: '50+0x450'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: UmweltOutboxPurgeBacklog
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: UmweltOutboxPurgeBacklog
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "Expired event_outbox rows are not being purged (purge_delivered_outbox falling behind)"
+              runbook: "docs/observability.md#umweltoutboxpurgebacklog"
+
+  - name: outbox purge backlog quiet when it drains
+    interval: 1m
+    input_series:
+      - series: 'umwelt_outbox_purge_backlog'
+        values: '50+0x100 0+0x300'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: UmweltOutboxPurgeBacklog
+        exp_alerts: []
+
   - name: queue age fires for the stuck queue only
     interval: 1m
     input_series:

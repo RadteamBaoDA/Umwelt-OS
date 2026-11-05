@@ -14,7 +14,6 @@ bounded timeout well below the dispatcher's 30 s stale-reclaim window multiplied
 import asyncio
 import os
 import time
-from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -53,7 +52,6 @@ async def test_cron_dispatched_job_is_consumed_by_default_worker(
 
     deadline = time.monotonic() + CONSUME_TIMEOUT_SECONDS
     status: str | None = None
-    operation: Any = None
     while time.monotonic() < deadline:
         status = await _outbox_status(engine, source_id)
         if status == "delivered":
@@ -64,9 +62,14 @@ async def test_cron_dispatched_job_is_consumed_by_default_worker(
         "(cron-dispatched jobs routed to a queue nobody serves?)"
     )
 
-    async with engine.connect() as connection:
-        operation = (await connection.execute(text(
-            "SELECT status FROM source_purge_operations WHERE source_id = :id"
-        ), {"id": str(source_id)})).scalar_one_or_none()
-    # Downstream state changed too: the consumer ran, not merely an acknowledgement.
-    assert operation is not None
+    # Downstream state changed too: the consumer ran, not merely an acknowledgement. Same deadline budget.
+    operation: str | None = None
+    while time.monotonic() < deadline:
+        async with engine.connect() as connection:
+            operation = (await connection.execute(text(
+                "SELECT status FROM source_purge_operations WHERE source_id = :id"
+            ), {"id": str(source_id)})).scalar_one_or_none()
+        if operation == "succeeded":
+            break
+        await asyncio.sleep(1)
+    assert operation == "succeeded", f"purge operation ended {operation!r}, expected 'succeeded'"

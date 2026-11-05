@@ -10,10 +10,11 @@ from uuid import uuid4
 import pytest
 
 from modules.chat import worker
+from tests.unit.modules.chat._worker_patch import patch_worker
 
 
 @pytest.mark.asyncio
-async def test_purge_commits_between_items_and_locks_once_per_transaction() -> None:
+async def test_purge_commits_between_items_and_locks_once_per_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two expired conversations (one fails the locked expiry re-check) -> commit before each item."""
     now = datetime.now(UTC)
     expired = SimpleNamespace(
@@ -44,13 +45,16 @@ async def test_purge_commits_between_items_and_locks_once_per_transaction() -> N
         events.append("lock")
 
     deleted = AsyncMock(return_value=True)
+    delta_purge = AsyncMock(return_value=0)
+    # The call site lives in modules.chat._worker_purge, so patching the facade alone would not reach it.
+    patch_worker(monkeypatch, "purge_terminal_message_deltas", delta_purge)
     with (
         patch("modules.chat.public.delete_conversation", deleted),
         patch("modules.memory.public.lock_export_privacy", strict_lock),
-        patch.object(worker, "purge_terminal_message_deltas", AsyncMock(return_value=0)),
     ):
         await worker.purge_expired_chat_runs({"session_factory": lambda: session})
 
     assert events.count("lock") == 2
     assert events.count("commit") >= 2
     deleted.assert_awaited_once()
+    delta_purge.assert_awaited_once()  # proves the mock was the one called

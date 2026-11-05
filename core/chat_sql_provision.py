@@ -116,6 +116,8 @@ async def grant_runtime_role(settings: Settings) -> int:
     Independent of the reader URL so separate-role deployments work with the SQL tool disabled. Idempotent;
     the quoted identifier comes from the configured URL, never from request input. Refuses (exit 1, generic
     message) when the runtime user is the chat SQL reader login or ``umwelt_app`` is loginable/superuser.
+    After the grant it verifies the reader login did not become a (possibly indirect, e.g. via the runtime
+    user) member of ``umwelt_app``; if it did, the grant is reverted and the call fails.
     """
     runtime = distinct_runtime_user(settings)
     if not runtime:
@@ -137,6 +139,16 @@ async def grant_runtime_role(settings: Settings) -> int:
                 print(f"{APP_GROUP_ROLE} has unsafe attributes; refusing to grant it.", file=sys.stderr)
                 return 1
             await conn.exec_driver_sql(f"GRANT {APP_GROUP_ROLE} TO {quoted}")
+            # The reader could inherit the group through the runtime role; pg_roles guard = no reader, no check.
+            reaches = (
+                await conn.exec_driver_sql(
+                    f"SELECT pg_has_role('{LOGIN_ROLE}', '{APP_GROUP_ROLE}', 'MEMBER') FROM pg_roles WHERE rolname = '{LOGIN_ROLE}'"  # noqa: S608  # module constants
+                )
+            ).first()
+            if reaches and reaches[0]:
+                await conn.exec_driver_sql(f"REVOKE {APP_GROUP_ROLE} FROM {quoted}")
+                print(f"{LOGIN_ROLE} would reach {APP_GROUP_ROLE}; the grant was reverted.", file=sys.stderr)
+                return 1
     except Exception as exc:  # noqa: BLE001 - deliberately generic; str(exc) would carry statement text
         orig = getattr(exc, "orig", None)
         sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None) or "unknown"
