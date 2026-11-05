@@ -118,3 +118,10 @@ All recurring jobs run on the `cron-worker` service (`apps.worker.main.CronWorke
 ```
 
 Apply with `aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-configuration file://lifecycle.json` (MinIO: `mc ilm rule add`). Do not add an expiration rule for `workspaces/`; deletion of originals is owned by the application. Backups and bucket versioning/replication are the provider's responsibility.
+
+### Database role model
+
+- Migration user (= database owner in the default setup): owns the schema and the `chat_sql` views.
+- `umwelt_app` (NOLOGIN group role, Alembic `0020`): holds database `TEMPORARY` and `pg_*advisory*` `EXECUTE`, which `0019` revoked from PUBLIC. It is granted to the migration user and the database owner. When the runtime role (`DATABASE_URL`) differs from the migration/admin role (`DATABASE_DIRECT_URL`), `python -m core.chat_sql_provision` (run by `migrate`) executes `GRANT umwelt_app TO <runtime user>` idempotently; do it by hand if you do not run that script.
+- `umwelt_chat_sql_login`: reader login, never a member of `umwelt_app`, so it has no temp tables or advisory locks.
+- The legacy `umwelt_chat_sql_reader` role (0013) is dropped by `0020`; the downgrade recreates it.

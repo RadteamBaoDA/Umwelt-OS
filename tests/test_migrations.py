@@ -188,3 +188,18 @@ def test_chat_sql_reader_no_public_writes_migration_revokes_and_restores() -> No
     assert down.returncode == 0, down.stderr
     assert "GRANT TEMPORARY ON DATABASE %I TO PUBLIC" in down.stdout
     assert "GRANT EXECUTE ON FUNCTION %s TO PUBLIC" in down.stdout
+
+
+def test_drop_legacy_chat_sql_reader_role_and_app_group_migration() -> None:
+    """0020 drops the 0013 role tolerantly, grants umwelt_app, and its downgrade recreates 0013's role."""
+    up = _alembic("upgrade", "0019_chat_sql_reader_no_public_writes:0020_drop_legacy_chat_sql_reader_role", "--sql")
+    assert up.returncode == 0, up.stderr
+    assert "DROP ROLE umwelt_chat_sql_reader" in up.stdout and "dependent_objects_still_exist" in up.stdout
+    assert "CREATE ROLE umwelt_app NOLOGIN" in up.stdout
+    assert "GRANT TEMPORARY ON DATABASE %I TO umwelt_app" in up.stdout and "GRANT umwelt_app TO %I" in up.stdout
+    assert "umwelt_chat_sql_login" not in up.stdout  # the reader login never joins the group
+    down = _alembic("downgrade", "0020_drop_legacy_chat_sql_reader_role:0019_chat_sql_reader_no_public_writes", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP ROLE umwelt_app" in down.stdout
+    assert "CREATE ROLE umwelt_chat_sql_reader NOLOGIN NOSUPERUSER NOINHERIT" in down.stdout
+    assert "GRANT umwelt_chat_sql_reader TO CURRENT_USER" in down.stdout
