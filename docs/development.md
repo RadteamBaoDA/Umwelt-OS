@@ -52,12 +52,15 @@ Cross-module mutations use owner commands on the caller's `AsyncSession`; comman
 
 ## Quality gates
 
+Formatting commit `ea870297` is a one-off mechanical `ruff format`; hide it from blame with `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
+
 `make lint` and `./scripts/dev.ps1 lint` run the lint gates; `make typecheck` the type gates; CI (`.github/workflows/ci.yml`) runs all of them on every push and pull request. A change is not done until each gate is green.
 
 | Gate | Command | Notes |
 | --- | --- | --- |
-| Ruff | `uv run ruff check core apps modules tests infrastructure/postgres/migrations scripts/check_function_length.py` | Rules `E F W I B UP C90 PLR0912 PLR0915 BLE S ASYNC RUF100` (`pyproject.toml`); mccabe 15, 15 branches, 60 statements. `E501` is off (no formatter owns wrapping). Every `# noqa` names the rule and carries a reason (`# noqa: S608  # ...`, or the ` - reason` style already used for `F401` re-exports); `RUF100` fails stale ones. Tests only get scoped `S101/S105/S106/S107` ignores. |
-| Function length | `uv run python scripts/check_function_length.py` | No production Python function over 100 lines; must report 0. |
+| Ruff format | `uv run ruff format --check core apps modules tests scripts` | Code is formatted by `ruff format` (line length 100); run `uv run ruff format core apps modules tests scripts` to fix. Alembic migrations are excluded (historical). After edits that move `# noqa` / `# type: ignore` comments, keep them on the line the tool reports. |
+| Ruff | `uv run ruff check core apps modules tests scripts infrastructure/postgres/migrations` | Rules `E F W I B UP C90 PLR0912 PLR0915 BLE S ASYNC RUF100` (`pyproject.toml`); mccabe 15, 15 branches, 60 statements. `E501` is off (the formatter does not wrap strings or comments). Every `# noqa` names the rule and carries a reason (`# noqa: S608  # ...`, or the ` - reason` style already used for `F401` re-exports); `RUF100` fails stale ones. Tests only get scoped `S101/S105/S106/S107` ignores. |
+| Function length | `uv run python scripts/check_function_length.py` | No new production Python function over 100 lines; legacy offenders in `scripts/function_length_baseline.json` (`path::qualname`) may not grow (`--update` only lowers). Must report 0 violations. |
 | mypy | `uv run mypy core apps modules` | Strict; must report 0 errors. |
 | GenUI parity | `uv run python scripts/check_genui_parity.py` | |
 | Import contracts | `uv run lint-imports` | Runs only when `.importlinter` exists. |
