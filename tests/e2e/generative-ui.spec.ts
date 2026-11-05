@@ -106,7 +106,7 @@ test.describe('render_sandboxed_ui', () => {
   // Tall viewport: the 480 px widget must fit so a real pointer click on the in-frame button is actionable.
   test.use({ viewport: { width: 1280, height: 1600 } });
 
-  test('iframe is sandboxed without same-origin, renders, resizes and bridges sendPrompt exactly once', async ({ page }) => {
+  test('iframe is sandboxed without same-origin, renders, resizes and drafts sendPrompt into the composer without sending', async ({ page }) => {
     const sent: Json[] = [];
     await mockChat(page, { assistantUi: SANDBOX_UI, onSend: (b) => sent.push(b) });
     await openChat(page);
@@ -119,10 +119,10 @@ test.describe('render_sandboxed_ui', () => {
     const container = page.getByTestId('sandboxed-ui-container');
     await expect.poll(async () => (await container.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(480);
     await frame.locator('#ask').click();
-    await expect.poll(() => sent.length).toBe(1);
+    // A sandboxed widget may only draft the prompt into the composer; it must never submit it on its own.
+    await expect(page.getByRole('textbox', { name: /Ask a question about your knowledge/ })).toHaveValue('Tell me more about the counter');
     await page.waitForTimeout(500);
-    expect(sent).toHaveLength(1);
-    expect(sent[0].content).toBe('Tell me more about the counter');
+    expect(sent).toHaveLength(0);
   });
 
   test('imports vendored d3 from /vendor/genui with no external request and no CSP violation', async ({ page, baseURL }) => {
