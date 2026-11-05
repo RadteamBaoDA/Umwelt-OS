@@ -24,6 +24,7 @@ from core.config import Settings
 from core.cron import notify_on_commit
 from core.errors import ConflictError, DomainError
 from core.events import DomainEvent
+from core.events.dispatch import valid_event_envelope
 from core.heavy_work import bounded_heavy_work, to_thread_joined
 from core.ids import uuid7
 from core.realtime import (
@@ -48,7 +49,6 @@ from modules.ingestion._normalize_metadata import (
     _normalize_common_metadata,
     metadata_extractor_for,
 )
-from modules.ingestion.dispatcher import valid_event_envelope
 from modules.ingestion.models import (
     COLLECTION_LEASE,
     EventOutbox,

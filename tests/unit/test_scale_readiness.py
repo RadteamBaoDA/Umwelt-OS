@@ -216,7 +216,7 @@ def test_per_process_state_is_classified() -> None:
 
 def test_worker_cross_job_coordination_is_not_a_process_lock_for_correctness() -> None:
     """The only worker-ctx ``asyncio.Lock`` serialises an in-process scan cursor; claims stay row-fenced in SQL."""
-    source = (ROOT / "modules/ingestion/dispatcher.py").read_text(encoding="utf-8")
+    source = (ROOT / "core/events/dispatch.py").read_text(encoding="utf-8")
     assert "with_for_update" in source or "FOR UPDATE" in source or "skip_locked" in source
     assert "SAFE PER PROCESS" in (ROOT / "apps/worker/main.py").read_text(encoding="utf-8")
 

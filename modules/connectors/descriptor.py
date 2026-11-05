@@ -19,7 +19,7 @@ class ConnectorsDescriptor(ModuleDescriptor):
     provides: tuple[str, ...] = ("source_connectors",)
     requires: tuple[str, ...] = ("sources", "ingestion_runs")
     routes: tuple[str, ...] = ("/api/v1/connectors", "/api/v1/connectors/sources")
-    emitted_events: tuple[str, ...] = ()
+    emitted_events: tuple[str, ...] = ("connector.crawl.requested",)
     consumed_events: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
     navigation: tuple[dict[str, str], ...] = ()

@@ -40,6 +40,8 @@ from core.cron import (
     wake,
 )
 from core.database import dispose_engine, make_session_factory_for_role
+from core.events.dispatch import dispatch_pending_work
+from core.events.registry import get_event_registry, validate_event_contracts
 from core.heavy_work import HEAVY_JOB_MAX_TRIES
 from core.ids import uuid7
 from core.metrics import (
@@ -77,7 +79,6 @@ from modules.chat.worker import (
 from modules.connectors.scheduler import dispatch_due_collections
 from modules.connectors.worker import process_collection_request, reconcile_connectors
 from modules.dashboard.worker import run_scheduled_brief, run_scheduled_highlights
-from modules.ingestion.dispatcher import WORKER_BY_EVENT, dispatch_pending_work
 from modules.ingestion.worker import (
     cleanup_storage_orphans,
     process_ingestion_event,
@@ -151,7 +152,7 @@ def _arq_options(name: str) -> dict[str, Any]:
     options: dict[str, Any] = {}
     if name == "translate_content":
         options["keep_result"] = 0  # fixed `translation:{id}` job ids must be re-enqueueable by recovery
-    if name in set(WORKER_BY_EVENT.values()):
+    if name in set(get_event_registry().job_names.values()):
         options["keep_result"] = 0
     if name in HEAVY_SLOT_JOBS:
         options["max_tries"] = HEAVY_JOB_MAX_TRIES
@@ -202,6 +203,7 @@ async def _boot_runtime(
     _silence_cron_logs()
     configure_default_executor()  # explicit default thread-pool size; see core.async_runtime
     settings = Settings()
+    validate_event_contracts()  # fail fast on undeclared outbox event types / handlers
     ctx["settings"] = settings
     # SAFE PER PROCESS: this lock only serialises overlapping cron calls of one process so they cannot regress the
     # scan cursor. It is not a cross-replica mutex: every claim is fenced in SQL (FOR UPDATE SKIP LOCKED, leases,

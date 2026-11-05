@@ -18,6 +18,7 @@ from core.config import Settings
 from core.cron import CRON_QUEUE, set_wake_hook, wake
 from core.database import dispose_engine, make_session_factory_for_role
 from core.errors import install_error_handling
+from core.events.registry import validate_event_contracts
 from core.metrics import monitor_event_loop_lag, run_sampler_loop, spawn_background, stop_background
 from core.metrics_http import MetricsMiddleware, metrics_enabled
 from core.model_gateway.pool import close_pinned_clients
@@ -285,6 +286,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = _new_app(app_settings, csrf_secret, session_factory, redis, _make_lifespan(redis, engine))
     instrument_fastapi(app)  # no-op unless tracing is on
     app.state.modules = register_modules()
+    validate_event_contracts()  # fail fast on undeclared outbox event types / handlers
     _include_descriptor_routers(app, app.state.modules)
     tool_registry = ToolRegistry(module_registry=app.state.modules)
     declared_tools = frozenset(name for item in app.state.modules.values() if item.enabled for name in item.tools)

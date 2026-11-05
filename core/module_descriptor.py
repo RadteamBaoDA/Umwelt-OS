@@ -38,6 +38,23 @@ class RouterSpec:
 
 
 @dataclass(frozen=True)
+class EventConsumerSpec:
+    """Declare how one outbox event type is consumed: its worker job, permitted producers and handler.
+
+    ``producers`` are the exact ``DomainEvent.producer`` strings (``"modules.<descriptor id>"``) allowed to
+    publish the type; each must list the type in its descriptor ``emitted_events``. ``handler`` is a lazy
+    ``"package.module:Attribute"`` reference to a ``core.events.registry.EventHandler`` class, resolved only by
+    the event registry so core never imports module internals. The declaring descriptor must list
+    ``event_type`` in its ``consumed_events``.
+    """
+
+    event_type: str
+    job_name: str
+    producers: tuple[str, ...]
+    handler: str
+
+
+@dataclass(frozen=True)
 class ModuleDescriptor:
     """Declarative identity, wiring and lifecycle metadata for one module.
 
@@ -50,6 +67,10 @@ class ModuleDescriptor:
       importable router objects actually mounted.
     * ``erasure_module`` / ``erasure_order``: account-erasure package and its position in the
       deletion order (lower runs first; the order encodes foreign-key cleanup dependencies).
+    * ``event_consumers``: outbox event types this module consumes, with their worker job, allowed producers
+      and handler (see ``EventConsumerSpec``); every type must also appear in ``consumed_events``.
+    * ``outbox_runtime``: lazy ``"package.module:attribute"`` reference to the single scope/admission runtime
+      the outbox publisher and dispatcher use (declared by exactly one module).
     """
 
     id: str = ""
@@ -70,6 +91,8 @@ class ModuleDescriptor:
     routers: tuple[RouterSpec, ...] = ()
     erasure_module: str | None = None
     erasure_order: int = 0
+    event_consumers: tuple[EventConsumerSpec, ...] = ()
+    outbox_runtime: str = ""
 
     def load_erasure(self) -> ModuleType:
         """Import and return the module's account-erasure package.
