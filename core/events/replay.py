@@ -10,7 +10,7 @@ Only ``failed`` rows are eligible, and only rows whose principal is the named wo
 ``actor_user_id`` must equal ``--owner-user-id`` and the workspace's ``owner_user_id``). Re-queuing sets the row
 back to ``pending`` with ``next_attempt_at = now`` and a cleared ``dispatched_at``; the dispatcher then claims it
 like a new event (fresh job id), re-validating the envelope, so a still-invalid event is quarantined again.
-Destructive types (purge, cleanup, purge-cancelled stage events) need ``--allow-destructive``.
+Destructive types (source purge, document cleanup) need ``--allow-destructive``.
 Without ``--execute`` nothing is written. Selection is bounded by ``--limit`` (default 100, max 1000).
 """
 
@@ -30,16 +30,16 @@ from core.events.model import EventOutbox
 from core.workspaces.models import Workspace
 
 MAX_LIMIT = 1000
-# Single source of truth: types whose replay is destructive (purge/cleanup) or would resurrect work a source
-# purge cancelled (``modules/ingestion/_purge.py`` marks stage events of purged runs ``failed``).
+# Single source of truth: types whose replay deletes data (source purge / document cleanup). Stage events are
+# deliberately excluded: replaying failed stages is the routine recovery path, and a stage event cancelled by a
+# source purge (``modules/ingestion/_purge.py``) finds its stage cascaded away and is quarantined again on dispatch.
 DESTRUCTIVE_TYPES = frozenset({
     "source.purge.requested", "source.purge.coverage", "source.purge.progressed", "document.cleanup.requested",
-    "ingestion.stage.requested", "connector.crawl.requested", "ingestion.normalize.requested",
 })
 
 
 def is_destructive(event_type: str) -> bool:
-    """Return whether replaying ``event_type`` needs ``--allow-destructive`` (purge, cleanup, purge-cancelled)."""
+    """Return whether replaying ``event_type`` needs ``--allow-destructive`` (source purge, document cleanup)."""
     return event_type in DESTRUCTIVE_TYPES
 
 

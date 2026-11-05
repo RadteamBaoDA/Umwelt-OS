@@ -120,3 +120,11 @@ async def test_destructive_dry_run_reports_type_and_status(capsys):
     assert await replay.run(args, FakeSession([row])) == 0
     out = capsys.readouterr().out
     assert "source.purge.requested status=failed" in out and "DESTRUCTIVE" in out
+
+
+def test_stage_events_stay_replayable_without_destructive_flag() -> None:
+    """Routine stage recovery must not require ``--allow-destructive``."""
+    from core.events.replay import is_destructive
+
+    for event_type in ("ingestion.stage.requested", "connector.crawl.requested", "ingestion.normalize.requested"):
+        assert not is_destructive(event_type)
