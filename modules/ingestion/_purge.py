@@ -242,7 +242,7 @@ async def purge_expired_collection_receipts(session: AsyncSession, *, now: datet
 
 # Fan-out stage events nobody reads after delivery: they age out on the short window. Every other event
 # type (``document.version.ready`` is read by the automations/entity sweeps by keyset cursor, cleanup
-# receipts check fixed event ids) is kept for the configurable ``OUTBOX_GENERAL_RETENTION_DAYS`` so a
+# receipts check fixed event ids) is kept for the configurable ``OUTBOX_RETENTION_DAYS`` (default ``OUTBOX_GENERAL_RETENTION_DAYS``) so a
 # consumer that is behind by less than that never loses events.
 _PURGEABLE_OUTBOX_TYPES = ("ingestion.stage.requested", "ingestion.normalize.requested")
 

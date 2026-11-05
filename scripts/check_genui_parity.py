@@ -65,7 +65,7 @@ def check(doc: Path, root: Path, allow_not_ported: bool) -> tuple[list[str], dic
         if layout is None:
             problems.append(f"{cells[0]}: expected 5 or 6 columns, found {len(cells)}")
             continue
-        row = dict(zip(layout, cells))
+        row = dict(zip(layout, cells, strict=True))
         rid, status = row["id"], row["status"]
         for col in ("feature", "status", "evidence", "proof"):
             if not row[col]:
