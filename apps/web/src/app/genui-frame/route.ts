@@ -1,3 +1,4 @@
+import { getPublicOrigin } from '@/core/public-origin';
 import { buildFrameShellCsp, FRAME_SHELL_SCRIPT } from '@/core/genui-frame';
 
 /** Static for the lifetime of a deployment apart from the origin-dependent CSP header, so never cached by shared caches. */
@@ -12,14 +13,14 @@ export const dynamic = 'force-dynamic';
  * Unauthenticated by design: it is excluded from `proxy.ts` because a sandboxed (opaque-origin) frame sends no cookies,
  * and the response contains no user data. Only the embedding app origin may frame it (`frame-ancestors 'self'`).
  *
- * @param request - Incoming request; its origin names the `/vendor/genui/` source allowed by the CSP.
+ * @param request - Incoming request; its headers are only a validated fallback; the `/vendor/genui/` source origin comes from `PUBLIC_ORIGIN` (`request.url` is the bind address in the standalone container).
  * @returns The shell HTML response.
  */
 export function GET(request: Request): Response {
   return new Response(`<!doctype html><script>${FRAME_SHELL_SCRIPT}</script>`, {
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
-      'Content-Security-Policy': buildFrameShellCsp(new URL(request.url).origin),
+      'Content-Security-Policy': buildFrameShellCsp(getPublicOrigin(request.headers) ?? ''),
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer',
       'Cache-Control': 'no-store',

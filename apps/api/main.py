@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import Route
 
+from core.api_headers import ApiDefaultHeadersMiddleware
 from core.async_runtime import configure_default_executor
 from core.auth.dependencies import session_middleware_secret
 from core.body_limit import BodyLimitMiddleware
@@ -171,6 +172,7 @@ def _new_app(
         default_limit=app_settings.max_request_body_bytes,
         upload_limit=app_settings.upload_max_bytes + 1024 * 1024,
     )
+    app.add_middleware(ApiDefaultHeadersMiddleware)
     # Outermost: times every request (including rejections by inner middleware) and serves /metrics.
     app.add_middleware(MetricsMiddleware, settings=app_settings)
     return app

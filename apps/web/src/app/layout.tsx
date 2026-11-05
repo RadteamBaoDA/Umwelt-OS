@@ -5,6 +5,7 @@ import { NextIntlClientProvider } from 'next-intl';
 import type { ReactNode } from 'react';
 import { ACCENT_INIT_SCRIPT } from '@/core/accent';
 import { NONCE_HEADER } from '@/core/csp';
+import { getPublicOrigin } from '@/core/public-origin';
 import { messages } from '@/core/messages';
 import { QueryProvider } from '@/core/query-provider';
 import { SHARE_TAGLINE, SHARE_TITLE } from '@/core/share-card';
@@ -15,7 +16,7 @@ const inter = Inter({ subsets: ['latin', 'vietnamese'], variable: '--font-inter'
 
 export const metadata: Metadata = {
   // PUBLIC_ORIGIN is the existing public-origin setting (.env.example); the fallback matches its local default.
-  metadataBase: new URL(process.env.PUBLIC_ORIGIN ?? 'http://localhost:3000'),
+  metadataBase: new URL(getPublicOrigin() ?? 'http://localhost:3000'),
   title: SHARE_TITLE,
   description: SHARE_TAGLINE,
   openGraph: { title: SHARE_TITLE, description: SHARE_TAGLINE, siteName: SHARE_TITLE, type: 'website' },

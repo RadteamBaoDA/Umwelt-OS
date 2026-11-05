@@ -38,6 +38,10 @@ services:
       CSRF_SIGNING_SECRET: bbd-os-disposable-test-csrf-secret
       POSTGRES_PASSWORD: bbd-os-test-db-only
 
+  web:
+    environment:
+      PUBLIC_ORIGIN: ${TEST_PUBLIC_ORIGIN:-http://localhost:3300}
+
   api:
     # Never read a developer's real .env into the disposable test stack.
     env_file: !reset []

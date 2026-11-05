@@ -197,6 +197,8 @@ services:
       dockerfile: docker/web.Dockerfile
     environment:
       API_INTERNAL_URL: http://api:8000
+      # Browser-facing origin; the frame-shell CSP and metadataBase derive from it (request.url is the bind address).
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:3000}
       NODE_OPTIONS: --max-old-space-size=512
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
