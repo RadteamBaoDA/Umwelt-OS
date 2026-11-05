@@ -21,7 +21,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from modules.connectors.providers import rest
 from modules.connectors.providers.rest import Fetched
 from modules.connectors.public import ProviderCollectionPage, ProviderRateLimited
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 NOTION_API_VERSION = "2026-03-11"
 NOTION_ORIGIN = "https://api.notion.com/v1"

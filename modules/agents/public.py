@@ -1,6 +1,5 @@
 """Owner-scoped agent run creation, lookup, and cancellation contracts."""
 
-# Cross-module contract re-exports (importers use this public module, never private submodules).
 from importlib import import_module as _import_module
 from typing import TYPE_CHECKING as _TYPE_CHECKING
 from typing import Any as _Any
@@ -25,10 +24,6 @@ def __getattr__(name: str) -> _Any:
     return value
 
 
-from modules.agents.internal_writes import (
-    run_approved_write as run_approved_write,
-    uuid_arg as uuid_arg,
-)
 import asyncio
 import base64
 import binascii
@@ -65,6 +60,7 @@ from modules.agents.access import actor, admit, read_workspace_modules, run_epoc
 from modules.agents.account_checkpoints import (
     erase_account_checkpoints_page,
 )
+from modules.agents.internal_writes import run_approved_write, uuid_arg
 from modules.agents.leases import try_agent_run_lease_in_uow
 from modules.agents.models import (
     AgentApproval,
@@ -1993,6 +1989,7 @@ __all__ = [
     "list_run_meta",
     "list_runs",
     "lock_write_admission",
+    "mark_effect_outcome",
     "preflight_document_copied_evidence_lease",
     "purge_agent_runs",
     "purge_conversation_actions",
@@ -2002,6 +1999,8 @@ __all__ = [
     "request_cancel_for_owner",
     "reserve_browser_run_budget_in_uow",
     "revalidate_browser_run_authority",
+    "run_approved_write",
+    "uuid_arg",
 ]
 
 
@@ -2120,5 +2119,5 @@ async def redact_expired_agent_traces(
 
 if _TYPE_CHECKING:
     from modules.agents.approvals import (
-        mark_effect_outcome as mark_effect_outcome,
+        mark_effect_outcome,
     )

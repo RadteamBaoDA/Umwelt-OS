@@ -12,7 +12,7 @@ from modules.connectors.providers.macro import (
     finite_decimal,
     provider_instant,
 )
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 ISS_URL = "https://api.wheretheiss.at/v1/satellites/25544"
 _VISIBILITY = {"daylight", "visible", "eclipsed"}

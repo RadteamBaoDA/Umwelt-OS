@@ -34,7 +34,7 @@ from modules.connectors.providers.macro import (
     decode_json,
 )
 from modules.connectors.sections import SECTION_CATALOG
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 MAX_FEED_BYTES = 1024 * 1024
 MAX_FEED_ITEMS_SCANNED = 500

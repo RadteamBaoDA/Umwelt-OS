@@ -487,6 +487,7 @@ __all__ = [
     "decide_action",
     "delete_automation",
     "enqueue_trigger",
+    "ensure_demo_automations",
     "evaluate_conditions",
     "get_automation",
     "get_automation_conversation_id",
@@ -497,6 +498,7 @@ __all__ = [
     "list_runs",
     "origin_for_reference",
     "preview",
+    "register_automation_tools",
     "scrub_document_runs",
     "scrub_document_triggers",
     "start_manual",
@@ -553,8 +555,8 @@ async def purge_finished_runs(session: AsyncSession, *, now: datetime | None = N
 
 if _TYPE_CHECKING:
     from modules.automations.seed import (
-        ensure_demo_automations as ensure_demo_automations,
+        ensure_demo_automations,
     )
     from modules.automations.tools import (
-        register_automation_tools as register_automation_tools,
+        register_automation_tools,
     )

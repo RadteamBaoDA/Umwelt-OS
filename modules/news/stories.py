@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.errors import ForbiddenError, ValidationFailedError
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope, WorkspaceContext
-from modules.connectors.provider_specs import get_provider_spec
+from modules.connectors.public import get_provider_spec
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.models import Document
 from modules.knowledge.entities import public as entities

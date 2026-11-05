@@ -8,7 +8,8 @@ from pydantic import ValidationError
 from modules.connectors.public import ConnectorConfig
 from modules.connectors.registry import validate
 from modules.connectors.selection import SelectionFilters, selection_filters
-from modules.sources.schemas import PROVIDER_SOURCE_TYPES, ConnectorSource
+from modules.connectors.public import PROVIDER_SOURCE_TYPES
+from modules.sources.schemas import ConnectorSource
 
 BASE = {"history_mode": "returned_snapshot", "schedule_interval_minutes": 30, "timeout_seconds": 30}
 

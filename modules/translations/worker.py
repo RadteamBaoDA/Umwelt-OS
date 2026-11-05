@@ -35,7 +35,6 @@ from core.workspaces.public import (
 )
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.settings import public as settings_public
-from modules.settings.models import TranslationSettingsRecord
 from modules.translations import public
 from modules.translations.inputs import load_translation_input
 from modules.translations.lifecycle import PAGE, expire_page, orphan_page
@@ -216,9 +215,9 @@ async def _verify(run: _Run, session: AsyncSession) -> TranslationInput:
         await lock_access_fence(session, scope=run.member, multi_workspace_enabled=mw)
         if await session.scalar(select(ContentTranslation.id).where(_mine(claim))) is None:
             raise TranslationBlocked("stale_request")
-        row = await session.scalar(select(TranslationSettingsRecord).where(
-            TranslationSettingsRecord.workspace_id == claim.workspace_id).execution_options(populate_existing=True))
-        if row is None or not row.enabled:
+        # An absent settings row projects to the disabled default, so ``row is None`` needs no separate branch.
+        translation_settings = await settings_public.read_translation_settings_projection(session, claim.workspace_id)
+        if not translation_settings.enabled:
             raise TranslationBlocked("translation_disabled")
         source = await load_translation_input(session, run.member, TranslationItemRequest(
             resource_type=cast(Any, claim.resource_type), resource_id=claim.resource_id,
@@ -229,8 +228,8 @@ async def _verify(run: _Run, session: AsyncSession) -> TranslationInput:
         current = public.config_hash_for(
             workspace_id=claim.workspace_id, actor_user_id=claim.actor_user_id,
             resource_revision=source.resource_revision, content_hash=content_hash(source),
-            visibility_hash=source.visibility_hash, target_language=row.target_language,
-            settings_revision=row.configuration_revision, policy_fingerprint=policy_fp)
+            visibility_hash=source.visibility_hash, target_language=translation_settings.target_language,
+            settings_revision=translation_settings.configuration_revision, policy_fingerprint=policy_fp)
         if current != claim.config_hash or source.resource_revision != claim.resource_revision:
             raise TranslationBlocked("stale_request")
         if run.config is not None:

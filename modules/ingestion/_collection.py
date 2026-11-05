@@ -1,9 +1,11 @@
 """Collection reservation, authorization, receipt settlement and cursor state (internal)."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -16,7 +18,6 @@ from core.realtime import (
     make_source_change,
 )
 from core.workspaces.schemas import AccessFence, Scope
-from modules.connectors.collection_schemas import CollectionRequestRef
 from modules.ingestion._credentials import (
     lock_source_credentials_in_uow,
 )
@@ -45,6 +46,9 @@ from modules.ingestion.schemas import (
 from modules.sources import public as sources
 from modules.sources.public import ConnectorSource, SourceFence
 
+if TYPE_CHECKING:
+    # Annotation-only: a runtime import would close an import cycle between public contracts.
+    from modules.connectors.public import CollectionRequestRef
 
 async def get_source_cursor(session: AsyncSession, source_id: UUID, *, scope: Scope, multi_workspace_enabled: bool,
 ) -> str | None:

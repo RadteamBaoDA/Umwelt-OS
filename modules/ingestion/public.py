@@ -7,6 +7,33 @@ This module is the stable facade: implementations live in the private ``_*`` sub
 package and are re-exported here under their original names.
 """
 
+# Hoisted first: DTO contracts must be bound before heavy imports so cyclic importers see them.
+from modules.ingestion.schemas import (
+    ChatAttachmentRead,
+    CollectionState,
+    CollectionStateUpdate,
+    CollectorCredentialRead,
+    ConnectorCollectionLease,
+    CrawlReceipt,
+    EventDelivery,
+    IngestionRecord,
+    NativeCollectionBatch,
+    NativeCollectionReceipt,
+    Receipt,
+    ReceiveBatch,
+    RetryRunRequest,
+    RunRead,
+    SourceIngestionRead,
+    StageRead,
+    TelegramCursor,
+    TelegramDeliveryProof,
+    TelegramPageDelivery,
+    TelegramProbeClassification,
+    TelegramRawDelivery,
+    classify_telegram_probe,
+)
+
+# isort: split
 from modules.ingestion._batches import (
     _NO_EXPECTED_CURSOR,
     accept_collection_no_changes,
@@ -131,30 +158,6 @@ from modules.ingestion._scope import (
     resolve_collector_job_scope,
     resolve_ingestion_event_scope,
     resolve_ingestion_run_scope,
-)
-from modules.ingestion.schemas import (
-    ChatAttachmentRead,
-    CollectionState,
-    CollectionStateUpdate,
-    CollectorCredentialRead,
-    ConnectorCollectionLease,
-    CrawlReceipt,
-    EventDelivery,
-    IngestionRecord,
-    NativeCollectionBatch,
-    NativeCollectionReceipt,
-    Receipt,
-    ReceiveBatch,
-    RetryRunRequest,
-    RunRead,
-    SourceIngestionRead,
-    StageRead,
-    TelegramCursor,
-    TelegramDeliveryProof,
-    TelegramPageDelivery,
-    TelegramProbeClassification,
-    TelegramRawDelivery,
-    classify_telegram_probe,
 )
 
 __all__ = [

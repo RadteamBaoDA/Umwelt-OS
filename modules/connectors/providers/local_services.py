@@ -22,7 +22,7 @@ import httpx
 
 from core.async_runtime import run_dns_lookup
 from core.heavy_work import to_thread_joined
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024

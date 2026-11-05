@@ -55,7 +55,7 @@ from modules.connectors.providers.json_feed import JSON_FEEDS
 from modules.connectors.providers.keyed import KEYED, KEYED_MAX_BYTES
 from modules.connectors.selection import select_incremental, selection_filters
 from modules.ingestion import public as ingestion
-from modules.ingestion.schemas import (
+from modules.ingestion.public import (
     CollectionState,
     CollectionStateUpdate,
     IngestionRecord,
@@ -2005,7 +2005,7 @@ async def _run_telegram(run: Run) -> None:
     """
     from modules.connectors.credentials import decrypt_native_token
     from modules.connectors.providers.telegram import fetch_telegram_updates, map_telegram_update
-    from modules.ingestion.schemas import classify_telegram_probe
+    from modules.ingestion.public import classify_telegram_probe
 
     a, source = run.attempt, run.attempt.source
     lease = await _lease(run)

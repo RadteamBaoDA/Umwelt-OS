@@ -51,7 +51,7 @@ from modules.sources.public import ConnectorSource, SourceFence
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from modules.connectors.github.schemas import GitHubBindingFence, GitHubSegmentProof
+    from modules.connectors.public import GitHubBindingFence, GitHubSegmentProof
 
 # A normalized row must fit the worker's bounded single-record budget.
 TELEGRAM_OBSERVATION_MAX_BYTES = 4 * 1024 * 1024
@@ -448,7 +448,7 @@ class GitHubVerifier(BaseNativeVerifier):
         Visibility preparation takes the credential rows itself, so the orchestrator then skips its own
         ``lock_source_credentials_in_uow`` (never re-enter that set).
         """
-        from modules.connectors.github.schemas import GitHubSegmentProof
+        from modules.connectors.public import GitHubSegmentProof
 
         payload = ctx.payload
         if payload.github_segment is None or payload.telegram_raw_deliveries or payload.telegram_deliveries:

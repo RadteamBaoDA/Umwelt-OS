@@ -29,7 +29,7 @@ from modules.connectors.providers.macro import (
     content_version,
 )
 from modules.connectors.providers.news import _record, https_link, parse_when, plain_text
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 VIETNAMWORKS_API_HOST = "ms.vietnamworks.com"
 VIETNAMWORKS_SEARCH_URL = f"https://{VIETNAMWORKS_API_HOST}/job-search/v1.0/search"

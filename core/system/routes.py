@@ -13,8 +13,11 @@ from core.auth.routes import get_auth_redis
 from core.database import get_session
 from core.errors import DomainError
 from core.system.health import system_health
-from modules.sources.public import read_source_purge_operation, resolve_source_purge_job_scope
-from modules.sources.public import OperationRead
+from modules.sources.public import (
+    OperationRead,
+    read_source_purge_operation,
+    resolve_source_purge_job_scope,
+)
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
 

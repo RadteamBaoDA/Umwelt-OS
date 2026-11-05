@@ -82,6 +82,7 @@ __all__ = [
     "GoalPage",
     "GoalRead",
     "ensure_demo_goals",
+    "register_goal_tools",
 ]
 
 
@@ -806,5 +807,5 @@ async def list_deadlines_within(
 
 if _TYPE_CHECKING:
     from modules.goals.tools import (
-        register_goal_tools as register_goal_tools,
+        register_goal_tools,
     )

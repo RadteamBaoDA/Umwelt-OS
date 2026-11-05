@@ -45,7 +45,7 @@ from modules.connectors.public import (
     get_native_credential_snapshot,
 )
 from modules.ingestion import public as ingestion
-from modules.ingestion.schemas import (
+from modules.ingestion.public import (
     ConnectorCollectionLease,
     NativeCollectionBatch,
     NativeCollectionReceipt,

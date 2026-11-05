@@ -19,7 +19,7 @@ from modules.connectors.github.schemas import (
     GitHubSegmentProof,
     GitHubSourceConfig,
 )
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 
 OVERLAP = timedelta(hours=24)
 MAX_SWEEP_PAGES = 100

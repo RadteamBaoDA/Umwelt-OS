@@ -32,7 +32,7 @@ from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.connectors import scheduler
 from modules.connectors.collection_schemas import CollectionRequestRef
 from modules.ingestion import public as ingestion
-from modules.ingestion.schemas import Receipt, ReceiveBatch
+from modules.ingestion.public import Receipt, ReceiveBatch
 from modules.sources import public as sources
 from modules.sources.public import ConnectorSource
 from modules.tools import public as tools

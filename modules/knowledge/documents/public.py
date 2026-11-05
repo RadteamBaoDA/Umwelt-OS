@@ -61,6 +61,8 @@ from modules.knowledge.documents.schemas import (
     VersionRead,
     WorldDataMeasurement,
 )
+
+# isort: split
 from core.workspaces import public as workspaces
 from modules.knowledge.documents._chat_evidence import (
     ChatEvidenceChunk,

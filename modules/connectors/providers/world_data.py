@@ -32,7 +32,7 @@ from modules.connectors.providers.security import SECURITY_ADAPTERS
 from modules.connectors.providers.space import SPACE_ADAPTERS
 from modules.connectors.providers.vn_stock import VN_STOCK_ADAPTERS
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 from modules.sources.public import ConnectorSource, SourceFence
 
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024

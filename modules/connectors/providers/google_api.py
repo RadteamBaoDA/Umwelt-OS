@@ -13,7 +13,7 @@ from urllib.parse import quote, urlencode
 from core.heavy_work import to_thread_joined
 from modules.connectors.providers import rest
 from modules.connectors.quota import QuotaDeferred
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
 
 MAX_PAGES = 10

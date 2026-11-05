@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modules.connectors.providers.news import safe_xml_root
 from modules.connectors.public import ConnectorConfig, ProviderCollectionPage, ProviderRateLimited
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
 from modules.sources.public import ConnectorSource
 

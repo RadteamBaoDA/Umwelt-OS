@@ -12,7 +12,7 @@ from urllib.parse import quote, urlencode
 
 from modules.connectors.providers import social_walk
 from modules.connectors.providers.rest import Fetched
-from modules.ingestion.schemas import IngestionRecord
+from modules.ingestion.public import IngestionRecord
 from modules.knowledge.documents.public import ProviderRecordMetadata
 
 _MAX_RECORDS = 100

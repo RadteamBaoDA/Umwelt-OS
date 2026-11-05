@@ -67,10 +67,7 @@ from modules.connectors.public import (
     wake_packaged_collection,
 )
 from modules.ingestion import public as ingestion
-from modules.ingestion.schemas import (
-    Receipt,
-    ReceiveBatch,
-)
+from modules.ingestion.public import Receipt, ReceiveBatch
 from modules.settings.public import module_dependency, module_is_enabled, n8n_enabled, resolve_n8n
 from modules.sources import public as sources
 from modules.sources.public import ConnectorSource

@@ -17,17 +17,21 @@ client thresholds. Currency, pair and coin lists are curated server-side constan
 request line except through the Literal types below.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Annotated, Any, Literal, get_args
+from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args
 from urllib.parse import quote, urlencode
 
 from pydantic import StringConstraints
 
-from modules.ingestion.schemas import IngestionRecord
+if TYPE_CHECKING:
+    # Annotation-only: a runtime import would close an import cycle between public contracts.
+    from modules.ingestion.public import IngestionRecord
 
 HnList = Literal["top", "new", "best", "ask", "show"]
 GdeltTimespan = Literal["1h", "6h", "24h", "3d", "7d"]

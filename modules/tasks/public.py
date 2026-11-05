@@ -85,6 +85,7 @@ __all__ = [
     "TaskRead",
     "TaskStatus",
     "ensure_demo_tasks",
+    "register_task_tools",
 ]
 
 
@@ -706,5 +707,5 @@ async def list_due_within(
 
 if _TYPE_CHECKING:
     from modules.tasks.tools import (
-        register_task_tools as register_task_tools,
+        register_task_tools,
     )

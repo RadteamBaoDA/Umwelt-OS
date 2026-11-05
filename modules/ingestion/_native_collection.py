@@ -7,6 +7,7 @@ The orchestration here is provider-agnostic. Provider proofs are verified by the
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import select
@@ -24,7 +25,6 @@ from core.realtime import (
     make_source_change,
 )
 from core.workspaces.schemas import AccessFence, Scope
-from modules.connectors.collection_schemas import CollectionRequestRef
 from modules.ingestion._collection import (
     _apply_state_update,
     _authorize_collection,
@@ -66,6 +66,10 @@ from modules.ingestion.schemas import (
 )
 from modules.sources import public as sources
 from modules.sources.public import ConnectorSource, SourceFence
+
+if TYPE_CHECKING:
+    # Annotation-only: a runtime import would close an import cycle between public contracts.
+    from modules.connectors.public import CollectionRequestRef
 
 _BATCH_KEY_MAX = 255
 

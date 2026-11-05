@@ -2,8 +2,10 @@
 
 # Cross-module contract re-exports (importers use this public module, never private submodules).
 from modules.chat.generative_ui import (
-    external_router as external_router,
+    external_router,
 )
+
+# isort: split
 import base64 as _base64
 import binascii as _binascii
 import hashlib as _hashlib
@@ -175,6 +177,7 @@ __all__ = [
     "ensure_demo_conversation",
     "ensure_grounded_answer",
     "export_page",
+    "external_router",
     "filter_current_citations",
     "filter_live_agent_run_ids",
     "format_grounded_context",

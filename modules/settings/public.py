@@ -2,8 +2,10 @@ from __future__ import annotations
 
 # Cross-module contract re-exports (importers use this public module, never private submodules).
 from modules.settings.prompts import (
-    resolve_prompt as resolve_prompt,
+    resolve_prompt,
 )
+
+# isort: split
 import hashlib
 import ipaddress
 import json
@@ -64,7 +66,11 @@ from core.workspaces.public import (
 )
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope, WorkspaceContext
 from modules.settings.display_name import derive_display_name, normalize_display_name
-from modules.settings.models import AISettingsRecord, OwnerPreferencesRecord
+from modules.settings.models import (
+    AISettingsRecord,
+    OwnerPreferencesRecord,
+    TranslationSettingsRecord,
+)
 
 # Re-exported for the model_gateway routes (strict mypy forbids implicit re-export, hence the aliases).
 from modules.settings.models import capability_evidence as capability_evidence  # noqa: PLC0414
@@ -1437,6 +1443,61 @@ async def get_translation_settings(session: AsyncSession, *, scope: Scope, multi
     return await read_translation_settings(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
 
 
+def _translation_settings_read(row: TranslationSettingsRecord | None) -> TranslationSettingsRead:
+    """Project a settings row (or the documented default for an absent row) to the public DTO."""
+    if row is None:
+        return TranslationSettingsRead()
+    return TranslationSettingsRead(
+        enabled=row.enabled, target_language=row.target_language,
+        configuration_revision=row.configuration_revision,
+    )
+
+
+async def read_translation_settings_projection(
+    session: AsyncSession, workspace_id: UUID, *, lock: bool = False,
+) -> TranslationSettingsRead:
+    """Read one workspace's translation choice for the Translations module (owner: Settings).
+
+    Read-only projection of ``translation_settings`` (fields: enabled, target_language, configuration_revision). The
+    caller must already have admitted the workspace (access fence); this function does not authorize. An absent row
+    yields the documented default (disabled, ``vi``, revision 1). ``lock=True`` adds ``FOR UPDATE`` so the caller
+    serializes against a concurrent settings save. ``populate_existing`` refreshes any identity-mapped row.
+    """
+    statement = select(TranslationSettingsRecord).where(TranslationSettingsRecord.workspace_id == workspace_id)
+    if lock:
+        statement = statement.with_for_update()
+    return _translation_settings_read(await session.scalar(statement.execution_options(populate_existing=True)))
+
+
+async def save_translation_settings_cas(
+    session: AsyncSession, workspace_id: UUID, *, enabled: bool, target_language: str, expected_revision: int,
+    updated_by_user_id: int,
+) -> tuple[TranslationSettingsRead, bool]:
+    """Compare-and-set one workspace's translation choice; the caller commits and holds the access fence.
+
+    Inserts the row on first use (``ON CONFLICT DO NOTHING``), locks it ``FOR UPDATE`` and rejects a stale
+    ``expected_revision`` with ``ConflictError``. Returns ``(settings, changed)``: when nothing changed the revision is
+    untouched and ``changed`` is False; otherwise the revision is bumped and ``changed`` is True, and the caller must
+    block its own derived pending work. The write is flushed lazily by the caller's next statement or flush.
+    """
+    await session.execute(insert(TranslationSettingsRecord).values(workspace_id=workspace_id)
+                          .on_conflict_do_nothing(index_elements=["workspace_id"]))
+    row = await session.scalar(select(TranslationSettingsRecord).where(
+        TranslationSettingsRecord.workspace_id == workspace_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    if row is None:
+        raise RuntimeError("Translation settings could not be initialized")
+    if row.configuration_revision != expected_revision:
+        raise ConflictError(detail="Translation settings changed; reload before saving")
+    if row.enabled == enabled and row.target_language == target_language:
+        return _translation_settings_read(row), False
+    row.enabled = enabled
+    row.target_language = target_language
+    row.configuration_revision += 1
+    row.updated_by_user_id = updated_by_user_id
+    return _translation_settings_read(row), True
+
+
 async def read_ai_policy_fingerprint(
     session: AsyncSession, settings: Settings, redis: Redis | None, *, workspace_id: UUID, role: str,
 ) -> str | None:
@@ -1463,3 +1524,8 @@ async def read_ai_policy_fingerprint(
         (destination, _fingerprint(config.gateway_api_key), role, mapping.model, mapping.version, mapping.destination,
          config.privacy.model_dump(mode="json"), config.configuration_revision),
         sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+
+# Names re-exported from the owner's private submodules for other modules (see top of file).
+__all__ = [
+    "resolve_prompt",
+]
