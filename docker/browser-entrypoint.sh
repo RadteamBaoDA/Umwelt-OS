@@ -19,7 +19,7 @@ ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 ip6tables -A OUTPUT -o lo -j ACCEPT
 ip6tables -A OUTPUT -d ::ffff:127.0.0.11 -p udp --dport 53 -j ACCEPT
 ip6tables -A OUTPUT -d ::ffff:127.0.0.11 -p tcp --dport 53 -j ACCEPT
-for range in ::/128 ::1/128 fc00::/7 fe80::/10 ff00::/8 2001:db8::/32; do
+for range in ::/128 ::1/128 fc00::/7 fe80::/10 ff00::/8 2001:db8::/32 ::ffff:0:0/96 64:ff9b::/96 64:ff9b:1::/48 2002::/16 2001::/32 100::/64; do
   ip6tables -A OUTPUT -d "$range" -j DROP
 done
 ip6tables -A OUTPUT -p tcp -m multiport --dports 80,443 -j ACCEPT

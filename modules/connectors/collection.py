@@ -1070,7 +1070,13 @@ def _local_service_failure(reason: str) -> Exception | None:
 
 
 async def _native_local_service(call: NativeCall) -> None:
-    """FHIR observations or Home Assistant snapshot against the configured local origin; accepts itself."""
+    """FHIR observations or Home Assistant snapshot against the configured local origin; accepts itself.
+
+    These providers may only reach private/loopback addresses, which is the operator's own LAN. In
+    multi-workspace mode any invited account owns a workspace, so a non-operator actor would otherwise
+    reach internal services (database, redis, docker gateway); refuse as an unsafe destination.
+    """
+    from core.auth.dependencies import is_instance_operator_id
     from modules.connectors.providers.local_services import (
         LocalServiceError,
         collect_fhir_observations,
@@ -1079,6 +1085,8 @@ async def _native_local_service(call: NativeCall) -> None:
 
     run, gate, a = call.run, call.run.gate, call.run.attempt
     provider = a.source.provider
+    if not is_instance_operator_id(a.scope.actor_user_id):
+        raise rest.UnsafeDestination("destination_not_allowed")
     header_name, bearer_token = await _rest_secret(run)
     if header_name != "Authorization" or not bearer_token:
         raise CredentialMissing
