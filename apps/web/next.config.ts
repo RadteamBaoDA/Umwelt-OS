@@ -23,7 +23,8 @@ const nextConfig: NextConfig = {
   /** Applies the security headers to every route, including API rewrites' HTML error pages. */
   async headers() {
     return [
-      { source: '/:path*', headers: securityHeaders },
+      // Not the widget frame shell (/genui-frame): it must be framable (X-Frame-Options DENY) and sets its own headers.
+      { source: '/((?!genui-frame$).*)', headers: securityHeaders },
       // Sandboxed (opaque-origin) generative-UI iframes load these modules cross-origin, so they need CORS + CORP.
       {
         source: '/vendor/genui/:path*',

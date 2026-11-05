@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildStandaloneHtmlDocument } from '../sandbox/export-utils';
-import { buildFrameDocument, SANDBOX_BRIDGE_JS } from '../sandbox/frame-content';
+import { buildCspMetaTag, buildFrameDocument, buildFrameShellCsp, frameDocumentProps, SANDBOX_BRIDGE_JS } from '../sandbox/frame-content';
 
 describe('sandbox frame nonce + export origin', () => {
   it('embeds the nonce in srcdoc and gates the in-frame listener on source and nonce', () => {
@@ -23,7 +23,7 @@ describe('sandbox frame nonce + export origin', () => {
     expect(doc).toContain(`${window.location.origin}/vendor/genui/`);
   });
 
-  it('ships the vendored import map before the bridge and runs widget JS without eval (host CSP has no unsafe-eval)', () => {
+  it('ships the vendored import map before the bridge and runs widget JS without eval (frame CSP has no unsafe-eval)', () => {
     const doc = buildFrameDocument({ html: '<p>x</p>' });
     expect(doc).toContain('<script type="importmap">');
     expect(doc.indexOf('type="importmap"')).toBeLessThan(doc.indexOf('__umweltNonce'));
@@ -32,18 +32,26 @@ describe('sandbox frame nonce + export origin', () => {
   });
 });
 
-describe('host CSP nonce on frame scripts', () => {
-  it('tags trusted scripts with the host nonce but never model-authored body scripts', async () => {
-    const { nonceScriptTags } = await import('../sandbox/frame-content');
-    expect(nonceScriptTags('<script>a</script><script type="importmap">{}</script>', 'N')).toBe(
-      '<script nonce="N">a</script><script nonce="N" type="importmap">{}</script>',
-    );
-    expect(nonceScriptTags('<script>a</script>', '')).toBe('<script>a</script>');
+describe('frame document delivery and CSP', () => {
+  it('never embeds a host nonce and keeps widget scripts un-nonced (frame CSP allows unsafe-inline itself)', () => {
     document.head.innerHTML = '<meta name="csp-nonce" content="HOSTN">';
-    const doc = buildFrameDocument({ html: '<script>evil()</script><p>x</p>', executeScripts: true, jsExpressions: 'go()' });
+    const doc = buildFrameDocument({ html: '<p>x</p>', executeScripts: true, jsExpressions: 'go()' });
     document.head.innerHTML = '';
-    expect(doc).toContain('<script nonce="HOSTN" id="umwelt-widget-js">');
-    expect(doc).toContain('<script nonce="HOSTN" type="importmap">');
-    expect(doc).not.toMatch(/nonce="HOSTN"[^>]*>\s*evil/);
+    expect(doc).not.toContain('HOSTN');
+    expect(doc).not.toMatch(/<script nonce=/);
+    expect(doc).toContain('<script id="umwelt-widget-js">');
+  });
+
+  it('loads documents through the shell route (src + name), never srcdoc, so the app CSP is not inherited', () => {
+    expect(frameDocumentProps('<p>doc</p>')).toEqual({ src: '/genui-frame', name: '<p>doc</p>' });
+  });
+
+  it('shell header CSP is at least as strict as the in-document meta policy and only frameable by the app', () => {
+    const csp = buildFrameShellCsp('https://app.test');
+    const meta = /content="([^"]+)"/.exec(buildCspMetaTag('https://app.test'))![1];
+    expect(csp).toBe(`${meta}; frame-ancestors 'self'`);
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("script-src 'unsafe-inline' https://app.test/vendor/genui/");
   });
 });

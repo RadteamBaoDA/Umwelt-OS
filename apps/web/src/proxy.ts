@@ -25,5 +25,6 @@ export function proxy(request: NextRequest) {
 
 export const config = {
   // Next 16 loses the escaped dot from negative-lookahead matchers, skipping every page path.
-  matcher: ['/((?!_next/|api/).*)'],
+  // /genui-frame is the widget frame shell: it sets its own CSP and must not get the app policy (policies intersect).
+  matcher: ['/((?!_next/|api/|genui-frame$).*)'],
 };

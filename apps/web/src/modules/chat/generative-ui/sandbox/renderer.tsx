@@ -16,20 +16,10 @@ import { genUiCopy } from '../copy';
 import type { SandboxTheme } from '../design-system';
 import { ExportOverlay } from './export-overlay';
 import { buildStandaloneHtmlDocument } from './export-utils';
-import { buildFrameDocument, createFrameNonce } from './frame-content';
+import { buildFrameDocument, createFrameNonce, frameDocumentProps } from './frame-content';
 import { processPartialHtml } from './process-partial-html';
-import {
-  getStreamingStage,
-  validateSandboxedUiArgs,
-  type GenerativeUIPayload,
-  type SandboxedUiArgs,
-} from './schema';
-import {
-  enforceStrictSandboxAttribute,
-  executeSandboxScripts,
-  syncSandboxTheme,
-  updateSandboxContent,
-} from './websandbox-loader';
+import { getStreamingStage, validateSandboxedUiArgs, type GenerativeUIPayload, type SandboxedUiArgs } from './schema';
+import { enforceStrictSandboxAttribute, executeSandboxScripts, syncSandboxTheme, updateSandboxContent } from './websandbox-loader';
 
 /** Default throttle interval in milliseconds for high-frequency streaming snapshots. */
 export const THROTTLE_MS = 1000;
@@ -87,9 +77,7 @@ function useResolvedSandboxTheme(explicitTheme?: SandboxTheme): SandboxTheme {
       return;
     }
     const updateFromDom = () => {
-      const isDark =
-        document.documentElement.classList.contains('dark') ||
-        document.documentElement.getAttribute('data-theme') === 'dark';
+      const isDark = document.documentElement.classList.contains('dark') || document.documentElement.getAttribute('data-theme') === 'dark';
       setDetectedTheme(isDark ? 'dark' : 'light');
     };
     const observer = new MutationObserver(updateFromDom);
@@ -111,13 +99,8 @@ function useResolvedSandboxTheme(explicitTheme?: SandboxTheme): SandboxTheme {
  * @param intervalMs - Rotation interval in milliseconds (defaults to 1800ms).
  * @returns Currently active placeholder message string.
  */
-export function usePlaceholderRotation(
-  active: boolean,
-  customMessages?: string[],
-  intervalMs = 1800,
-): string {
-  const phrases =
-    customMessages && customMessages.length > 0 ? customMessages : LOADING_PHRASES;
+export function usePlaceholderRotation(active: boolean, customMessages?: string[], intervalMs = 1800): string {
+  const phrases = customMessages && customMessages.length > 0 ? customMessages : LOADING_PHRASES;
   const [index, setIndex] = React.useState(0);
 
   React.useEffect(() => {
@@ -176,7 +159,12 @@ type MergedArgs = ReturnType<typeof validateSandboxedUiArgs>;
  * Merges the widget source (`args` > `sandbox` > `payload.sandbox`) with direct prop overrides and validates it.
  * `expressionList` keeps the array form (non-blank strings) so each expression executes exactly once.
  */
-function useMergedSandboxArgs(p: Pick<OpenGenerativeUIRendererProps, 'args' | 'sandbox' | 'payload' | 'initialHeight' | 'placeholderMessages' | 'css' | 'html' | 'jsFunctions' | 'jsExpressions' | 'title'>): { mergedRawArgs: MergedArgs; expressionList: string[] } {
+function useMergedSandboxArgs(
+  p: Pick<
+    OpenGenerativeUIRendererProps,
+    'args' | 'sandbox' | 'payload' | 'initialHeight' | 'placeholderMessages' | 'css' | 'html' | 'jsFunctions' | 'jsExpressions' | 'title'
+  >,
+): { mergedRawArgs: MergedArgs; expressionList: string[] } {
   const { args, sandbox, payload, initialHeight, placeholderMessages, css, html, jsFunctions, jsExpressions, title } = p;
   const mergedRawArgs = React.useMemo(() => {
     const base = args ?? sandbox ?? payload?.sandbox ?? {};
@@ -188,11 +176,7 @@ function useMergedSandboxArgs(p: Pick<OpenGenerativeUIRendererProps, 'args' | 's
       ...(html !== undefined ? { html } : {}),
       ...(jsFunctions !== undefined ? { jsFunctions } : {}),
       ...(jsExpressions !== undefined ? { jsExpressions } : {}),
-      ...(title !== undefined
-        ? { title }
-        : payload?.title !== undefined
-          ? { title: payload.title }
-          : {}),
+      ...(title !== undefined ? { title } : payload?.title !== undefined ? { title: payload.title } : {}),
     });
   }, [args, sandbox, payload, initialHeight, placeholderMessages, css, html, jsFunctions, jsExpressions, title]);
 
@@ -228,7 +212,16 @@ interface FrameSyncArgs {
  *
  * @returns The iframe `onLoad` handler (bumps the epoch that re-triggers the sync effects).
  */
-function useSandboxFrameSync({ iframeRef, frameNonce, merged, expressionList, hasHtmlContent, isStreaming, isCompleted, theme }: FrameSyncArgs): () => void {
+function useSandboxFrameSync({
+  iframeRef,
+  frameNonce,
+  merged,
+  expressionList,
+  hasHtmlContent,
+  isStreaming,
+  isCompleted,
+  theme,
+}: FrameSyncArgs): () => void {
   const bridge = usePromptBridge();
   const frameLoadedRef = React.useRef(false);
   const functionsExecutedRef = React.useRef(false);
@@ -329,7 +322,7 @@ function useReportedFrameHeight(iframeRef: React.RefObject<HTMLIFrameElement | n
 }
 
 /**
- * Frame documents: the inline iframe's `srcDoc` is created ONCE (empty body, no scripts); content, theme and JS reach
+ * Frame documents: the inline iframe's document (loaded via `frameDocumentProps`) is created ONCE (empty body, no scripts); content, theme and JS reach
  * it via postMessage so streaming deltas never reload the frame or replay a stale preview. The fullscreen preview
  * gets the full self-contained document only once completed.
  *
@@ -407,7 +400,14 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
   const resolvedTitle = mergedRawArgs.title ?? genUiCopy().genUiDefaultWidgetTitle;
   const { frameNonce, baseSrcDoc, previewSrcDoc } = useSandboxDocuments(mergedRawArgs, isCompleted, resolvedTheme, resolvedTitle);
   const handleFrameLoad = useSandboxFrameSync({
-    iframeRef, frameNonce, merged: mergedRawArgs, expressionList, hasHtmlContent, isStreaming, isCompleted, theme: resolvedTheme,
+    iframeRef,
+    frameNonce,
+    merged: mergedRawArgs,
+    expressionList,
+    hasHtmlContent,
+    isStreaming,
+    isCompleted,
+    theme: resolvedTheme,
   });
   const reportedHeight = useReportedFrameHeight(iframeRef, frameNonce);
   const effectiveHeight = reportedHeight ?? mergedRawArgs.initialHeight ?? DEFAULT_INITIAL_HEIGHT;
@@ -426,7 +426,16 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
       resolvedTitle,
       resolvedTheme,
     );
-  }, [isCompleted, hasHtmlContent, mergedRawArgs.css, sanitizedHtml, mergedRawArgs.jsFunctions, mergedRawArgs.jsExpressions, resolvedTitle, resolvedTheme]);
+  }, [
+    isCompleted,
+    hasHtmlContent,
+    mergedRawArgs.css,
+    sanitizedHtml,
+    mergedRawArgs.jsFunctions,
+    mergedRawArgs.jsExpressions,
+    resolvedTitle,
+    resolvedTheme,
+  ]);
 
   return (
     <ExportOverlay
@@ -450,7 +459,7 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
           ref={iframeRef}
           title={resolvedTitle}
           sandbox="allow-scripts"
-          srcDoc={baseSrcDoc}
+          {...frameDocumentProps(baseSrcDoc)}
           data-umwelt-nonce={frameNonce}
           onLoad={handleFrameLoad}
           className="h-full w-full border-0 bg-transparent"

@@ -10,7 +10,7 @@ import { buildSandboxStylesheet, DESIGN_SYSTEM_CSS, buildImportMapScriptTag, typ
 import { IDIOMORPH_INLINE_SCRIPT } from './idiomorph-inline';
 import { processPartialHtml } from './process-partial-html';
 import { TRIP_ANIMATOR_SCRIPT } from './trip-animator';
-import { readHostNonce } from '@/core/csp';
+import { FRAME_SHELL_PATH } from '@/core/genui-frame';
 import { uuid7 } from '@/core/uuid7';
 
 /** Message type emitted by the sandboxed iframe when its content height changes. */
@@ -18,6 +18,8 @@ export const RESIZE_MESSAGE_TYPE = 'umwelt:resize';
 
 /** Legacy resize message type alias for OpenIntelligentUI compatibility. */
 export const LEGACY_RESIZE_MESSAGE_TYPE = '__ogui_resize';
+
+export { FRAME_SHELL_PATH, FRAME_SHELL_SCRIPT, buildFrameShellCsp } from '@/core/genui-frame';
 
 /** Minimal preview shell used when initializing an empty sandboxed frame. */
 export const PREVIEW_FRAME_CONTENT = '<head></head><body><div id="umwelt-sandbox-root"></div></body>';
@@ -40,17 +42,14 @@ export function buildCspMetaTag(origin = typeof window !== 'undefined' ? window.
 export const CSP_META_TAG = buildCspMetaTag('');
 
 /**
- * Tags every `<script` in trusted frame markup with the host page's CSP nonce. The srcdoc frame inherits the host's
- * nonce + 'strict-dynamic' policy, so our own bootstrap scripts (import map, Idiomorph, bridge, user JS) need it; scripts
- * they create (runScript, dynamic import) are then trusted transitively. The frame is opaque-origin and cannot reach
- * the host DOM, so exposing the nonce to widget code does not widen host script execution.
+ * Props that make an `<iframe>` render `doc` through the shell route instead of `srcdoc` (which would inherit the host CSP).
+ * The iframe must also carry `sandbox="allow-scripts"` (never `allow-same-origin`).
  *
- * @param html - Trusted frame markup containing `<script` tags.
- * @param nonce - Host nonce; empty returns the markup unchanged (tests, non-nonce pages).
- * @returns Markup whose script tags carry `nonce="..."`.
+ * @param doc - Complete frame document from `buildFrameDocument`.
+ * @returns `src` and `name` iframe attributes.
  */
-export function nonceScriptTags(html: string, nonce: string): string {
-  return nonce ? html.replace(/<script(?=[\s>])/g, `<script nonce="${nonce}"`) : html;
+export function frameDocumentProps(doc: string): { src: string; name: string } {
+  return { src: FRAME_SHELL_PATH, name: doc };
 }
 
 /**
@@ -139,9 +138,8 @@ export const SANDBOX_BRIDGE_JS = `
     return '';
   }
 
-  // Runs model-authored code as an inline <script>, not eval(): the frame inherits the host page's CSP
-  // (nonce + 'strict-dynamic', no 'unsafe-eval' in production), which blocks eval/new Function.
-  // A script created by this nonced bridge is trusted by 'strict-dynamic'; function declarations still become globals.
+  // Runs model-authored code as an inline <script>, not eval(): the frame CSP has no 'unsafe-eval', which blocks
+  // eval/new Function. Function declarations in an inline script still become globals (inline onclick handlers use them).
   function runScript(code) {
     var el = document.createElement('script');
     el.textContent = code;
@@ -415,7 +413,7 @@ export function createFrameNonce(): string {
 }
 
 /**
- * Assembles the complete sandboxed iframe HTML document (`srcdoc`), combining:
+ * Assembles the complete sandboxed iframe HTML document (delivered via `frameDocumentProps`, not `srcdoc`), combining:
  * 1. Strict `CSP_META_TAG` (`default-src 'none'; script-src/style-src 'unsafe-inline' + <origin>/vendor/genui/; connect-src 'none'`)
  * 2. Vendored-library import map (must precede any module import; backs `import('d3')` etc.)
  * 2b. Umwelt-OS + OpenIntelligentUI Design System CSS (`buildSandboxStylesheet(theme)`)
@@ -427,7 +425,7 @@ export function createFrameNonce(): string {
  * 8. Optional deferred JS execution (`jsFunctions` and `jsExpressions`) once streaming completes.
  *
  * @param options - `FrameDocumentOptions` configuring HTML, CSS, scripts, and theme.
- * @returns Complete HTML document string for `<iframe srcdoc={...} sandbox="allow-scripts">`.
+ * @returns Complete HTML document string for `<iframe {...frameDocumentProps(doc)} sandbox="allow-scripts">`.
  */
 export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
   const {
@@ -455,11 +453,7 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
     }
   }
 
-  const hostNonce = readHostNonce();
-  /** Nonces one trusted script tag (never the model-authored body). */
-  const n = (tag: string) => nonceScriptTags(tag, hostNonce);
-  const userScriptTag =
-    scriptParts.length > 0 ? `\n  <script nonce="${hostNonce}" id="umwelt-widget-js">\n${scriptParts.join('\n')}\n  </script>` : '';
+  const userScriptTag = scriptParts.length > 0 ? `\n  <script id="umwelt-widget-js">\n${scriptParts.join('\n')}\n  </script>` : '';
 
   return `<!DOCTYPE html>
 <html lang="en" data-theme="${theme}"${themeClass}>
@@ -467,18 +461,18 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   ${buildCspMetaTag()}
-  ${n(buildImportMapScriptTag())}
+  ${buildImportMapScriptTag()}
   <style>html, body { overflow: hidden !important; height: auto !important; min-height: 0 !important; }</style>
   <style id="umwelt-design-system">${stylesheet}</style>
   <style id="umwelt-widget-css">${customCss}</style>
-  <script nonce="${hostNonce}">window.__umweltNonce=${JSON.stringify(nonce)};</script>
-  <script nonce="${hostNonce}">${escapeScriptTagContent(IDIOMORPH_INLINE_SCRIPT)}</script>
-  ${n(TRIP_ANIMATOR_SCRIPT)}
-  <script nonce="${hostNonce}">${escapeScriptTagContent(SANDBOX_BRIDGE_JS)}</script>
+  <script>window.__umweltNonce=${JSON.stringify(nonce)};</script>
+  <script>${escapeScriptTagContent(IDIOMORPH_INLINE_SCRIPT)}</script>
+  ${TRIP_ANIMATOR_SCRIPT}
+  <script>${escapeScriptTagContent(SANDBOX_BRIDGE_JS)}</script>
 </head>
 <body>
   <div id="umwelt-sandbox-root" class="initial-render">${safeBody}</div>
-  <script nonce="${hostNonce}">${escapeScriptTagContent(MEASUREMENT_JS)}</script>${userScriptTag}
+  <script>${escapeScriptTagContent(MEASUREMENT_JS)}</script>${userScriptTag}
 </body>
 </html>`;
 }
@@ -487,7 +481,7 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
  * Alias for `buildFrameDocument` matching upstream/contract naming.
  *
  * @param options - `FrameDocumentOptions` configuring HTML, CSS, scripts, and theme.
- * @returns Complete HTML document string for `<iframe srcdoc={...} sandbox="allow-scripts">`.
+ * @returns Complete HTML document string for `<iframe {...frameDocumentProps(doc)} sandbox="allow-scripts">`.
  */
 export const assembleFrameHtml = buildFrameDocument;
 

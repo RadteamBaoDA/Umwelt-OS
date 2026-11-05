@@ -39,6 +39,17 @@ const D3_UI: Json = {
   },
 };
 
+/** Sandbox payload with an inline `onclick` handler calling a jsFunction, plus a vendored d3 import (strict app CSP). */
+const INLINE_HANDLER_UI: Json = {
+  kind: 'sandboxed_ui', status: 'completed', title: 'Inline handler',
+  sandbox: {
+    initialHeight: 160,
+    html: '<button id="go" type="button" onclick="bump(this)">Bump</button><p id="out">0</p><p id="lib">pending</p><button id="ask" type="button" onclick="sendPrompt(&quot;hello bridge&quot;)">Ask</button>',
+    jsFunctions: "function bump(el) { document.getElementById('out').textContent = 'clicked ' + el.id; } async function loadLib() { const d3 = await import('d3'); document.getElementById('lib').textContent = 'd3 ' + typeof d3.select; }",
+    jsExpressions: 'loadLib();',
+  },
+};
+
 /**
  * Mocks the chat API for one conversation `c1`. The transcript is stateful: a POSTed user message is appended
  * and, for streamed turns, the assistant reply is persisted so the refetch after `message.done` sees the widget.
@@ -123,6 +134,54 @@ test.describe('render_sandboxed_ui', () => {
     await page.waitForTimeout(500);
     expect(sent).toHaveLength(1);
     expect(sent[0].content).toBe('Tell me more about the counter');
+  });
+
+  test('inline onclick + jsFunctions + vendored import run under the strict app CSP with no violations, host or frame', async ({ page, baseURL }) => {
+    const violations: string[] = [];
+    // A third-party host chunk feature-probes eval() inside try/catch (blocked by design, no 'unsafe-eval' in prod); not a widget concern.
+    page.on('console', (msg) => { if (/^(HOST|FRAME)CSPV/.test(msg.text()) && !/^HOSTCSPV script-src eval /.test(msg.text())) violations.push(msg.text()); });
+    // Every document (host and sandbox frame) reports its own violations; none is expected.
+    await page.addInitScript(() => {
+      const who = window.parent === window ? 'HOST' : 'FRAME';
+      document.addEventListener('securitypolicyviolation', (e) => console.error(`${who}CSPV ${e.violatedDirective} ${e.blockedURI} ${e.sourceFile}:${e.lineNumber} ${e.sample}`));
+    });
+    // Records frame -> host bridge messages independent of chat state (the prompt itself may be refused by a busy chat).
+    await page.addInitScript(() => {
+      if (window.parent !== window) return;
+      const seen: unknown[] = [];
+      (window as unknown as { __bridgeMsgs: unknown[] }).__bridgeMsgs = seen;
+      window.addEventListener('message', (e) => { if (e.origin === 'null') seen.push(e.data); });
+    });
+    await mockChat(page, { assistantUi: INLINE_HANDLER_UI });
+    await openChat(page);
+    const frame = page.frameLocator('[data-testid="sandboxed-ui-iframe"]');
+    await expect(frame.locator('#lib')).toHaveText('d3 function');
+    await frame.locator('#go').click();
+    await expect(frame.locator('#out')).toHaveText('clicked go');
+    // sendPrompt bridge: an inline handler posts a nonce-carrying message from the opaque-origin frame to the host.
+    await frame.locator('#ask').click();
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __bridgeMsgs: Array<Record<string, unknown>> }).__bridgeMsgs.some((m) => typeof m.nonce === 'string' && JSON.stringify(m).includes('hello bridge'))))
+      .toBe(true);
+    expect(violations, `CSP violations: ${violations.join(' | ')}`).toEqual([]);
+
+    // The host policy has no script 'unsafe-inline' and the frame shell carries its own, separate policy.
+    const host = await page.request.get('/login');
+    const hostCsp = host.headers()['content-security-policy'];
+    const hostScript = hostCsp.split('; ').find((d) => d.startsWith('script-src'))!;
+    expect(hostScript).not.toContain('unsafe-inline');
+    const shell = await page.request.get('/genui-frame');
+    expect(shell.status()).toBe(200);
+    const shellCsp = shell.headers()['content-security-policy'];
+    expect(shellCsp).toContain("default-src 'none'");
+    expect(shellCsp).toContain(`script-src 'unsafe-inline' ${new URL(baseURL!).origin}/vendor/genui/`);
+    expect(shellCsp).toContain("connect-src 'none'");
+    expect(shell.headers()['x-frame-options']).toBeUndefined();
+    // No host nonce reaches the frame document.
+    const hostNonce = /'nonce-([^']+)'/.exec(hostCsp)?.[1];
+    expect(hostNonce).toBeTruthy();
+    const frameDoc = await page.locator('[data-testid="sandboxed-ui-iframe"]').getAttribute('name');
+    expect(frameDoc).not.toContain(hostNonce!);
   });
 
   test('imports vendored d3 from /vendor/genui with no external request and no CSP violation', async ({ page, baseURL }) => {

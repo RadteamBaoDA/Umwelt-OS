@@ -2,12 +2,7 @@ import * as React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  CANONICAL_STREAM_KEYS,
-  clampReportedHeight,
-  getStreamingStage,
-  OpenGenerativeUIRenderer,
-} from '../sandbox';
+import { CANONICAL_STREAM_KEYS, clampReportedHeight, getStreamingStage, OpenGenerativeUIRenderer } from '../sandbox';
 import { PromptBridgeProvider } from '../bridge';
 
 afterEach(() => {
@@ -17,25 +12,11 @@ afterEach(() => {
 
 describe('OpenGenerativeUIRenderer', () => {
   it('exports the canonical stream key ordering and streaming stage helper', () => {
-    expect(CANONICAL_STREAM_KEYS).toEqual([
-      'initialHeight',
-      'placeholderMessages',
-      'css',
-      'html',
-      'jsFunctions',
-      'jsExpressions',
-    ]);
+    expect(CANONICAL_STREAM_KEYS).toEqual(['initialHeight', 'placeholderMessages', 'css', 'html', 'jsFunctions', 'jsExpressions']);
     expect(getStreamingStage({}, 'streaming')).toBe('placeholder');
     expect(getStreamingStage({ css: '.card {}' }, 'streaming')).toBe('css');
-    expect(getStreamingStage({ css: '.card {}', html: '<div>Hi</div>' }, 'streaming')).toBe(
-      'html',
-    );
-    expect(
-      getStreamingStage(
-        { css: '.card {}', html: '<div>Hi</div>', jsExpressions: 'init();' },
-        'streaming',
-      ),
-    ).toBe('js');
+    expect(getStreamingStage({ css: '.card {}', html: '<div>Hi</div>' }, 'streaming')).toBe('html');
+    expect(getStreamingStage({ css: '.card {}', html: '<div>Hi</div>', jsExpressions: 'init();' }, 'streaming')).toBe('js');
     expect(getStreamingStage({ html: '<div>Hi</div>' }, 'completed')).toBe('completed');
   });
 
@@ -55,8 +36,8 @@ describe('OpenGenerativeUIRenderer', () => {
     const iframe = screen.getByTestId('sandboxed-ui-iframe') as HTMLIFrameElement;
     expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
     expect(iframe.getAttribute('sandbox')).not.toContain('allow-same-origin');
-    expect(iframe.getAttribute('srcdoc')).toContain('Content-Security-Policy');
-    // Content is delivered by postMessage morph (stable srcdoc), tracked on the dataset.
+    expect(iframe.getAttribute('name')).toContain('Content-Security-Policy');
+    // Content is delivered by postMessage morph (stable frame document), tracked on the dataset.
     expect(iframe.dataset.latestHtml).toContain('Result: $12,400');
   });
 
@@ -78,27 +59,21 @@ describe('OpenGenerativeUIRenderer', () => {
       />,
     );
 
-    expect(screen.getByTestId('sandboxed-ui-placeholder').textContent).toContain(
-      'Analyzing portfolio...',
-    );
+    expect(screen.getByTestId('sandboxed-ui-placeholder').textContent).toContain('Analyzing portfolio...');
 
     act(() => {
       vi.advanceTimersByTime(1100);
     });
 
-    expect(screen.getByTestId('sandboxed-ui-placeholder').textContent).toContain(
-      'Rendering compound curves...',
-    );
+    expect(screen.getByTestId('sandboxed-ui-placeholder').textContent).toContain('Rendering compound curves...');
 
     const streamingIframe = screen.getByTestId('sandboxed-ui-iframe') as HTMLIFrameElement;
     fireEvent.load(streamingIframe);
     // JS must NOT run (or be embedded) while streaming
-    expect(streamingIframe.getAttribute('srcdoc')).not.toContain('computeCurve()');
+    expect(streamingIframe.getAttribute('name')).not.toContain('computeCurve()');
     expect(streamingIframe.dataset.scriptsExecuted).toBeUndefined();
     // Unclosed <div class="chart"> is balanced by processPartialHtml
-    expect(streamingIframe.dataset.latestHtml).toContain(
-      '<div class="chart">Streaming chart</div>',
-    );
+    expect(streamingIframe.dataset.latestHtml).toContain('<div class="chart">Streaming chart</div>');
 
     // Transition to completed -> executes JS and hides streaming placeholder
     rerender(
@@ -214,22 +189,19 @@ describe('OpenGenerativeUIRenderer', () => {
   }
 
   it('does not reload the iframe (stable srcdoc) as html deltas stream in', () => {
-    const { rerender } = render(
-      <OpenGenerativeUIRenderer status="streaming" args={{ html: '<div>A' }} />,
-    );
+    const { rerender } = render(<OpenGenerativeUIRenderer status="streaming" args={{ html: '<div>A' }} />);
     const iframe = screen.getByTestId('sandboxed-ui-iframe') as HTMLIFrameElement;
-    const initial = iframe.getAttribute('srcdoc');
+    const initial = iframe.getAttribute('name');
+    expect(iframe.getAttribute('src')).toBe('/genui-frame');
+    expect(iframe.hasAttribute('srcdoc')).toBe(false);
     rerender(<OpenGenerativeUIRenderer status="streaming" args={{ html: '<div>AB</div>' }} />);
-    expect(iframe.getAttribute('srcdoc')).toBe(initial);
+    expect(iframe.getAttribute('name')).toBe(initial);
     expect(iframe.dataset.latestHtml).toContain('AB');
   });
 
   it('never executes partial jsFunctions/jsExpressions while streaming', () => {
     render(
-      <OpenGenerativeUIRenderer
-        status="streaming"
-        args={{ html: '<div>x</div>', jsFunctions: 'function f(){', jsExpressions: 'f(' }}
-      />,
+      <OpenGenerativeUIRenderer status="streaming" args={{ html: '<div>x</div>', jsFunctions: 'function f(){', jsExpressions: 'f(' }} />,
     );
     const iframe = screen.getByTestId('sandboxed-ui-iframe') as HTMLIFrameElement;
     const execs = spyPosts(iframe);
@@ -248,11 +220,7 @@ describe('OpenGenerativeUIRenderer', () => {
     const execs = spyPosts(iframe);
 
     fireEvent.load(iframe);
-    expect(execs().map((m) => m.jsFunctions ?? m.jsExpressions)).toEqual([
-      'function f(){}',
-      'f();',
-      'g();',
-    ]);
+    expect(execs().map((m) => m.jsFunctions ?? m.jsExpressions)).toEqual(['function f(){}', 'f();', 'g();']);
 
     // Unrelated re-render must not re-execute anything.
     rerender(<OpenGenerativeUIRenderer status="completed" args={{ ...args }} />);
@@ -264,9 +232,7 @@ describe('OpenGenerativeUIRenderer', () => {
   });
 
   it('clamps an out-of-range initialHeight', () => {
-    const { rerender } = render(
-      <OpenGenerativeUIRenderer status="completed" args={{ html: '<p>x</p>', initialHeight: 99999 }} />,
-    );
+    const { rerender } = render(<OpenGenerativeUIRenderer status="completed" args={{ html: '<p>x</p>', initialHeight: 99999 }} />);
     expect(screen.getByTestId('sandboxed-ui-container').style.height).toBe('4000px');
     rerender(<OpenGenerativeUIRenderer status="completed" args={{ html: '<p>x</p>', initialHeight: 1 }} />);
     expect(screen.getByTestId('sandboxed-ui-container').style.height).toBe('50px');

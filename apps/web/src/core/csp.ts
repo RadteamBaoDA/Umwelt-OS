@@ -6,9 +6,6 @@
 /** Request header carrying the per-request nonce from `proxy.ts` to server components (`app/layout.tsx`). */
 export const NONCE_HEADER = 'x-nonce';
 
-/** `<meta name>` the root layout renders so client code (generative-UI frame builder) can reuse the page nonce. */
-export const NONCE_META_NAME = 'csp-nonce';
-
 /**
  * Creates an unguessable per-request nonce (128 random bits, base64).
  *
@@ -44,14 +41,4 @@ export function buildAppCsp(nonce: string, isDev: boolean): string {
     "form-action 'self'",
     "frame-ancestors 'none'",
   ].join('; ');
-}
-
-/**
- * Reads the page's CSP nonce from the root layout's meta tag (browser only).
- *
- * @returns The nonce, or '' on the server, in tests, or when the page has no nonce CSP.
- */
-export function readHostNonce(): string {
-  if (typeof document === 'undefined') return '';
-  return document.querySelector<HTMLMetaElement>(`meta[name="${NONCE_META_NAME}"]`)?.content ?? '';
 }
