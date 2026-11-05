@@ -66,7 +66,7 @@ services:
     environment:
       REDISCLI_AUTH: ${REDISCLI_AUTH:-}
     # Password comes from REDISCLI_AUTH in .env; redis-cli (healthcheck) reads the same variable.
-    command: ["sh", "-c", "exec redis-server --appendonly yes --save 60 1000 --maxmemory 256mb --maxmemory-policy noeviction --requirepass \"$$REDISCLI_AUTH\""]
+    command: ["sh", "-c", "exec redis-server --appendonly yes --save 60 1000 --maxmemory 512mb --maxmemory-policy noeviction --requirepass \"$$REDISCLI_AUTH\""]
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
@@ -79,7 +79,7 @@ services:
     cpu_shares: 128
     deploy:
       resources:
-        limits: {memory: 384M}
+        limits: {memory: 640M}
         reservations: {memory: 64M}
     restart: unless-stopped
     logging: *default-logging

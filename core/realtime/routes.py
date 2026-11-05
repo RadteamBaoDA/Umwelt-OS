@@ -1,7 +1,9 @@
 """Principal-bound replay reads and bounded actual ASGI publication for realtime only."""
 
 import asyncio
+import contextlib
 import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Annotated, Any
@@ -65,8 +67,8 @@ async def _wait_for_realtime_wakeup(
 ) -> None:
     """Wait up to ``timeout_seconds`` for a workspace wakeup signal before the next replay poll.
 
-    Combines an in-process ``asyncio.Event`` with an optional Redis Pub/Sub check when available,
-    falling back cleanly to the bounded sleep interval if Redis is absent or unreachable.
+    Waits on an in-process ``asyncio.Event`` that ``notify_realtime_wakeup`` sets, fed cross-process by
+    ``run_realtime_wakeup_listener``; the bounded timeout is the polling fallback if no wake-up arrives.
 
     Args:
         request: Active FastAPI request carrying app state.
@@ -82,6 +84,52 @@ async def _wait_for_realtime_wakeup(
             await event.wait()
     except TimeoutError:
         return
+
+
+REALTIME_CHANNEL_PATTERN = "realtime:workspace:*"
+LISTENER_RETRY_SECONDS = (1, 2, 5, 10, 30)
+
+
+def _workspace_from_channel(channel: object) -> UUID | None:
+    """Parse the workspace UUID from a ``realtime:workspace:<uuid>`` channel name; ``None`` when malformed."""
+    text = channel.decode() if isinstance(channel, bytes) else str(channel)
+    try:
+        return UUID(text.rsplit(":", 1)[-1])
+    except ValueError:
+        return None
+
+
+async def run_realtime_wakeup_listener(redis: Any) -> None:
+    """Bridge worker-side Redis publishes to this process's SSE streams until cancelled.
+
+    Workers publish to ``realtime:workspace:<id>`` after a committed collection; this subscribes to the
+    pattern and calls ``notify_realtime_wakeup`` so streams poll immediately instead of after the 2 s tick.
+    The payload (a source id) is ignored: a wake-up only triggers the normal authorized SQL replay read, so
+    it carries no data or authority. Any Redis error reconnects with capped backoff; the poll interval
+    remains the correctness fallback while disconnected.
+    """
+    attempt = 0
+    while True:
+        pubsub = redis.pubsub()
+        try:
+            await pubsub.psubscribe(REALTIME_CHANNEL_PATTERN)
+            attempt = 0
+            while True:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=30)
+                if message is None:
+                    continue
+                workspace_id = _workspace_from_channel(message.get("channel"))
+                if workspace_id is not None:
+                    notify_realtime_wakeup(workspace_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001  # boundary: Redis outage degrades to SQL polling
+            logging.getLogger(__name__).warning("realtime wake-up listener disconnected", exc_info=True)
+        finally:
+            with contextlib.suppress(Exception):
+                await asyncio.shield(pubsub.aclose())
+        await asyncio.sleep(LISTENER_RETRY_SECONDS[min(attempt, len(LISTENER_RETRY_SECONDS) - 1)])
+        attempt += 1
 
 
 class SnapshotRead(BaseModel):
