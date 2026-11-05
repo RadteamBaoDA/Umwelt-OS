@@ -17,8 +17,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, desc, func, or_, select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
+from core.config import Settings
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope
 from modules.chat.schemas import DB_QUERY_KEY, GADGET_SCOPE_KEY, EvidenceItem
@@ -422,104 +423,95 @@ async def execute_db_query_tool(
         return json.dumps({"error": f"query_execution_failed: {type(exc).__name__}", "rows": []})
 
 
-CHAT_SQL_READER_ROLE = "umwelt_chat_sql_reader"
-_SQL_SAVEPOINT = "chat_sql_reader"
-
-_SCOPED_OBSERVATIONS_VIEW = """
-CREATE TEMP VIEW scoped_observations WITH (security_barrier = true) AS
-SELECT o.id, o.source_id, o.provider, o.metric, o.symbol, o.region, o.value, o.unit, o.currency,
-       o.observed_at, o.published_at, o.quality, o.is_current, o.document_id, o.document_version_id
-FROM observations o
-WHERE o.workspace_id = CAST('{workspace_id}' AS uuid)
-  AND o.source_id = ANY(CAST(ARRAY[{source_ids}] AS uuid[]))
-"""
-_SCOPED_DOCUMENTS_VIEW = """
-CREATE TEMP VIEW scoped_documents WITH (security_barrier = true) AS
-SELECT d.id, d.source_id, s.provider, d.title, d.canonical_url, d.published_at, d.observed_at,
-       d.language, LEFT(dv.content, 600) AS content_excerpt, dv.id AS document_version_id
-FROM documents d
-JOIN sources s ON s.id = d.source_id AND s.workspace_id = d.workspace_id
-JOIN document_versions dv ON dv.document_id = d.id AND dv.version_number = d.current_version
-WHERE d.workspace_id = CAST('{workspace_id}' AS uuid)
-  AND d.source_id = ANY(CAST(ARRAY[{source_ids}] AS uuid[]))
-"""
+CHAT_SQL_LOGIN_ROLE = "umwelt_chat_sql_login"
+_READER_POOL_SIZE = 2
+_READER_STATEMENT_TIMEOUT_MS = 2000
+_reader_engines: dict[str, AsyncEngine] = {}
 
 
-def build_scoped_view_statements(workspace_id: UUID, allowed_source_ids: list[UUID]) -> list[str]:
-    """Return the DDL that exposes the workspace-fenced views to the reader role.
+class ChatSqlReaderUnavailableError(ValueError):
+    """Raised when ``CHAT_SQL_READER_DATABASE_URL`` is unset, so SQL mode is disabled (reported to the model)."""
 
-    The views are TEMP, ``security_barrier`` views owned by the session user, so the reader role can
-    SELECT them (after an explicit GRANT) without holding any privilege on ``observations`` /
-    ``documents`` / ``sources``; Postgres evaluates view bodies with the owner's rights, and the
-    barrier stops model predicates from being pushed below the workspace filter. Utility statements
-    cannot take bind parameters, so the ids are inlined; they are ``UUID`` instances rendered by
-    ``str()`` (hex and dashes only), never model text.
+
+def _reader_engine() -> AsyncEngine:
+    """Return the lazily created, bounded engine that logs in directly as ``umwelt_chat_sql_login``.
+
+    The URL comes only from ``CHAT_SQL_READER_DATABASE_URL``; there is deliberately no fallback to the
+    application connection, because that would reintroduce a ``RESET ROLE`` path to the app user.
+    The engine (and so the URL) is cached for the process lifetime (small pool, no overflow, short pool timeout).
 
     Raises:
-        TypeError: If ``workspace_id`` or any source id is not a ``uuid.UUID`` instance. The annotation is
-            not enough because the values are formatted straight into DDL; a plain ``str`` is refused so
-            quoting or SQL can never be smuggled in.
+        ChatSqlReaderUnavailableError: the setting is empty.
+    """
+    if _reader_engines:  # settings are read once per process: the URL is fixed after the first engine is built
+        return next(iter(_reader_engines.values()))
+    url = Settings().chat_sql_reader_database_url
+    if not url:  # not cached, so setting the URL later enables the mode; unset stays fail-closed
+        raise ChatSqlReaderUnavailableError("sql mode is disabled: CHAT_SQL_READER_DATABASE_URL is not configured")
+    engine = _reader_engines.get(url)
+    if engine is None:
+        engine = _reader_engines[url] = create_async_engine(
+            url,
+            pool_size=_READER_POOL_SIZE,
+            max_overflow=0,
+            pool_timeout=5,
+            pool_pre_ping=True,
+            pool_recycle=1800,
+            connect_args={"server_settings": {"default_transaction_read_only": "on"}},
+        )
+    return engine
+
+
+def _scope_settings(workspace_id: UUID, allowed_source_ids: list[UUID]) -> dict[str, str]:
+    """Return the ``umwelt.*`` settings that parameterise the ``chat_sql`` scoped views.
+
+    Raises:
+        TypeError: ``workspace_id`` or any source id is not a ``uuid.UUID`` (a plain ``str`` is refused so no
+            free text ever becomes a fence value).
     """
     if not isinstance(workspace_id, UUID) or not all(isinstance(sid, UUID) for sid in allowed_source_ids):
         raise TypeError("workspace_id and every allowed source id must be uuid.UUID instances")
-    ids = ", ".join(f"'{sid}'" for sid in allowed_source_ids)
-    fmt = {"workspace_id": str(workspace_id), "source_ids": ids}
-    return [
-        _SCOPED_OBSERVATIONS_VIEW.format(**fmt),
-        _SCOPED_DOCUMENTS_VIEW.format(**fmt),
-        f"GRANT SELECT ON scoped_observations, scoped_documents TO {CHAT_SQL_READER_ROLE}",
-    ]
+    return {
+        "umwelt.chat_sql_workspace": str(workspace_id),
+        "umwelt.chat_sql_sources": ",".join(str(sid) for sid in allowed_source_ids),
+    }
 
 
 async def _run_sql_as_reader(
-    session: AsyncSession,
     clean_sql: str,
     *,
     workspace_id: UUID,
     allowed_source_ids: list[UUID],
     max_rows: int,
 ) -> list[Any]:
-    """Execute validated model SQL with least privilege and return fully-fetched row mappings.
+    """Execute validated model SQL on the dedicated read-only login connection; return fetched row mappings.
 
-    Ordering (all inside one raw SAVEPOINT so nothing leaks into the caller's transaction):
-    1. create the TEMP scoped views and GRANT them to ``umwelt_chat_sql_reader`` as the session user;
-    2. ``SET LOCAL transaction_read_only = on`` then ``SET LOCAL ROLE`` the NOLOGIN reader, which owns
-       and may read nothing else, so even a parser-allowlist bypass cannot touch other tables;
-    3. run ``SELECT * FROM (<sql>) LIMIT :max_rows`` (the caller's 2000ms statement_timeout applies);
-    4. ``ROLLBACK TO SAVEPOINT`` which reverts the role, read-only flag and temp views (SET LOCAL
-       inside a released ORM savepoint would otherwise persist and make the turn's later writes fail).
-    Rows are fetched before the rollback. A raw savepoint is used because an ORM rollback would
-    expire the caller's loaded objects. On error the same ``ROLLBACK TO``/``RELEASE`` pair runs
-    best-effort (so role, read-only flag and temp views never outlive a failed query), then the original
-    exception propagates and the caller's own savepoint rollback discards everything else.
+    The connection is a separate pool logged in as ``umwelt_chat_sql_login`` (no role membership, no table
+    privileges, read-only by default), so the database enforces read-only access to the two ``chat_sql``
+    scoped views even if the parser allowlist were bypassed: there is no ``SET ROLE`` path to the app user.
+    The views are permanent and fenced per transaction via ``set_config(..., is_local=true)``; nothing is
+    created in the session. Ordering: scope settings, ``SET TRANSACTION READ ONLY``, statement timeout, then
+    ``SELECT * FROM (<sql>) LIMIT :max_rows``; the transaction is always rolled back (nothing to commit).
 
     Raises:
-        TypeError: ``workspace_id``/source ids are not ``uuid.UUID`` (nothing is executed).
+        ChatSqlReaderUnavailableError: the reader DSN is not configured (checked before any I/O).
+        TypeError: ``workspace_id``/source ids are not ``uuid.UUID``.
     """
-    statements = build_scoped_view_statements(workspace_id, allowed_source_ids)  # validates ids before any I/O
-    await session.execute(text(f"SAVEPOINT {_SQL_SAVEPOINT}"))
-    try:
-        for statement in statements:
-            await session.execute(text(statement))
-        await session.execute(text("SET LOCAL transaction_read_only = on"))
-        await session.execute(text(f"SET LOCAL ROLE {CHAT_SQL_READER_ROLE}"))
-        res = await session.execute(
-            text("SELECT * FROM (" + clean_sql + ") AS _bounded_query LIMIT :max_rows"),  # noqa: S608  # clean_sql passed the read-only single-statement guard and runs under SET LOCAL ROLE
-            {"max_rows": max_rows},
-        )
-        mappings = list(res.mappings().all())
-    except Exception:
-        # A failing model query aborts the Postgres transaction and leaves the reader role / read-only flag
-        # active. Roll back to our savepoint so role, flag and temp views are reverted and the session is
-        # usable again even if the caller does not discard its own savepoint. A failure of the cleanup itself
-        # (e.g. lost connection) must not mask the original error.
-        with suppress(Exception):
-            await session.execute(text(f"ROLLBACK TO SAVEPOINT {_SQL_SAVEPOINT}"))
-            await session.execute(text(f"RELEASE SAVEPOINT {_SQL_SAVEPOINT}"))
-        raise
-    await session.execute(text(f"ROLLBACK TO SAVEPOINT {_SQL_SAVEPOINT}"))
-    await session.execute(text(f"RELEASE SAVEPOINT {_SQL_SAVEPOINT}"))
-    return mappings
+    scope_settings = _scope_settings(workspace_id, allowed_source_ids)  # validates ids before any I/O
+    engine = _reader_engine()
+    async with engine.connect() as conn:
+        try:
+            for name, value in scope_settings.items():
+                await conn.execute(text("SELECT set_config(:name, :value, true)"), {"name": name, "value": value})
+            await conn.execute(text("SET TRANSACTION READ ONLY"))
+            await conn.execute(text(f"SET LOCAL statement_timeout = {_READER_STATEMENT_TIMEOUT_MS}"))
+            res = await conn.execute(
+                text("SELECT * FROM (" + clean_sql + ") AS _bounded_query LIMIT :max_rows"),  # noqa: S608  # clean_sql passed the read-only single-statement guard and runs as the read-only login role
+                {"max_rows": max_rows},
+            )
+            return list(res.mappings().all())
+        finally:
+            await conn.rollback()  # read-only work: discard the transaction so the pooled connection is clean
 
 
 async def _execute_sql_mode(
@@ -538,7 +530,6 @@ async def _execute_sql_mode(
     """
     clean_sql = validate_readonly_sql(sql_query)
     mappings = await _run_sql_as_reader(
-        session,
         clean_sql,
         workspace_id=workspace_id,
         allowed_source_ids=allowed_source_ids,

@@ -75,9 +75,17 @@ def _valid_csrf(cookie: str | None, submitted: str | None, settings: Settings) -
     )
 
 
+INSTANCE_OPERATOR_OWNER_ID = 1
+
+
+def is_instance_operator_id(owner_id: int) -> bool:
+    """Whether an owner/actor user id is the bootstrap account, for callers without an auth session."""
+    return owner_id == INSTANCE_OPERATOR_OWNER_ID
+
+
 def is_instance_operator(auth_session: AuthSession) -> bool:
     """Bootstrap account (owner 1) alone holds instance operator authority."""
-    return auth_session.owner_id == 1
+    return is_instance_operator_id(auth_session.owner_id)
 
 
 async def _current_session(

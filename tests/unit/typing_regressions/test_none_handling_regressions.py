@@ -164,9 +164,9 @@ async def test_revoke_github_grant_sends_delete_with_json_body(monkeypatch: pyte
 
 
 async def test_system_operation_route_returns_full_operation_read(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.system import routes as system_routes
-    from core.system.routes import get_operation
+    from modules.sources import system_routes
     from modules.sources.schemas import OperationRead
+    from modules.sources.system_routes import get_operation
 
     row = SimpleNamespace(
         id=uuid4(), source_id=uuid4(), status="running", error_code=None, documents_status="queued",

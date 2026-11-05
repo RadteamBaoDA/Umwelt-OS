@@ -42,7 +42,7 @@ The web port binds to loopback by default. For remote access, terminate HTTPS at
 
 Memory limits sum to 7.66 GiB (2.5 + 0.375 + 1 + 1 + 0.5 + 0.75 + 0.75 + 0.75), leaving about 0.34 GiB for the OS and page cache. The optional connectors overlay adds limits of 768 MiB + 1.5 GiB (2.25 GiB), so with it the limits total about 9.4 GiB, above 8 GiB: they are caps, not reservations, and the stack relies on actual RSS (about 4.2 GiB steady, plus connectors) staying below RAM. CPU shares apply only under contention (no hard CPU caps).
 
-Connection budget without PgBouncer (`max_connections=120`, raised from 100 when the cron worker was split out; see "PgBouncer and horizontal scaling" for N replicas): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, cron-worker 9 + 5 = 14, chat-worker 10 + 10 = 20, model-worker 5 + 5 = 10, total 101. The main worker also opens one non-pooled agent checkpoint connection per running agent run (at most 6, so worker worst case 23); plus migrate, backup and admin about 5 gives a worst case of about 112, leaving about 8 spare. A second cron-worker replica adds 14 more; recompute before scaling. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
+Connection budget without PgBouncer (`max_connections=120`, raised from 100 when the cron worker was split out; see "PgBouncer and horizontal scaling" for N replicas): API 2 x (10 + 10) = 40, main worker 7 + 10 = 17, cron-worker 9 + 5 = 14, chat-worker 10 + 10 = 20, model-worker 5 + 5 = 10, chat SQL reader pool (login role `umwelt_chat_sql_login`, `pool_size=2`, no overflow, role `CONNECTION LIMIT 8`) 2 per API process and 2 for the chat-worker = 6, total 107. The main worker also opens one non-pooled agent checkpoint connection per running agent run (at most 6, so worker worst case 23); plus migrate, backup and admin about 5 gives a worst case of about 118, leaving about 2 spare. The reader role limit of 8 allows four processes with a reader pool (three today): a second API replica exceeds it, so raise the role's `CONNECTION LIMIT` before scaling. A second cron-worker replica adds 14 more; recompute before scaling. If you change `WEB_CONCURRENCY`, `DB_POOL_SIZE` or `DB_MAX_OVERFLOW`, recompute this before applying.
 
 Redis clients use `socket_timeout=5`, `socket_connect_timeout=2`, `health_check_interval=30` and at most 100 connections. Each API process allows 32 concurrent Realtime SSE streams and 64 concurrent chat response streams (503 beyond). No global `lock_timeout` is set because it would turn waits on the Memory privacy lock into errors.
 
@@ -54,13 +54,13 @@ PostgreSQL has `max_connections=120`. Without a pooler every process owns its SQ
 
 | Role | Per replica (pool + overflow) |
 |---|---|
-| API | `WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW)` = 2 x 20 = 40 |
+| API | `WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW + 2 reader)` = 2 x 22 = 44 |
 | worker | 7 + 10 = 17, plus up to 6 direct connections (agent checkpoints and leases) = 23 |
 | cron-worker | 9 + 5 = 14 |
-| chat-worker | 10 + 10 = 20 |
+| chat-worker | 10 + 10 + 2 reader = 22 |
 | model-worker | 5 + 5 = 10 |
 
-Direct, with N API replicas, W worker replicas and C cron-worker replicas (one chat-worker and one model-worker): `40N + 23W + 14C + 20 + 10 + 5` (admin/migrate). One of each is 112 and fits; **a second API replica (152), a second worker replica (135) or a second cron-worker replica (126) exceeds `max_connections`**. This is why the stack ships as a single replica of each service.
+Direct, with N API replicas, W worker replicas and C cron-worker replicas (one chat-worker and one model-worker): `44N + 23W + 14C + 22 + 10 + 5` (admin/migrate). One of each is 118 and fits; **a second API replica (162), a second worker replica (141) or a second cron-worker replica (132) exceeds `max_connections`** (and a second API replica also exceeds the reader role's limit of 8). This is why the stack ships as a single replica of each service.
 
 With the PgBouncer overlay (`docker compose -f docker-compose.yml -f docker-compose.pgbouncer.yml up -d`) the application pools become *client* pools. PostgreSQL only sees the pooler's server connections, which are fixed per database alias and do not grow with replicas:
 

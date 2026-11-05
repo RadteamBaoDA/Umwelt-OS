@@ -41,7 +41,7 @@ from modules.connectors.github.webhooks import (
 )
 from modules.connectors.public import ProviderRateLimited
 
-_orig_bounded_json_counts = modules.connectors.github.schemas._bounded_json_counts
+_orig_bounded_json_counts = modules.ingestion.github_proof._bounded_json_counts
 
 
 def _safe_bounded_json_counts(value: Any) -> tuple[int, int]:
@@ -50,7 +50,7 @@ def _safe_bounded_json_counts(value: Any) -> tuple[int, int]:
     return _orig_bounded_json_counts(value)
 
 
-modules.connectors.github.schemas._bounded_json_counts = _safe_bounded_json_counts
+modules.ingestion.github_proof._bounded_json_counts = _safe_bounded_json_counts
 
 
 def make_hint_claim(

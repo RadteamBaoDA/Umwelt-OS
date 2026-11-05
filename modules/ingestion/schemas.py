@@ -7,9 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# Documented import-linter exception (.importlinter): ``connectors.github.schemas`` is a dependency-free DTO leaf. The
-# Connectors facade eagerly imports Ingestion's contract, so routing this field type through it would be a cycle.
-from modules.connectors.github.schemas import GitHubSegmentProof
+from modules.ingestion.github_proof import GitHubSegmentProof
 
 MAX_NATIVE_COLLECTION_BYTES = 10 * 1024 * 1024
 MAX_TELEGRAM_CURSOR_BYTES = 16_384

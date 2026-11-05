@@ -149,6 +149,9 @@ from modules.connectors.provider_specs import (
     INCREMENTAL_PROVIDERS,
     min_interval_minutes,
 )
+from modules.connectors.provider_specs import (
+    LOCAL_SERVICE_PROVIDERS as LOCAL_SERVICE_PROVIDERS,
+)
 from modules.connectors.providers.cii import CiiProjection
 from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
 from modules.ingestion.public import IngestionRecord, TelegramRawDelivery

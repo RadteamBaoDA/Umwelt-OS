@@ -95,8 +95,12 @@ async def create_source(
     """
     _require_source_owner(scope)
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
+    from core.auth.dependencies import is_instance_operator_id
     from modules.connectors import public as connectors
 
+    # Local-service providers fetch private addresses; fail clearly at creation, not only at configure/collect time.
+    if payload.provider in connectors.LOCAL_SERVICE_PROVIDERS and not is_instance_operator_id(scope.user_id):
+        raise HTTPException(status_code=403, detail="Local-service connectors are restricted to the instance operator")
     if payload.provider in connectors.BUILTIN_PROVIDERS and await public.list_provider_sources(
         session, frozenset({payload.provider}), scope=scope, multi_workspace_enabled=multi_workspace_enabled,
     ):

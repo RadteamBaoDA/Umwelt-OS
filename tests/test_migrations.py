@@ -121,7 +121,7 @@ def test_model_capability_evidence_extends_test_results_key() -> None:
 
 
 def test_chat_sql_reader_role_migration_is_least_privilege_and_guarded() -> None:
-    sql = _upgrade_sql()
+    sql = _alembic("upgrade", f"{MERGE_REVISION}:{CHAT_SQL_READER}", "--sql").stdout
     assert "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'umwelt_chat_sql_reader')" in sql
     assert "CREATE ROLE umwelt_chat_sql_reader NOLOGIN NOSUPERUSER NOINHERIT" in sql
     assert "GRANT umwelt_chat_sql_reader TO CURRENT_USER" in sql
@@ -148,3 +148,18 @@ def test_workspace_storage_state_migration_makes_the_erasure_flag_permanent() ->
     down = _alembic("downgrade", "0016_workspace_storage_state:0015_worker_dead_letters", "--sql")
     assert down.returncode == 0, down.stderr
     assert "DROP TABLE workspace_storage_state" in down.stdout
+
+
+def test_chat_sql_login_role_migration_is_isolated_and_passwordless() -> None:
+    """0017 creates a LOGIN role with no membership/password, read-only defaults and grants only on the two views."""
+    up = _alembic("upgrade", "0016_workspace_storage_state:0017_chat_sql_login_role", "--sql")
+    assert up.returncode == 0, up.stderr
+    sql = up.stdout
+    assert "CREATE ROLE umwelt_chat_sql_login LOGIN NOSUPERUSER NOINHERIT" in sql
+    assert "PASSWORD" not in sql.upper().replace("PASSWORDLESS", "")
+    assert "GRANT umwelt_chat_sql_reader" not in sql and "TO CURRENT_USER" not in sql
+    assert "ALTER ROLE umwelt_chat_sql_login SET default_transaction_read_only = on" in sql
+    assert "GRANT SELECT ON chat_sql.scoped_observations, chat_sql.scoped_documents TO umwelt_chat_sql_login" in sql
+    down = _alembic("downgrade", "0017_chat_sql_login_role:0016_workspace_storage_state", "--sql")
+    assert down.returncode == 0, down.stderr
+    assert "DROP ROLE IF EXISTS umwelt_chat_sql_login" in down.stdout
