@@ -136,6 +136,29 @@ async def test_lost_signal_is_recovered_by_the_slow_poll(monkeypatch: pytest.Mon
     assert redis.waits == [signals.STREAM_SIGNAL_FALLBACK_INTERVAL] * 2
 
 
+async def test_terminal_batch_ends_the_stream_without_a_fallback_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = _Store([_event(1)], status="completed")
+    _install(monkeypatch, store)
+    redis = FakeRedis()
+    chunks, _sleeps = await _stream(store, redis, monkeypatch)
+    assert "".join(chunks).count("id:") == 1
+    assert redis.waits == []  # no extra STREAM_SIGNAL_FALLBACK_INTERVAL hold after the final batch
+    assert store.seq_floors == [0]  # and no second poll
+    assert redis.unsubscribed == [f"chat:response:{RID}"]
+
+
+async def test_full_terminal_batch_keeps_polling_for_the_backlog(monkeypatch: pytest.MonkeyPatch) -> None:
+    total = routes.STREAM_BATCH_SIZE + 1
+    store = _Store([_event(n) for n in range(1, total + 1)], status="completed")
+    _install(monkeypatch, store)
+    redis = FakeRedis()
+    chunks, _sleeps = await _stream(store, redis, monkeypatch)
+    ids = [line for line in "".join(chunks).splitlines() if line.startswith("id:")]
+    assert ids == [f"id: {RID}:{n}" for n in range(1, total + 1)]
+    assert store.seq_floors == [0, routes.STREAM_BATCH_SIZE]  # size-capped batch did not end the stream
+    assert redis.waits == []
+
+
 async def test_resume_cursor_and_dedup_are_unchanged_with_a_signal(monkeypatch: pytest.MonkeyPatch) -> None:
     store = _Store([_event(n) for n in range(1, 6)], status="completed")
     _install(monkeypatch, store)
