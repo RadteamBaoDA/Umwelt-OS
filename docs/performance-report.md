@@ -265,3 +265,24 @@ No pgbouncer in this stack. web, fake-model, fake-local and migrate (test scaffo
 k6 exit 99: `chat_ttft_ms` and `ingest_queue_age_ms` crossed. Read-path latencies are unaffected (the 0.6 CPU api handles 10 read VUs fine); the regressions are all in the asynchronous paths (chat worker dispatch, ingestion queue). `chat_completion_ms` avg rose from 0.56 s to 0.76 s.
 
 Peak `docker stats` samples (every 15 s, CPU % is of one core): api 60 % of its 0.6 cap (saturated, throttled), worker 31 % of 0.3 (saturated), chat-worker 20 % of 0.2 (saturated), cron-worker 10 % of 0.1, model-worker 11 % of 0.1, postgres 21 % of 0.6, redis 2 %. Peak memory: api 538 MiB, worker 283 MiB, chat-worker 268 MiB, model-worker 275 MiB, cron-worker 303 MiB, postgres 256 MiB, redis 4 MiB, far below the limits. The budget is CPU-bound, not memory-bound: the 0.2 CPU chat-worker and 0.3 CPU worker were pinned at their caps, which matches the TTFT and queue-age tails. Other splits (for example more CPU to chat-worker/worker, less to postgres) were not tried. Single run, so tail values carry run-to-run noise.
+
+#### Rebalanced split (2026-11-06, `ed65fa7a`)
+
+Same procedure, host and compose-override mechanism, with the CPU moved from postgres and api to the workers: api 0.5 / 1.5 GiB, postgres 0.3 / 2.5 GiB, worker 0.5 / 1.5 GiB, chat-worker 0.4 / 1.0 GiB, model-worker 0.1 / 768 MiB, cron-worker 0.1 / 512 MiB, redis 0.1 / 256 MiB (total 2.0 CPU, about 8.0 GiB). Single full run (`LOAD_DURATION_SCALE=1`); `summary.json` was written this time and the figures below come from it. Still not target-host evidence.
+
+| SLO | Metric | First 2 CPU split | Rebalanced split | Threshold | Result |
+|---|---|---|---|---|---|
+| SLO-1 | `http_req_failed` | 0.00 % (0 of 1139) | 0.00 % (0 of 1180) | < 0.5 % | pass |
+| SLO-2a | dashboards p95 / p99 | 22.7 / 52.7 ms | 25.9 / 80.6 ms | 400 / 800 ms | pass |
+| SLO-2b | search p95 / p99 | 33.3 / 202.3 ms | 65.3 / 72.7 ms | 800 / 1500 ms | pass |
+| SLO-2c | documents p95 / p99 | 40.0 / 74.4 ms | 40.0 / 68.5 ms | 300 / 600 ms | pass |
+| SLO-3 | chat TTFT p50 / p95 / p99 | 738 / 3020 / 8120 ms | 509 / 638 / 1357 ms | p95 < 2000, p99 < 4000 ms | pass |
+| SLO-3b | chat send p95 | 43 ms | 103 ms | 500 ms | pass |
+| SLO-4 | ingest lag p95 / p99 | 9130 / 17540 ms | 15316 / 34406 ms | 30 / 60 s | pass |
+| SLO-5 | SSE open p95 | 86.7 ms | 95.7 ms | 500 ms | pass |
+| SLO-6 | ingest queue age p95 | 8960 ms | 15290 ms | 5 s | **FAIL** |
+| SLO-7 | checks | 100 % (1226) | 100 % (1240) | > 99 % | pass |
+
+k6 exit 99: only `ingest_queue_age_ms` crossed. Giving chat-worker 0.4 CPU fixed the chat TTFT tail, but the ingest path got worse (queue age p95 8.96 s to 15.3 s) because postgres at 0.3 CPU and the worker share the ingestion bursts.
+
+Peak `docker stats` samples (about 12 s interval, CPU % of one core): api 49 % of 0.5, chat-worker 39 % of 0.4 (near cap), worker 26 % of 0.5, cron-worker 11 % of 0.1, model-worker 11 % of 0.1, postgres 20 % of 0.3, redis 2 %. Peak memory: api 540 MiB, worker 282 MiB, chat-worker 272 MiB, model-worker 289 MiB, cron-worker 273 MiB, postgres 249 MiB, redis 5 MiB, all far below limits. Neither split satisfied all SLOs at 2 CPU; the ingest queue age SLO needs a split that keeps the worker/postgres share from the first run while keeping chat-worker at 0.4 (for example by trimming api below 0.5), which was not tried. Single run, so tail values carry noise.
