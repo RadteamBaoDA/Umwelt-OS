@@ -8,6 +8,7 @@ and on every submodule that binds it, which is equivalent to the former single-m
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import pkgutil
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
@@ -17,10 +18,16 @@ from typing import Any
 import pytest
 
 
-def _holders(package: str, name: str) -> list[ModuleType]:
-    """Return the facade plus private submodules of ``package`` binding ``name``; fail loudly if none does."""
+def _holders(package: str, name: str, facade: str | None = "public") -> list[ModuleType]:
+    """Return the facade plus private submodules of ``package`` binding ``name``; fail loudly if none does.
+
+    ``facade`` is the facade submodule name (default ``public``); ``None`` -- or a package without a ``public``
+    submodule -- means the package ``__init__`` itself is the facade (e.g. ``modules.search.indexing``).
+    """
     pkg = importlib.import_module(package)
-    mods = [importlib.import_module(f"{package}.public")]
+    if facade is not None and importlib.util.find_spec(f"{package}.{facade}") is None:
+        facade = None
+    mods = [pkg if facade is None else importlib.import_module(f"{package}.{facade}")]
     mods += [
         importlib.import_module(f"{package}.{info.name}")
         for info in pkgutil.iter_modules(pkg.__path__)
@@ -31,18 +38,26 @@ def _holders(package: str, name: str) -> list[ModuleType]:
     return found
 
 
-def patch_split(monkeypatch: pytest.MonkeyPatch, package: str, name: str, value: Any) -> None:
+def patch_split(
+    monkeypatch: pytest.MonkeyPatch,
+    package: str,
+    name: str,
+    value: Any,
+    facade: str | None = "public",
+) -> None:
     """Monkeypatch ``name`` on ``package``'s facade and each private submodule that binds it."""
-    for module in _holders(package, name):
+    for module in _holders(package, name, facade):
         monkeypatch.setattr(module, name, value)
 
 
 @contextmanager
-def patch_split_attr(package: str, name: str, value: Any) -> Iterator[None]:
+def patch_split_attr(
+    package: str, name: str, value: Any, facade: str | None = "public"
+) -> Iterator[None]:
     """Context-manager form of :func:`patch_split` using ``unittest.mock.patch.object``."""
     from unittest.mock import patch
 
     with ExitStack() as stack:
-        for module in _holders(package, name):
+        for module in _holders(package, name, facade):
             stack.enter_context(patch.object(module, name, value))
         yield

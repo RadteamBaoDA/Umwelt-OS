@@ -21,6 +21,7 @@ from modules.model_gateway import routes as gateway_routes
 from modules.notifications import public as notifications
 from modules.tasks import public as tasks
 from modules.tasks.schemas import TaskFilter
+from tests.unit.split_patching import patch_split
 
 
 def _sql(statement: Any) -> str:
@@ -437,9 +438,9 @@ async def test_index_generation_loop_stops_on_claim_or_process_stop(
         state.completed += 1
         return len(processed) < 2  # stop after the second chunk
 
-    monkeypatch.setattr(indexing, "_prepare_index_run", prepare)
-    monkeypatch.setattr(indexing, "_claim_next_chunk", claim)
-    monkeypatch.setattr(indexing, "_process_claimed_chunk", process)
+    patch_split(monkeypatch, "modules.search.indexing", "_prepare_index_run", prepare)
+    patch_split(monkeypatch, "modules.search.indexing", "_claim_next_chunk", claim)
+    patch_split(monkeypatch, "modules.search.indexing", "_process_claimed_chunk", process)
     assert await indexing._index_generation(None, None, None, uuid4(), uuid4()) == 2  # type: ignore[arg-type]
 
 
@@ -451,7 +452,7 @@ async def test_index_generation_returns_early_value_and_idle_none(
     async def failed(*args: Any) -> tuple[None, int]:
         return None, 0
 
-    monkeypatch.setattr(indexing, "_prepare_index_run", failed)
+    patch_split(monkeypatch, "modules.search.indexing", "_prepare_index_run", failed)
     assert await indexing._index_generation(None, None, None, uuid4(), uuid4()) == 0  # type: ignore[arg-type]
 
     async def prepared(*args: Any) -> tuple[Any, None]:
@@ -460,8 +461,8 @@ async def test_index_generation_returns_early_value_and_idle_none(
     async def idle(c: Any, state: Any) -> None:
         state.idle = True
 
-    monkeypatch.setattr(indexing, "_prepare_index_run", prepared)
-    monkeypatch.setattr(indexing, "_claim_next_chunk", idle)
+    patch_split(monkeypatch, "modules.search.indexing", "_prepare_index_run", prepared)
+    patch_split(monkeypatch, "modules.search.indexing", "_claim_next_chunk", idle)
     assert await indexing._index_generation(None, None, None, uuid4(), uuid4()) is None  # type: ignore[arg-type]
 
 
@@ -483,7 +484,7 @@ async def test_process_claimed_chunk_maps_outcomes(monkeypatch: pytest.MonkeyPat
     async def fail_item(*args: Any, **kwargs: Any) -> None:
         failed.append("failed")
 
-    monkeypatch.setattr(indexing, "_fail_item", fail_item)
+    patch_split(monkeypatch, "modules.search.indexing", "_fail_item", fail_item)
 
     def embedding_raises(exc: BaseException) -> Any:
         async def raiser(*args: Any, **kwargs: Any) -> Any:
@@ -491,22 +492,33 @@ async def test_process_claimed_chunk_maps_outcomes(monkeypatch: pytest.MonkeyPat
 
         return raiser
 
-    monkeypatch.setattr(
-        indexing, "_embed_claimed_chunk", embedding_raises(indexing._AuthorityChanged())
+    patch_split(
+        monkeypatch,
+        "modules.search.indexing",
+        "_embed_claimed_chunk",
+        embedding_raises(indexing._AuthorityChanged()),
     )
     assert await indexing._process_claimed_chunk(ctx, state, claimed) is False  # type: ignore[arg-type]
-    monkeypatch.setattr(
-        indexing, "_embed_claimed_chunk", embedding_raises(ConflictError(detail="x"))
+    patch_split(
+        monkeypatch,
+        "modules.search.indexing",
+        "_embed_claimed_chunk",
+        embedding_raises(ConflictError(detail="x")),
     )
     assert await indexing._process_claimed_chunk(ctx, state, claimed) is False  # type: ignore[arg-type]
-    monkeypatch.setattr(indexing, "_embed_claimed_chunk", embedding_raises(ValueError("dims")))
+    patch_split(
+        monkeypatch,
+        "modules.search.indexing",
+        "_embed_claimed_chunk",
+        embedding_raises(ValueError("dims")),
+    )
     assert await indexing._process_claimed_chunk(ctx, state, claimed) is True  # type: ignore[arg-type]
     assert failed == ["failed"]
 
     async def nothing(*args: Any, **kwargs: Any) -> None:
         return None
 
-    monkeypatch.setattr(indexing, "_embed_claimed_chunk", nothing)
+    patch_split(monkeypatch, "modules.search.indexing", "_embed_claimed_chunk", nothing)
     assert await indexing._process_claimed_chunk(ctx, state, claimed) is True  # type: ignore[arg-type]
     assert hashlib.sha256(
         b""

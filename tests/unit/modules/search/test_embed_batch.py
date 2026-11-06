@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from modules.search import indexing
+from tests.unit.split_patching import patch_split
 
 pytestmark = pytest.mark.asyncio
 
@@ -113,11 +114,11 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
         w.deleted.append(item_id)
         w.items.pop(item_id, None)
 
-    monkeypatch.setattr(indexing, "_recheck_prepared", recheck)
-    monkeypatch.setattr(indexing, "gateway", lambda *_a, **_k: Gateway())
-    monkeypatch.setattr(indexing, "_commit_index_change", commit)
-    monkeypatch.setattr(indexing, "_index_projection", projection)
-    monkeypatch.setattr(indexing, "_drop_pending_item", drop)
+    patch_split(monkeypatch, "modules.search.indexing", "_recheck_prepared", recheck)
+    patch_split(monkeypatch, "modules.search.indexing", "gateway", lambda *_a, **_k: Gateway())
+    patch_split(monkeypatch, "modules.search.indexing", "_commit_index_change", commit)
+    patch_split(monkeypatch, "modules.search.indexing", "_index_projection", projection)
+    patch_split(monkeypatch, "modules.search.indexing", "_drop_pending_item", drop)
     return w
 
 
@@ -175,7 +176,7 @@ async def test_index_contents_identical_for_every_batch_size(
         async def recheck(session: Any, **kw: Any) -> tuple[Any, bool, int]:
             return "fence", True, 1
 
-        monkeypatch.setattr(indexing, "_recheck_prepared", recheck)
+        patch_split(monkeypatch, "modules.search.indexing", "_recheck_prepared", recheck)
         await _run(w, size)
         results.append(dict(w.updates))
         assert by_chunk
@@ -216,7 +217,7 @@ async def test_malformed_response_falls_back_to_per_chunk(
         seen.append(claimed.chunk_id)
         return True
 
-    monkeypatch.setattr(indexing, "_process_claimed_chunk", single)
+    patch_split(monkeypatch, "modules.search.indexing", "_process_claimed_chunk", single)
     assert (
         await indexing._process_claimed_batch(_ctx(world), indexing._RunState(), world.chunks)
         is True
@@ -278,9 +279,9 @@ async def test_index_generation_loops_batches_until_nothing_is_left(
         state.completed += len(claimed)
         return True
 
-    monkeypatch.setattr(indexing, "_prepare_index_run", prepare)
-    monkeypatch.setattr(indexing, "_claim_chunk_batch", claim)
-    monkeypatch.setattr(indexing, "_process_claimed_batch", process)
+    patch_split(monkeypatch, "modules.search.indexing", "_prepare_index_run", prepare)
+    patch_split(monkeypatch, "modules.search.indexing", "_claim_chunk_batch", claim)
+    patch_split(monkeypatch, "modules.search.indexing", "_process_claimed_batch", process)
     settings = SimpleNamespace(search_embed_batch_size=32)
     assert await indexing._index_generation(None, None, settings, uuid4(), uuid4()) == 8  # type: ignore[arg-type]
     assert limits == [32, 32, 32]
@@ -335,7 +336,7 @@ async def test_fallback_skips_chunks_dropped_as_stale(
         seen.append(claimed.chunk_id)
         return True
 
-    monkeypatch.setattr(indexing, "_process_claimed_chunk", single)
+    patch_split(monkeypatch, "modules.search.indexing", "_process_claimed_chunk", single)
     assert (
         await indexing._process_claimed_batch(_ctx(world), indexing._RunState(), world.chunks)
         is True

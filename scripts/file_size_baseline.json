@@ -16,6 +16,5 @@
   "modules/knowledge/entities/worker.py": 2034,
   "modules/knowledge/observations/public.py": 1872,
   "modules/news/stories.py": 1985,
-  "modules/search/indexing.py": 2204,
   "modules/settings/public.py": 2151
 }

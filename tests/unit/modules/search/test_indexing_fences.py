@@ -21,6 +21,7 @@ from modules.knowledge.documents import public as documents_public
 from modules.search import indexing, public
 from modules.settings import public as settings_public
 from modules.sources import public as sources_public
+from tests.unit.split_patching import patch_split
 
 WORKSPACE = uuid4()
 FENCE = AccessFence(
@@ -159,12 +160,12 @@ def _patch_publication(
         events.append(f"dedupe retry={kwargs['honor_retry_delay']}")
         return "generation"
 
-    monkeypatch.setattr(indexing, "_admit", admit)
-    monkeypatch.setattr(indexing, "_take_generation_mutex", mutex)
+    patch_split(monkeypatch, "modules.search.indexing", "_admit", admit)
+    patch_split(monkeypatch, "modules.search.indexing", "_take_generation_mutex", mutex)
     monkeypatch.setattr(settings_public, "module_is_enabled", enabled)
-    monkeypatch.setattr(indexing, "configured_embedding", configured)
-    monkeypatch.setattr(indexing, "_dedupe_or_create", dedupe)
-    monkeypatch.setattr(indexing, "may_send", lambda *_a, **_k: True)
+    patch_split(monkeypatch, "modules.search.indexing", "configured_embedding", configured)
+    patch_split(monkeypatch, "modules.search.indexing", "_dedupe_or_create", dedupe)
+    patch_split(monkeypatch, "modules.search.indexing", "may_send", lambda *_a, **_k: True)
 
 
 SCOPE = InternalJobScope(workspace_id=WORKSPACE, actor_user_id=1, membership_revision=2)
@@ -324,14 +325,14 @@ def _patch_generation_run(
             return {"data": [{"embedding": [1.0, 2.0]}], "model": "embed"}
 
     monkeypatch.setattr(workspaces_public, "resolve_workspace_owner_context", owner)
-    monkeypatch.setattr(indexing, "capture_authority", capture)
+    patch_split(monkeypatch, "modules.search.indexing", "capture_authority", capture)
     monkeypatch.setattr(settings_public, "module_is_enabled", enabled)
-    monkeypatch.setattr(indexing, "_admit", admit)
-    monkeypatch.setattr(indexing, "_index_projection", projection)
-    monkeypatch.setattr(indexing, "_commit_index_change", commit)
-    monkeypatch.setattr(indexing, "_recheck_prepared", recheck)
-    monkeypatch.setattr(indexing, "gateway", lambda *_a, **_k: FakeGateway())
-    monkeypatch.setattr(indexing, "may_send", lambda *_a, **_k: True)
+    patch_split(monkeypatch, "modules.search.indexing", "_admit", admit)
+    patch_split(monkeypatch, "modules.search.indexing", "_index_projection", projection)
+    patch_split(monkeypatch, "modules.search.indexing", "_commit_index_change", commit)
+    patch_split(monkeypatch, "modules.search.indexing", "_recheck_prepared", recheck)
+    patch_split(monkeypatch, "modules.search.indexing", "gateway", lambda *_a, **_k: FakeGateway())
+    patch_split(monkeypatch, "modules.search.indexing", "may_send", lambda *_a, **_k: True)
     return seen_open
 
 
@@ -383,7 +384,7 @@ async def test_recheck_prepared_rejects_changed_fence(monkeypatch: pytest.Monkey
     async def admit(*_a: Any, **_k: Any) -> AccessFence:
         return other
 
-    monkeypatch.setattr(indexing, "_admit", admit)
+    patch_split(monkeypatch, "modules.search.indexing", "_admit", admit)
     with pytest.raises(indexing._AuthorityChanged):
         await indexing._recheck_prepared(
             None,
@@ -451,9 +452,9 @@ async def test_denied_oldest_row_does_not_block_next(monkeypatch: pytest.MonkeyP
             return None
 
     monkeypatch.setattr(documents_public, "backfill_current_chunks", noop)
-    monkeypatch.setattr(indexing, "_reconcile_automatic_generations", noop)
-    monkeypatch.setattr(indexing, "_candidate_page", page)
-    monkeypatch.setattr(indexing, "_index_generation", index)
+    patch_split(monkeypatch, "modules.search.indexing", "_reconcile_automatic_generations", noop)
+    patch_split(monkeypatch, "modules.search.indexing", "_candidate_page", page)
+    patch_split(monkeypatch, "modules.search.indexing", "_index_generation", index)
     ctx: dict[str, object] = {
         "session_factory": Session,
         "redis": _DownRedis(),
@@ -520,9 +521,9 @@ async def test_cursor_advances_across_arq_ctx_copies(
         return None
 
     monkeypatch.setattr(documents_public, "backfill_current_chunks", _noop)
-    monkeypatch.setattr(indexing, "_reconcile_automatic_generations", _noop)
-    monkeypatch.setattr(indexing, "_candidate_page", page)
-    monkeypatch.setattr(indexing, "_index_generation", index)
+    patch_split(monkeypatch, "modules.search.indexing", "_reconcile_automatic_generations", _noop)
+    patch_split(monkeypatch, "modules.search.indexing", "_candidate_page", page)
+    patch_split(monkeypatch, "modules.search.indexing", "_index_generation", index)
     base: dict[str, object] = {
         "session_factory": _Session,
         "redis": redis(),
@@ -575,10 +576,10 @@ def _patch_denial(
     async def fail(*_a: Any, **_k: Any) -> None:
         calls["fail"].append(1)
 
-    monkeypatch.setattr(indexing, "_recheck_prepared", recheck)
-    monkeypatch.setattr(indexing, "gateway", make_gateway)
-    monkeypatch.setattr(indexing, "_drop_pending_item", drop)
-    monkeypatch.setattr(indexing, "_fail_item", fail)
+    patch_split(monkeypatch, "modules.search.indexing", "_recheck_prepared", recheck)
+    patch_split(monkeypatch, "modules.search.indexing", "gateway", make_gateway)
+    patch_split(monkeypatch, "modules.search.indexing", "_drop_pending_item", drop)
+    patch_split(monkeypatch, "modules.search.indexing", "_fail_item", fail)
     return calls
 
 
@@ -629,9 +630,9 @@ async def test_queued_and_active_classes_both_served(monkeypatch: pytest.MonkeyP
         return 1
 
     monkeypatch.setattr(documents_public, "backfill_current_chunks", _noop)
-    monkeypatch.setattr(indexing, "_reconcile_automatic_generations", _noop)
-    monkeypatch.setattr(indexing, "_candidate_page", page)
-    monkeypatch.setattr(indexing, "_index_generation", index)
+    patch_split(monkeypatch, "modules.search.indexing", "_reconcile_automatic_generations", _noop)
+    patch_split(monkeypatch, "modules.search.indexing", "_candidate_page", page)
+    patch_split(monkeypatch, "modules.search.indexing", "_index_generation", index)
     ctx: dict[str, object] = {
         "session_factory": _Session,
         "redis": _DownRedis(),
@@ -692,11 +693,11 @@ async def _prepared(
         async def scalar(self, _stmt: Any) -> Any:
             return self.results.pop(0)
 
-    monkeypatch.setattr(indexing, "_admit", admit)
+    patch_split(monkeypatch, "modules.search.indexing", "_admit", admit)
     monkeypatch.setattr(settings_public, "module_is_enabled", enabled)
     monkeypatch.setattr(sources_public, "lock_source", lock_source)
     monkeypatch.setattr(documents_public, "lock_document_ids", lock_documents)
-    monkeypatch.setattr(indexing, "configured_embedding", configured)
+    patch_split(monkeypatch, "modules.search.indexing", "configured_embedding", configured)
     result = await indexing._recheck_prepared(
         Session(),
         scope=SCOPE,
@@ -877,8 +878,8 @@ async def test_reindex_maps_conflicts_to_409(monkeypatch: pytest.MonkeyPatch) ->
             raise outcome["error"]
         return outcome["result"]
 
-    monkeypatch.setattr(indexing, "capture_authority", capture)
-    monkeypatch.setattr(indexing, "create_generation_for_authority", create)
+    patch_split(monkeypatch, "modules.search.indexing", "capture_authority", capture)
+    patch_split(monkeypatch, "modules.search.indexing", "create_generation_for_authority", create)
 
     async def call() -> int:
         with pytest.raises((DomainError, HTTPException)) as caught:

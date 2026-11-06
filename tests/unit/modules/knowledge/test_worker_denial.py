@@ -18,6 +18,7 @@ from modules.news import worker as news_worker
 from modules.search import indexing as search_indexing
 from modules.timeline import worker as timeline_worker
 from tests.unit.modules.knowledge.temporal._worker_patch import patch_worker
+from tests.unit.split_patching import patch_split
 
 WS = uuid4()
 OWNER = SimpleNamespace(user_id=1, membership_revision=1)
@@ -162,8 +163,8 @@ async def test_denial_never_raises_and_is_terminal(
         run = lambda: entry(ctx, str(uuid4()))  # noqa: E731  # terse test stub
     else:
         monkeypatch.setattr(search_indexing.workspaces, "resolve_workspace_owner_context", owner)
-        monkeypatch.setattr(search_indexing, "capture_authority", deny)
-        monkeypatch.setattr(search_indexing, "terminalize", recorded)
+        patch_split(monkeypatch, "modules.search.indexing", "capture_authority", deny)
+        patch_split(monkeypatch, "modules.search.indexing", "terminalize", recorded)
         run = lambda: search_indexing._index_generation(  # noqa: E731  # terse test stub
             _Factory(session), MagicMock(), ctx["settings"], uuid4(), WS
         )
