@@ -787,33 +787,14 @@ async def list_entity_evidence(
     return EntityEvidencePage(items=items, next_cursor=next_cursor)
 
 
-async def list_entity_evidence_bulk(
-    session: AsyncSession,
-    ids: list[UUID],
-    limit: int = 50,
-    *,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> list[EntityEvidencePage | None]:
-    """Bulk first-page ``list_entity_evidence``: pages aligned with ``ids`` (duplicates allowed, at most 100).
+async def _first_evidence_memberships(
+    session: AsyncSession, wanted: list[UUID], limit: int, *, scope: Scope
+) -> dict[UUID, list[EntityEvidenceMembership]]:
+    """Read the first ``limit + 1`` evidence memberships of every wanted entity in one query.
 
-    Per entity the result equals ``list_entity_evidence(id, limit)`` without a cursor: redirects are followed,
-    rows are ordered ``(extracted_at, id)`` and cut at ``limit`` (``next_cursor`` set when more exist), items
-    whose evidence ref is no longer readable are dropped, and a missing entity yields ``None``. One
-    window-function query selects the first ``limit + 1`` memberships of every entity and evidence refs are
-    read in batches of at most 100 unique pairs, instead of ~3 statements per entity. Read-only.
+    Read-only window-function query ordered ``(extracted_at, id)`` per entity and scoped to the
+    workspace; every wanted entity has an entry (possibly empty).
     """
-    if not 1 <= limit <= 100:
-        raise ValueError("Entity evidence page limit must be between 1 and 100")
-    canonical_ids = await resolve_canonical_entity_ids(
-        session,
-        ids,
-        scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
-    )
-    wanted = list(
-        dict.fromkeys(identifier for identifier in canonical_ids if identifier is not None)
-    )
     rows_by_entity: dict[UUID, list[EntityEvidenceMembership]] = {
         identifier: [] for identifier in wanted
     }
@@ -844,6 +825,37 @@ async def list_entity_evidence_bulk(
         ).all()
         for membership in memberships:
             rows_by_entity[membership.entity_id].append(membership)
+    return rows_by_entity
+
+
+async def list_entity_evidence_bulk(
+    session: AsyncSession,
+    ids: list[UUID],
+    limit: int = 50,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[EntityEvidencePage | None]:
+    """Bulk first-page ``list_entity_evidence``: pages aligned with ``ids`` (duplicates allowed, at most 100).
+
+    Per entity the result equals ``list_entity_evidence(id, limit)`` without a cursor: redirects are followed,
+    rows are ordered ``(extracted_at, id)`` and cut at ``limit`` (``next_cursor`` set when more exist), items
+    whose evidence ref is no longer readable are dropped, and a missing entity yields ``None``. One
+    window-function query selects the first ``limit + 1`` memberships of every entity and evidence refs are
+    read in batches of at most 100 unique pairs, instead of ~3 statements per entity. Read-only.
+    """
+    if not 1 <= limit <= 100:
+        raise ValueError("Entity evidence page limit must be between 1 and 100")
+    canonical_ids = await resolve_canonical_entity_ids(
+        session,
+        ids,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    wanted = list(
+        dict.fromkeys(identifier for identifier in canonical_ids if identifier is not None)
+    )
+    rows_by_entity = await _first_evidence_memberships(session, wanted, limit, scope=scope)
     from modules.knowledge.documents import public as documents
 
     pairs = list(

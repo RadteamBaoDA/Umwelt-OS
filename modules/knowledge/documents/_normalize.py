@@ -698,6 +698,30 @@ async def select_current_world_document_version(
     )
 
 
+def _provenance_world_record_matches(
+    provenance: object, provider: str, provider_scope_discriminator: str
+) -> bool:
+    """Return whether a stored provenance payload carries a typed world record for ``provider``.
+
+    Pure check: the payload must be a dict whose scope discriminator equals the expected one and
+    whose ``provider_record`` validates as ``ProviderRecordMetadata`` for ``provider`` with world data.
+    Any malformed shape returns ``False`` rather than raising.
+    """
+    if (
+        not isinstance(provenance, dict)
+        or provenance.get("provider_scope_discriminator") != provider_scope_discriminator
+    ):
+        return False
+    record = provenance.get("provider_record")
+    if not isinstance(record, dict):
+        return False
+    try:
+        metadata = ProviderRecordMetadata.model_validate(record)
+    except (ValueError, TypeError):
+        return False
+    return metadata.provider == provider and metadata.world_data is not None
+
+
 async def normalized_observation_version_matches_in_uow(
     session: AsyncSession,
     *,
@@ -793,20 +817,7 @@ async def normalized_observation_version_matches_in_uow(
     ).all()
     if len(rows) != 1:
         return False
-    provenance = rows[0][0]
-    if (
-        not isinstance(provenance, dict)
-        or provenance.get("provider_scope_discriminator") != provider_scope_discriminator
-    ):
-        return False
-    record = provenance.get("provider_record")
-    if not isinstance(record, dict):
-        return False
-    try:
-        metadata = ProviderRecordMetadata.model_validate(record)
-    except (ValueError, TypeError):
-        return False
-    return metadata.provider == provider and metadata.world_data is not None
+    return _provenance_world_record_matches(rows[0][0], provider, provider_scope_discriminator)
 
 
 async def select_current_world_document_version_in_uow(
