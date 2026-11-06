@@ -436,33 +436,19 @@ async def _hydrate_history_item(
     return item
 
 
-async def _list_relationships_as_of(
+async def _read_history_snapshot_page(
     session: AsyncSession,
+    statement: Any,
     *,
-    limit: int,
     cursor: str | None,
-    entity_id: UUID | None,
-    valid_at: datetime | None,
-    include_unknown_validity: bool,
-    knowledge_as_of: datetime,
     fingerprint: str,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> RelationshipPage:
-    """Page actual latest recorded canonical snapshots by transaction cutoff.
+    limit: int,
+) -> tuple[list[RelationshipSnapshotHistory], str | None]:
+    """Read one page of latest snapshot rows after ``cursor`` and build the next bound cursor.
 
-    Current deletion/permission and retained exact support are checked again.
-    Never return current fields as historical substitutes; unavailable intervals
-    are explicit. Pagination covers snapshot identities, not loaded current rows.
-    Query order: missing-snapshot probe, then (after cursor validation) the snapshot page; per-item support
-    re-reads follow. Read-only; no commit.
+    Fetches ``limit + 1`` rows ordered newest first; an invalid or foreign cursor raises through
+    ``_decode_bound_cursor``. Returns the page rows and the next cursor (``None`` on the last page).
     """
-    missing = await _missing_history_ids(
-        session, entity_id=entity_id, knowledge_as_of=knowledge_as_of, scope=scope
-    )
-    statement = _latest_snapshot_statement(
-        entity_id=entity_id, knowledge_as_of=knowledge_as_of, scope=scope
-    )
     if cursor:
         recorded_at, identifier = _decode_bound_cursor(
             cursor, fingerprint, "Invalid relationship history cursor"
@@ -494,6 +480,39 @@ async def _list_relationships_as_of(
                 ]
             ).encode()
         )
+    return rows, next_cursor
+
+
+async def _list_relationships_as_of(
+    session: AsyncSession,
+    *,
+    limit: int,
+    cursor: str | None,
+    entity_id: UUID | None,
+    valid_at: datetime | None,
+    include_unknown_validity: bool,
+    knowledge_as_of: datetime,
+    fingerprint: str,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> RelationshipPage:
+    """Page actual latest recorded canonical snapshots by transaction cutoff.
+
+    Current deletion/permission and retained exact support are checked again.
+    Never return current fields as historical substitutes; unavailable intervals
+    are explicit. Pagination covers snapshot identities, not loaded current rows.
+    Query order: missing-snapshot probe, then (after cursor validation) the snapshot page; per-item support
+    re-reads follow. Read-only; no commit.
+    """
+    missing = await _missing_history_ids(
+        session, entity_id=entity_id, knowledge_as_of=knowledge_as_of, scope=scope
+    )
+    statement = _latest_snapshot_statement(
+        entity_id=entity_id, knowledge_as_of=knowledge_as_of, scope=scope
+    )
+    rows, next_cursor = await _read_history_snapshot_page(
+        session, statement, cursor=cursor, fingerprint=fingerprint, limit=limit
+    )
     items, unavailable = [], []
     for history in rows:
         if history.deleted:

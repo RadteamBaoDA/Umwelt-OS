@@ -160,55 +160,14 @@ async def _discover_owned_rows(
     return source_memberships, aliases, alias_supports, field_supports
 
 
-async def _discover_redirects(
-    session: AsyncSession,
-    ids: list[UUID],
-    *,
-    scope: Scope,
-) -> tuple[list[EntityRedirect], set[UUID]]:
-    """Walk redirects that point into the correction entities and reject cycles, size excess or retained evidence.
+async def _reject_retained_redirect_evidence(
+    session: AsyncSession, redirect_entity_ids: set[UUID], *, scope: Scope
+) -> None:
+    """Raise ``redirect_dependency_conflict`` when a redirected (old) entity still owns evidence.
 
-    Returns the redirect rows sorted by old entity id and the set of redirected (old) entity ids. A redirected
-    entity that still owns memberships, aliases or field evidence raises ``redirect_dependency_conflict``.
+    Read-only, three LIMIT 1 probes (memberships, aliases, field evidence) scoped to the workspace;
+    does nothing for an empty ``redirect_entity_ids``.
     """
-    redirect_rows_by_old_id: dict[UUID, EntityRedirect] = {}
-    redirect_frontier = set(ids)
-    while redirect_frontier:
-        children = list(
-            (
-                await session.scalars(
-                    select(EntityRedirect)
-                    .where(
-                        EntityRedirect.workspace_id == scope.workspace_id,
-                        EntityRedirect.target_entity_id.in_(redirect_frontier),
-                    )
-                    .order_by(EntityRedirect.old_entity_id)
-                    .limit(MAX_CORRECTION_ENTITIES + 1)
-                    .execution_options(populate_existing=True)
-                )
-            ).all()
-        )
-        if len(children) > MAX_CORRECTION_ENTITIES:
-            raise _conflict(
-                "correction_too_large", "Correction redirect closure exceeds 100", entity_ids=ids
-            )
-        next_frontier: set[UUID] = set()
-        for redirect in children:
-            if redirect.old_entity_id not in redirect_rows_by_old_id:
-                redirect_rows_by_old_id[redirect.old_entity_id] = redirect
-                if redirect.old_entity_id not in ids:
-                    next_frontier.add(redirect.old_entity_id)
-        if len(redirect_rows_by_old_id) > MAX_CORRECTION_ENTITIES:
-            raise _conflict(
-                "correction_too_large", "Correction redirect closure exceeds 100", entity_ids=ids
-            )
-        if set(ids) & set(redirect_rows_by_old_id):
-            raise _conflict(
-                "redirect_cycle", "Correction redirect closure contains a cycle", entity_ids=ids
-            )
-        redirect_frontier = next_frontier
-    redirect_rows = sorted(redirect_rows_by_old_id.values(), key=lambda row: str(row.old_entity_id))
-    redirect_entity_ids = set(redirect_rows_by_old_id)
     if redirect_entity_ids:
         retained_memberships = list(
             (
@@ -264,6 +223,58 @@ async def _discover_redirects(
                 entity_ids=sorted(redirect_entity_ids, key=str),
                 membership_ids=retained_memberships,
             )
+
+
+async def _discover_redirects(
+    session: AsyncSession,
+    ids: list[UUID],
+    *,
+    scope: Scope,
+) -> tuple[list[EntityRedirect], set[UUID]]:
+    """Walk redirects that point into the correction entities and reject cycles, size excess or retained evidence.
+
+    Returns the redirect rows sorted by old entity id and the set of redirected (old) entity ids. A redirected
+    entity that still owns memberships, aliases or field evidence raises ``redirect_dependency_conflict``.
+    """
+    redirect_rows_by_old_id: dict[UUID, EntityRedirect] = {}
+    redirect_frontier = set(ids)
+    while redirect_frontier:
+        children = list(
+            (
+                await session.scalars(
+                    select(EntityRedirect)
+                    .where(
+                        EntityRedirect.workspace_id == scope.workspace_id,
+                        EntityRedirect.target_entity_id.in_(redirect_frontier),
+                    )
+                    .order_by(EntityRedirect.old_entity_id)
+                    .limit(MAX_CORRECTION_ENTITIES + 1)
+                    .execution_options(populate_existing=True)
+                )
+            ).all()
+        )
+        if len(children) > MAX_CORRECTION_ENTITIES:
+            raise _conflict(
+                "correction_too_large", "Correction redirect closure exceeds 100", entity_ids=ids
+            )
+        next_frontier: set[UUID] = set()
+        for redirect in children:
+            if redirect.old_entity_id not in redirect_rows_by_old_id:
+                redirect_rows_by_old_id[redirect.old_entity_id] = redirect
+                if redirect.old_entity_id not in ids:
+                    next_frontier.add(redirect.old_entity_id)
+        if len(redirect_rows_by_old_id) > MAX_CORRECTION_ENTITIES:
+            raise _conflict(
+                "correction_too_large", "Correction redirect closure exceeds 100", entity_ids=ids
+            )
+        if set(ids) & set(redirect_rows_by_old_id):
+            raise _conflict(
+                "redirect_cycle", "Correction redirect closure contains a cycle", entity_ids=ids
+            )
+        redirect_frontier = next_frontier
+    redirect_rows = sorted(redirect_rows_by_old_id.values(), key=lambda row: str(row.old_entity_id))
+    redirect_entity_ids = set(redirect_rows_by_old_id)
+    await _reject_retained_redirect_evidence(session, redirect_entity_ids, scope=scope)
     return redirect_rows, redirect_entity_ids
 
 

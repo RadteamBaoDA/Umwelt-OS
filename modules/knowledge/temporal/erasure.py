@@ -45,6 +45,51 @@ ERASURE_TABLES: tuple[str, ...] = (
 ERASURE_OWNER = AccountErasureOwner(ERASURE_TABLES)
 
 
+async def _delete_edge_page(graph: Any, partition_id: UUID) -> int:
+    """Delete up to 100 relationships tagged with the partition group id and return the count.
+
+    Edges with stale or missing endpoints can survive a node-only deletion. Raises ``RuntimeError``
+    if Neo4j omits the count record.
+    """
+    from neo4j import Query
+
+    edge = await graph.run(
+        Query(
+            "MATCH ()-[r]-() WHERE r.group_id = $group_id "
+            "WITH DISTINCT r LIMIT 100 DELETE r RETURN count(r) AS removed",
+            timeout=QUERY_SECONDS,
+        ),
+        group_id=str(partition_id),
+    )
+    edge_record = await edge.single()
+    if edge_record is None:
+        raise RuntimeError("Graph edge deletion omitted its count")
+    edge_count: int = edge_record["removed"]
+    return edge_count
+
+
+async def _delete_node_page(graph: Any, partition_id: UUID) -> int:
+    """Delete up to 100 nodes tagged with the partition group id and return the count.
+
+    Raises ``RuntimeError`` if Neo4j omits the count record.
+    """
+    from neo4j import Query
+
+    node = await graph.run(
+        Query(
+            "MATCH (n) WHERE n.group_id = $group_id "
+            "WITH n LIMIT 100 DELETE n RETURN count(n) AS removed",
+            timeout=QUERY_SECONDS,
+        ),
+        group_id=str(partition_id),
+    )
+    node_record = await node.single()
+    if node_record is None:
+        raise RuntimeError("Graph node deletion omitted its count")
+    node_count: int = node_record["removed"]
+    return node_count
+
+
 async def erase_account_graph_page(
     ctx: dict[str, Any],
     scope: AccountErasureScope,
@@ -103,18 +148,7 @@ async def erase_account_graph_page(
         if fenced is None or fenced["erased"] is not True:
             raise RuntimeError("Graph erasure fence was not confirmed")
         # Edges with stale/missing endpoints can survive a node-only deletion.
-        edge = await graph.run(
-            Query(
-                "MATCH ()-[r]-() WHERE r.group_id = $group_id "
-                "WITH DISTINCT r LIMIT 100 DELETE r RETURN count(r) AS removed",
-                timeout=QUERY_SECONDS,
-            ),
-            group_id=str(partition_id),
-        )
-        edge_record = await edge.single()
-        if edge_record is None:
-            raise RuntimeError("Graph edge deletion omitted its count")
-        edge_count = edge_record["removed"]
+        edge_count = await _delete_edge_page(graph, partition_id)
         if edge_count:
             return False, dict(cursor)
         foreign_edges = await graph.run(
@@ -127,18 +161,7 @@ async def erase_account_graph_page(
         )
         if await foreign_edges.single():
             raise RuntimeError("Graph partition has a foreign relationship")
-        node = await graph.run(
-            Query(
-                "MATCH (n) WHERE n.group_id = $group_id "
-                "WITH n LIMIT 100 DELETE n RETURN count(n) AS removed",
-                timeout=QUERY_SECONDS,
-            ),
-            group_id=str(partition_id),
-        )
-        node_record = await node.single()
-        if node_record is None:
-            raise RuntimeError("Graph node deletion omitted its count")
-        node_count = node_record["removed"]
+        node_count = await _delete_node_page(graph, partition_id)
         if node_count:
             return False, dict(cursor)
         # An exact group read is required before advancing past its SQL receipt.

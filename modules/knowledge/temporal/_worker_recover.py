@@ -3,9 +3,10 @@
 Private implementation of ``modules.knowledge.temporal.worker``; import from that facade.
 """
 
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from arq.connections import ArqRedis
@@ -284,6 +285,41 @@ async def _recover(
     )
 
 
+async def _verify_ancestor_dispatches(
+    graph: TemporalGraph,
+    factory: async_sessionmaker[AsyncSession],
+    adm: _Admission,
+    context: Any,
+    ancestor: GraphOperation,
+    mapping: GraphMapping,
+    prior: Sequence[GraphDispatch],
+) -> None:
+    """Prove each unfinished ancestor dispatch has ceased and journal the cessation.
+
+    For every dispatch in ``prior`` (in order) asks the graph to verify exact cessation, raising
+    ``GraphOperationUnknown`` if unproven, then records ``cessation_verified_at`` under a row lock
+    in its own committed journal session.
+    """
+    for dispatch in prior:
+        if ancestor is None:
+            raise RuntimeError("invariant violated: ancestor must not be None")
+        ownership = DispatchOwnership(
+            ancestor.id, str(mapping.partition_id), dispatch.server_run_id, dispatch.client_id
+        )
+        if not await graph.verify_dispatch_cessation(ownership, context):
+            raise GraphOperationUnknown("graph_ancestor_dispatch_unknown")
+        async with factory() as journal:
+            await _admit(journal, adm)
+            stopped = await _get(journal, GraphDispatch, dispatch.id, adm, lock=True)
+            if stopped is None:
+                raise RuntimeError("invariant violated: stopped must not be None")
+            stopped.cessation_verified_at, stopped.cessation_reason = (
+                datetime.now(UTC),
+                "owned_sync_client_killed",
+            )
+            await _commit(journal, adm)
+
+
 async def _recover_ancestor(
     graph: TemporalGraph,
     factory: async_sessionmaker[AsyncSession],
@@ -334,24 +370,7 @@ async def _recover_ancestor(
             )
         )
     ).all()
-    for dispatch in prior:
-        if ancestor is None:
-            raise RuntimeError("invariant violated: ancestor must not be None")
-        ownership = DispatchOwnership(
-            ancestor.id, str(mapping.partition_id), dispatch.server_run_id, dispatch.client_id
-        )
-        if not await graph.verify_dispatch_cessation(ownership, context):
-            raise GraphOperationUnknown("graph_ancestor_dispatch_unknown")
-        async with factory() as journal:
-            await _admit(journal, adm)
-            stopped = await _get(journal, GraphDispatch, dispatch.id, adm, lock=True)
-            if stopped is None:
-                raise RuntimeError("invariant violated: stopped must not be None")
-            stopped.cessation_verified_at, stopped.cessation_reason = (
-                datetime.now(UTC),
-                "owned_sync_client_killed",
-            )
-            await _commit(journal, adm)
+    await _verify_ancestor_dispatches(graph, factory, adm, context, ancestor, mapping, prior)
     if context.receipt_history:
         await _recover(
             graph,
