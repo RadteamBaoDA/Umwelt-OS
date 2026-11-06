@@ -148,8 +148,9 @@ services:
 
   # Optional S3-compatible object store (RustFS) for STORAGE_BACKEND=s3.
   # Start with: docker compose -f docker-compose.base.yml --profile s3 up -d rustfs
-  # RustFS falls back to the public default rustfsadmin/rustfsadmin when the keys are empty: owners MUST set
-  # RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY in .env (not `:?` here; compose interpolates inactive profiles too).
+  # RustFS would otherwise fall back to the public default rustfsadmin/rustfsadmin when the keys are empty, so the
+  # entrypoint guard below refuses to start (exit 64) unless RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY are set in .env,
+  # neither is `rustfsadmin`, and the secret has >= 16 characters. (No `:?` here: compose interpolates inactive profiles too.)
   # The S3 API is path-style (keep S3_PATH_STYLE=true). The named volume inherits the image's UID 10001 ownership.
   rustfs:
     image: rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
@@ -157,6 +158,20 @@ services:
     environment:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
+    # Fail closed; `$$` is compose escaping for a literal `$`. Image entrypoint is /entrypoint.sh, cmd `rustfs`.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if [ -z "$${RUSTFS_ACCESS_KEY}" ] || [ -z "$${RUSTFS_SECRET_KEY}" ] \
+          || [ "$${RUSTFS_ACCESS_KEY}" = rustfsadmin ] || [ "$${RUSTFS_SECRET_KEY}" = rustfsadmin ] \
+          || [ "$${#RUSTFS_SECRET_KEY}" -lt 16 ]; then
+          echo "rustfs: refusing to start: set RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY (not rustfsadmin; secret >= 16 chars)" >&2
+          exit 64
+        fi
+        exec /entrypoint.sh "$$@"
+      - rustfs-guard
+    command: ["rustfs"]
     ports:
       - "127.0.0.1:${RUSTFS_PORT:-9000}:9000"
     volumes:
