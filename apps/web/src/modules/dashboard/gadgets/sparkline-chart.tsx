@@ -2,7 +2,7 @@
 
 import React, { useMemo } from 'react';
 import { Area, AreaChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { ChartDataPoint } from '@/core/charts/recharts-wrapper';
+import type { ChartDataPoint } from '@/core/charts/chart-format';
 
 /** Props for the axis-free Sparkline. */
 export interface SparklineProps {
@@ -71,17 +71,48 @@ export function SparklineChart({ data, height = 40, width, forecastFrom, tooltip
     <LineChart {...sized} width={width}>
       {common}
       <Line dataKey="past" stroke={stroke} strokeWidth={1.5} dot={false} isAnimationActive={false} connectNulls />
-      {dashed && <Line dataKey="future" stroke={stroke} strokeWidth={1.5} strokeDasharray="3 3" dot={false} isAnimationActive={false} connectNulls />}
+      {dashed && (
+        <Line dataKey="future" stroke={stroke} strokeWidth={1.5} strokeDasharray="3 3" dot={false} isAnimationActive={false} connectNulls />
+      )}
     </LineChart>
   ) : (
     <AreaChart {...sized} width={width}>
       {common}
-      <Area dataKey="past" type="monotone" stroke={stroke} strokeWidth={1.5} fill={stroke} fillOpacity={0.12} dot={false} isAnimationActive={false} connectNulls />
-      {dashed && <Area dataKey="future" type="monotone" stroke={stroke} strokeWidth={1.5} strokeDasharray="3 3" fill={stroke} fillOpacity={0.06} dot={false} isAnimationActive={false} connectNulls />}
+      <Area
+        dataKey="past"
+        type="monotone"
+        stroke={stroke}
+        strokeWidth={1.5}
+        fill={stroke}
+        fillOpacity={0.12}
+        dot={false}
+        isAnimationActive={false}
+        connectNulls
+      />
+      {dashed && (
+        <Area
+          dataKey="future"
+          type="monotone"
+          stroke={stroke}
+          strokeWidth={1.5}
+          strokeDasharray="3 3"
+          fill={stroke}
+          fillOpacity={0.06}
+          dot={false}
+          isAnimationActive={false}
+          connectNulls
+        />
+      )}
     </AreaChart>
   );
 
-  return width === undefined ? <ResponsiveContainer width="100%" height={height}>{chart}</ResponsiveContainer> : chart;
+  return width === undefined ? (
+    <ResponsiveContainer width="100%" height={height}>
+      {chart}
+    </ResponsiveContainer>
+  ) : (
+    chart
+  );
 }
 
 /**
@@ -98,8 +129,13 @@ function SparkTooltip({ data, active }: { data: ChartDataPoint[]; active?: boole
   const pct = start !== 0 ? ((end - start) / Math.abs(start)) * 100 : null;
   return (
     <div className="rounded-md border border-border bg-popover px-2 py-1 text-[11px] tabular-nums text-popover-foreground shadow-sm">
-      <div>{start} → {end}{pct === null ? '' : ` (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)`}</div>
-      <div className="text-muted-foreground">{Math.min(...values)} – {Math.max(...values)}</div>
+      <div>
+        {start} → {end}
+        {pct === null ? '' : ` (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)`}
+      </div>
+      <div className="text-muted-foreground">
+        {Math.min(...values)} – {Math.max(...values)}
+      </div>
     </div>
   );
 }

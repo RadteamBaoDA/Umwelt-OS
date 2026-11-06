@@ -2,47 +2,14 @@
 
 import { useTranslations } from 'next-intl';
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { BarChart3 } from 'lucide-react';
-import { formatCurrency, formatDateWith, formatNumber } from '@/core/format';
+import { formatDateWith, formatNumber } from '@/core/format';
 import { type AppLocaleId } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { formatChartValue, type ChartDataPoint, type ChartSeries, type ChartValueFormatOptions } from './chart-format';
 
-/** Single data point in a time-series or categorical chart. */
-export interface ChartDataPoint {
-  /** Timestamp (ISO string or unix ms) or category label. */
-  timestamp: string | number;
-  /** Primary numeric value. */
-  value: number;
-  /** Optional secondary or multi-series values. */
-  [key: string]: unknown;
-}
-
-/** Configuration descriptor for a named series rendered on a chart. */
-export interface ChartSeries {
-  /** Property key matching the numeric value on each data point. */
-  dataKey: string;
-  /** Human-readable display label for legends and tooltips. */
-  name: string;
-  /** Primary stroke or fill color; if omitted, resolved from theme palette. */
-  color?: string;
-  /** Unit indicator (e.g. '%', 'pts', 'MB'). */
-  unit?: string;
-  /** Currency code if this series represents money (e.g. 'USD', 'VND'). */
-  currency?: string;
-}
+export { formatChartValue, type ChartDataPoint, type ChartSeries, type ChartValueFormatOptions };
 
 /** Props for the SSR-safe RechartsContainer. */
 export interface RechartsContainerProps {
@@ -99,78 +66,6 @@ export function getChartColors(): ChartThemeColors {
     tooltipText: 'var(--text)',
     series: ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'],
   };
-}
-
-/** Options accepted by `formatChartValue`. */
-export interface ChartValueFormatOptions {
-  currency?: string;
-  unit?: string;
-  locale?: AppLocaleId;
-  precision?: number;
-  compact?: boolean;
-}
-
-/**
- * Formats a currency amount; an invalid ISO currency code makes Intl throw, in which case the value falls back to
- * `<fixed-precision number> <code>` instead of failing the chart render.
- */
-function formatChartCurrency(
-  value: number,
-  currency: string,
-  locale: AppLocaleId,
-  precision: number,
-  maximumFractionDigits: number,
-  compactNotation: { notation?: 'compact' },
-): string {
-  try {
-    return formatCurrency(value, locale, currency, {
-      ...compactNotation,
-      maximumFractionDigits,
-      minimumFractionDigits: 0,
-    });
-  } catch {
-    return `${value.toFixed(precision)} ${currency}`;
-  }
-}
-
-/**
- * Formats a numeric value according to currency, unit, and locale.
- *
- * @param value The number to format.
- * @param options Currency, unit, locale, precision, and optional compact notation for large values.
- * @returns Localized formatted string.
- */
-export function formatChartValue(
-  value: number,
-  options?: ChartValueFormatOptions,
-): string {
-  if (value === null || value === undefined || isNaN(value)) {
-    return '—';
-  }
-
-  const { currency, unit, locale = 'en-us', precision = 2, compact: wantsCompact } = options ?? {};
-  const compact = Boolean(wantsCompact && Math.abs(value) >= 1000);
-  const maximumFractionDigits = compact ? Math.min(precision, 1) : precision;
-  const compactNotation = compact ? { notation: 'compact' as const } : {};
-
-  if (currency) {
-    return formatChartCurrency(value, currency, locale, precision, maximumFractionDigits, compactNotation);
-  }
-
-  if (unit === '%' || unit === 'percent') {
-    return formatNumber(value > 1 ? value / 100 : value, locale, {
-      style: 'percent',
-      ...compactNotation,
-      maximumFractionDigits,
-    });
-  }
-
-  const formatted = formatNumber(value, locale, {
-    ...compactNotation,
-    maximumFractionDigits,
-  });
-
-  return unit ? `${formatted} ${unit}` : formatted;
 }
 
 /** Fixed Y-axis width (px): fits compact labels such as "-77.2K" at 11px so ticks never wrap or clip. */
@@ -317,19 +212,16 @@ export function formatChartTimestamp(
  * @param timezone Target timezone identifier.
  * @returns Formatter suitable for recharts `tickFormatter`.
  */
-export function makeXTickFormatter(
-  data: ChartDataPoint[],
-  locale: AppLocaleId,
-  timezone: string,
-): (val: string | number) => string {
+export function makeXTickFormatter(data: ChartDataPoint[], locale: AppLocaleId, timezone: string): (val: string | number) => string {
   const times = data.map((p) => new Date(p.timestamp).getTime()).filter((n) => !isNaN(n));
   const intraday = times.length > 1 && Math.max(...times) - Math.min(...times) < 48 * 3_600_000;
   let last = '';
   return (val) => {
     const date = new Date(val);
-    const label = intraday && !isNaN(date.getTime())
-      ? formatDateWith(date, locale, { hour: 'numeric', minute: '2-digit', timeZone: timezone })
-      : formatChartTimestamp(val, locale, timezone, 'compact');
+    const label =
+      intraday && !isNaN(date.getTime())
+        ? formatDateWith(date, locale, { hour: 'numeric', minute: '2-digit', timeZone: timezone })
+        : formatChartTimestamp(val, locale, timezone, 'compact');
     if (label === last) return '';
     last = label;
     return label;
@@ -357,11 +249,7 @@ export function ChartHistoryNote({ data }: { data: ChartDataPoint[] }) {
  * @param props Title, message, and layout classes.
  * @returns Accessible empty state container.
  */
-export function ChartEmptyState({
-  title,
-  message,
-  className = '',
-}: ChartEmptyStateProps) {
+export function ChartEmptyState({ title, message, className = '' }: ChartEmptyStateProps) {
   const ts = useTranslations('uiSweep');
   title ??= ts('chNoData');
   message ??= ts('chNoDataMsg');
@@ -412,24 +300,17 @@ export function ChartCustomTooltip({
   return (
     <div className="rounded-lg border border-border bg-card p-2.5 shadow-[var(--shadow-popover)] text-card-foreground text-xs min-w-[140px] z-50">
       {label !== undefined && (
-        <div className="text-[11px] text-muted-foreground mb-1.5 tabular-nums">
-          {formatChartTimestamp(label, locale, timezone, 'full')}
-        </div>
+        <div className="text-[11px] text-muted-foreground mb-1.5 tabular-nums">{formatChartTimestamp(label, locale, timezone, 'full')}</div>
       )}
       <div className="space-y-1">
         {payload.map((item, idx) => (
           <div key={idx} className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-1.5 min-w-0">
-              <span
-                className="w-2 rounded-full shrink-0 h-2"
-                style={{ backgroundColor: item.color }}
-              />
+              <span className="w-2 rounded-full shrink-0 h-2" style={{ backgroundColor: item.color }} />
               <span className="text-muted-foreground truncate">{item.name || item.dataKey}</span>
             </div>
             <span className="font-semibold tabular-nums text-foreground">
-              {typeof item.value === 'number'
-                ? formatChartValue(item.value, { currency, unit, locale })
-                : String(item.value ?? '—')}
+              {typeof item.value === 'number' ? formatChartValue(item.value, { currency, unit, locale }) : String(item.value ?? '—')}
             </span>
           </div>
         ))}
@@ -451,15 +332,7 @@ export function ChartCustomTooltip({
  * @param props Series data points, series descriptions, and optional title.
  * @returns Screen-reader accessible table element.
  */
-export function ChartAccessibleTable({
-  data,
-  series,
-  title,
-}: {
-  data: ChartDataPoint[];
-  series: ChartSeries[];
-  title?: string;
-}) {
+export function ChartAccessibleTable({ data, series, title }: { data: ChartDataPoint[]; series: ChartSeries[]; title?: string }) {
   const ts = useTranslations('uiSweep');
   return (
     <div className="sr-only">
@@ -498,12 +371,7 @@ export function ChartAccessibleTable({
  * @param props Container configuration and children.
  * @returns Fully responsive, client-safe chart container.
  */
-export function RechartsContainer({
-  height = '100%',
-  minHeight = 140,
-  className = '',
-  children,
-}: RechartsContainerProps) {
+export function RechartsContainer({ height = '100%', minHeight = 140, className = '', children }: RechartsContainerProps) {
   const ts = useTranslations('uiSweep');
   const [isMounted, setIsMounted] = useState<boolean>(false);
 
@@ -576,9 +444,7 @@ export function BaseAreaChart({
       <ChartAccessibleTable data={data} series={series} />
       <RechartsContainer height={height}>
         <AreaChart data={data} margin={{ top: 10, right: 32, left: 0, bottom: 0 }}>
-          {showGrid && (
-            <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
-          )}
+          {showGrid && <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />}
           <XAxis
             dataKey="timestamp"
             stroke={colors.axisText}
@@ -678,9 +544,7 @@ export function BaseLineChart({
       <ChartAccessibleTable data={data} series={series} />
       <RechartsContainer height={height}>
         <LineChart data={data} margin={{ top: 10, right: 32, left: 0, bottom: 0 }}>
-          {showGrid && (
-            <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
-          )}
+          {showGrid && <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />}
           <XAxis
             dataKey="timestamp"
             stroke={colors.axisText}
@@ -777,9 +641,7 @@ export function BaseBarChart({
       <ChartAccessibleTable data={data} series={series} />
       <RechartsContainer height={height}>
         <BarChart data={data} margin={{ top: 10, right: 32, left: 0, bottom: 0 }}>
-          {showGrid && (
-            <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
-          )}
+          {showGrid && <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />}
           <XAxis
             dataKey="timestamp"
             stroke={colors.axisText}
@@ -810,16 +672,7 @@ export function BaseBarChart({
           />
           {series.map((s, idx) => {
             const color = s.color || colors.series[idx % colors.series.length];
-            return (
-              <Bar
-                key={s.dataKey}
-                dataKey={s.dataKey}
-                name={s.name}
-                fill={color}
-                radius={[4, 4, 0, 0]}
-                isAnimationActive={false}
-              />
-            );
+            return <Bar key={s.dataKey} dataKey={s.dataKey} name={s.name} fill={color} radius={[4, 4, 0, 0]} isAnimationActive={false} />;
           })}
         </BarChart>
       </RechartsContainer>

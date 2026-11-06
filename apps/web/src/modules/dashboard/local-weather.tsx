@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import dynamic from 'next/dynamic';
 import { useTranslations } from 'next-intl';
 import { Info, MapPin } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
@@ -8,9 +9,12 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { getLocalWeather, type LocalWeather as LocalWeatherReading } from './api';
-import { toUnit, useWeatherUnit, weatherCondition, WeatherCard } from './weather-card';
+import { toUnit, useWeatherUnit, weatherCondition } from './weather-model';
 import { BareButton } from '@/components/bare-button';
 import { getNumberFormat } from '@/modules/shared';
+
+/** Popover forecast card, loaded on first open so the chart library stays out of the header's bundle. */
+const WeatherCard = dynamic(() => import('./weather-card').then((m) => m.WeatherCard), { ssr: false });
 
 type Coords = { lat: number; lon: number };
 type Phase = 'checking' | 'ask' | 'granted' | 'hidden';
@@ -35,7 +39,10 @@ export function LocalWeather({ fallback = null }: { fallback?: ReactNode }) {
   /** Reads one low-accuracy position (30 min cache, 10 s timeout); any failure hides the control. */
   const locate = useCallback(() => {
     navigator.geolocation.getCurrentPosition(
-      (pos) => { setCoords({ lat: coarse(pos.coords.latitude), lon: coarse(pos.coords.longitude) }); setPhase('granted'); },
+      (pos) => {
+        setCoords({ lat: coarse(pos.coords.latitude), lon: coarse(pos.coords.longitude) });
+        setPhase('granted');
+      },
       () => setPhase('hidden'),
       { enableHighAccuracy: false, maximumAge: 30 * 60_000, timeout: 10_000 },
     );
@@ -44,17 +51,24 @@ export function LocalWeather({ fallback = null }: { fallback?: ReactNode }) {
   useEffect(() => {
     // All state updates happen in promise callbacks (never synchronously in the effect body).
     const available = typeof navigator !== 'undefined' && Boolean(navigator.geolocation);
-    const status: Promise<{ state: PermissionState } | null> = available && navigator.permissions?.query
-      ? navigator.permissions.query({ name: 'geolocation' }).catch(() => null)
-      : Promise.resolve(null);
+    const status: Promise<{ state: PermissionState } | null> =
+      available && navigator.permissions?.query
+        ? navigator.permissions.query({ name: 'geolocation' }).catch(() => null)
+        : Promise.resolve(null);
     let live = true;
     void status.then((result) => {
       if (!live) return;
       if (!available) setPhase('hidden');
-      else if (result === null || result.state === 'prompt') setPhase('ask'); // no Permissions API: the click still prompts
-      else if (result.state === 'granted') { setPhase('granted'); locate(); } else setPhase('hidden');
+      else if (result === null || result.state === 'prompt')
+        setPhase('ask'); // no Permissions API: the click still prompts
+      else if (result.state === 'granted') {
+        setPhase('granted');
+        locate();
+      } else setPhase('hidden');
     });
-    return () => { live = false; };
+    return () => {
+      live = false;
+    };
   }, [locate]);
 
   const apiLocale = locale.toLowerCase().startsWith('vi') ? 'vi' : 'en';
@@ -73,11 +87,18 @@ export function LocalWeather({ fallback = null }: { fallback?: ReactNode }) {
       {phase === 'ask' && (
         <>
           {' · '}
-          <BareButton type="button" onClick={locate} title={t('localWeatherPrivacy')} aria-describedby="local-weather-privacy"
-            className="cursor-pointer border-0 bg-transparent p-0 text-sm font-normal text-muted-foreground underline underline-offset-2 hover:text-foreground">
+          <BareButton
+            type="button"
+            onClick={locate}
+            title={t('localWeatherPrivacy')}
+            aria-describedby="local-weather-privacy"
+            className="cursor-pointer border-0 bg-transparent p-0 text-sm font-normal text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
             {t('showLocalWeather')}
           </BareButton>
-          <span id="local-weather-privacy" className="sr-only">{t('localWeatherPrivacy')}</span>
+          <span id="local-weather-privacy" className="sr-only">
+            {t('localWeatherPrivacy')}
+          </span>
         </>
       )}
     </span>
@@ -102,9 +123,17 @@ function WeatherSummary({ data }: { data: LocalWeatherReading }) {
   const { key } = weatherCondition(data.weather_code, data.is_day);
 
   /** Cancels a pending hover close. */
-  const keepOpen = () => { if (closeTimer.current) clearTimeout(closeTimer.current); closeTimer.current = null; };
+  const keepOpen = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+  };
   /** Opens on mouse hover only; touch pointers fall through to the click toggle. */
-  const hoverOpen = (event: ReactPointerEvent) => { if (event.pointerType === 'mouse') { keepOpen(); setOpen(true); } };
+  const hoverOpen = (event: ReactPointerEvent) => {
+    if (event.pointerType === 'mouse') {
+      keepOpen();
+      setOpen(true);
+    }
+  };
   /** Schedules a close when the mouse leaves the button or the card. */
   const hoverClose = (event: ReactPointerEvent) => {
     if (event.pointerType !== 'mouse') return;
@@ -116,12 +145,24 @@ function WeatherSummary({ data }: { data: LocalWeatherReading }) {
   return (
     <span className="font-normal text-muted-foreground">
       {' · '}
-      {data.place && <><MapPin className="inline size-3.5 -translate-y-px" aria-hidden="true" /> {data.place} </>}
-      <span className="tabular-nums text-foreground">{degrees}°{unit === 'f' ? 'F' : 'C'}</span> {t(key)}
+      {data.place && (
+        <>
+          <MapPin className="inline size-3.5 -translate-y-px" aria-hidden="true" /> {data.place}{' '}
+        </>
+      )}
+      <span className="tabular-nums text-foreground">
+        {degrees}°{unit === 'f' ? 'F' : 'C'}
+      </span>{' '}
+      {t(key)}
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <BareButton type="button" aria-label={t('weatherDetails')} onPointerEnter={hoverOpen} onPointerLeave={hoverClose}
-            className="ml-1 inline-flex size-6 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 align-middle text-muted-foreground hover:bg-raised hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+          <BareButton
+            type="button"
+            aria-label={t('weatherDetails')}
+            onPointerEnter={hoverOpen}
+            onPointerLeave={hoverClose}
+            className="ml-1 inline-flex size-6 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-0 align-middle text-muted-foreground hover:bg-raised hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          >
             <Info className="size-4" aria-hidden="true" />
           </BareButton>
         </PopoverTrigger>

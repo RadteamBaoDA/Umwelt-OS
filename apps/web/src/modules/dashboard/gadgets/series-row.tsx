@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { formatChartValue, type ChartDataPoint } from '@/core/charts/recharts-wrapper';
+import { formatChartValue, type ChartDataPoint } from '@/core/charts/chart-format';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { DeltaPill } from './gadget-kpi';
 import type { BetterDirection } from './metric-direction';
@@ -33,7 +33,11 @@ export function SeriesRow({ label, value, currency, unit, series, deltaPercent, 
       <span className="min-w-0 flex-1 truncate text-foreground">{label}</span>
       <span className="w-24 shrink-0">{series && series.length >= 2 ? <Sparkline data={series} width={96} height={24} line /> : null}</span>
       <span className="shrink-0 text-right font-medium tabular-nums text-foreground">
-        {value === null ? '—' : format ? format(value) : formatChartValue(value, { currency, unit: currency ? unit : undefined, locale: display.locale })}
+        {value === null
+          ? '—'
+          : format
+            ? format(value)
+            : formatChartValue(value, { currency, unit: currency ? unit : undefined, locale: display.locale })}
       </span>
       {deltaPercent !== undefined && <DeltaPill percent={deltaPercent} better={better} />}
     </div>

@@ -2,7 +2,7 @@
 
 import { ArrowDownRight, ArrowUpRight } from 'lucide-react';
 import React from 'react';
-import { formatChartValue, type ChartDataPoint } from '@/core/charts/recharts-wrapper';
+import { formatChartValue, type ChartDataPoint } from '@/core/charts/chart-format';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { BetterDirection } from './metric-direction';
 import { Sparkline } from './sparkline';
@@ -35,14 +35,19 @@ export function DeltaPill({ percent, better = 'neutral', periodLabel }: DeltaPil
   const flat = !known || percent === 0;
   const up = !flat && (percent as number) > 0;
   const tone = deltaTone(flat, up, better);
-  const toneClass = tone === 'positive'
-    ? 'bg-pill-positive text-pill-positive-foreground'
-    : tone === 'negative'
-      ? 'bg-pill-negative text-pill-negative-foreground'
-      : 'bg-muted text-muted-foreground';
+  const toneClass =
+    tone === 'positive'
+      ? 'bg-pill-positive text-pill-positive-foreground'
+      : tone === 'negative'
+        ? 'bg-pill-negative text-pill-negative-foreground'
+        : 'bg-muted text-muted-foreground';
   const Arrow = up ? ArrowUpRight : ArrowDownRight;
   return (
-    <span data-testid="delta-pill" data-tone={tone} className={`inline-flex items-center gap-0.5 whitespace-nowrap rounded-full px-1.5 py-0.5 text-xs font-medium tabular-nums ${toneClass}`}>
+    <span
+      data-testid="delta-pill"
+      data-tone={tone}
+      className={`inline-flex items-center gap-0.5 whitespace-nowrap rounded-full px-1.5 py-0.5 text-xs font-medium tabular-nums ${toneClass}`}
+    >
       {!flat && <Arrow className="size-3" aria-hidden="true" />}
       <span>{!known ? '—' : flat ? '0.0%' : `${up ? '+' : '−'}${Math.abs(percent as number).toFixed(1)}%`}</span>
       {periodLabel && <span className="font-normal opacity-80">{periodLabel}</span>}
@@ -78,14 +83,30 @@ export interface GadgetKpiProps {
  * @param props Label, value, formatting, delta and optional series.
  * @returns Stacked KPI element.
  */
-export function GadgetKpi({ label, value, currency, unit, size = 'lg', deltaPercent, better, periodLabel, series, sparkHeight = 40, format }: GadgetKpiProps) {
+export function GadgetKpi({
+  label,
+  value,
+  currency,
+  unit,
+  size = 'lg',
+  deltaPercent,
+  better,
+  periodLabel,
+  series,
+  sparkHeight = 40,
+  format,
+}: GadgetKpiProps) {
   const display = useDisplayPreferences();
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="truncate text-xs text-muted-foreground">{label}</div>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <span className={`${size === 'sm' ? 'text-figure-sm' : 'text-figure'} text-foreground`}>
-          {value === null ? '—' : format ? format(value) : formatChartValue(value, { currency, unit: currency ? unit : undefined, locale: display.locale })}
+          {value === null
+            ? '—'
+            : format
+              ? format(value)
+              : formatChartValue(value, { currency, unit: currency ? unit : undefined, locale: display.locale })}
         </span>
         {!currency && unit && value !== null && <span className="text-xs text-muted-foreground">{unit}</span>}
         {deltaPercent !== undefined && <DeltaPill percent={deltaPercent} better={better} periodLabel={periodLabel} />}

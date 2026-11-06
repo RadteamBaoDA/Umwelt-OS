@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useWeatherUnit, WEATHER_UNIT_KEY } from './weather-card';
+import { useWeatherUnit, WEATHER_UNIT_KEY } from './weather-model';
 
 describe('useWeatherUnit', () => {
   beforeEach(() => localStorage.clear());

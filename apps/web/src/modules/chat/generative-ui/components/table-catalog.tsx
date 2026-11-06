@@ -1,36 +1,15 @@
 'use client';
 
 import * as React from 'react';
-import {
-  ArrowDownIcon,
-  ArrowUpDownIcon,
-  ArrowUpIcon,
-  MessageSquarePlusIcon,
-  SearchIcon,
-  TableIcon,
-} from 'lucide-react';
+import { ArrowDownIcon, ArrowUpDownIcon, ArrowUpIcon, MessageSquarePlusIcon, SearchIcon, TableIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { SampleDataBadge } from './sample-data-badge';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { TablePagination, usePagination } from '@/components/ui/pagination';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { formatChartValue } from '@/core/charts/recharts-wrapper';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { formatChartValue } from '@/core/charts/chart-format';
 import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
 import { genUiCopy, resolveWidgetLocale, TABLE_COPY } from '../copy';
 import { BareButton } from '@/components/bare-button';
@@ -61,9 +40,7 @@ export interface TableColumn {
 }
 
 /** Row input accepted by TableCatalog: either keyed record objects or positional cell tuples. */
-export type TableRowData =
-  | Record<string, unknown>
-  | Array<string | number | boolean | null | undefined>;
+export type TableRowData = Record<string, unknown> | Array<string | number | boolean | null | undefined>;
 
 /** Active column sort state. */
 export interface TableSortState {
@@ -150,22 +127,12 @@ function getRawCellValue(row: TableRowData, column: TableColumn, columnIndex: nu
  * @param value - Text content of the badge cell.
  * @returns Semantic Badge variant.
  */
-function resolveBadgeVariant(
-  value: string,
-): 'default' | 'secondary' | 'destructive' | 'outline' {
+function resolveBadgeVariant(value: string): 'default' | 'secondary' | 'destructive' | 'outline' {
   const normalized = value.trim().toLowerCase();
-  if (
-    ['active', 'completed', 'ready', 'healthy', 'high', 'approved', 'positive', 'hoàn thành', 'sẵn sàng'].includes(
-      normalized,
-    )
-  ) {
+  if (['active', 'completed', 'ready', 'healthy', 'high', 'approved', 'positive', 'hoàn thành', 'sẵn sàng'].includes(normalized)) {
     return 'default';
   }
-  if (
-    ['failed', 'error', 'critical', 'rejected', 'overdue', 'negative', 'lỗi', 'thất bại'].includes(
-      normalized,
-    )
-  ) {
+  if (['failed', 'error', 'critical', 'rejected', 'overdue', 'negative', 'lỗi', 'thất bại'].includes(normalized)) {
     return 'destructive';
   }
   if (['pending', 'in_progress', 'in progress', 'medium', 'warning', 'chờ xử lý'].includes(normalized)) {
@@ -183,11 +150,7 @@ function resolveBadgeVariant(
  * @param locale - Active application locale ('en-us' | 'vi-vi').
  * @returns Localized string representation of the cell value.
  */
-export function formatTableCellValue(
-  raw: unknown,
-  column: TableColumn,
-  locale: AppLocaleId,
-): string {
+export function formatTableCellValue(raw: unknown, column: TableColumn, locale: AppLocaleId): string {
   if (raw === null || raw === undefined || raw === '') {
     return '—';
   }
@@ -209,7 +172,11 @@ export function formatTableCellValue(
  * Chooses the numeric formatting for a column: currency (default USD), percent, or plain number with optional
  * currency/unit; undefined when the column declares none of them (the value then falls through to default formatting).
  */
-function numericFormatOptions(column: TableColumn, locale: AppLocaleId, precision: number): Parameters<typeof formatChartValue>[1] | undefined {
+function numericFormatOptions(
+  column: TableColumn,
+  locale: AppLocaleId,
+  precision: number,
+): Parameters<typeof formatChartValue>[1] | undefined {
   if (column.format === 'currency') return { currency: column.currency ?? 'USD', locale, precision };
   if (column.format === 'percent') return { unit: '%', locale, precision };
   if (column.format === 'number' || column.currency || column.unit) {
@@ -221,9 +188,14 @@ function numericFormatOptions(column: TableColumn, locale: AppLocaleId, precisio
 /** Whether both raw values compare numerically (neither blank, null or boolean, and both parse as numbers). */
 function bothNumeric(valA: unknown, valB: unknown, numA: number, numB: number): boolean {
   return (
-    !Number.isNaN(numA) && !Number.isNaN(numB)
-    && valA !== '' && valB !== '' && valA !== null && valB !== null
-    && typeof valA !== 'boolean' && typeof valB !== 'boolean'
+    !Number.isNaN(numA) &&
+    !Number.isNaN(numB) &&
+    valA !== '' &&
+    valB !== '' &&
+    valA !== null &&
+    valB !== null &&
+    typeof valA !== 'boolean' &&
+    typeof valB !== 'boolean'
   );
 }
 
@@ -296,9 +268,7 @@ function filterAndSortRows(
 
 /** Summarizes a row as `label: value` pairs for the row-action follow-up prompt. */
 function summarizeRow(row: TableRowData, columns: TableColumn[], locale: AppLocaleId): string {
-  return columns
-    .map((col, idx) => `${col.label}: ${formatTableCellValue(getRawCellValue(row, col, idx), col, locale)}`)
-    .join(', ');
+  return columns.map((col, idx) => `${col.label}: ${formatTableCellValue(getRawCellValue(row, col, idx), col, locale)}`).join(', ');
 }
 
 type TableCopy = (typeof TABLE_COPY)[keyof typeof TABLE_COPY];
@@ -311,7 +281,13 @@ function SortIcon({ direction }: { direction: TableSortState['direction'] | null
 }
 
 /** Header row with sortable column buttons (aria-sort) and the optional actions column. */
-function CatalogHeaderRow({ columns, sortState, copy, hasActions, onSort }: {
+function CatalogHeaderRow({
+  columns,
+  sortState,
+  copy,
+  hasActions,
+  onSort,
+}: {
   columns: TableColumn[];
   sortState: TableSortState | null;
   copy: TableCopy;
@@ -344,11 +320,7 @@ function CatalogHeaderRow({ columns, sortState, copy, hasActions, onSort }: {
           </TableHead>
         );
       })}
-      {hasActions && (
-        <TableHead className="px-3 py-2 text-right text-xs font-semibold text-foreground">
-          {copy.actionsHeader}
-        </TableHead>
-      )}
+      {hasActions && <TableHead className="px-3 py-2 text-right text-xs font-semibold text-foreground">{copy.actionsHeader}</TableHead>}
     </TableRow>
   );
 }
@@ -361,20 +333,23 @@ function CatalogCell({ raw, column, locale }: { raw: unknown; column: TableColum
   return (
     <TableCell className="px-3 py-2.5 text-xs text-foreground">
       {isBadge ? (
-        <Badge variant={resolveBadgeVariant(String(raw))}>
-          {String(raw)}
-        </Badge>
+        <Badge variant={resolveBadgeVariant(String(raw))}>{String(raw)}</Badge>
       ) : (
-        <span className={tabular ? 'tabular-nums' : undefined}>
-          {formatted}
-        </span>
+        <span className={tabular ? 'tabular-nums' : undefined}>{formatted}</span>
       )}
     </TableCell>
   );
 }
 
 /** One data row with its cells and the optional row action button. */
-function CatalogRow({ row, rowIdx, columns, locale, actionLabel, onAction }: {
+function CatalogRow({
+  row,
+  rowIdx,
+  columns,
+  locale,
+  actionLabel,
+  onAction,
+}: {
   row: TableRowData;
   rowIdx: number;
   columns: TableColumn[];
@@ -412,11 +387,7 @@ function CatalogRow({ row, rowIdx, columns, locale, actionLabel, onAction }: {
 function CatalogEmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
   return (
     <TableRow>
-      <TableCell
-        colSpan={colSpan}
-        data-testid="table-catalog-empty"
-        className="py-8 text-center text-xs text-muted-foreground"
-      >
+      <TableCell colSpan={colSpan} data-testid="table-catalog-empty" className="py-8 text-center text-xs text-muted-foreground">
         {text}
       </TableCell>
     </TableRow>
@@ -429,7 +400,18 @@ function catalogRowKey(row: TableRowData, rowIdx: number): string {
 }
 
 /** Card header: title block, sample/row-count badges and the filter box. */
-function CatalogHeader({ title, description, isSample, locale, copy, visibleCount, totalCount, filterText, filterPlaceholder, onFilter }: {
+function CatalogHeader({
+  title,
+  description,
+  isSample,
+  locale,
+  copy,
+  visibleCount,
+  totalCount,
+  filterText,
+  filterPlaceholder,
+  onFilter,
+}: {
   title: string;
   description?: string;
   isSample?: boolean;
@@ -450,26 +432,19 @@ function CatalogHeader({ title, description, isSample, locale, copy, visibleCoun
           </span>
           <div>
             <CardTitle className="text-base font-semibold text-foreground">{title}</CardTitle>
-            {description && (
-              <CardDescription className="mt-0.5 text-xs text-muted-foreground">
-                {description}
-              </CardDescription>
-            )}
+            {description && <CardDescription className="mt-0.5 text-xs text-muted-foreground">{description}</CardDescription>}
           </div>
         </div>
         <div className="flex items-center gap-1.5">
           {isSample && <SampleDataBadge locale={locale} />}
           <Badge variant="outline" className="tabular-nums text-xs">
-          {copy.rowCountLabel(visibleCount, totalCount)}
+            {copy.rowCountLabel(visibleCount, totalCount)}
           </Badge>
         </div>
       </div>
 
       <div className="relative flex items-center">
-        <SearchIcon
-          className="pointer-events-none absolute left-3 size-4 text-muted-foreground"
-          aria-hidden="true"
-        />
+        <SearchIcon className="pointer-events-none absolute left-3 size-4 text-muted-foreground" aria-hidden="true" />
         <Input
           type="search"
           value={filterText}
@@ -515,6 +490,22 @@ function useCatalogView(rows: TableRowData[], columns: TableColumn[], locale: Ap
 }
 
 /**
+ * Footer line naming the data source of a TableCatalog card.
+ *
+ * @param props - Localized prefix label and the source text.
+ * @returns Card footer with the prefixed source.
+ */
+function CatalogSource({ prefix, source }: { prefix: string; source: string }) {
+  return (
+    <CardFooter className="border-t border-border py-2.5 text-[11px] text-muted-foreground">
+      <span>
+        <strong className="font-medium text-foreground">{prefix}:</strong> {source}
+      </span>
+    </CardFooter>
+  );
+}
+
+/**
  * Native structured TableCatalog widget ported from OpenIntelligentUI and adapted to Umwelt-OS
  * shadcn Table, Input, Badge, and Button primitives. Supports ascending/descending column sorting,
  * instant text filtering across rows, locale-aware currency/number/percent formatting, semantic badges,
@@ -540,10 +531,7 @@ export function TableCatalog({
   const canonicalLocale = normalizeFormattingLocale(resolvedLocale);
   const copy = TABLE_COPY[resolvedLocale];
   const catalog = genUiCopy(resolvedLocale);
-  const resolvedRows = React.useMemo<TableRowData[]>(
-    () => (rows && rows.length > 0 ? rows : (records ?? [])),
-    [records, rows],
-  );
+  const resolvedRows = React.useMemo<TableRowData[]>(() => (rows && rows.length > 0 ? rows : (records ?? [])), [records, rows]);
 
   const normalizedColumns = React.useMemo(() => normalizeColumns(columns), [columns]);
   const view = useCatalogView(resolvedRows, normalizedColumns, resolvedLocale, canonicalLocale);
@@ -563,10 +551,7 @@ export function TableCatalog({
   );
 
   return (
-    <Card
-      data-testid="generative-table-catalog"
-      className="my-2 w-full max-w-3xl border-border bg-surface text-foreground"
-    >
+    <Card data-testid="generative-table-catalog" className="my-2 w-full max-w-3xl border-border bg-surface text-foreground">
       <CatalogHeader
         title={title}
         description={description ?? subtitle}
@@ -577,7 +562,10 @@ export function TableCatalog({
         totalCount={resolvedRows.length}
         filterText={filterText}
         filterPlaceholder={catalog.genUiTableFilterPlaceholder}
-        onFilter={(value) => { setFilterText(value); pager.setPage(1); }}
+        onFilter={(value) => {
+          setFilterText(value);
+          pager.setPage(1);
+        }}
       />
 
       <CardContent className="p-0">
@@ -588,13 +576,19 @@ export function TableCatalog({
               sortState={sortState}
               copy={copy}
               hasActions={Boolean(onSendPrompt)}
-              onSort={(columnKey) => { handleSortColumn(columnKey); pager.setPage(1); }}
+              onSort={(columnKey) => {
+                handleSortColumn(columnKey);
+                pager.setPage(1);
+              }}
             />
           </TableHeader>
 
           <TableBody>
             {filteredAndSortedRows.length === 0 ? (
-              <CatalogEmptyRow colSpan={normalizedColumns.length + (onSendPrompt ? 1 : 0)} text={resolvedRows.length === 0 ? copy.emptyTitle : copy.emptyFiltered} />
+              <CatalogEmptyRow
+                colSpan={normalizedColumns.length + (onSendPrompt ? 1 : 0)}
+                text={resolvedRows.length === 0 ? copy.emptyTitle : copy.emptyFiltered}
+              />
             ) : (
               pager.pageItems.map((row, pageIdx) => {
                 // Global index keeps ids and test ids stable across pages.
@@ -614,16 +608,12 @@ export function TableCatalog({
             )}
           </TableBody>
         </Table>
-        <div className="px-3 pb-2"><TablePagination {...pager} /></div>
+        <div className="px-3 pb-2">
+          <TablePagination {...pager} />
+        </div>
       </CardContent>
 
-      {source && (
-        <CardFooter className="border-t border-border py-2.5 text-[11px] text-muted-foreground">
-          <span>
-            <strong className="font-medium text-foreground">{copy.sourcePrefix}:</strong> {source}
-          </span>
-        </CardFooter>
-      )}
+      {source && <CatalogSource prefix={copy.sourcePrefix} source={source} />}
     </Card>
   );
 }

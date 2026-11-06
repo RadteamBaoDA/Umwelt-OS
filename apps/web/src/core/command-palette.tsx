@@ -13,8 +13,8 @@ import { useGuardedNavigation } from '@/core/guarded-navigation';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { useWorkspace } from '@/core/workspace-context';
 import type { listConversations } from '@/modules/chat';
-import { searchEvents } from '@/modules/timeline';
-import { searchDocuments, searchEntities, type SearchFilters } from '@/modules/search';
+import { searchEvents } from '@/modules/timeline/public-api';
+import { searchDocuments, searchEntities, type SearchFilters } from '@/modules/search/public-api';
 
 type Scope = 'all' | 'entities' | 'documents' | 'events' | 'conversations';
 const scopes: Scope[] = ['all', 'entities', 'documents', 'events', 'conversations'];
