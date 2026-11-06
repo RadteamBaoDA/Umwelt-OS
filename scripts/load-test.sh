@@ -57,7 +57,9 @@ export TEST_PUBLIC_ORIGIN="http://localhost:${WEB_PORT}"
 
 compose=(docker compose -p "$project" -f docker-compose.yml -f docker-compose.test.yml)
 [[ "${LOAD_TEST_LIMITS:-0}" == "1" ]] && compose+=(-f docker-compose.limits.yml)
+sampler_pid=""
 cleanup() {
+  [[ -z "$sampler_pid" ]] || kill "$sampler_pid" 2>/dev/null || true
   # Keep the stack's state next to the results: `down` destroys the only evidence of a container that died mid-run.
   "${compose[@]}" ps -a >"$out_dir/compose-ps.txt" 2>&1 || true
   "${compose[@]}" logs --no-color --timestamps --tail 2000 >"$out_dir/compose-logs.txt" 2>&1 || true
@@ -79,6 +81,15 @@ network="$(docker network ls --filter "label=com.docker.compose.project=$project
   echo "source_revision=$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 } >"$out_dir/environment.txt"
 
+# Resource sampling: one JSON line per container of this project every ~5s (docker stats itself takes ~2s per call).
+(
+  while true; do
+    docker stats --no-stream --format '{{json .}}' 2>/dev/null | grep -F "\"Name\":\"$project-" | sed "s/^{/{\"ts\":$(date +%s),/" || true
+    sleep 3
+  done
+) >"$out_dir/docker-stats.jsonl" &
+sampler_pid=$!
+
 status=0
 docker run --rm --network "$network" \
   -v "$repo_root/tests/load:/scripts:ro" -v "$out_dir:/out" \
@@ -90,5 +101,31 @@ docker run --rm --network "$network" \
   -e SLO_LATENCY_SCALE="${SLO_LATENCY_SCALE:-1}" \
   -e SEED_DOCS="${SEED_DOCS:-8}" \
   "$K6_IMAGE" run --summary-export /out/summary.json "/scripts/$scenario" || status=$?
+kill "$sampler_pid" 2>/dev/null || true
+wait "$sampler_pid" 2>/dev/null || true
+sampler_pid=""
+# Per-service max/avg CPU% and max memory (stdlib only).
+"$py" - "$out_dir/docker-stats.jsonl" "$project" <<'PY' | tee "$out_dir/docker-stats-summary.txt"
+import json, re, sys
+units = {"b": 1, "kib": 1024, "mib": 1024**2, "gib": 1024**3, "kb": 1e3, "mb": 1e6, "gb": 1e9}
+def size(t):
+    m = re.match(r"([\d.]+)\s*([A-Za-z]+)", t.strip())
+    return float(m[1]) * units.get(m[2].lower(), 1) if m else 0.0
+rows = {}
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    try:
+        d = json.loads(line)
+        used, limit = d["MemUsage"].split("/")
+        r = rows.setdefault(d["Name"].removeprefix(sys.argv[2] + "-"), {"cpu": [], "mem": 0.0, "limit": ""})
+        r["cpu"].append(float(d["CPUPerc"].rstrip("%")))
+        r["mem"] = max(r["mem"], size(used))
+        r["limit"] = limit.strip()
+    except (ValueError, KeyError):
+        continue
+print(f"{'service':<28}{'samples':>8}{'cpu_max%':>10}{'cpu_avg%':>10}{'mem_max_MiB':>13}  mem_limit")
+for n, r in sorted(rows.items()):
+    c = r["cpu"]
+    print(f"{n:<28}{len(c):>8}{max(c):>10.1f}{sum(c)/len(c):>10.1f}{r['mem']/1024**2:>13.1f}  {r['limit']}")
+PY
 echo "k6 exit status: $status (0 = all SLO thresholds met, 99 = threshold crossed). Results: $out_dir"
 exit "$status"
