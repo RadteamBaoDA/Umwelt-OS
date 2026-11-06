@@ -15,8 +15,12 @@ import modules.knowledge.documents.models
 import modules.sources.models  # noqa: F401
 from core.errors import NotFoundError, ValidationFailedError
 from core.pagination import decode_fingerprinted_cursor
+from modules.connectors import public as connectors
+from modules.knowledge.documents import public as documents
 from modules.knowledge.observations import public
 from modules.knowledge.observations.schemas import ObservationQuery
+from modules.sources import public as sources
+from tests.unit.split_patching import patch_split
 
 _WS, _SRC = uuid4(), uuid4()
 _FROM = datetime(2026, 10, 1, tzinfo=UTC)
@@ -68,10 +72,10 @@ def _patch(
             if allowed is None or c.observation_id in allowed
         }
 
-    monkeypatch.setattr(public, "_admit", admit)
-    monkeypatch.setattr(public.sources, "get_connector_source", get_source)
-    monkeypatch.setattr(public.connectors, "get_current_provider_scope", get_scope)
-    monkeypatch.setattr(public.documents, "current_observation_evidence_versions", evidence)
+    patch_split(monkeypatch, "modules.knowledge.observations", "_admit", admit)
+    monkeypatch.setattr(sources, "get_connector_source", get_source)
+    monkeypatch.setattr(connectors, "get_current_provider_scope", get_scope)
+    monkeypatch.setattr(documents, "current_observation_evidence_versions", evidence)
 
 
 def _session(*batches: list[Any]) -> Any:

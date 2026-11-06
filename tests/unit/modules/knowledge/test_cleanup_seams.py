@@ -112,7 +112,7 @@ def _admit():
         patch_relationship_attr("_admit", AsyncMock(return_value=FENCE)),
         patch_split_attr("modules.timeline", "_admit", AsyncMock(return_value=FENCE)),
         patch.object(temporal, "_admit", AsyncMock(return_value=FENCE)),
-        patch.object(observations, "_admit", AsyncMock(return_value=FENCE)),
+        patch_split_attr("modules.knowledge.observations", "_admit", AsyncMock(return_value=FENCE)),
         patch.object(ingestion_outbox, "_admit_ingestion_scope", AsyncMock(return_value=FENCE)),
     ):
         yield

@@ -12,9 +12,13 @@ from sqlalchemy.orm import Session
 import modules.ingestion.models  # resolve Observation foreign-key targets
 import modules.knowledge.documents.models
 import modules.sources.models  # noqa: F401
+from modules.connectors import public as connectors
+from modules.knowledge.documents import public as documents
 from modules.knowledge.observations import public, routes
 from modules.knowledge.observations.models import Observation
 from modules.knowledge.observations.schemas import ObservationQuery
+from modules.sources import public as sources
+from tests.unit.split_patching import patch_split
 
 _FROM = datetime(2026, 10, 1, tzinfo=UTC)
 _TO = datetime(2026, 10, 2, tzinfo=UTC)
@@ -213,10 +217,10 @@ async def test_list_observations_forwards_history_to_evidence_check(monkeypatch)
         seen.append(include_historical)
         return {candidate.observation_id: 7 for candidate in candidates}
 
-    monkeypatch.setattr(public, "_admit", admit)
-    monkeypatch.setattr(public.sources, "get_connector_source", get_source)
-    monkeypatch.setattr(public.connectors, "get_current_provider_scope", get_scope)
-    monkeypatch.setattr(public.documents, "current_observation_evidence_versions", evidence)
+    patch_split(monkeypatch, "modules.knowledge.observations", "_admit", admit)
+    monkeypatch.setattr(sources, "get_connector_source", get_source)
+    monkeypatch.setattr(connectors, "get_current_provider_scope", get_scope)
+    monkeypatch.setattr(documents, "current_observation_evidence_versions", evidence)
     for flag in (True, False):
         session = SimpleNamespace(
             scalars=AsyncMock(return_value=SimpleNamespace(all=lambda: [row]))
