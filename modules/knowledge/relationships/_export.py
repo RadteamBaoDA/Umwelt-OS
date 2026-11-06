@@ -193,6 +193,86 @@ async def _relationship_source_generations(
     return result
 
 
+async def _export_citations(
+    session: AsyncSession, row: Relationship, eligible: Any, *, scope: Scope
+) -> tuple[list[RelationshipExportEvidence], dict[UUID, int]]:
+    """Read one relationship's export-eligible citations with their source generations.
+
+    Read-only, ordered by evidence id and capped at 100 (``ValueError`` beyond that). Returns the
+    citation DTOs and the distinct ``source_id -> generation`` map used for the record fence.
+    """
+    supports = list(
+        (
+            await session.scalars(
+                select(RelationshipEvidence)
+                .where(
+                    _evidence_scope(scope),
+                    RelationshipEvidence.relationship_id == row.id,
+                    RelationshipEvidence.source_id.in_(eligible),
+                )
+                .order_by(RelationshipEvidence.id)
+                .limit(101)
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
+    if len(supports) > 100:
+        raise ValueError("A relationship export record exceeds the citation bound")
+    generations = await _relationship_source_generations(
+        session,
+        {support.source_id for support in supports if support.source_id is not None},
+        scope=scope,
+    )
+    refs = [
+        RelationshipExportEvidence(
+            id=support.id,
+            source_id=support.source_id,
+            source_generation=generations.get(support.source_id)
+            if support.source_id is not None
+            else None,
+            document_id=support.document_id,
+            document_version_id=support.document_version_id,
+            chunk_id=support.chunk_id,
+            source_membership_id=support.source_membership_id,
+            target_membership_id=support.target_membership_id,
+            observed_at=support.observed_at,
+            confidence=support.confidence,
+        )
+        for support in supports
+    ]
+    return refs, generations
+
+
+def _relationship_export_fence(
+    row: Relationship,
+    refs: list[RelationshipExportEvidence],
+    generations: dict[UUID, int],
+) -> RelationshipExportFence:
+    """Build the final-validation fence of one exported relationship.
+
+    Pure: records the row timestamps, the ordered citation ids, the source generations (sorted by
+    id) and a digest of the exact citation payload.
+    """
+    digest = sha256(
+        json.dumps(
+            [ref.model_dump(mode="json") for ref in refs],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    return RelationshipExportFence(
+        id=row.id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        evidence_ids=[ref.id for ref in refs],
+        source_fences=[
+            RelationshipSourceExportFence(source_id=source_id, generation=generation)
+            for source_id, generation in sorted(generations.items(), key=lambda pair: str(pair[0]))
+        ],
+        evidence_digest=digest,
+    )
+
+
 async def export_page(
     session: AsyncSession,
     *,
@@ -239,45 +319,7 @@ async def export_page(
     fences: list[RelationshipExportFence] = []
     eligible = sources.export_eligible_source_ids(scope=scope)
     for row in rows[:limit]:
-        supports = list(
-            (
-                await session.scalars(
-                    select(RelationshipEvidence)
-                    .where(
-                        _evidence_scope(scope),
-                        RelationshipEvidence.relationship_id == row.id,
-                        RelationshipEvidence.source_id.in_(eligible),
-                    )
-                    .order_by(RelationshipEvidence.id)
-                    .limit(101)
-                    .execution_options(populate_existing=True)
-                )
-            ).all()
-        )
-        if len(supports) > 100:
-            raise ValueError("A relationship export record exceeds the citation bound")
-        generations = await _relationship_source_generations(
-            session,
-            {support.source_id for support in supports if support.source_id is not None},
-            scope=scope,
-        )
-        refs = [
-            RelationshipExportEvidence(
-                id=support.id,
-                source_id=support.source_id,
-                source_generation=generations.get(support.source_id)
-                if support.source_id is not None
-                else None,
-                document_id=support.document_id,
-                document_version_id=support.document_version_id,
-                chunk_id=support.chunk_id,
-                source_membership_id=support.source_membership_id,
-                target_membership_id=support.target_membership_id,
-                observed_at=support.observed_at,
-                confidence=support.confidence,
-            )
-            for support in supports
-        ]
+        refs, generations = await _export_citations(session, row, eligible, scope=scope)
         item = RelationshipExportRead(
             id=row.id,
             source_entity_id=row.source_entity_id,
@@ -297,28 +339,7 @@ async def export_page(
             has_more = True
             break
         items.append(item)
-        digest = sha256(
-            json.dumps(
-                [ref.model_dump(mode="json") for ref in refs],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
-        fences.append(
-            RelationshipExportFence(
-                id=row.id,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-                evidence_ids=[ref.id for ref in refs],
-                source_fences=[
-                    RelationshipSourceExportFence(source_id=source_id, generation=generation)
-                    for source_id, generation in sorted(
-                        generations.items(), key=lambda pair: str(pair[0])
-                    )
-                ],
-                evidence_digest=digest,
-            )
-        )
+        fences.append(_relationship_export_fence(row, refs, generations))
     next_cursor = (
         _encode_relationship_export_cursor(
             owner_id, scope.workspace_id, snapshot_at, items[-1].created_at, items[-1].id
@@ -337,6 +358,95 @@ async def export_page(
         max_payload_bytes=RELATIONSHIP_EXPORT_PAGE_MAX_BYTES,
         next_cursor=next_cursor,
     )
+
+
+async def _export_fence_unchanged(
+    session: AsyncSession,
+    fence: RelationshipExportFence,
+    eligible: Any,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Recheck one relationship export fence against the current canonical state.
+
+    Read-only. Returns ``False`` when the row is missing or its timestamps changed, a source is no
+    longer export-eligible at its fenced generation, support exceeds 100 rows, or the exact evidence
+    ids/digest differ; ``True`` only when every check still matches the fence.
+    """
+    row = await session.scalar(
+        select(Relationship)
+        .where(
+            Relationship.workspace_id == scope.workspace_id,
+            Relationship.id == fence.id,
+        )
+        .execution_options(populate_existing=True)
+    )
+    if row is None or (row.created_at, row.updated_at) != (fence.created_at, fence.updated_at):
+        return False
+    source_fences = [
+        SourceExportFence(
+            source_id=item.source_id,
+            workspace_id=scope.workspace_id,
+            generation=item.generation,
+        )
+        for item in fence.source_fences
+    ]
+    if set(
+        await sources.filter_export_eligible_sources(
+            session, source_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+    ) != {item.source_id for item in source_fences}:
+        return False
+    supports = list(
+        (
+            await session.scalars(
+                select(RelationshipEvidence)
+                .where(
+                    _evidence_scope(scope),
+                    RelationshipEvidence.relationship_id == fence.id,
+                    RelationshipEvidence.source_id.in_(eligible),
+                )
+                .order_by(RelationshipEvidence.id)
+                .limit(101)
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
+    if len(supports) > 100:
+        return False
+    generations = await _relationship_source_generations(
+        session,
+        {support.source_id for support in supports if support.source_id is not None},
+        scope=scope,
+    )
+    refs = [
+        RelationshipExportEvidence(
+            id=support.id,
+            source_id=support.source_id,
+            source_generation=generations.get(support.source_id)
+            if support.source_id is not None
+            else None,
+            document_id=support.document_id,
+            document_version_id=support.document_version_id,
+            chunk_id=support.chunk_id,
+            source_membership_id=support.source_membership_id,
+            target_membership_id=support.target_membership_id,
+            observed_at=support.observed_at,
+            confidence=support.confidence,
+        )
+        for support in supports
+    ]
+    digest = sha256(
+        json.dumps(
+            [ref.model_dump(mode="json") for ref in refs],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    if [ref.id for ref in refs] != fence.evidence_ids or digest != fence.evidence_digest:
+        return False
+    return True
 
 
 async def validate_export_fences(
@@ -365,83 +475,13 @@ async def validate_export_fences(
         )
     eligible = sources.export_eligible_source_ids(scope=scope)
     for fence in fences:
-        row = await session.scalar(
-            select(Relationship)
-            .where(
-                Relationship.workspace_id == scope.workspace_id,
-                Relationship.id == fence.id,
-            )
-            .execution_options(populate_existing=True)
-        )
-        if row is None or (row.created_at, row.updated_at) != (fence.created_at, fence.updated_at):
-            return RelationshipExportFenceValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed
-            )
-        source_fences = [
-            SourceExportFence(
-                source_id=item.source_id,
-                workspace_id=scope.workspace_id,
-                generation=item.generation,
-            )
-            for item in fence.source_fences
-        ]
-        if set(
-            await sources.filter_export_eligible_sources(
-                session, source_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-            )
-        ) != {item.source_id for item in source_fences}:
-            return RelationshipExportFenceValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed
-            )
-        supports = list(
-            (
-                await session.scalars(
-                    select(RelationshipEvidence)
-                    .where(
-                        _evidence_scope(scope),
-                        RelationshipEvidence.relationship_id == fence.id,
-                        RelationshipEvidence.source_id.in_(eligible),
-                    )
-                    .order_by(RelationshipEvidence.id)
-                    .limit(101)
-                    .execution_options(populate_existing=True)
-                )
-            ).all()
-        )
-        if len(supports) > 100:
-            return RelationshipExportFenceValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed
-            )
-        generations = await _relationship_source_generations(
+        if not await _export_fence_unchanged(
             session,
-            {support.source_id for support in supports if support.source_id is not None},
+            fence,
+            eligible,
             scope=scope,
-        )
-        refs = [
-            RelationshipExportEvidence(
-                id=support.id,
-                source_id=support.source_id,
-                source_generation=generations.get(support.source_id)
-                if support.source_id is not None
-                else None,
-                document_id=support.document_id,
-                document_version_id=support.document_version_id,
-                chunk_id=support.chunk_id,
-                source_membership_id=support.source_membership_id,
-                target_membership_id=support.target_membership_id,
-                observed_at=support.observed_at,
-                confidence=support.confidence,
-            )
-            for support in supports
-        ]
-        digest = sha256(
-            json.dumps(
-                [ref.model_dump(mode="json") for ref in refs],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
-        if [ref.id for ref in refs] != fence.evidence_ids or digest != fence.evidence_digest:
+            multi_workspace_enabled=multi_workspace_enabled,
+        ):
             return RelationshipExportFenceValidation(
                 valid=False, reason="record_changed", observed_snapshot_count=observed
             )

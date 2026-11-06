@@ -905,6 +905,60 @@ async def lock_source_documents_for_purge_in_uow(
     )
 
 
+async def _held_purge_capture(
+    session: AsyncSession,
+    source_id: UUID,
+    source_purge_operation_id: UUID,
+    *,
+    scope: Scope,
+    flag: bool,
+    access_fence: AccessFence,
+    source_fence: SourceFence,
+) -> Any:
+    """Read the retained source-purge capture and require it to equal the held fences.
+
+    Raises ``RuntimeError`` when the capture is missing or its membership/configuration revision,
+    source generation or source id differ from the held access and source fences.
+    """
+    capture = await sources.read_source_purge_job_capture(
+        session, source_purge_operation_id, scope=scope, multi_workspace_enabled=flag
+    )
+    if (
+        capture is None
+        or capture.membership_revision != access_fence.membership_revision
+        or capture.configuration_revision != access_fence.configuration_revision
+        or capture.source_generation != source_fence.generation
+        or capture.source_id != source_id
+    ):
+        raise RuntimeError("Source purge authority differs from the held cleanup fences")
+    return capture
+
+
+async def _source_document_ids(
+    session: AsyncSession, source_id: UUID, *, scope: Scope
+) -> list[UUID]:
+    """Return the ordered ids of every Document owned by the source in the workspace.
+
+    Raises ``ValueError`` when more than ``_CLEANUP_LIMIT`` documents exist, before any effect.
+    """
+    document_ids = list(
+        (
+            await session.scalars(
+                select(Document.id)
+                .where(
+                    Document.workspace_id == scope.workspace_id,
+                    Document.source_id == source_id,
+                )
+                .order_by(Document.id)
+                .limit(_CLEANUP_LIMIT + 1)
+            )
+        ).all()
+    )
+    if len(document_ids) > _CLEANUP_LIMIT:
+        raise ValueError("Source graph cleanup exceeds its atomic document limit")
+    return document_ids
+
+
 async def delete_source_documents_in_uow(
     session: AsyncSession,
     source_id: UUID,
@@ -936,32 +990,16 @@ async def delete_source_documents_in_uow(
         access_fence=access_fence,
         source_fence=source_fence,
     )
-    capture = await sources.read_source_purge_job_capture(
-        session, source_purge_operation_id, scope=scope, multi_workspace_enabled=flag
+    capture = await _held_purge_capture(
+        session,
+        source_id,
+        source_purge_operation_id,
+        scope=scope,
+        flag=flag,
+        access_fence=access_fence,
+        source_fence=source_fence,
     )
-    if (
-        capture is None
-        or capture.membership_revision != access_fence.membership_revision
-        or capture.configuration_revision != access_fence.configuration_revision
-        or capture.source_generation != source_fence.generation
-        or capture.source_id != source_id
-    ):
-        raise RuntimeError("Source purge authority differs from the held cleanup fences")
-    document_ids = list(
-        (
-            await session.scalars(
-                select(Document.id)
-                .where(
-                    Document.workspace_id == scope.workspace_id,
-                    Document.source_id == source_id,
-                )
-                .order_by(Document.id)
-                .limit(_CLEANUP_LIMIT + 1)
-            )
-        ).all()
-    )
-    if len(document_ids) > _CLEANUP_LIMIT:
-        raise ValueError("Source graph cleanup exceeds its atomic document limit")
+    document_ids = await _source_document_ids(session, source_id, scope=scope)
     closure = await _prepare_cleanup_closure(
         session,
         source_id=source_id,

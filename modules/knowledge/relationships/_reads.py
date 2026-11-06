@@ -50,6 +50,72 @@ from modules.knowledge.relationships.schemas import (
 from modules.sources import public as sources
 
 
+async def _read_current_relationship_page(
+    session: AsyncSession,
+    *,
+    limit: int,
+    cursor: str | None,
+    entity_id: UUID | None,
+    valid_at: datetime | None,
+    include_unknown_validity: bool,
+    fingerprint: str,
+    scope: Scope,
+) -> tuple[list[Relationship], str | None]:
+    """Read one page of current relationships under the validity filters and build the next cursor.
+
+    Newest first, ``limit + 1`` rows fetched to detect more; the cursor is bound to ``fingerprint``
+    (an invalid or foreign cursor raises through ``_decode_bound_cursor``). Read-only.
+    """
+    statement = select(Relationship).where(Relationship.workspace_id == scope.workspace_id)
+    known = Relationship.valid_from.is_not(None) & Relationship.valid_to.is_not(None)
+    if not include_unknown_validity:
+        statement = statement.where(known)
+    if valid_at is not None:
+        in_interval = or_(
+            Relationship.valid_from.is_(None), Relationship.valid_from <= valid_at
+        ) & or_(
+            Relationship.valid_to.is_(None),
+            Relationship.valid_to > valid_at,
+        )
+        statement = statement.where(in_interval)
+    if entity_id is not None:
+        statement = statement.where(
+            or_(
+                Relationship.source_entity_id == entity_id,
+                Relationship.target_entity_id == entity_id,
+            )
+        )
+    if cursor:
+        created_at, identifier = _decode_bound_cursor(
+            cursor, fingerprint, "Invalid relationship filter cursor"
+        )
+        statement = statement.where(
+            tuple_(Relationship.created_at, Relationship.id) < (created_at, identifier)
+        )
+    rows = list(
+        (
+            await session.scalars(
+                statement.order_by(desc(Relationship.created_at), desc(Relationship.id)).limit(
+                    limit + 1
+                )
+            )
+        ).all()
+    )
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = None
+    if has_more and rows:
+        next_cursor = b64url_encode(
+            json.dumps(
+                [
+                    fingerprint,
+                    encode_cursor(rows[-1].created_at, rows[-1].id),
+                ]
+            ).encode()
+        )
+    return rows, next_cursor
+
+
 async def list_relationships(
     session: AsyncSession,
     limit: int,
@@ -102,53 +168,16 @@ async def list_relationships(
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
         )
-    statement = select(Relationship).where(Relationship.workspace_id == scope.workspace_id)
-    known = Relationship.valid_from.is_not(None) & Relationship.valid_to.is_not(None)
-    if not include_unknown_validity:
-        statement = statement.where(known)
-    if valid_at is not None:
-        in_interval = or_(
-            Relationship.valid_from.is_(None), Relationship.valid_from <= valid_at
-        ) & or_(
-            Relationship.valid_to.is_(None),
-            Relationship.valid_to > valid_at,
-        )
-        statement = statement.where(in_interval)
-    if entity_id is not None:
-        statement = statement.where(
-            or_(
-                Relationship.source_entity_id == entity_id,
-                Relationship.target_entity_id == entity_id,
-            )
-        )
-    if cursor:
-        created_at, identifier = _decode_bound_cursor(
-            cursor, fingerprint, "Invalid relationship filter cursor"
-        )
-        statement = statement.where(
-            tuple_(Relationship.created_at, Relationship.id) < (created_at, identifier)
-        )
-    rows = list(
-        (
-            await session.scalars(
-                statement.order_by(desc(Relationship.created_at), desc(Relationship.id)).limit(
-                    limit + 1
-                )
-            )
-        ).all()
+    rows, next_cursor = await _read_current_relationship_page(
+        session,
+        limit=limit,
+        cursor=cursor,
+        entity_id=entity_id,
+        valid_at=valid_at,
+        include_unknown_validity=include_unknown_validity,
+        fingerprint=fingerprint,
+        scope=scope,
     )
-    has_more = len(rows) > limit
-    rows = rows[:limit]
-    next_cursor = None
-    if has_more and rows:
-        next_cursor = b64url_encode(
-            json.dumps(
-                [
-                    fingerprint,
-                    encode_cursor(rows[-1].created_at, rows[-1].id),
-                ]
-            ).encode()
-        )
     items = []
     for row in rows:
         try:
@@ -379,33 +408,15 @@ async def get_neighbors(
     return NeighborPage(items=items, truncated=truncated, next_cursor=next_cursor)
 
 
-async def get_neighbors_bulk(
-    session: AsyncSession,
-    ids: list[UUID],
-    limit: int = 50,
-    *,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> list[NeighborPage | None]:
-    """Bulk first-page ``get_neighbors``: pages aligned with ``ids`` (duplicates allowed, at most 100).
+async def _first_neighbor_rows(
+    session: AsyncSession, wanted: list[UUID], limit: int, *, scope: Scope
+) -> dict[UUID, list[Relationship]]:
+    """Read the first ``limit`` relationships of every focus in one window-function query.
 
-    Per entity the page equals ``get_neighbors(id, limit)`` without a cursor: the focus is the redirect-resolved
-    canonical entity (``None`` page when missing), relationships are ordered ``(created_at DESC, id DESC)`` and
-    cut at ``limit - 1`` with ``truncated``/``next_cursor`` set when more exist. One window-function query
-    selects every focus's first ``limit`` relationships and neighbour entity references are resolved in
-    batches of at most 100 unique ids, instead of ~4 statements per entity. Read-only; a dangling neighbour
-    raises ``LookupError`` like the singular.
+    Read-only; relationships come back ordered ``(created_at DESC, id DESC)`` per focus, and every
+    focus in ``wanted`` has an entry (possibly empty). Scoped to the caller's workspace.
+
     """
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if not 2 <= limit <= 100:
-        raise ValueError("Neighbor page limit must be between 2 and 100 total nodes")
-    focuses = await entities.resolve_canonical_entity_ids(
-        session,
-        ids,
-        scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
-    )
-    wanted = list(dict.fromkeys(focus for focus in focuses if focus is not None))
     rows_by_focus: dict[UUID, list[Relationship]] = {focus: [] for focus in wanted}
     if wanted:
         # UNION (not UNION ALL) so a self-loop matched on both endpoints appears once per focus, like OR.
@@ -449,6 +460,37 @@ async def get_neighbors_bulk(
             relationship: Relationship = found_row[0]
             focus_id: UUID = found_row[1]
             rows_by_focus[focus_id].append(relationship)
+    return rows_by_focus
+
+
+async def get_neighbors_bulk(
+    session: AsyncSession,
+    ids: list[UUID],
+    limit: int = 50,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[NeighborPage | None]:
+    """Bulk first-page ``get_neighbors``: pages aligned with ``ids`` (duplicates allowed, at most 100).
+
+    Per entity the page equals ``get_neighbors(id, limit)`` without a cursor: the focus is the redirect-resolved
+    canonical entity (``None`` page when missing), relationships are ordered ``(created_at DESC, id DESC)`` and
+    cut at ``limit - 1`` with ``truncated``/``next_cursor`` set when more exist. One window-function query
+    selects every focus's first ``limit`` relationships and neighbour entity references are resolved in
+    batches of at most 100 unique ids, instead of ~4 statements per entity. Read-only; a dangling neighbour
+    raises ``LookupError`` like the singular.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not 2 <= limit <= 100:
+        raise ValueError("Neighbor page limit must be between 2 and 100 total nodes")
+    focuses = await entities.resolve_canonical_entity_ids(
+        session,
+        ids,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    wanted = list(dict.fromkeys(focus for focus in focuses if focus is not None))
+    rows_by_focus = await _first_neighbor_rows(session, wanted, limit, scope=scope)
     neighbor_ids = list(
         dict.fromkeys(
             row.target_entity_id if row.source_entity_id == focus else row.source_entity_id

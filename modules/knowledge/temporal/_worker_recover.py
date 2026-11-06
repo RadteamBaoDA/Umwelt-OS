@@ -3,9 +3,10 @@
 Private implementation of ``modules.knowledge.temporal.worker``; import from that facade.
 """
 
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from arq.connections import ArqRedis
@@ -284,6 +285,41 @@ async def _recover(
     )
 
 
+async def _verify_ancestor_dispatches(
+    graph: TemporalGraph,
+    factory: async_sessionmaker[AsyncSession],
+    adm: _Admission,
+    context: Any,
+    ancestor: GraphOperation,
+    mapping: GraphMapping,
+    prior: Sequence[GraphDispatch],
+) -> None:
+    """Prove each unfinished ancestor dispatch has ceased and journal the cessation.
+
+    For every dispatch in ``prior`` (in order) asks the graph to verify exact cessation, raising
+    ``GraphOperationUnknown`` if unproven, then records ``cessation_verified_at`` under a row lock
+    in its own committed journal session.
+    """
+    for dispatch in prior:
+        if ancestor is None:
+            raise RuntimeError("invariant violated: ancestor must not be None")
+        ownership = DispatchOwnership(
+            ancestor.id, str(mapping.partition_id), dispatch.server_run_id, dispatch.client_id
+        )
+        if not await graph.verify_dispatch_cessation(ownership, context):
+            raise GraphOperationUnknown("graph_ancestor_dispatch_unknown")
+        async with factory() as journal:
+            await _admit(journal, adm)
+            stopped = await _get(journal, GraphDispatch, dispatch.id, adm, lock=True)
+            if stopped is None:
+                raise RuntimeError("invariant violated: stopped must not be None")
+            stopped.cessation_verified_at, stopped.cessation_reason = (
+                datetime.now(UTC),
+                "owned_sync_client_killed",
+            )
+            await _commit(journal, adm)
+
+
 async def _recover_ancestor(
     graph: TemporalGraph,
     factory: async_sessionmaker[AsyncSession],
@@ -334,24 +370,7 @@ async def _recover_ancestor(
             )
         )
     ).all()
-    for dispatch in prior:
-        if ancestor is None:
-            raise RuntimeError("invariant violated: ancestor must not be None")
-        ownership = DispatchOwnership(
-            ancestor.id, str(mapping.partition_id), dispatch.server_run_id, dispatch.client_id
-        )
-        if not await graph.verify_dispatch_cessation(ownership, context):
-            raise GraphOperationUnknown("graph_ancestor_dispatch_unknown")
-        async with factory() as journal:
-            await _admit(journal, adm)
-            stopped = await _get(journal, GraphDispatch, dispatch.id, adm, lock=True)
-            if stopped is None:
-                raise RuntimeError("invariant violated: stopped must not be None")
-            stopped.cessation_verified_at, stopped.cessation_reason = (
-                datetime.now(UTC),
-                "owned_sync_client_killed",
-            )
-            await _commit(journal, adm)
+    await _verify_ancestor_dispatches(graph, factory, adm, context, ancestor, mapping, prior)
     if context.receipt_history:
         await _recover(
             graph,
@@ -451,6 +470,96 @@ async def _recovery_workspaces(
     return page
 
 
+async def _requeue_blocked_operations(
+    session: AsyncSession,
+    ctx: dict[str, object],
+    adm: _Admission,
+    blocked: Sequence[UUID],
+    dependency_state: GraphState | None,
+    now: datetime,
+) -> None:
+    """Return blocked operations to pending once their dependency fingerprint changed.
+
+    Per operation: reads the locator, computes the current dependency fingerprint, then (partition
+    first, then operation, then mapping, matching execution lock order) requeues it only if it is
+    still blocked and its partition lease has lapsed. A mapping still at the operation's desired
+    revision is marked pending and committed with its status change. Raises ``RuntimeError`` on
+    missing rows or an unprobed dependency state.
+    """
+    for blocked_id in blocked:
+        # Retry admission uses the same row order as execution. Mapping is
+        # deliberately untouched; any uncertainty retains its exact ledger.
+        locator = await _get(session, GraphOperation, blocked_id, adm)
+        if locator is None or dependency_state is None:
+            raise RuntimeError("invariant violated: locator and dependency_state must not be None")
+        fingerprint = await _dependency_fingerprint(
+            session, ctx, dependency_state, adm, locator.partition_id
+        )
+        if locator.dependency_fingerprint == fingerprint:
+            continue
+        partition = await _get(session, GraphPartition, locator.partition_id, adm, lock=True)
+        operation = await _get(session, GraphOperation, blocked_id, adm, lock=True)
+        if operation is None:
+            raise RuntimeError("invariant violated: operation must not be None")
+        if partition is None:
+            raise RuntimeError("invariant violated: partition must not be None")
+        if operation.status == "blocked" and (
+            partition.lease_expires_at is None or partition.lease_expires_at <= now
+        ):
+            operation.status, operation.attempts = "pending", 0
+            operation.dependency_fingerprint = fingerprint
+            mapping = await _get(session, GraphMapping, operation.mapping_id, adm, lock=True)
+            if mapping is None:
+                raise RuntimeError("invariant violated: mapping must not be None")
+            if (
+                mapping.desired_revision == operation.desired_revision
+                and mapping.desired_digest == operation.desired_digest
+            ):
+                mapping.status, mapping.error_code = "pending", None
+                await _commit(
+                    session,
+                    adm,
+                    [await public.graph_status_change(session, mapping.id, scope=adm.scope)],
+                )
+
+
+async def _due_operations_and_runs(
+    session: AsyncSession, workspace_id: UUID, now: datetime
+) -> tuple[Sequence[UUID], Sequence[UUID]]:
+    """Select up to 25 due operation ids and 25 pending reconcile runs for one workspace.
+
+    Operations are unleased (or lease-expired) pending/reconcile/running intents due now, oldest
+    first; runs are locked with ``SKIP LOCKED`` so concurrent recovery passes never share one.
+    """
+    operations = (
+        await session.scalars(
+            select(GraphOperation.id)
+            .where(
+                GraphOperation.workspace_id == workspace_id,
+                GraphOperation.status.in_(["pending", "reconcile_needed", "running"]),
+                GraphOperation.next_attempt_at <= now,
+                (GraphOperation.lease_expires_at.is_(None))
+                | (GraphOperation.lease_expires_at <= now),
+            )
+            .order_by(GraphOperation.next_attempt_at, GraphOperation.id)
+            .limit(25)
+        )
+    ).all()
+    runs = (
+        await session.scalars(
+            select(GraphReconcileRun.id)
+            .where(
+                GraphReconcileRun.workspace_id == workspace_id,
+                GraphReconcileRun.status.in_(["pending", "running"]),
+            )
+            .order_by(GraphReconcileRun.created_at)
+            .limit(25)
+            .with_for_update(skip_locked=True)
+        )
+    ).all()
+    return operations, runs
+
+
 async def recover_graph_work(ctx: dict[str, object]) -> int:
     """Recover due intents/runs one admitted workspace per transaction; Redis loss never deletes work.
 
@@ -492,77 +601,8 @@ async def recover_graph_work(ctx: dict[str, object]) -> int:
                     await probe.close()
             async with factory() as session:
                 await _admit(session, adm)
-                for blocked_id in blocked:
-                    # Retry admission uses the same row order as execution. Mapping is
-                    # deliberately untouched; any uncertainty retains its exact ledger.
-                    locator = await _get(session, GraphOperation, blocked_id, adm)
-                    if locator is None or dependency_state is None:
-                        raise RuntimeError(
-                            "invariant violated: locator and dependency_state must not be None"
-                        )
-                    fingerprint = await _dependency_fingerprint(
-                        session, ctx, dependency_state, adm, locator.partition_id
-                    )
-                    if locator.dependency_fingerprint == fingerprint:
-                        continue
-                    partition = await _get(
-                        session, GraphPartition, locator.partition_id, adm, lock=True
-                    )
-                    operation = await _get(session, GraphOperation, blocked_id, adm, lock=True)
-                    if operation is None:
-                        raise RuntimeError("invariant violated: operation must not be None")
-                    if partition is None:
-                        raise RuntimeError("invariant violated: partition must not be None")
-                    if operation.status == "blocked" and (
-                        partition.lease_expires_at is None or partition.lease_expires_at <= now
-                    ):
-                        operation.status, operation.attempts = "pending", 0
-                        operation.dependency_fingerprint = fingerprint
-                        mapping = await _get(
-                            session, GraphMapping, operation.mapping_id, adm, lock=True
-                        )
-                        if mapping is None:
-                            raise RuntimeError("invariant violated: mapping must not be None")
-                        if (
-                            mapping.desired_revision == operation.desired_revision
-                            and mapping.desired_digest == operation.desired_digest
-                        ):
-                            mapping.status, mapping.error_code = "pending", None
-                            await _commit(
-                                session,
-                                adm,
-                                [
-                                    await public.graph_status_change(
-                                        session, mapping.id, scope=adm.scope
-                                    )
-                                ],
-                            )
-                operations = (
-                    await session.scalars(
-                        select(GraphOperation.id)
-                        .where(
-                            GraphOperation.workspace_id == workspace_id,
-                            GraphOperation.status.in_(["pending", "reconcile_needed", "running"]),
-                            GraphOperation.next_attempt_at <= now,
-                            (GraphOperation.lease_expires_at.is_(None))
-                            | (GraphOperation.lease_expires_at <= now),
-                        )
-                        .order_by(GraphOperation.next_attempt_at, GraphOperation.id)
-                        .limit(25)
-                    )
-                ).all()
-                runs = (
-                    await session.scalars(
-                        select(GraphReconcileRun.id)
-                        .where(
-                            GraphReconcileRun.workspace_id == workspace_id,
-                            GraphReconcileRun.status.in_(["pending", "running"]),
-                        )
-                        .order_by(GraphReconcileRun.created_at)
-                        .limit(25)
-                        .with_for_update(skip_locked=True)
-                    )
-                ).all()
+                await _requeue_blocked_operations(session, ctx, adm, blocked, dependency_state, now)
+                operations, runs = await _due_operations_and_runs(session, workspace_id, now)
                 for run_id in runs:
                     await public.reconcile_slice(
                         session, run_id, scope=adm.scope, multi_workspace_enabled=adm.multi

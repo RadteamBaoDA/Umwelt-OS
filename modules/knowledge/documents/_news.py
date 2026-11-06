@@ -10,6 +10,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import (
+    Select,
     func,
     select,
     tuple_,
@@ -529,6 +530,57 @@ async def news_current_scope_status(
     return NewsProjectionStatus(incomplete_reasons=tuple(sorted(reasons)))
 
 
+def _news_projection_statement(
+    scope: Scope,
+    source_ids: tuple[UUID, ...],
+    observed_since: datetime | None,
+    channel_ids: tuple[str, ...] | None,
+    language: str | None,
+) -> Select[UUID, datetime]:
+    """Build the id/created_at selection of current ready versions for the given news filters.
+
+    Pure statement construction (no I/O): active sources only, current version with at least one
+    chunk, optional observed-since, language (stored normalized) and Telegram channel filters.
+    """
+    statement = (
+        select(Document.id, Document.created_at)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(Source, Source.id == Document.source_id)
+        .where(
+            Document.source_id.in_(source_ids),
+            Document.current_version == DocumentVersion.version_number,
+            *_document_scope(scope),
+            Document.extraction_status.in_(("ready", "succeeded")),
+            Source.status == "active",
+            select(DocumentChunk.id)
+            .where(DocumentChunk.document_version_id == DocumentVersion.id)
+            .exists(),
+        )
+    )
+    if observed_since is not None:
+        statement = statement.where(
+            func.coalesce(Document.observed_at, DocumentVersion.observed_at) >= observed_since
+        )
+    if language is not None:
+        # Unknown (NULL) language never matches a concrete language; only "Any" (None) returns it.
+        # Stored normalized (primary subtag, lowercase) so this equality can use ix_documents_workspace_language_created_at_id.
+        statement = statement.where(Document.language == language)
+    if channel_ids is not None:
+        statement = statement.where(
+            Source.provider == "telegram",
+            select(NormalizedVersionProvenance.id)
+            .where(
+                NormalizedVersionProvenance.document_version_id == DocumentVersion.id,
+                NormalizedVersionProvenance.source_generation == Source.generation,
+                NormalizedVersionProvenance.provenance_json["provider_record"]["telegram"][
+                    "channel_id"
+                ].astext.in_(channel_ids),
+            )
+            .exists(),
+        )
+    return statement
+
+
 async def list_news_document_projections(
     session: AsyncSession,
     *,
@@ -567,42 +619,7 @@ async def list_news_document_projections(
         channel_ids=channel_ids,
         language=language,
     )
-    statement = (
-        select(Document.id, Document.created_at)
-        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
-        .join(Source, Source.id == Document.source_id)
-        .where(
-            Document.source_id.in_(source_ids),
-            Document.current_version == DocumentVersion.version_number,
-            *_document_scope(scope),
-            Document.extraction_status.in_(("ready", "succeeded")),
-            Source.status == "active",
-            select(DocumentChunk.id)
-            .where(DocumentChunk.document_version_id == DocumentVersion.id)
-            .exists(),
-        )
-    )
-    if observed_since is not None:
-        statement = statement.where(
-            func.coalesce(Document.observed_at, DocumentVersion.observed_at) >= observed_since
-        )
-    if language is not None:
-        # Unknown (NULL) language never matches a concrete language; only "Any" (None) returns it.
-        # Stored normalized (primary subtag, lowercase) so this equality can use ix_documents_workspace_language_created_at_id.
-        statement = statement.where(Document.language == language)
-    if channel_ids is not None:
-        statement = statement.where(
-            Source.provider == "telegram",
-            select(NormalizedVersionProvenance.id)
-            .where(
-                NormalizedVersionProvenance.document_version_id == DocumentVersion.id,
-                NormalizedVersionProvenance.source_generation == Source.generation,
-                NormalizedVersionProvenance.provenance_json["provider_record"]["telegram"][
-                    "channel_id"
-                ].astext.in_(channel_ids),
-            )
-            .exists(),
-        )
+    statement = _news_projection_statement(scope, source_ids, observed_since, channel_ids, language)
     if cursor:
         created_at, document_cursor = _decode_news_projection_cursor(cursor, fingerprint)
         statement = statement.where(

@@ -5,7 +5,7 @@ Private implementation of ``modules.knowledge.temporal.worker``; import from tha
 
 import math
 from dataclasses import replace
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from pydantic import TypeAdapter
@@ -503,6 +503,50 @@ async def _prepare_node_actions(
     return tuple(prepared_actions)
 
 
+def _expected_fact_fingerprint(
+    current: Any,
+    receipts: tuple[GraphWriteReceipt, ...],
+    fact_id: str,
+    state: Any,
+) -> str:
+    """Pick the fingerprint a recovery action must match for one journaled fact.
+
+    Pure: the current graph state wins; otherwise the newest receipt that observed the fact as
+    existing; otherwise the intended support state itself.
+    """
+    expected = (
+        current.state_fingerprint
+        if current
+        else next(
+            (
+                item.state_fingerprint
+                for receipt in reversed(receipts)
+                for item in receipt.existing_fact_states
+                if item.fact_id == fact_id
+            ),
+            state.state_fingerprint,
+        )
+    )
+    return expected
+
+
+def _terminal_episode_ids(rows: list[GraphMapping]) -> set[str]:
+    """Return episode ids of converged tombstoned mappings whose graph state is proven absent.
+
+    Pure filter over already-loaded rows; these owners are discarded from a fact's support claim.
+    """
+    terminal = {
+        str(row.episode_id)
+        for row in rows
+        if row.tombstoned
+        and row.external_state == "absent"
+        and row.applied_revision == row.desired_revision
+        and row.applied_digest == row.desired_digest
+        and row.error_code is None
+    }
+    return terminal
+
+
 async def _build_fact_actions(
     factory: async_sessionmaker[AsyncSession],
     adm: _Admission,
@@ -540,29 +584,9 @@ async def _build_fact_actions(
                     "invariant violated: context.authorize_rebuild_absence must not be None"
                 )
             await context.authorize_rebuild_absence("fact", fact_id)
-            terminal = {
-                str(row.episode_id)
-                for row in rows
-                if row.tombstoned
-                and row.external_state == "absent"
-                and row.applied_revision == row.desired_revision
-                and row.applied_digest == row.desired_digest
-                and row.error_code is None
-            }
+            terminal = _terminal_episode_ids(rows)
             remaining -= terminal
-        expected = (
-            current.state_fingerprint
-            if current
-            else next(
-                (
-                    item.state_fingerprint
-                    for receipt in reversed(receipts)
-                    for item in receipt.existing_fact_states
-                    if item.fact_id == fact_id
-                ),
-                state.state_fingerprint,
-            )
-        )
+        expected = _expected_fact_fingerprint(current, receipts, fact_id, state)
         if not remaining:
             fact_actions.append(
                 ExactFactRecoveryAction(

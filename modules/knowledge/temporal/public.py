@@ -96,46 +96,19 @@ def _after(cursor: str | None, fingerprint: str) -> int:
         raise ValueError("Invalid temporal cursor") from exc
 
 
-async def schedule_version(
+async def _reserve_partition_slot(
     session: AsyncSession,
     ready: documents.ReadyVersionRef,
+    chunk_count: int,
     *,
     scope: Scope,
-    multi_workspace_enabled: bool,
-) -> UUID:
-    """Reserve one immutable bounded bucket/episode and durable intent under the caller's source/document fence.
+) -> GraphPartition:
+    """Reserve one episode slot (and its evidence slots) in the source generation's open bucket.
 
-    No provider work or commit occurs here. Bucket slots include tombstones and failed
-    attempts permanently; retry never moves an episode into a new graph context.
-    Out-of-bound immutable input creates blocked mapping/intent status without
-    rolling back canonical readiness or truncating evidence for graph inference.
+    Ensures and row-locks the generation's allocator (allocator before partition), reuses the newest
+    unsealed partition when it has room, otherwise seals it and opens the next ordinal. Tombstones and
+    failed attempts keep their slot. Flushes only when a new partition is created; never commits.
     """
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    mapping = await session.scalar(
-        select(GraphMapping)
-        .where(
-            GraphMapping.workspace_id == scope.workspace_id,
-            GraphMapping.document_version_id == ready.document_version_id,
-            GraphMapping.source_generation == ready.source_generation,
-        )
-        .with_for_update()
-    )
-    if mapping is not None:
-        return mapping.id
-    input_error = None
-    try:
-        data = await documents.read_extraction_input(
-            session,
-            ready.document_version_id,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-    except documents.ExtractionInputLimitError:
-        # An optional projection's capacity limit must not poison the canonical
-        # ready event/outbox transaction or its other consumers' durable work.
-        data = None
-        input_error = "graph_extraction_input_limit"
-    chunk_count = len(data.chunks) if data is not None else 0
     await session.execute(
         insert(GraphAllocation)
         .values(
@@ -192,6 +165,50 @@ async def schedule_version(
         await session.flush()
     partition.reservations += 1
     partition.evidence_reservations += chunk_count
+    return partition
+
+
+async def schedule_version(
+    session: AsyncSession,
+    ready: documents.ReadyVersionRef,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> UUID:
+    """Reserve one immutable bounded bucket/episode and durable intent under the caller's source/document fence.
+
+    No provider work or commit occurs here. Bucket slots include tombstones and failed
+    attempts permanently; retry never moves an episode into a new graph context.
+    Out-of-bound immutable input creates blocked mapping/intent status without
+    rolling back canonical readiness or truncating evidence for graph inference.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    mapping = await session.scalar(
+        select(GraphMapping)
+        .where(
+            GraphMapping.workspace_id == scope.workspace_id,
+            GraphMapping.document_version_id == ready.document_version_id,
+            GraphMapping.source_generation == ready.source_generation,
+        )
+        .with_for_update()
+    )
+    if mapping is not None:
+        return mapping.id
+    input_error = None
+    try:
+        data = await documents.read_extraction_input(
+            session,
+            ready.document_version_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    except documents.ExtractionInputLimitError:
+        # An optional projection's capacity limit must not poison the canonical
+        # ready event/outbox transaction or its other consumers' durable work.
+        data = None
+        input_error = "graph_extraction_input_limit"
+    chunk_count = len(data.chunks) if data is not None else 0
+    partition = await _reserve_partition_slot(session, ready, chunk_count, scope=scope)
     state = {"version_id": str(ready.document_version_id), "generation": ready.source_generation}
     mapping = GraphMapping(
         workspace_id=scope.workspace_id,
@@ -628,6 +645,104 @@ async def mapping_statuses(
     ]
 
 
+async def _search_partition_episodes(
+    session: AsyncSession,
+    partition_id: UUID,
+    now: datetime,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> tuple[UUID, ...]:
+    """Validate one search bucket and return its active episode ids.
+
+    Read-only. Raises ``ValueError`` when the partition is missing, uncertain or leased, its
+    source generation is unavailable, a dispatch has not ceased, mappings exceed the lifetime
+    bound or are unconverged, deletion is unproven, or active evidence fences are stale.
+
+    """
+    partition = await session.scalar(
+        select(GraphPartition).where(
+            GraphPartition.id == partition_id,
+            GraphPartition.workspace_id == scope.workspace_id,
+        )
+    )
+    if (
+        partition is None
+        or partition.uncertain_operation_id is not None
+        or (partition.lease_expires_at is not None and partition.lease_expires_at > now)
+    ):
+        raise ValueError("Graph partition requires recovery or is busy")
+    source = await sources.get_connector_source(
+        session,
+        partition.source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if source is None or source.status != "active" or source.generation != partition.generation:
+        raise ValueError("Graph partition source generation is unavailable")
+    unresolved = await session.scalar(
+        select(GraphDispatch.id)
+        .join(
+            GraphOperation,
+            GraphOperation.id == GraphDispatch.operation_id,
+        )
+        .where(
+            GraphOperation.workspace_id == scope.workspace_id,
+            GraphDispatch.workspace_id == scope.workspace_id,
+            GraphOperation.partition_id == partition_id,
+            GraphDispatch.completed_at.is_(None),
+            GraphDispatch.cessation_verified_at.is_(None),
+        )
+        .limit(1)
+    )
+    if unresolved is not None:
+        raise ValueError("Graph partition dispatch has not ceased")
+    rows = (
+        await session.scalars(
+            select(GraphMapping)
+            .where(
+                GraphMapping.workspace_id == scope.workspace_id,
+                GraphMapping.partition_id == partition_id,
+            )
+            .order_by(GraphMapping.id)
+            .limit(101)
+        )
+    ).all()
+    if len(rows) > 100:
+        raise ValueError("Graph partition exceeds its lifetime mapping bound")
+    active = [row for row in rows if not row.tombstoned]
+    fences = await documents.review_version_fences(
+        session,
+        [row.document_version_id for row in active],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    for row in rows:
+        if (
+            row.source_id != partition.source_id
+            or row.source_generation != partition.generation
+            or row.applied_revision != row.desired_revision
+            or row.applied_digest != row.desired_digest
+            or row.error_code is not None
+        ):
+            raise ValueError("Graph partition contains unconverged mappings")
+        if row.tombstoned:
+            if row.external_state != "absent":
+                raise ValueError("Graph partition deletion is not proven")
+        else:
+            fence = fences.get(row.document_version_id)
+            if (
+                row.status != "synchronized"
+                or row.external_state != "present"
+                or fence is None
+                or fence.document_id != row.document_id
+                or fence.source_id != row.source_id
+                or fence.current_source_generation != row.source_generation
+            ):
+                raise ValueError("Graph partition evidence is unavailable")
+    return tuple(row.episode_id for row in active)
+
+
 async def select_search_partitions(
     session: AsyncSession,
     partition_ids: list[UUID],
@@ -650,87 +765,13 @@ async def select_search_partitions(
     result = {}
     now = datetime.now(UTC)
     for partition_id in partition_ids:
-        partition = await session.scalar(
-            select(GraphPartition).where(
-                GraphPartition.id == partition_id,
-                GraphPartition.workspace_id == scope.workspace_id,
-            )
-        )
-        if (
-            partition is None
-            or partition.uncertain_operation_id is not None
-            or (partition.lease_expires_at is not None and partition.lease_expires_at > now)
-        ):
-            raise ValueError("Graph partition requires recovery or is busy")
-        source = await sources.get_connector_source(
+        result[partition_id] = await _search_partition_episodes(
             session,
-            partition.source_id,
+            partition_id,
+            now,
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
         )
-        if source is None or source.status != "active" or source.generation != partition.generation:
-            raise ValueError("Graph partition source generation is unavailable")
-        unresolved = await session.scalar(
-            select(GraphDispatch.id)
-            .join(
-                GraphOperation,
-                GraphOperation.id == GraphDispatch.operation_id,
-            )
-            .where(
-                GraphOperation.workspace_id == scope.workspace_id,
-                GraphDispatch.workspace_id == scope.workspace_id,
-                GraphOperation.partition_id == partition_id,
-                GraphDispatch.completed_at.is_(None),
-                GraphDispatch.cessation_verified_at.is_(None),
-            )
-            .limit(1)
-        )
-        if unresolved is not None:
-            raise ValueError("Graph partition dispatch has not ceased")
-        rows = (
-            await session.scalars(
-                select(GraphMapping)
-                .where(
-                    GraphMapping.workspace_id == scope.workspace_id,
-                    GraphMapping.partition_id == partition_id,
-                )
-                .order_by(GraphMapping.id)
-                .limit(101)
-            )
-        ).all()
-        if len(rows) > 100:
-            raise ValueError("Graph partition exceeds its lifetime mapping bound")
-        active = [row for row in rows if not row.tombstoned]
-        fences = await documents.review_version_fences(
-            session,
-            [row.document_version_id for row in active],
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        for row in rows:
-            if (
-                row.source_id != partition.source_id
-                or row.source_generation != partition.generation
-                or row.applied_revision != row.desired_revision
-                or row.applied_digest != row.desired_digest
-                or row.error_code is not None
-            ):
-                raise ValueError("Graph partition contains unconverged mappings")
-            if row.tombstoned:
-                if row.external_state != "absent":
-                    raise ValueError("Graph partition deletion is not proven")
-            else:
-                fence = fences.get(row.document_version_id)
-                if (
-                    row.status != "synchronized"
-                    or row.external_state != "present"
-                    or fence is None
-                    or fence.document_id != row.document_id
-                    or fence.source_id != row.source_id
-                    or fence.current_source_generation != row.source_generation
-                ):
-                    raise ValueError("Graph partition evidence is unavailable")
-        result[partition_id] = tuple(row.episode_id for row in active)
     return result
 
 
@@ -940,29 +981,13 @@ async def reconcile_slice(
     return len(members) > limit
 
 
-async def reconcile_status(
-    session: AsyncSession,
-    run_id: UUID,
-    *,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> ReconcileStatus | None:
-    """Aggregate current exact-revision outcomes for already scanned immutable members.
+def _reconcile_member_predicates(scope: Scope) -> tuple[Any, Any, Any]:
+    """Build the SQL predicates classifying a reconcile member as converged, blocked or failed.
 
-    Reads perform no writes. Queue counts are outstanding scanned work; terminal
-    success requires all selected members converged and the scan exhausted.
-    Missing ledgers fail, superseded revisions and uncertain partitions block;
-    a live writer or unresolved dispatch prevents certifying physical convergence.
+    Pure expression construction (evaluated by the caller's query). Convergence requires the applied
+    revision/digest to equal the member's desired one and the partition to be free of uncertain
+    operations, unresolved dispatches and live leases; the lease cutoff is read at build time.
     """
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    run = await session.scalar(
-        select(GraphReconcileRun).where(
-            GraphReconcileRun.id == run_id,
-            GraphReconcileRun.workspace_id == scope.workspace_id,
-        )
-    )
-    if run is None:
-        return None
     matching = and_(
         GraphMapping.desired_revision == GraphReconcileMember.desired_revision,
         GraphMapping.desired_digest == GraphReconcileMember.desired_digest,
@@ -1011,6 +1036,33 @@ async def reconcile_status(
         ~failed,
         or_(~matching, uncertain, and_(~converged, GraphMapping.status == "blocked")),
     )
+    return converged, blocked, failed
+
+
+async def reconcile_status(
+    session: AsyncSession,
+    run_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> ReconcileStatus | None:
+    """Aggregate current exact-revision outcomes for already scanned immutable members.
+
+    Reads perform no writes. Queue counts are outstanding scanned work; terminal
+    success requires all selected members converged and the scan exhausted.
+    Missing ledgers fail, superseded revisions and uncertain partitions block;
+    a live writer or unresolved dispatch prevents certifying physical convergence.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    run = await session.scalar(
+        select(GraphReconcileRun).where(
+            GraphReconcileRun.id == run_id,
+            GraphReconcileRun.workspace_id == scope.workspace_id,
+        )
+    )
+    if run is None:
+        return None
+    converged, blocked, failed = _reconcile_member_predicates(scope)
     filters = [
         GraphReconcileMember.workspace_id == scope.workspace_id,
         GraphReconcileMember.run_id == run.id,

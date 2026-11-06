@@ -9,6 +9,7 @@ import binascii
 import json
 from datetime import datetime
 from hashlib import sha256
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import or_, select, tuple_
@@ -37,6 +38,130 @@ from modules.knowledge.entities.schemas import (
     EntityTemporalNodeSeed,
 )
 from modules.sources import public as sources
+
+
+async def _verify_seed_evidence(
+    session: AsyncSession,
+    rows: list[EntityEvidenceMembership],
+    source: Any,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
+    """Require every selected membership's document version and chunk to be current and permitted.
+
+    Groups chunks per (document, version), then checks the review version fence, the source and
+    generation, and that every cited chunk still resolves. Raises ``LookupError`` on any mismatch.
+    """
+    from modules.knowledge.documents import public as documents
+
+    groups: dict[tuple[UUID, UUID], list[UUID]] = {}
+    for row in rows:
+        groups.setdefault((row.document_id, row.document_version_id), []).append(row.chunk_id)
+    for (document_id, version_id), chunks in groups.items():
+        fences = await documents.review_version_fences(
+            session,
+            [version_id],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        fence = fences.get(version_id)
+        refs = await documents.read_evidence_refs(
+            session,
+            [(version_id, chunk) for chunk in dict.fromkeys(chunks)],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if (
+            fence is None
+            or fence.document_id != document_id
+            or fence.source_id != source.id
+            or fence.current_source_generation != source.generation
+            or len(refs) != len(set(chunks))
+            or any(ref.document_id != document_id or ref.source_id != source.id for ref in refs)
+        ):
+            raise LookupError("Node seed retained evidence is not current and permitted")
+
+
+async def _load_seed_entity(
+    session: AsyncSession, entity_id: UUID, *, scope: Scope, multi_workspace_enabled: bool
+) -> Entity:
+    """Load one canonical entity with a usable name for a node seed.
+
+    Raises ``LookupError`` when the identity was redirected or the entity is missing or has a blank
+    or origin-less name.
+    """
+    ref = (
+        await get_entity_refs(
+            session,
+            [entity_id],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    )[0]
+    if ref.canonical_id != entity_id:
+        raise LookupError("Node seed identity was redirected")
+    entity = await session.scalar(
+        select(Entity).where(
+            Entity.id == entity_id,
+            Entity.workspace_id == scope.workspace_id,
+        )
+    )
+    if entity is None or not entity.name or not entity.name.strip() or entity.name_origin is None:
+        raise LookupError("Node seed name is unavailable")
+    return entity
+
+
+async def _seed_field_support(
+    session: AsyncSession,
+    entity: Entity,
+    selected: list[EntityEvidenceMembership],
+    *,
+    scope: Scope,
+) -> tuple[str, list[UUID], str | None, list[UUID]]:
+    """Prove the entity's name and summary against exact selected field evidence.
+
+    Returns ``(name_hash, name_support, summary_hash, summary_support)`` with sorted supporting
+    membership ids. Raises ``LookupError`` when the name has no exact selected support; a summary
+    without support is simply not seeded.
+    """
+    if entity.name is None:
+        raise RuntimeError("invariant violated: entity.name must not be None")
+    proofs = list(
+        (
+            await session.scalars(
+                select(EntityFieldEvidence)
+                .join(
+                    EntityEvidenceMembership,
+                    EntityEvidenceMembership.id == EntityFieldEvidence.membership_id,
+                )
+                .where(
+                    EntityFieldEvidence.entity_id == entity.id,
+                    EntityFieldEvidence.membership_id.in_([row.id for row in selected]),
+                    EntityEvidenceMembership.workspace_id == scope.workspace_id,
+                )
+            )
+        ).all()
+    )
+    name_hash = sha256(entity.name.encode("utf-8")).hexdigest()
+    name_support = sorted(
+        {p.membership_id for p in proofs if p.field_name == "name" and p.value_hash == name_hash}
+    )
+    if not name_support:
+        raise LookupError("Node seed name has no exact selected field support")
+    summary_hash = (
+        sha256(entity.description.encode("utf-8")).hexdigest()
+        if entity.description and entity.description.strip() and entity.description_origin
+        else None
+    )
+    summary_support = sorted(
+        {
+            p.membership_id
+            for p in proofs
+            if p.field_name == "description" and p.value_hash == summary_hash
+        }
+    )
+    return name_hash, name_support, summary_hash, summary_support
 
 
 async def get_temporal_node_seeds(
@@ -88,97 +213,18 @@ async def get_temporal_node_seeds(
     )
     if source is None or source.status != "active":
         raise LookupError("Node seed source is unavailable")
-    from modules.knowledge.documents import public as documents
 
-    groups: dict[tuple[UUID, UUID], list[UUID]] = {}
-    for row in rows:
-        groups.setdefault((row.document_id, row.document_version_id), []).append(row.chunk_id)
-    for (document_id, version_id), chunks in groups.items():
-        fences = await documents.review_version_fences(
-            session,
-            [version_id],
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        fence = fences.get(version_id)
-        refs = await documents.read_evidence_refs(
-            session,
-            [(version_id, chunk) for chunk in dict.fromkeys(chunks)],
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        if (
-            fence is None
-            or fence.document_id != document_id
-            or fence.source_id != source.id
-            or fence.current_source_generation != source.generation
-            or len(refs) != len(set(chunks))
-            or any(ref.document_id != document_id or ref.source_id != source.id for ref in refs)
-        ):
-            raise LookupError("Node seed retained evidence is not current and permitted")
+    await _verify_seed_evidence(
+        session, rows, source, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     result = []
     for entity_id in sorted({row.entity_id for row in rows}):
-        ref = (
-            await get_entity_refs(
-                session,
-                [entity_id],
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-            )
-        )[0]
-        if ref.canonical_id != entity_id:
-            raise LookupError("Node seed identity was redirected")
-        entity = await session.scalar(
-            select(Entity).where(
-                Entity.id == entity_id,
-                Entity.workspace_id == scope.workspace_id,
-            )
+        entity = await _load_seed_entity(
+            session, entity_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
         )
-        if (
-            entity is None
-            or not entity.name
-            or not entity.name.strip()
-            or entity.name_origin is None
-        ):
-            raise LookupError("Node seed name is unavailable")
         selected = [row for row in rows if row.entity_id == entity_id]
-        proofs = list(
-            (
-                await session.scalars(
-                    select(EntityFieldEvidence)
-                    .join(
-                        EntityEvidenceMembership,
-                        EntityEvidenceMembership.id == EntityFieldEvidence.membership_id,
-                    )
-                    .where(
-                        EntityFieldEvidence.entity_id == entity_id,
-                        EntityFieldEvidence.membership_id.in_([row.id for row in selected]),
-                        EntityEvidenceMembership.workspace_id == scope.workspace_id,
-                    )
-                )
-            ).all()
-        )
-        name_hash = sha256(entity.name.encode("utf-8")).hexdigest()
-        name_support = sorted(
-            {
-                p.membership_id
-                for p in proofs
-                if p.field_name == "name" and p.value_hash == name_hash
-            }
-        )
-        if not name_support:
-            raise LookupError("Node seed name has no exact selected field support")
-        summary_hash = (
-            sha256(entity.description.encode("utf-8")).hexdigest()
-            if entity.description and entity.description.strip() and entity.description_origin
-            else None
-        )
-        summary_support = sorted(
-            {
-                p.membership_id
-                for p in proofs
-                if p.field_name == "description" and p.value_hash == summary_hash
-            }
+        name_hash, name_support, summary_hash, summary_support = await _seed_field_support(
+            session, entity, selected, scope=scope
         )
         result.append(
             EntityTemporalNodeSeed(
@@ -225,6 +271,63 @@ def _decode_identity_cursor(
         raise ValueError(message) from exc
 
 
+async def _drop_inactive_source_items(
+    session: AsyncSession, membership_page: Any, *, scope: Scope, multi_workspace_enabled: bool
+) -> None:
+    """Remove membership items whose connector source is missing or not active, in place.
+
+    Read-only: looks up each distinct source (sorted for deterministic query order) and keeps only
+    items from sources with status ``active``. Does nothing when ``membership_page`` is falsy.
+    """
+    if membership_page:
+        permitted = set()
+        for source_id in sorted({item.source_id for item in membership_page.items}):
+            source = await sources.get_connector_source(
+                session,
+                source_id,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+            if source is not None and source.status == "active":
+                permitted.add(source_id)
+        membership_page.items = [
+            item for item in membership_page.items if item.source_id in permitted
+        ]
+
+
+async def _read_owner_action_page(
+    session: AsyncSession, statement: Any, *, entity_id: UUID, cursor: str | None, limit: int
+) -> tuple[list[EntityOwnerAction], str | None]:
+    """Read one page of owner-action audit rows after ``cursor`` and build the next bound cursor.
+
+    Fetches ``limit + 1`` rows newest first; an invalid cursor raises through ``_decode_identity_cursor``.
+    Returns the page rows and a cursor bound to ``entity_id`` (``None`` on the last page).
+    """
+    if cursor:
+        _, (timestamp, identifier) = _decode_identity_cursor(
+            cursor, entity_id, "Invalid entity history cursor"
+        )
+        statement = statement.where(
+            tuple_(EntityOwnerAction.created_at, EntityOwnerAction.id) < (timestamp, identifier)
+        )
+    rows = list(
+        (
+            await session.scalars(
+                statement.order_by(
+                    EntityOwnerAction.created_at.desc(),
+                    EntityOwnerAction.id.desc(),
+                ).limit(limit + 1)
+            )
+        ).all()
+    )
+    more, rows = len(rows) > limit, rows[:limit]
+    next_cursor = None
+    if more and rows:
+        position = encode_cursor(rows[-1].created_at, rows[-1].id)
+        next_cursor = b64url_encode(json.dumps([str(entity_id), position]).encode())
+    return rows, next_cursor
+
+
 async def list_entity_history(
     session: AsyncSession,
     entity_id: UUID,
@@ -260,28 +363,9 @@ async def list_entity_history(
             EntityOwnerAction.affected_ids.contains([str(canonical)]),
         ),
     )
-    if cursor:
-        _, (timestamp, identifier) = _decode_identity_cursor(
-            cursor, entity_id, "Invalid entity history cursor"
-        )
-        statement = statement.where(
-            tuple_(EntityOwnerAction.created_at, EntityOwnerAction.id) < (timestamp, identifier)
-        )
-    rows = list(
-        (
-            await session.scalars(
-                statement.order_by(
-                    EntityOwnerAction.created_at.desc(),
-                    EntityOwnerAction.id.desc(),
-                ).limit(limit + 1)
-            )
-        ).all()
+    rows, next_cursor = await _read_owner_action_page(
+        session, statement, entity_id=entity_id, cursor=cursor, limit=limit
     )
-    more, rows = len(rows) > limit, rows[:limit]
-    next_cursor = None
-    if more and rows:
-        position = encode_cursor(rows[-1].created_at, rows[-1].id)
-        next_cursor = b64url_encode(json.dumps([str(entity_id), position]).encode())
     membership_position = None
     if membership_cursor:
         membership_position, _ = _decode_identity_cursor(
@@ -295,20 +379,9 @@ async def list_entity_history(
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
-    if membership_page:
-        permitted = set()
-        for source_id in sorted({item.source_id for item in membership_page.items}):
-            source = await sources.get_connector_source(
-                session,
-                source_id,
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-            )
-            if source is not None and source.status == "active":
-                permitted.add(source_id)
-        membership_page.items = [
-            item for item in membership_page.items if item.source_id in permitted
-        ]
+    await _drop_inactive_source_items(
+        session, membership_page, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     membership_next = None
     if membership_page and membership_page.next_cursor:
         membership_next = b64url_encode(

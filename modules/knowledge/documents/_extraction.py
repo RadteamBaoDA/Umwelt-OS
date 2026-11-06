@@ -267,6 +267,72 @@ async def set_extraction_status(
     return True
 
 
+async def _append_text_version(
+    session: AsyncSession, document: Document, text: str
+) -> DocumentVersion:
+    """Add the next immutable version holding ``text`` and make it the document's current one.
+
+    Hashes the text (off-loop), derives the next monotonic version number, adds the row, updates the
+    document's current version/hash and flushes. Never commits.
+    """
+    digest = await content_hash_async(text)
+    max_number = await session.scalar(
+        select(func.coalesce(func.max(DocumentVersion.version_number), 0)).where(
+            DocumentVersion.document_id == document.id
+        )
+    )
+    current = DocumentVersion(
+        document_id=document.id,
+        version_number=int(max_number or 0) + 1,
+        content=text,
+        content_hash=digest,
+    )
+    session.add(current)
+    document.current_version = current.version_number
+    document.content_hash = digest
+    await session.flush()
+    return current
+
+
+def _add_prepared_chunks(
+    session: AsyncSession,
+    current: DocumentVersion,
+    prepared_chunks: list[tuple[str, int, dict[str, object]]],
+) -> None:
+    """Add one chunk row per prepared ``(content, token_count, metadata)`` in order.
+
+    Caller has proven the version has no chunks yet; rows are only added to the session (no flush).
+    """
+    for index, (content, token_count, metadata) in enumerate(prepared_chunks):
+        session.add(
+            DocumentChunk(
+                document_version_id=current.id,
+                chunk_index=index,
+                content=content,
+                content_hash=content_hash(content),
+                token_count=token_count,
+                metadata_json=metadata,
+            )
+        )
+
+
+def _prepare_chunks(chunks: list[dict[str, object]]) -> list[tuple[str, int, dict[str, object]]]:
+    """Convert parser chunk dicts to validated ``(content, token_count, metadata)`` tuples.
+
+    Pure, run before any mutation so a malformed chunk raises ``KeyError``/``ValueError``/``TypeError``
+    without side effects.
+    """
+    prepared_chunks = [
+        (
+            str(chunk["content"]),
+            int(cast("int", chunk["token_count"])),
+            dict(cast("dict[str, object]", chunk.get("metadata", {}))),
+        )
+        for chunk in chunks
+    ]
+    return prepared_chunks
+
+
 async def save_extraction(
     session: AsyncSession,
     document_id: UUID,
@@ -303,14 +369,7 @@ async def save_extraction(
         "needs_ocr",
     }:
         raise ValueError("Invalid parser text or extraction status")
-    prepared_chunks = [
-        (
-            str(chunk["content"]),
-            int(cast("int", chunk["token_count"])),
-            dict(cast("dict[str, object]", chunk.get("metadata", {}))),
-        )
-        for chunk in chunks
-    ]
+    prepared_chunks = _prepare_chunks(chunks)
     prepared_metadata, prepared_warnings = dict(extraction_metadata), list(warnings)
     document = await _extraction_document(
         session,
@@ -340,39 +399,14 @@ async def save_extraction(
     if current is None:
         raise RuntimeError("Current document version is missing")
     if current.content != text:
-        digest = await content_hash_async(text)
-        max_number = await session.scalar(
-            select(func.coalesce(func.max(DocumentVersion.version_number), 0)).where(
-                DocumentVersion.document_id == document.id
-            )
-        )
-        current = DocumentVersion(
-            document_id=document.id,
-            version_number=int(max_number or 0) + 1,
-            content=text,
-            content_hash=digest,
-        )
-        session.add(current)
-        document.current_version = current.version_number
-        document.content_hash = digest
-        await session.flush()
+        current = await _append_text_version(session, document, text)
     document.extraction_status = extraction_status
     document.metadata_json = prepared_document_metadata
     existing = await session.scalar(
         select(DocumentChunk.id).where(DocumentChunk.document_version_id == current.id).limit(1)
     )
     if existing is None:
-        for index, (content, token_count, metadata) in enumerate(prepared_chunks):
-            session.add(
-                DocumentChunk(
-                    document_version_id=current.id,
-                    chunk_index=index,
-                    content=content,
-                    content_hash=content_hash(content),
-                    token_count=token_count,
-                    metadata_json=metadata,
-                )
-            )
+        _add_prepared_chunks(session, current, prepared_chunks)
     if extraction_status == "succeeded" and chunks:
         try:
             await _publish_extraction_ready(

@@ -65,6 +65,66 @@ def _decode_review_cursor(value: str) -> tuple[datetime, UUID, int]:
         raise ValueError("Invalid review cursor") from exc
 
 
+def _candidate_evidence_keys(
+    work: EntityExtractionWork, kind: object, candidate: dict[str, Any]
+) -> list[tuple[UUID, UUID]]:
+    """Return the (document_version_id, chunk_id) evidence keys a review candidate cites.
+
+    Pure: an entity candidate yields at most its first five valid chunk ids, a relationship candidate
+    its single chunk id; malformed ids are skipped silently.
+    """
+    candidate_evidence: list[tuple[UUID, UUID]] = []
+    if kind == "entity" and isinstance(candidate.get("chunk_ids"), list):
+        for raw_chunk in candidate["chunk_ids"][:5]:
+            try:
+                candidate_evidence.append((work.document_version_id, UUID(str(raw_chunk))))
+            except (ValueError, TypeError):
+                continue
+    elif kind == "relationship" and candidate.get("chunk_id"):
+        try:
+            candidate_evidence.append((work.document_version_id, UUID(str(candidate["chunk_id"]))))
+        except (ValueError, TypeError):
+            pass
+    return candidate_evidence
+
+
+def _review_candidate_actionable(
+    work: EntityExtractionWork,
+    candidate: dict[str, Any],
+    candidate_id: UUID | None,
+    digest_ok: bool,
+    state: object,
+    fences: dict[UUID, Any],
+    kind: object,
+) -> bool:
+    """Decide whether a stored review candidate may be acted on.
+
+    Pure: requires a parsed candidate id, a matching immutable digest, no prior resolution state, a
+    succeeded work row with a live version fence, and the identity fields of its kind.
+    """
+    actionable = bool(
+        candidate_id
+        and digest_ok
+        and not state
+        and work.status == "succeeded"
+        and (
+            work.document_version_id in fences
+            and (
+                kind == "entity"
+                and candidate.get("candidate_key")
+                and candidate.get("match_fingerprint")
+                and candidate.get("chunk_ids")
+                or kind == "relationship"
+                and candidate.get("source_candidate_key")
+                and candidate.get("target_candidate_key")
+                and candidate.get("chunk_id")
+                and candidate.get("relationship_type")
+            )
+        )
+    )
+    return actionable
+
+
 def _review_candidate_item(
     work: EntityExtractionWork,
     result: EntityExtractionResult,
@@ -111,38 +171,10 @@ def _review_candidate_item(
         digest_ok = candidate.get("snapshot_digest") == _review_snapshot_digest(candidate)
     except (KeyError, TypeError):
         pass
-    actionable = bool(
-        candidate_id
-        and digest_ok
-        and not state
-        and work.status == "succeeded"
-        and (
-            work.document_version_id in fences
-            and (
-                kind == "entity"
-                and candidate.get("candidate_key")
-                and candidate.get("match_fingerprint")
-                and candidate.get("chunk_ids")
-                or kind == "relationship"
-                and candidate.get("source_candidate_key")
-                and candidate.get("target_candidate_key")
-                and candidate.get("chunk_id")
-                and candidate.get("relationship_type")
-            )
-        )
+    actionable = _review_candidate_actionable(
+        work, candidate, candidate_id, digest_ok, state, fences, kind
     )
-    candidate_evidence: list[tuple[UUID, UUID]] = []
-    if kind == "entity" and isinstance(candidate.get("chunk_ids"), list):
-        for raw_chunk in candidate["chunk_ids"][:5]:
-            try:
-                candidate_evidence.append((work.document_version_id, UUID(str(raw_chunk))))
-            except (ValueError, TypeError):
-                continue
-    elif kind == "relationship" and candidate.get("chunk_id"):
-        try:
-            candidate_evidence.append((work.document_version_id, UUID(str(candidate["chunk_id"]))))
-        except (ValueError, TypeError):
-            pass
+    candidate_evidence = _candidate_evidence_keys(work, kind, candidate)
     fence = fences.get(work.document_version_id)
     item = EntityReviewCandidate(
         kind=kind,

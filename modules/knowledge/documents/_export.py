@@ -808,30 +808,15 @@ class ObservationEvidenceCandidate:
     document_version_id: UUID
 
 
-async def current_observation_evidence_versions(
-    session: AsyncSession,
-    candidates: Sequence[ObservationEvidenceCandidate],
-    current_scopes: dict[UUID, object],
-    *,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-    include_historical: bool = False,
-) -> dict[UUID, int]:
-    """Return observation evidence revisions backed by matching document and provider fences.
+async def _evidence_provenance_by_identity(
+    session: AsyncSession, candidates: Sequence[ObservationEvidenceCandidate], *, scope: Scope
+) -> dict[tuple[UUID, UUID], list[tuple[UUID, int, int, int, str, int, dict[str, object]]]]:
+    """Read provider provenance for the candidates' document versions, grouped by identity.
 
-    ``include_historical`` (observation history mode only) also accepts superseded document versions of the
-    same document: every other fence (scope, source generation, provider identity, provenance) still applies.
-
-    Documents owns version/provenance reads. The result contains accepted observation IDs
-    paired with the version number of the document version that backs each accepted observation
-    (the current version unless ``include_historical``); foreign modules never receive Document ORM
-    rows or provenance bodies.
+    Read-only, scoped by ``_document_scope``. Keys are ``(document_id, document_version_id)``; each
+    value lists the matching ``(source_id, source_generation, version_number, current_version,
+    provider_id, accepted_generation, provenance)`` rows so callers can reject ambiguous matches.
     """
-    await _admit_document_scope(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-    )
-    if not candidates or len(candidates) > 256:
-        return {}
     rows: Any = (
         await session.execute(
             select(
@@ -882,6 +867,34 @@ async def current_observation_evidence_versions(
                 provenance,
             )
         )
+    return by_identity
+
+
+async def current_observation_evidence_versions(
+    session: AsyncSession,
+    candidates: Sequence[ObservationEvidenceCandidate],
+    current_scopes: dict[UUID, object],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    include_historical: bool = False,
+) -> dict[UUID, int]:
+    """Return observation evidence revisions backed by matching document and provider fences.
+
+    ``include_historical`` (observation history mode only) also accepts superseded document versions of the
+    same document: every other fence (scope, source generation, provider identity, provenance) still applies.
+
+    Documents owns version/provenance reads. The result contains accepted observation IDs
+    paired with the version number of the document version that backs each accepted observation
+    (the current version unless ``include_historical``); foreign modules never receive Document ORM
+    rows or provenance bodies.
+    """
+    await _admit_document_scope(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if not candidates or len(candidates) > 256:
+        return {}
+    by_identity = await _evidence_provenance_by_identity(session, candidates, scope=scope)
     accepted: dict[UUID, int] = {}
     for candidate in candidates:
         current = current_scopes.get(candidate.source_id)

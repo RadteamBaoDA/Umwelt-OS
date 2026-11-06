@@ -510,6 +510,53 @@ async def _write_normalized_revision(
     return chunk_count
 
 
+async def _create_missing_normalized_rows(
+    session: AsyncSession,
+    payload: NormalizedDocumentInput,
+    document: Document | None,
+    identity: NormalizedDocumentIdentity | None,
+    workspace_id: UUID,
+    payload_digest: str,
+) -> tuple[Document, NormalizedDocumentIdentity, UUID | None, UUID | None]:
+    """Insert the proven-absent normalized identity and document rows for one provider record.
+
+    Returns the (possibly new) document and identity plus the ids this call created, which the caller
+    re-checks after the revision write. Flushes only when a document is created, linking it to the
+    identity first.
+    """
+    created_identity_id, created_document_id = None, None
+    if identity is None:
+        created_identity_id = uuid7()
+        identity = NormalizedDocumentIdentity(
+            id=created_identity_id,
+            workspace_id=workspace_id,
+            source_id=payload.source_id,
+            external_id=payload.provider_id,
+        )
+        session.add(identity)
+    if document is None:
+        created_document_id = uuid7()
+        document = Document(
+            id=created_document_id,
+            workspace_id=workspace_id,
+            source_id=payload.source_id,
+            external_id=payload.provider_id,
+            title=payload.title,
+            content_type=payload.content_type,
+            canonical_url=payload.canonical_url,
+            published_at=payload.published_at,
+            observed_at=payload.observed_at,
+            current_version=0,
+            content_hash=payload_digest,
+            extraction_status="ready",
+            language=_provenance_language(payload.provenance),
+        )
+        session.add(document)
+        identity.document_id = document.id
+        await session.flush()
+    return document, identity, created_identity_id, created_document_id
+
+
 async def _apply_normalized_document(
     session: AsyncSession,
     payload: NormalizedDocumentInput,
@@ -557,36 +604,14 @@ async def _apply_normalized_document(
     )
     # All provider/content errors above precede the first owner mutation.
     payload_digest = await content_hash_async(payload.content)  # pure hash, before any session.add
-    created_identity_id, created_document_id = None, None
-    if identity is None:
-        created_identity_id = uuid7()
-        identity = NormalizedDocumentIdentity(
-            id=created_identity_id,
-            workspace_id=workspace_id,
-            source_id=payload.source_id,
-            external_id=payload.provider_id,
-        )
-        session.add(identity)
-    if document is None:
-        created_document_id = uuid7()
-        document = Document(
-            id=created_document_id,
-            workspace_id=workspace_id,
-            source_id=payload.source_id,
-            external_id=payload.provider_id,
-            title=payload.title,
-            content_type=payload.content_type,
-            canonical_url=payload.canonical_url,
-            published_at=payload.published_at,
-            observed_at=payload.observed_at,
-            current_version=0,
-            content_hash=payload_digest,
-            extraction_status="ready",
-            language=_provenance_language(payload.provenance),
-        )
-        session.add(document)
-        identity.document_id = document.id
-        await session.flush()
+    (
+        document,
+        identity,
+        created_identity_id,
+        created_document_id,
+    ) = await _create_missing_normalized_rows(
+        session, payload, document, identity, workspace_id, payload_digest
+    )
     max_number = await session.scalar(
         select(func.coalesce(func.max(DocumentVersion.version_number), 0)).where(
             DocumentVersion.document_id == document.id
@@ -698,6 +723,30 @@ async def select_current_world_document_version(
     )
 
 
+def _provenance_world_record_matches(
+    provenance: object, provider: str, provider_scope_discriminator: str
+) -> bool:
+    """Return whether a stored provenance payload carries a typed world record for ``provider``.
+
+    Pure check: the payload must be a dict whose scope discriminator equals the expected one and
+    whose ``provider_record`` validates as ``ProviderRecordMetadata`` for ``provider`` with world data.
+    Any malformed shape returns ``False`` rather than raising.
+    """
+    if (
+        not isinstance(provenance, dict)
+        or provenance.get("provider_scope_discriminator") != provider_scope_discriminator
+    ):
+        return False
+    record = provenance.get("provider_record")
+    if not isinstance(record, dict):
+        return False
+    try:
+        metadata = ProviderRecordMetadata.model_validate(record)
+    except (ValueError, TypeError):
+        return False
+    return metadata.provider == provider and metadata.world_data is not None
+
+
 async def normalized_observation_version_matches_in_uow(
     session: AsyncSession,
     *,
@@ -793,20 +842,7 @@ async def normalized_observation_version_matches_in_uow(
     ).all()
     if len(rows) != 1:
         return False
-    provenance = rows[0][0]
-    if (
-        not isinstance(provenance, dict)
-        or provenance.get("provider_scope_discriminator") != provider_scope_discriminator
-    ):
-        return False
-    record = provenance.get("provider_record")
-    if not isinstance(record, dict):
-        return False
-    try:
-        metadata = ProviderRecordMetadata.model_validate(record)
-    except (ValueError, TypeError):
-        return False
-    return metadata.provider == provider and metadata.world_data is not None
+    return _provenance_world_record_matches(rows[0][0], provider, provider_scope_discriminator)
 
 
 async def select_current_world_document_version_in_uow(

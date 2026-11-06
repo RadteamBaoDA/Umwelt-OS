@@ -3,6 +3,7 @@
 Private implementation of ``modules.knowledge.relationships.public``; import from that facade.
 """
 
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -34,6 +35,27 @@ from modules.knowledge.relationships.schemas import (
     CorrectionRelationshipRef,
     CorrectionSupportRef,
 )
+
+
+def _group_correction_supports(
+    supports: Sequence[RelationshipEvidence],
+) -> dict[UUID, list[CorrectionSupportRef]]:
+    """Group evidence rows into public support refs keyed by relationship id, preserving row order."""
+    by_edge: dict[UUID, list[CorrectionSupportRef]] = {}
+    for row in supports:
+        by_edge.setdefault(row.relationship_id, []).append(
+            CorrectionSupportRef(
+                id=row.id,
+                document_id=row.document_id,
+                source_id=row.source_id,
+                document_version_id=row.document_version_id,
+                chunk_id=row.chunk_id,
+                source_membership_id=row.source_membership_id,
+                target_membership_id=row.target_membership_id,
+                confidence=row.confidence,
+            )
+        )
+    return by_edge
 
 
 async def list_correction_relationship_refs(
@@ -110,20 +132,7 @@ async def list_correction_relationship_refs(
         > 200
     ):
         raise ValueError("Correction membership closure exceeds its atomic limit")
-    by_edge: dict[UUID, list[CorrectionSupportRef]] = {}
-    for row in supports:
-        by_edge.setdefault(row.relationship_id, []).append(
-            CorrectionSupportRef(
-                id=row.id,
-                document_id=row.document_id,
-                source_id=row.source_id,
-                document_version_id=row.document_version_id,
-                chunk_id=row.chunk_id,
-                source_membership_id=row.source_membership_id,
-                target_membership_id=row.target_membership_id,
-                confidence=row.confidence,
-            )
-        )
+    by_edge = _group_correction_supports(supports)
     return [
         CorrectionRelationshipRef(
             id=edge.id,
@@ -232,6 +241,36 @@ def validate_entity_split_plan(
                 raise ValueError("Split would create a self relationship")
 
 
+def _merge_key_groups(
+    rows: list[Relationship],
+    source_entity_id: UUID,
+    target_entity_id: UUID,
+    source_redirect_ids: set[UUID],
+) -> dict[tuple[UUID, UUID, str, str, datetime | None, datetime | None], list[Relationship]]:
+    """Group relationships by their post-merge identity key.
+
+    Pure: endpoints on the merged-away entities (source plus its redirects) are mapped to the
+    target, so edges that become identical land in one group; the caller picks a survivor.
+    """
+    key_groups: dict[
+        tuple[UUID, UUID, str, str, datetime | None, datetime | None], list[Relationship]
+    ] = {}
+    for row in rows:
+        next_source = (
+            target_entity_id
+            if row.source_entity_id in ({source_entity_id} | source_redirect_ids)
+            else row.source_entity_id
+        )
+        next_target = (
+            target_entity_id
+            if row.target_entity_id in ({source_entity_id} | source_redirect_ids)
+            else row.target_entity_id
+        )
+        key = (next_source, next_target, row.type, row.origin, row.valid_from, row.valid_to)
+        key_groups.setdefault(key, []).append(row)
+    return key_groups
+
+
 async def apply_entity_merge(
     session: AsyncSession,
     source_entity_id: UUID,
@@ -271,22 +310,7 @@ async def apply_entity_merge(
         else []
     )
     source_merge_ids = {source_entity_id} | source_redirect_ids
-    key_groups: dict[
-        tuple[UUID, UUID, str, str, datetime | None, datetime | None], list[Relationship]
-    ] = {}
-    for row in rows:
-        next_source = (
-            target_entity_id
-            if row.source_entity_id in ({source_entity_id} | source_redirect_ids)
-            else row.source_entity_id
-        )
-        next_target = (
-            target_entity_id
-            if row.target_entity_id in ({source_entity_id} | source_redirect_ids)
-            else row.target_entity_id
-        )
-        key = (next_source, next_target, row.type, row.origin, row.valid_from, row.valid_to)
-        key_groups.setdefault(key, []).append(row)
+    key_groups = _merge_key_groups(rows, source_entity_id, target_entity_id, source_redirect_ids)
     replacements: list[tuple[UUID, UUID]] = []
     affected_relationship_ids: set[UUID] = set()
     for (source_id, target_id, _, _, _, _), group in key_groups.items():

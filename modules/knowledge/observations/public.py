@@ -49,6 +49,7 @@ from core.workspaces.admission import admit_scope
 from core.workspaces.schemas import AccessFence, Scope
 from modules.connectors import public as connectors
 from modules.knowledge.documents import public as documents
+from modules.knowledge.observations._snapshot_rows import classify_snapshot_rows
 from modules.knowledge.observations.models import Observation
 from modules.knowledge.observations.schemas import (
     GeospatialObservationPage,
@@ -781,25 +782,7 @@ async def _observation_key_snapshot(
     )
     if len(rows) > 64:
         raise RuntimeError("observation_preparation_identity_set_changed")
-    accepted: dict[tuple[str, UUID], Observation] = {}
-    current: dict[str, Observation] = {}
-    for row in rows:
-        if (
-            row.workspace_id != workspace_id
-            or row.source_id != source_id
-            or row.external_id not in external_ids
-            or row.revision <= 0
-        ):
-            raise RuntimeError("observation_preparation_namespace_changed")
-        pair = (row.external_id, row.ingestion_observation_id)
-        if pair in keys:
-            if pair in accepted:
-                raise RuntimeError("observation_preparation_duplicate_pair")
-            accepted[pair] = row
-        if row.is_current:
-            if row.external_id in current:
-                raise RuntimeError("observation_preparation_multiple_current")
-            current[row.external_id] = row
+    accepted, current = classify_snapshot_rows(rows, keys, external_ids, source_id, workspace_id)
     maxima = (
         await session.execute(
             select(
