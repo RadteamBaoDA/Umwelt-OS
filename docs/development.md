@@ -85,3 +85,18 @@ Coverage is reported and enforced in CI as a ratchet: the floor sits just under 
 Run locally: `uv run pytest tests/unit --ignore=tests/unit/test_event_loop_offload.py --cov=core --cov=modules --cov=apps --cov-report=term` and `npm run test:coverage --workspace apps/web`. CI excludes the timing-sensitive `tests/unit/test_event_loop_offload.py` from the coverage run (tracing pushes it over its budgets) and runs it in a separate step.
 
 Ratchet procedure: when a change raises a measured value by 2 or more points, raise the floor to about 1.5 points under the new measurement in the same change and update the table above. Never lower a floor to land a change; add the missing tests or, for genuinely untestable code, document why in the PR.
+
+## Bundle-size budget
+
+`npm run check:bundle-size --workspace apps/web` runs after `npm run build` (CI `frontend` job). Turbopack prints no per-route sizes, so `apps/web/scripts/check-bundle-size.mjs` derives them from `.next`: a route's first-load JS is the gzip size of the root main/polyfill chunks plus every chunk its `page_client-reference-manifest.js` references (an upper bound that includes lazily loaded client components); total client JS is the gzip sum of `.next/static/chunks/*.js`. Budgets are in `apps/web/bundle-budget.json` (KB gzip):
+
+| Metric | Measured | Budget |
+| --- | --- | --- |
+| Largest route first-load JS (`/login`) | 1030.4 KB | 1135 KB |
+| Total client JS | 1965.4 KB | 2165 KB |
+
+`--measure` prints the numbers without failing. To raise a budget, run a local build, measure, and edit `bundle-budget.json` to about measured + 10% in the same PR with the reason (a new dependency or feature); prefer lazy-loading (`next/dynamic`) over raising it. A per-route override can be added as `"routes": {"/(public)/login/page": 600}`.
+
+## Lighthouse CI
+
+`lighthouserc.json` drives the nightly/manual `lighthouse` CI job (`npx @lhci/cli@0.16.0 autorun` against `next start`). It audits `/login`, `/terms` and `/privacy` only, because every other route needs the API; no backend is started, so authenticated pages are not covered. Accessibility below 0.9 fails; performance below 0.8 warns. Local run: build, `npm run start --workspace apps/web -- --port 3000`, then `npx @lhci/cli@0.16.0 autorun` with `CHROME_PATH` set. Reports go to `test-results/lighthouse`.
