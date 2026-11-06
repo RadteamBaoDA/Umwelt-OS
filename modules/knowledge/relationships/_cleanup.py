@@ -340,6 +340,28 @@ async def _reread_delete_closure(
     return refreshed_edges, refreshed_supports
 
 
+def _support_snapshot(
+    supports: list[RelationshipEvidence],
+) -> list[tuple[UUID, UUID, UUID, UUID, UUID | None, UUID | None, float]]:
+    """Project support rows onto the identity tuple compared before and after locking.
+
+    Pure and order-preserving; two snapshots are equal only when every support kept its id,
+    relationship, cited chunk, endpoint memberships and confidence.
+    """
+    return [
+        (
+            item.id,
+            item.relationship_id,
+            item.document_version_id,
+            item.chunk_id,
+            item.source_membership_id,
+            item.target_membership_id,
+            item.confidence,
+        )
+        for item in supports
+    ]
+
+
 async def lock_delete_closure(
     session: AsyncSession,
     entity_ids: list[UUID],
@@ -390,18 +412,7 @@ async def lock_delete_closure(
         if relationship_ids
         else []
     )
-    support_snapshot = [
-        (
-            item.id,
-            item.relationship_id,
-            item.document_version_id,
-            item.chunk_id,
-            item.source_membership_id,
-            item.target_membership_id,
-            item.confidence,
-        )
-        for item in supports
-    ]
+    support_snapshot = _support_snapshot(supports)
     if (
         len(supports) > 200
         or len({(item.document_version_id, item.chunk_id) for item in supports}) > 100
@@ -425,19 +436,7 @@ async def lock_delete_closure(
     if (
         [item.id for item in refreshed_edges] != relationship_ids
         or [item.id for item in refreshed_supports] != support_ids
-        or support_snapshot
-        != [
-            (
-                item.id,
-                item.relationship_id,
-                item.document_version_id,
-                item.chunk_id,
-                item.source_membership_id,
-                item.target_membership_id,
-                item.confidence,
-            )
-            for item in refreshed_supports
-        ]
+        or support_snapshot != _support_snapshot(refreshed_supports)
     ):
         raise ValueError("Entity deletion relationship closure changed; retry")
     return relationship_ids, support_ids
