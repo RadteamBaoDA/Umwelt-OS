@@ -19,8 +19,6 @@
   "modules/knowledge/entities/corrections.py": 2765,
   "modules/knowledge/entities/worker.py": 2034,
   "modules/knowledge/observations/public.py": 1872,
-  "modules/knowledge/relationships/public.py": 3084,
-  "modules/knowledge/temporal/worker.py": 3336,
   "modules/memory/public.py": 3354,
   "modules/news/stories.py": 1985,
   "modules/search/indexing.py": 2204,

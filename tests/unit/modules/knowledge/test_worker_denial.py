@@ -17,6 +17,7 @@ from modules.knowledge.temporal import worker as temporal_worker
 from modules.news import worker as news_worker
 from modules.search import indexing as search_indexing
 from modules.timeline import worker as timeline_worker
+from tests.unit.modules.knowledge.temporal._worker_patch import patch_worker
 
 WS = uuid4()
 OWNER = SimpleNamespace(user_id=1, membership_revision=1)
@@ -143,7 +144,7 @@ async def test_denial_never_raises_and_is_terminal(
         session.scalar = AsyncMock(return_value=uuid4())
         monkeypatch.setattr(temporal_worker.workspaces, "resolve_workspace_owner_context", owner)
         monkeypatch.setattr(temporal_worker.workspaces, "authorize_internal_job", deny)
-        monkeypatch.setattr(temporal_worker, "terminalize", recorded)
+        patch_worker(monkeypatch, "terminalize", recorded)
         run = lambda: temporal_worker.process_graph_operation(ctx, str(uuid4()))  # noqa: E731  # terse test stub
     elif name in {"timeline", "entities_work"}:
         mod = timeline_worker if name == "timeline" else entities_worker

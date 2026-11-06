@@ -28,6 +28,7 @@ from modules.knowledge.temporal.adapter import (
     GraphOperationError,
     GraphWriteReceipt,
 )
+from tests.unit.modules.knowledge.temporal._worker_patch import patch_worker
 
 
 class _Factory:
@@ -150,11 +151,11 @@ class Env:
         }
         for name, value in names.items():
             self.calls[name] = AsyncMock(return_value=value)
-            monkeypatch.setattr(worker, name, self.calls[name])
+            patch_worker(monkeypatch, name, self.calls[name])
         self.calls["_inventory"] = AsyncMock(return_value=(self.rows, [self.support]))
-        monkeypatch.setattr(worker, "_inventory", self.calls["_inventory"])
+        patch_worker(monkeypatch, "_inventory", self.calls["_inventory"])
         self.calls["_bindings"] = AsyncMock(side_effect=lambda *a, **k: self.bindings)
-        monkeypatch.setattr(worker, "_bindings", self.calls["_bindings"])
+        patch_worker(monkeypatch, "_bindings", self.calls["_bindings"])
         monkeypatch.setattr(worker.sources, "lock_source", AsyncMock(return_value=self.source))
         monkeypatch.setattr(worker.documents, "lock_document_ids", AsyncMock())
         monkeypatch.setattr(
@@ -168,14 +169,12 @@ class Env:
         )
         monkeypatch.setattr(worker.settings_public, "derive_for_role", lambda config, role: config)
         self.gateway_type = MagicMock()
-        monkeypatch.setattr(worker, "ModelGateway", self.gateway_type)
+        patch_worker(monkeypatch, "ModelGateway", self.gateway_type)
         self.calls["_recovery_authorization"] = AsyncMock()
-        monkeypatch.setattr(
-            worker, "_recovery_authorization", self.calls["_recovery_authorization"]
-        )
+        patch_worker(monkeypatch, "_recovery_authorization", self.calls["_recovery_authorization"])
         self.calls["_authorize_scheduled_rebuild"] = AsyncMock()
-        monkeypatch.setattr(
-            worker, "_authorize_scheduled_rebuild", self.calls["_authorize_scheduled_rebuild"]
+        patch_worker(
+            monkeypatch, "_authorize_scheduled_rebuild", self.calls["_authorize_scheduled_rebuild"]
         )
 
     async def build(self) -> tuple[Any, Any, list[Any]]:
@@ -323,7 +322,7 @@ async def test_fence_and_record_renew_lease(monkeypatch: pytest.MonkeyPatch) -> 
     """fence() renews the lease; record() journals through _record and rebuild-absence markers need proof."""
     env = Env(monkeypatch)
     record = AsyncMock()
-    monkeypatch.setattr(worker, "_record", record)
+    patch_worker(monkeypatch, "_record", record)
     context, _, _ = await env.build()
     async with context.fence():
         pass
