@@ -4,6 +4,7 @@ Callees owned by the Documents and Knowledge slices are mocked with their frozen
 """
 
 import ast
+import importlib
 import inspect
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -18,7 +19,7 @@ from sqlalchemy.dialects import postgresql
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.connectors import mcp, worker
 from modules.connectors import public as connectors_public
-from modules.connectors.github import mapping, routes
+from modules.connectors.github import _routes_common, mapping, routes
 from modules.connectors.service import collection_requests as collection_requests_service
 
 WORKSPACE_ID = uuid4()
@@ -610,8 +611,16 @@ async def test_revoke_deleted_grants_skips_a_source_without_admissible_scope() -
 # ---------------------------------------------------------------- routes
 
 
+def _all_route_source() -> str:
+    """Concatenate the source of every private GitHub ``_routes_*`` module behind the ``routes`` facade."""
+    return "\n".join(
+        inspect.getsource(importlib.import_module(f"modules.connectors.github._routes_{name}"))
+        for name in ("common", "delivery", "oauth", "peers")
+    )
+
+
 def test_every_oauth_operation_insert_carries_the_real_workspace_and_actor() -> None:
-    tree = ast.parse(inspect.getsource(routes))
+    tree = ast.parse(_all_route_source())
     inserts = [
         n
         for n in ast.walk(tree)
@@ -625,7 +634,7 @@ def test_every_oauth_operation_insert_carries_the_real_workspace_and_actor() -> 
 
 
 def test_no_route_keys_oauth_state_on_the_session_owner_id() -> None:
-    source = inspect.getsource(routes)
+    source = _all_route_source()
     # The browser-session check may still compare the session's owner; OAuth state may not be keyed on it.
     assert "GithubOAuthCoordinator.owner_id == owner" not in source
     assert "GithubOAuthCoordinator.owner_id == _owner" not in source
@@ -661,7 +670,7 @@ def test_peer_inventory_filters_the_workspace_before_limit() -> None:
 
 async def test_member_is_denied_before_any_lock() -> None:
     with (
-        patch.object(routes, "lock_access_fence", AsyncMock()) as lock,
+        patch.object(_routes_common, "lock_access_fence", AsyncMock()) as lock,
         pytest.raises(HTTPException) as denied,
     ):
         await routes._admit(MagicMock(), MagicMock(), MEMBER)
@@ -675,7 +684,9 @@ async def test_reconciliation_mark_writes_nothing_when_original_access_is_gone()
     session.scalar = AsyncMock()
     request = MagicMock()
     request.app.state.settings.multi_workspace_enabled = False
-    with patch.object(routes, "_admit", AsyncMock(side_effect=HTTPException(status_code=409))):
+    with patch.object(
+        _routes_common, "_admit", AsyncMock(side_effect=HTTPException(status_code=409))
+    ):
         await routes._mark_github_reconciliation(
             session,
             request,
