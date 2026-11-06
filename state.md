@@ -1,6 +1,6 @@
 # Umwelt-OS remediation — trạng thái (state)
 
-- Cập nhật: 2026-11-07. Nhánh `feature/fix-ui`, head local `e70e51b7` (+ commit cập nhật state này). **Chưa push** các commit W7.
+- Cập nhật: 2026-11-07. Nhánh `feature/fix-ui`, head local `3863d100`. Owner tự push.
 - Plan gốc: `docs/superpowers/plans/2026-11-04-code-quality-remediation-plan.md`. Scorecard: `docs/scorecard.md` (8.3/10, mục tiêu 9).
 
 ## Đã xong (merge vào `feature/fix-ui`)
@@ -20,12 +20,15 @@
   - Docker: integration 68/68, 0021 downgrade/upgrade OK, promtool/amtool OK;
   - k6 2 CPU / 8 GiB: pass 10/10 SLO với split cron-worker 0.3 (1 lần chạy, `docs/performance-report.md`).
 
+## Đã xong sau W7 (2026-11-06)
+
+- MinIO → RustFS (profile `s3`, fail-closed keys, network `storage` riêng cho api/worker/cron-worker).
+- Spec `BUILTINS` thêm 5 built-in; `test.sh`/`dev.ps1` export `CHAT_SQL_READER_DATABASE_URL`; sửa test Windows launch-path, test offload deterministic, race replay trong `test_p12_source_purge`.
+- `set_event_delivery` compare-and-set theo status; `docker-compose.limits.yml` + `LOAD_TEST_LIMITS=1`; npm audit 0.
+- Kiểm tra local: integration (`test_auth_race` 3/3, reader 20/20, S3 RustFS 3/3, purge 3×4/4); e2e rest 12/13 spec + screens-capture nhóm dark pass riêng, datasources pass, `sources-builtin-fetch` 47/47 (crash screens-capture cũ do harness timeout).
+
 ## Còn lại
 
-- `test_auth_race` chưa chạy lại trên stack sạch; datasources e2e + MinIO chưa chạy.
 - Nightly jobs chưa từng chạy (schedule chỉ chạy trên default branch); SHA `actions/upload-artifact` chưa xác minh.
-- `set_event_delivery` cập nhật vô điều kiện.
-- npm audit 8 moderate (dev-only).
-- File override giới hạn CPU của k6 chưa commit.
+- k6 với `docker-compose.limits.yml` mới chạy 1 lần; cần lặp ≥3.
 - Top-5 việc lên 9+: xem `docs/scorecard.md`.
-- Session song song đã merge `42d5b08c` (compose `!reset`) và `9c83afb8` (docs Langfuse); test compose hiện đã pass.
