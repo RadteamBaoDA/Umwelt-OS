@@ -17,21 +17,37 @@
 # The run fails (exit 99, k6's threshold-failure code) when any SLO threshold is crossed.
 set -euo pipefail
 
+# Git Bash would rewrite "/scripts:ro"-style docker arguments into Windows paths; keep them verbatim.
+export MSYS_NO_PATHCONV=1
+
+# `python3` on Windows is often the Microsoft Store stub (exists, but does not run); take the first that executes.
+py=""
+for cand in python3 python; do
+  if "$cand" -c 'import sys' >/dev/null 2>&1; then py="$cand"; break; fi
+done
+[[ -n "$py" ]] || { echo "No working python3/python found on PATH" >&2; exit 2; }
+
+# Under MSYS/Cygwin, Docker Desktop needs bind-mount sources in Windows form (D:/...); plain `pwd` gives /d/...
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) pwd_host() { pwd -W; } ;;
+  *) pwd_host() { pwd; } ;;
+esac
+
 K6_IMAGE="${K6_IMAGE:-grafana/k6:0.57.0}"
 scenario="${LOAD_SCENARIO:-all.js}"
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd_host)"
 cd "$repo_root"
 [[ "$scenario" =~ ^[a-z_]+\.js$ && -f "tests/load/$scenario" ]] || { echo "Unknown LOAD_SCENARIO: $scenario" >&2; exit 2; }
 out_dir="${LOAD_OUT_DIR:-test-results/load/$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$out_dir"
-out_dir="$(cd "$out_dir" && pwd)"
+out_dir="$(cd "$out_dir" && pwd_host)"
 # The k6 image runs as a non-root user; it must be able to write the summary into the bind mount.
 chmod 777 "$out_dir"
 
-project="bbd-os-test-$(python3 -c 'import secrets; print(secrets.token_hex(5))')"
+project="bbd-os-test-$("$py" -c 'import secrets; print(secrets.token_hex(5))')"
 [[ "$project" =~ ^bbd-os-test-[0-9a-f]{10}$ ]]
-free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'; }
+free_port() { "$py" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'; }
 export WEB_PORT="$(free_port)"
 export API_TEST_PORT="$(free_port)"
 while [[ "$API_TEST_PORT" == "$WEB_PORT" ]]; do export API_TEST_PORT="$(free_port)"; done
