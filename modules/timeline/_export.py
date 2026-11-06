@@ -168,14 +168,14 @@ async def _timeline_export_count(
         position = (rows[-1].created_at, rows[-1].id)
 
 
-async def _timeline_export_record(
-    session: AsyncSession,
-    event: Event,
-    *,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> tuple[TimelineExportRead, str, str, list[tuple[UUID, int]]]:
-    """Project one fresh event and its exact supported children without arbitrary metadata."""
+async def _export_participant_rows(
+    session: AsyncSession, event: Event, *, scope: Scope
+) -> list[EventParticipant]:
+    """Read an event's participants in stable role/entity order, bounded at 100.
+
+    Fetches 101 rows with ``populate_existing`` so stale identity-map copies never leak into the
+    export; raises ``ValueError`` when the bound is exceeded rather than truncating silently.
+    """
     participants = list(
         (
             await session.scalars(
@@ -196,6 +196,17 @@ async def _timeline_export_record(
     )
     if len(participants) > 100:
         raise ValueError("An event export record exceeds the participant bound")
+    return participants
+
+
+async def _export_evidence_rows(
+    session: AsyncSession, event: Event, *, scope: Scope
+) -> list[EventEvidence]:
+    """Read an event's export-eligible-source evidence rows with full document/chunk refs, bounded at 100.
+
+    Fetches 101 rows with ``populate_existing``; raises ``ValueError`` over the bound. Document
+    liveness is proven per row later by the documents owner; this only narrows candidates.
+    """
     evidence_rows = list(
         (
             await session.scalars(
@@ -215,6 +226,54 @@ async def _timeline_export_record(
     )
     if len(evidence_rows) > 100:
         raise ValueError("An event export record exceeds the evidence bound")
+    return evidence_rows
+
+
+def _export_read(
+    event: Event,
+    participant_refs: list[TimelineExportParticipant],
+    validated: list[TimelineExportEvidence],
+) -> TimelineExportRead:
+    """Project an event and its already-validated children into the export DTO.
+
+    Copies only the enumerated scalar fields; arbitrary event metadata is never exported. Pure.
+    """
+    return TimelineExportRead(
+        id=event.id,
+        type=event.type,
+        subtype=event.subtype,
+        title=event.title,
+        summary=event.summary,
+        importance_score=event.importance_score,
+        confidence=event.confidence,
+        origin=event.origin,
+        date_precision=event.date_precision,
+        started_at=event.started_at,
+        ended_at=event.ended_at,
+        occurred_date=event.occurred_date,
+        end_date=event.end_date,
+        occurrence_timezone=event.occurrence_timezone,
+        observed_at=event.observed_at,
+        valid_from=event.valid_from,
+        valid_to=event.valid_to,
+        revision=event.revision,
+        created_at=event.created_at,
+        updated_at=event.updated_at,
+        participants=participant_refs,
+        evidence=validated,
+    )
+
+
+async def _timeline_export_record(
+    session: AsyncSession,
+    event: Event,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> tuple[TimelineExportRead, str, str, list[tuple[UUID, int]]]:
+    """Project one fresh event and its exact supported children without arbitrary metadata."""
+    participants = await _export_participant_rows(session, event, scope=scope)
+    evidence_rows = await _export_evidence_rows(session, event, scope=scope)
     validated: list[TimelineExportEvidence] = []
     valid_evidence_ids: set[UUID] = set()
     current_source_fences: set[tuple[UUID, int]] = set()
@@ -275,30 +334,7 @@ async def _timeline_export_record(
         for item in participants
         if item.origin == "manual" or item.id in supported_participant_ids
     ]
-    item = TimelineExportRead(
-        id=event.id,
-        type=event.type,
-        subtype=event.subtype,
-        title=event.title,
-        summary=event.summary,
-        importance_score=event.importance_score,
-        confidence=event.confidence,
-        origin=event.origin,
-        date_precision=event.date_precision,
-        started_at=event.started_at,
-        ended_at=event.ended_at,
-        occurred_date=event.occurred_date,
-        end_date=event.end_date,
-        occurrence_timezone=event.occurrence_timezone,
-        observed_at=event.observed_at,
-        valid_from=event.valid_from,
-        valid_to=event.valid_to,
-        revision=event.revision,
-        created_at=event.created_at,
-        updated_at=event.updated_at,
-        participants=participant_refs,
-        evidence=validated,
-    )
+    item = _export_read(event, participant_refs, validated)
     participant_digest = hashlib.sha256(
         _timeline_export_json([ref.model_dump(mode="json") for ref in participant_refs])
     ).hexdigest()

@@ -393,30 +393,15 @@ def _new_derived_event(
     )
 
 
-async def publish_extracted_events(
-    session: AsyncSession,
-    *,
-    work_id: UUID,
-    lease_owner: str,
-    ready: Any,
-    proposals: Any,
-    model: str | None,
-    membership_revisions: dict[UUID, int],
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> bool:
-    """Publish bounded event proposals and exact evidence under caller-owned source/document fences.
+async def _lock_running_extraction_work(
+    session: AsyncSession, work_id: UUID, lease_owner: str, ready: Any, *, scope: Scope
+) -> Any | None:
+    """Lock the running extraction work row if this worker still holds an unexpired lease.
 
-    Resolves and locks participant entities after inference, then event rows.
-    Membership revisions captured before inference must still match the locked
-    canonical revisions. Existing owner fields win; if proposed unowned
-    temporal fields conflict with that merged state, the unowned temporal
-    refresh group is skipped and named while safe fields, evidence, and results
-    publish.
-    It flushes only; the worker commits results, replay and success atomically.
-    Returns ``False`` (nothing published) when the lease or its version/generation is lost.
+    Returns the row, or ``None`` when the lease is lost or the work's source generation or document
+    version no longer matches ``ready`` (the caller then publishes nothing). Holds ``FOR UPDATE``
+    until the caller's transaction ends.
     """
-    from modules.timeline.extraction import EXTRACTOR_VERSION, PROMPT_VERSION
     from modules.timeline.models import TimelineExtractionWork
 
     work = await session.scalar(
@@ -435,10 +420,23 @@ async def publish_extracted_events(
         or work.source_generation != ready.source_generation
         or work.document_version_id != ready.document_version_id
     ):
-        return False
-    chunk_ids = sorted(
-        {chunk for item in proposals.events for chunk in item.evidence_chunk_ids}, key=str
-    )
+        return None
+    return work
+
+
+async def _load_extraction_evidence(
+    session: AsyncSession,
+    ready: Any,
+    chunk_ids: list[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> dict[UUID, Any]:
+    """Resolve the cited chunks to current evidence closures keyed by chunk id.
+
+    Raises ``ValueError`` when the documents owner reports the evidence is no longer current or the
+    closure snapshot is incomplete, aborting publication before any event write.
+    """
     refs = (
         await documents.read_extraction_evidence_refs(
             session,
@@ -463,33 +461,22 @@ async def publish_extracted_events(
     )
     if len(evidence) != len(refs):
         raise ValueError("event evidence snapshot is unavailable")
-    evidence_by_chunk = {item.chunk_id: item for item in evidence}
-    memberships = []
-    for offset in range(0, len(chunk_ids), 100):
-        memberships.extend(
-            await entities.list_version_membership_refs(
-                session,
-                ready.document_version_id,
-                chunk_ids[offset : offset + 100],
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-            )
-        )
-    membership_by_id = {item.membership_id: item for item in memberships}
-    identity = f"{ready.document_version_id}:{ready.source_generation}:{EXTRACTOR_VERSION}:{PROMPT_VERSION}"
-    normalized, entity_ids = _normalize_proposals(
-        proposals, chunk_ids, memberships, membership_by_id
-    )
-    await _lock_extraction_entities(
-        session,
-        entity_ids,
-        proposals,
-        membership_by_id,
-        membership_revisions,
-        scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
-    )
-    candidates = [item[1] for item in normalized]
+    return {item.chunk_id: item for item in evidence}
+
+
+async def _load_existing_and_suppressed(
+    session: AsyncSession,
+    identity: str,
+    candidates: list[Any],
+    ready: Any,
+    *,
+    scope: Scope,
+) -> tuple[dict[Any, Event], set[Any]]:
+    """Lock already-derived events for this extraction identity and read owner suppressions.
+
+    Returns ``(events by candidate hash, suppressed candidate hashes)``. Event rows are locked
+    ``FOR UPDATE`` in id order; both queries are skipped when there are no candidates.
+    """
     existing = (
         list(
             (
@@ -508,7 +495,6 @@ async def publish_extracted_events(
         if candidates
         else []
     )
-    by_hash = {item.candidate_hash: item for item in existing}
     suppressed = (
         set(
             (
@@ -524,34 +510,61 @@ async def publish_extracted_events(
         if candidates
         else set()
     )
-    published: list[tuple[Event, Any]] = []
-    refresh_conflicts: dict[str, list[str]] = {}
-    for proposal, candidate_hash, participants in normalized:
-        if candidate_hash in suppressed:
-            continue
-        event = by_hash.get(candidate_hash)
-        if event is None:
-            event = _new_derived_event(proposal, candidate_hash, ready, identity, scope=scope)
-            session.add(event)
-            await session.flush()
-        else:
-            _refresh_derived_event(event, proposal, candidate_hash, refresh_conflicts)
-        published.append((event, proposal))
-        if "evidence" not in event.owner_fields:
-            await _insert_derived_evidence(
-                session,
-                event,
-                proposal,
-                candidate_hash,
-                evidence_by_chunk,
-                ready,
-                identity,
-                scope=scope,
-            )
-        if "participants" not in event.owner_fields and "evidence" not in event.owner_fields:
-            await _link_derived_participants(session, event, participants, scope=scope)
-    await session.flush()
-    proposals_json = [
+    return {item.candidate_hash: item for item in existing}, suppressed
+
+
+async def _publish_derived_event(
+    session: AsyncSession,
+    proposal: Any,
+    candidate_hash: Any,
+    participants: Any,
+    by_hash: dict[Any, Event],
+    evidence_by_chunk: dict[UUID, Any],
+    ready: Any,
+    identity: str,
+    refresh_conflicts: dict[str, list[str]],
+    *,
+    scope: Scope,
+) -> Event:
+    """Create or refresh one derived event and attach its evidence and participants.
+
+    A missing event is added and flushed; an existing one is refreshed in place, recording any
+    skipped temporal-field conflicts in ``refresh_conflicts``. Evidence is inserted unless the owner
+    pinned ``evidence``; participants are linked unless the owner pinned ``participants`` or
+    ``evidence``. Flushes only; the worker commits.
+    """
+    event = by_hash.get(candidate_hash)
+    if event is None:
+        event = _new_derived_event(proposal, candidate_hash, ready, identity, scope=scope)
+        session.add(event)
+        await session.flush()
+    else:
+        _refresh_derived_event(event, proposal, candidate_hash, refresh_conflicts)
+    if "evidence" not in event.owner_fields:
+        await _insert_derived_evidence(
+            session,
+            event,
+            proposal,
+            candidate_hash,
+            evidence_by_chunk,
+            ready,
+            identity,
+            scope=scope,
+        )
+    if "participants" not in event.owner_fields and "evidence" not in event.owner_fields:
+        await _link_derived_participants(session, event, participants, scope=scope)
+    return event
+
+
+def _proposals_json(
+    published: list[tuple[Event, Any]], ready: Any, refresh_conflicts: dict[str, list[str]]
+) -> list[dict[str, Any]]:
+    """Serialize published events and their cited support for the extraction-work result.
+
+    Includes the proposal payload, the document version/chunk/membership ids it cited and any
+    refresh conflicts recorded for the event's candidate hash. Pure.
+    """
+    return [
         {
             "event_id": str(event.id),
             "candidate_hash": event.candidate_hash,
@@ -565,6 +578,112 @@ async def publish_extracted_events(
         }
         for event, proposal in published
     ]
+
+
+async def _list_memberships(
+    session: AsyncSession,
+    ready: Any,
+    chunk_ids: list[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[Any]:
+    """Read entity membership refs for the cited chunks in pages of 100 (the entities owner's cap)."""
+    memberships: list[Any] = []
+    for offset in range(0, len(chunk_ids), 100):
+        memberships.extend(
+            await entities.list_version_membership_refs(
+                session,
+                ready.document_version_id,
+                chunk_ids[offset : offset + 100],
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        )
+    return memberships
+
+
+async def publish_extracted_events(
+    session: AsyncSession,
+    *,
+    work_id: UUID,
+    lease_owner: str,
+    ready: Any,
+    proposals: Any,
+    model: str | None,
+    membership_revisions: dict[UUID, int],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Publish bounded event proposals and exact evidence under caller-owned source/document fences.
+
+    Resolves and locks participant entities after inference, then event rows.
+    Membership revisions captured before inference must still match the locked
+    canonical revisions. Existing owner fields win; if proposed unowned
+    temporal fields conflict with that merged state, the unowned temporal
+    refresh group is skipped and named while safe fields, evidence, and results
+    publish.
+    It flushes only; the worker commits results, replay and success atomically.
+    Returns ``False`` (nothing published) when the lease or its version/generation is lost.
+    """
+    from modules.timeline.extraction import EXTRACTOR_VERSION, PROMPT_VERSION
+
+    if (
+        await _lock_running_extraction_work(session, work_id, lease_owner, ready, scope=scope)
+        is None
+    ):
+        return False
+    chunk_ids = sorted(
+        {chunk for item in proposals.events for chunk in item.evidence_chunk_ids}, key=str
+    )
+    evidence_by_chunk = await _load_extraction_evidence(
+        session,
+        ready,
+        chunk_ids,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    memberships = await _list_memberships(
+        session, ready, chunk_ids, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    membership_by_id = {item.membership_id: item for item in memberships}
+    identity = f"{ready.document_version_id}:{ready.source_generation}:{EXTRACTOR_VERSION}:{PROMPT_VERSION}"
+    normalized, entity_ids = _normalize_proposals(
+        proposals, chunk_ids, memberships, membership_by_id
+    )
+    await _lock_extraction_entities(
+        session,
+        entity_ids,
+        proposals,
+        membership_by_id,
+        membership_revisions,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    candidates = [item[1] for item in normalized]
+    by_hash, suppressed = await _load_existing_and_suppressed(
+        session, identity, candidates, ready, scope=scope
+    )
+    published: list[tuple[Event, Any]] = []
+    refresh_conflicts: dict[str, list[str]] = {}
+    for proposal, candidate_hash, participants in normalized:
+        if candidate_hash in suppressed:
+            continue
+        event = await _publish_derived_event(
+            session,
+            proposal,
+            candidate_hash,
+            participants,
+            by_hash,
+            evidence_by_chunk,
+            ready,
+            identity,
+            refresh_conflicts,
+            scope=scope,
+        )
+        published.append((event, proposal))
+    await session.flush()
+    proposals_json = _proposals_json(published, ready, refresh_conflicts)
     if not await finish_extraction_work(
         session,
         work_id,
@@ -624,79 +743,28 @@ async def summarize_source_events(
     return {row[0]: int(row[1]) for row in rows}, max((row[2] for row in rows), default=None)
 
 
-async def publish_provider_event(
+async def _upsert_provider_event(
     session: AsyncSession,
+    event: Event | None,
     *,
+    scope: Scope,
     source_id: UUID,
-    source_generation: int,
-    document_id: UUID,
-    document_version_id: UUID,
-    chunk_ids: list[UUID],
     extraction_identity: str,
-    record_key: str,
+    candidate_hash: str,
     event_type: str,
     title: str,
     summary: str | None,
     started_at: datetime,
     observed_at: datetime,
     metadata: dict[str, Any],
-    participants: list[tuple[UUID, str]],
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> UUID | None:
-    """Idempotently publish one deterministic provider event with exact current evidence.
+) -> tuple[Event, bool]:
+    """Create the deterministic provider event or refresh its unowned fields.
 
-    The event identity is ``(extraction_identity, sha256(record_key))``, so every
-    version of the same provider record updates one event instead of creating
-    duplicates. Owner-owned fields are never overwritten, owner-deleted events
-    stay deleted, and the revision/temporal change is scheduled only when a
-    field, the evidence set or a participant actually changed. The caller holds
-    the source/document fences and the outer transaction; this only flushes.
-    Returns None when the evidence is no longer the current ready version.
+    ``event`` is the already-locked existing row (never owner-deleted) or ``None`` to create one.
+    Owner-owned fields are never overwritten; a refresh bumps ``revision`` only when a field really
+    changed. Returns ``(event, changed)`` where ``changed`` also covers creation. Flushes new rows
+    only; the caller owns the transaction.
     """
-    from hashlib import sha256
-
-    from sqlalchemy.dialects.postgresql import insert
-
-    refs = await documents.read_extraction_evidence_refs(
-        session,
-        document_id=document_id,
-        document_version_id=document_version_id,
-        source_id=source_id,
-        source_generation=source_generation,
-        chunk_ids=chunk_ids,
-        scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
-    )
-    if refs is None:
-        return None
-    evidence = await _read_evidence_closure(
-        session,
-        [(item.document_version_id, item.chunk_id) for item in refs],
-        scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
-    )
-    if len(evidence) != len(refs):
-        return None
-    canonical = await entities.get_entity_refs(
-        session,
-        [entity_id for entity_id, _ in participants],
-        for_write=True,
-        scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
-    )
-    candidate_hash = sha256(record_key.encode("utf-8")).hexdigest()
-    event = await session.scalar(
-        select(Event)
-        .where(
-            Event.workspace_id == scope.workspace_id,
-            Event.extraction_identity == extraction_identity,
-            Event.candidate_hash == candidate_hash,
-        )
-        .with_for_update()
-    )
-    if event is not None and event.deleted_at is not None:
-        return None
     changed = event is None
     if event is None:
         event = Event(
@@ -737,6 +805,27 @@ async def publish_provider_event(
             event.revision += 1
             event.updated_at = datetime.now(UTC)
             changed = True
+    return event, changed
+
+
+async def _insert_provider_evidence(
+    session: AsyncSession,
+    event: Event,
+    evidence: list[Any],
+    *,
+    scope: Scope,
+    source_generation: int,
+    extraction_identity: str,
+    candidate_hash: str,
+) -> bool:
+    """Insert each evidence closure row for the event idempotently; return whether any row was new.
+
+    Uses ``ON CONFLICT DO NOTHING`` on the unique evidence constraint so reruns of the same record
+    add nothing and report no change.
+    """
+    from sqlalchemy.dialects.postgresql import insert
+
+    changed = False
     for item in evidence:
         inserted = await session.execute(
             insert(EventEvidence)
@@ -764,18 +853,25 @@ async def publish_provider_event(
             .returning(EventEvidence.id)
         )
         changed = changed or inserted.first() is not None
-    evidence_rows = list(
-        (
-            await session.scalars(
-                select(EventEvidence).where(
-                    EventEvidence.workspace_id == scope.workspace_id,
-                    EventEvidence.event_id == event.id,
-                    EventEvidence.chunk_id.in_(chunk_ids),
-                    EventEvidence.document_version_id == document_version_id,
-                )
-            )
-        ).all()
-    )
+    return changed
+
+
+async def _link_provider_participants(
+    session: AsyncSession,
+    event: Event,
+    canonical: list[Any],
+    participants: list[tuple[UUID, str]],
+    evidence_rows: list[EventEvidence],
+) -> bool:
+    """Lock or create each derived participant link and attach the event's evidence to it.
+
+    ``canonical`` are the write-locked entity refs aligned with ``participants`` (entity, role).
+    Returns whether any participant row was newly created; evidence links are idempotent
+    (``ON CONFLICT DO NOTHING``). Flushes new rows only.
+    """
+    from sqlalchemy.dialects.postgresql import insert
+
+    changed = False
     for ref, (_, role) in zip(canonical, participants, strict=False):
         row = await session.scalar(
             select(EventParticipant)
@@ -806,6 +902,177 @@ async def publish_provider_event(
                 )
                 .on_conflict_do_nothing(constraint="uq_timeline_participant_evidence")
             )
+    return changed
+
+
+async def _read_provider_evidence(
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    source_generation: int,
+    document_id: UUID,
+    document_version_id: UUID,
+    chunk_ids: list[UUID],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[Any] | None:
+    """Return the exact current evidence closure for the cited chunks, or ``None`` if unavailable.
+
+    ``None`` means the documents owner no longer reports the version/generation as current or a
+    closure row could not be read; the caller then publishes nothing.
+    """
+    refs = await documents.read_extraction_evidence_refs(
+        session,
+        document_id=document_id,
+        document_version_id=document_version_id,
+        source_id=source_id,
+        source_generation=source_generation,
+        chunk_ids=chunk_ids,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if refs is None:
+        return None
+    evidence = await _read_evidence_closure(
+        session,
+        [(item.document_version_id, item.chunk_id) for item in refs],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if len(evidence) != len(refs):
+        return None
+    return evidence
+
+
+async def _lock_provider_event(
+    session: AsyncSession, extraction_identity: str, candidate_hash: str, *, scope: Scope
+) -> Event | None:
+    """Lock the event for this provider record identity ``FOR UPDATE``, or return ``None`` if absent.
+
+    Includes owner-deleted rows so the caller can leave them deleted instead of recreating them.
+    """
+    return await session.scalar(
+        select(Event)
+        .where(
+            Event.workspace_id == scope.workspace_id,
+            Event.extraction_identity == extraction_identity,
+            Event.candidate_hash == candidate_hash,
+        )
+        .with_for_update()
+    )
+
+
+async def _provider_evidence_rows(
+    session: AsyncSession,
+    event: Event,
+    chunk_ids: list[UUID],
+    document_version_id: UUID,
+    *,
+    scope: Scope,
+) -> list[EventEvidence]:
+    """Read the event's evidence rows for the given chunks of one document version."""
+    return list(
+        (
+            await session.scalars(
+                select(EventEvidence).where(
+                    EventEvidence.workspace_id == scope.workspace_id,
+                    EventEvidence.event_id == event.id,
+                    EventEvidence.chunk_id.in_(chunk_ids),
+                    EventEvidence.document_version_id == document_version_id,
+                )
+            )
+        ).all()
+    )
+
+
+async def publish_provider_event(
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    source_generation: int,
+    document_id: UUID,
+    document_version_id: UUID,
+    chunk_ids: list[UUID],
+    extraction_identity: str,
+    record_key: str,
+    event_type: str,
+    title: str,
+    summary: str | None,
+    started_at: datetime,
+    observed_at: datetime,
+    metadata: dict[str, Any],
+    participants: list[tuple[UUID, str]],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> UUID | None:
+    """Idempotently publish one deterministic provider event with exact current evidence.
+
+    The event identity is ``(extraction_identity, sha256(record_key))``, so every
+    version of the same provider record updates one event instead of creating
+    duplicates. Owner-owned fields are never overwritten, owner-deleted events
+    stay deleted, and the revision/temporal change is scheduled only when a
+    field, the evidence set or a participant actually changed. The caller holds
+    the source/document fences and the outer transaction; this only flushes.
+    Returns None when the evidence is no longer the current ready version.
+    """
+    from hashlib import sha256
+
+    evidence = await _read_provider_evidence(
+        session,
+        source_id=source_id,
+        source_generation=source_generation,
+        document_id=document_id,
+        document_version_id=document_version_id,
+        chunk_ids=chunk_ids,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if evidence is None:
+        return None
+    canonical = await entities.get_entity_refs(
+        session,
+        [entity_id for entity_id, _ in participants],
+        for_write=True,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    candidate_hash = sha256(record_key.encode("utf-8")).hexdigest()
+    event = await _lock_provider_event(session, extraction_identity, candidate_hash, scope=scope)
+    if event is not None and event.deleted_at is not None:
+        return None
+    event, changed = await _upsert_provider_event(
+        session,
+        event,
+        scope=scope,
+        source_id=source_id,
+        extraction_identity=extraction_identity,
+        candidate_hash=candidate_hash,
+        event_type=event_type,
+        title=title,
+        summary=summary,
+        started_at=started_at,
+        observed_at=observed_at,
+        metadata=metadata,
+    )
+    changed = (
+        await _insert_provider_evidence(
+            session,
+            event,
+            evidence,
+            scope=scope,
+            source_generation=source_generation,
+            extraction_identity=extraction_identity,
+            candidate_hash=candidate_hash,
+        )
+        or changed
+    )
+    evidence_rows = await _provider_evidence_rows(
+        session, event, chunk_ids, document_version_id, scope=scope
+    )
+    changed = (
+        await _link_provider_participants(session, event, canonical, participants, evidence_rows)
+        or changed
+    )
     await session.flush()
     if changed:
         await _schedule_temporal_event(

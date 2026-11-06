@@ -7,7 +7,7 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import or_, select, text
@@ -151,40 +151,25 @@ async def lock_export_privacy_in_uow(
     await lock_export_privacy(session, scope.workspace_id)
 
 
-async def _lock_live_provenance_evidence(
+async def _lock_source_or_document_evidence(
     session: AsyncSession,
-    provenance: object,
+    raw: dict[str, Any],
     *,
-    require_copy_evidence: bool,
     scope: Scope,
     multi_workspace_enabled: bool,
-    access_fence: AccessFence | None = None,
-) -> None:
-    """Acquire privacy-held live evidence locks in Source then Document order and reject stale claims.
+    access_fence: AccessFence | None,
+) -> bool:
+    """Lock and verify the Source or Document evidence named by a provenance hint.
 
-    Callers first read a provenance hint, acquire the privacy lock, then use this helper before
-    locking the copied Memory/Candidate rows and comparing the locked row to its hint. Every
-    owner call runs under the caller's workspace scope; ``access_fence`` (the caller's locked
-    admission) is compared before each Source lock so a revoked membership cannot publish.
+    Document identity (document, version and chunk together) is locked through the documents owner
+    and wins; otherwise a bare ``source_id`` is locked under ``access_fence`` and must be export
+    eligible with no pending purge. Returns whether document evidence was verified; raises
+    ``ConflictError`` for incomplete, removed or unavailable evidence.
     """
-    if not isinstance(provenance, dict):
-        raise ConflictError("Memory provenance is not verifiable")
-    from modules.chat import public as chat_public
     from modules.knowledge.documents import public as documents_public
     from modules.sources import public as sources_public
     from modules.sources.public import SourceExportFence
 
-    raw = provenance
-    if require_copy_evidence and raw.keys() - {
-        "conversation_id",
-        "message_id",
-        "source_id",
-        "document_id",
-        "document_version_id",
-        "chunk_id",
-        "origin",
-    }:
-        raise ConflictError("Memory provenance contains unsupported copied fields")
     source_value = raw.get("source_id")
     source_id = _provenance_uuid(source_value) if source_value is not None else None
     if source_value is not None and source_id is None:
@@ -247,6 +232,18 @@ async def _lock_live_provenance_evidence(
         )
         if not eligible:
             raise ConflictError("Memory source evidence is removed or unavailable")
+    return document_verified
+
+
+async def _verify_chat_provenance(
+    session: AsyncSession, raw: dict[str, Any], *, scope: Scope
+) -> bool:
+    """Verify conversation/message provenance against the chat owner's export origin.
+
+    Returns ``False`` when the hint names no conversation or message; raises ``ConflictError`` when
+    only one of the pair is present, an id is malformed, or the transcript is removed.
+    """
+    from modules.chat import public as chat_public
 
     conversation_value, message_value = raw.get("conversation_id"), raw.get("message_id")
     conversation_id = (
@@ -268,6 +265,46 @@ async def _lock_live_provenance_evidence(
         )
         if not chat_verified:
             raise ConflictError("Memory transcript evidence is removed or unavailable")
+    return chat_verified
+
+
+async def _lock_live_provenance_evidence(
+    session: AsyncSession,
+    provenance: object,
+    *,
+    require_copy_evidence: bool,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence | None = None,
+) -> None:
+    """Acquire privacy-held live evidence locks in Source then Document order and reject stale claims.
+
+    Callers first read a provenance hint, acquire the privacy lock, then use this helper before
+    locking the copied Memory/Candidate rows and comparing the locked row to its hint. Every
+    owner call runs under the caller's workspace scope; ``access_fence`` (the caller's locked
+    admission) is compared before each Source lock so a revoked membership cannot publish.
+    """
+    if not isinstance(provenance, dict):
+        raise ConflictError("Memory provenance is not verifiable")
+    raw = provenance
+    if require_copy_evidence and raw.keys() - {
+        "conversation_id",
+        "message_id",
+        "source_id",
+        "document_id",
+        "document_version_id",
+        "chunk_id",
+        "origin",
+    }:
+        raise ConflictError("Memory provenance contains unsupported copied fields")
+    document_verified = await _lock_source_or_document_evidence(
+        session,
+        raw,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
+    chat_verified = await _verify_chat_provenance(session, raw, scope=scope)
     if require_copy_evidence and not (document_verified or chat_verified):
         raise ConflictError("Memory copied-content evidence is not verifiable")
 
@@ -850,6 +887,70 @@ async def _sweep_source_memory_page(
     return has_more, rows[-1].id if rows else after, processed, changed
 
 
+async def _require_cleanup_fences(
+    session: AsyncSession,
+    evidence: SourceCopiedEvidenceScope,
+    *,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    source_fence: "SourceFence",
+) -> None:
+    """Reject a cleanup page whose held fences no longer match a fresh owner admission or the receipt.
+
+    The held ``access_fence`` must equal a fresh admission read and the locked ``source_fence``
+    plus the internal job scope must name the receipt's workspace, Source and generation. Raises
+    ``ConflictError`` (409) on any mismatch before the page mutates anything.
+    """
+    if (
+        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        != access_fence
+    ):
+        raise ConflictError("Memory cleanup access fence is stale")
+    if (
+        source_fence.workspace_id != scope.workspace_id
+        or source_fence.id != evidence.source_id
+        or source_fence.generation != evidence.generation
+        or scope.source_id != evidence.source_id
+        or scope.source_generation != evidence.generation
+    ):
+        raise ConflictError("Source cleanup fence does not match the receipt")
+
+
+async def _lock_source_candidate_page(
+    session: AsyncSession,
+    evidence: SourceCopiedEvidenceScope,
+    after: UUID | None,
+    remaining: int,
+    *,
+    scope: InternalJobScope,
+) -> list[MemoryCandidate]:
+    """Lock up to ``remaining + 1`` candidates carrying the purged Source id, keyset after ``after``.
+
+    Selection is exact ``provenance.source_id`` equality plus the owner predicates, ordered by id;
+    the extra row is the lookahead the caller trims. Plain ``FOR UPDATE`` so the cursor never
+    skips a held row.
+    """
+    candidate_statement = (
+        select(MemoryCandidate)
+        .where(
+            MemoryCandidate.provenance["source_id"].astext == str(evidence.source_id),
+            *_owned(MemoryCandidate, scope),
+        )
+        .order_by(MemoryCandidate.id)
+        .limit(remaining + 1)
+    )
+    if after is not None:
+        candidate_statement = candidate_statement.where(MemoryCandidate.id > after)
+    return list(
+        (
+            await session.scalars(
+                candidate_statement.with_for_update().execution_options(populate_existing=True)
+            )
+        ).all()
+    )
+
+
 async def purge_source_copied_evidence_page_in_uow(
     session: AsyncSession,
     evidence: SourceCopiedEvidenceScope,
@@ -880,19 +981,14 @@ async def purge_source_copied_evidence_page_in_uow(
     """
     if not 1 <= limit <= 100:
         raise ValueError("Source Memory cleanup page size must be between 1 and 100")
-    if (
-        await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        != access_fence
-    ):
-        raise ConflictError("Memory cleanup access fence is stale")
-    if (
-        source_fence.workspace_id != scope.workspace_id
-        or source_fence.id != evidence.source_id
-        or source_fence.generation != evidence.generation
-        or scope.source_id != evidence.source_id
-        or scope.source_generation != evidence.generation
-    ):
-        raise ConflictError("Source cleanup fence does not match the receipt")
+    await _require_cleanup_fences(
+        session,
+        evidence,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        source_fence=source_fence,
+    )
     await bound_cleanup_lock_waits(session)
     kind, after = _decode_source_memory_cursor(cursor, evidence) if cursor else ("memories", None)
     now = datetime.now(UTC)
@@ -931,24 +1027,7 @@ async def purge_source_copied_evidence_page_in_uow(
             )
 
     remaining = limit - processed
-    candidate_statement = (
-        select(MemoryCandidate)
-        .where(
-            MemoryCandidate.provenance["source_id"].astext == str(evidence.source_id),
-            *_owned(MemoryCandidate, scope),
-        )
-        .order_by(MemoryCandidate.id)
-        .limit(remaining + 1)
-    )
-    if after is not None:
-        candidate_statement = candidate_statement.where(MemoryCandidate.id > after)
-    candidates = list(
-        (
-            await session.scalars(
-                candidate_statement.with_for_update().execution_options(populate_existing=True)
-            )
-        ).all()
-    )
+    candidates = await _lock_source_candidate_page(session, evidence, after, remaining, scope=scope)
     has_more = len(candidates) > remaining
     candidates = candidates[:remaining]
     for candidate in candidates:

@@ -890,6 +890,78 @@ async def export_page(
     )
 
 
+async def _dashboard_export_validation(
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    snapshot_at: datetime,
+    expected_snapshot_count: int,
+    fences: list[DashboardExportFence],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> DashboardExportValidation:
+    """Recheck the dashboard inventory count and each fenced dashboard's exact public projection.
+
+    Fails closed (``valid=False``) when the cutoff count changed, a newer definition exists,
+    a fenced row vanished, or its revision, timestamps or content digest differ from the fence.
+    Read-only; admission and the 100-fence bound are enforced by the caller.
+    """
+    observed = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(Dashboard)
+            .where(*_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id))
+        )
+        or 0
+    )
+    if observed != expected_snapshot_count:
+        return DashboardExportValidation(
+            valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed
+        )
+    if (
+        fences
+        and await session.scalar(
+            select(Dashboard.id)
+            .where(
+                *_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id),
+                _newer_export_definition_exists(owner_id, snapshot_at, scope.workspace_id),
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        return DashboardExportValidation(
+            valid=False, reason="record_changed", observed_snapshot_count=observed
+        )
+    for fence in fences:
+        row = await session.scalar(
+            select(Dashboard)
+            .where(
+                Dashboard.id == fence.id,
+                *_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id),
+            )
+            .execution_options(populate_existing=True)
+        )
+        if row is None:
+            return DashboardExportValidation(
+                valid=False, reason="record_changed", observed_snapshot_count=observed
+            )
+        item = await _dashboard_read(
+            session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+        if (
+            item.created_at != fence.created_at
+            or item.updated_at != fence.updated_at
+            or item.revision != fence.revision
+            or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest()
+            != fence.content_digest
+        ):
+            return DashboardExportValidation(
+                valid=False, reason="record_changed", observed_snapshot_count=observed
+            )
+    return DashboardExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)
+
+
 async def validate_export_fences(
     session: AsyncSession,
     *,
@@ -946,57 +1018,12 @@ async def validate_export_fences(
         )
     if record_kind != "dashboards" or len(fences) > 100:
         raise ValueError("Dashboard export validation input is invalid")
-    observed = int(
-        await session.scalar(
-            select(func.count())
-            .select_from(Dashboard)
-            .where(*_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id))
-        )
-        or 0
+    return await _dashboard_export_validation(
+        session,
+        owner_id=owner_id,
+        snapshot_at=snapshot_at,
+        expected_snapshot_count=expected_snapshot_count,
+        fences=fences,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    if observed != expected_snapshot_count:
-        return DashboardExportValidation(
-            valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed
-        )
-    if (
-        fences
-        and await session.scalar(
-            select(Dashboard.id)
-            .where(
-                *_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id),
-                _newer_export_definition_exists(owner_id, snapshot_at, scope.workspace_id),
-            )
-            .limit(1)
-        )
-        is not None
-    ):
-        return DashboardExportValidation(
-            valid=False, reason="record_changed", observed_snapshot_count=observed
-        )
-    for fence in fences:
-        row = await session.scalar(
-            select(Dashboard)
-            .where(
-                Dashboard.id == fence.id,
-                *_dashboard_export_scope(owner_id, snapshot_at, scope.workspace_id),
-            )
-            .execution_options(populate_existing=True)
-        )
-        if row is None:
-            return DashboardExportValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed
-            )
-        item = await _dashboard_read(
-            session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-        )
-        if (
-            item.created_at != fence.created_at
-            or item.updated_at != fence.updated_at
-            or item.revision != fence.revision
-            or hashlib.sha256(item.model_dump_json().encode("utf-8")).hexdigest()
-            != fence.content_digest
-        ):
-            return DashboardExportValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed
-            )
-    return DashboardExportValidation(valid=True, reason="valid", observed_snapshot_count=observed)

@@ -451,6 +451,95 @@ async def _replace_event_evidence(
     return keys
 
 
+def _require_unchanged_closure(
+    event: Event,
+    initial: Any,
+    expected_revision: int,
+    initial_support: tuple[Any, Any],
+    current_support: tuple[Any, Any],
+) -> None:
+    """Abort a correction when the event or its support closure moved while locks were acquired.
+
+    ``initial`` is the (revision, origin, deleted_at) row read before locking; the support tuples
+    are (evidence, participants) snapshots before and after locking. Also enforces the caller's
+    ``expected_revision``. Pure; raises ``ValueError`` so the caller aborts before any mutation.
+    """
+    if (
+        event.revision != initial.revision
+        or event.origin != initial.origin
+        or event.deleted_at != initial.deleted_at
+        or current_support != initial_support
+        or event.revision != expected_revision
+    ):
+        raise ValueError("stale event revision or support closure; retry the correction")
+
+
+async def _apply_relation_corrections(
+    session: AsyncSession,
+    event: Event,
+    payload: EventPatch,
+    participant_values: list[Any],
+    changed: dict[str, Any],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
+    """Apply the participant and evidence parts of a correction and record them in ``changed``.
+
+    Participants are replaced as manual links (a derived event also pins ``participants`` as an
+    owner field so re-extraction keeps it); evidence is replaced from the patch. Each part runs only
+    when the patch explicitly set it. Mutates ``changed`` in place; the caller owns the transaction.
+    """
+    fields = payload.model_fields_set
+    if "participants" in fields:
+        await _set_participants(
+            session,
+            event.id,
+            participant_values,
+            origin="manual",
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        changed["participants"] = [item.model_dump(mode="json") for item in participant_values]
+        if event.origin == "derived":
+            event.owner_fields = sorted(set(event.owner_fields) | {"participants"})
+    if "evidence" in fields:
+        changed["evidence"] = await _replace_event_evidence(
+            session,
+            event,
+            payload,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+
+
+def _add_correction_audit(
+    session: AsyncSession,
+    event: Event,
+    reason: str | None,
+    prior_revision: int,
+    changed: dict[str, Any],
+    *,
+    scope: Scope,
+) -> None:
+    """Stage the append-only ``EventAudit`` row for an owner correction (no flush or commit).
+
+    ``event.revision`` must already be the resulting revision; the row is committed atomically
+    with the correction by the caller's ``commit_with_replay``.
+    """
+    session.add(
+        EventAudit(
+            workspace_id=scope.workspace_id,
+            event_id=event.id,
+            actor_id=_actor(scope),
+            reason=reason,
+            prior_revision=prior_revision,
+            resulting_revision=event.revision,
+            changed_json=changed,
+        )
+    )
+
+
 async def update_event(
     session: AsyncSession,
     event_id: UUID,
@@ -483,7 +572,6 @@ async def update_event(
     initial_evidence, initial_participants = await _event_support_snapshot(
         session, event_id, scope=scope
     )
-    fields = payload.model_fields_set
     supplied = payload.model_dump(
         exclude_unset=True, exclude={"expected_revision", "reason", "participants", "evidence"}
     )
@@ -507,52 +595,29 @@ async def update_event(
     current_evidence, current_participants = await _event_support_snapshot(
         session, event_id, scope=scope
     )
-    if (
-        event.revision != initial.revision
-        or event.origin != initial.origin
-        or event.deleted_at != initial.deleted_at
-        or current_evidence != initial_evidence
-        or current_participants != initial_participants
-        or event.revision != payload.expected_revision
-    ):
-        raise ValueError("stale event revision or support closure; retry the correction")
+    _require_unchanged_closure(
+        event,
+        initial,
+        payload.expected_revision,
+        (initial_evidence, initial_participants),
+        (current_evidence, current_participants),
+    )
     prior = event.revision
     changed = _apply_scalar_corrections(event, supplied)
-    if "participants" in fields:
-        await _set_participants(
-            session,
-            event.id,
-            participant_values,
-            origin="manual",
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        changed["participants"] = [item.model_dump(mode="json") for item in participant_values]
-        if event.origin == "derived":
-            event.owner_fields = sorted(set(event.owner_fields) | {"participants"})
-    if "evidence" in fields:
-        changed["evidence"] = await _replace_event_evidence(
-            session,
-            event,
-            payload,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
+    await _apply_relation_corrections(
+        session,
+        event,
+        payload,
+        participant_values,
+        changed,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     if not changed:
         raise ValueError("event correction contains no changes")
     event.revision += 1
     event.updated_at = datetime.now(UTC)
-    session.add(
-        EventAudit(
-            workspace_id=scope.workspace_id,
-            event_id=event.id,
-            actor_id=_actor(scope),
-            reason=payload.reason,
-            prior_revision=prior,
-            resulting_revision=event.revision,
-            changed_json=changed,
-        )
-    )
+    _add_correction_audit(session, event, payload.reason, prior, changed, scope=scope)
     await _schedule_temporal_event(
         session, event, list(changed), scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
