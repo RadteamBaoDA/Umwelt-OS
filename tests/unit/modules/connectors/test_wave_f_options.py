@@ -17,6 +17,7 @@ from modules.connectors import provider_options as po
 from modules.connectors.provider_specs import get_provider_spec
 from modules.connectors.providers import crypto, hazards, json_feed, macro, rest, security
 from modules.connectors.providers.world_data import map_pure_provider_body
+from tests.unit.modules.connectors._collection_patch import patch_collection
 from tests.unit.modules.connectors.p3_helpers import NOW, fixture, jfixture, wd
 from tests.unit.modules.connectors.test_builtins import _RAW, SCOPE, _request, _session, _World
 from tests.unit.modules.connectors.test_free_provider_dispatch import Gate, make_run
@@ -451,7 +452,7 @@ async def test_social_walk_reports_caught_up_in_run_stats(monkeypatch):
     async def no_publish(*_a, **_k):
         return None
 
-    monkeypatch.setattr(collection, "_publish_realtime_snapshot", no_publish)
+    patch_collection(monkeypatch, "_publish_realtime_snapshot", no_publish)
     lease = SimpleNamespace(token=uuid4(), cursor_before=None)
     await collection._accept_native(run, lease, (), "truncated", datetime.now(UTC))
     assert seen["stats"]["caught_up"] is False

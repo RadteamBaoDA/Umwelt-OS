@@ -439,7 +439,7 @@ async def test_google_disconnect_fences_owner_and_revokes_the_saved_grant(
 
 def test_configuration_read_accepts_oauth2_auth_method():
     """Google/Reddit snapshots report `oauth2`; the response model must serialize it instead of answering 500."""
-    from modules.connectors.provisioning_routes import ConnectorConfigurationRead
+    from modules.connectors.provisioning.routes import ConnectorConfigurationRead
 
     read = ConnectorConfigurationRead(
         workspace_id=uuid4(),

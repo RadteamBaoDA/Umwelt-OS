@@ -11,6 +11,7 @@ import pytest
 from modules.connectors import backends, collection
 from modules.connectors import mcp as mcp_collection
 from modules.connectors.providers import rest
+from tests.unit.modules.connectors._collection_patch import patch_collection
 
 
 async def public(host, port):
@@ -131,8 +132,8 @@ async def test_web_adapter_stays_same_origin_bounded_and_hands_records_to_accept
     async def accept(run, records, before, after, update=None):
         accepted.append(records)
 
-    monkeypatch.setattr(collection, "_state", state)
-    monkeypatch.setattr(collection, "_accept_generic", accept)
+    patch_collection(monkeypatch, "_state", state)
+    patch_collection(monkeypatch, "_accept_generic", accept)
     run = web_run(
         FakeGate(pages, calls), {"url": "https://a.example/", "max_pages": 10, "max_depth": 1}
     )
@@ -175,8 +176,8 @@ async def test_mcp_adapter_gates_each_call_and_ingests_normalized_records(monkey
 
     monkeypatch.setattr(tools, "read_collection_capability", read_capability)
     monkeypatch.setattr(mcp_collection, "normalize", lambda read, args, at: [{"provider_id": "p"}])
-    monkeypatch.setattr(collection, "_state", state)
-    monkeypatch.setattr(collection, "_accept_generic", accept)
+    patch_collection(monkeypatch, "_state", state)
+    patch_collection(monkeypatch, "_accept_generic", accept)
     run = SimpleNamespace(
         attempt=SimpleNamespace(source=src, scope=None, multi=False),
         gate=gate,
@@ -210,7 +211,7 @@ async def test_mcp_adapter_fails_without_runtime_or_when_every_call_fails(monkey
         return SimpleNamespace(cursor=None)
 
     monkeypatch.setattr(tools, "read_collection_capability", boom)
-    monkeypatch.setattr(collection, "_state", state)
+    patch_collection(monkeypatch, "_state", state)
     run.ctx = {"agent_mcp_runtime": object()}
     with pytest.raises(mcp_collection.McpCollectionError):
         await collection._run_mcp(run)
@@ -237,7 +238,7 @@ async def test_mcp_adapter_fence_loss_in_gate_propagates_not_counted_failed(monk
         return SimpleNamespace(cursor=None)
 
     monkeypatch.setattr(tools, "read_collection_capability", read_capability)
-    monkeypatch.setattr(collection, "_state", state)
+    patch_collection(monkeypatch, "_state", state)
     run = SimpleNamespace(
         attempt=SimpleNamespace(source=src, scope=None, multi=False),
         gate=gate,

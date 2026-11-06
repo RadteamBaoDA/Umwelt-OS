@@ -64,7 +64,7 @@ Formatting commit `ea870297` is a one-off mechanical `ruff format`; hide it from
 | mypy | `uv run mypy core apps modules` | Strict; must report 0 errors. |
 | GenUI parity | `uv run python scripts/check_genui_parity.py` | |
 | Import contracts | `uv run lint-imports` | Runs only when `.importlinter` exists. |
-| Python tests | `uv run pytest -q` (unit: `tests/unit tests/test_*.py`) | Docker integration/e2e only through `make test`. CI adds `--cov=core --cov=modules --cov=apps --cov-fail-under=68` (see Coverage floors). |
+| Python tests | `uv run pytest -q` (unit: `tests/unit tests/test_*.py`) | Docker integration/e2e only through `make test`. CI adds `--cov=core --cov=modules --cov=apps --cov-fail-under=65` (see Coverage floors). |
 | ESLint | `npm run lint` | `max-lines-per-function` (100), `complexity` (15), module-boundary `no-restricted-imports` and the literal hex-colour guard are errors. |
 | TypeScript | `npm run typecheck` | |
 | Vitest | `npm test --workspace apps/web` | CI runs `npm run test:coverage --workspace apps/web` with the floors in `apps/web/vitest.config.ts`. |
@@ -79,7 +79,7 @@ Coverage is reported and enforced in CI as a ratchet: the floor sits just under 
 
 | Suite | Measured (2026-11-05) | Floor | Where |
 | --- | --- | --- | --- |
-| Python `tests/unit` (`core`, `modules`, `apps`, line coverage) | 70% | 68% | `--cov-fail-under` in `.github/workflows/ci.yml` |
+| Python `tests/unit` (`core`, `modules`, `apps`, branch coverage, `[tool.coverage.run] branch = true`) | 70% | 65% (measured 66%) | `--cov-fail-under` in `.github/workflows/ci.yml` |
 | Vitest `apps/web` (lines / statements / functions / branches) | 61.7 / 58.1 / 51.0 / 48.5 | 60 / 57 / 50 / 47 | `coverage.thresholds` in `apps/web/vitest.config.ts` |
 
 Run locally: `uv run pytest tests/unit --ignore=tests/unit/test_event_loop_offload.py --cov=core --cov=modules --cov=apps --cov-report=term` and `npm run test:coverage --workspace apps/web`. CI excludes the timing-sensitive `tests/unit/test_event_loop_offload.py` from the coverage run (tracing pushes it over its budgets) and runs it in a separate step.

@@ -24,6 +24,7 @@ from modules.connectors.sections import MAX_SECTIONS, SECTION_CATALOG
 from modules.ingestion import public as ingestion
 from modules.ingestion.schemas import CollectionStateUpdate
 from modules.sources.schemas import ConnectorSource
+from tests.unit.modules.connectors._collection_patch import patch_collection
 from tests.unit.modules.connectors.test_builtins import SCOPE, _enable, _request, _session, _World
 from tests.unit.modules.connectors.test_free_provider_dispatch import Gate, make_run
 
@@ -345,7 +346,7 @@ async def test_accept_native_hands_selection_stats_to_ingestion(monkeypatch) -> 
     async def no_publish(*_a, **_k):
         return None
 
-    monkeypatch.setattr(collection, "_publish_realtime_snapshot", no_publish)
+    patch_collection(monkeypatch, "_publish_realtime_snapshot", no_publish)
     from contextlib import asynccontextmanager
 
     @asynccontextmanager

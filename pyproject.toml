@@ -80,6 +80,10 @@ markers = [
     "benchmark: opt-in micro-benchmarks, run with RUN_BENCHMARKS=1 (tests/benchmarks)",
 ]
 
+[tool.coverage.run]
+# Branch coverage: line-only totals hide untested else/except arms (floor in .github/workflows/ci.yml).
+branch = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

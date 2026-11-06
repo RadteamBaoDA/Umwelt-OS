@@ -14,6 +14,7 @@ from modules.connectors import collection
 from modules.connectors.github import webhooks
 from modules.connectors.providers import feed_catalog, local_services, telegram
 from modules.connectors.providers.rest import UnsafeDestination
+from tests.unit.modules.connectors._collection_patch import patch_collection
 
 
 def _run(provider: str, rollback: AsyncMock) -> SimpleNamespace:
@@ -44,11 +45,11 @@ async def test_new_native_provider_plugs_in_without_editing_the_dispatcher(monke
 
     rollback = AsyncMock()
     accept = AsyncMock()
-    monkeypatch.setattr(
-        collection, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None))
+    patch_collection(
+        monkeypatch, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None))
     )
-    monkeypatch.setattr(collection, "_accept_native", accept)
-    monkeypatch.setattr(collection, "_NATIVE_HANDLERS", dict(collection._NATIVE_HANDLERS))
+    patch_collection(monkeypatch, "_accept_native", accept)
+    patch_collection(monkeypatch, "_NATIVE_HANDLERS", dict(collection._NATIVE_HANDLERS))
     collection.register_native_provider(("brand_new",), handler)
 
     await collection._run_native(_run("brand_new", rollback))
@@ -62,11 +63,11 @@ async def test_handler_returning_none_skips_generic_accept_and_rollback(monkeypa
     """Handlers that accept their own receipt return ``None``: the dispatcher stops immediately."""
     rollback = AsyncMock()
     accept = AsyncMock()
-    monkeypatch.setattr(
-        collection, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None))
+    patch_collection(
+        monkeypatch, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None))
     )
-    monkeypatch.setattr(collection, "_accept_native", accept)
-    monkeypatch.setattr(collection, "_NATIVE_HANDLERS", dict(collection._NATIVE_HANDLERS))
+    patch_collection(monkeypatch, "_accept_native", accept)
+    patch_collection(monkeypatch, "_NATIVE_HANDLERS", dict(collection._NATIVE_HANDLERS))
     collection.register_native_provider(("self_accepting",), AsyncMock(return_value=None))
 
     await collection._run_native(_run("self_accepting", rollback))
@@ -80,11 +81,11 @@ async def test_provider_backoff_page_sets_next_eligible_and_rate_limits(monkeypa
     when = datetime.now(UTC) + timedelta(minutes=5)
     page = SimpleNamespace(records=(), coverage="returned_snapshot", next_eligible_at=when)
     accept = AsyncMock()
-    monkeypatch.setattr(
-        collection, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None))
+    patch_collection(
+        monkeypatch, "_lease", AsyncMock(return_value=SimpleNamespace(cursor_before=None))
     )
-    monkeypatch.setattr(collection, "_accept_native", accept)
-    monkeypatch.setattr(collection, "_NATIVE_HANDLERS", dict(collection._NATIVE_HANDLERS))
+    patch_collection(monkeypatch, "_accept_native", accept)
+    patch_collection(monkeypatch, "_NATIVE_HANDLERS", dict(collection._NATIVE_HANDLERS))
     collection.register_native_provider(("slow",), AsyncMock(return_value=page))
     run = _run("slow", AsyncMock())
 

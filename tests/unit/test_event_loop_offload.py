@@ -31,6 +31,7 @@ from modules.ingestion import parsers
 from modules.ingestion import worker as ingestion_worker
 from modules.knowledge.documents import public as documents
 from tests.unit.modules._documents_patch import monkeypatch_documents
+from tests.unit.modules.connectors._collection_patch import patch_collection
 
 _CPU_DEFAULT = min(32, (os.cpu_count() or 1) + 4)  # asyncio's own implicit default, made explicit
 BIG_PAGE_REPEAT = 40_000  # about 2 MB of HTML: inline HTMLParser.feed takes several hundred ms
@@ -74,7 +75,7 @@ async def test_run_web_parses_big_pages_off_the_loop(monkeypatch):
         parse_threads.append(threading.get_ident())
         return real_parse(text)
 
-    monkeypatch.setattr(collection, "_parse_page", recording_parse)
+    patch_collection(monkeypatch, "_parse_page", recording_parse)
     accepted: list[list[dict]] = []
 
     class Gate:
@@ -87,8 +88,8 @@ async def test_run_web_parses_big_pages_off_the_loop(monkeypatch):
     async def accept(_run, records, _before, _after, update=None):
         accepted.append(records)
 
-    monkeypatch.setattr(collection, "_state", state)
-    monkeypatch.setattr(collection, "_accept_generic", accept)
+    patch_collection(monkeypatch, "_state", state)
+    patch_collection(monkeypatch, "_accept_generic", accept)
     src = SimpleNamespace(
         id=1,
         type="web",
@@ -613,7 +614,7 @@ async def test_payload_async_goes_through_to_thread_joined(monkeypatch):
         seen.append(fn)
         return await real(fn, *args)
 
-    monkeypatch.setattr(collection, "to_thread_joined", spy)
+    patch_collection(monkeypatch, "to_thread_joined", spy)
     assert await collection._payload_async(lambda: 7) == 7
     assert seen == [collection._payload]
 

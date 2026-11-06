@@ -14,6 +14,8 @@ from modules.connectors import collection
 from modules.connectors.credentials import decrypt_rest_secret
 from modules.connectors.providers import rest
 from modules.connectors.providers.crypto import COINGECKO_KEY_HEADER, coingecko_request
+from tests.unit.modules.connectors._collection_patch import patch_collection
+from tests.unit.modules.connectors._routes_patch import patch_routes
 
 KEY = "CG-demo-key-1234567890"
 SOURCE_ID = uuid4()
@@ -48,9 +50,9 @@ def make_run(monkeypatch, secret):
             raise secret
         return secret
 
-    monkeypatch.setattr(collection, "_lease", lease)
-    monkeypatch.setattr(collection, "_accept_native", accept)
-    monkeypatch.setattr(collection, "_rest_secret", stored)
+    patch_collection(monkeypatch, "_lease", lease)
+    patch_collection(monkeypatch, "_accept_native", accept)
+    patch_collection(monkeypatch, "_rest_secret", stored)
     settings = SimpleNamespace(
         connector_credential_encryption_key=SimpleNamespace(get_secret_value=lambda: DEPLOY)
     )
@@ -138,7 +140,7 @@ async def test_credential_revision_change_fences_in_flight_sends(current, lost):
 
 
 def _reentry(provider_secret, row_over=None):
-    from modules.connectors import provisioning_routes as routes
+    from modules.connectors.provisioning import routes
 
     r = SimpleNamespace(
         source_id=SOURCE_ID,
@@ -162,8 +164,8 @@ def _reentry(provider_secret, row_over=None):
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)))
     payload = routes.NativeRestCredentialRequest(expected_revision=3, secret=provider_secret)
     patches = (
-        patch.object(routes, "_owner_access", AsyncMock(return_value=object())),
-        patch.object(routes, "_source", AsyncMock(return_value=source)),
+        patch_routes("_owner_access", AsyncMock(return_value=object())),
+        patch_routes("_source", AsyncMock(return_value=source)),
         patch.object(routes.provisioning, "activation_status", AsyncMock(return_value=r)),
         patch.object(
             routes.provisioning,
@@ -171,9 +173,9 @@ def _reentry(provider_secret, row_over=None):
             AsyncMock(return_value=(SimpleNamespace(status="active", generation=1), r, {})),
         ),
         patch.object(routes.scheduler, "clear_collection_block", AsyncMock(return_value=True)),
-        patch.object(routes, "commit_with_replay", AsyncMock()),
-        patch.object(routes, "make_source_change", lambda *a, **k: None),
-        patch.object(routes, "_activation_read", AsyncMock(return_value="read")),
+        patch_routes("commit_with_replay", AsyncMock()),
+        patch_routes("make_source_change", lambda *a, **k: None),
+        patch_routes("_activation_read", AsyncMock(return_value="read")),
     )
     return routes, r, stored, session, request, payload, patches
 

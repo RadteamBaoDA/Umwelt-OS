@@ -15,6 +15,7 @@ from modules.connectors import provider_options as po
 from modules.connectors.providers import news, rest, world_data
 from modules.ingestion import public as ingestion
 from modules.ingestion.schemas import IngestionRecord
+from tests.unit.modules.connectors._collection_patch import patch_collection
 from tests.unit.modules.connectors.p3_helpers import fixture
 from tests.unit.modules.connectors.test_collection_incremental import T0, _run
 from tests.unit.modules.connectors.test_free_provider_dispatch import Gate, make_run
@@ -108,8 +109,8 @@ def _gdelt_run(monkeypatch, configuration, cursor, stored_fp, seen_urls):
         seen_urls.append(request.url)
         return SimpleNamespace(body=b"{}", etag=None, last_modified=None)
 
-    monkeypatch.setattr(collection, "_state", state)
-    monkeypatch.setattr(collection, "_get_body", get_body)
+    patch_collection(monkeypatch, "_state", state)
+    patch_collection(monkeypatch, "_get_body", get_body)
     monkeypatch.setattr(news, "map_news_body", lambda *_a, **_k: [])
     return run, accepted
 
@@ -185,7 +186,7 @@ async def test_providers_without_native_params_never_read_state_for_fingerprint(
     async def boom(_run):
         raise AssertionError("state must not be read")
 
-    monkeypatch.setattr(collection, "_state", boom)
+    patch_collection(monkeypatch, "_state", boom)
     assert await collection._resume_cursor(run, SimpleNamespace(cursor_before="c")) == "c"
     assert "native_fp" not in run.extras
 
@@ -203,7 +204,7 @@ async def test_accept_native_persists_fingerprint_as_continuation_state(monkeypa
 
     monkeypatch.undo()  # the sibling helper stubs _accept_native; restore the real one for this test
     monkeypatch.setattr(ingestion, "accept_native_collection", fake_accept)
-    monkeypatch.setattr(collection, "_publish_realtime_snapshot", noop)
+    patch_collection(monkeypatch, "_publish_realtime_snapshot", noop)
     run.extras["native_fp"] = "n1:abc"
     run.gate = SimpleNamespace(captured_operation=None)
     await collection._accept_native(

@@ -14,6 +14,7 @@ from modules.connectors.provider_specs import DISPATCHABLE, get_provider_spec
 from modules.connectors.providers import rest
 from modules.connectors.providers.gdelt import GDELT_TIMEOUT_SECONDS
 from modules.connectors.providers.macro import ProviderPayloadError
+from tests.unit.modules.connectors._collection_patch import patch_collection
 from tests.unit.modules.connectors.p3_helpers import fixture
 
 
@@ -50,9 +51,9 @@ def make_run(provider, gate, monkeypatch, state=None, connector_revision=2, conf
     async def get_state(_run):
         return state or SimpleNamespace(etag=None, last_modified=None, validators_revision=None)
 
-    monkeypatch.setattr(collection, "_lease", lease)
-    monkeypatch.setattr(collection, "_accept_native", accept)
-    monkeypatch.setattr(collection, "_state", get_state)
+    patch_collection(monkeypatch, "_lease", lease)
+    patch_collection(monkeypatch, "_accept_native", accept)
+    patch_collection(monkeypatch, "_state", get_state)
     monkeypatch.setattr(collection.ingestion, "seen_record_keys", no_seen)
     source = SimpleNamespace(
         id=uuid4(), generation=1, provider=provider, configuration=configuration or {}
@@ -89,9 +90,9 @@ async def test_bluesky_dispatch_commits_adapter_cursor_with_the_native_receipt(m
     page = SimpleNamespace(records=(), coverage="truncated", cursor_after='{"page":"next"}')
     collect = AsyncMock(return_value=page)
     accept = AsyncMock()
-    monkeypatch.setattr(collection, "_lease", AsyncMock(return_value=lease))
-    monkeypatch.setattr(collection, "_accept_native", accept)
-    monkeypatch.setattr(collection, "_credential_fence", AsyncMock())
+    patch_collection(monkeypatch, "_lease", AsyncMock(return_value=lease))
+    patch_collection(monkeypatch, "_accept_native", accept)
+    patch_collection(monkeypatch, "_credential_fence", AsyncMock())
     monkeypatch.setattr(social_feeds, "collect_bluesky_profile", collect)
 
     @asynccontextmanager

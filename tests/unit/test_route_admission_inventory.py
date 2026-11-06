@@ -5,7 +5,7 @@ from fastapi.routing import APIRoute
 
 from modules.connectors.builtins import router as builtins_router
 from modules.connectors.github.routes import router as github_router
-from modules.connectors.provisioning_routes import router as provisioning_router
+from modules.connectors.provisioning.routes import router as provisioning_router
 from modules.connectors.routes import operator_router as connectors_operator_router
 from modules.connectors.routes import router as connectors_router
 from modules.goals.routes import router as goals_router

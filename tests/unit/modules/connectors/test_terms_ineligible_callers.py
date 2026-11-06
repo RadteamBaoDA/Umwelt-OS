@@ -14,8 +14,10 @@ import pytest
 from fastapi import HTTPException
 
 from core.errors import ConflictError
-from modules.connectors import collection, provisioning_routes, routes, scheduler
+from modules.connectors import collection, routes, scheduler
 from modules.connectors.provider_specs import TERMS_INELIGIBLE
+from modules.connectors.provisioning import routes as provisioning_routes
+from tests.unit.modules.connectors._routes_patch import patch_routes_mp
 
 FAMILIES = [
     pytest.param(lambda: ConflictError(TERMS_INELIGIBLE), id="domain_error"),
@@ -85,8 +87,8 @@ async def test_backend_transition_route_maps_terms_to_terms_not_accepted(
     monkeypatch: pytest.MonkeyPatch, make
 ) -> None:
     source = SimpleNamespace(id=uuid4(), status="active", type="rss", generation=1)
-    monkeypatch.setattr(provisioning_routes, "_owner_access", AsyncMock())
-    monkeypatch.setattr(provisioning_routes, "_source", AsyncMock(return_value=source))
+    patch_routes_mp(monkeypatch, "_owner_access", AsyncMock())
+    patch_routes_mp(monkeypatch, "_source", AsyncMock(return_value=source))
     monkeypatch.setattr(provisioning_routes.registry, "SUPPORTED_TYPES", {"rss"})
     monkeypatch.setattr(
         provisioning_routes.provider_terms, "require_terms_eligible", AsyncMock(side_effect=make())

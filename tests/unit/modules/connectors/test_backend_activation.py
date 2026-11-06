@@ -20,6 +20,7 @@ from modules.connectors.n8n import build_workflow
 from modules.connectors.provider_specs import TERMS_INELIGIBLE
 from modules.connectors.provisioning import _backend
 from modules.sources import public as sources_public
+from tests.unit.modules.connectors._routes_patch import patch_routes
 
 SOURCE_ID = uuid4()
 KEY = Fernet.generate_key().decode("ascii")
@@ -653,7 +654,7 @@ async def test_bearer_routes_reject_native_and_transitioning_rows():
 
 
 def test_backend_choice_preserves_existing_and_defaults_fresh_supported_to_native():
-    from modules.connectors import provisioning_routes as routes
+    from modules.connectors.provisioning import routes
 
     fresh = row(
         applied_revision=0, applied_backend_revision=0, workflow_id=None, state="saved_not_active"
@@ -675,7 +676,7 @@ def test_backend_choice_preserves_existing_and_defaults_fresh_supported_to_nativ
 
 @pytest.mark.asyncio
 async def test_reentry_stores_encrypted_secret_bumps_revision_and_lifts_the_gate():
-    from modules.connectors import provisioning_routes as routes
+    from modules.connectors.provisioning import routes
 
     r = row(
         desired_configuration={"auth_method": "http_header", "auth_header_name": "X-Key"},
@@ -695,14 +696,14 @@ async def test_reentry_stores_encrypted_secret_bumps_revision_and_lifts_the_gate
     clear = AsyncMock(return_value=True)
     fence = SimpleNamespace(status="active", generation=1)
     with (
-        patch.object(routes, "_owner_access", AsyncMock(return_value=object())),
-        patch.object(routes, "_source", AsyncMock(return_value=source)),
+        patch_routes("_owner_access", AsyncMock(return_value=object())),
+        patch_routes("_source", AsyncMock(return_value=source)),
         patch.object(routes.provisioning, "activation_status", AsyncMock(return_value=r)),
         patch.object(routes.provisioning, "lock_connector", AsyncMock(return_value=(fence, r, {}))),
         patch.object(routes.scheduler, "clear_collection_block", clear),
-        patch.object(routes, "commit_with_replay", AsyncMock()),
-        patch.object(routes, "make_source_change", lambda *a, **k: None),
-        patch.object(routes, "_activation_read", AsyncMock(return_value="read")),
+        patch_routes("commit_with_replay", AsyncMock()),
+        patch_routes("make_source_change", lambda *a, **k: None),
+        patch_routes("_activation_read", AsyncMock(return_value="read")),
     ):
         owner = SimpleNamespace(workspace_id=uuid4())
         result = await routes.reenter_native_rest_credential(
@@ -730,7 +731,7 @@ async def test_reentry_stores_encrypted_secret_bumps_revision_and_lifts_the_gate
 
 @pytest.mark.asyncio
 async def test_reentry_refuses_sources_without_header_authentication():
-    from modules.connectors import provisioning_routes as routes
+    from modules.connectors.provisioning import routes
 
     r = row(desired_configuration={"auth_method": "none"})
     source = SimpleNamespace(id=SOURCE_ID, status="active", type="api", provider=None, generation=1)
@@ -740,8 +741,8 @@ async def test_reentry_refuses_sources_without_header_authentication():
     )
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(settings=settings)))
     with (
-        patch.object(routes, "_owner_access", AsyncMock(return_value=object())),
-        patch.object(routes, "_source", AsyncMock(return_value=source)),
+        patch_routes("_owner_access", AsyncMock(return_value=object())),
+        patch_routes("_source", AsyncMock(return_value=source)),
         patch.object(routes.provisioning, "activation_status", AsyncMock(return_value=r)),
         pytest.raises(HTTPException) as caught,
     ):
@@ -781,7 +782,7 @@ async def test_credential_gate_lifts_only_at_a_newer_credential_revision():
 
 def test_local_only_refusal_has_a_stable_api_code():
     """Local-only activation refusal surfaces as 409 with the stable ``local_only_source`` code the wizard localizes."""
-    from modules.connectors.provisioning_routes import _NATIVE_ERRORS
+    from modules.connectors.provisioning.routes import _NATIVE_ERRORS
 
     status, detail = _NATIVE_ERRORS["local_only_source"]
     assert status == 409 and detail["code"] == "local_only_source"
