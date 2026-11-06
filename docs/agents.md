@@ -36,7 +36,7 @@ Lock order across modules: Sources, then Agents, then Tools.
 
 `agents.handoff` is a READ_ONLY tool with `{specialist, request}` that only the Supervisor profile may select
 (saved profiles must add it explicitly; the default Supervisor includes it). It runs one specialist sub-run through
-the same compiled workflow (`run_specialist_handoff` in `modules/agents/harness.py`) and returns only the specialist's
+the same compiled workflow (`run_specialist_handoff` in `modules/agents/_harness_handoff.py`, re-exported by `modules/agents/harness.py`) and returns only the specialist's
 final answer (12,000 characters at most) and up to 20 citations; the specialist's source fences join the parent's, so
 the final answer is revalidated against them.
 

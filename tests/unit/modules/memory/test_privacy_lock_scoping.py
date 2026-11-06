@@ -19,7 +19,7 @@ LOCK_CALLS = {"lock_export_privacy", "lock_export_privacy_in_uow", "lock_export_
 
 # (file, enclosing function) -> shared reader or exclusive writer. Mirrors the table in docs/privacy.md.
 READERS = {
-    ("modules/agents/harness.py", "_lock_native_output_fences_for_publication"),
+    ("modules/agents/_harness_steps.py", "_lock_native_output_fences_for_publication"),
     ("modules/chat/_public_export.py", "read_memory_export_origin"),
     ("modules/chat/routes.py", "create_conversation"),
     ("modules/chat/routes.py", "send_message"),
@@ -45,10 +45,10 @@ READERS = {
     ("modules/memory/_service.py", "MemoryService.get_candidates"),
 }
 WRITERS = {
-    ("modules/agents/public.py", "_cleanup_finalized_marker"),
-    ("modules/agents/public.py", "_cleanup_unavailable_marker"),
-    ("modules/agents/public.py", "_cleanup_phase_a"),
-    ("modules/agents/public.py", "_cleanup_phase_b"),
+    ("modules/agents/_public_cleanup.py", "_cleanup_finalized_marker"),
+    ("modules/agents/_public_cleanup.py", "_cleanup_unavailable_marker"),
+    ("modules/agents/_public_cleanup.py", "_cleanup_phase_a"),
+    ("modules/agents/_public_cleanup.py", "_cleanup_phase_b"),
     ("modules/chat/_public_conversations.py", "delete_conversation"),
     ("modules/chat/_public_cleanup.py", "purge_document_copied_evidence_page"),
     ("modules/chat/_worker_purge.py", "_purge_expired_conversations"),

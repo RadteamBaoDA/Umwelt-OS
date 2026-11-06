@@ -210,7 +210,7 @@ PER_PROCESS_STATE_ALLOWLIST = {
     # Per-process weather TTL cache (bounded to _MAX_ENTRIES); a miss costs one provider call.
     "modules/dashboard/local_weather.py": {"_CACHE"},
     # Static module registry memoised on first use (immutable after build).
-    "modules/automations/execution.py": {"_modules_cache"},
+    "modules/automations/_execution_types.py": {"_modules_cache"},
 }
 STATE_CALLS = {"Lock", "Semaphore", "Event", "BoundedSemaphore"}
 

@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 
 from modules.automations import execution
+from tests.unit.split_patching import patch_split
 
 DOC, SRC, VERSION, OTHER_VERSION = uuid4(), uuid4(), uuid4(), uuid4()
 SCOPE = SimpleNamespace(workspace_id=uuid4(), actor_user_id=1)
@@ -58,18 +59,28 @@ def seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "proof": SimpleNamespace(document_version_id=VERSION),
         "elsewhere": False,
     }
-    monkeypatch.setattr(execution, "_admit", AsyncMock())
-    monkeypatch.setattr(execution, "_actor", lambda _s: 1)
-    monkeypatch.setattr(execution, "_scrub_document_payload", lambda payload: {"scrubbed": True})
-    monkeypatch.setattr(
-        execution,
+    patch_split(monkeypatch, "modules.automations", "_admit", AsyncMock(), facade="execution")
+    patch_split(monkeypatch, "modules.automations", "_actor", lambda _s: 1, facade="execution")
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_scrub_document_payload",
+        lambda payload: {"scrubbed": True},
+        facade="execution",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.automations",
         "_legacy_event_matches_cleanup",
         AsyncMock(side_effect=lambda *_a, **_k: state["proof"]),
+        facade="execution",
     )
-    monkeypatch.setattr(
-        execution,
+    patch_split(
+        monkeypatch,
+        "modules.automations",
         "_event_belongs_elsewhere",
         AsyncMock(side_effect=lambda *_a, **_k: state["elsewhere"]),
+        facade="execution",
     )
     return state
 

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from modules.agents import gateway_factory, harness
+from tests.unit.split_patching import patch_split
 
 THINKING = [{"type": "thinking", "thinking": "", "signature": "s"}]
 
@@ -42,8 +43,8 @@ async def _call_model(monkeypatch: pytest.MonkeyPatch, message: dict[str, Any]) 
     gateway.tools = AsyncMock(
         return_value={"choices": [{"message": message}], "usage": {"total_tokens": 5}}
     )
-    monkeypatch.setattr(harness, "_reserve_step", AsyncMock())
-    monkeypatch.setattr(harness, "_tool_specs", lambda _c: [spec])
+    patch_split(monkeypatch, "modules.agents", "_reserve_step", AsyncMock(), facade="harness")
+    patch_split(monkeypatch, "modules.agents", "_tool_specs", lambda _c: [spec], facade="harness")
     monkeypatch.setattr(gateway_factory, "ModelGateway", lambda **_kw: gateway)
     monkeypatch.setattr(gateway_factory.settings_public, "capability_evidence", lambda *_a: None)
     node = harness.build_workflow(context, None).nodes["call_model"].bound

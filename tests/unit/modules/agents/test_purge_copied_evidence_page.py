@@ -12,6 +12,7 @@ import pytest
 
 from modules.agents import public as agents_public
 from modules.agents.models import AgentEvidenceCleanup
+from tests.unit.split_patching import patch_split
 
 RUN_ID = uuid4()
 OP_ID = uuid4()
@@ -105,29 +106,74 @@ def seams(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "unresolved": False,
         "privacy": 0,
     }
-    monkeypatch.setattr(agents_public, "_admit_cleanup_evidence", AsyncMock())
-    monkeypatch.setattr(agents_public, "_agent_cleanup_records", lambda _e: [])
-    monkeypatch.setattr(agents_public, "_agent_cleanup_fingerprint", lambda _e, _r: "page-fp")
-    monkeypatch.setattr(agents_public, "_agent_cleanup_scope_fingerprint", lambda _e: "scope-fp")
-    monkeypatch.setattr(agents_public, "_decode_agent_cleanup_cursor", lambda *_a: (None, False))
-    monkeypatch.setattr(
-        agents_public,
+    patch_split(
+        monkeypatch, "modules.agents", "_admit_cleanup_evidence", AsyncMock(), facade="public"
+    )
+    patch_split(
+        monkeypatch, "modules.agents", "_agent_cleanup_records", lambda _e: [], facade="public"
+    )
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "_agent_cleanup_fingerprint",
+        lambda _e, _r: "page-fp",
+        facade="public",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "_agent_cleanup_scope_fingerprint",
+        lambda _e: "scope-fp",
+        facade="public",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "_decode_agent_cleanup_cursor",
+        lambda *_a: (None, False),
+        facade="public",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.agents",
         "_encode_agent_cleanup_cursor",
         lambda _e, _f, last, flag: f"cursor:{'none' if last is None else 'run'}:{flag}",
+        facade="public",
     )
-    monkeypatch.setattr(agents_public, "actor", lambda _s: 1)
-    monkeypatch.setattr(agents_public, "_agent_unavailable_run_count", AsyncMock(return_value=7))
-    monkeypatch.setattr(
-        agents_public,
+    patch_split(monkeypatch, "modules.agents", "actor", lambda _s: 1, facade="public")
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "_agent_unavailable_run_count",
+        AsyncMock(return_value=7),
+        facade="public",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.agents",
         "_agent_cleanup_candidate_ids",
         AsyncMock(side_effect=lambda *_a, **_k: state["candidates"]),
+        facade="public",
     )
-    monkeypatch.setattr(
-        agents_public, "_agent_cleanup_ledgers", AsyncMock(return_value=([], [], []))
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "_agent_cleanup_ledgers",
+        AsyncMock(return_value=([], [], []), facade="public"),
     )
-    monkeypatch.setattr(agents_public, "_find_agent_scope_match", lambda *_a: state["match"])
-    monkeypatch.setattr(
-        agents_public, "_scrub_agent_scope_payloads", lambda *_a: state["unresolved"]
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "_find_agent_scope_match",
+        lambda *_a: state["match"],
+        facade="public",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "_scrub_agent_scope_payloads",
+        lambda *_a: state["unresolved"],
+        facade="public",
     )
 
     async def privacy(_session: Any, _workspace_id: Any = None, **_kw: Any) -> None:

@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 
 from modules.automations import execution
+from tests.unit.split_patching import patch_split
 
 RUN_ID = uuid4()
 SCOPE = SimpleNamespace(workspace_id=uuid4(), actor_user_id=1)
@@ -89,29 +90,93 @@ def _setup(
         """Answer the owner-module probe."""
         return flags["modules"]
 
-    monkeypatch.setattr(execution, "_admit", admit)
-    monkeypatch.setattr(execution, "_locked_run", locked_run)
-    monkeypatch.setattr(execution, "_run_evidence_current", evidence)
-    monkeypatch.setattr(execution, "_fence_current", fence_current)
-    monkeypatch.setattr(execution, "_action_modules_enabled", modules)
-    monkeypatch.setattr(execution, "_destination_stale", lambda *_a: flags["dest_stale"])
-    monkeypatch.setattr(execution, "webhook_profile_revision", lambda *_a: flags["destination"])
-    monkeypatch.setattr(execution, "_approval_hash", lambda *_a: "approval-hash")
-    monkeypatch.setattr(
-        execution, "_finish", lambda r, status, reason: events.append(f"finish:{status}:{reason}")
+    patch_split(monkeypatch, "modules.automations", "_admit", admit, facade="execution")
+    patch_split(monkeypatch, "modules.automations", "_locked_run", locked_run, facade="execution")
+    patch_split(
+        monkeypatch, "modules.automations", "_run_evidence_current", evidence, facade="execution"
     )
-    monkeypatch.setattr(execution, "_skip_pending", lambda *_a: spy("skip_pending"))
-    monkeypatch.setattr(execution, "_commit", lambda *_a, **_k: spy("commit"))
-    monkeypatch.setattr(execution, "emit", lambda *_a, **_k: spy("emit"))
-    monkeypatch.setattr(
-        execution, "_in_database_action", lambda *_a, **_k: spy("in_database", "in-db")
+    patch_split(
+        monkeypatch, "modules.automations", "_fence_current", fence_current, facade="execution"
     )
-    monkeypatch.setattr(execution, "_generate_brief", lambda *_a, **_k: spy("brief", "brief-done"))
-    monkeypatch.setattr(
-        execution, "_start_agent", lambda *a, **_k: spy("start_agent:" + str(a[4]), "agent-done")
+    patch_split(
+        monkeypatch, "modules.automations", "_action_modules_enabled", modules, facade="execution"
     )
-    monkeypatch.setattr(
-        execution, "_send_webhook", lambda *a, **_k: spy("send_webhook:" + str(a[5]), "hook-done")
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_destination_stale",
+        lambda *_a: flags["dest_stale"],
+        facade="execution",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "webhook_profile_revision",
+        lambda *_a: flags["destination"],
+        facade="execution",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_approval_hash",
+        lambda *_a: "approval-hash",
+        facade="execution",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_finish",
+        lambda r, status, reason: events.append(f"finish:{status}:{reason}"),
+        facade="execution",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_skip_pending",
+        lambda *_a: spy("skip_pending"),
+        facade="execution",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_commit",
+        lambda *_a, **_k: spy("commit"),
+        facade="execution",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "emit",
+        lambda *_a, **_k: spy("emit"),
+        facade="execution",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_in_database_action",
+        lambda *_a, **_k: spy("in_database", "in-db"),
+        facade="execution",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_generate_brief",
+        lambda *_a, **_k: spy("brief", "brief-done"),
+        facade="execution",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_start_agent",
+        lambda *a, **_k: spy("start_agent:" + str(a[4]), "agent-done"),
+        facade="execution",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_send_webhook",
+        lambda *a, **_k: spy("send_webhook:" + str(a[5]), "hook-done"),
+        facade="execution",
     )
     ctx = {
         "session_factory": lambda: FakeSession(row, rev),

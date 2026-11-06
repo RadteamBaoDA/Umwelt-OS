@@ -21,6 +21,7 @@ from modules.agents import approvals as approvals_module
 from modules.agents import harness
 from modules.agents.harness import HarnessContext, RunCancelled, RunIncompatible, RunLimitReached
 from modules.tools import public as webhook_module
+from tests.unit.split_patching import patch_split
 
 RUN_ID = uuid4()
 EMPTY_SINK: dict[str, Any] = {"source_generations": {}, "records": []}
@@ -176,11 +177,29 @@ def _build(
             f"run.source_fences={'set' if h.run.source_fences is not None else 'unset'}"
         )
 
-    monkeypatch.setattr(harness, "_reserve_step", reserve)
-    monkeypatch.setattr(harness, "_lock_native_output_fences_for_publication", lock_fences)
-    monkeypatch.setattr(harness, "commit_with_replay", commit)
-    monkeypatch.setattr(harness, "revalidate_account_session", AsyncMock(return_value=True))
-    monkeypatch.setattr(harness, "publish_agent_activity_safely", AsyncMock())
+    patch_split(monkeypatch, "modules.agents", "_reserve_step", reserve, facade="harness")
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "_lock_native_output_fences_for_publication",
+        lock_fences,
+        facade="harness",
+    )
+    patch_split(monkeypatch, "modules.agents", "commit_with_replay", commit, facade="harness")
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "revalidate_account_session",
+        AsyncMock(return_value=True),
+        facade="harness",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "publish_agent_activity_safely",
+        AsyncMock(),
+        facade="harness",
+    )
     import modules.chat.public as chat_public
 
     monkeypatch.setattr(chat_public, "has_live_agent_run_link", AsyncMock(return_value=True))
@@ -419,7 +438,7 @@ async def test_legacy_checkpoint_recovers_ordinal_from_assistant_messages(
         seen.update(kwargs)
         return SimpleNamespace(owner_id=1, auth_session_hash="h", profile_revision_hash=None)
 
-    monkeypatch.setattr(harness, "_reserve_step", reserve)
+    patch_split(monkeypatch, "modules.agents", "_reserve_step", reserve, facade="harness")
     await _run(node, state)
     assert seen["tool_ordinal"] == 1 and seen["legacy_readonly_slot"] is True
 
@@ -633,7 +652,9 @@ async def test_handoff_usage_is_folded_into_parent_total(monkeypatch: pytest.Mon
             success=True, data={"answer": "a"}, error_code=None, evidence_refs=()
         )
 
-    monkeypatch.setattr(harness, "run_specialist_handoff", fake_handoff)
+    patch_split(
+        monkeypatch, "modules.agents", "run_specialist_handoff", fake_handoff, facade="harness"
+    )
     _h, node, state = _build(monkeypatch, name=harness.HANDOFF_TOOL, invoke=handoff)
     state["token_usage"] = 3
     result = await _run(node, state)

@@ -12,6 +12,7 @@ from modules.agents import access, routes, worker
 from modules.agents import public as agents
 from modules.agents.harness import HarnessContext
 from tests.unit.modules.agents.test_scope import CTX, FENCE, JOB, OWNER, WS, _factory
+from tests.unit.split_patching import patch_split_attr
 
 MOVED = type(FENCE)(workspace_id=WS, user_id=7, membership_revision=2, configuration_revision=6)
 
@@ -121,13 +122,23 @@ async def test_revalidate_owner_mismatch_is_false_before_any_select() -> None:
 
 @pytest.mark.parametrize("status", [401, 403, 404, 409])
 async def test_revalidate_returns_false_when_admission_is_denied(status: int) -> None:
-    with patch.object(agents, "admit", AsyncMock(side_effect=HTTPException(status_code=status))):
+    with patch_split_attr(
+        "modules.agents",
+        "admit",
+        AsyncMock(side_effect=HTTPException(status_code=status)),
+        facade="public",
+    ):
         assert await agents.revalidate_browser_run_authority(MagicMock(), _auth(), **CTX) is False
 
 
 async def test_revalidate_reraises_unexpected_status_and_bad_flag() -> None:
     with (
-        patch.object(agents, "admit", AsyncMock(side_effect=HTTPException(status_code=500))),
+        patch_split_attr(
+            "modules.agents",
+            "admit",
+            AsyncMock(side_effect=HTTPException(status_code=500)),
+            facade="public",
+        ),
         pytest.raises(HTTPException),
     ):
         await agents.revalidate_browser_run_authority(MagicMock(), _auth(), **CTX)
@@ -146,21 +157,38 @@ async def test_revalidate_reraises_unexpected_status_and_bad_flag() -> None:
 async def test_type_error_from_revalidation_propagates_in_agents_public() -> None:
     item = SimpleNamespace(tool_name="webhook.send", source_fences={})
     with (
-        patch.object(agents, "_restore_fences", MagicMock(return_value={})),
-        patch.object(agents, "ToolExecutionPrincipal", MagicMock()),
-        patch.object(
-            agents, "revalidate_native_output_fences", AsyncMock(side_effect=TypeError("bad"))
+        patch_split_attr(
+            "modules.agents", "_restore_fences", MagicMock(return_value={}), facade="public"
+        ),
+        patch_split_attr("modules.agents", "ToolExecutionPrincipal", MagicMock(), facade="public"),
+        patch_split_attr(
+            "modules.agents",
+            "revalidate_native_output_fences",
+            AsyncMock(side_effect=TypeError("bad")),
+            facade="public",
         ),
         pytest.raises(TypeError),
     ):
         await agents._approval_fences_current(MagicMock(), item, **CTX)  # type: ignore[arg-type]
     row = SimpleNamespace(source_fences={"x": 1}, answer="a")
     with (
-        patch.object(agents, "_restore_fences", MagicMock(return_value={})),
-        patch.object(agents, "_read", MagicMock(return_value=SimpleNamespace(answer="a"))),
-        patch.object(agents, "_result_principal", MagicMock(return_value=object())),
-        patch.object(
-            agents, "revalidate_native_output_fences", AsyncMock(side_effect=TypeError("bad"))
+        patch_split_attr(
+            "modules.agents", "_restore_fences", MagicMock(return_value={}), facade="public"
+        ),
+        patch_split_attr(
+            "modules.agents",
+            "_read",
+            MagicMock(return_value=SimpleNamespace(answer="a")),
+            facade="public",
+        ),
+        patch_split_attr(
+            "modules.agents", "_result_principal", MagicMock(return_value=object()), facade="public"
+        ),
+        patch_split_attr(
+            "modules.agents",
+            "revalidate_native_output_fences",
+            AsyncMock(side_effect=TypeError("bad")),
+            facade="public",
         ),
         pytest.raises(TypeError),
     ):
@@ -171,9 +199,16 @@ async def test_malformed_fences_still_deny_without_calling_revalidation() -> Non
     item = SimpleNamespace(tool_name="webhook.send", source_fences={})
     revalidate = AsyncMock()
     with (
-        patch.object(agents, "_restore_fences", MagicMock(side_effect=ValueError("bad"))),
-        patch.object(agents, "ToolExecutionPrincipal", MagicMock()),
-        patch.object(agents, "revalidate_native_output_fences", revalidate),
+        patch_split_attr(
+            "modules.agents",
+            "_restore_fences",
+            MagicMock(side_effect=ValueError("bad")),
+            facade="public",
+        ),
+        patch_split_attr("modules.agents", "ToolExecutionPrincipal", MagicMock(), facade="public"),
+        patch_split_attr(
+            "modules.agents", "revalidate_native_output_fences", revalidate, facade="public"
+        ),
     ):
         assert await agents._approval_fences_current(MagicMock(), item, **CTX) is False  # type: ignore[arg-type]
     revalidate.assert_not_awaited()
@@ -188,16 +223,20 @@ async def test_harness_authorize_propagates_type_error_but_denies_other_failures
     context.owner_principal = MagicMock()  # type: ignore[method-assign]
     state = {"source_fences": {"x": 1}}
     with (
-        patch(
-            "modules.agents.harness.revalidate_native_output_fences",
+        patch_split_attr(
+            "modules.agents",
+            "revalidate_native_output_fences",
             AsyncMock(side_effect=TypeError("bad")),
+            facade="harness",
         ),
         pytest.raises(TypeError),
     ):
         await context.authorize_internal_write(state, uuid4(), MagicMock(), {})  # type: ignore[arg-type]
-    with patch(
-        "modules.agents.harness.revalidate_native_output_fences",
+    with patch_split_attr(
+        "modules.agents",
+        "revalidate_native_output_fences",
         AsyncMock(side_effect=RuntimeError("x")),
+        facade="harness",
     ):
         assert await context.authorize_internal_write(state, uuid4(), MagicMock(), {}) is False  # type: ignore[arg-type]
 
