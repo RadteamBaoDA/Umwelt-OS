@@ -158,6 +158,27 @@ async def _credential_fence(
             await session.rollback()
 
 
+def _google_grant_usable(grant: Any, a: Any) -> bool:
+    """Return whether a locked Google grant row is ready and bound to this attempt's fence.
+
+    The caller has already rejected a missing row. Checks state, provider, workspace, owner, source generation, configuration and credential
+    revision, a stored token cipher and the provider's read scope. Pure; no I/O.
+    """
+    from modules.connectors.oauth_routes import _PROVIDER_SCOPES
+
+    return not (
+        grant.state != "ready"
+        or grant.provider != a.source.provider
+        or grant.workspace_id != a.scope.workspace_id
+        or grant.owner_id != a.scope.actor_user_id
+        or grant.source_generation != a.source.generation
+        or grant.configuration_revision != a.connector_revision
+        or grant.credential_revision != a.credential_revision
+        or not grant.encrypted_tokens
+        or _PROVIDER_SCOPES.get(grant.provider) not in grant.granted_scopes
+    )
+
+
 async def _google_access_token(run: Run) -> tuple[str, tuple[UUID, int]]:
     """Load a source-bound read-only Google token and serialize refresh under its grant row lock.
 
@@ -167,7 +188,7 @@ async def _google_access_token(run: Run) -> tuple[str, tuple[UUID, int]]:
     """
     from modules.connectors.google_oauth_tokens import refresh_google_token
     from modules.connectors.models import ConnectorOAuthGrant
-    from modules.connectors.oauth_routes import _PROVIDER_SCOPES, _cipher, _open_cipher
+    from modules.connectors.oauth_routes import _cipher, _open_cipher
 
     a = run.attempt
     async with run.factory() as session:
@@ -209,25 +230,14 @@ async def _google_access_token(run: Run) -> tuple[str, tuple[UUID, int]]:
             )
             .with_for_update()
         )
-        if (
-            grant is None
-            or grant.state != "ready"
-            or grant.provider != a.source.provider
-            or grant.workspace_id != a.scope.workspace_id
-            or grant.owner_id != a.scope.actor_user_id
-            or grant.source_generation != a.source.generation
-            or grant.configuration_revision != a.connector_revision
-            or grant.credential_revision != a.credential_revision
-            or not grant.encrypted_tokens
-            or _PROVIDER_SCOPES.get(grant.provider) not in grant.granted_scopes
-        ):
+        if grant is None or not _google_grant_usable(grant, a):
             await session.rollback()
             raise CredentialMissing
         try:
             key = run.settings.connector_credential_encryption_key.get_secret_value()
             tokens = _open_cipher(
                 key,
-                grant.encrypted_tokens,
+                cast(str, grant.encrypted_tokens),  # non-empty: checked by _google_grant_usable
                 a.source.id,
                 grant.operation_id,
                 grant.source_generation,

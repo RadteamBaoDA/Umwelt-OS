@@ -769,6 +769,32 @@ def _pause_prepared_github_hints(
     return len(current)
 
 
+def _require_pause_transition(
+    source_fence: SourceFence, previous_source_fence: SourceFence, scope: Scope
+) -> None:
+    """Require the exact active G -> paused G+1 transition or an identical already-paused fence.
+
+    Pure check of identity, workspace, local-only flag, status and generation.
+
+    Raises:
+        ConflictError: when the Source fences do not describe that transition.
+    """
+    if (
+        source_fence.id != previous_source_fence.id
+        or source_fence.workspace_id != previous_source_fence.workspace_id
+        or source_fence.workspace_id != scope.workspace_id
+        or source_fence.local_only != previous_source_fence.local_only
+        or not (
+            previous_source_fence.status == "active"
+            and source_fence.status == "paused"
+            and source_fence.generation == previous_source_fence.generation + 1
+            or previous_source_fence.status == "paused"
+            and source_fence == previous_source_fence
+        )
+    ):
+        raise ConflictError("Source pause transition changed")
+
+
 async def apply_source_pause_cleanup_in_uow(
     session: AsyncSession,
     *,
@@ -788,20 +814,7 @@ async def apply_source_pause_cleanup_in_uow(
     """
     from modules.connectors import provisioning
 
-    if (
-        source_fence.id != previous_source_fence.id
-        or source_fence.workspace_id != previous_source_fence.workspace_id
-        or source_fence.workspace_id != scope.workspace_id
-        or source_fence.local_only != previous_source_fence.local_only
-        or not (
-            previous_source_fence.status == "active"
-            and source_fence.status == "paused"
-            and source_fence.generation == previous_source_fence.generation + 1
-            or previous_source_fence.status == "paused"
-            and source_fence == previous_source_fence
-        )
-    ):
-        raise ConflictError("Source pause transition changed")
+    _require_pause_transition(source_fence, previous_source_fence, scope)
     source = await _read_scoped_source(
         session,
         source_fence.id,

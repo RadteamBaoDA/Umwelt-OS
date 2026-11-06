@@ -9,7 +9,7 @@ import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NoReturn, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -838,6 +838,37 @@ async def _check_google_discovery_fence(
     await session.rollback()
 
 
+def _raise_google_discovery_error(exc: Exception) -> NoReturn:
+    """Translate a transport/provider failure from Google resource discovery into a stable HTTP error.
+
+    Maps rate limits to 429, 401/403 to a 409 reconnect hint, incomplete listings to 422 and anything
+    else to 503. Always raises ``from None`` so no provider response text reaches the client.
+    """
+    from modules.connectors.providers import rest
+    from modules.connectors.public import ProviderRateLimited
+
+    if isinstance(exc, ProviderRateLimited):
+        raise HTTPException(
+            status_code=429, detail="Google resource discovery is rate limited"
+        ) from None
+    if isinstance(exc, rest.ProviderHttpError) and exc.status_code in {401, 403}:
+        raise HTTPException(
+            status_code=409,
+            detail="Google authorization needs attention; reconnect this source",
+        ) from None
+    if isinstance(exc, rest.ProviderHttpError) and exc.status_code == 429:
+        raise HTTPException(
+            status_code=429, detail="Google resource discovery is rate limited"
+        ) from None
+    if isinstance(exc, rest.CollectionIncomplete):
+        raise HTTPException(
+            status_code=422, detail="Google resource list exceeds the bounded discovery limit"
+        ) from None
+    raise HTTPException(
+        status_code=503, detail="Google resources could not be discovered"
+    ) from None
+
+
 @router.get("/{source_id}/oauth/google/{provider}/resources")
 async def discover_google_source_resources(
     source_id: str,
@@ -918,29 +949,7 @@ async def discover_google_source_resources(
     except (DomainError, HTTPException):
         raise
     except Exception as exc:  # noqa: BLE001  # Normalize transport and provider failures before returning to the UI.
-        from modules.connectors.providers import rest
-        from modules.connectors.public import ProviderRateLimited
-
-        if isinstance(exc, ProviderRateLimited):
-            raise HTTPException(
-                status_code=429, detail="Google resource discovery is rate limited"
-            ) from None
-        if isinstance(exc, rest.ProviderHttpError) and exc.status_code in {401, 403}:
-            raise HTTPException(
-                status_code=409,
-                detail="Google authorization needs attention; reconnect this source",
-            ) from None
-        if isinstance(exc, rest.ProviderHttpError) and exc.status_code == 429:
-            raise HTTPException(
-                status_code=429, detail="Google resource discovery is rate limited"
-            ) from None
-        if isinstance(exc, rest.CollectionIncomplete):
-            raise HTTPException(
-                status_code=422, detail="Google resource list exceeds the bounded discovery limit"
-            ) from None
-        raise HTTPException(
-            status_code=503, detail="Google resources could not be discovered"
-        ) from None
+        _raise_google_discovery_error(exc)
     return {"items": rows, "token_revision": token_revision, "truncated": truncated}
 
 

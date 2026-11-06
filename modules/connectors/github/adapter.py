@@ -70,6 +70,28 @@ def _github_next_page(link_header: str | None, *, path: str, page: int) -> int |
     return page + 1
 
 
+def _encode_page_items(raw_items: object) -> bytes:
+    """Validate a decoded GitHub page and return its canonical JSON bytes for hashing.
+
+    Requires a list of at most 100 objects and canonical encoding within ``MAX_GITHUB_PAGE_BYTES``.
+
+    Raises:
+        ValueError: ``github_response_invalid`` or ``github_response_too_large``.
+    """
+    if (
+        not isinstance(raw_items, list)
+        or len(raw_items) > 100
+        or any(not isinstance(item, dict) for item in raw_items)
+    ):
+        raise ValueError("github_response_invalid")
+    encoded = json.dumps(
+        raw_items, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+    if len(encoded) > MAX_GITHUB_PAGE_BYTES:
+        raise ValueError("github_response_too_large")
+    return encoded
+
+
 async def collect_github_segment(
     config: GitHubSourceConfig,
     access_token: str,
@@ -148,17 +170,7 @@ async def collect_github_segment(
             else:
                 next_page = _github_next_page(response.headers.get("Link"), path=path, page=page)
                 target_outcome = None
-    if (
-        not isinstance(raw_items, list)
-        or len(raw_items) > 100
-        or any(not isinstance(item, dict) for item in raw_items)
-    ):
-        raise ValueError("github_response_invalid")
-    encoded = json.dumps(
-        raw_items, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
-    ).encode("utf-8")
-    if len(encoded) > MAX_GITHUB_PAGE_BYTES:
-        raise ValueError("github_response_too_large")
+    encoded = _encode_page_items(raw_items)
     return GitHubSegmentProof(
         fence=fence,
         resource=resource,

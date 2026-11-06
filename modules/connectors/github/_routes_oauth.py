@@ -645,6 +645,39 @@ async def refresh_github_authorization(
     return {"state": "ready"}
 
 
+def _stage_refresh_operation(
+    session: AsyncSession,
+    scope: WorkspaceContext,
+    actor: int,
+    source_uuid: UUID,
+    grant: GithubOAuthGrant,
+    coordinator: GithubOAuthCoordinator,
+    operation_id: UUID,
+) -> None:
+    """Mark the coordinator and grant as refreshing and add the in-progress refresh operation row.
+
+    Mutates the already locked ``grant``/``coordinator`` and adds the operation to ``session``; the
+    caller commits through the replay gate. Performs no I/O and raises nothing.
+    """
+    coordinator.state, coordinator.operation_id = "refreshing", operation_id
+    coordinator.error_code = None
+    session.add(
+        GithubOAuthOperation(
+            operation_id=operation_id,
+            workspace_id=scope.workspace_id,
+            owner_id=actor,
+            operation_kind="refresh",
+            source_id=source_uuid,
+            source_generation=grant.source_generation,
+            configuration_revision=grant.configuration_revision,
+            token_revision=grant.token_revision,
+            state="in_progress",
+        )
+    )
+    grant.refresh_operation_id = operation_id
+    grant.state = "refreshing"
+
+
 async def _begin_refresh(ctx: _FlowCtx, source_uuid: UUID) -> tuple[str, UUID, int, UUID]:
     """Lock source/connector/grant/coordinator, validate them and commit the in-progress refresh operation.
 
@@ -728,23 +761,7 @@ async def _begin_refresh(ctx: _FlowCtx, source_uuid: UUID) -> tuple[str, UUID, i
     operation_id = uuid7()
     expected_token_revision = grant.token_revision
     expected_grant_operation = grant.operation_id
-    coordinator.state, coordinator.operation_id = "refreshing", operation_id
-    coordinator.error_code = None
-    session.add(
-        GithubOAuthOperation(
-            operation_id=operation_id,
-            workspace_id=scope.workspace_id,
-            owner_id=actor,
-            operation_kind="refresh",
-            source_id=source_uuid,
-            source_generation=grant.source_generation,
-            configuration_revision=grant.configuration_revision,
-            token_revision=grant.token_revision,
-            state="in_progress",
-        )
-    )
-    grant.refresh_operation_id = operation_id
-    grant.state = "refreshing"
+    _stage_refresh_operation(session, scope, actor, source_uuid, grant, coordinator, operation_id)
     await _publish(session, request, scope, fence)
     return refresh_token, operation_id, expected_token_revision, expected_grant_operation
 

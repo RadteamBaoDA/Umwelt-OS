@@ -38,6 +38,69 @@ from modules.connectors.public import (
 )
 
 
+async def _apply_retained_outcome(
+    session: AsyncSession,
+    source_id: UUID,
+    slot: str,
+    *,
+    original_operation: dict[str, object],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    outcome: str,
+    remote_id: str | None,
+    binding: dict[str, object] | None,
+    error_code: str | None,
+) -> bool:
+    """Apply a retained credential outcome through the matching state transition.
+
+    ``known_success`` acknowledges a delete or completes a create/replace; any other outcome fails
+    the operation (``unknown`` keeps it ambiguous). Runs inside the caller's already locked
+    transaction and does not commit; returns whether state changed.
+    """
+    operation_id = UUID(str(original_operation["id"]))
+    if outcome == "known_success":
+        if original_operation.get("kind") == "delete":
+            changed = await acknowledge_credential_delete(
+                session,
+                source_id,
+                slot,
+                operation_id,
+                str(original_operation["target_id"]),
+                original_operation=original_operation,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence,
+            )
+        else:
+            changed = await complete_credential_operation(
+                session,
+                source_id,
+                slot,
+                operation_id,
+                credential_id=remote_id,
+                binding=binding or {},
+                original_operation=original_operation,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence,
+            )
+    else:
+        changed = await fail_credential_operation(
+            session,
+            source_id,
+            slot,
+            operation_id,
+            error_code or "credential_operation_outcome_unknown",
+            unknown=outcome == "unknown",
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
+    return changed
+
+
 async def _settle_retained_credential_after_io(
     session: AsyncSession,
     source_id: UUID,
@@ -87,46 +150,19 @@ async def _settle_retained_credential_after_io(
             await session.rollback()
         denied.journal_disposition = disposition
         raise
-    operation_id = UUID(str(original_operation["id"]))
-    if outcome == "known_success":
-        if original_operation.get("kind") == "delete":
-            changed = await acknowledge_credential_delete(
-                session,
-                source_id,
-                slot,
-                operation_id,
-                str(original_operation["target_id"]),
-                original_operation=original_operation,
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-                access_fence=access_fence,
-            )
-        else:
-            changed = await complete_credential_operation(
-                session,
-                source_id,
-                slot,
-                operation_id,
-                credential_id=remote_id,
-                binding=binding or {},
-                original_operation=original_operation,
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-                access_fence=access_fence,
-            )
-    else:
-        changed = await fail_credential_operation(
-            session,
-            source_id,
-            slot,
-            operation_id,
-            error_code or "credential_operation_outcome_unknown",
-            unknown=outcome == "unknown",
-            original_operation=original_operation,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=access_fence,
-        )
+    changed = await _apply_retained_outcome(
+        session,
+        source_id,
+        slot,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        outcome=outcome,
+        remote_id=remote_id,
+        binding=binding,
+        error_code=error_code,
+    )
     if changed:
         await commit_retained_connector_effect(
             session,
