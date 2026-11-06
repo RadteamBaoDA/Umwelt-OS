@@ -146,10 +146,35 @@ services:
     pids_limit: 128
     restart: unless-stopped
 
+  # Optional S3-compatible object store (RustFS) for STORAGE_BACKEND=s3.
+  # Start with: docker compose -f docker-compose.base.yml --profile s3 up -d rustfs
+  # RustFS falls back to the public default rustfsadmin/rustfsadmin when the keys are empty: owners MUST set
+  # RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY in .env (not `:?` here; compose interpolates inactive profiles too).
+  # The S3 API is path-style (keep S3_PATH_STYLE=true). The named volume inherits the image's UID 10001 ownership.
+  rustfs:
+    image: rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2
+    profiles: ["s3"]
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-}
+    ports:
+      - "127.0.0.1:${RUSTFS_PORT:-9000}:9000"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    logging: *default-logging
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:
   graph-data:
   n8n-data:
+  rustfs-data:
 
 

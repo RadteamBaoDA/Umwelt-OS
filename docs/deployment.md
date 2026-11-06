@@ -218,18 +218,18 @@ n8n hardening: `docker-compose.connectors.yml` requires `N8N_ENCRYPTION_KEY` (co
 - [ ] Provider volume snapshots configured (Postgres, `app-data`, `n8n-data`, graph-data) and a restore was rehearsed by the operator.
 - [ ] `AI_ALLOWED_ENDPOINT_*` lists are as narrow as intended; optional graph profile and connectors stay off unless needed.
 
-## S3 / MinIO storage
+## S3-compatible storage
 
-Original uploads live on the local filesystem (`STORAGE_BACKEND=local`, `DATA_DIR`, a volume shared by API and worker) unless `STORAGE_BACKEND=s3` selects an S3-compatible bucket (AWS S3 or MinIO). With S3 the API and worker no longer need a shared volume; parsers still receive a bounded temporary copy that is deleted afterwards (`download_to_temp`).
+Original uploads live on the local filesystem (`STORAGE_BACKEND=local`, `DATA_DIR`, a volume shared by API and worker) unless `STORAGE_BACKEND=s3` selects an S3-compatible bucket (AWS S3, RustFS or another S3-compatible store). With S3 the API and worker no longer need a shared volume; parsers still receive a bounded temporary copy that is deleted afterwards (`download_to_temp`).
 
 | Setting | Meaning |
 | --- | --- |
-| `S3_BUCKET` (required), `S3_REGION` | Target bucket and region (`us-east-1` is fine for MinIO). |
-| `S3_ENDPOINT_URL` | Empty for AWS; `http://minio:9000` (or an HTTPS URL) for MinIO. |
+| `S3_BUCKET` (required), `S3_REGION` | Target bucket and region (`us-east-1` is fine for RustFS). |
+| `S3_ENDPOINT_URL` | Empty for AWS; `http://rustfs:9000` (or an HTTPS URL) for the bundled RustFS or another store. |
 | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | Static keys (secrets, never logged). Leave both empty to use the AWS default credential chain (instance/task role). |
 | `S3_PREFIX` | Optional key prefix inside the bucket. Object keys keep the local layout `workspaces/<ws>/documents/<doc>/<doc><suffix>`, so stored `raw_uri` values are identical on both backends. |
 | `S3_SSE`, `S3_SSE_KMS_KEY_ID` | Server-side encryption: `AES256` (SSE-S3) or `aws:kms` with an optional key id. |
-| `S3_PATH_STYLE` | `true` (default) for MinIO; set `false` for AWS virtual-hosted addressing. |
+| `S3_PATH_STYLE` | `true` (default) for RustFS and most self-hosted stores; set `false` for AWS virtual-hosted addressing. |
 | `S3_CONDITIONAL_PUT` | `true` (default): publication uses `If-None-Match: *` so an existing object is never overwritten. Set `false` only for stores without conditional writes: publication then goes through a `staging/` key plus `CopyObject`, with a best-effort existence check (not race free; keys are unique per document, so a collision needs a retry of the same id). |
 | `S3_PART_SIZE_BYTES` | Multipart part size (5 MiB to 512 MiB, default 8 MiB). At most one part is buffered per upload. |
 | `STORAGE_PRESIGNED_DOWNLOADS`, `STORAGE_PRESIGNED_TTL_SECONDS`, `S3_PRESIGN_ENDPOINT_URL` | See below. |
@@ -238,4 +238,4 @@ Original uploads live on the local filesystem (`STORAGE_BACKEND=local`, `DATA_DI
 
 **Downloads.** By default bytes stream through the API after authorization, with `Content-Disposition: attachment`, the stored `Content-Type`, `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. Optionally `STORAGE_PRESIGNED_DOWNLOADS=true` answers with a `307` redirect to a presigned GET whose lifetime is at most 60 s (`STORAGE_PRESIGNED_TTL_SECONDS`, hard-capped) and which signs `response-content-disposition=attachment` and `response-content-type=<stored type>`. Trade-offs: the API no longer sees the bytes (lower load, no egress through the API) but the link is a bearer capability for up to 60 s, the response lacks the API's `nosniff`/cache headers (the forced attachment disposition and content type mitigate sniffing), the object store must be reachable from the browser (set `S3_PRESIGN_ENDPOINT_URL` to the browser-facing host), and S3 access logs, not API logs, record the download. The web client downloads with `fetch()` plus a blob using credentials and a workspace header, so the browser follows the 307 cross-origin: the bucket needs a CORS rule allowing the web origin (`AllowedOrigins`: your `PUBLIC_ORIGIN`, `AllowedMethods`: `GET`, `AllowedHeaders`: `*`, `ExposeHeaders`: `Content-Disposition`); without it the browser blocks the preflight and downloads fail, so leave `STORAGE_PRESIGNED_DOWNLOADS` off unless that is configured.
 
-**MinIO.** The disposable test stack has an optional `minio` service (`docker compose -f docker-compose.yml -f docker-compose.test.yml --profile minio up -d minio`, image pinned in that file). For a real deployment run MinIO with TLS and a dedicated bucket and least-privilege access key (`s3:GetObject`, `PutObject`, `DeleteObject`, `ListBucket`, `AbortMultipartUpload`, `ListBucketMultipartUploads`).
+**RustFS.** `docker-compose.base.yml` ships an optional `rustfs` service (profile `s3`, image pinned by digest, loopback-only port `RUSTFS_PORT`, named volume `rustfs-data`): `docker compose -f docker-compose.base.yml --profile s3 up -d rustfs`. Set `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` in `.env` first (empty falls back to RustFS's public default credentials), create the bucket, and point `S3_ENDPOINT_URL=http://rustfs:9000` with `S3_PATH_STYLE=true` at it. The disposable test stack overrides the same service with fixed test credentials and no volume. For a real deployment put TLS in front, use a dedicated bucket and a least-privilege access key (`s3:GetObject`, `PutObject`, `DeleteObject`, `ListBucket`, `AbortMultipartUpload`, `ListBucketMultipartUploads`).

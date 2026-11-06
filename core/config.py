@@ -106,13 +106,13 @@ class Settings(BaseSettings):
     )
     data_dir: Path = Path("/data")
     # Original-file backend (core.storage.factory registry): the local filesystem, or S3-compatible object
-    # storage (AWS S3, MinIO) fenced by PostgreSQL. See docs/deployment.md "S3 / MinIO storage".
+    # storage (AWS S3, RustFS and other S3-compatible stores) fenced by PostgreSQL. See docs/deployment.md "S3-compatible storage".
     storage_backend: Literal["local", "s3"] = Field(
         default="local", validation_alias="STORAGE_BACKEND"
     )
     s3_endpoint_url: str | None = Field(
         default=None, validation_alias="S3_ENDPOINT_URL"
-    )  # MinIO / non-AWS endpoint
+    )  # RustFS / non-AWS endpoint
     s3_bucket: str = Field(default="", validation_alias="S3_BUCKET")
     s3_region: str = Field(default="us-east-1", validation_alias="S3_REGION")
     s3_access_key_id: SecretStr = Field(
@@ -129,7 +129,7 @@ class Settings(BaseSettings):
     s3_sse_kms_key_id: str = Field(default="", validation_alias="S3_SSE_KMS_KEY_ID")
     s3_path_style: bool = Field(
         default=True, validation_alias="S3_PATH_STYLE"
-    )  # MinIO needs path-style addressing
+    )  # RustFS needs path-style addressing
     # If-None-Match: * conditional create; disable for stores without it (publication then uses a staging key + copy).
     s3_conditional_put: bool = Field(default=True, validation_alias="S3_CONDITIONAL_PUT")
     s3_part_size_bytes: int = Field(
