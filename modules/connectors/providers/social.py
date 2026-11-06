@@ -6,6 +6,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
 
 import httpx
@@ -204,6 +205,106 @@ def _release_source_fields(
     return source_fields, source_fields_truncated
 
 
+def _release_metadata(
+    provider_record: dict[str, object],
+    *,
+    node_id: str | None,
+    name: str,
+    title: str,
+    body_text: str,
+    html_url: str | None,
+    canonical_url: str | None,
+    tag: str,
+    draft: bool,
+    prerelease: bool,
+    author: object,
+    created_at: str | None,
+    published_at: str | None,
+) -> dict[str, object]:
+    """Build the bounded record metadata for a GitHub release.
+
+    Truncates every provider string to its storage limit and includes ``canonical_url`` and the
+    timestamps only when present. Pure; ``html_url`` is exposed only when it canonicalized.
+    """
+    metadata: dict[str, object] = {
+        "provider_record": provider_record,
+        "node_id": node_id[:256] if isinstance(node_id, str) else None,
+        "name": name[:500],
+        "title": title[:500],
+        "body": body_text[:4000],
+        "html_url": html_url if canonical_url is not None else None,
+        "tag_name": tag[:255],
+        "draft": draft,
+        "prerelease": prerelease,
+        "author": author[:1000] if isinstance(author, str) else None,
+    }
+    if canonical_url is not None:
+        metadata["canonical_url"] = canonical_url
+    if created_at is not None:
+        metadata["created_at"] = created_at
+    if published_at is not None:
+        metadata["published_at"] = published_at
+    return metadata
+
+
+def _str_field(payload: dict[str, Any], key: str) -> str | None:
+    """Return ``payload[key]`` when it is a string, otherwise ``None``."""
+    value = payload.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _release_fields(release: dict[str, Any], owner: str, repository: str) -> tuple[Any, ...]:
+    """Extract and validate the string fields of a REST release.
+
+    Returns ``(author, name, body, tag_name, node_id, html_url, canonical_url, created_at,
+    published_at)``; non-string provider values become ``None``.
+
+    Raises:
+        ValueError: ``github_response_invalid`` for an over-64-character timestamp or an
+            ``html_url`` that does not canonicalize to the configured repository.
+    """
+    release_owner = release.get("author")
+    author = release_owner.get("login") if isinstance(release_owner, dict) else None
+    name_value = _str_field(release, "name")
+    body_value = _str_field(release, "body")
+    tag_value = _str_field(release, "tag_name")
+    node_id = _str_field(release, "node_id")
+    html_url = _str_field(release, "html_url")
+    canonical_url = _release_canonical(html_url, owner, repository, tag_value)
+    created_at = _str_field(release, "created_at")
+    published_at = _str_field(release, "published_at")
+    if (
+        (created_at is not None and len(created_at) > 64)
+        or (published_at is not None and len(published_at) > 64)
+        or (html_url is not None and canonical_url is None)
+    ):
+        raise ValueError("github_response_invalid")
+    return (
+        author,
+        name_value,
+        body_value,
+        tag_value,
+        node_id,
+        html_url,
+        canonical_url,
+        created_at,
+        published_at,
+    )
+
+
+def _release_flags(release: dict[str, Any]) -> tuple[bool, bool]:
+    """Return ``(draft, prerelease)``, defaulting absent flags to ``False``.
+
+    Raises:
+        ValueError: ``github_response_invalid`` when either flag is present but not a boolean.
+    """
+    draft = release.get("draft", False)
+    prerelease = release.get("prerelease", False)
+    if not isinstance(draft, bool) or not isinstance(prerelease, bool):
+        raise ValueError("github_response_invalid")
+    return draft, prerelease
+
+
 def _release_record(
     release: object,
     owner: str,
@@ -224,29 +325,19 @@ def _release_record(
         raise ValueError("github_response_invalid")
     if release.get("draft") is True:
         return None
-    release_owner = release.get("author")
-    author = release_owner.get("login") if isinstance(release_owner, dict) else None
-    name_value = release.get("name") if isinstance(release.get("name"), str) else None
-    name = name_value or ""
-    body_value = release.get("body") if isinstance(release.get("body"), str) else None
-    body = body_value or ""
+    (
+        author,
+        name_value,
+        body_value,
+        tag_value,
+        node_id,
+        html_url,
+        canonical_url,
+        created_at,
+        published_at,
+    ) = _release_fields(release, owner, repository)
+    name, body, tag = name_value or "", body_value or "", tag_value or ""
     body_text = _plain_text(body)
-    tag_value = release.get("tag_name") if isinstance(release.get("tag_name"), str) else None
-    tag = tag_value or ""
-    node_id = release.get("node_id") if isinstance(release.get("node_id"), str) else None
-    html_url = release.get("html_url") if isinstance(release.get("html_url"), str) else None
-    tag_candidate = release.get("tag_name") if isinstance(release.get("tag_name"), str) else None
-    canonical_url = _release_canonical(html_url, owner, repository, tag_candidate)
-    created_at = release.get("created_at") if isinstance(release.get("created_at"), str) else None
-    published_at = (
-        release.get("published_at") if isinstance(release.get("published_at"), str) else None
-    )
-    if (
-        (created_at is not None and len(created_at) > 64)
-        or (published_at is not None and len(published_at) > 64)
-        or (html_url is not None and canonical_url is None)
-    ):
-        raise ValueError("github_response_invalid")
     selected = {
         "id": release_id,
         "node_id": node_id,
@@ -263,10 +354,7 @@ def _release_record(
     version = _selected_hash(selected)
     identity = f"github_releases:{owner.casefold()}/{repository.casefold()}:{release_id}"
     content = "\n".join(part for part in (name, f"Tag: {tag}" if tag else "", body_text) if part)
-    draft = release.get("draft", False)
-    prerelease = release.get("prerelease", False)
-    if not isinstance(draft, bool) or not isinstance(prerelease, bool):
-        raise ValueError("github_response_invalid")
+    draft, prerelease = _release_flags(release)
     title = name or tag or f"Release {release_id}"
     source_fields, source_fields_truncated = _release_source_fields(
         draft=draft,
@@ -293,24 +381,21 @@ def _release_record(
         content_truncated=content_truncated,
         source_fields=source_fields,
     )
-    metadata: dict[str, object] = {
-        "provider_record": provider_record.model_dump(mode="json", exclude_none=True),
-        "node_id": node_id[:256] if isinstance(node_id, str) else None,
-        "name": name[:500],
-        "title": title[:500],
-        "body": body_text[:4000],
-        "html_url": html_url if canonical_url is not None else None,
-        "tag_name": tag[:255],
-        "draft": draft,
-        "prerelease": prerelease,
-        "author": author[:1000] if isinstance(author, str) else None,
-    }
-    if canonical_url is not None:
-        metadata["canonical_url"] = canonical_url
-    if created_at is not None:
-        metadata["created_at"] = created_at
-    if published_at is not None:
-        metadata["published_at"] = published_at
+    metadata = _release_metadata(
+        provider_record.model_dump(mode="json", exclude_none=True),
+        node_id=node_id,
+        name=name,
+        title=title,
+        body_text=body_text,
+        html_url=html_url,
+        canonical_url=canonical_url,
+        tag=tag,
+        draft=draft,
+        prerelease=prerelease,
+        author=author,
+        created_at=created_at,
+        published_at=published_at,
+    )
     return IngestionRecord(
         provider_id=identity,
         content=content[:4000],

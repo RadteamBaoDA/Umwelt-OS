@@ -30,6 +30,70 @@ from modules.connectors.provisioning._workflow_steps import (
 )
 
 
+async def _apply_workflow_outcome(
+    session: AsyncSession,
+    source_id: UUID,
+    *,
+    original_operation: dict[str, object],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    outcome: str,
+    remote_id: str | None,
+    error_code: str | None,
+    next_kind: str | None,
+    request: dict[str, object] | None,
+) -> bool:
+    """Apply a retained workflow outcome to its step: prepare (lookup success), acknowledge or fail.
+
+    Runs in the caller's already locked transaction without committing; returns whether the step
+    state changed.
+    """
+    operation_id = UUID(str(original_operation["id"]))
+    step = cast(dict[str, Any], original_operation["step"])
+    step_id = str(step["id"])
+    if outcome == "known_success" and step.get("kind") == "lookup":
+        changed = await prepare_workflow_step(
+            session,
+            source_id,
+            operation_id,
+            step_id,
+            str(next_kind),
+            remote_id,
+            request,
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
+    elif outcome == "known_success":
+        changed = await acknowledge_workflow_step(
+            session,
+            source_id,
+            operation_id,
+            step_id,
+            workflow_id=remote_id,
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
+    else:
+        changed = await fail_workflow_step(
+            session,
+            source_id,
+            operation_id,
+            step_id,
+            error_code or "n8n_outcome_unknown",
+            unknown=outcome == "unknown",
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
+    return changed
+
+
 async def _settle_retained_workflow_after_io(
     session: AsyncSession,
     source_id: UUID,
@@ -78,48 +142,19 @@ async def _settle_retained_workflow_after_io(
             await session.rollback()
         denied.journal_disposition = disposition
         raise
-    operation_id = UUID(str(original_operation["id"]))
-    step = cast(dict[str, Any], original_operation["step"])
-    step_id = str(step["id"])
-    if outcome == "known_success" and step.get("kind") == "lookup":
-        changed = await prepare_workflow_step(
-            session,
-            source_id,
-            operation_id,
-            step_id,
-            str(next_kind),
-            remote_id,
-            request,
-            original_operation=original_operation,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=access_fence,
-        )
-    elif outcome == "known_success":
-        changed = await acknowledge_workflow_step(
-            session,
-            source_id,
-            operation_id,
-            step_id,
-            workflow_id=remote_id,
-            original_operation=original_operation,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=access_fence,
-        )
-    else:
-        changed = await fail_workflow_step(
-            session,
-            source_id,
-            operation_id,
-            step_id,
-            error_code or "n8n_outcome_unknown",
-            unknown=outcome == "unknown",
-            original_operation=original_operation,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=access_fence,
-        )
+    changed = await _apply_workflow_outcome(
+        session,
+        source_id,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        outcome=outcome,
+        remote_id=remote_id,
+        error_code=error_code,
+        next_kind=next_kind,
+        request=request,
+    )
     if not changed:
         await session.rollback()
         return False, None

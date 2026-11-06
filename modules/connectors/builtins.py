@@ -347,6 +347,51 @@ async def list_builtins(
     ]
 
 
+async def _acknowledge_and_unblock(
+    session: Any,
+    spec: Any,
+    source: Any,
+    use: Any,
+    *,
+    scope: Any,
+    gate: Any,
+    reviewer_user_id: Any,
+    review_class: bool,
+) -> None:
+    """Acknowledge provider terms, add operator review evidence if needed, clear the collection block, commit.
+
+    Rolls back first to release the preceding read transaction; for review-class providers whose
+    terms are not yet eligible records an approved instance-operator review keyed to this terms
+    version. Commits once at the end. Errors from the terms services propagate unchanged.
+    """
+    await session.rollback()
+    terms = await provider_terms.acknowledge_terms(
+        session,
+        source.id,
+        provider_terms.ProviderTermsAcknowledge(declared_use=use, terms_version=spec.checked_on),
+        scope=scope,
+        multi_workspace_enabled=gate,
+    )
+    if review_class and not terms.eligible:
+        terms = await provider_terms.record_operator_review(
+            session,
+            workspace_id=scope.workspace_id,
+            source_id=source.id,
+            reviewer_user_id=reviewer_user_id,
+            body=provider_terms.OperatorTermsReview(
+                state="approved",
+                allowed_use=use,
+                evidence_ref=f"builtin-toggle:{spec.id}:{spec.terms_url}@{spec.checked_on}",
+                reviewed_terms_version=spec.checked_on,
+            ),
+            instance_operator=True,
+        )
+    await scheduler.clear_collection_block(
+        session, source.id, terms_revision=terms.terms_revision, workspace_id=scope.workspace_id
+    )
+    await session.commit()
+
+
 @router.post("/{provider}/enable", response_model=BuiltinSourceRead)
 async def enable_builtin(
     provider: str,
@@ -404,32 +449,16 @@ async def enable_builtin(
     )
 
     # 4-5. Terms: the owner toggle is the acknowledgement; review-class adds operator evidence for this version.
-    await session.rollback()
-    terms = await provider_terms.acknowledge_terms(
+    await _acknowledge_and_unblock(
         session,
-        source.id,
-        provider_terms.ProviderTermsAcknowledge(declared_use=use, terms_version=spec.checked_on),
+        spec,
+        source,
+        use,
         scope=scope,
-        multi_workspace_enabled=gate,
+        gate=gate,
+        reviewer_user_id=reviewer_user_id,
+        review_class=review_class,
     )
-    if review_class and not terms.eligible:
-        terms = await provider_terms.record_operator_review(
-            session,
-            workspace_id=scope.workspace_id,
-            source_id=source.id,
-            reviewer_user_id=reviewer_user_id,
-            body=provider_terms.OperatorTermsReview(
-                state="approved",
-                allowed_use=use,
-                evidence_ref=f"builtin-toggle:{spec.id}:{spec.terms_url}@{spec.checked_on}",
-                reviewed_terms_version=spec.checked_on,
-            ),
-            instance_operator=True,
-        )
-    await scheduler.clear_collection_block(
-        session, source.id, terms_revision=terms.terms_revision, workspace_id=scope.workspace_id
-    )
-    await session.commit()
 
     # 6. Activate natively unless it is already on at the current revision.
     row = _snapshot(

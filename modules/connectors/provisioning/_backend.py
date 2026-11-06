@@ -224,6 +224,36 @@ async def resolve_backend_transition_in_uow(
     return row
 
 
+async def _advance_draining(
+    session: AsyncSession,
+    source_id: UUID,
+    row: ConnectorProvisioning,
+    *,
+    scope: Scope,
+    access_fence: AccessFence,
+) -> None:
+    """Fence in-flight requests, then move a draining row to deactivating_old/activating_new.
+
+    Starts a deactivation saga operation when an old workflow exists; failure to create one makes
+    the row ``reconciliation_required`` so no backend admits. Mutates the locked ``row`` only; the
+    caller commits the observation.
+    """
+    await fence_active_requests(session, source_id)
+    operation = (
+        _new_deactivation(row, row.source_generation, scope=scope, access_fence=access_fence)
+        if row.old_workflow_id
+        else None
+    )
+    if row.old_workflow_id and operation is None:
+        row.transition_phase, row.error_code = (
+            "reconciliation_required",
+            "deactivation_unconfirmed",
+        )
+    else:
+        row.workflow_operation = operation
+        row.transition_phase = "deactivating_old" if operation is not None else "activating_new"
+
+
 async def advance_backend_transition(
     session: AsyncSession,
     source_id: UUID,
@@ -259,24 +289,7 @@ async def advance_backend_transition(
             return phase
         before = _connector_observation(source_fence, row, slots, access_fence)
         if phase == "draining":
-            await fence_active_requests(session, source_id)
-            operation = (
-                _new_deactivation(
-                    row, row.source_generation, scope=scope, access_fence=access_fence
-                )
-                if row.old_workflow_id
-                else None
-            )
-            if row.old_workflow_id and operation is None:
-                row.transition_phase, row.error_code = (
-                    "reconciliation_required",
-                    "deactivation_unconfirmed",
-                )
-            else:
-                row.workflow_operation = operation
-                row.transition_phase = (
-                    "deactivating_old" if operation is not None else "activating_new"
-                )
+            await _advance_draining(session, source_id, row, scope=scope, access_fence=access_fence)
         elif phase == "deactivating_old":
             operation = row.workflow_operation
             step = operation.get("step") if isinstance(operation, dict) else None

@@ -6,7 +6,10 @@ public APIs; this module never touches another module's tables.
 """
 
 import logging
+from datetime import datetime
+from functools import partial
 from hashlib import sha256
+from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -106,6 +109,112 @@ async def map_github_version(
         return False
 
 
+async def _ensure_entity(
+    session: AsyncSession,
+    candidate_key: str,
+    entity_type: str,
+    name: str | None,
+    *,
+    identity: str,
+    evidence_ref: Any,
+    source_generation: int,
+    observed_at: datetime,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> tuple[UUID, UUID]:
+    """Find or create a keyed extracted entity, bind the evidence chunk as support and publish its name.
+
+    Returns ``(entity_id, membership_id)``. Every Entities call carries the admitted ``scope`` and
+    flag; the derived ``name`` field is published only when a name is available.
+    """
+    entity_id = await entities.find_extraction_entity(
+        session,
+        extraction_identity=identity,
+        candidate_key=candidate_key,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    ) or await entities.create_extracted_entity(
+        session,
+        entity_type,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    membership_id = await entities.record_extraction_membership(
+        session,
+        entity_id=entity_id,
+        evidence_ref=evidence_ref,
+        source_generation=source_generation,
+        extraction_identity=identity,
+        candidate_key=candidate_key,
+        match_fingerprint=sha256(f"{identity}:{candidate_key}".encode()).hexdigest(),
+        observed_at=observed_at,
+        confidence=1.0,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if name:
+        await entities.publish_derived_field(
+            session,
+            entity_id=entity_id,
+            membership_id=membership_id,
+            field_name="name",
+            value=name,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    return entity_id, membership_id
+
+
+async def _read_mappable(
+    session: AsyncSession,
+    ready: ReadyVersionRef,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> tuple[Any, str, UUID, Any] | None:
+    """Read the version's snapshot, first chunk and re-proved evidence reference.
+
+    Returns ``(snapshot, record_type, chunk_id, evidence_ref)`` or ``None`` when the record type is
+    not mapped, the version has no chunk, or ``read_extraction_evidence_refs`` no longer proves
+    Source, generation and current version. All reads use the admitted scope and flag.
+    """
+    snapshot = (
+        await documents.read_provider_snapshots(
+            session,
+            [ready.document_version_id],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    )[0]
+    record_type = (
+        snapshot.provider_metadata.source_fields if snapshot.provider_metadata else {}
+    ).get("record_type")
+    if record_type not in _RECORD_TYPES:
+        return None
+    chunk_id = await documents.get_first_chunk_id(
+        session,
+        ready.document_version_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if chunk_id is None:
+        return None
+    refs = await documents.read_extraction_evidence_refs(
+        session,
+        document_id=ready.document_id,
+        document_version_id=ready.document_version_id,
+        source_id=ready.source_id,
+        source_generation=ready.source_generation,
+        chunk_ids=[chunk_id],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if refs is None:
+        return None
+    evidence_ref = refs[0]
+    return snapshot, record_type, chunk_id, evidence_ref
+
+
 async def _map_version(
     session: AsyncSession,
     ready: ReadyVersionRef,
@@ -122,80 +231,24 @@ async def _map_version(
     The first chunk is read under the same scope; ``read_extraction_evidence_refs`` then re-proves
     Source, generation and current version before any membership, relationship or event is written.
     """
-    snapshot = (
-        await documents.read_provider_snapshots(
-            session,
-            [ready.document_version_id],
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-    )[0]
-    record_type = (
-        snapshot.provider_metadata.source_fields if snapshot.provider_metadata else {}
-    ).get("record_type")
-    if record_type not in _RECORD_TYPES:
-        return False
-    chunk_id = await documents.get_first_chunk_id(
-        session,
-        ready.document_version_id,
-        scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
+    mappable = await _read_mappable(
+        session, ready, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
-    if chunk_id is None:
+    if mappable is None:
         return False
-    refs = await documents.read_extraction_evidence_refs(
-        session,
-        document_id=ready.document_id,
-        document_version_id=ready.document_version_id,
-        source_id=ready.source_id,
-        source_generation=ready.source_generation,
-        chunk_ids=[chunk_id],
-        scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
-    )
-    if refs is None:
-        return False
-    evidence_ref = refs[0]
+    snapshot, record_type, chunk_id, evidence_ref = mappable
     identity = f"{MAPPING_VERSION}:{ready.source_id}"
 
-    async def ensure(candidate_key: str, entity_type: str, name: str | None) -> tuple[UUID, UUID]:
-        """Find or create a keyed entity, bind this chunk as support and publish its derived name."""
-        entity_id = await entities.find_extraction_entity(
-            session,
-            extraction_identity=identity,
-            candidate_key=candidate_key,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        ) or await entities.create_extracted_entity(
-            session,
-            entity_type,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        membership_id = await entities.record_extraction_membership(
-            session,
-            entity_id=entity_id,
-            evidence_ref=evidence_ref,
-            source_generation=ready.source_generation,
-            extraction_identity=identity,
-            candidate_key=candidate_key,
-            match_fingerprint=sha256(f"{identity}:{candidate_key}".encode()).hexdigest(),
-            observed_at=snapshot.observed_at,
-            confidence=1.0,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        if name:
-            await entities.publish_derived_field(
-                session,
-                entity_id=entity_id,
-                membership_id=membership_id,
-                field_name="name",
-                value=name,
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-            )
-        return entity_id, membership_id
+    ensure = partial(
+        _ensure_entity,
+        session,
+        identity=identity,
+        evidence_ref=evidence_ref,
+        source_generation=ready.source_generation,
+        observed_at=snapshot.observed_at,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
 
     # Repository identity is the source (one source = one numeric repository id).
     repository_id, repository_membership = await ensure(

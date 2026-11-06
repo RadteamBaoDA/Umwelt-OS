@@ -38,6 +38,69 @@ from modules.connectors.public import (
 )
 
 
+async def _apply_retained_outcome(
+    session: AsyncSession,
+    source_id: UUID,
+    slot: str,
+    *,
+    original_operation: dict[str, object],
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: AccessFence,
+    outcome: str,
+    remote_id: str | None,
+    binding: dict[str, object] | None,
+    error_code: str | None,
+) -> bool:
+    """Apply a retained credential outcome through the matching state transition.
+
+    ``known_success`` acknowledges a delete or completes a create/replace; any other outcome fails
+    the operation (``unknown`` keeps it ambiguous). Runs inside the caller's already locked
+    transaction and does not commit; returns whether state changed.
+    """
+    operation_id = UUID(str(original_operation["id"]))
+    if outcome == "known_success":
+        if original_operation.get("kind") == "delete":
+            changed = await acknowledge_credential_delete(
+                session,
+                source_id,
+                slot,
+                operation_id,
+                str(original_operation["target_id"]),
+                original_operation=original_operation,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence,
+            )
+        else:
+            changed = await complete_credential_operation(
+                session,
+                source_id,
+                slot,
+                operation_id,
+                credential_id=remote_id,
+                binding=binding or {},
+                original_operation=original_operation,
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+                access_fence=access_fence,
+            )
+    else:
+        changed = await fail_credential_operation(
+            session,
+            source_id,
+            slot,
+            operation_id,
+            error_code or "credential_operation_outcome_unknown",
+            unknown=outcome == "unknown",
+            original_operation=original_operation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
+    return changed
+
+
 async def _settle_retained_credential_after_io(
     session: AsyncSession,
     source_id: UUID,
@@ -87,46 +150,19 @@ async def _settle_retained_credential_after_io(
             await session.rollback()
         denied.journal_disposition = disposition
         raise
-    operation_id = UUID(str(original_operation["id"]))
-    if outcome == "known_success":
-        if original_operation.get("kind") == "delete":
-            changed = await acknowledge_credential_delete(
-                session,
-                source_id,
-                slot,
-                operation_id,
-                str(original_operation["target_id"]),
-                original_operation=original_operation,
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-                access_fence=access_fence,
-            )
-        else:
-            changed = await complete_credential_operation(
-                session,
-                source_id,
-                slot,
-                operation_id,
-                credential_id=remote_id,
-                binding=binding or {},
-                original_operation=original_operation,
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-                access_fence=access_fence,
-            )
-    else:
-        changed = await fail_credential_operation(
-            session,
-            source_id,
-            slot,
-            operation_id,
-            error_code or "credential_operation_outcome_unknown",
-            unknown=outcome == "unknown",
-            original_operation=original_operation,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=access_fence,
-        )
+    changed = await _apply_retained_outcome(
+        session,
+        source_id,
+        slot,
+        original_operation=original_operation,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        outcome=outcome,
+        remote_id=remote_id,
+        binding=binding,
+        error_code=error_code,
+    )
     if changed:
         await commit_retained_connector_effect(
             session,
@@ -240,6 +276,85 @@ async def _credential_send_allowed(
         await session.rollback()
 
 
+def _prepared_intent_validity(
+    envelope: dict[str, object],
+    source: Any,
+    desired: Any,
+    slot: str,
+    operation_id: UUID,
+) -> tuple[bool, bool]:
+    """Return ``(valid_enable, valid_delete)`` for a prepared envelope against current source intent.
+
+    An enable (create/update) must match the active source, enabled provisioning row, activation
+    intent, generation and revision; a delete must match a paused source with disabled intent.
+    Pure; no I/O.
+    """
+    valid_enable = bool(
+        envelope.get("kind") in {"create", "update"}
+        and source is not None
+        and source.status == "active"
+        and desired is not None
+        and desired.desired_enabled
+        and isinstance(desired.activation_intent, dict)
+        and envelope.get("activation_id") == desired.activation_intent.get("id")
+        and isinstance(desired.activation_intent.get("required_credentials"), dict)
+        and isinstance(desired.activation_intent["required_credentials"].get(slot), dict)
+        and desired.activation_intent["required_credentials"][slot].get("operation_id")
+        == str(operation_id)
+        and source.generation == envelope.get("source_generation")
+        and desired.source_generation == envelope.get("source_generation")
+        and desired.desired_revision == envelope.get("revision")
+    )
+    valid_delete = bool(
+        envelope.get("kind") == "delete"
+        and source is not None
+        and source.status == "paused"
+        and desired is not None
+        and not desired.desired_enabled
+        and source.generation == envelope.get("source_generation")
+        and desired.desired_revision == envelope.get("revision")
+    )
+    return valid_enable, valid_delete
+
+
+def _discard_stale_prepared_intent(
+    row: Any, slots: dict[str, Any], desired: Any, source: Any, envelope: dict[str, object]
+) -> None:
+    """Clear a stale prepared credential operation and, when it owns the activation intent, the intent.
+
+    Resets ``row`` and any sibling slot prepared for the same activation, then disables the
+    desired state. Mutates locked ORM rows only; the caller commits the observation.
+    """
+    activation_id = envelope.get("activation_id")
+    row.operation_envelope = None
+    row.operation_id = None
+    row.state = "ready" if row.credential_id else "queued"
+    row.error_code = "prepared_credential_intent_stale"
+    if (
+        isinstance(activation_id, str)
+        and desired is not None
+        and isinstance(desired.activation_intent, dict)
+    ):
+        if desired.activation_intent.get("id") == activation_id:
+            for sibling in slots.values():
+                sibling_envelope = sibling.operation_envelope
+                if (
+                    sibling is not row
+                    and isinstance(sibling_envelope, dict)
+                    and sibling_envelope.get("activation_id") == activation_id
+                    and sibling_envelope.get("state") == "prepared"
+                ):
+                    sibling.operation_id = None
+                    sibling.operation_envelope = None
+                    sibling.state = "ready" if sibling.credential_id else "queued"
+            desired.activation_intent = None
+            desired.desired_enabled = False
+            desired.state = (
+                "disabled" if source is None or source.status != "active" else "saved_not_active"
+            )
+            desired.error_code = "activation_intent_stale"
+
+
 async def claim_credential_operation(
     session: AsyncSession,
     source_id: UUID,
@@ -279,62 +394,11 @@ async def claim_credential_operation(
         return None
     if envelope.get("state") != "prepared":
         return None
-    valid_enable = bool(
-        envelope.get("kind") in {"create", "update"}
-        and source is not None
-        and source.status == "active"
-        and desired is not None
-        and desired.desired_enabled
-        and isinstance(desired.activation_intent, dict)
-        and envelope.get("activation_id") == desired.activation_intent.get("id")
-        and isinstance(desired.activation_intent.get("required_credentials"), dict)
-        and isinstance(desired.activation_intent["required_credentials"].get(slot), dict)
-        and desired.activation_intent["required_credentials"][slot].get("operation_id")
-        == str(operation_id)
-        and source.generation == envelope.get("source_generation")
-        and desired.source_generation == envelope.get("source_generation")
-        and desired.desired_revision == envelope.get("revision")
-    )
-    valid_delete = bool(
-        envelope.get("kind") == "delete"
-        and source is not None
-        and source.status == "paused"
-        and desired is not None
-        and not desired.desired_enabled
-        and source.generation == envelope.get("source_generation")
-        and desired.desired_revision == envelope.get("revision")
+    valid_enable, valid_delete = _prepared_intent_validity(
+        envelope, source, desired, slot, operation_id
     )
     if not valid_enable and not valid_delete:
-        activation_id = envelope.get("activation_id")
-        row.operation_envelope = None
-        row.operation_id = None
-        row.state = "ready" if row.credential_id else "queued"
-        row.error_code = "prepared_credential_intent_stale"
-        if (
-            isinstance(activation_id, str)
-            and desired is not None
-            and isinstance(desired.activation_intent, dict)
-        ):
-            if desired.activation_intent.get("id") == activation_id:
-                for sibling in slots.values():
-                    sibling_envelope = sibling.operation_envelope
-                    if (
-                        sibling is not row
-                        and isinstance(sibling_envelope, dict)
-                        and sibling_envelope.get("activation_id") == activation_id
-                        and sibling_envelope.get("state") == "prepared"
-                    ):
-                        sibling.operation_id = None
-                        sibling.operation_envelope = None
-                        sibling.state = "ready" if sibling.credential_id else "queued"
-                desired.activation_intent = None
-                desired.desired_enabled = False
-                desired.state = (
-                    "disabled"
-                    if source is None or source.status != "active"
-                    else "saved_not_active"
-                )
-                desired.error_code = "activation_intent_stale"
+        _discard_stale_prepared_intent(row, slots, desired, source, envelope)
         await commit_connector_observation(
             session, before, scope=scope, multi_workspace_enabled=multi_workspace_enabled
         )
@@ -612,6 +676,70 @@ async def complete_credential_operation(
     return True
 
 
+def _release_prepared_siblings(row: Any, slots: dict[str, Any], activation_id: str) -> None:
+    """Clear every other slot's prepared operation that belongs to the same activation.
+
+    Each released slot returns to ``ready`` when it holds a credential, otherwise ``queued``.
+    Mutates locked ORM rows only; the caller flushes.
+    """
+    for sibling in slots.values():
+        sibling_envelope = sibling.operation_envelope
+        if (
+            sibling is not row
+            and isinstance(sibling_envelope, dict)
+            and sibling_envelope.get("activation_id") == activation_id
+            and sibling_envelope.get("state") == "prepared"
+        ):
+            sibling.operation_id = None
+            sibling.operation_envelope = None
+            sibling.state = "ready" if sibling.credential_id else "queued"
+
+
+def _dispatched_envelope_matches(
+    row: Any,
+    envelope: dict[str, Any],
+    operation_id: UUID,
+    original_operation: dict[str, object],
+    *,
+    source_id: UUID,
+    scope: Scope,
+    access_fence: AccessFence,
+) -> bool:
+    """Return whether ``envelope`` is the still-dispatched, un-settled operation captured in the original.
+
+    Requires the slot's operation id/revision/generation to equal the envelope's, no retained
+    effect result already recorded, and the retained-operation identity to match. Pure; no I/O.
+    """
+    return (
+        row.operation_id == operation_id
+        and envelope.get("state") == "dispatched"
+        and envelope.get("id") == str(operation_id)
+        and row.operation_revision == envelope.get("revision")
+        and row.source_generation == envelope.get("source_generation")
+        and not envelope.get("retained_effect_result")
+        and _retained_operation_matches(
+            envelope,
+            original_operation,
+            source_id=source_id,
+            scope=scope,
+            access_fence=access_fence,
+        )
+    )
+
+
+def _desired_matches_envelope(desired: Any, envelope: dict[str, Any]) -> bool:
+    """Return whether the provisioning row still sits at the envelope's revision and generation.
+
+    False when ``desired`` is missing. Pure; used to decide if a failed credential operation may
+    also disable or flag the owner's desired configuration.
+    """
+    return (
+        desired is not None
+        and desired.desired_revision == int(envelope["revision"])
+        and desired.source_generation == envelope.get("source_generation")
+    )
+
+
 async def fail_credential_operation(
     session: AsyncSession,
     source_id: UUID,
@@ -647,15 +775,11 @@ async def fail_credential_operation(
     envelope = copy.deepcopy(row.operation_envelope) if row is not None else None
     if (
         row is None
-        or row.operation_id != operation_id
         or not isinstance(envelope, dict)
-        or envelope.get("state") != "dispatched"
-        or envelope.get("id") != str(operation_id)
-        or row.operation_revision != envelope.get("revision")
-        or row.source_generation != envelope.get("source_generation")
-        or envelope.get("retained_effect_result")
-        or not _retained_operation_matches(
+        or not _dispatched_envelope_matches(
+            row,
             envelope,
+            operation_id,
             original_operation,
             source_id=source_id,
             scope=scope,
@@ -681,28 +805,14 @@ async def fail_credential_operation(
         row.error_code = error_code
         activation_id = envelope.get("activation_id")
         if isinstance(activation_id, str):
-            for sibling in slots.values():
-                sibling_envelope = sibling.operation_envelope
-                if (
-                    sibling is not row
-                    and isinstance(sibling_envelope, dict)
-                    and sibling_envelope.get("activation_id") == activation_id
-                    and sibling_envelope.get("state") == "prepared"
-                ):
-                    sibling.operation_id = None
-                    sibling.operation_envelope = None
-                    sibling.state = "ready" if sibling.credential_id else "queued"
+            _release_prepared_siblings(row, slots, activation_id)
             if (
                 desired is not None
                 and isinstance(desired.activation_intent, dict)
                 and desired.activation_intent.get("id") == activation_id
             ):
                 desired.activation_intent = None
-        if (
-            desired is not None
-            and desired.desired_revision == int(envelope["revision"])
-            and desired.source_generation == envelope.get("source_generation")
-        ):
+        if _desired_matches_envelope(desired, envelope):
             desired.desired_enabled = False
             desired.state = "saved_not_active"
             desired.error_code = error_code
@@ -712,17 +822,7 @@ async def fail_credential_operation(
         row.state = "reconciliation_required"
         activation_id = envelope.get("activation_id")
         if isinstance(activation_id, str):
-            for sibling in slots.values():
-                sibling_envelope = sibling.operation_envelope
-                if (
-                    sibling is not row
-                    and isinstance(sibling_envelope, dict)
-                    and sibling_envelope.get("activation_id") == activation_id
-                    and sibling_envelope.get("state") == "prepared"
-                ):
-                    sibling.operation_id = None
-                    sibling.operation_envelope = None
-                    sibling.state = "ready" if sibling.credential_id else "queued"
+            _release_prepared_siblings(row, slots, activation_id)
             if (
                 desired is not None
                 and isinstance(desired.activation_intent, dict)
@@ -731,12 +831,7 @@ async def fail_credential_operation(
                 desired.activation_intent["state"] = "outcome_unknown"
     row.error_code = error_code
     row.operation_envelope = envelope
-    if (
-        desired is not None
-        and unknown
-        and desired.desired_revision == int(envelope["revision"])
-        and desired.source_generation == envelope.get("source_generation")
-    ):
+    if unknown and _desired_matches_envelope(desired, envelope):
         desired.state = "reconciliation_required"
         desired.error_code = error_code
     await session.flush()

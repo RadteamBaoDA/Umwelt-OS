@@ -47,13 +47,17 @@ if TYPE_CHECKING:
         GitHubWebhookReceipt,
         VerifiedGitHubDelivery,
     )
+from modules.connectors.service._github_hint_rows import (
+    lock_pause_hints,
+    reserve_deferred_capacity,
+    rewrite_visibility_hint,
+)
 from modules.connectors.service.access import (
     _connector_access,
     _connector_actor,
     _read_scoped_source,
 )
 from modules.connectors.service.github_binding import (
-    _GITHUB_PAUSE_STATES,
     GitHubHintClaim,
     _claim_matches_binding,
     _current_github_binding_in_uow,
@@ -812,25 +816,7 @@ async def _admit_visibility_loss(ctx: _HintAdmission) -> GitHubHintEnqueueResult
     from modules.sources import public as sources
 
     session, binding, target, scope = ctx.session, ctx.binding, ctx.target, ctx.scope
-    pause_hints = list(
-        await session.scalars(
-            select(GithubSourceHint)
-            .where(
-                GithubSourceHint.source_id == binding.source_id,
-                or_(
-                    GithubSourceHint.state.in_(_GITHUB_PAUSE_STATES),
-                    (
-                        (GithubSourceHint.resource == target.resource)
-                        & (GithubSourceHint.locator_kind == target.locator_kind)
-                        & (GithubSourceHint.locator == target.locator)
-                    ),
-                ),
-            )
-            .order_by(GithubSourceHint.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-    )
+    pause_hints = await lock_pause_hints(session, binding, target)
     capacity = await session.scalar(
         select(GithubWebhookCapacity)
         .where(
@@ -886,22 +872,9 @@ async def _admit_visibility_loss(ctx: _HintAdmission) -> GitHubHintEnqueueResult
             )
         )
     else:
-        visibility_hint.dirty_revision += 1
-        visibility_hint.source_generation = paused.generation
-        visibility_hint.connector_revision = binding.connector_revision
-        visibility_hint.repository_id = binding.repository_id
-        visibility_hint.binding_revision = binding.binding_revision
-        visibility_hint.intent = "visibility_lost"
-        visibility_hint.last_delivery_id = ctx.delivery_receipt_id
-        visibility_hint.state = "visibility_unverified"
-        visibility_hint.claim_token = None
-        visibility_hint.claimed_revision = None
-        visibility_hint.claim_expires_at = None
-        if visibility_hint.capacity_reserved:
-            if capacity.pending_count < 1:
-                raise ConflictError("GitHub visibility capacity changed")
-            capacity.pending_count -= 1
-            visibility_hint.capacity_reserved = False
+        rewrite_visibility_hint(
+            visibility_hint, paused.generation, binding, ctx.delivery_receipt_id, capacity
+        )
     result = ctx.persist_terminal(ctx.result("ignored"))
     if ctx.original_source_status == "active":
         await commit_with_replay(
@@ -1180,29 +1153,8 @@ async def claim_github_hint(
         await session.rollback()
         return None
     if hint.state == "capacity_deferred" and not hint.capacity_reserved:
-        if (
-            hint.repository_id != fence.repository_id
-            or hint.binding_revision != fence.binding_revision
-            or hint.resource not in fence.resource_scope
-        ):
-            hint.state = "visibility_unverified"
-            hint.next_attempt_at = now
-            await session.commit()
+        if not await reserve_deferred_capacity(session, hint, fence, now):
             return None
-        capacity = await session.scalar(
-            select(GithubWebhookCapacity)
-            .where(
-                GithubWebhookCapacity.id == 1,
-            )
-            .with_for_update()
-        )
-        if capacity is None or capacity.pending_count >= 100_000:
-            hint.next_attempt_at = now + timedelta(seconds=60)
-            await session.commit()
-            return None
-        capacity.pending_count += 1
-        hint.capacity_reserved = True
-        hint.state = "pending"
     token = uuid7()
     expires = now + timedelta(seconds=60)
     hint.claim_token = token

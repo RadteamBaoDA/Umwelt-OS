@@ -104,6 +104,40 @@ def _model_times(model: dict[str, Any]) -> tuple[object, object, datetime | None
     return last_modified_raw, created_raw, modified, created
 
 
+def _model_source_fields(
+    author_piece: str,
+    tags: list[str],
+    tags_raw: list[Any],
+    pipeline: str | None,
+    created_raw: object,
+    last_modified_raw: object,
+    created: datetime | None,
+    modified: datetime | None,
+) -> tuple[dict[str, object], bool]:
+    """Build the bounded ``source_fields`` map and report whether any provider value was cut short.
+
+    Pure: truncates author (1000), pipeline tag (128) and timestamps (64) and flags truncation when
+    more than 100 tags, any tag over 255 characters, or an over-limit timestamp/pipeline was seen.
+    """
+    source_fields: dict[str, object] = {"author": author_piece[:1000], "tags": tags}
+    source_fields_truncated = isinstance(tags_raw, list) and (
+        len(tags_raw) > 100 or any(isinstance(tag, str) and len(tag) > 255 for tag in tags_raw)
+    )
+    source_fields_truncated = (
+        source_fields_truncated
+        or (isinstance(created_raw, str) and len(created_raw) > 64)
+        or (isinstance(last_modified_raw, str) and len(last_modified_raw) > 64)
+    )
+    if pipeline is not None:
+        source_fields["pipeline_tag"] = pipeline[:128]
+        source_fields_truncated = source_fields_truncated or len(pipeline) > 128
+    if created is not None and isinstance(created_raw, str):
+        source_fields["created_at"] = created_raw[:64]
+    if modified is not None and isinstance(last_modified_raw, str):
+        source_fields["last_modified"] = last_modified_raw[:64]
+    return source_fields, source_fields_truncated
+
+
 def _model_record(
     model: dict[str, Any],
     author: str,
@@ -157,22 +191,9 @@ def _model_record(
     version = f"{sha}:{digest}" if sha else digest
     version = version[:255]
     content = f"{model_id}\nPipeline: {pipeline or 'unspecified'}\nTags: {', '.join(tags)}"
-    source_fields: dict[str, object] = {"author": pieces[0][:1000], "tags": tags}
-    source_fields_truncated = isinstance(tags_raw, list) and (
-        len(tags_raw) > 100 or any(isinstance(tag, str) and len(tag) > 255 for tag in tags_raw)
+    source_fields, source_fields_truncated = _model_source_fields(
+        pieces[0], tags, tags_raw, pipeline, created_raw, last_modified_raw, created, modified
     )
-    source_fields_truncated = (
-        source_fields_truncated
-        or (isinstance(created_raw, str) and len(created_raw) > 64)
-        or (isinstance(last_modified_raw, str) and len(last_modified_raw) > 64)
-    )
-    if pipeline is not None:
-        source_fields["pipeline_tag"] = pipeline[:128]
-        source_fields_truncated = source_fields_truncated or len(pipeline) > 128
-    if created is not None and isinstance(created_raw, str):
-        source_fields["created_at"] = created_raw[:64]
-    if modified is not None and isinstance(last_modified_raw, str):
-        source_fields["last_modified"] = last_modified_raw[:64]
     content_truncated = len(content) > 4000 or source_fields_truncated
     provider_record = ProviderRecordMetadata(
         provider="huggingface",

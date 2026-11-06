@@ -116,6 +116,92 @@ def _plan(
     return sorted(rows, key=lambda r: (r[0].budget_kind, r[1], r[0].policy_key, r[2]))
 
 
+async def _debit_window(
+    session: AsyncSession,
+    provider_id: str,
+    send_id: UUID,
+    policy: QuotaWindowPolicy,
+    subject: str,
+    start: datetime,
+    end: datetime,
+    now: datetime,
+) -> None:
+    """Atomically debit one quota window for a send and record its ``ConnectorQuotaDebit`` row.
+
+    Upserts the window counter only when the new total stays within the limit and the window is not
+    blocked; otherwise raises ``QuotaDeferred`` with the later of the block and window end. Runs
+    inside the caller's savepoint; neither flushes nor commits.
+    """
+    limit, cost = policy.limit_units, policy.cost_per_send
+    if limit is not None and cost > limit:
+        raise QuotaDeferred(policy.policy_key, end)
+    admitted = (
+        await session.execute(
+            pg_insert(_W)
+            .values(
+                provider_id=provider_id,
+                budget_kind=policy.budget_kind,
+                subject_hash=subject,
+                policy_key=policy.policy_key,
+                window_start=start,
+                window_end=end,
+                unit=policy.unit,
+                limit_units=limit,
+                used_units=cost,
+                policy_revision=QUOTA_POLICY_REVISION,
+            )
+            .on_conflict_do_update(
+                index_elements=[
+                    _W.provider_id,
+                    _W.budget_kind,
+                    _W.subject_hash,
+                    _W.policy_key,
+                    _W.window_start,
+                ],
+                # Policy edits apply to the live window; consumption is never reset.
+                set_={
+                    "used_units": _W.used_units + cost,
+                    "limit_units": limit,
+                    "unit": policy.unit,
+                    "policy_revision": QUOTA_POLICY_REVISION,
+                },
+                where=and_(
+                    True if limit is None else _W.used_units + cost <= limit,
+                    or_(_W.blocked_until.is_(None), _W.blocked_until <= now),
+                ),
+            )
+            .returning(_W.used_units)
+        )
+    ).first()
+    if admitted is None:
+        row = (
+            await session.execute(
+                select(_W.blocked_until).where(
+                    _W.provider_id == provider_id,
+                    _W.budget_kind == policy.budget_kind,
+                    _W.subject_hash == subject,
+                    _W.policy_key == policy.policy_key,
+                    _W.window_start == start,
+                )
+            )
+        ).first()
+        blocked = row[0] if row is not None else None
+        raise QuotaDeferred(
+            policy.policy_key, blocked if blocked is not None and blocked > now else end
+        )
+    session.add(
+        ConnectorQuotaDebit(
+            send_id=send_id,
+            provider_id=provider_id,
+            budget_kind=policy.budget_kind,
+            subject_hash=subject,
+            policy_key=policy.policy_key,
+            window_start=start,
+            units=cost,
+        )
+    )
+
+
 async def debit_send(
     session: AsyncSession,
     *,
@@ -159,74 +245,7 @@ async def debit_send(
         if inserted is None:
             raise SendPermitConsumed
         for policy, subject, start, end in plan:
-            limit, cost = policy.limit_units, policy.cost_per_send
-            if limit is not None and cost > limit:
-                raise QuotaDeferred(policy.policy_key, end)
-            admitted = (
-                await session.execute(
-                    pg_insert(_W)
-                    .values(
-                        provider_id=provider_id,
-                        budget_kind=policy.budget_kind,
-                        subject_hash=subject,
-                        policy_key=policy.policy_key,
-                        window_start=start,
-                        window_end=end,
-                        unit=policy.unit,
-                        limit_units=limit,
-                        used_units=cost,
-                        policy_revision=QUOTA_POLICY_REVISION,
-                    )
-                    .on_conflict_do_update(
-                        index_elements=[
-                            _W.provider_id,
-                            _W.budget_kind,
-                            _W.subject_hash,
-                            _W.policy_key,
-                            _W.window_start,
-                        ],
-                        # Policy edits apply to the live window; consumption is never reset.
-                        set_={
-                            "used_units": _W.used_units + cost,
-                            "limit_units": limit,
-                            "unit": policy.unit,
-                            "policy_revision": QUOTA_POLICY_REVISION,
-                        },
-                        where=and_(
-                            True if limit is None else _W.used_units + cost <= limit,
-                            or_(_W.blocked_until.is_(None), _W.blocked_until <= now),
-                        ),
-                    )
-                    .returning(_W.used_units)
-                )
-            ).first()
-            if admitted is None:
-                row = (
-                    await session.execute(
-                        select(_W.blocked_until).where(
-                            _W.provider_id == provider_id,
-                            _W.budget_kind == policy.budget_kind,
-                            _W.subject_hash == subject,
-                            _W.policy_key == policy.policy_key,
-                            _W.window_start == start,
-                        )
-                    )
-                ).first()
-                blocked = row[0] if row is not None else None
-                raise QuotaDeferred(
-                    policy.policy_key, blocked if blocked is not None and blocked > now else end
-                )
-            session.add(
-                ConnectorQuotaDebit(
-                    send_id=send_id,
-                    provider_id=provider_id,
-                    budget_kind=policy.budget_kind,
-                    subject_hash=subject,
-                    policy_key=policy.policy_key,
-                    window_start=start,
-                    units=cost,
-                )
-            )
+            await _debit_window(session, provider_id, send_id, policy, subject, start, end, now)
         await session.flush()
     return send_id
 

@@ -163,34 +163,27 @@ async def _wake_still_current(
     return bool(current)
 
 
-async def wake_packaged_collection(
+async def _lock_wakeable_source(
     session: AsyncSession,
     *,
     source_id: UUID,
     source_generation: int,
     connector_revision: int,
-    settings: "Settings",
-    timeout_seconds: int = 15,
     scope: Scope,
     multi_workspace_enabled: bool,
-) -> PackagedCollectionWakeResult:
-    """Wake only an active, fully applied packaged n8n collection through its real webhook token.
+) -> tuple[AccessFence, Any, Any] | None:
+    """Lock the Source and prove it is active, applied and fenced for exactly this wake.
 
-    Returns ``unavailable`` when n8n is disabled by the owner kill switch or has no webhook token.
+    Lock order: access admission, Source, provisioning read, then the collection fence. Rolls the
+    session back and returns ``None`` when anything is missing, local-only, disabled or at another
+    generation/revision. On success the locks stay held for the caller, which releases them.
 
-    Source and provisioning locks are released before network I/O. The wake carries only source
-    fences; n8n continues through its actual provider-fetch route and collector credential. A
-    timeout is ambiguous and must keep the durable hint pending for idempotent retry.
+    Returns:
+        ``(access_fence, source, locked_source_fence)``.
     """
-    import httpx
-
-    from modules.connectors.n8n import workflow_webhook_paths
     from modules.connectors.provisioning import activation_status
+    from modules.settings.public import module_is_enabled
     from modules.sources import public as sources
-
-    if not 1 <= timeout_seconds <= 75:
-        raise ValueError("Packaged collection wake timeout is out of range")
-    from modules.settings.public import module_is_enabled, resolve_n8n
 
     access_fence = await _connector_access(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
@@ -243,9 +236,50 @@ async def wake_packaged_collection(
         )
     ):
         await session.rollback()
+        return None
+    return access_fence, source, locked
+
+
+async def wake_packaged_collection(
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    source_generation: int,
+    connector_revision: int,
+    settings: "Settings",
+    timeout_seconds: int = 15,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> PackagedCollectionWakeResult:
+    """Wake only an active, fully applied packaged n8n collection through its real webhook token.
+
+    Returns ``unavailable`` when n8n is disabled by the owner kill switch or has no webhook token.
+
+    Source and provisioning locks are released before network I/O. The wake carries only source
+    fences; n8n continues through its actual provider-fetch route and collector credential. A
+    timeout is ambiguous and must keep the durable hint pending for idempotent retry.
+    """
+    import httpx
+
+    from modules.connectors.n8n import workflow_webhook_paths
+
+    if not 1 <= timeout_seconds <= 75:
+        raise ValueError("Packaged collection wake timeout is out of range")
+    from modules.settings.public import resolve_n8n
+
+    wakeable = await _lock_wakeable_source(
+        session,
+        source_id=source_id,
+        source_generation=source_generation,
+        connector_revision=connector_revision,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if wakeable is None:
         return PackagedCollectionWakeResult(
             workspace_id=scope.workspace_id, source_id=source_id, outcome="unavailable"
         )
+    access_fence, source, locked = wakeable
     source_type = source.type
     await session.rollback()
     n8n = await resolve_n8n(session, settings, workspace_id=scope.workspace_id)

@@ -201,34 +201,15 @@ def _append_record(
     return current_bytes + record_bytes
 
 
-def _gmail_message_record(message: object, collected_at: datetime) -> IngestionRecord:
-    """Map a Gmail message without attachments and attach validated identity/version provenance.
+def _gmail_plain_text(payload: dict[str, Any]) -> str:
+    """Join the inline ``text/plain`` parts of a Gmail payload tree (attachments excluded).
 
-    The Gmail history ID is retained as a version, while ``internalDate`` remains the published
-    timestamp basis. Provider fields are allowlisted before the record can reach durable ingestion.
+    Walks at most 1000 parts and 1,000,000 decoded characters.
+
+    Raises:
+        GoogleProviderError: ``gmail_body_invalid`` on undecodable base64/UTF-8.
+        rest.CollectionIncomplete: when the part or size bound is exceeded.
     """
-    if not isinstance(message, dict):
-        raise GoogleProviderError("gmail_message_invalid")
-    identifier = message.get("id")
-    thread_id = message.get("threadId")
-    if (
-        not isinstance(identifier, str)
-        or not identifier
-        or len(identifier) > 512
-        or not isinstance(thread_id, str)
-        or not thread_id
-        or len(thread_id) > 512
-    ):
-        raise GoogleProviderError("gmail_message_identity_invalid")
-    raw_payload = message.get("payload")
-    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
-    raw_headers = payload.get("headers")
-    headers: list[Any] = raw_headers if isinstance(raw_headers, list) else []
-    fields = {
-        item.get("name", "").lower(): item.get("value", "")
-        for item in headers
-        if isinstance(item, dict) and isinstance(item.get("name"), str)
-    }
     text_parts: list[str] = []
     pending = [payload]
     visited_parts = 0
@@ -260,6 +241,38 @@ def _gmail_message_record(message: object, collected_at: datetime) -> IngestionR
     body_text = "\n".join(text_parts)
     if len(body_text) > 1_000_000:
         raise rest.CollectionIncomplete
+    return body_text
+
+
+def _gmail_message_record(message: object, collected_at: datetime) -> IngestionRecord:
+    """Map a Gmail message without attachments and attach validated identity/version provenance.
+
+    The Gmail history ID is retained as a version, while ``internalDate`` remains the published
+    timestamp basis. Provider fields are allowlisted before the record can reach durable ingestion.
+    """
+    if not isinstance(message, dict):
+        raise GoogleProviderError("gmail_message_invalid")
+    identifier = message.get("id")
+    thread_id = message.get("threadId")
+    if (
+        not isinstance(identifier, str)
+        or not identifier
+        or len(identifier) > 512
+        or not isinstance(thread_id, str)
+        or not thread_id
+        or len(thread_id) > 512
+    ):
+        raise GoogleProviderError("gmail_message_identity_invalid")
+    raw_payload = message.get("payload")
+    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+    raw_headers = payload.get("headers")
+    headers: list[Any] = raw_headers if isinstance(raw_headers, list) else []
+    fields = {
+        item.get("name", "").lower(): item.get("value", "")
+        for item in headers
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    body_text = _gmail_plain_text(payload)
     raw_snippet = message.get("snippet")
     snippet: str = raw_snippet if isinstance(raw_snippet, str) else ""
     content: str = body_text or snippet
@@ -598,6 +611,50 @@ async def collect_gmail(
     return await _gmail_history_step(run, state, history_id)
 
 
+def _calendar_source_fields(
+    calendar_id: str,
+    event_id: str,
+    status: str,
+    recurrence: list[str],
+    raw_start_value: object,
+    start: dict[str, Any],
+    end: dict[str, Any],
+    event: dict[str, Any],
+) -> dict[str, object]:
+    """Build the allowlisted, length-bounded ``source_fields`` provenance for a Calendar event.
+
+    Identity, status and up to 32 recurrence rules are always present; times, time zones and the
+    HTML link appear only when the provider supplied strings, truncated to their storage limits.
+    """
+    return {
+        "calendar_id": calendar_id,
+        "event_id": event_id,
+        "status": status,
+        "recurrence": [_text(item, 255) for item in recurrence[:32]],
+        **({"start": _text(raw_start_value, 64)} if isinstance(raw_start_value, str) else {}),
+        **(
+            {"end": _text(end.get("dateTime") or end.get("date"), 64)}
+            if isinstance(end.get("dateTime") or end.get("date"), str)
+            else {}
+        ),
+        **(
+            {"start_timezone": _text(start["timeZone"], 128)}
+            if isinstance(start.get("timeZone"), str)
+            else {}
+        ),
+        **(
+            {"end_timezone": _text(end["timeZone"], 128)}
+            if isinstance(end.get("timeZone"), str)
+            else {}
+        ),
+        **(
+            {"html_link": _text(event["htmlLink"], 2048)}
+            if isinstance(event.get("htmlLink"), str)
+            else {}
+        ),
+    }
+
+
 def _calendar_event_record(
     calendar_id: str, event: object, collected_at: datetime
 ) -> IngestionRecord:
@@ -685,37 +742,9 @@ def _calendar_event_record(
                     if isinstance(event.get("description", ""), str)
                     else False
                 ),
-                source_fields={
-                    "calendar_id": calendar_id,
-                    "event_id": event_id,
-                    "status": status,
-                    "recurrence": [_text(item, 255) for item in recurrence[:32]],
-                    **(
-                        {"start": _text(raw_start_value, 64)}
-                        if isinstance(raw_start_value, str)
-                        else {}
-                    ),
-                    **(
-                        {"end": _text(end.get("dateTime") or end.get("date"), 64)}
-                        if isinstance(end.get("dateTime") or end.get("date"), str)
-                        else {}
-                    ),
-                    **(
-                        {"start_timezone": _text(start["timeZone"], 128)}
-                        if isinstance(start.get("timeZone"), str)
-                        else {}
-                    ),
-                    **(
-                        {"end_timezone": _text(end["timeZone"], 128)}
-                        if isinstance(end.get("timeZone"), str)
-                        else {}
-                    ),
-                    **(
-                        {"html_link": _text(event["htmlLink"], 2048)}
-                        if isinstance(event.get("htmlLink"), str)
-                        else {}
-                    ),
-                },
+                source_fields=_calendar_source_fields(
+                    calendar_id, event_id, status, recurrence, raw_start_value, start, end, event
+                ),
             ),
         },
     )

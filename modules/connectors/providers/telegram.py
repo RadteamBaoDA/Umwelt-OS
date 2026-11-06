@@ -360,6 +360,20 @@ def _message_identity_and_times(message: dict[str, Any]) -> tuple[int, datetime,
     return message_id, published_at, edited_at
 
 
+def _bounded_int_text(value: object) -> str | None:
+    """Return ``str(value)`` for a real (non-bool) integer in ``[0, 10**20)``, otherwise ``None``."""
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 10**20:
+        return str(value)
+    return None
+
+
+def _channel_post_url(username: str | None, message_id: object) -> str | None:
+    """Return the public ``t.me`` permalink when ``username`` is a valid public handle, else ``None``."""
+    if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+        return f"https://t.me/{username}/{message_id}"
+    return None
+
+
 def map_telegram_update(
     update: dict[str, Any],
     *,
@@ -397,11 +411,7 @@ def map_telegram_update(
     reply_id = reply.get("message_id") if isinstance(reply, dict) else None
     username = chat.get("username") if isinstance(chat.get("username"), str) else None
     channel_label = chat.get("title") if isinstance(chat.get("title"), str) else None
-    canonical = (
-        f"https://t.me/{username}/{message_id}"
-        if username and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username)
-        else None
-    )
+    canonical = _channel_post_url(username, message_id)
     title = channel_label or (f"Telegram channel {chat_id}")
     provider_version = f"telegram:{proof.epoch}:{proof.update_id}:{observed_at.isoformat()}"
     metadata_truncated = (
@@ -428,16 +438,8 @@ def map_telegram_update(
                 "bot_id": proof.bot_id,
                 "channel_id": chat_id,
                 "message_id": str(message_id),
-                "thread_id": str(thread_id)
-                if isinstance(thread_id, int)
-                and not isinstance(thread_id, bool)
-                and 0 <= thread_id < 10**20
-                else None,
-                "reply_to_message_id": str(reply_id)
-                if isinstance(reply_id, int)
-                and not isinstance(reply_id, bool)
-                and 0 <= reply_id < 10**20
-                else None,
+                "thread_id": _bounded_int_text(thread_id),
+                "reply_to_message_id": _bounded_int_text(reply_id),
                 "channel_label": channel_label[:255] if channel_label else None,
                 "channel_username": username[:64] if username else None,
                 "epoch": proof.epoch,

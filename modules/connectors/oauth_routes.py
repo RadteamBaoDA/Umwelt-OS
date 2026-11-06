@@ -9,7 +9,7 @@ import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, NoReturn, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -538,6 +538,47 @@ def _write_grant(
         grant.state, grant.error_code = "ready", None
 
 
+async def _reject_stale_exchange(session: Session, tokens: dict[str, Any]) -> NoReturn:
+    """Discard a token exchange whose source or grant changed mid-flight: roll back, revoke, raise 409.
+
+    The remote refresh-token revocation is best effort and never masks the 409; an unconfirmed
+    revocation cannot restore local authority because the result is never stored.
+    """
+    # A grant may have been replaced while Google was exchanging the code; discard this result.
+    await session.rollback()
+    try:
+        await _revoke_token(tokens["refresh_token"])
+    except Exception:  # best-effort remote cleanup; never masks the 409 below
+        # A stale callback can never be stored; an unconfirmed remote cleanup cannot restore local authority.
+        logger.debug("google_stale_token_revoke_failed", exc_info=True)
+    raise HTTPException(
+        status_code=409, detail="Connector changed during authorization; reconnect to continue"
+    )
+
+
+def _validate_callback_request(request: Request, settings: Any) -> str:
+    """Check the callback URL matches the registered one and return the bounded ``state`` parameter.
+
+    Raises:
+        HTTPException: 400 for a URL that differs in scheme, host or path from the registration, or
+            for a missing/over-256-character state.
+    """
+    callback = urlsplit(settings.connector_google_callback_url)
+    actual = urlsplit(str(request.url))
+    if (actual.scheme, actual.netloc, actual.path) != (
+        callback.scheme,
+        callback.netloc,
+        callback.path,
+    ):
+        raise HTTPException(
+            status_code=400, detail="Google callback URL does not match registration"
+        )
+    state = request.query_params.get("state", "")
+    if not state or len(state) > 256:
+        raise HTTPException(status_code=400, detail="Google authorization state is invalid")
+    return state
+
+
 @router.get("/oauth/google/callback")
 async def complete_google_authorization(
     request: Request,
@@ -553,19 +594,7 @@ async def complete_google_authorization(
     """
     settings = request.app.state.settings
     _configured(settings)
-    callback = urlsplit(settings.connector_google_callback_url)
-    actual = urlsplit(str(request.url))
-    if (actual.scheme, actual.netloc, actual.path) != (
-        callback.scheme,
-        callback.netloc,
-        callback.path,
-    ):
-        raise HTTPException(
-            status_code=400, detail="Google callback URL does not match registration"
-        )
-    state = request.query_params.get("state", "")
-    if not state or len(state) > 256:
-        raise HTTPException(status_code=400, detail="Google authorization state is invalid")
+    state = _validate_callback_request(request, settings)
     owner_token_hash, owner_id = owner.token_hash, owner.owner_id
     fence = await _admit(session, request, scope)
     attempt = await _consume_attempt(session, settings, state, owner_token_hash, owner_id, scope)
@@ -624,16 +653,7 @@ async def complete_google_authorization(
             or grant.owner_id != owner_id
         )
     ):
-        # A grant may have been replaced while Google was exchanging the code; discard this result.
-        await session.rollback()
-        try:
-            await _revoke_token(tokens["refresh_token"])
-        except Exception:  # best-effort remote cleanup; never masks the 409 below
-            # A stale callback can never be stored; an unconfirmed remote cleanup cannot restore local authority.
-            logger.debug("google_stale_token_revoke_failed", exc_info=True)
-        raise HTTPException(
-            status_code=409, detail="Connector changed during authorization; reconnect to continue"
-        )
+        await _reject_stale_exchange(session, tokens)
     _write_grant(
         session,
         settings,
@@ -838,6 +858,37 @@ async def _check_google_discovery_fence(
     await session.rollback()
 
 
+def _raise_google_discovery_error(exc: Exception) -> NoReturn:
+    """Translate a transport/provider failure from Google resource discovery into a stable HTTP error.
+
+    Maps rate limits to 429, 401/403 to a 409 reconnect hint, incomplete listings to 422 and anything
+    else to 503. Always raises ``from None`` so no provider response text reaches the client.
+    """
+    from modules.connectors.providers import rest
+    from modules.connectors.public import ProviderRateLimited
+
+    if isinstance(exc, ProviderRateLimited):
+        raise HTTPException(
+            status_code=429, detail="Google resource discovery is rate limited"
+        ) from None
+    if isinstance(exc, rest.ProviderHttpError) and exc.status_code in {401, 403}:
+        raise HTTPException(
+            status_code=409,
+            detail="Google authorization needs attention; reconnect this source",
+        ) from None
+    if isinstance(exc, rest.ProviderHttpError) and exc.status_code == 429:
+        raise HTTPException(
+            status_code=429, detail="Google resource discovery is rate limited"
+        ) from None
+    if isinstance(exc, rest.CollectionIncomplete):
+        raise HTTPException(
+            status_code=422, detail="Google resource list exceeds the bounded discovery limit"
+        ) from None
+    raise HTTPException(
+        status_code=503, detail="Google resources could not be discovered"
+    ) from None
+
+
 @router.get("/{source_id}/oauth/google/{provider}/resources")
 async def discover_google_source_resources(
     source_id: str,
@@ -918,30 +969,44 @@ async def discover_google_source_resources(
     except (DomainError, HTTPException):
         raise
     except Exception as exc:  # noqa: BLE001  # Normalize transport and provider failures before returning to the UI.
-        from modules.connectors.providers import rest
-        from modules.connectors.public import ProviderRateLimited
-
-        if isinstance(exc, ProviderRateLimited):
-            raise HTTPException(
-                status_code=429, detail="Google resource discovery is rate limited"
-            ) from None
-        if isinstance(exc, rest.ProviderHttpError) and exc.status_code in {401, 403}:
-            raise HTTPException(
-                status_code=409,
-                detail="Google authorization needs attention; reconnect this source",
-            ) from None
-        if isinstance(exc, rest.ProviderHttpError) and exc.status_code == 429:
-            raise HTTPException(
-                status_code=429, detail="Google resource discovery is rate limited"
-            ) from None
-        if isinstance(exc, rest.CollectionIncomplete):
-            raise HTTPException(
-                status_code=422, detail="Google resource list exceeds the bounded discovery limit"
-            ) from None
-        raise HTTPException(
-            status_code=503, detail="Google resources could not be discovered"
-        ) from None
+        _raise_google_discovery_error(exc)
     return {"items": rows, "token_revision": token_revision, "truncated": truncated}
+
+
+async def _lock_google_grant(session: AsyncSession, source_id: UUID) -> Any:
+    """Lock and return the source's OAuth grant row (``FOR UPDATE``), or ``None`` when absent."""
+    return await session.scalar(
+        select(ConnectorOAuthGrant)
+        .where(ConnectorOAuthGrant.source_id == source_id)
+        .with_for_update()
+    )
+
+
+def _grant_refresh_token(settings: Any, grant: Any, source_id: UUID) -> str:
+    """Decrypt the grant's token cipher and return its non-empty refresh token.
+
+    Raises:
+        HTTPException: 503 when the cipher cannot be opened or holds no refresh token, so the
+            operator must reconcile the credential.
+    """
+    key = settings.connector_credential_encryption_key.get_secret_value()
+    try:
+        token_set = _open_cipher(
+            key,
+            grant.encrypted_tokens or "",
+            source_id,
+            grant.operation_id,
+            grant.source_generation,
+            grant.configuration_revision,
+        )
+        refresh_token = token_set.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            raise ValueError("google_refresh_token_missing")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503, detail="Google credential requires operator reconciliation"
+        ) from exc
+    return refresh_token
 
 
 @router.post("/{source_id}/oauth/google/disconnect")
@@ -964,13 +1029,7 @@ async def disconnect_google_source(
     source, row = await _current_source(
         session, request, parsed_id, None, scope, fence, allow_paused=True
     )
-    grant = await session.scalar(
-        select(ConnectorOAuthGrant)
-        .where(
-            ConnectorOAuthGrant.source_id == parsed_id,
-        )
-        .with_for_update()
-    )
+    grant = await _lock_google_grant(session, parsed_id)
     if (
         source is None
         or source.provider not in _PROVIDER_SCOPES
@@ -987,23 +1046,7 @@ async def disconnect_google_source(
         raise HTTPException(
             status_code=409, detail="Google credential changed; reload before disconnecting"
         )
-    key = settings.connector_credential_encryption_key.get_secret_value()
-    try:
-        token_set = _open_cipher(
-            key,
-            grant.encrypted_tokens or "",
-            parsed_id,
-            grant.operation_id,
-            grant.source_generation,
-            grant.configuration_revision,
-        )
-        refresh_token = token_set.get("refresh_token")
-        if not isinstance(refresh_token, str) or not refresh_token:
-            raise ValueError("google_refresh_token_missing")
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=503, detail="Google credential requires operator reconciliation"
-        ) from exc
+    refresh_token = _grant_refresh_token(settings, grant, parsed_id)
     row.credential_revision += 1
     grant.credential_revision = row.credential_revision
     grant.state, grant.error_code = "revocation_pending", None
@@ -1022,13 +1065,7 @@ async def disconnect_google_source(
         source, row = await _current_source(
             session, request, parsed_id, None, scope, fence, allow_paused=True
         )
-        grant = await session.scalar(
-            select(ConnectorOAuthGrant)
-            .where(
-                ConnectorOAuthGrant.source_id == parsed_id,
-            )
-            .with_for_update()
-        )
+        grant = await _lock_google_grant(session, parsed_id)
         if (
             grant is not None
             and grant.token_revision == payload.expected_token_revision
@@ -1047,13 +1084,7 @@ async def disconnect_google_source(
     source, row = await _current_source(
         session, request, parsed_id, None, scope, fence, allow_paused=True
     )
-    grant = await session.scalar(
-        select(ConnectorOAuthGrant)
-        .where(
-            ConnectorOAuthGrant.source_id == parsed_id,
-        )
-        .with_for_update()
-    )
+    grant = await _lock_google_grant(session, parsed_id)
     if (
         grant is None
         or grant.provider != source.provider
