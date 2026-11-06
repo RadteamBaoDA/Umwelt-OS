@@ -492,6 +492,40 @@ async def _memory_export_count(
     )
 
 
+async def _memory_export_rows(
+    session: AsyncSession,
+    record_kind: str,
+    snapshot_at: datetime,
+    position: tuple[datetime, UUID] | None,
+    fetch: int,
+    *,
+    scope: Scope,
+) -> list[Memory | MemoryCandidate]:
+    """Fetch up to ``fetch`` export rows in stable ``(created_at, id)`` order after ``position``.
+
+    The workspace/cutoff predicate comes from ``_memory_export_scope`` and precedes ordering and
+    LIMIT; callers pass ``limit + 1`` to detect a following page. Rows are refreshed with
+    ``populate_existing`` so stale identity-map state never reaches the export.
+    """
+    model: type[Memory | MemoryCandidate] = Memory if record_kind == "memories" else MemoryCandidate
+    statement = select(model).where(*_memory_export_scope(record_kind, snapshot_at, scope))
+    if position is not None:
+        statement = statement.where(tuple_(model.created_at, model.id) > position)
+    # `model` is chosen by record_kind, so every row is exactly one of the two ORM types.
+    return cast(
+        list[Memory | MemoryCandidate],
+        list(
+            (
+                await session.scalars(
+                    statement.order_by(model.created_at, model.id)
+                    .limit(fetch)
+                    .execution_options(populate_existing=True)
+                )
+            ).all()
+        ),
+    )
+
+
 async def export_page(
     session: AsyncSession,
     *,
@@ -523,22 +557,8 @@ async def export_page(
             cursor, owner_id, record_kind
         )
         position = (position_at, position_id)
-    model: type[Memory | MemoryCandidate] = Memory if record_kind == "memories" else MemoryCandidate
-    statement = select(model).where(*_memory_export_scope(record_kind, snapshot_at, scope))
-    if position is not None:
-        statement = statement.where(tuple_(model.created_at, model.id) > position)
-    # `model` is chosen by record_kind, so every row is exactly one of the two ORM types.
-    rows = cast(
-        list[Memory | MemoryCandidate],
-        list(
-            (
-                await session.scalars(
-                    statement.order_by(model.created_at, model.id)
-                    .limit(limit + 1)
-                    .execution_options(populate_existing=True)
-                )
-            ).all()
-        ),
+    rows = await _memory_export_rows(
+        session, record_kind, snapshot_at, position, limit + 1, scope=scope
     )
     has_more, rows = len(rows) > limit, rows[:limit]
     items: list[MemoryExportRead | MemoryCandidateExportRead] = []

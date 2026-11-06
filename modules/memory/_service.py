@@ -51,6 +51,45 @@ from modules.memory.selection import evaluate_candidate, extract_candidate_propo
 logger = logging.getLogger(__name__)
 
 
+def _build_replacement_memory(
+    old_item: Memory, payload: MemorySupersedeRequest, now: datetime, *, scope: Scope
+) -> Memory:
+    """Build the unsaved active replacement for a memory being superseded.
+
+    A derived predecessor (``is_manual is False``) keeps its exact provenance and candidate lineage
+    so later source revocation still finds the copy; only an explicitly manual predecessor yields
+    an independent manual replacement that merely records ``supersedes``. Pure; the caller adds
+    and flushes the row.
+    """
+    derived_replacement = old_item.is_manual is False
+    replacement_provenance = (
+        (
+            dict(old_item.provenance)
+            if isinstance(old_item.provenance, dict)
+            else old_item.provenance
+        )
+        if derived_replacement
+        else {"supersedes": str(old_item.id), "origin": "manual"}
+    )
+    new_item = Memory(
+        workspace_id=scope.workspace_id,
+        actor_user_id=_actor(scope),
+        content=payload.new_content.strip(),
+        memory_type=payload.type or old_item.memory_type,
+        # The caller sets superseded_by_id, which records supersession. Derived copies must retain their
+        # exact evidence and candidate lineage so later revocation can still find them.
+        provenance=replacement_provenance,
+        confidence=payload.confidence,
+        reason=payload.reason,
+        status="active",
+        is_manual=not derived_replacement,
+        candidate_id=old_item.candidate_id if derived_replacement else None,
+        created_at=now,
+        updated_at=now,
+    )
+    return new_item
+
+
 class MemoryService:
     """Service managing memory lifecycle, candidates, evaluation, and privacy settings.
 
@@ -596,32 +635,7 @@ class MemoryService:
             raise ConflictError("Memory evidence changed while it was being superseded")
 
         now = datetime.now(UTC)
-        derived_replacement = old_item.is_manual is False
-        replacement_provenance = (
-            (
-                dict(old_item.provenance)
-                if isinstance(old_item.provenance, dict)
-                else old_item.provenance
-            )
-            if derived_replacement
-            else {"supersedes": str(old_item.id), "origin": "manual"}
-        )
-        new_item = Memory(
-            workspace_id=scope.workspace_id,
-            actor_user_id=_actor(scope),
-            content=payload.new_content.strip(),
-            memory_type=payload.type or old_item.memory_type,
-            # The lifecycle FK below records supersession. Derived copies must retain their
-            # exact evidence and candidate lineage so later revocation can still find them.
-            provenance=replacement_provenance,
-            confidence=payload.confidence,
-            reason=payload.reason,
-            status="active",
-            is_manual=not derived_replacement,
-            candidate_id=old_item.candidate_id if derived_replacement else None,
-            created_at=now,
-            updated_at=now,
-        )
+        new_item = _build_replacement_memory(old_item, payload, now, scope=scope)
         self.session.add(new_item)
         await self.session.flush()
 
@@ -1044,8 +1058,24 @@ class MemoryService:
             access_fence=fence,
         )
         await self._invalidate_cache(scope)
+        return await self._verified_candidate_reads(
+            results, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+
+    async def _verified_candidate_reads(
+        self,
+        created: list[MemoryCandidateRead],
+        *,
+        scope: Scope,
+        multi_workspace_enabled: bool,
+    ) -> list[MemoryCandidateRead]:
+        """Re-read each created candidate and keep only those whose provenance still verifies.
+
+        Runs after the creating commit; candidates that vanished or whose evidence can no longer be
+        verified are silently dropped from the returned list (they remain stored). Read-only.
+        """
         safe_results: list[MemoryCandidateRead] = []
-        for result in results:
+        for result in created:
             candidate_row = await self.session.scalar(
                 select(MemoryCandidate).where(
                     MemoryCandidate.id == result.id,
