@@ -964,29 +964,13 @@ async def reconcile_slice(
     return len(members) > limit
 
 
-async def reconcile_status(
-    session: AsyncSession,
-    run_id: UUID,
-    *,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> ReconcileStatus | None:
-    """Aggregate current exact-revision outcomes for already scanned immutable members.
+def _reconcile_member_predicates(scope: Scope) -> tuple[Any, Any, Any]:
+    """Build the SQL predicates classifying a reconcile member as converged, blocked or failed.
 
-    Reads perform no writes. Queue counts are outstanding scanned work; terminal
-    success requires all selected members converged and the scan exhausted.
-    Missing ledgers fail, superseded revisions and uncertain partitions block;
-    a live writer or unresolved dispatch prevents certifying physical convergence.
+    Pure expression construction (evaluated by the caller's query). Convergence requires the applied
+    revision/digest to equal the member's desired one and the partition to be free of uncertain
+    operations, unresolved dispatches and live leases; the lease cutoff is read at build time.
     """
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    run = await session.scalar(
-        select(GraphReconcileRun).where(
-            GraphReconcileRun.id == run_id,
-            GraphReconcileRun.workspace_id == scope.workspace_id,
-        )
-    )
-    if run is None:
-        return None
     matching = and_(
         GraphMapping.desired_revision == GraphReconcileMember.desired_revision,
         GraphMapping.desired_digest == GraphReconcileMember.desired_digest,
@@ -1035,6 +1019,33 @@ async def reconcile_status(
         ~failed,
         or_(~matching, uncertain, and_(~converged, GraphMapping.status == "blocked")),
     )
+    return converged, blocked, failed
+
+
+async def reconcile_status(
+    session: AsyncSession,
+    run_id: UUID,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> ReconcileStatus | None:
+    """Aggregate current exact-revision outcomes for already scanned immutable members.
+
+    Reads perform no writes. Queue counts are outstanding scanned work; terminal
+    success requires all selected members converged and the scan exhausted.
+    Missing ledgers fail, superseded revisions and uncertain partitions block;
+    a live writer or unresolved dispatch prevents certifying physical convergence.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    run = await session.scalar(
+        select(GraphReconcileRun).where(
+            GraphReconcileRun.id == run_id,
+            GraphReconcileRun.workspace_id == scope.workspace_id,
+        )
+    )
+    if run is None:
+        return None
+    converged, blocked, failed = _reconcile_member_predicates(scope)
     filters = [
         GraphReconcileMember.workspace_id == scope.workspace_id,
         GraphReconcileMember.run_id == run.id,

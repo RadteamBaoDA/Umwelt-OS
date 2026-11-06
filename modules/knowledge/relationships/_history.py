@@ -313,6 +313,98 @@ def _decode_bound_cursor(cursor: str, fingerprint: str, message: str) -> tuple[d
         raise ValueError(message) from exc
 
 
+def _history_evidence_reads(
+    history: RelationshipSnapshotHistory,
+    item: RelationshipRead,
+    by_pair: dict[tuple[UUID, UUID], Any],
+    by_membership: dict[UUID, Any],
+    canonical_endpoints: dict[UUID, UUID],
+) -> list[EvidenceRead]:
+    """Project retained support rows onto currently readable evidence refs.
+
+    Pure over already-read refs: skips support whose ref is no longer permitted, and raises
+    ``LookupError`` when a derived edge lacks endpoint membership or a membership no longer matches
+    the canonical endpoint entity or the cited document version/chunk.
+    """
+    evidence = []
+    for support in history.support:
+        pair = UUID(str(support["document_version_id"])), UUID(str(support["chunk_id"]))
+        ref = by_pair.get(pair)
+        if ref is None:
+            continue
+        for key, endpoint in (
+            ("source_membership_id", item.source_entity_id),
+            ("target_membership_id", item.target_entity_id),
+        ):
+            if not support.get(key):
+                if item.origin == "derived":
+                    raise LookupError("Historical endpoint support unavailable")
+                continue
+            member = by_membership[UUID(str(support[key]))]
+            if (
+                member.entity_id != canonical_endpoints[endpoint]
+                or (member.document_version_id, member.chunk_id) != pair
+            ):
+                raise LookupError("Historical endpoint support changed")
+        evidence.append(
+            EvidenceRead(
+                id=UUID(str(support["id"])),
+                relationship_id=item.id,
+                document_id=ref.document_id,
+                document_version_id=ref.document_version_id,
+                version_number=ref.version_number,
+                chunk_id=ref.chunk_id,
+                observed_at=ref.observed_at,
+                extracted_at=datetime.fromisoformat(str(support["extracted_at"])),
+                confidence=float(support["confidence"]),
+                source_entity_membership_id=UUID(str(support["source_membership_id"]))
+                if support.get("source_membership_id")
+                else None,
+                target_entity_membership_id=UUID(str(support["target_membership_id"]))
+                if support.get("target_membership_id")
+                else None,
+                title=ref.title,
+                canonical_url=ref.canonical_url,
+                source_id=ref.source_id,
+                excerpt=ref.excerpt,
+                metadata_is_version_snapshot=ref.metadata_is_version_snapshot,
+            )
+        )
+    return evidence
+
+
+async def _read_history_memberships(
+    session: AsyncSession,
+    history: RelationshipSnapshotHistory,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[Any]:
+    """Read the entity memberships cited by a snapshot's support rows, 200 ids per call.
+
+    Read-only and ordered by sorted membership id so batches are deterministic.
+    """
+    membership_ids = sorted(
+        {
+            UUID(str(s[key]))
+            for s in history.support
+            for key in ("source_membership_id", "target_membership_id")
+            if s.get(key)
+        }
+    )
+    memberships = []
+    for offset in range(0, len(membership_ids), 200):
+        memberships.extend(
+            await entities.get_membership_refs(
+                session,
+                membership_ids[offset : offset + 200],
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        )
+    return memberships
+
+
 async def _hydrate_history_item(
     session: AsyncSession,
     history: RelationshipSnapshotHistory,
@@ -369,69 +461,11 @@ async def _hydrate_history_item(
     # Any missing support can have contributed to the retained derived fields.
     if item.origin == "derived" and (not pairs or len(by_pair) != len(pairs)):
         return None
-    membership_ids = sorted(
-        {
-            UUID(str(s[key]))
-            for s in history.support
-            for key in ("source_membership_id", "target_membership_id")
-            if s.get(key)
-        }
+    memberships = await _read_history_memberships(
+        session, history, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
-    memberships = []
-    for offset in range(0, len(membership_ids), 200):
-        memberships.extend(
-            await entities.get_membership_refs(
-                session,
-                membership_ids[offset : offset + 200],
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-            )
-        )
     by_membership = {member.id: member for member in memberships}
-    evidence = []
-    for support in history.support:
-        pair = UUID(str(support["document_version_id"])), UUID(str(support["chunk_id"]))
-        ref = by_pair.get(pair)
-        if ref is None:
-            continue
-        for key, endpoint in (
-            ("source_membership_id", item.source_entity_id),
-            ("target_membership_id", item.target_entity_id),
-        ):
-            if not support.get(key):
-                if item.origin == "derived":
-                    raise LookupError("Historical endpoint support unavailable")
-                continue
-            member = by_membership[UUID(str(support[key]))]
-            if (
-                member.entity_id != canonical_endpoints[endpoint]
-                or (member.document_version_id, member.chunk_id) != pair
-            ):
-                raise LookupError("Historical endpoint support changed")
-        evidence.append(
-            EvidenceRead(
-                id=UUID(str(support["id"])),
-                relationship_id=item.id,
-                document_id=ref.document_id,
-                document_version_id=ref.document_version_id,
-                version_number=ref.version_number,
-                chunk_id=ref.chunk_id,
-                observed_at=ref.observed_at,
-                extracted_at=datetime.fromisoformat(str(support["extracted_at"])),
-                confidence=float(support["confidence"]),
-                source_entity_membership_id=UUID(str(support["source_membership_id"]))
-                if support.get("source_membership_id")
-                else None,
-                target_entity_membership_id=UUID(str(support["target_membership_id"]))
-                if support.get("target_membership_id")
-                else None,
-                title=ref.title,
-                canonical_url=ref.canonical_url,
-                source_id=ref.source_id,
-                excerpt=ref.excerpt,
-                metadata_is_version_snapshot=ref.metadata_is_version_snapshot,
-            )
-        )
+    evidence = _history_evidence_reads(history, item, by_pair, by_membership, canonical_endpoints)
     item.evidence = evidence
     return item
 

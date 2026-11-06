@@ -387,36 +387,16 @@ async def _entity_export_children(
     return aliases, evidence, alias_support_rows
 
 
-async def _entity_export_item(
-    session: AsyncSession,
-    row: Entity,
-    eligible: Any,
-    *,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> tuple[EntityExportRead, EntityExportFence]:
-    """Build one entity's export record and its final-validation fence.
+def _entity_export_children_items(
+    aliases: Any,
+    evidence: Any,
+    alias_support_rows: Any,
+    source_generations: dict[UUID, int],
+) -> tuple[list[EntityExportAlias], list[EntityExportEvidence]]:
+    """Project loaded aliases and evidence onto export DTOs with their source generations.
 
-    Non-owner name/description are exported only with exact eligible support (otherwise blanked with their
-    origin). Reads children, distinct source generations (<= 100) and field support in that order.
+    Pure; every referenced source id must be present in ``source_generations`` (``KeyError`` otherwise).
     """
-    aliases, evidence, alias_support_rows = await _entity_export_children(
-        session, row, eligible, scope
-    )
-    source_ids = {item.source_id for item in evidence}
-    source_ids.update(
-        membership.source_id
-        for rows_for_alias in alias_support_rows.values()
-        for _, membership in rows_for_alias
-    )
-    if len(source_ids) > 100:
-        raise ValueError("An entity export record exceeds the distinct source generation bound")
-    source_generations = await _entity_export_source_generations(
-        session,
-        source_ids,
-        scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
-    )
     alias_items = [
         EntityExportAlias(
             id=alias.id,
@@ -451,6 +431,18 @@ async def _entity_export_item(
         )
         for item in evidence
     ]
+    return alias_items, evidence_items
+
+
+async def _exported_owner_fields(
+    session: AsyncSession, row: Entity, *, scope: Scope, multi_workspace_enabled: bool
+) -> tuple[Any, Any, Any, Any, Any]:
+    """Resolve the exported name/description fields and their origins for one entity.
+
+    Owner-authored fields export as stored; any other field is blanked (with its origin) unless exact
+    eligible support is proven. Returns ``(name, canonical_name, name_origin, description,
+    description_origin)``; the name check precedes the description check.
+    """
     name = row.name
     canonical_name = row.canonical_name
     name_origin = row.name_origin
@@ -476,6 +468,51 @@ async def _entity_export_item(
     ):
         description = None
         description_origin = None
+    return name, canonical_name, name_origin, description, description_origin
+
+
+async def _entity_export_item(
+    session: AsyncSession,
+    row: Entity,
+    eligible: Any,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> tuple[EntityExportRead, EntityExportFence]:
+    """Build one entity's export record and its final-validation fence.
+
+    Non-owner name/description are exported only with exact eligible support (otherwise blanked with their
+    origin). Reads children, distinct source generations (<= 100) and field support in that order.
+    """
+    aliases, evidence, alias_support_rows = await _entity_export_children(
+        session, row, eligible, scope
+    )
+    source_ids = {item.source_id for item in evidence}
+    source_ids.update(
+        membership.source_id
+        for rows_for_alias in alias_support_rows.values()
+        for _, membership in rows_for_alias
+    )
+    if len(source_ids) > 100:
+        raise ValueError("An entity export record exceeds the distinct source generation bound")
+    source_generations = await _entity_export_source_generations(
+        session,
+        source_ids,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    alias_items, evidence_items = _entity_export_children_items(
+        aliases, evidence, alias_support_rows, source_generations
+    )
+    (
+        name,
+        canonical_name,
+        name_origin,
+        description,
+        description_origin,
+    ) = await _exported_owner_fields(
+        session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     item = EntityExportRead(
         id=row.id,
         type=row.type,
