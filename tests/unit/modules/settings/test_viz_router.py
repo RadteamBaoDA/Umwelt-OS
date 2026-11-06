@@ -15,6 +15,7 @@ from core.errors import DomainError
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.settings import public, routes
 from modules.settings.schemas import VizRouterUpdate
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
@@ -55,9 +56,11 @@ async def _save(row: SimpleNamespace, **fields: object) -> object:
     )  # type: ignore[arg-type]
     fence = AccessFence(workspace_id=WS, user_id=1, membership_revision=1, configuration_revision=1)
     with (
-        patch.object(public, "require_settings_scope", AsyncMock(return_value=fence)),
-        patch.object(public, "_row", AsyncMock(return_value=row)),
-        patch.object(public, "read_viz_router", AsyncMock()),
+        patch_split_attr(
+            "modules.settings", "require_settings_scope", AsyncMock(return_value=fence)
+        ),
+        patch_split_attr("modules.settings", "_row", AsyncMock(return_value=row)),
+        patch_split_attr("modules.settings", "read_viz_router", AsyncMock()),
     ):
         session = MagicMock()
         session.execute = AsyncMock()
@@ -67,7 +70,7 @@ async def _save(row: SimpleNamespace, **fields: object) -> object:
 
 
 async def _resolve(row: SimpleNamespace) -> public.VizRouterResolved:
-    with patch.object(public, "_row", AsyncMock(return_value=row)):
+    with patch_split_attr("modules.settings", "_row", AsyncMock(return_value=row)):
         return await public.resolve_viz_router(MagicMock(), _settings(), scope=SCOPE)
 
 
@@ -121,8 +124,10 @@ async def test_stale_revision_conflicts() -> None:
     update = VizRouterUpdate(expected_revision=1)
     fence = AccessFence(workspace_id=WS, user_id=1, membership_revision=1, configuration_revision=1)
     with (
-        patch.object(public, "require_settings_scope", AsyncMock(return_value=fence)),
-        patch.object(public, "_row", AsyncMock(return_value=row)),
+        patch_split_attr(
+            "modules.settings", "require_settings_scope", AsyncMock(return_value=fence)
+        ),
+        patch_split_attr("modules.settings", "_row", AsyncMock(return_value=row)),
     ):
         session = MagicMock()
         session.execute = AsyncMock()
@@ -166,7 +171,9 @@ async def _run_test(
     resolved: public.VizRouterResolved, transport: httpx.MockTransport | None = None
 ) -> object:
     with (
-        patch.object(public, "resolve_viz_router", AsyncMock(return_value=resolved)),
+        patch_split_attr(
+            "modules.settings", "resolve_viz_router", AsyncMock(return_value=resolved)
+        ),
         patch.object(routes, "approved_web_search_transport", return_value=transport),
     ):
         session = MagicMock()
@@ -239,12 +246,16 @@ async def test_route_llm_falls_back_to_other_mode_and_records_capability() -> No
 
     saved = AsyncMock()
     with (
-        patch.object(public, "resolve_viz_router", AsyncMock(return_value=resolved)),
-        patch.object(public, "get_ai_execution_config", AsyncMock(return_value=config)),
+        patch_split_attr(
+            "modules.settings", "resolve_viz_router", AsyncMock(return_value=resolved)
+        ),
+        patch_split_attr(
+            "modules.settings", "get_ai_execution_config", AsyncMock(return_value=config)
+        ),
         patch.object(public, "viz_router_gateway_config", return_value=(config, mapping)),
         patch.object(public, "new_capability_result", return_value="result") as new_result,
-        patch.object(public, "check_ai_execution_config", AsyncMock()),
-        patch.object(public, "save_capability", saved),
+        patch_split_attr("modules.settings", "check_ai_execution_config", AsyncMock()),
+        patch_split_attr("modules.settings", "save_capability", saved),
         patch.object(routes, "ModelGateway", MagicMock()),
         patch.object(routes, "authenticated_session_ref", MagicMock()),
         patch.object(routes.viz, "classify_llm", fake_classify),
@@ -286,8 +297,12 @@ async def test_route_llm_hard_failure_does_not_try_other_mode() -> None:
         raise routes.viz.VisualizationRouterError("auth_error", retryable=False)
 
     with (
-        patch.object(public, "resolve_viz_router", AsyncMock(return_value=resolved)),
-        patch.object(public, "get_ai_execution_config", AsyncMock(return_value=config)),
+        patch_split_attr(
+            "modules.settings", "resolve_viz_router", AsyncMock(return_value=resolved)
+        ),
+        patch_split_attr(
+            "modules.settings", "get_ai_execution_config", AsyncMock(return_value=config)
+        ),
         patch.object(
             public,
             "viz_router_gateway_config",
@@ -324,9 +339,11 @@ async def _save_keyed(
     )  # type: ignore[arg-type]
     fence = AccessFence(workspace_id=WS, user_id=1, membership_revision=1, configuration_revision=1)
     with (
-        patch.object(public, "require_settings_scope", AsyncMock(return_value=fence)),
-        patch.object(public, "_row", AsyncMock(return_value=row)),
-        patch.object(public, "read_viz_router", AsyncMock()),
+        patch_split_attr(
+            "modules.settings", "require_settings_scope", AsyncMock(return_value=fence)
+        ),
+        patch_split_attr("modules.settings", "_row", AsyncMock(return_value=row)),
+        patch_split_attr("modules.settings", "read_viz_router", AsyncMock()),
     ):
         session = MagicMock()
         session.execute = AsyncMock()
@@ -338,7 +355,7 @@ async def _save_keyed(
 async def _resolve_keyed(
     row: SimpleNamespace, settings: MagicMock | None = None
 ) -> public.VizRouterResolved:
-    with patch.object(public, "_row", AsyncMock(return_value=row)):
+    with patch_split_attr("modules.settings", "_row", AsyncMock(return_value=row)):
         return await public.resolve_viz_router(
             MagicMock(), settings or _keyed_settings(), scope=SCOPE
         )
@@ -521,10 +538,16 @@ async def test_route_keyed_kind_missing_credential_or_endpoint(
 ) -> None:
     config = SimpleNamespace(endpoint_destination_id=None)
     with (
-        patch.object(public, "resolve_viz_router", AsyncMock(return_value=resolved)),
-        patch.object(public, "get_ai_execution_config", AsyncMock(return_value=config)),
+        patch_split_attr(
+            "modules.settings", "resolve_viz_router", AsyncMock(return_value=resolved)
+        ),
+        patch_split_attr(
+            "modules.settings", "get_ai_execution_config", AsyncMock(return_value=config)
+        ),
         patch.object(
-            public, "viz_router_gateway_config", return_value=(config, SimpleNamespace(model="m"))
+            public,
+            "viz_router_gateway_config",
+            return_value=(config, SimpleNamespace(model="m")),
         ),
     ):
         session = MagicMock()
@@ -596,14 +619,20 @@ async def test_route_decisions_api_uses_decisions_adapter_and_records_structured
     chat = AsyncMock()
     decisions = AsyncMock(return_value="map")
     with (
-        patch.object(public, "resolve_viz_router", AsyncMock(return_value=resolved)),
-        patch.object(public, "get_ai_execution_config", AsyncMock(return_value=config)),
+        patch_split_attr(
+            "modules.settings", "resolve_viz_router", AsyncMock(return_value=resolved)
+        ),
+        patch_split_attr(
+            "modules.settings", "get_ai_execution_config", AsyncMock(return_value=config)
+        ),
         patch.object(
-            public, "viz_router_gateway_config", return_value=(config, SimpleNamespace(model="m"))
+            public,
+            "viz_router_gateway_config",
+            return_value=(config, SimpleNamespace(model="m")),
         ),
         patch.object(public, "new_capability_result", return_value="r") as new_result,
-        patch.object(public, "check_ai_execution_config", AsyncMock()),
-        patch.object(public, "save_capability", AsyncMock()),
+        patch_split_attr("modules.settings", "check_ai_execution_config", AsyncMock()),
+        patch_split_attr("modules.settings", "save_capability", AsyncMock()),
         patch.object(routes, "ModelGateway", MagicMock()),
         patch.object(routes, "authenticated_session_ref", MagicMock()),
         patch.object(routes.viz, "classify_llm", chat),
@@ -634,8 +663,12 @@ async def _discover(body: object, resolved: public.VizRouterResolved, gateway: o
         allow_public_providers=True,
     )
     with (
-        patch.object(public, "resolve_viz_router", AsyncMock(return_value=resolved)),
-        patch.object(public, "get_ai_execution_config", AsyncMock(return_value=config)),
+        patch_split_attr(
+            "modules.settings", "resolve_viz_router", AsyncMock(return_value=resolved)
+        ),
+        patch_split_attr(
+            "modules.settings", "get_ai_execution_config", AsyncMock(return_value=config)
+        ),
         patch.object(
             public, "viz_decision_discovery_config", return_value=config
         ) as discovery_config,

@@ -9,7 +9,7 @@ Covers:
 - Privacy mapping: destination-bound consent checks for remote reasoning, embeddings, and web search.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -27,6 +27,7 @@ from modules.settings.schemas import (
     OwnerPreferencesRead,
     OwnerPreferencesUpdate,
 )
+from tests.unit.split_patching import patch_split_attr
 
 
 class TestOwnerPreferencesSchemas:
@@ -101,7 +102,7 @@ class TestOwnerPreferencesSchemas:
 @pytest.fixture(autouse=True)
 def _active_account():
     """Account admission is covered by auth/scope tests; these exercise preference defaults and CAS."""
-    with patch("modules.settings.public.require_preferences_account", AsyncMock()):
+    with patch_split_attr("modules.settings", "require_preferences_account", AsyncMock()):
         yield
 
 
@@ -330,7 +331,7 @@ class TestDisplayNameAndAccent:
         )
         session.scalar.return_value = record
         update = OwnerPreferencesUpdate(**_BASE, display_name="Bao", accent="moss")
-        with patch("modules.settings.public.require_preferences_account", AsyncMock()):
+        with patch_split_attr("modules.settings", "require_preferences_account", AsyncMock()):
             result = await save_owner_preferences(
                 session, update, actor_user_id=1, multi_workspace_enabled=False
             )

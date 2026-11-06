@@ -25,6 +25,7 @@ from core.model_gateway.schemas import (
 )
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.settings import models, public
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
@@ -72,8 +73,10 @@ def _row(**over: object) -> SimpleNamespace:
 async def _config(row: SimpleNamespace, settings: MagicMock | None = None) -> AIExecutionConfig:
     fence = AccessFence(workspace_id=WS, user_id=1, membership_revision=1, configuration_revision=1)
     with (
-        patch.object(public, "require_settings_scope", AsyncMock(return_value=fence)),
-        patch.object(public, "_row", AsyncMock(return_value=row)),
+        patch_split_attr(
+            "modules.settings", "require_settings_scope", AsyncMock(return_value=fence)
+        ),
+        patch_split_attr("modules.settings", "_row", AsyncMock(return_value=row)),
     ):
         return await public.get_ai_execution_config(
             AsyncMock(), settings or _settings(), None, scope=SCOPE
@@ -85,9 +88,11 @@ async def _save(
 ) -> SimpleNamespace:
     fence = AccessFence(workspace_id=WS, user_id=1, membership_revision=1, configuration_revision=1)
     with (
-        patch.object(public, "require_settings_scope", AsyncMock(return_value=fence)),
-        patch.object(public, "_row", AsyncMock(return_value=row)),
-        patch.object(public, "read_ai_settings", AsyncMock()),
+        patch_split_attr(
+            "modules.settings", "require_settings_scope", AsyncMock(return_value=fence)
+        ),
+        patch_split_attr("modules.settings", "_row", AsyncMock(return_value=row)),
+        patch_split_attr("modules.settings", "read_ai_settings", AsyncMock()),
     ):
         await public.save_ai_settings(AsyncMock(), update, settings or _settings(), scope=SCOPE)
     return row

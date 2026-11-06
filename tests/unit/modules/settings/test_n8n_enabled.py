@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -14,6 +14,7 @@ from core.errors import DomainError
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.settings import public
 from modules.settings.schemas import N8nUpdate
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
@@ -38,9 +39,11 @@ def _session(stored: dict | None) -> MagicMock:
 async def _save(row: SimpleNamespace, update: N8nUpdate) -> None:
     fence = AccessFence(workspace_id=WS, user_id=1, membership_revision=1, configuration_revision=1)
     with (
-        patch.object(public, "require_settings_scope", AsyncMock(return_value=fence)),
-        patch.object(public, "_row", AsyncMock(return_value=row)),
-        patch.object(public, "read_n8n", AsyncMock()),
+        patch_split_attr(
+            "modules.settings", "require_settings_scope", AsyncMock(return_value=fence)
+        ),
+        patch_split_attr("modules.settings", "_row", AsyncMock(return_value=row)),
+        patch_split_attr("modules.settings", "read_n8n", AsyncMock()),
     ):
         await public.save_n8n(AsyncMock(), update, _settings(), scope=SCOPE)
 
@@ -81,8 +84,8 @@ async def test_enabled_change_is_revision_checked() -> None:
 async def test_read_exposes_enabled_and_fixed_callback_base() -> None:
     row = SimpleNamespace(n8n={"revision": 3, "enabled": False})
     with (
-        patch.object(public, "require_settings_scope", AsyncMock()),
-        patch.object(public, "_row", AsyncMock(return_value=row)),
+        patch_split_attr("modules.settings", "require_settings_scope", AsyncMock()),
+        patch_split_attr("modules.settings", "_row", AsyncMock(return_value=row)),
     ):
         read = await public.read_n8n(_session(row.n8n), _settings(), scope=SCOPE)
     assert (

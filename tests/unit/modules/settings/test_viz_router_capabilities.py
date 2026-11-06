@@ -16,6 +16,7 @@ from core.model_gateway.schemas import (
 )
 from core.workspaces.schemas import WorkspaceContext
 from modules.settings import models, public, routes
+from tests.unit.split_patching import patch_split_attr
 
 SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
 
@@ -90,9 +91,13 @@ async def test_successful_probe_publishes_evidence_consumed_by_runtime(
     session.commit = AsyncMock()
     with (
         patch.object(models, "save_model_test_result", saved),
-        patch.object(public, "resolve_viz_router", AsyncMock(return_value=resolved)),
-        patch.object(public, "get_ai_execution_config", AsyncMock(return_value=base)),
-        patch.object(public, "check_ai_execution_config", AsyncMock()),
+        patch_split_attr(
+            "modules.settings", "resolve_viz_router", AsyncMock(return_value=resolved)
+        ),
+        patch_split_attr(
+            "modules.settings", "get_ai_execution_config", AsyncMock(return_value=base)
+        ),
+        patch_split_attr("modules.settings", "check_ai_execution_config", AsyncMock()),
         patch.object(routes, "authenticated_session_ref", MagicMock()),
         patch.object(routes, "ModelGateway", MagicMock()),
         patch.object(routes.viz, "classify_llm", AsyncMock(return_value="table")),
@@ -150,13 +155,15 @@ async def test_router_revision_drift_rejects_probe_without_publishing(stage: str
         return "table"
 
     with (
-        patch.object(
-            public,
+        patch_split_attr(
+            "modules.settings",
             "resolve_viz_router",
             AsyncMock(side_effect=[resolved, resolved.model_copy(update={"revision": 2})]),
         ),
-        patch.object(public, "get_ai_execution_config", AsyncMock(return_value=base)),
-        patch.object(public, "check_ai_execution_config", AsyncMock()),
+        patch_split_attr(
+            "modules.settings", "get_ai_execution_config", AsyncMock(return_value=base)
+        ),
+        patch_split_attr("modules.settings", "check_ai_execution_config", AsyncMock()),
         patch.object(routes, "authenticated_session_ref", MagicMock()),
         patch.object(routes, "ModelGateway", MagicMock()),
         patch.object(routes.viz, "classify_llm", classify),

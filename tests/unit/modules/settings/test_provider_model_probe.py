@@ -22,6 +22,7 @@ from core.model_gateway.schemas import (
 from core.workspaces.schemas import WorkspaceContext
 from modules.model_gateway import routes
 from modules.settings import public
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
@@ -101,9 +102,11 @@ async def _run(
     session.rollback = AsyncMock()
     session.commit = AsyncMock()
     with (
-        patch.object(public, "get_ai_execution_config", AsyncMock(return_value=_config())),
-        patch.object(public, "check_ai_execution_config", AsyncMock()),
-        patch.object(public, "save_capability", save or AsyncMock()),
+        patch_split_attr(
+            "modules.settings", "get_ai_execution_config", AsyncMock(return_value=_config())
+        ),
+        patch_split_attr("modules.settings", "check_ai_execution_config", AsyncMock()),
+        patch_split_attr("modules.settings", "save_capability", save or AsyncMock()),
         patch.object(routes, "ModelGateway", MagicMock(return_value=gateway)),
         patch.object(routes, "authenticated_session_ref", MagicMock()),
     ):

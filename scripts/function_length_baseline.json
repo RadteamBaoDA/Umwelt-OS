@@ -219,7 +219,7 @@
   "modules/search/public.py::_hydrate_hits": 105,
   "modules/search/public.py::compare_news_evidence_embeddings": 115,
   "modules/search/public.py::search": 123,
-  "modules/settings/public.py::get_ai_execution_config": 172,
+  "modules/settings/_settings_execution.py::get_ai_execution_config": 172,
   "modules/settings/routes.py::test_viz_router": 137,
   "modules/sources/worker.py::_evict_memory_cache_after_commit": 136,
   "modules/sources/worker.py::process_source_memory_coverage": 143,
