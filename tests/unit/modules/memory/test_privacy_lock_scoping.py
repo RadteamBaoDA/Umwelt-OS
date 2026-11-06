@@ -24,7 +24,7 @@ READERS = {
     ("modules/chat/routes.py", "create_conversation"),
     ("modules/chat/routes.py", "send_message"),
     ("modules/chat/routes.py", "mutate_message"),
-    ("modules/chat/routes.py", "_locked_poll"),
+    ("modules/chat/_routes_stream.py", "_locked_poll"),
     ("modules/chat/routes.py", "cancel_response"),
     ("modules/chat/_routes_support.py", "_redact_cancelled_run_in_fresh_session"),
     ("modules/chat/user_input.py", "expire_stale_requests"),

@@ -15,6 +15,7 @@ from core.config import Settings
 from modules.chat import public as chat_public
 from modules.chat import routes
 from modules.chat.models import Conversation, ResponseRun, StreamEvent
+from tests.unit.modules.chat._routes_patch import patch_routes
 
 RID = uuid4()
 CID = uuid4()
@@ -110,12 +111,12 @@ def _install(
         store.log.append("probe")
         return store.probe_says_work
 
-    monkeypatch.setattr(routes, "_session_is_current", current)
-    monkeypatch.setattr(routes, "_poll_needs_lock", probe)
-    monkeypatch.setattr(routes, "_run_scope", run_scope)
-    monkeypatch.setattr(routes, "lock_export_privacy", lock)
-    monkeypatch.setattr(routes, "_require_privacy_fence", fence)
-    monkeypatch.setattr(routes, "_auth_row_current", auth_row)
+    patch_routes(monkeypatch, "_session_is_current", current)
+    patch_routes(monkeypatch, "_poll_needs_lock", probe)
+    patch_routes(monkeypatch, "_run_scope", run_scope)
+    patch_routes(monkeypatch, "lock_export_privacy", lock)
+    patch_routes(monkeypatch, "_require_privacy_fence", fence)
+    patch_routes(monkeypatch, "_auth_row_current", auth_row)
     monkeypatch.setattr(chat_public, "filter_current_citations", no_citations)
 
 
@@ -424,9 +425,9 @@ async def test_probe_takes_the_locked_path_for_every_publish_or_close_reason(
     async def auth_row(_session: Any, _hash: Any) -> int | None:
         return 1 if auth else None
 
-    monkeypatch.setattr(routes, "read_export_privacy", privacy)
-    monkeypatch.setattr(routes, "_run_scope", run_scope)
-    monkeypatch.setattr(routes, "_auth_row_current", auth_row)
+    patch_routes(monkeypatch, "read_export_privacy", privacy)
+    patch_routes(monkeypatch, "_run_scope", run_scope)
+    patch_routes(monkeypatch, "_auth_row_current", auth_row)
     row = (
         None
         if run is None

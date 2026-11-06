@@ -22,6 +22,7 @@ from modules.chat.schemas import (
 )
 from modules.chat.stream import format_sse_event
 from tests.unit.chat_public_patching import patch_chat_public
+from tests.unit.modules.chat._routes_patch import patch_routes
 
 NOW = datetime(2026, 10, 7, tzinfo=UTC)
 WEB = {
@@ -175,12 +176,12 @@ async def test_get_conversation_reads_outcome_for_assistant_messages(
     async def keep(_session: Any, lists: Any, _scope: Any = None) -> list[list[Any]]:
         return [list(x) for x in lists]
 
-    monkeypatch.setattr(routes, "_filter_citation_lists", keep)
+    patch_routes(monkeypatch, "_filter_citation_lists", keep)
 
     async def default_scope(*_a: Any, **_k: Any) -> Any:
         return SimpleNamespace(workspace_id=uuid4(), user_id=1)
 
-    monkeypatch.setattr(routes, "owner_default_scope", default_scope)
+    patch_routes(monkeypatch, "owner_default_scope", default_scope)
     detail = await routes.get_conversation(
         cid, session, SimpleNamespace(owner_id=1), SimpleNamespace(headers={})
     )  # type: ignore[arg-type]
