@@ -2,13 +2,14 @@
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from sqlalchemy.dialects import postgresql
 
 from modules.knowledge.documents import public, worker
 from tests.unit.modules.knowledge.documents._scope import FENCE, SCOPE, SCOPE_KW
+from tests.unit.modules.knowledge.documents._worker_patch import patch_worker
 
 
 class _Session:
@@ -140,9 +141,7 @@ def _attempt(progress=("p",)):
 async def test_cache_eviction_failure_keeps_marker_for_retry() -> None:
     factory, session = _factory(SimpleNamespace(memory_cache_pending=True))
     attempt, _ = _attempt()
-    with patch.object(
-        worker, "invalidate_memory_cache", AsyncMock(side_effect=RuntimeError("redis"))
-    ):
+    with patch_worker("invalidate_memory_cache", AsyncMock(side_effect=RuntimeError("redis"))):
         await worker._evict_memory_cache_after_commit(factory, MagicMock(), False, attempt)
     factory.assert_not_called()  # marker untouched, nothing committed
     session.commit.assert_not_called()
@@ -154,14 +153,14 @@ async def test_cache_eviction_success_clears_marker_wakes_source_and_reschedules
     attempt, admitted = _attempt()
     redis = MagicMock()
     with (
-        patch.object(worker, "invalidate_memory_cache", AsyncMock()) as invalidate,
-        patch.object(worker, "_admit_cleanup", AsyncMock(return_value=admitted)) as admit,
-        patch.object(worker, "lock_export_privacy_in_uow", AsyncMock()),
-        patch.object(worker, "_attempt_progress_snapshot", return_value=("p",)),
-        patch.object(worker, "_hint") as hint,
-        patch.object(worker, "_settle", AsyncMock(return_value=True)) as settle,
-        patch.object(worker, "_commit", AsyncMock()) as commit,
-        patch.object(worker, "_publish_wakeups", AsyncMock()) as wakeups,
+        patch_worker("invalidate_memory_cache", AsyncMock()) as invalidate,
+        patch_worker("_admit_cleanup", AsyncMock(return_value=admitted)) as admit,
+        patch_worker("lock_export_privacy_in_uow", AsyncMock()),
+        patch_worker("_attempt_progress_snapshot", return_value=("p",)),
+        patch_worker("_hint") as hint,
+        patch_worker("_settle", AsyncMock(return_value=True)) as settle,
+        patch_worker("_commit", AsyncMock()) as commit,
+        patch_worker("_publish_wakeups", AsyncMock()) as wakeups,
     ):
         await worker._evict_memory_cache_after_commit(factory, redis, False, attempt)
     assert invalidate.await_args.kwargs["scope"] == SCOPE
@@ -182,11 +181,11 @@ async def test_cache_eviction_changed_progress_is_a_noop_rollback() -> None:
     factory, session = _factory(SimpleNamespace(memory_cache_pending=True))
     attempt, admitted = _attempt()
     with (
-        patch.object(worker, "invalidate_memory_cache", AsyncMock()),
-        patch.object(worker, "_admit_cleanup", AsyncMock(return_value=admitted)),
-        patch.object(worker, "lock_export_privacy_in_uow", AsyncMock()),
-        patch.object(worker, "_attempt_progress_snapshot", return_value=("moved",)),
-        patch.object(worker, "_settle", AsyncMock()) as settle,
+        patch_worker("invalidate_memory_cache", AsyncMock()),
+        patch_worker("_admit_cleanup", AsyncMock(return_value=admitted)),
+        patch_worker("lock_export_privacy_in_uow", AsyncMock()),
+        patch_worker("_attempt_progress_snapshot", return_value=("moved",)),
+        patch_worker("_settle", AsyncMock()) as settle,
     ):
         await worker._evict_memory_cache_after_commit(factory, MagicMock(), False, attempt)
     settle.assert_not_awaited()
