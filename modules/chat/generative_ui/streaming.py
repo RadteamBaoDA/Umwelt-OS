@@ -285,6 +285,94 @@ def ui_call_error(tool_name: str, raw_args: str) -> str | None:
     return None
 
 
+def _table_envelope(
+    args: TableToolArgs, citations: Mapping[int, Mapping[str, Any]], local_only: bool
+) -> dict[str, Any]:
+    """Build the persisted ``table`` envelope, deriving per-row ``records`` keyed by column key.
+
+    Raises ``ValueError`` (pydantic validation) when the table limits reject the data; the caller drops the
+    widget and keeps the answer text.
+    """
+    table = TablePayload(
+        title=args.title,
+        columns=args.columns,
+        rows=args.rows,
+        records=[dict(zip((c.key for c in args.columns), row, strict=False)) for row in args.rows],
+        citations=_resolve_citations(args.citations, citations),
+        source=args.source,
+        is_sample=args.is_sample,
+    )
+    return _envelope(
+        "table",
+        "table",
+        "a2ui",
+        args.title,
+        local_only,
+        "table",
+        table.model_dump(mode="json"),
+    )
+
+
+def _chart_envelope(
+    args: ChartToolArgs, citations: Mapping[int, Mapping[str, Any]], local_only: bool
+) -> dict[str, Any]:
+    """Build the persisted chart envelope whose kind follows ``args.chart_type``.
+
+    Raises ``ValueError`` (pydantic validation) when chart limits reject the data; the caller drops the widget.
+    """
+    chart = ChartPayload(
+        chart_type=args.chart_type,
+        title=args.title,
+        subtitle=args.subtitle,
+        x_key=args.x_key,
+        series=args.series,
+        data=args.data,
+        citations=_resolve_citations(args.citations, citations),
+        source=args.source,
+        unit=args.unit,
+        is_sample=args.is_sample,
+    )
+    return _envelope(
+        _chart_kind(args.chart_type),
+        args.chart_type,
+        "open_generative_ui",
+        args.title,
+        local_only,
+        "chart",
+        chart.model_dump(mode="json"),
+    )
+
+
+def _plan_envelope(args: PlanToolArgs, local_only: bool) -> dict[str, Any]:
+    """Build the persisted ``plan`` envelope with numbered step ids and a derived todo checklist.
+
+    A step is ``completed`` only when the model marked it so; every other status maps to ``pending``. Raises
+    ``ValueError`` (pydantic validation) when plan limits reject the data; the caller drops the widget.
+    """
+    steps = [PlanStep(id=f"step-{i}", **s.model_dump()) for i, s in enumerate(args.steps, 1)]
+    plan = PlanPayload(
+        title=args.title,
+        approach=args.approach,
+        technology=args.technology,
+        key_elements=args.key_elements,
+        steps=steps,
+        source=args.source,
+        todos=[
+            {
+                "id": s.id,
+                "title": s.title,
+                "description": s.description,
+                "emoji": s.emoji,
+                "status": "completed" if s.status == "completed" else "pending",
+            }
+            for s in steps
+        ],
+    )
+    return _envelope(
+        "plan", "plan", "a2ui", args.title, local_only, "plan", plan.model_dump(mode="json")
+    )
+
+
 def finalize_generative_ui(
     tool_name: str,
     raw_args: str,
@@ -328,73 +416,11 @@ def finalize_generative_ui(
                 args.to_ordered_dict(),
             )
         if isinstance(args, TableToolArgs):
-            table = TablePayload(
-                title=args.title,
-                columns=args.columns,
-                rows=args.rows,
-                records=[
-                    dict(zip((c.key for c in args.columns), row, strict=False)) for row in args.rows
-                ],
-                citations=_resolve_citations(args.citations, citations),
-                source=args.source,
-                is_sample=args.is_sample,
-            )
-            return _envelope(
-                "table",
-                "table",
-                "a2ui",
-                args.title,
-                local_only,
-                "table",
-                table.model_dump(mode="json"),
-            )
+            return _table_envelope(args, citations, local_only)
         if isinstance(args, ChartToolArgs):
-            chart = ChartPayload(
-                chart_type=args.chart_type,
-                title=args.title,
-                subtitle=args.subtitle,
-                x_key=args.x_key,
-                series=args.series,
-                data=args.data,
-                citations=_resolve_citations(args.citations, citations),
-                source=args.source,
-                unit=args.unit,
-                is_sample=args.is_sample,
-            )
-            return _envelope(
-                _chart_kind(args.chart_type),
-                args.chart_type,
-                "open_generative_ui",
-                args.title,
-                local_only,
-                "chart",
-                chart.model_dump(mode="json"),
-            )
+            return _chart_envelope(args, citations, local_only)
         if isinstance(args, PlanToolArgs):
-            steps = [
-                PlanStep(id=f"step-{i}", **s.model_dump()) for i, s in enumerate(args.steps, 1)
-            ]
-            plan = PlanPayload(
-                title=args.title,
-                approach=args.approach,
-                technology=args.technology,
-                key_elements=args.key_elements,
-                steps=steps,
-                source=args.source,
-                todos=[
-                    {
-                        "id": s.id,
-                        "title": s.title,
-                        "description": s.description,
-                        "emoji": s.emoji,
-                        "status": "completed" if s.status == "completed" else "pending",
-                    }
-                    for s in steps
-                ],
-            )
-            return _envelope(
-                "plan", "plan", "a2ui", args.title, local_only, "plan", plan.model_dump(mode="json")
-            )
+            return _plan_envelope(args, local_only)
         if isinstance(args, FormPayload):
             return _envelope(
                 "form", "form", "a2ui", args.title, local_only, "form", build_form_payload(args)

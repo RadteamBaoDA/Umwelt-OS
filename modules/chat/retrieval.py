@@ -240,6 +240,35 @@ async def _prepare_rerank(
     return config, rerank_mapping, policy, destination_id
 
 
+def _create_rerank_gateway(
+    session_factory: async_sessionmaker[AsyncSession],
+    redis: Redis,
+    scope_kw: dict[str, Any],
+    config: Any,
+    egress: Any,
+    destination_id: str,
+) -> Any:
+    """Build the ModelGateway used for the rerank call, wired to the egress lock's ``before_send`` hook.
+
+    Pure construction with no I/O: the gateway enforces the config's allowed CIDRs and request timeout, and
+    falls back to the local gateway base URL when the config names none.
+    """
+    return ModelGatewayFactory(
+        session_factory,
+        redis,
+        scope_kw["scope"],
+        config.endpoint_allowed_cidrs,
+        evidence_provider=settings_public.capability_evidence,
+        gateway_cls=ModelGateway,
+    ).create(
+        config,
+        timeout_seconds=config.request_timeout_seconds,
+        before_send=egress.before_send,
+        destination_id=destination_id,
+        base_url=config.gateway_base_url or "http://localhost:8000",
+    )
+
+
 async def _apply_configured_reranking(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -303,19 +332,8 @@ async def _apply_configured_reranking(
             scope_kw,
         )
 
-        gateway = ModelGatewayFactory(
-            session_factory,
-            redis,
-            scope_kw["scope"],
-            config.endpoint_allowed_cidrs,
-            evidence_provider=settings_public.capability_evidence,
-            gateway_cls=ModelGateway,
-        ).create(
-            config,
-            timeout_seconds=config.request_timeout_seconds,
-            before_send=egress.before_send,
-            destination_id=destination_id,
-            base_url=config.gateway_base_url or "http://localhost:8000",
+        gateway = _create_rerank_gateway(
+            session_factory, redis, scope_kw, config, egress, destination_id
         )
 
         # Release the outer session's snapshot/locks before the network call; the egress hook
@@ -744,6 +762,21 @@ def _fit_context_budget(
     return budgeted_items, total_bytes
 
 
+def _snapshot_source_fences(items: list[EvidenceItem]) -> dict[str, dict[str, Any]]:
+    """Map each evidence Source id to its observed generation and local-only flag for later revalidation.
+
+    Pure projection of the final ordered evidence; a later item for the same Source overwrites an earlier
+    one, matching the Source-level (not chunk-level) fence the answer revalidates.
+    """
+    return {
+        str(item.source_id): {
+            "generation": item.source_generation,
+            "local_only": item.local_only,
+        }
+        for item in items
+    }
+
+
 async def build_context(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -817,13 +850,7 @@ async def build_context(
     warnings.extend(rerank_warnings)
 
     # 8. Snapshot source fences
-    fence_snapshot = {
-        str(item.source_id): {
-            "generation": item.source_generation,
-            "local_only": item.local_only,
-        }
-        for item in reranked_items
-    }
+    fence_snapshot = _snapshot_source_fences(reranked_items)
 
     has_sufficient = len(reranked_items) > 0
     if not has_sufficient:

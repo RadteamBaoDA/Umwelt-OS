@@ -431,6 +431,38 @@ REWRITE_INSTRUCTIONS = (
 )
 
 
+def _rewrite_user_window(
+    prior_messages: list[dict[str, str]], user_prompt: str
+) -> list[dict[str, str]]:
+    """Build the bounded user-only model window for the web query rewrite.
+
+    User messages only: assistant output may carry private evidence that must not reach the search provider.
+    Keeps the last ``REWRITE_USER_MESSAGES`` prior user messages truncated to ``REWRITE_MESSAGE_CHARS`` and
+    appends the current prompt with the same truncation.
+    """
+    window = [
+        {"role": "user", "content": m["content"][:REWRITE_MESSAGE_CHARS]}
+        for m in prior_messages
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    ][-REWRITE_USER_MESSAGES:]
+    window.append({"role": "user", "content": user_prompt[:REWRITE_MESSAGE_CHARS]})
+    return window
+
+
+def _rewrite_query_schema() -> dict[str, Any]:
+    """Return a fresh strict JSON schema for the single ``query`` string the rewrite model must emit."""
+    return {
+        "name": "web_search_query",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    }
+
+
 async def _rewrite_web_query(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
@@ -498,23 +530,8 @@ async def _rewrite_web_query(
             before_send=recheck_send,
             destination_id=config.endpoint_destination_id or "remote",
         )
-        # User messages only: assistant output may carry private evidence that must not reach the search provider.
-        window = [
-            {"role": "user", "content": m["content"][:REWRITE_MESSAGE_CHARS]}
-            for m in prior_messages
-            if m.get("role") == "user" and isinstance(m.get("content"), str)
-        ][-REWRITE_USER_MESSAGES:]
-        window.append({"role": "user", "content": user_prompt[:REWRITE_MESSAGE_CHARS]})
-        schema = {
-            "name": "web_search_query",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        }
+        window = _rewrite_user_window(prior_messages, user_prompt)
+        schema = _rewrite_query_schema()
         async with asyncio.timeout(REWRITE_TIMEOUT_SECONDS):
             response = await gateway.structured(
                 "chat",
