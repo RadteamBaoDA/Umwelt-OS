@@ -2,37 +2,14 @@
 
 import * as React from 'react';
 import { NextIntlClientProvider } from 'next-intl';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  Scatter,
-  ScatterChart,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts';
 import { BarChart3Icon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import {
-  ChartAccessibleTable,
-  formatChartValue,
-  type ChartDataPoint,
-  type ChartSeries,
-} from '@/core/charts/recharts-wrapper';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { ChartAccessibleTable, formatChartValue, type ChartDataPoint, type ChartSeries } from '@/core/charts/recharts-wrapper';
 import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
-import { messages } from '@/core/messages';
+import { dashboardMessages } from '@/core/messages/dashboard';
+import { uiSweepMessages } from '@/core/messages/ui-sweep';
 import { SampleDataBadge } from '../sample-data-badge';
 import { genUiCopy, resolveWidgetLocale } from '../../copy';
 import { ExportOverlay } from '../../sandbox/export-overlay';
@@ -264,23 +241,11 @@ function renderScatterPlot(ctx: CartesianContext) {
         fontSize={11}
         tickLine={false}
       />
-      <YAxis
-        type="number"
-        dataKey="y"
-        stroke={GENERATIVE_CHART_TOKENS.axisStroke}
-        fontSize={11}
-        tickLine={false}
-        axisLine={false}
-      />
+      <YAxis type="number" dataKey="y" stroke={GENERATIVE_CHART_TOKENS.axisStroke} fontSize={11} tickLine={false} axisLine={false} />
       {themedTooltip(ctx)}
       <Legend wrapperStyle={{ fontSize: '12px' }} />
       {ctx.series.map((s, idx) => (
-        <Scatter
-          key={s.dataKey}
-          name={s.name}
-          data={scatterPoints(ctx.data, s.dataKey)}
-          fill={resolveSeriesColor(idx, s.color)}
-        />
+        <Scatter key={s.dataKey} name={s.name} data={scatterPoints(ctx.data, s.dataKey)} fill={resolveSeriesColor(idx, s.color)} />
       ))}
     </ScatterChart>
   );
@@ -327,10 +292,7 @@ function renderPlot(ctx: CartesianContext, chartType: GenerativeCartesianChartTy
 function SummaryChips({ title, ctx }: { title: string; ctx: CartesianContext }) {
   const { data, series, currency, unit, locale } = ctx;
   return (
-    <ul
-      aria-label={`${title} summary`}
-      className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3 text-xs"
-    >
+    <ul aria-label={`${title} summary`} className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3 text-xs">
       {data.map((row, idx) => {
         const primarySeries = series[0];
         const rawVal = Number(row[primarySeries.dataKey] ?? row.value ?? 0);
@@ -341,12 +303,7 @@ function SummaryChips({ title, ctx }: { title: string; ctx: CartesianContext }) 
             data-testid={`bar-summary-item-${idx}`}
             className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1"
           >
-            <span
-              className="size-2 rounded-full shrink-0"
-              style={{ backgroundColor: color }}
-              data-color={color}
-              aria-hidden="true"
-            />
+            <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: color }} data-color={color} aria-hidden="true" />
             <span className="text-muted-foreground">{String(row.timestamp)}:</span>
             <span className="tabular-nums font-semibold text-foreground">
               {formatChartValue(rawVal, {
@@ -363,7 +320,14 @@ function SummaryChips({ title, ctx }: { title: string; ctx: CartesianContext }) 
 }
 
 /** Card header: icon, title, description and the sample / currency badges. */
-function BarChartHeader({ title, description, isSample, currency, unit, locale }: {
+function BarChartHeader({
+  title,
+  description,
+  isSample,
+  currency,
+  unit,
+  locale,
+}: {
   title: string;
   description?: string;
   isSample?: boolean;
@@ -380,11 +344,7 @@ function BarChartHeader({ title, description, isSample, currency, unit, locale }
           </span>
           <div>
             <CardTitle className="text-base font-semibold text-foreground">{title}</CardTitle>
-            {description && (
-              <CardDescription className="mt-0.5 text-xs text-muted-foreground">
-                {description}
-              </CardDescription>
-            )}
+            {description && <CardDescription className="mt-0.5 text-xs text-muted-foreground">{description}</CardDescription>}
           </div>
         </div>
         <div className="flex items-center gap-1.5">
@@ -469,65 +429,66 @@ export function GenerativeBarChart({
   const resolvedDescription = description ?? subtitle;
   const resolvedCategoryKey = categoryKey ?? x_key;
 
-  const normalizedData = React.useMemo(
-    () => normalizeBarData(data, resolvedCategoryKey),
-    [data, resolvedCategoryKey],
-  );
-  const resolvedSeries = React.useMemo(
-    () => normalizeBarSeries(series, title, currency, unit),
-    [currency, series, title, unit],
-  );
+  const normalizedData = React.useMemo(() => normalizeBarData(data, resolvedCategoryKey), [data, resolvedCategoryKey]);
+  const resolvedSeries = React.useMemo(() => normalizeBarSeries(series, title, currency, unit), [currency, series, title, unit]);
   const ctx: CartesianContext = {
-    data: normalizedData, series: resolvedSeries, height, currency, unit, locale: resolvedLocale, categoryKey: resolvedCategoryKey,
+    data: normalizedData,
+    series: resolvedSeries,
+    height,
+    currency,
+    unit,
+    locale: resolvedLocale,
+    categoryKey: resolvedCategoryKey,
   };
   const exportHtml = useBarExportHtml({
-    title, description: resolvedDescription, source, sourceLabel: catalog.genUiTableSource, locale: resolvedLocale, chartType, ctx,
+    title,
+    description: resolvedDescription,
+    source,
+    sourceLabel: catalog.genUiTableSource,
+    locale: resolvedLocale,
+    chartType,
+    ctx,
   });
 
   return (
     <ExportOverlay title={title} html={exportHtml} ready={normalizedData.length > 0}>
-    <Card
-      data-testid="generative-bar-chart"
-      className="my-2 w-full max-w-2xl border-border bg-surface text-foreground"
-    >
-      <BarChartHeader title={title} description={resolvedDescription} isSample={isSample} currency={currency} unit={unit} locale={resolvedLocale} />
+      <Card data-testid="generative-bar-chart" className="my-2 w-full max-w-2xl border-border bg-surface text-foreground">
+        <BarChartHeader
+          title={title}
+          description={resolvedDescription}
+          isSample={isSample}
+          currency={currency}
+          unit={unit}
+          locale={resolvedLocale}
+        />
 
-      <CardContent className="pt-4">
-        {normalizedData.length === 0 ? (
-          <p
-            role="status"
-            data-testid="bar-chart-empty"
-            className="py-8 text-center text-xs text-muted-foreground"
-          >
-            {catalog.genUiBarEmpty}
-          </p>
-        ) : (
-          <NextIntlClientProvider
-            locale={canonicalLocale}
-            messages={messages[resolvedLocale]}
-          >
-            <ChartAccessibleTable
-              data={normalizedData}
-              series={resolvedSeries}
-              title={title}
-            />
-            <div className="w-full overflow-x-auto" data-testid="bar-chart-canvas"
-              data-chart-type={chartType}>
-              {renderPlot(ctx, chartType)}
-            </div>
+        <CardContent className="pt-4">
+          {normalizedData.length === 0 ? (
+            <p role="status" data-testid="bar-chart-empty" className="py-8 text-center text-xs text-muted-foreground">
+              {catalog.genUiBarEmpty}
+            </p>
+          ) : (
+            <NextIntlClientProvider
+              locale={canonicalLocale}
+              messages={{ dashboard: dashboardMessages[resolvedLocale], uiSweep: uiSweepMessages[resolvedLocale] }}
+            >
+              <ChartAccessibleTable data={normalizedData} series={resolvedSeries} title={title} />
+              <div className="w-full overflow-x-auto" data-testid="bar-chart-canvas" data-chart-type={chartType}>
+                {renderPlot(ctx, chartType)}
+              </div>
 
-            <SummaryChips title={title} ctx={ctx} />
-          </NextIntlClientProvider>
+              <SummaryChips title={title} ctx={ctx} />
+            </NextIntlClientProvider>
+          )}
+        </CardContent>
+        {source && (
+          <CardFooter className="border-t border-border py-2.5 text-[11px] text-muted-foreground">
+            <span data-testid="bar-chart-source">
+              <strong className="font-medium text-foreground">{catalog.genUiTableSource}:</strong> {source}
+            </span>
+          </CardFooter>
         )}
-      </CardContent>
-      {source && (
-        <CardFooter className="border-t border-border py-2.5 text-[11px] text-muted-foreground">
-          <span data-testid="bar-chart-source">
-            <strong className="font-medium text-foreground">{catalog.genUiTableSource}:</strong> {source}
-          </span>
-        </CardFooter>
-      )}
-    </Card>
+      </Card>
     </ExportOverlay>
   );
 }

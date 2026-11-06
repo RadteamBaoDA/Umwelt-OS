@@ -1,5 +1,6 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { type ComponentProps, type RefObject, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -23,7 +24,6 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { useRealtime } from '@/core/realtime-provider';
 import { AccountDeletionSection, ChangePasswordDialog, GoogleLink, PreferencesDialog, UserMenu } from '@/modules/account';
 import { LegalLinks } from '@/modules/legal';
-import { ChatDrawer } from '@/modules/chat';
 import { NotificationBell } from '@/modules/notifications';
 
 /** Browser connectivity (navigator.onLine); assumed online during server render. */
@@ -83,6 +83,23 @@ function useNavExpanded(): [boolean, () => void] {
 }
 // Re-exported so existing importers of the shell keep working; the context itself lives in the light module.
 export { useWorkspaceSession };
+
+/** Chat drawer chunk (chat session, markdown, generative-UI and chart libraries) fetched only when the drawer is first opened. */
+const ChatDrawer = dynamic(() => import('@/modules/chat').then((m) => m.ChatDrawer), { ssr: false });
+
+/**
+ * Mounts the lazily loaded chat drawer on first open and keeps it mounted afterwards, so the Sheet's close animation,
+ * in-memory drafts and background generation behave as before while closed sessions never download the chat bundle.
+ */
+function LazyChatDrawer() {
+  const { isDrawerOpen } = useChatController();
+  const [everOpened, setEverOpened] = useState(isDrawerOpen);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- latches the first open so the drawer stays mounted
+    if (isDrawerOpen) setEverOpened(true);
+  }, [isDrawerOpen]);
+  return everOpened || isDrawerOpen ? <ChatDrawer /> : null;
+}
 
 /**
  * Registers the Cmd+J / Ctrl+J shortcut that toggles the quick-chat Sheet drawer. Renders nothing: the header
@@ -536,7 +553,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
           authGeneration={generation}
           onCloseAutoFocus={restoreMenuFocus}
         />
-        {role !== 'admin_viewer' && <ChatDrawer />}
+        {role !== 'admin_viewer' && <LazyChatDrawer />}
       </div>
     </SessionContext.Provider>
   );

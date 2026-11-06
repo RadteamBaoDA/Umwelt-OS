@@ -1,16 +1,16 @@
 {
-  "maxRouteFirstLoadKb": 1135,
-  "totalClientKb": 2165,
+  "maxRouteFirstLoadKb": 1005,
+  "totalClientKb": 2100,
   "routes": {
-    "/(public)/login/page": 540,
-    "/(public)/setup/page": 540,
-    "/(public)/invite/page": 495,
-    "/(public)/invitations/accept/page": 495,
-    "/(public)/account-deletion/page": 475,
-    "/(public)/pick/page": 435,
-    "/(public)/privacy/page": 430,
-    "/(public)/refunds/page": 430,
-    "/(public)/terms/page": 430,
-    "/(public)/page": 410
+    "/(public)/login/page": 375,
+    "/(public)/setup/page": 375,
+    "/(public)/invite/page": 330,
+    "/(public)/invitations/accept/page": 330,
+    "/(public)/account-deletion/page": 310,
+    "/(public)/pick/page": 271,
+    "/(public)/privacy/page": 263,
+    "/(public)/refunds/page": 263,
+    "/(public)/terms/page": 263,
+    "/(public)/page": 245
   }
 }

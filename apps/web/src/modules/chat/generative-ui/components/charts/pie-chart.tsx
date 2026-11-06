@@ -5,22 +5,11 @@ import { NextIntlClientProvider } from 'next-intl';
 import { Cell, Legend, Pie, PieChart, Tooltip } from 'recharts';
 import { PieChartIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import {
-  ChartAccessibleTable,
-  formatChartValue,
-  type ChartDataPoint,
-  type ChartSeries,
-} from '@/core/charts/recharts-wrapper';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { ChartAccessibleTable, formatChartValue, type ChartDataPoint, type ChartSeries } from '@/core/charts/recharts-wrapper';
 import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
-import { messages } from '@/core/messages';
+import { dashboardMessages } from '@/core/messages/dashboard';
+import { uiSweepMessages } from '@/core/messages/ui-sweep';
 import { SampleDataBadge } from '../sample-data-badge';
 import { genUiCopy, resolveWidgetLocale } from '../../copy';
 import { ExportOverlay } from '../../sandbox/export-overlay';
@@ -122,12 +111,7 @@ function PiePlot({ slices, height, fmt }: { slices: PieSlice[]; height: number; 
         isAnimationActive={false}
       >
         {slices.map((slice, idx) => (
-          <Cell
-            key={`${slice.name}-${idx}`}
-            fill={slice.color}
-            stroke="var(--surface)"
-            strokeWidth={2}
-          />
+          <Cell key={`${slice.name}-${idx}`} fill={slice.color} stroke="var(--surface)" strokeWidth={2} />
         ))}
       </Pie>
       <Tooltip
@@ -148,13 +132,9 @@ function PiePlot({ slices, height, fmt }: { slices: PieSlice[]; height: number; 
 /** Accessible non-color-only breakdown list with semantic color indicators and share percentages. */
 function SliceBreakdown({ title, slices, totalValue, fmt }: { title: string; slices: PieSlice[]; totalValue: number; fmt: PieFormat }) {
   return (
-    <ul
-      aria-label={`${title} breakdown`}
-      className="mt-3 grid grid-cols-1 gap-2 border-t border-border pt-3 text-xs sm:grid-cols-2"
-    >
+    <ul aria-label={`${title} breakdown`} className="mt-3 grid grid-cols-1 gap-2 border-t border-border pt-3 text-xs sm:grid-cols-2">
       {slices.map((slice, idx) => {
-        const sharePercent =
-          totalValue > 0 ? Math.round((slice.value / totalValue) * 1000) / 10 : 0;
+        const sharePercent = totalValue > 0 ? Math.round((slice.value / totalValue) * 1000) / 10 : 0;
         return (
           <li
             key={`${slice.name}-${idx}`}
@@ -171,9 +151,7 @@ function SliceBreakdown({ title, slices, totalValue, fmt }: { title: string; sli
               <span className="truncate font-medium text-foreground">{slice.name}</span>
             </div>
             <div className="flex shrink-0 items-center gap-1.5 tabular-nums">
-              <span className="font-semibold text-foreground">
-                {formatChartValue(slice.value, fmt)}
-              </span>
+              <span className="font-semibold text-foreground">{formatChartValue(slice.value, fmt)}</span>
               <span className="text-muted-foreground">({sharePercent}%)</span>
             </div>
           </li>
@@ -184,7 +162,15 @@ function SliceBreakdown({ title, slices, totalValue, fmt }: { title: string; sli
 }
 
 /** Card header: icon, title, description, sample badge and the total. */
-function PieChartHeader({ title, description, isSample, hasSlices, totalLabel, totalValue, fmt }: {
+function PieChartHeader({
+  title,
+  description,
+  isSample,
+  hasSlices,
+  totalLabel,
+  totalValue,
+  fmt,
+}: {
   title: string;
   description?: string;
   isSample?: boolean;
@@ -202,19 +188,14 @@ function PieChartHeader({ title, description, isSample, hasSlices, totalLabel, t
           </span>
           <div>
             <CardTitle className="text-base font-semibold text-foreground">{title}</CardTitle>
-            {description && (
-              <CardDescription className="mt-0.5 text-xs text-muted-foreground">
-                {description}
-              </CardDescription>
-            )}
+            {description && <CardDescription className="mt-0.5 text-xs text-muted-foreground">{description}</CardDescription>}
           </div>
         </div>
         <div className="flex items-center gap-1.5">
           {isSample && <SampleDataBadge locale={fmt.locale} />}
           {hasSlices && (
             <Badge variant="secondary" className="tabular-nums text-xs">
-              {totalLabel}:{' '}
-              {formatChartValue(totalValue, fmt)}
+              {totalLabel}: {formatChartValue(totalValue, fmt)}
             </Badge>
           )}
         </div>
@@ -228,7 +209,14 @@ function PieChartHeader({ title, description, isSample, hasSlices, totalLabel, t
  *
  * @returns Accessible table rows/series and the memoized export HTML (inline SVG + data table, no remote origins).
  */
-function usePieDerived({ title, description, source, sourceLabel, slices, fmt }: {
+function usePieDerived({
+  title,
+  description,
+  source,
+  sourceLabel,
+  slices,
+  fmt,
+}: {
   title: string;
   description?: string;
   source?: string;
@@ -290,72 +278,60 @@ export function GenerativePieChart({
   const resolvedDescription = description ?? subtitle;
   const fmt = React.useMemo<PieFormat>(() => ({ currency, unit, locale: resolvedLocale }), [currency, unit, resolvedLocale]);
 
-  const valueKey = React.useMemo(
-    () => normalizeBarSeries(series, title, currency, unit)[0].dataKey,
-    [series, title, currency, unit],
-  );
+  const valueKey = React.useMemo(() => normalizeBarSeries(series, title, currency, unit)[0].dataKey, [series, title, currency, unit]);
   const normalizedSlices = useNormalizedSlices(data, categoryKey, valueKey);
 
-  const totalValue = React.useMemo(
-    () => normalizedSlices.reduce((sum, slice) => sum + slice.value, 0),
-    [normalizedSlices],
-  );
+  const totalValue = React.useMemo(() => normalizedSlices.reduce((sum, slice) => sum + slice.value, 0), [normalizedSlices]);
 
   const { accessibleData, accessibleSeries, exportHtml } = usePieDerived({
-    title, description: resolvedDescription, source, sourceLabel: catalog.genUiTableSource, slices: normalizedSlices, fmt,
+    title,
+    description: resolvedDescription,
+    source,
+    sourceLabel: catalog.genUiTableSource,
+    slices: normalizedSlices,
+    fmt,
   });
 
   return (
     <ExportOverlay title={title} html={exportHtml} ready={normalizedSlices.length > 0}>
-    <Card
-      data-testid="generative-pie-chart"
-      className="my-2 w-full max-w-2xl border-border bg-surface text-foreground"
-    >
-      <PieChartHeader
-        title={title}
-        description={resolvedDescription}
-        isSample={isSample}
-        hasSlices={normalizedSlices.length > 0}
-        totalLabel={catalog.genUiPieTotal}
-        totalValue={totalValue}
-        fmt={fmt}
-      />
+      <Card data-testid="generative-pie-chart" className="my-2 w-full max-w-2xl border-border bg-surface text-foreground">
+        <PieChartHeader
+          title={title}
+          description={resolvedDescription}
+          isSample={isSample}
+          hasSlices={normalizedSlices.length > 0}
+          totalLabel={catalog.genUiPieTotal}
+          totalValue={totalValue}
+          fmt={fmt}
+        />
 
-      <CardContent className="pt-4">
-        {normalizedSlices.length === 0 ? (
-          <p
-            role="status"
-            data-testid="pie-chart-empty"
-            className="py-8 text-center text-xs text-muted-foreground"
-          >
-            {catalog.genUiPieEmpty}
-          </p>
-        ) : (
-          <NextIntlClientProvider
-            locale={canonicalLocale}
-            messages={messages[resolvedLocale]}
-          >
-            <ChartAccessibleTable
-              data={accessibleData}
-              series={accessibleSeries}
-              title={title}
-            />
-            <div className="flex flex-col items-center justify-center overflow-x-auto" data-testid="pie-chart-canvas">
-              <PiePlot slices={normalizedSlices} height={height} fmt={fmt} />
-            </div>
+        <CardContent className="pt-4">
+          {normalizedSlices.length === 0 ? (
+            <p role="status" data-testid="pie-chart-empty" className="py-8 text-center text-xs text-muted-foreground">
+              {catalog.genUiPieEmpty}
+            </p>
+          ) : (
+            <NextIntlClientProvider
+              locale={canonicalLocale}
+              messages={{ dashboard: dashboardMessages[resolvedLocale], uiSweep: uiSweepMessages[resolvedLocale] }}
+            >
+              <ChartAccessibleTable data={accessibleData} series={accessibleSeries} title={title} />
+              <div className="flex flex-col items-center justify-center overflow-x-auto" data-testid="pie-chart-canvas">
+                <PiePlot slices={normalizedSlices} height={height} fmt={fmt} />
+              </div>
 
-            <SliceBreakdown title={title} slices={normalizedSlices} totalValue={totalValue} fmt={fmt} />
-          </NextIntlClientProvider>
+              <SliceBreakdown title={title} slices={normalizedSlices} totalValue={totalValue} fmt={fmt} />
+            </NextIntlClientProvider>
+          )}
+        </CardContent>
+        {source && (
+          <CardFooter className="border-t border-border py-2.5 text-[11px] text-muted-foreground">
+            <span data-testid="pie-chart-source">
+              <strong className="font-medium text-foreground">{catalog.genUiTableSource}:</strong> {source}
+            </span>
+          </CardFooter>
         )}
-      </CardContent>
-      {source && (
-        <CardFooter className="border-t border-border py-2.5 text-[11px] text-muted-foreground">
-          <span data-testid="pie-chart-source">
-            <strong className="font-medium text-foreground">{catalog.genUiTableSource}:</strong> {source}
-          </span>
-        </CardFooter>
-      )}
-    </Card>
+      </Card>
     </ExportOverlay>
   );
 }
