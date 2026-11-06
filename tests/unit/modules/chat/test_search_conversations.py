@@ -29,7 +29,7 @@ def _sql(session: MagicMock) -> tuple[str, dict[str, object]]:
 async def test_history_off_returns_nothing_and_never_queries() -> None:
     session = _session()
     with patch(
-        "modules.chat._public_export._chat_export_privacy",
+        "modules.chat._public.export._chat_export_privacy",
         AsyncMock(return_value=(False, True, None)),
     ):
         assert (
@@ -43,7 +43,7 @@ async def test_history_off_returns_nothing_and_never_queries() -> None:
 async def test_query_excludes_ephemeral_expired_automation_and_is_bounded() -> None:
     session = _session()
     with patch(
-        "modules.chat._public_export._chat_export_privacy",
+        "modules.chat._public.export._chat_export_privacy",
         AsyncMock(return_value=(True, True, None)),
     ):
         await search_conversations(session, "plan", limit=7, offset=3, archived=False, **KW)
@@ -59,7 +59,7 @@ async def test_query_excludes_ephemeral_expired_automation_and_is_bounded() -> N
 async def test_like_metacharacters_are_literal() -> None:
     session = _session()
     with patch(
-        "modules.chat._public_export._chat_export_privacy",
+        "modules.chat._public.export._chat_export_privacy",
         AsyncMock(return_value=(True, True, None)),
     ):
         await search_conversations(
@@ -74,7 +74,7 @@ async def test_like_metacharacters_are_literal() -> None:
 async def test_workspace_and_actor_bind_before_limit() -> None:
     session = _session()
     with patch(
-        "modules.chat._public_export._chat_export_privacy",
+        "modules.chat._public.export._chat_export_privacy",
         AsyncMock(return_value=(True, True, None)),
     ):
         await search_conversations(session, "plan", limit=7, offset=3, archived=False, **KW)

@@ -18,6 +18,29 @@ from typing import Any
 import pytest
 
 
+def private_submodules(pkg: ModuleType, family: str | None = None) -> list[ModuleType]:
+    """Return private ``_*`` submodules of ``pkg``, descending one level into private family subpackages.
+
+    ``family`` (e.g. ``"worker"``) keeps only the ``_worker`` subpackage's modules and any flat ``_worker_*``
+    siblings; ``None`` keeps every private module.
+    """
+    out: list[ModuleType] = []
+    for info in pkgutil.iter_modules(pkg.__path__):
+        name = info.name
+        if not name.startswith("_") or (
+            family is not None and name != f"_{family}" and not name.startswith(f"_{family}_")
+        ):
+            continue
+        module = importlib.import_module(f"{pkg.__name__}.{name}")
+        out.append(module)
+        if info.ispkg:
+            out += [
+                importlib.import_module(f"{module.__name__}.{child.name}")
+                for child in pkgutil.iter_modules(module.__path__)
+            ]
+    return out
+
+
 def _holders(package: str, name: str, facade: str | None = "public") -> list[ModuleType]:
     """Return the facade plus private submodules of ``package`` binding ``name``; fail loudly if none does.
 
@@ -28,11 +51,7 @@ def _holders(package: str, name: str, facade: str | None = "public") -> list[Mod
     if facade is not None and importlib.util.find_spec(f"{package}.{facade}") is None:
         facade = None
     mods = [pkg if facade is None else importlib.import_module(f"{package}.{facade}")]
-    mods += [
-        importlib.import_module(f"{package}.{info.name}")
-        for info in pkgutil.iter_modules(pkg.__path__)
-        if info.name.startswith("_")
-    ]
+    mods += private_submodules(pkg)
     found = [m for m in mods if hasattr(m, name)]
     assert found, f"no {package} module defines {name}"
     return found

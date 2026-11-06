@@ -1,10 +1,10 @@
 {
   "note": "Frozen W2 ruling section3. Direct-call keyword/owner-positional supplement only; no runtime, defaults, dynamic methods, source lineage or admission proof.",
   "scope_and_flag": {
-    "modules/agents/_public_budget.py": "reserve_browser_run_budget_in_uow revalidate_browser_run_authority",
-    "modules/agents/_public_lifecycle.py": "current_profile_revision",
-    "modules/agents/_public_runs.py": "create_profile_run_in_uow",
-    "modules/agents/_public_traces.py": "redact_expired_agent_traces",
+    "modules/agents/_public/budget.py": "reserve_browser_run_budget_in_uow revalidate_browser_run_authority",
+    "modules/agents/_public/lifecycle.py": "current_profile_revision",
+    "modules/agents/_public/runs.py": "create_profile_run_in_uow",
+    "modules/agents/_public/traces.py": "redact_expired_agent_traces",
     "modules/automations/seed.py": "ensure_demo_automations",
     "modules/connectors/github/mapping.py": "map_github_version",
     "modules/goals/public.py": "list_goals list_deadlines_within",
@@ -41,7 +41,7 @@
     "modules/tools/public.py": "purge_browser_results_in_uow"
   },
   "exports": [
-    "modules/chat/_public_export.py",
+    "modules/chat/_public/export.py",
     "modules/dashboard/_export.py",
     "modules/goals/public.py",
     "modules/knowledge/documents/_export.py",

@@ -10,7 +10,7 @@ from modules.connectors import (  # noqa: F401  (shared module objects tests pat
     registry,
     scheduler,
 )
-from modules.connectors.provisioning._routes_activation import (
+from modules.connectors.provisioning._routes.activation import (
     _NATIVE_ERRORS,
     _capture_telegram_revocation,
     _check_activation_preconditions,
@@ -29,7 +29,7 @@ from modules.connectors.provisioning._routes_activation import (
     resolve_backend_transition,
     start_backend_transition,
 )
-from modules.connectors.provisioning._routes_common import (
+from modules.connectors.provisioning._routes.common import (
     ActivationRead,
     ActivationRequest,
     BackendResolveRequest,
@@ -50,7 +50,7 @@ from modules.connectors.provisioning._routes_common import (
     _validation_send_fence,
     router,
 )
-from modules.connectors.provisioning._routes_config import (
+from modules.connectors.provisioning._routes.config import (
     CoinSearchRead,
     N8nWorkflowRead,
     _check_draft_auth_mode,

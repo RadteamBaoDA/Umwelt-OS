@@ -96,11 +96,11 @@ from modules.ingestion._event_publisher import (
     _ready_document_payload,
     publish_event,
 )
-from modules.ingestion._native_collection import (
+from modules.ingestion._native.collection import (
     accept_native_collection,
     accept_native_collection_with_params,
 )
-from modules.ingestion._native_records import (
+from modules.ingestion._native.records import (
     drop_seen_records,
     native_record_key,
     record_key,
@@ -108,7 +108,7 @@ from modules.ingestion._native_records import (
     seen_record_keys,
     validate_telegram_record_delivery,
 )
-from modules.ingestion._native_verifiers import (
+from modules.ingestion._native.verifiers import (
     NativeProofVerifier,
     NativeProviderParams,
     native_verifier_for,

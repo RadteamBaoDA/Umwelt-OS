@@ -6,7 +6,6 @@ binding, otherwise the submodule would still call the original.
 """
 
 import importlib
-import pkgutil
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from types import ModuleType
@@ -14,16 +13,15 @@ from typing import Any
 from unittest.mock import DEFAULT, patch
 
 import modules.ingestion as ingestion_package
+from tests.unit.split_patching import private_submodules
 
 
 def ingestion_modules() -> list[ModuleType]:
     """Return the facade plus every private ``_*`` implementation module of the ingestion package."""
-    names = ["modules.ingestion.public"] + sorted(
-        f"modules.ingestion.{info.name}"
-        for info in pkgutil.iter_modules(ingestion_package.__path__)
-        if info.name.startswith("_")
-    )
-    return [importlib.import_module(name) for name in names]
+    return [
+        importlib.import_module("modules.ingestion.public"),
+        *private_submodules(ingestion_package),
+    ]
 
 
 @contextmanager
@@ -51,12 +49,10 @@ def patch_ingestion(name: str, new: Any = DEFAULT, **kwargs: Any) -> Iterator[An
 
 def worker_modules() -> list[ModuleType]:
     """Return the ``modules.ingestion.worker`` facade plus its private ``_worker_*`` implementation modules."""
-    names = ["modules.ingestion.worker"] + sorted(
-        f"modules.ingestion.{info.name}"
-        for info in pkgutil.iter_modules(ingestion_package.__path__)
-        if info.name.startswith("_worker_")
-    )
-    return [importlib.import_module(name) for name in names]
+    return [
+        importlib.import_module("modules.ingestion.worker"),
+        *private_submodules(ingestion_package, "worker"),
+    ]
 
 
 def patch_worker(monkeypatch: Any, name: str, value: Any) -> None:

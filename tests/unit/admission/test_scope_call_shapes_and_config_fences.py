@@ -171,8 +171,8 @@ async def test_dependency_snapshot_reports_supported_without_evidence(module):
     "path",
     [
         "modules/timeline/worker.py",
-        "modules/knowledge/entities/_worker_ready.py",
-        "modules/knowledge/entities/_worker_claim.py",
+        "modules/knowledge/entities/_worker/ready.py",
+        "modules/knowledge/entities/_worker/claim.py",
         "modules/dashboard/briefs.py",
     ],
 )

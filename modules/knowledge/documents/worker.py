@@ -13,133 +13,133 @@ from modules.ingestion import (
     public as ingestion,  # noqa: F401  # shared module object; tests patch worker.ingestion
 )
 from modules.knowledge.documents import public as documents
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _admit_cleanup as _admit_cleanup,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _Admitted as _Admitted,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _agent_preflight as _agent_preflight,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _AgentPreflight as _AgentPreflight,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _Attempt as _Attempt,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _commit as _commit,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _cursor_state_agent as _cursor_state_agent,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _hint as _hint,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _lock_claim as _lock_claim,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _PageSchedule as _PageSchedule,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _publish_wakeups as _publish_wakeups,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _receipt_query as _receipt_query,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _ReceiptSnapshot as _ReceiptSnapshot,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _requeue as _requeue,
 )
-from modules.knowledge.documents._worker_admit import (
+from modules.knowledge.documents._worker.admit import (
     _settle as _settle,
 )
-from modules.knowledge.documents._worker_cleanup import (
+from modules.knowledge.documents._worker.cleanup import (
     _advance_brief_cleanup as _advance_brief_cleanup,
 )
-from modules.knowledge.documents._worker_cleanup import (
+from modules.knowledge.documents._worker.cleanup import (
     _advance_materialization_cleanup as _advance_materialization_cleanup,
 )
-from modules.knowledge.documents._worker_cleanup import (
+from modules.knowledge.documents._worker.cleanup import (
     _advance_memory_cleanup as _advance_memory_cleanup,
 )
-from modules.knowledge.documents._worker_cleanup import (
+from modules.knowledge.documents._worker.cleanup import (
     _advance_raw_document_cleanup as _advance_raw_document_cleanup,
 )
-from modules.knowledge.documents._worker_cleanup import (
+from modules.knowledge.documents._worker.cleanup import (
     _evict_memory_cache_after_commit as _evict_memory_cache_after_commit,
 )
-from modules.knowledge.documents._worker_cleanup import (
+from modules.knowledge.documents._worker.cleanup import (
     _reopen_cleanup_event as _reopen_cleanup_event,
 )
-from modules.knowledge.documents._worker_cleanup import (
+from modules.knowledge.documents._worker.cleanup import (
     _reopen_page as _reopen_page,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _CONTINUATION_DELAY as _CONTINUATION_DELAY,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _COPIED_STAGE_TERMINAL_CODES as _COPIED_STAGE_TERMINAL_CODES,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _MATERIALIZATION_PHASES as _MATERIALIZATION_PHASES,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _RAW_URI_UNAVAILABLE as _RAW_URI_UNAVAILABLE,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _RETRY_DELAY as _RETRY_DELAY,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _attempt_progress_snapshot as _attempt_progress_snapshot,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _copied_stage_terminal as _copied_stage_terminal,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _memory_terminal as _memory_terminal,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _optional_uuid as _optional_uuid,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _raw_stage_done as _raw_stage_done,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _receipt_fully_settled as _receipt_fully_settled,
 )
-from modules.knowledge.documents._worker_progress import (
+from modules.knowledge.documents._worker.progress import (
     _source_cleanup_progress_key as _source_cleanup_progress_key,
 )
-from modules.knowledge.documents._worker_stages import (
+from modules.knowledge.documents._worker.stages import (
     _advance_agent_stage as _advance_agent_stage,
 )
-from modules.knowledge.documents._worker_stages import (
+from modules.knowledge.documents._worker.stages import (
     _advance_chat_stage as _advance_chat_stage,
 )
-from modules.knowledge.documents._worker_stages import (
+from modules.knowledge.documents._worker.stages import (
     _advance_copied_cleanup as _advance_copied_cleanup,
 )
-from modules.knowledge.documents._worker_stages import (
+from modules.knowledge.documents._worker.stages import (
     _advance_copied_stages as _advance_copied_stages,
 )
-from modules.knowledge.documents._worker_stages import (
+from modules.knowledge.documents._worker.stages import (
     _advance_memory_stage as _advance_memory_stage,
 )
-from modules.knowledge.documents._worker_stages import (
+from modules.knowledge.documents._worker.stages import (
     _collect_stage_failures as _collect_stage_failures,
 )
-from modules.knowledge.documents._worker_stages import (
+from modules.knowledge.documents._worker.stages import (
     _fail_uncaptured_scope as _fail_uncaptured_scope,
 )
-from modules.knowledge.documents._worker_stages import (
+from modules.knowledge.documents._worker.stages import (
     _finalize_aggregate_status as _finalize_aggregate_status,
 )
-from modules.knowledge.documents._worker_stages import (
+from modules.knowledge.documents._worker.stages import (
     _recover_attempt as _recover_attempt,
 )
 from modules.sources import (

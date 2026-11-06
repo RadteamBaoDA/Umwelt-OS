@@ -15,145 +15,145 @@ from core.model_gateway.client import ModelGateway
 from core.workspaces import public as workspaces
 from modules.knowledge.documents import public as documents
 from modules.knowledge.entities import public as entities
-from modules.knowledge.temporal._worker_actions import (
+from modules.knowledge.temporal._worker.actions import (
     _bind_node_actions as _bind_node_actions,
 )
-from modules.knowledge.temporal._worker_actions import (
+from modules.knowledge.temporal._worker.actions import (
     _build_fact_actions as _build_fact_actions,
 )
-from modules.knowledge.temporal._worker_actions import (
+from modules.knowledge.temporal._worker.actions import (
     _current_relationship_snapshot as _current_relationship_snapshot,
 )
-from modules.knowledge.temporal._worker_actions import (
+from modules.knowledge.temporal._worker.actions import (
     _fresh_fact_action as _fresh_fact_action,
 )
-from modules.knowledge.temporal._worker_actions import (
+from modules.knowledge.temporal._worker.actions import (
     _initial_node_actions as _initial_node_actions,
 )
-from modules.knowledge.temporal._worker_actions import (
+from modules.knowledge.temporal._worker.actions import (
     _prepare_node_actions as _prepare_node_actions,
 )
-from modules.knowledge.temporal._worker_actions import (
+from modules.knowledge.temporal._worker.actions import (
     _readback_matches_desired as _readback_matches_desired,
 )
-from modules.knowledge.temporal._worker_actions import (
+from modules.knowledge.temporal._worker.actions import (
     _recovery_authorization as _recovery_authorization,
 )
-from modules.knowledge.temporal._worker_actions import (
+from modules.knowledge.temporal._worker.actions import (
     _validate_fact_replacement as _validate_fact_replacement,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     LEASE_SECONDS as LEASE_SECONDS,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     OWNER_BUDGET_SECONDS as OWNER_BUDGET_SECONDS,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     RECOVERY_CURSOR_KEY as RECOVERY_CURSOR_KEY,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     RECOVERY_WORKSPACE_PAGE as RECOVERY_WORKSPACE_PAGE,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     _Admission as _Admission,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     _admit as _admit,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     _admit_job as _admit_job,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     _authorize_scheduled_rebuild as _authorize_scheduled_rebuild,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     _claim as _claim,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     _commit as _commit,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     _dependency_fingerprint as _dependency_fingerprint,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     _get as _get,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     _lease as _lease,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     _mark_dependents_for_rebuild as _mark_dependents_for_rebuild,
 )
-from modules.knowledge.temporal._worker_admission import (
+from modules.knowledge.temporal._worker.admission import (
     admit_workspace as admit_workspace,
 )
-from modules.knowledge.temporal._worker_finish import (
+from modules.knowledge.temporal._worker.finish import (
     _find_ancestor_operation as _find_ancestor_operation,
 )
-from modules.knowledge.temporal._worker_finish import (
+from modules.knowledge.temporal._worker.finish import (
     _finish as _finish,
 )
-from modules.knowledge.temporal._worker_finish import (
+from modules.knowledge.temporal._worker.finish import (
     _join_local_cleanup as _join_local_cleanup,
 )
-from modules.knowledge.temporal._worker_finish import (
+from modules.knowledge.temporal._worker.finish import (
     _publish_clean_projection as _publish_clean_projection,
 )
-from modules.knowledge.temporal._worker_finish import (
+from modules.knowledge.temporal._worker.finish import (
     _verify_prior_dispatches as _verify_prior_dispatches,
 )
-from modules.knowledge.temporal._worker_journal import (
+from modules.knowledge.temporal._worker.journal import (
     _bindings as _bindings,
 )
-from modules.knowledge.temporal._worker_journal import (
+from modules.knowledge.temporal._worker.journal import (
     _inventory as _inventory,
 )
-from modules.knowledge.temporal._worker_journal import (
+from modules.knowledge.temporal._worker.journal import (
     _receipt_inventory as _receipt_inventory,
 )
-from modules.knowledge.temporal._worker_journal import (
+from modules.knowledge.temporal._worker.journal import (
     _receipts as _receipts,
 )
-from modules.knowledge.temporal._worker_journal import (
+from modules.knowledge.temporal._worker.journal import (
     _record as _record,
 )
-from modules.knowledge.temporal._worker_journal import (
+from modules.knowledge.temporal._worker.journal import (
     _WitnessIndex as _WitnessIndex,
 )
-from modules.knowledge.temporal._worker_owner import (
+from modules.knowledge.temporal._worker.owner import (
     _context as _context,
 )
-from modules.knowledge.temporal._worker_owner import (
+from modules.knowledge.temporal._worker.owner import (
     _lock_owner_state as _lock_owner_state,
 )
-from modules.knowledge.temporal._worker_owner import (
+from modules.knowledge.temporal._worker.owner import (
     _OwnerCallbacks as _OwnerCallbacks,
 )
-from modules.knowledge.temporal._worker_owner import (
+from modules.knowledge.temporal._worker.owner import (
     _record_embedding_identity as _record_embedding_identity,
 )
-from modules.knowledge.temporal._worker_recover import (
+from modules.knowledge.temporal._worker.recover import (
     _complete_recovery as _complete_recovery,
 )
-from modules.knowledge.temporal._worker_recover import (
+from modules.knowledge.temporal._worker.recover import (
     _recover as _recover,
 )
-from modules.knowledge.temporal._worker_recover import (
+from modules.knowledge.temporal._worker.recover import (
     _recover_ancestor as _recover_ancestor,
 )
-from modules.knowledge.temporal._worker_recover import (
+from modules.knowledge.temporal._worker.recover import (
     _recovery_workspaces as _recovery_workspaces,
 )
-from modules.knowledge.temporal._worker_recover import (
+from modules.knowledge.temporal._worker.recover import (
     recover_graph_work as recover_graph_work,
 )
-from modules.knowledge.temporal._worker_run import (
+from modules.knowledge.temporal._worker.run import (
     _project_current_episode as _project_current_episode,
 )
-from modules.knowledge.temporal._worker_run import (
+from modules.knowledge.temporal._worker.run import (
     _run_operation as _run_operation,
 )
-from modules.knowledge.temporal._worker_run import (
+from modules.knowledge.temporal._worker.run import (
     process_graph_operation as process_graph_operation,
 )
 from modules.knowledge.temporal.adapter import CanonicalNodeRecoveryAction, GraphConfiguration

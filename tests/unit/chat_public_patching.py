@@ -8,22 +8,20 @@ worker modules that also import some of the same names keep their originals.
 from __future__ import annotations
 
 import importlib
-import pkgutil
 from typing import Any
 
 import pytest
 
 import modules.chat as chat_package
+from tests.unit.split_patching import private_submodules
 
 
 def chat_public_modules() -> list[Any]:
     """Return ``modules.chat.public`` followed by every private ``_public_*`` implementation module."""
-    names = ["modules.chat.public"] + sorted(
-        f"modules.chat.{info.name}"
-        for info in pkgutil.iter_modules(chat_package.__path__)
-        if info.name.startswith("_public_")
-    )
-    return [importlib.import_module(name) for name in names]
+    return [
+        importlib.import_module("modules.chat.public"),
+        *private_submodules(chat_package, "public"),
+    ]
 
 
 def patch_chat_public(monkeypatch: pytest.MonkeyPatch, name: str, value: Any) -> None:

@@ -14,11 +14,11 @@ import pytest
 
 _MODULES = (
     "modules.knowledge.entities.corrections",
-    "modules.knowledge.entities._corrections_common",
-    "modules.knowledge.entities._corrections_discover",
-    "modules.knowledge.entities._corrections_delete",
-    "modules.knowledge.entities._corrections_merge",
-    "modules.knowledge.entities._corrections_split",
+    "modules.knowledge.entities._corrections.common",
+    "modules.knowledge.entities._corrections.discover",
+    "modules.knowledge.entities._corrections.delete",
+    "modules.knowledge.entities._corrections.merge",
+    "modules.knowledge.entities._corrections.split",
 )
 
 

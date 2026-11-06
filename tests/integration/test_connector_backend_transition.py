@@ -23,13 +23,13 @@ from core.worker_cursors import STATE_KEY
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import InternalJobScope
 from modules.connectors import (
-    _worker_reconcile,
     activation,
     backends,
     provisioning,
     upgrade_templates,
     worker,
 )
+from modules.connectors._worker import reconcile as _worker_reconcile
 from modules.connectors.models import ConnectorProvisioning, ConnectorSchedule
 from modules.sources import public as sources
 

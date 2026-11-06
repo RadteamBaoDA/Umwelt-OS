@@ -19,7 +19,8 @@ from sqlalchemy.dialects import postgresql
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.connectors import mcp, worker
 from modules.connectors import public as connectors_public
-from modules.connectors.github import _routes_common, mapping, routes
+from modules.connectors.github import mapping, routes
+from modules.connectors.github._routes import common as _routes_common
 from modules.connectors.service import collection_requests as collection_requests_service
 from tests.unit.modules.connectors._worker_patch import patch_worker
 
@@ -611,9 +612,9 @@ async def test_revoke_deleted_grants_skips_a_source_without_admissible_scope() -
 
 
 def _all_route_source() -> str:
-    """Concatenate the source of every private GitHub ``_routes_*`` module behind the ``routes`` facade."""
+    """Concatenate the source of every private GitHub ``_routes`` package module behind the ``routes`` facade."""
     return "\n".join(
-        inspect.getsource(importlib.import_module(f"modules.connectors.github._routes_{name}"))
+        inspect.getsource(importlib.import_module(f"modules.connectors.github._routes.{name}"))
         for name in ("common", "delivery", "oauth", "peers")
     )
 

@@ -5,7 +5,7 @@ in the original order (delivery, oauth, peers). Submodule names sort alphabetica
 the import order, and import order is registration order.
 """
 
-from modules.connectors.github._routes_common import (
+from modules.connectors.github._routes.common import (
     _DENIED,
     RECOVERY_GRACE,
     DisconnectRequest,
@@ -28,12 +28,12 @@ from modules.connectors.github._routes_common import (
     _require_current_owner_session,
     router,
 )
-from modules.connectors.github._routes_delivery import (
+from modules.connectors.github._routes.delivery import (
     GitHubWebhookStatus,
     get_github_webhook_status,
     receive_github_webhook,
 )
-from modules.connectors.github._routes_oauth import (
+from modules.connectors.github._routes.oauth import (
     _begin_callback_operation,
     _begin_refresh,
     _consume_callback_attempt,
@@ -48,7 +48,7 @@ from modules.connectors.github._routes_oauth import (
     reset_github_sync,
     start_github_authorization,
 )
-from modules.connectors.github._routes_peers import (
+from modules.connectors.github._routes.peers import (
     _begin_revocation,
     _fence_revoke_peers,
     _finish_revocation,

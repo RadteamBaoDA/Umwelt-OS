@@ -14,7 +14,7 @@ import pytest
 from core.errors import ValidationFailedError
 from core.pagination import b64url_encode
 from core.workspaces.schemas import AccessFence
-from modules.chat import _public_export as chat_export
+from modules.chat._public import export as chat_export
 from modules.dashboard import _export as dash_export
 from modules.memory import _export as memory_export
 from modules.timeline import _export as timeline_export

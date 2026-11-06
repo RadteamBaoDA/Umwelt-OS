@@ -29,9 +29,9 @@ def _heavy_slot_users() -> set[str]:
                 and n.func.id == "heavy_job_slot"
                 for n in ast.walk(node)
             )
-            # direct slot users only count in worker.py or its _worker_* split submodules (modules/tools/browser.py is a request path, not an arq job)
+            # direct slot users only count in worker.py or its _worker/ split package (modules/tools/browser.py is a request path, not an arq job)
             if decorated or (
-                direct and (path.name == "worker.py" or path.name.startswith("_worker_"))
+                direct and (path.name == "worker.py" or path.parent.name == "_worker")
             ):
                 names.add(node.name)
     return names
