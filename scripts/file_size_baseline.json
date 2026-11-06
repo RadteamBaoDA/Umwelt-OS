@@ -13,7 +13,6 @@
   "modules/connectors/service/github_hints.py": 1621,
   "modules/connectors/worker.py": 2039,
   "modules/dashboard/briefs.py": 1722,
-  "modules/dashboard/public.py": 4099,
   "modules/ingestion/worker.py": 2941,
   "modules/knowledge/documents/worker.py": 1746,
   "modules/knowledge/entities/corrections.py": 2765,
@@ -25,6 +24,5 @@
   "modules/news/stories.py": 1985,
   "modules/search/indexing.py": 2204,
   "modules/settings/public.py": 2151,
-  "modules/sources/public.py": 3157,
-  "modules/timeline/public.py": 3931
+  "modules/sources/public.py": 3157
 }

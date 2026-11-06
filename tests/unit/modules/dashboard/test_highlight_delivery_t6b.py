@@ -26,6 +26,7 @@ from tests.unit.modules.dashboard.test_highlight_rules_t6a import (
     run_emit,
     scope_edges,  # noqa: F401  (autouse fixture)
 )
+from tests.unit.split_patching import patch_split
 
 NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
 
@@ -98,7 +99,7 @@ def frozen(monkeypatch: pytest.MonkeyPatch) -> None:
         def now(cls, tz: Any = None) -> "Clock":
             return cls.fromtimestamp(CLOCK[0].timestamp(), tz)
 
-    monkeypatch.setattr(public, "datetime", Clock)
+    patch_split(monkeypatch, "modules.dashboard", "datetime", Clock)
 
     async def prefs(_s: Any, **_k: Any) -> Any:
         return SimpleNamespace(timezone="UTC")

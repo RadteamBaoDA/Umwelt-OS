@@ -14,6 +14,7 @@ from core.workspaces.dependencies import require_workspace_observer_read, requir
 from core.workspaces.schemas import WorkspaceContext
 from modules.dashboard import public, routes
 from modules.dashboard.schemas import DashboardDetail
+from tests.unit.split_patching import patch_split
 
 KINDS = {"kp": ("noaa_kp", "api"), "news": ("bbc_world", "rss")}
 
@@ -105,11 +106,11 @@ def client(
         "validate_highlight_rules",
         "commit_with_replay",
     ):
-        monkeypatch.setattr(public, name, noop)
-    monkeypatch.setattr(public, "make_dashboard_change", lambda *a, **k: None)
-    monkeypatch.setattr(public, "_source_states", states)
-    monkeypatch.setattr(public, "_definition_source_states", definition_states)
-    monkeypatch.setattr(public, "_dashboard_read", read_dashboard)
+        patch_split(monkeypatch, "modules.dashboard", name, noop)
+    patch_split(monkeypatch, "modules.dashboard", "make_dashboard_change", lambda *a, **k: None)
+    patch_split(monkeypatch, "modules.dashboard", "_source_states", states)
+    patch_split(monkeypatch, "modules.dashboard", "_definition_source_states", definition_states)
+    patch_split(monkeypatch, "modules.dashboard", "_dashboard_read", read_dashboard)
     monkeypatch.setattr(public.sources, "get_gadget_sources", get_sources)
     monkeypatch.setattr(public.sources, "list_active_source_kinds", active_kinds)
 
@@ -157,7 +158,7 @@ def test_create_and_rename_legacy_definition_and_counts(
     async def lock_definition(*_a: object, **_k: object) -> object:
         return legacy
 
-    monkeypatch.setattr(public, "_lock_definition", lock_definition)
+    patch_split(monkeypatch, "modules.dashboard", "_lock_definition", lock_definition)
     renamed = http.patch(
         f"/api/v1/gadget-definitions/{legacy.id}", json={"expected_revision": 1, "name": "new"}
     )

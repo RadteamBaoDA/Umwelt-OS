@@ -20,6 +20,7 @@ from modules.knowledge.temporal import public as temporal
 from modules.sources.schemas import SourceFence
 from modules.timeline import public as timeline
 from tests.unit.entity_patching import patch_entity_attr
+from tests.unit.split_patching import patch_split_attr
 
 WS, SRC, DOC = uuid4(), uuid4(), uuid4()
 SCOPE = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=2)
@@ -108,7 +109,7 @@ def _admit():
     with (
         patch_entity_attr("_admit", AsyncMock(return_value=FENCE)),
         patch.object(relationships, "_admit", AsyncMock(return_value=FENCE)),
-        patch.object(timeline, "_admit", AsyncMock(return_value=FENCE)),
+        patch_split_attr("modules.timeline", "_admit", AsyncMock(return_value=FENCE)),
         patch.object(temporal, "_admit", AsyncMock(return_value=FENCE)),
         patch.object(observations, "_admit", AsyncMock(return_value=FENCE)),
         patch.object(ingestion_outbox, "_admit_ingestion_scope", AsyncMock(return_value=FENCE)),
