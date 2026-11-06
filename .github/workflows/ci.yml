@@ -86,6 +86,8 @@ jobs:
       # Coverage floors are in apps/web/vitest.config.ts (ratchet, see docs/development.md).
       - run: npm run test:coverage --workspace apps/web
       - run: npm run build
+      - name: Bundle-size budget
+        run: npm run check:bundle-size --workspace apps/web
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
