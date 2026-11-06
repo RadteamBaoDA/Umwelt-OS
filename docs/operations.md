@@ -102,7 +102,7 @@ All recurring jobs run on the `cron-worker` service (`apps.worker.main.CronWorke
 `SEARCH_EMBED_BATCH_SIZE` (default 64, max 128) chunks are claimed per keyset query, embedded in one gateway request, revalidated in one short session (access -> Source -> chunk) before the send and again under locks (Sources in sorted order) at publication, and written with one transaction per batch. A malformed response or a source that changed mid-batch falls back to the per-chunk path for that batch only. The run loops while work remains for up to 45 s (2048 chunks); `document.version.ready` also wakes it. Index contents are identical to the one-chunk path (`tests/unit/modules/search/test_embed_batch.py`).
 
 
-## Object storage operations (S3 / MinIO)
+## Object storage operations (S3-compatible)
 
 **Migrate from local files to S3.** Do this in a maintenance window or with uploads quiet; the tool is resumable and never modifies the source.
 
@@ -123,7 +123,7 @@ All recurring jobs run on the `cron-worker` service (`apps.worker.main.CronWorke
 ]}
 ```
 
-Apply with `aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-configuration file://lifecycle.json` (MinIO: `mc ilm rule add`). Do not add an expiration rule for `workspaces/`; deletion of originals is owned by the application. Backups and bucket versioning/replication are the provider's responsibility.
+Apply with `aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-configuration file://lifecycle.json` (RustFS: use its console or `mc ilm rule add` against the S3 endpoint). Do not add an expiration rule for `workspaces/`; deletion of originals is owned by the application. Backups and bucket versioning/replication are the provider's responsibility.
 
 ### Database role model
 

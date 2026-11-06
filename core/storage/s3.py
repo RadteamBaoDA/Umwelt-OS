@@ -1,4 +1,4 @@
-"""S3-compatible (AWS S3, MinIO) implementation of the ``StorageBackend`` contract.
+"""S3-compatible (AWS S3, RustFS and other S3-compatible stores) implementation of the ``StorageBackend`` contract.
 
 Keys keep the local layout (``workspaces/<ws>/documents/<doc>/<doc><suffix>``) under an optional
 bucket prefix, so ``raw_uri`` values are portable between backends. Publication is atomic by

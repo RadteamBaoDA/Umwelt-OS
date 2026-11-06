@@ -1,8 +1,8 @@
-"""S3 storage backend against a real MinIO server and the real PostgreSQL fence.
+"""S3 storage backend against a real S3-compatible server (RustFS) and the real PostgreSQL fence.
 
-Skipped unless the disposable harness provides ``S3_TEST_ENDPOINT_URL`` (compose profile ``minio`` in
+Skipped unless the disposable harness provides ``S3_TEST_ENDPOINT_URL`` (compose profile ``s3`` in
 docker-compose.test.yml, published on 127.0.0.1:39000 with ``S3_TEST_ACCESS_KEY`` / ``S3_TEST_SECRET_KEY``
-equal to the MINIO_ROOT_USER / MINIO_ROOT_PASSWORD there). The PostgreSQL fence tests additionally need
+equal to the RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY there). The PostgreSQL fence tests additionally need
 ``TEST_DATABASE_URL`` (migrated ``bbd_test``, including ``0016_workspace_storage_state``).
 """
 
@@ -35,11 +35,11 @@ async def _chunks(*blocks: bytes) -> AsyncIterator[bytes]:
 
 
 @pytest.fixture
-async def minio_config() -> S3Config:
-    """Create a fresh bucket on the MinIO test service and return a config bound to it (skips when unconfigured)."""
+async def s3_config() -> S3Config:
+    """Create a fresh bucket on the RustFS test service and return a config bound to it (skips when unconfigured)."""
     endpoint = os.getenv("S3_TEST_ENDPOINT_URL")
     if not endpoint:
-        pytest.skip("S3_TEST_ENDPOINT_URL is available only when the minio compose profile runs")
+        pytest.skip("S3_TEST_ENDPOINT_URL is available only when the s3 compose profile runs")
     key, secret = os.getenv("S3_TEST_ACCESS_KEY", ""), os.getenv("S3_TEST_SECRET_KEY", "")
     bucket = f"it-{uuid4().hex[:20]}"
     async with aioboto3.Session().client(
@@ -69,10 +69,10 @@ def pg_fence() -> PostgresStorageFence:
 
 
 async def test_multipart_roundtrip_conditional_create_and_listing(
-    minio_config: S3Config,
+    s3_config: S3Config,
     pg_fence: PostgresStorageFence,
 ) -> None:
-    backend = S3StorageBackend(minio_config, pg_fence)
+    backend = S3StorageBackend(s3_config, pg_fence)
     workspace = uuid4()
     key = build_document_key(workspace, uuid4(), ".bin")
     payload = b"a" * (5 * MIB) + b"b" * 1234
@@ -95,9 +95,9 @@ async def test_multipart_roundtrip_conditional_create_and_listing(
 
 
 async def test_presigned_download_forces_attachment(
-    minio_config: S3Config, pg_fence: PostgresStorageFence
+    s3_config: S3Config, pg_fence: PostgresStorageFence
 ) -> None:
-    backend = S3StorageBackend(replace(minio_config, presigned_downloads=True), pg_fence)
+    backend = S3StorageBackend(replace(s3_config, presigned_downloads=True), pg_fence)
     workspace = uuid4()
     key = build_document_key(workspace, uuid4(), ".html")
     await backend.put_stream(key, _chunks(b"<b>x</b>"), 100, workspace_id=workspace)

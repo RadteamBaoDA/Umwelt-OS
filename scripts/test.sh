@@ -29,12 +29,12 @@ export TEST_PUBLIC_ORIGIN="http://localhost:${WEB_PORT}"
 # Opt-in real-model chat e2e: public https providers are reachable only when .env.e2e-real holds a key (never exported to compose).
 if [[ -f .env.e2e-real ]] && grep -Eq '^[[:space:]]*E2E_REAL_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]]' .env.e2e-real; then export E2E_ALLOW_PUBLIC_PROVIDERS=true; fi
 export TEST_DATABASE_URL="postgresql+asyncpg://bbd_test:bbd-os-test-db-only@127.0.0.1:${TEST_POSTGRES_PORT}/bbd_test"
-export TEST_MINIO_PORT="$(free_port)"
-# Optional MinIO profile backs tests/integration/test_storage_s3_minio.py (disposable credentials from docker-compose.test.yml).
-export S3_TEST_ENDPOINT_URL="http://127.0.0.1:${TEST_MINIO_PORT}"
-export S3_TEST_ACCESS_KEY="bbd-os-test-minio"
-export S3_TEST_SECRET_KEY="bbd-os-test-minio-only"
-compose=(docker compose -p "$project" -f docker-compose.yml -f docker-compose.test.yml --profile minio)
+export TEST_S3_PORT="$(free_port)"
+# Optional S3 profile (RustFS) backs tests/integration/test_storage_s3.py (disposable credentials from docker-compose.test.yml).
+export S3_TEST_ENDPOINT_URL="http://127.0.0.1:${TEST_S3_PORT}"
+export S3_TEST_ACCESS_KEY="bbd-os-test-s3"
+export S3_TEST_SECRET_KEY="bbd-os-test-s3-only"
+compose=(docker compose -p "$project" -f docker-compose.yml -f docker-compose.test.yml --profile s3)
 cleanup() { "${compose[@]}" down --volumes --remove-orphans; }
 trap cleanup EXIT
 "${compose[@]}" up -d --build
