@@ -1,9 +1,11 @@
 {
   "ci": {
     "collect": {
-      "url": ["http://localhost:3000/login", "http://localhost:3000/terms", "http://localhost:3000/privacy"],
+      "url": ["http://localhost:3300/login", "http://localhost:3300/terms", "http://localhost:3300/privacy", "http://localhost:3300/"],
       "numberOfRuns": 1,
-      "settings": { "chromeFlags": "--no-sandbox --headless=new" }
+      "puppeteerScript": "scripts/lighthouse-auth.cjs",
+      "puppeteerLaunchOptions": { "args": ["--no-sandbox"] },
+      "settings": { "chromeFlags": "--no-sandbox --headless=new", "disableStorageReset": true }
     },
     "assert": {
       "assertions": {
