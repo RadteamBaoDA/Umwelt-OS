@@ -2,7 +2,7 @@
 
 import time
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -96,6 +96,31 @@ def embed_batch_size(settings: object) -> int:
     return max(1, min(value, MAX_EMBED_BATCH)) if isinstance(value, int) else 1
 
 
+async def _ensure_index_items(
+    session: AsyncSession, ctx: _RunContext, rows: list[Any]
+) -> dict[UUID, SearchIndexItem]:
+    """Return the generation's ``SearchIndexItem`` per claimed chunk, creating missing rows in one flush.
+
+    ``rows`` are the keyset ``(chunk_id, content, source_id)`` tuples; existing items (e.g. pending retries) are
+    reused and new ones are added to ``session`` and flushed so their ids exist before the claim is committed.
+    """
+    known = {
+        item.chunk_id: item
+        for item in await session.scalars(
+            select(SearchIndexItem).where(
+                SearchIndexItem.generation_id == ctx.generation_id,
+                SearchIndexItem.chunk_id.in_([row[0] for row in rows]),
+            )
+        )
+    }
+    for chunk_id, _content, _source in rows:
+        if chunk_id not in known:
+            known[chunk_id] = SearchIndexItem(generation_id=ctx.generation_id, chunk_id=chunk_id)
+            session.add(known[chunk_id])
+    await session.flush()
+    return known
+
+
 async def _claim_chunk_batch(ctx: _RunContext, state: _RunState, limit: int) -> list[_ClaimedChunk]:
     """Claim up to ``limit`` pending chunks (one keyset query, ascending id) in one locked transaction.
 
@@ -170,22 +195,7 @@ async def _claim_chunk_batch(ctx: _RunContext, state: _RunState, limit: int) -> 
                 await _finalize_exhausted_generation(session, ctx, generation, before, access_fence)
             return []
         state.last_chunk = rows[-1][0]
-        known = {
-            item.chunk_id: item
-            for item in await session.scalars(
-                select(SearchIndexItem).where(
-                    SearchIndexItem.generation_id == ctx.generation_id,
-                    SearchIndexItem.chunk_id.in_([row[0] for row in rows]),
-                )
-            )
-        }
-        for chunk_id, _content, _source in rows:
-            if chunk_id not in known:
-                known[chunk_id] = SearchIndexItem(
-                    generation_id=ctx.generation_id, chunk_id=chunk_id
-                )
-                session.add(known[chunk_id])
-        await session.flush()
+        known = await _ensure_index_items(session, ctx, rows)
         claimed = [
             _ClaimedChunk(cid, content, sid, known[cid].id, generation.dimensions)
             for cid, content, sid in rows

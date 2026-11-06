@@ -572,6 +572,30 @@ async def get_discovery(
     return to_discovery_read(row, list(items))
 
 
+def _require_matching_deployment(connection: McpConnection, discovery: McpDiscovery) -> None:
+    """Raise ``McpConflict`` unless the connection and selected discovery share one deployment identity.
+
+    For stdio the connection's deployment, successful-check and discovery profile hashes must all be present and
+    equal; for streamable HTTP none of them may be set. Pure comparison: reads only loaded column values.
+    """
+    if (
+        connection.transport == "stdio"
+        and (
+            connection.deployment_profile_hash is None
+            or connection.draft_check_profile_hash != connection.deployment_profile_hash
+            or discovery.deployment_profile_hash != connection.deployment_profile_hash
+        )
+    ) or (
+        connection.transport == "streamable_http"
+        and (
+            connection.deployment_profile_hash is not None
+            or connection.draft_check_profile_hash is not None
+            or discovery.deployment_profile_hash is not None
+        )
+    ):
+        raise McpConflict("Connection and discovery deployment identities do not match")
+
+
 async def replace_connection_grants(
     session: AsyncSession,
     connection_id: UUID,
@@ -602,22 +626,7 @@ async def replace_connection_grants(
     )
     if discovery is None:
         raise McpConflict("Discovery is stale or belongs to another connection")
-    if (
-        connection.transport == "stdio"
-        and (
-            connection.deployment_profile_hash is None
-            or connection.draft_check_profile_hash != connection.deployment_profile_hash
-            or discovery.deployment_profile_hash != connection.deployment_profile_hash
-        )
-    ) or (
-        connection.transport == "streamable_http"
-        and (
-            connection.deployment_profile_hash is not None
-            or connection.draft_check_profile_hash is not None
-            or discovery.deployment_profile_hash is not None
-        )
-    ):
-        raise McpConflict("Connection and discovery deployment identities do not match")
+    _require_matching_deployment(connection, discovery)
     if len({item.capability_id for item in selections}) != len(selections):
         raise ValueError("Capability selections must be unique")
     ids = [item.capability_id for item in selections]

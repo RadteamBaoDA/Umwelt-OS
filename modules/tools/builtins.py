@@ -225,6 +225,64 @@ async def _handle_knowledge_list_documents(
     return {"items": items, "next_cursor": page.next_cursor}
 
 
+async def _search_source_generations(
+    session: Any,
+    *,
+    requested: frozenset[UUID],
+    source_ids: frozenset[UUID],
+    owner_all: bool,
+    destination: ToolDestination,
+    scope: Scope,
+    flag: bool,
+) -> dict[UUID, int]:
+    """Resolve the searchable sources to their pre-await generations through the tool source projections.
+
+    Owner-wide scope with no explicit request reads one bounded page of tool-visible sources (a further page raises
+    ``PermissionError``); otherwise each source in the requested/granted intersection is read individually. Returns
+    ``{source_id: generation}`` for every allowed source, so the keys are the allowed set. Raises ``PermissionError``
+    when the candidate set exceeds the 100-source fence.
+    """
+    from modules.sources import public as sources
+
+    source_generations: dict[UUID, int] = {}
+    if owner_all and not requested:
+        page = await sources.list_tool_sources(
+            session,
+            limit=100,
+            cursor=None,
+            source_ids=frozenset(),
+            owner_all=True,
+            destination=destination,
+            scope=scope,
+            multi_workspace_enabled=flag,
+        )
+        if page.next_cursor is not None:
+            raise PermissionError("Owner source scope exceeds the bounded search fence")
+        for source in page.items:
+            source_generations[source.id] = source.generation
+    else:
+        candidates = (
+            requested
+            if owner_all
+            else (requested.intersection(source_ids) if requested else source_ids)
+        )
+        if len(candidates) > 100:
+            raise PermissionError("Search source scope exceeds the bounded fence")
+        for source_id in candidates:
+            candidate_source = await sources.get_tool_source(
+                session,
+                source_id,
+                source_ids=source_ids,
+                owner_all=owner_all,
+                destination=destination,
+                scope=scope,
+                multi_workspace_enabled=flag,
+            )
+            if candidate_source is not None:
+                source_generations[source_id] = candidate_source.generation
+    return source_generations
+
+
 async def _handle_search_query(args: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Search the trusted source intersection and capture pre-await generations plus exact hits.
 
@@ -239,49 +297,17 @@ async def _handle_search_query(args: dict[str, Any], context: dict[str, Any]) ->
     _, source_ids, owner_all, scope, flag = _principal_scope(context)
     requested = frozenset(UUID(value) for value in args.get("source_ids", []))
     destination = _destination(context)
-    source_generations: dict[UUID, int] = {}
     async with _resolve_session(context) as session:
-        from modules.sources import public as sources
-
-        allowed_set: set[UUID] = set()
-        if owner_all and not requested:
-            page = await sources.list_tool_sources(
-                session,
-                limit=100,
-                cursor=None,
-                source_ids=frozenset(),
-                owner_all=True,
-                destination=destination,
-                scope=scope,
-                multi_workspace_enabled=flag,
-            )
-            if page.next_cursor is not None:
-                raise PermissionError("Owner source scope exceeds the bounded search fence")
-            for source in page.items:
-                allowed_set.add(source.id)
-                source_generations[source.id] = source.generation
-        else:
-            candidates = (
-                requested
-                if owner_all
-                else (requested.intersection(source_ids) if requested else source_ids)
-            )
-            if len(candidates) > 100:
-                raise PermissionError("Search source scope exceeds the bounded fence")
-            for source_id in candidates:
-                candidate_source = await sources.get_tool_source(
-                    session,
-                    source_id,
-                    source_ids=source_ids,
-                    owner_all=owner_all,
-                    destination=destination,
-                    scope=scope,
-                    multi_workspace_enabled=flag,
-                )
-                if candidate_source is not None:
-                    allowed_set.add(source_id)
-                    source_generations[source_id] = candidate_source.generation
-        allowed = frozenset(allowed_set)
+        source_generations = await _search_source_generations(
+            session,
+            requested=requested,
+            source_ids=source_ids,
+            owner_all=owner_all,
+            destination=destination,
+            scope=scope,
+            flag=flag,
+        )
+        allowed = frozenset(source_generations)
         if not allowed:
             _record_output_fences(context, [], source_generations)
             return {"items": [], "next_cursor": None, "effective_mode": "lexical", "warnings": []}

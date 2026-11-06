@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select, text
@@ -222,6 +223,55 @@ async def cluster_observation(
     return story.id
 
 
+async def _live_fuzzy_candidates(
+    session: AsyncSession,
+    candidate_rows: list[Any],
+    *,
+    current_entity_ids: set[str],
+    observed_at: datetime,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[tuple[NewsObservation, NewsStory, list[str]]]:
+    """Keep only candidate ``(observation, story)`` rows whose evidence is still current and entity-overlapping.
+
+    A row survives when it is inside the fuzzy time window, its document projection still carries the observed
+    version and chunk (read through the owner contract at the observation's source generation), and it shares at
+    least one canonical entity with the new observation. Returns ``(observation, story, sorted_overlap_ids)`` in
+    input order; issues one projection read and one membership read per surviving-window row.
+    """
+    live_candidates: list[tuple[NewsObservation, NewsStory, list[str]]] = []
+    for observation, story in candidate_rows:
+        if (
+            abs((observation.observed_at - observed_at).total_seconds())
+            > FUZZY_WINDOW.total_seconds()
+        ):
+            continue
+        candidate_projection = await documents.get_news_document_projection(
+            session,
+            observation.document_id,
+            expected_source_generation=observation.source_generation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if (
+            candidate_projection is None
+            or candidate_projection.document_version_id != observation.document_version_id
+            or observation.chunk_id not in {item.id for item in candidate_projection.chunks}
+        ):
+            continue
+        refs = await entities.list_version_membership_refs(
+            session,
+            observation.document_version_id,
+            [observation.chunk_id],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        overlap = sorted(current_entity_ids.intersection(str(item.entity_id) for item in refs))
+        if overlap:
+            live_candidates.append((observation, story, overlap))
+    return live_candidates
+
+
 async def _fuzzy_candidate(
     session: AsyncSession,
     *,
@@ -254,37 +304,14 @@ async def _fuzzy_candidate(
     )
     if len(candidate_rows) > MAX_CANDIDATES:
         return None
-    live_candidates: list[tuple[NewsObservation, NewsStory, list[str]]] = []
-    for observation, story in candidate_rows:
-        if (
-            abs((observation.observed_at - observed_at).total_seconds())
-            > FUZZY_WINDOW.total_seconds()
-        ):
-            continue
-        candidate_projection = await documents.get_news_document_projection(
-            session,
-            observation.document_id,
-            expected_source_generation=observation.source_generation,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        if (
-            candidate_projection is None
-            or candidate_projection.document_version_id != observation.document_version_id
-            or observation.chunk_id not in {item.id for item in candidate_projection.chunks}
-        ):
-            continue
-        refs = await entities.list_version_membership_refs(
-            session,
-            observation.document_version_id,
-            [observation.chunk_id],
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        overlap = sorted(current_entity_ids.intersection(str(item.entity_id) for item in refs))
-        if overlap:
-            live_candidates.append((observation, story, overlap))
-    scored_rows = live_candidates
+    scored_rows = await _live_fuzzy_candidates(
+        session,
+        candidate_rows,
+        current_entity_ids=current_entity_ids,
+        observed_at=observed_at,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     if not scored_rows:
         return None
     similarity = await search.compare_news_evidence_embeddings(

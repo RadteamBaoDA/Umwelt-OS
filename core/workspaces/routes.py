@@ -374,6 +374,38 @@ async def share_revoke(
     await session.commit()
 
 
+async def _admit_invitation_caller(
+    body: InvitationAccept,
+    request: Request,
+    session: AsyncSession,
+    redis: Redis,
+    origin: str | None,
+    csrf_token: str | None,
+) -> tuple[str, bool, AuthSession | None]:
+    """Run the pre-lock admission checks for invitation acceptance and return ``(digest, signed_in, auth)``.
+
+    Ordering is preserved from the route: feature flag, origin allow-list, bounded hashed attempt admission, then
+    either account-bound CSRF (signed-in caller, returning the authenticated session) or the anonymous CSRF
+    double-submit check. Raises ``HTTPException`` 403 on any failed check; takes no database locks.
+    """
+    settings = request.app.state.settings
+    if not settings.multi_workspace_enabled:
+        raise HTTPException(status_code=403, detail="Invitation acceptance is not enabled")
+    if not _origin_allowed(origin, settings):
+        raise HTTPException(status_code=403, detail="Origin is not allowed")
+    digest = _hash(body.token.get_secret_value())
+    await _allow_invitation_attempt(request, redis, digest)
+    signed_in = SESSION_COOKIE in request.cookies
+    auth = None
+    if signed_in:
+        auth = await require_account_write(request, session, origin, csrf_token)
+    else:
+        # Anonymous CSRF bootstrap already exists for login; bind Google proof to the same cookie.
+        if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
+            raise HTTPException(status_code=403, detail="CSRF token is invalid")
+    return digest, signed_in, auth
+
+
 @router.post("/invitations/accept", response_model=InvitationAccepted)
 async def invitation_accept(
     body: InvitationAccept,
@@ -392,20 +424,9 @@ async def invitation_accept(
     roll back all rows and require explicit winning-account login, never email-only joining.
     """
     settings = request.app.state.settings
-    if not settings.multi_workspace_enabled:
-        raise HTTPException(status_code=403, detail="Invitation acceptance is not enabled")
-    if not _origin_allowed(origin, settings):
-        raise HTTPException(status_code=403, detail="Origin is not allowed")
-    digest = _hash(body.token.get_secret_value())
-    await _allow_invitation_attempt(request, redis, digest)
-    signed_in = SESSION_COOKIE in request.cookies
-    auth = None
-    if signed_in:
-        auth = await require_account_write(request, session, origin, csrf_token)
-    else:
-        # Anonymous CSRF bootstrap already exists for login; bind Google proof to the same cookie.
-        if not _valid_csrf(request.cookies.get(CSRF_COOKIE), csrf_token, settings):
-            raise HTTPException(status_code=403, detail="CSRF token is invalid")
+    digest, signed_in, auth = await _admit_invitation_caller(
+        body, request, session, redis, origin, csrf_token
+    )
     target = await invitation_target(session, digest)
     existing = await account_id_for_email(session, target.email)
     if signed_in and body.google_enrollment:

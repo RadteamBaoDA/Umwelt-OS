@@ -267,6 +267,26 @@ class _RequestIdMiddleware:
                     _record_request_start(scope, started, 500)
 
 
+def _retryable_503(request: Request, code: str, message: str) -> JSONResponse:
+    """Build the structured 503 envelope with ``Retry-After: 5`` shared by the retryable-failure handlers.
+
+    ``request.state.request_id`` (set by ``_RequestIdMiddleware``) is echoed as ``requestId``; the body carries no
+    exception details, matching the other error envelopes.
+    """
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": "5"},
+        content={
+            "error": {
+                "code": code,
+                "message": message,
+                "details": {},
+                "requestId": getattr(request.state, "request_id", ""),
+            }
+        },
+    )
+
+
 def install_error_handling(app: FastAPI) -> None:
     """Install direct request-ID/header/metric forwarding and unchanged structured error handlers.
 
@@ -314,17 +334,8 @@ def install_error_handling(app: FastAPI) -> None:
         )
         if code not in _TIMEOUT_SQLSTATES:
             return await internal_error(request, exc)
-        return JSONResponse(
-            status_code=503,
-            headers={"Retry-After": "5"},
-            content={
-                "error": {
-                    "code": "TEMPORARILY_UNAVAILABLE",
-                    "message": "The service is busy; retry shortly",
-                    "details": {},
-                    "requestId": getattr(request.state, "request_id", ""),
-                }
-            },
+        return _retryable_503(
+            request, "TEMPORARILY_UNAVAILABLE", "The service is busy; retry shortly"
         )
 
     @app.exception_handler(RedisError)
@@ -339,17 +350,8 @@ def install_error_handling(app: FastAPI) -> None:
             getattr(request.state, "request_id", ""),
             type(exc).__name__,
         )
-        return JSONResponse(
-            status_code=503,
-            headers={"Retry-After": "5"},
-            content={
-                "error": {
-                    "code": "QUEUE_UNAVAILABLE",
-                    "message": "The job queue is temporarily unavailable; retry shortly",
-                    "details": {},
-                    "requestId": getattr(request.state, "request_id", ""),
-                }
-            },
+        return _retryable_503(
+            request, "QUEUE_UNAVAILABLE", "The job queue is temporarily unavailable; retry shortly"
         )
 
     @app.exception_handler(Exception)
