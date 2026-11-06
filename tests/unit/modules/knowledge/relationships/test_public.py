@@ -45,6 +45,7 @@ from modules.knowledge.relationships.schemas import (
     RelationshipRead,
     RelationshipSnapshot,
 )
+from tests.unit.relationships_patching import patch_relationship_attr
 
 SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
 KW = {"scope": SCOPE, "multi_workspace_enabled": False}
@@ -53,9 +54,7 @@ KW = {"scope": SCOPE, "multi_workspace_enabled": False}
 @pytest.fixture(autouse=True)
 def _admitted() -> object:
     """Admission is covered in test_scope; these tests exercise the domain logic past it."""
-    with patch(
-        "modules.knowledge.relationships.public._admit", AsyncMock(return_value=MagicMock())
-    ):
+    with patch_relationship_attr("_admit", AsyncMock(return_value=MagicMock())):
         yield
 
 
@@ -142,8 +141,8 @@ class TestListRelationships:
             observation_history_only=True,
         )
 
-        with patch(
-            "modules.knowledge.relationships.public._list_relationships_as_of",
+        with patch_relationship_attr(
+            "_list_relationships_as_of",
             AsyncMock(return_value=expected_page),
         ) as mock_as_of:
             page = await list_relationships(
@@ -178,8 +177,8 @@ class TestListRelationships:
             digest="abcde",
         )
 
-        with patch(
-            "modules.knowledge.relationships.public.get_relationship_snapshot",
+        with patch_relationship_attr(
+            "get_relationship_snapshot",
             AsyncMock(return_value=mock_snapshot),
         ):
             page = await list_relationships(session, limit=2, cursor=None, **KW)
@@ -506,7 +505,7 @@ class TestPurgeAndCleanupBounds:
         session.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
         closure = RelationshipSupportClosure(src, None, (), (), (), (), (), False)
         with (
-            patch("modules.knowledge.relationships.public._admit", AsyncMock(return_value=fence)),
+            patch_relationship_attr("_admit", AsyncMock(return_value=fence)),
             pytest.raises(RuntimeError, match="cleanup closure changed"),
         ):
             await purge_history_support(
@@ -535,7 +534,7 @@ class TestPurgeAndCleanupBounds:
         session = AsyncMock()
         session.execute.return_value = MagicMock(all=MagicMock(return_value=[]))
         closure = RelationshipSupportClosure(src, None, (), (), (), (), (), False)
-        with patch("modules.knowledge.relationships.public._admit", AsyncMock(return_value=fence)):
+        with patch_relationship_attr("_admit", AsyncMock(return_value=fence)):
             await purge_history_support(
                 session,
                 closure,

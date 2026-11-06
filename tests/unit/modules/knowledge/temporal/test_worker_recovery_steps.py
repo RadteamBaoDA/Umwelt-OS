@@ -24,6 +24,7 @@ from modules.knowledge.temporal.adapter import (
     GraphReceiptInspection,
     GraphWriteReceipt,
 )
+from tests.unit.modules.knowledge.temporal._worker_patch import patch_worker
 
 SHA = "a" * 64
 OTHER = "b" * 64
@@ -68,7 +69,7 @@ def test_initial_node_actions_replace_bound_and_delete_orphans(
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             created_with.append((args, kwargs))
 
-    monkeypatch.setattr(worker, "CanonicalNodeRecoveryAction", Spy)
+    patch_worker(monkeypatch, "CanonicalNodeRecoveryAction", Spy)
     result = worker._initial_node_actions(context, operation)  # type: ignore[arg-type]
     assert len(result) == 2
     by_id = {args[0]: (args, kwargs) for args, kwargs in created_with}
@@ -110,7 +111,7 @@ async def test_prepare_node_actions_schedules_rebuild_for_shared_orphans(
     node, mine, theirs = str(uuid4()), str(uuid4()), str(uuid4())
     dependency = uuid4()
     mark = AsyncMock(return_value=(dependency,))
-    monkeypatch.setattr(worker, "_mark_dependents_for_rebuild", mark)
+    patch_worker(monkeypatch, "_mark_dependents_for_rebuild", mark)
     shared = ExactGraphLink(str(uuid4()), "REL", str(uuid4()), node, tuple(sorted([mine, theirs])))
     private = ExactGraphLink(str(uuid4()), "REL", str(uuid4()), str(uuid4()), (mine,))
     shared_action = CanonicalNodeRecoveryAction(
@@ -176,7 +177,7 @@ async def test_build_fact_actions_fresh_replacement_or_rebuild_fallback(
     fact, mine, survivor, receipt, inspection, source, target = _fact_inputs()
     mapping = SimpleNamespace(episode_id=mine)
     fresh = SimpleNamespace(marker="fresh")
-    monkeypatch.setattr(worker, "_fresh_fact_action", AsyncMock(return_value=fresh))
+    patch_worker(monkeypatch, "_fresh_fact_action", AsyncMock(return_value=fresh))
     args = (
         MagicMock(),
         MagicMock(),
@@ -194,19 +195,17 @@ async def test_build_fact_actions_fresh_replacement_or_rebuild_fallback(
     call = worker._fresh_fact_action.await_args  # type: ignore[attr-defined]
     assert call.args[-5:] == (fact, source, target, SHA, {survivor})
     dependency = uuid4()
-    monkeypatch.setattr(
-        worker,
+    patch_worker(
+        monkeypatch,
         "_fresh_fact_action",
         AsyncMock(side_effect=GraphOperationError("graph_candidate_fact_requires_rebuild")),
     )
-    monkeypatch.setattr(
-        worker, "_mark_dependents_for_rebuild", AsyncMock(return_value=(dependency,))
-    )
+    patch_worker(monkeypatch, "_mark_dependents_for_rebuild", AsyncMock(return_value=(dependency,)))
     (action,) = await worker._build_fact_actions(*args)  # type: ignore[arg-type]
     assert isinstance(action, ExactFactRecoveryAction)
     assert (action.action, action.rebuild_mapping_ids) == ("delete_for_rebuild", (dependency,))
-    monkeypatch.setattr(
-        worker, "_fresh_fact_action", AsyncMock(side_effect=GraphOperationError("graph_other"))
+    patch_worker(
+        monkeypatch, "_fresh_fact_action", AsyncMock(side_effect=GraphOperationError("graph_other"))
     )
     with pytest.raises(GraphOperationError, match="graph_other"):
         await worker._build_fact_actions(*args)  # type: ignore[arg-type]
@@ -234,7 +233,7 @@ async def test_build_fact_actions_deletes_unsupported_and_consumes_absence_proof
         desired_digest="d",
         error_code=None,
     )
-    monkeypatch.setattr(worker, "_fresh_fact_action", AsyncMock(side_effect=AssertionError))
+    patch_worker(monkeypatch, "_fresh_fact_action", AsyncMock(side_effect=AssertionError))
     (action,) = await worker._build_fact_actions(
         MagicMock(),
         MagicMock(),
@@ -270,10 +269,10 @@ async def test_verify_prior_dispatches_journals_cessation_or_raises(
     async def stopped() -> Any:
         yield MagicMock()
 
-    monkeypatch.setattr(worker, "_admit", AsyncMock())
-    monkeypatch.setattr(worker, "_get", AsyncMock(side_effect=lambda *a, **k: next(rows)))
+    patch_worker(monkeypatch, "_admit", AsyncMock())
+    patch_worker(monkeypatch, "_get", AsyncMock(side_effect=lambda *a, **k: next(rows)))
     commit = AsyncMock()
-    monkeypatch.setattr(worker, "_commit", commit)
+    patch_worker(monkeypatch, "_commit", commit)
     graph = SimpleNamespace(verify_dispatch_cessation=AsyncMock(return_value=False))
     adm = SimpleNamespace(scope=SimpleNamespace(workspace_id=uuid4()))
     with pytest.raises(GraphOperationUnknown, match="graph_prior_dispatch_still_unknown"):

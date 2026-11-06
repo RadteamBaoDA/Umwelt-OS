@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 
 from modules.knowledge.relationships import public as rel
+from tests.unit.relationships_patching import patch_relationship
 
 WS, ENTITY, NEW, OTHER = uuid4(), uuid4(), uuid4(), uuid4()
 
@@ -67,10 +68,10 @@ class _Session:
 @pytest.fixture(autouse=True)
 def _patched(monkeypatch: pytest.MonkeyPatch) -> None:
     """Neutralize admission, validation, confidence refresh and history recording."""
-    monkeypatch.setattr(rel, "_admit", AsyncMock())
-    monkeypatch.setattr(rel, "validate_entity_split_plan", lambda *_a: None)
-    monkeypatch.setattr(rel, "_refresh_derived_confidence", AsyncMock())
-    monkeypatch.setattr(rel, "record_relationship_history", AsyncMock())
+    patch_relationship(monkeypatch, "_admit", AsyncMock())
+    patch_relationship(monkeypatch, "validate_entity_split_plan", lambda *_a: None)
+    patch_relationship(monkeypatch, "_refresh_derived_confidence", AsyncMock())
+    patch_relationship(monkeypatch, "record_relationship_history", AsyncMock())
 
 
 def _refs(*rows: Any) -> AsyncMock:
@@ -98,7 +99,7 @@ async def test_partial_move_keeps_source_and_reuses_equal_existing_edge(
     row, member = _row(), uuid4()
     moving, staying = _support(row, source_membership=member), _support(row)
     existing = SimpleNamespace(id=uuid4(), metadata_json={})
-    monkeypatch.setattr(rel, "list_correction_relationship_refs", _refs(row))
+    patch_relationship(monkeypatch, "list_correction_relationship_refs", _refs(row))
     session = _Session([[row], [moving, staying]], [existing, uuid4(), uuid4()])
     out = await _split(session, row, {member})
     assert (
@@ -116,7 +117,7 @@ async def test_all_supports_moving_creates_destination_and_deletes_source(
     """Every support moves: a new edge is created, supports re-pointed and the old edge deleted."""
     row, member = _row(), uuid4()
     support = _support(row, source_membership=member)
-    monkeypatch.setattr(rel, "list_correction_relationship_refs", _refs(row))
+    patch_relationship(monkeypatch, "list_correction_relationship_refs", _refs(row))
     session = _Session([[row], [support]], [None, uuid4(), uuid4()])
     out = await _split(session, row, {member})
     destination_id = support.relationship_id
@@ -128,14 +129,14 @@ async def test_split_rejections(monkeypatch: pytest.MonkeyPatch) -> None:
     """Owner edges, self relationships, metadata conflicts and a changed closure are rejected."""
     member = uuid4()
     owner = _row("owner")
-    monkeypatch.setattr(rel, "list_correction_relationship_refs", _refs(owner))
+    patch_relationship(monkeypatch, "list_correction_relationship_refs", _refs(owner))
     with pytest.raises(ValueError, match="owner-authored relationship"):
         await _split(
             _Session([[owner], [_support(owner, source_membership=member)]], []), owner, {member}
         )
     selfish = _row()
     selfish.target_entity_id = NEW
-    monkeypatch.setattr(rel, "list_correction_relationship_refs", _refs(selfish))
+    patch_relationship(monkeypatch, "list_correction_relationship_refs", _refs(selfish))
     with pytest.raises(ValueError, match="self relationship"):
         await _split(
             _Session([[selfish], [_support(selfish, source_membership=member)]], []),
@@ -143,7 +144,7 @@ async def test_split_rejections(monkeypatch: pytest.MonkeyPatch) -> None:
             {member},
         )
     row = _row(metadata={"a": 1})
-    monkeypatch.setattr(rel, "list_correction_relationship_refs", _refs(row))
+    patch_relationship(monkeypatch, "list_correction_relationship_refs", _refs(row))
     conflicting = SimpleNamespace(id=uuid4(), metadata_json={"b": 2})
     with pytest.raises(ValueError, match="conflicting relationship metadata"):
         await _split(
@@ -151,6 +152,6 @@ async def test_split_rejections(monkeypatch: pytest.MonkeyPatch) -> None:
             row,
             {member},
         )
-    monkeypatch.setattr(rel, "list_correction_relationship_refs", AsyncMock(return_value=[]))
+    patch_relationship(monkeypatch, "list_correction_relationship_refs", AsyncMock(return_value=[]))
     with pytest.raises(ValueError, match="closure changed"):
         await _split(_Session([], []), row, {member})

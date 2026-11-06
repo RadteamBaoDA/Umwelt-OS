@@ -14,6 +14,7 @@ from core.errors import ConflictError, DomainError, error_status
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.knowledge.temporal import public, routes, worker
 from modules.knowledge.temporal.schemas import ReconcileRequest
+from tests.unit.modules.knowledge.temporal._worker_patch import patch_worker_attr
 from tests.unit.modules.knowledge.temporal.conftest import FENCE, JOB, MEMBER, OWNER, WORKSPACE_ID
 
 KW = {"multi_workspace_enabled": False}
@@ -161,7 +162,7 @@ async def test_changed_original_fence_is_rejected_before_the_effect() -> None:
 
 async def test_commit_carries_the_original_fence() -> None:
     session = _session()
-    with patch.object(worker, "commit_with_replay", AsyncMock()) as commit:
+    with patch_worker_attr("commit_with_replay", AsyncMock()) as commit:
         await worker._commit(session, _adm())
     assert commit.await_args.kwargs["access_fence"] == FENCE
     assert commit.await_args.kwargs["scope"] == JOB
@@ -195,10 +196,10 @@ async def test_process_admits_through_the_fence_before_slot_or_claim() -> None:
     graph = MagicMock(close=AsyncMock())
     ctx = {"session_factory": _factory(_session()), "settings": SimpleNamespace()}
     with (
-        patch.object(worker, "_admit_job", admit),
-        patch.object(worker, "_claim", claim),
-        patch.object(worker, "heavy_job_slot", slot),
-        patch.object(worker, "TemporalGraph", MagicMock(return_value=graph)),
+        patch_worker_attr("_admit_job", admit),
+        patch_worker_attr("_claim", claim),
+        patch_worker_attr("heavy_job_slot", slot),
+        patch_worker_attr("TemporalGraph", MagicMock(return_value=graph)),
         patch.object(worker.GraphConfiguration, "from_settings", MagicMock()),
     ):
         await worker.process_graph_operation(ctx, str(uuid4()))
@@ -209,9 +210,9 @@ async def test_denied_job_takes_no_slot_claim_or_lock() -> None:
     claim, slot = AsyncMock(), MagicMock()
     ctx = {"session_factory": _factory(_session()), "settings": SimpleNamespace()}
     with (
-        patch.object(worker, "_admit_job", AsyncMock(return_value=None)),
-        patch.object(worker, "_claim", claim),
-        patch.object(worker, "heavy_job_slot", slot),
+        patch_worker_attr("_admit_job", AsyncMock(return_value=None)),
+        patch_worker_attr("_claim", claim),
+        patch_worker_attr("heavy_job_slot", slot),
     ):
         await worker.process_graph_operation(ctx, str(uuid4()))
     claim.assert_not_awaited()
@@ -293,10 +294,10 @@ async def test_recovery_admits_each_workspace_separately_and_skips_denied() -> N
     redis = MagicMock(enqueue_job=AsyncMock())
     ctx = {"session_factory": _factory(session), "settings": SimpleNamespace(), "redis": redis}
     with (
-        patch.object(worker, "_recovery_workspaces", AsyncMock(return_value=[first, second])),
-        patch.object(worker, "admit_workspace", admit),
+        patch_worker_attr("_recovery_workspaces", AsyncMock(return_value=[first, second])),
+        patch_worker_attr("admit_workspace", admit),
         patch.object(worker.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)),
-        patch.object(worker, "commit_with_replay", AsyncMock()) as commit,
+        patch_worker_attr("commit_with_replay", AsyncMock()) as commit,
     ):
         assert await worker.recover_graph_work(ctx) == 0
     assert seen == [first, second]
@@ -314,12 +315,12 @@ async def test_cancellation_with_fence_drift_reraises_the_cancellation() -> None
     graph = MagicMock(close=AsyncMock(), initialize=AsyncMock(side_effect=asyncio.CancelledError()))
     ctx = {"session_factory": _factory(_session()), "settings": SimpleNamespace()}
     with (
-        patch.object(worker, "_admit_job", AsyncMock(return_value=_adm())),
-        patch.object(worker, "_claim", AsyncMock(return_value=uuid4())),
-        patch.object(worker, "_admit", AsyncMock()),
-        patch.object(worker, "_finish", AsyncMock(side_effect=HTTPException(status_code=409))),
-        patch.object(worker, "heavy_job_slot", slot),
-        patch.object(worker, "TemporalGraph", MagicMock(return_value=graph)),
+        patch_worker_attr("_admit_job", AsyncMock(return_value=_adm())),
+        patch_worker_attr("_claim", AsyncMock(return_value=uuid4())),
+        patch_worker_attr("_admit", AsyncMock()),
+        patch_worker_attr("_finish", AsyncMock(side_effect=HTTPException(status_code=409))),
+        patch_worker_attr("heavy_job_slot", slot),
+        patch_worker_attr("TemporalGraph", MagicMock(return_value=graph)),
         patch.object(worker.GraphConfiguration, "from_settings", MagicMock()),
         pytest.raises(asyncio.CancelledError),
     ):
@@ -337,10 +338,10 @@ async def test_plain_fence_drift_is_still_a_silent_skip(drift: Exception) -> Non
     graph = MagicMock(close=AsyncMock())
     ctx = {"session_factory": _factory(_session()), "settings": SimpleNamespace()}
     with (
-        patch.object(worker, "_admit_job", AsyncMock(return_value=_adm())),
-        patch.object(worker, "_claim", AsyncMock(side_effect=drift)),
-        patch.object(worker, "heavy_job_slot", slot),
-        patch.object(worker, "TemporalGraph", MagicMock(return_value=graph)),
+        patch_worker_attr("_admit_job", AsyncMock(return_value=_adm())),
+        patch_worker_attr("_claim", AsyncMock(side_effect=drift)),
+        patch_worker_attr("heavy_job_slot", slot),
+        patch_worker_attr("TemporalGraph", MagicMock(return_value=graph)),
         patch.object(worker.GraphConfiguration, "from_settings", MagicMock()),
     ):
         assert await worker.process_graph_operation(ctx, str(uuid4())) is None

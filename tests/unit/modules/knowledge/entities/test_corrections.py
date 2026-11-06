@@ -52,6 +52,7 @@ from modules.knowledge.entities.schemas import (
 )
 from modules.knowledge.relationships.schemas import CorrectionRelationshipRef
 from tests.unit.entity_patching import patch_entity_attr
+from tests.unit.relationships_patching import patch_relationship_attr
 
 
 def _make_sample_entity(
@@ -137,7 +138,7 @@ def _admitted() -> object:
     with (
         patch("modules.knowledge.entities.corrections._admit", admitted),
         patch_entity_attr("_admit", admitted),
-        patch("modules.knowledge.relationships.public._admit", admitted),
+        patch_relationship_attr("_admit", admitted),
     ):
         yield
 
