@@ -339,6 +339,95 @@ async def export_page(
     )
 
 
+async def _export_fence_unchanged(
+    session: AsyncSession,
+    fence: RelationshipExportFence,
+    eligible: Any,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Recheck one relationship export fence against the current canonical state.
+
+    Read-only. Returns ``False`` when the row is missing or its timestamps changed, a source is no
+    longer export-eligible at its fenced generation, support exceeds 100 rows, or the exact evidence
+    ids/digest differ; ``True`` only when every check still matches the fence.
+    """
+    row = await session.scalar(
+        select(Relationship)
+        .where(
+            Relationship.workspace_id == scope.workspace_id,
+            Relationship.id == fence.id,
+        )
+        .execution_options(populate_existing=True)
+    )
+    if row is None or (row.created_at, row.updated_at) != (fence.created_at, fence.updated_at):
+        return False
+    source_fences = [
+        SourceExportFence(
+            source_id=item.source_id,
+            workspace_id=scope.workspace_id,
+            generation=item.generation,
+        )
+        for item in fence.source_fences
+    ]
+    if set(
+        await sources.filter_export_eligible_sources(
+            session, source_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+    ) != {item.source_id for item in source_fences}:
+        return False
+    supports = list(
+        (
+            await session.scalars(
+                select(RelationshipEvidence)
+                .where(
+                    _evidence_scope(scope),
+                    RelationshipEvidence.relationship_id == fence.id,
+                    RelationshipEvidence.source_id.in_(eligible),
+                )
+                .order_by(RelationshipEvidence.id)
+                .limit(101)
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
+    if len(supports) > 100:
+        return False
+    generations = await _relationship_source_generations(
+        session,
+        {support.source_id for support in supports if support.source_id is not None},
+        scope=scope,
+    )
+    refs = [
+        RelationshipExportEvidence(
+            id=support.id,
+            source_id=support.source_id,
+            source_generation=generations.get(support.source_id)
+            if support.source_id is not None
+            else None,
+            document_id=support.document_id,
+            document_version_id=support.document_version_id,
+            chunk_id=support.chunk_id,
+            source_membership_id=support.source_membership_id,
+            target_membership_id=support.target_membership_id,
+            observed_at=support.observed_at,
+            confidence=support.confidence,
+        )
+        for support in supports
+    ]
+    digest = sha256(
+        json.dumps(
+            [ref.model_dump(mode="json") for ref in refs],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    if [ref.id for ref in refs] != fence.evidence_ids or digest != fence.evidence_digest:
+        return False
+    return True
+
+
 async def validate_export_fences(
     session: AsyncSession,
     *,
@@ -365,83 +454,13 @@ async def validate_export_fences(
         )
     eligible = sources.export_eligible_source_ids(scope=scope)
     for fence in fences:
-        row = await session.scalar(
-            select(Relationship)
-            .where(
-                Relationship.workspace_id == scope.workspace_id,
-                Relationship.id == fence.id,
-            )
-            .execution_options(populate_existing=True)
-        )
-        if row is None or (row.created_at, row.updated_at) != (fence.created_at, fence.updated_at):
-            return RelationshipExportFenceValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed
-            )
-        source_fences = [
-            SourceExportFence(
-                source_id=item.source_id,
-                workspace_id=scope.workspace_id,
-                generation=item.generation,
-            )
-            for item in fence.source_fences
-        ]
-        if set(
-            await sources.filter_export_eligible_sources(
-                session, source_fences, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-            )
-        ) != {item.source_id for item in source_fences}:
-            return RelationshipExportFenceValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed
-            )
-        supports = list(
-            (
-                await session.scalars(
-                    select(RelationshipEvidence)
-                    .where(
-                        _evidence_scope(scope),
-                        RelationshipEvidence.relationship_id == fence.id,
-                        RelationshipEvidence.source_id.in_(eligible),
-                    )
-                    .order_by(RelationshipEvidence.id)
-                    .limit(101)
-                    .execution_options(populate_existing=True)
-                )
-            ).all()
-        )
-        if len(supports) > 100:
-            return RelationshipExportFenceValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed
-            )
-        generations = await _relationship_source_generations(
+        if not await _export_fence_unchanged(
             session,
-            {support.source_id for support in supports if support.source_id is not None},
+            fence,
+            eligible,
             scope=scope,
-        )
-        refs = [
-            RelationshipExportEvidence(
-                id=support.id,
-                source_id=support.source_id,
-                source_generation=generations.get(support.source_id)
-                if support.source_id is not None
-                else None,
-                document_id=support.document_id,
-                document_version_id=support.document_version_id,
-                chunk_id=support.chunk_id,
-                source_membership_id=support.source_membership_id,
-                target_membership_id=support.target_membership_id,
-                observed_at=support.observed_at,
-                confidence=support.confidence,
-            )
-            for support in supports
-        ]
-        digest = sha256(
-            json.dumps(
-                [ref.model_dump(mode="json") for ref in refs],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
-        if [ref.id for ref in refs] != fence.evidence_ids or digest != fence.evidence_digest:
+            multi_workspace_enabled=multi_workspace_enabled,
+        ):
             return RelationshipExportFenceValidation(
                 valid=False, reason="record_changed", observed_snapshot_count=observed
             )

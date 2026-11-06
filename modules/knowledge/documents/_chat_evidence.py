@@ -1,7 +1,9 @@
 """Chat evidence reads: bounded, scope-qualified chunk projections and their locked variant."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
@@ -70,6 +72,52 @@ class ChatEvidenceChunk:
     metadata_is_version_snapshot: bool
     observed_at: datetime
     published_at: datetime | None
+
+
+async def _chat_chunks_by_ref(
+    session: AsyncSession, rows: Sequence[Any]
+) -> dict[tuple[UUID, UUID], ChatEvidenceChunk]:
+    """Build detached chat evidence DTOs keyed by ``(document_version_id, chunk_id)``.
+
+    Reads the matching ``NormalizedVersionProvenance`` rows (fresh, ``populate_existing``) so
+    immutable revision metadata snapshots override the live document title and canonical URL.
+    ``rows`` are ``(Document, DocumentVersion, DocumentChunk, Source)`` tuples.
+    """
+    provenance_rows = (
+        await session.scalars(
+            select(NormalizedVersionProvenance)
+            .where(
+                NormalizedVersionProvenance.document_version_id.in_(
+                    {version.id for _, version, _, _ in rows}
+                )
+            )
+            .execution_options(populate_existing=True)
+        )
+    ).all()
+    provenance_by_version = {item.document_version_id: item for item in provenance_rows}
+
+    by_ref = {}
+    for doc, ver, chunk, src in rows:
+        prov = provenance_by_version.get(ver.id)
+        by_ref[(ver.id, chunk.id)] = ChatEvidenceChunk(
+            document_id=doc.id,
+            document_version_id=ver.id,
+            version_number=ver.version_number,
+            chunk_id=chunk.id,
+            chunk_index=chunk.chunk_index,
+            content=chunk.content,
+            source_id=src.id,
+            source_name=src.name,
+            source_status=src.status,
+            source_generation=src.generation,
+            local_only=src.local_only,
+            title=prov.title if prov else doc.title,
+            canonical_url=prov.canonical_url if prov else doc.canonical_url,
+            metadata_is_version_snapshot=prov is not None,
+            observed_at=ver.observed_at,
+            published_at=doc.published_at,
+        )
+    return by_ref
 
 
 async def read_chat_evidence_chunks(
@@ -143,40 +191,7 @@ async def read_chat_evidence_chunks(
             raise ValueError("Evidence reference is missing or unavailable")
         return []
 
-    provenance_rows = (
-        await session.scalars(
-            select(NormalizedVersionProvenance)
-            .where(
-                NormalizedVersionProvenance.document_version_id.in_(
-                    {version.id for _, version, _, _ in rows}
-                )
-            )
-            .execution_options(populate_existing=True)
-        )
-    ).all()
-    provenance_by_version = {item.document_version_id: item for item in provenance_rows}
-
-    by_ref = {}
-    for doc, ver, chunk, src in rows:
-        prov = provenance_by_version.get(ver.id)
-        by_ref[(ver.id, chunk.id)] = ChatEvidenceChunk(
-            document_id=doc.id,
-            document_version_id=ver.id,
-            version_number=ver.version_number,
-            chunk_id=chunk.id,
-            chunk_index=chunk.chunk_index,
-            content=chunk.content,
-            source_id=src.id,
-            source_name=src.name,
-            source_status=src.status,
-            source_generation=src.generation,
-            local_only=src.local_only,
-            title=prov.title if prov else doc.title,
-            canonical_url=prov.canonical_url if prov else doc.canonical_url,
-            metadata_is_version_snapshot=prov is not None,
-            observed_at=ver.observed_at,
-            published_at=doc.published_at,
-        )
+    by_ref = await _chat_chunks_by_ref(session, rows)
 
     if selection_fences is not None and set(by_ref) != set(refs):
         raise ValueError("One or more exact selected evidence chunks are unavailable")
