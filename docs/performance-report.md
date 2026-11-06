@@ -337,3 +337,44 @@ Three consecutive full runs (`LOAD_DURATION_SCALE=1`, `all.js`, fake model, k6 0
 All three runs met every SLO threshold; no run failed. Dashboards, search and documents latencies are the `http_req_duration{endpoint:...}` sub-metrics. Largest relative spreads are in tail percentiles (search p99 184 to 360 ms, chat send p95 113 to 190 ms, ingest lag p95 2.6 to 3.3 s), all far inside thresholds. Ingest queue age p95 (the SLO that failed in the earlier splits) was 2.57 to 2.68 s, a 116 ms spread, with at least 1.9x headroom under the 5 s threshold.
 
 Host notes: Windows 11 Pro development machine, Docker Desktop (WSL2) reporting 14 CPUs and about 31.1 GiB (33370607616 bytes) to the Docker engine. The containers were capped to the 2 CPU / ~8 GiB split above; the k6 container was uncapped and ran on the same host. Other load: the long-lived `umwelt-os-*` dev stack (redis, postgres, graph) was running idle (about 0 to 1 % CPU) and an editor session was open; no other test stacks were running. Host CPU load was not sampled during the runs, and no `docker stats` samples were taken. Not target-host evidence: the caps only model the 2 CPU / 8 GiB budget on a larger host.
+
+#### Re-run at 8ce52ae3 with docker stats (2026-11-07)
+
+Three consecutive full runs (`LOAD_TEST_LIMITS=1 bash scripts/load-test.sh`, `all.js`, `LOAD_DURATION_SCALE=1`, fake model, k6 0.57.0) at commit 8ce52ae3 (after the module subpackage moves), each on a fresh disposable Compose stack with the same `docker-compose.limits.yml` split as the 084f0fc0 section. The script now samples `docker stats --no-stream` about every 5 s (43 samples per container per run) into `docker-stats.jsonl` and prints `docker-stats-summary.txt`. k6 exit status 0 in all three runs; nothing else heavy ran concurrently.
+
+| SLO | Metric | Run 1 | Run 2 | Run 3 | Median | Spread (max-min) | Threshold | Result |
+|---|---|---|---|---|---|---|---|---|
+| SLO-1 | `http_req_failed` | 0.00 % | 0.00 % | 0.00 % | 0.00 % | 0.00 % | < 0.5 % | pass |
+| SLO-2a | dashboard p(95) | 63.0 ms | 71.8 ms | 77.1 ms | 71.8 ms | 14.1 ms | p(95) < 400 ms | pass |
+| SLO-2a | dashboard p(99) | 97.7 ms | 148.0 ms | 143.2 ms | 143.2 ms | 50.2 ms | p(99) < 800 ms | pass |
+| SLO-2b | search p(95) | 86.3 ms | 127.6 ms | 95.5 ms | 95.5 ms | 41.3 ms | p(95) < 800 ms | pass |
+| SLO-2b | search p(99) | 204.5 ms | 397.5 ms | 325.8 ms | 325.8 ms | 193.0 ms | p(99) < 1500 ms | pass |
+| SLO-2c | documents p(95) | 66.6 ms | 50.4 ms | 59.8 ms | 59.8 ms | 16.2 ms | p(95) < 300 ms | pass |
+| SLO-2c | documents p(99) | 90.0 ms | 115.2 ms | 151.3 ms | 115.2 ms | 61.3 ms | p(99) < 600 ms | pass |
+| SLO-3 | chat TTFT p95 | 737.2 ms | 756.2 ms | 777.0 ms | 756.2 ms | 39.8 ms | < 2000 ms | pass |
+| SLO-3 | chat TTFT p99 | 1333.4 ms | 1491.6 ms | 1491.5 ms | 1491.5 ms | 158.2 ms | < 4000 ms | pass |
+| SLO-3b | chat send p95 | 110.0 ms | 101.0 ms | 112.0 ms | 110.0 ms | 11.0 ms | < 500 ms | pass |
+| SLO-4 | ingest lag p95 | 3618.4 ms | 2757.8 ms | 3272.3 ms | 3272.3 ms | 860.6 ms | < 30000 ms | pass |
+| SLO-4 | ingest lag p99 | 3738.1 ms | 3160.4 ms | 3332.1 ms | 3332.1 ms | 577.7 ms | < 60000 ms | pass |
+| SLO-5 | SSE open p95 | 102.0 ms | 97.0 ms | 104.6 ms | 102.0 ms | 7.6 ms | < 500 ms | pass |
+| SLO-6 | ingest queue age p95 | 2557.6 ms | 2535.8 ms | 2605.8 ms | 2557.6 ms | 70.0 ms | < 5000 ms | pass |
+| SLO-7 | checks | 100.00 % | 100.00 % | 100.00 % | 100.00 % | 0.00 % | > 99 % | pass |
+
+All thresholds met in all three runs. Against the 084f0fc0 medians, chat TTFT p95 improved (922 to 756 ms) and chat send p95 (153 to 110 ms), while search p95 (79 to 96 ms), dashboard p95 (56 to 72 ms) and ingest lag p95 (2685 to 3272 ms) are somewhat higher; all differences are within or near run-to-run spread and far inside thresholds, so there is no evidence of a regression from the refactor. Ingest queue age p95 stayed at 2.54 to 2.61 s.
+
+Resource use during the runs (`docker stats` CPU % is relative to one core, so a 0.4 CPU cap saturates near 40 %; max over the three runs, average is the mean of the per-run averages):
+
+| Service | CPU cap | CPU max % (worst run) | CPU avg % (mean of runs) | Max memory (MiB) | Memory limit |
+|---|---|---|---|---|---|
+| api | 40 % | 41.5 | 12.2 | 548.9 | 1.5GiB |
+| chat-worker | 40 % | 40.3 | 4.3 | 285.2 | 1GiB |
+| cron-worker | 30 % | 31.3 | 5.1 | 273.9 | 512MiB |
+| fake-local | none | 0.3 | 0.1 | 35.3 | 31.08GiB |
+| fake-model | none | 0.3 | 0.2 | 28.5 | 31.08GiB |
+| model-worker | 10 % | 10.8 | 3.5 | 260.5 | 768MiB |
+| postgres | 30 % | 9.7 | 2.7 | 248.7 | 2.5GiB |
+| redis | 10 % | 3.1 | 1.1 | 4.3 | 256MiB |
+| web | none | 5.0 | 0.1 | 54.3 | 768MiB |
+| worker | 40 % | 40.1 | 5.1 | 272.3 | 1.5GiB |
+
+api, worker and chat-worker touched their CPU caps (about 40 %) and cron-worker its 30 % cap in every run, which is the throttling the caps are meant to model; their average CPU is 4 to 12 %, so the saturation is brief bursts. postgres peaked at about 10 % of a 30 % cap. Memory is far below every limit (largest: api 549 MiB of 1.5 GiB; cron-worker 274 MiB of 512 MiB is the tightest at 53 %). The `fake-local`, `fake-model` and `web` containers are uncapped by the limits file (the 31.08 GiB figure is the Docker engine total). Sampling is coarse (about 5 s), so CPU maxima are samples, not true peaks. Same host and caveats as the 084f0fc0 section: Windows 11, Docker Desktop (WSL2), k6 uncapped on the same host; not target-host evidence.
