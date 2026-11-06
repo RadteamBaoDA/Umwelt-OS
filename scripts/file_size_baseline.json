@@ -3,7 +3,7 @@
   "modules/agents/harness.py": 2506,
   "modules/agents/public.py": 2970,
   "modules/automations/execution.py": 2985,
-  "modules/chat/routes.py": 1813,
+  "modules/chat/routes.py": 1781,
   "modules/connectors/github/routes.py": 2109,
   "modules/connectors/provider_specs.py": 1548,
   "modules/connectors/routes.py": 1680,
