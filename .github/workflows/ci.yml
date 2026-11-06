@@ -196,8 +196,9 @@ jobs:
           name: k6-smoke
           path: test-results/load
 
-  # Nightly (and manual) Lighthouse CI against a production `next start`. Only routes that render without the API
-  # (/login, /terms, /privacy) are audited, so no backend is started; authenticated routes are not covered.
+  # Nightly (and manual) Lighthouse CI against the disposable compose stack (production web build + API, same
+  # `docker-compose.test.yml` override as the acceptance job). Public routes (/login, /terms, /privacy) plus the
+  # authenticated dashboard (/): scripts/lighthouse-auth.cjs creates the owner and signs in before the audit.
   # Accessibility < 0.9 fails the job; performance < 0.8 only warns (assertions in lighthouserc.json).
   lighthouse:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
@@ -209,13 +210,31 @@ jobs:
         with:
           node-version: 24.20.0
           cache: npm
-      - run: npm ci
-      - run: npm run build
-      - name: Start production server
+      - name: Create disposable CI configuration
         run: |
-          npm run start --workspace apps/web -- --port 3000 &
-          npx --yes wait-on@8 http://localhost:3000/login --timeout 60000
-      - run: npx --yes @lhci/cli@0.16.0 autorun
+          cat > .env <<'ENVEOF'
+          PUBLIC_ORIGIN=http://localhost:3300
+          SECURE_COOKIES=false
+          SETUP_TOKEN=bbd-os-disposable-test-token
+          CSRF_SIGNING_SECRET=bbd-os-disposable-test-csrf-secret
+          SESSION_LIFETIME_HOURS=24
+          POSTGRES_PASSWORD=bbd-os-ci-database-only
+          DATABASE_URL=postgresql+asyncpg://bbd:bbd-os-ci-database-only@postgres:5432/bbd
+          REDIS_URL=redis://redis:6379/0
+          DATA_DIR=/data
+          WEB_PORT=3300
+          ENVEOF
+      - name: Start disposable stack
+        run: docker compose -p lhci -f docker-compose.yml -f docker-compose.test.yml up -d --build --wait
+      - run: npx --yes wait-on@8 http://localhost:3300/login --timeout 60000
+      - name: Lighthouse CI
+        env:
+          LH_SETUP_TOKEN: bbd-os-disposable-test-token
+          LH_OWNER_PASSWORD: lhci-owner-password-42
+        run: npx --yes @lhci/cli@0.16.0 autorun
+      - name: Stop disposable stack
+        if: always()
+        run: docker compose -p lhci -f docker-compose.yml -f docker-compose.test.yml down --volumes --remove-orphans
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
