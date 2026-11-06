@@ -517,6 +517,51 @@ async def defer_unknown_workflow_create(
     return True
 
 
+def _settle_rejected_step(
+    row: ConnectorProvisioning,
+    source: Any,
+    operation: dict[str, Any],
+    *,
+    current: bool,
+    error_code: str,
+) -> None:
+    """Apply a definitive rejection of a lookup/create/update/activate step to the provisioning row.
+
+    A stale operation with a known workflow schedules deactivation; otherwise the operation is
+    cleared and the row is disabled (current) or marked not active. Mutates the locked ``row`` and
+    ``operation`` only; the caller flushes.
+    """
+    target = str(operation.get("workflow_id") or row.workflow_id or "") or None
+    if not current and target is not None:
+        operation["cleanup_required"] = True
+        operation["phase"] = "deactivate"
+        operation["step"] = _step("deactivate", target)
+        row.workflow_operation = operation
+        row.error_code = "deactivation_pending"
+        row.state = (
+            "disabled" if source is None or source.status != "active" else "saved_not_active"
+        )
+    else:
+        row.workflow_operation = None
+        if current:
+            row.desired_enabled = False
+            row.state = "saved_not_active"
+            row.error_code = error_code
+            if isinstance(row.activation_intent, dict) and row.activation_intent.get(
+                "id"
+            ) == operation.get("activation_id"):
+                row.activation_intent = None
+        elif not row.desired_enabled or source is None or source.status != "active":
+            row.state = "disabled"
+            row.error_code = (
+                "workflow_operation_rejected"
+                if source is not None and source.generation == operation.get("source_generation")
+                else row.error_code
+            )
+        else:
+            row.state = "saved_not_active"
+
+
 async def fail_workflow_step(
     session: AsyncSession,
     source_id: UUID,
@@ -584,36 +629,7 @@ async def fail_workflow_step(
         and row.desired_revision == operation.get("revision")
     )
     if not unknown and step.get("kind") in {"lookup", "create", "update", "activate"}:
-        target = str(operation.get("workflow_id") or row.workflow_id or "") or None
-        if not current and target is not None:
-            operation["cleanup_required"] = True
-            operation["phase"] = "deactivate"
-            operation["step"] = _step("deactivate", target)
-            row.workflow_operation = operation
-            row.error_code = "deactivation_pending"
-            row.state = (
-                "disabled" if source is None or source.status != "active" else "saved_not_active"
-            )
-        else:
-            row.workflow_operation = None
-            if current:
-                row.desired_enabled = False
-                row.state = "saved_not_active"
-                row.error_code = error_code
-                if isinstance(row.activation_intent, dict) and row.activation_intent.get(
-                    "id"
-                ) == operation.get("activation_id"):
-                    row.activation_intent = None
-            elif not row.desired_enabled or source is None or source.status != "active":
-                row.state = "disabled"
-                row.error_code = (
-                    "workflow_operation_rejected"
-                    if source is not None
-                    and source.generation == operation.get("source_generation")
-                    else row.error_code
-                )
-            else:
-                row.state = "saved_not_active"
+        _settle_rejected_step(row, source, operation, current=current, error_code=error_code)
         await session.flush()
         return True
     step["state"] = "unknown" if unknown else "rejected"

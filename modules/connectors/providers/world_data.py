@@ -212,6 +212,49 @@ def _finite_number(raw: Any) -> float:
     return value
 
 
+def _raise_for_alpha_vantage_envelope(payload: dict[str, object]) -> None:
+    """Translate an Alpha Vantage note/information/error envelope into the matching failure.
+
+    Quota wording raises ``ProviderRateLimited`` with a per-minute, daily or one-hour retry time;
+    other envelopes raise a stable ``ValueError`` code. Returns normally only when the payload
+    carries none of those keys, so the caller reports the generic invalid-response error.
+    """
+    envelope = next(
+        (
+            (key, payload.get(key))
+            for key in ("Note", "Information", "Error Message")
+            if key in payload
+        ),
+        None,
+    )
+    if envelope is not None:
+        field, message = envelope
+        normalized = message.lower() if isinstance(message, str) else ""
+        quota_markers = (
+            "rate limit",
+            "call frequency",
+            "requests per day",
+            "requests per minute",
+            "api call frequency",
+        )
+        if any(marker in normalized for marker in quota_markers):
+            now = datetime.now(UTC)
+            if "per minute" in normalized:
+                retry_at = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+            elif "per day" in normalized or "daily" in normalized:
+                retry_at = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
+                    days=1
+                )
+            else:
+                retry_at = now + timedelta(hours=1)
+            raise ProviderRateLimited(retry_at)
+        if field == "Error Message" and "invalid api call" in normalized:
+            raise ValueError("alpha_vantage_symbol_or_endpoint_unavailable")
+        if "premium" in normalized or "entitlement" in normalized:
+            raise ValueError("alpha_vantage_entitlement_unavailable")
+        raise ValueError("alpha_vantage_access_unavailable")
+
+
 def _market_records(
     source: ConnectorSource,
     config: ConnectorConfig,
@@ -229,40 +272,7 @@ def _market_records(
     metadata = payload.get("Meta Data")
     series = payload.get("Time Series (Daily)")
     if not isinstance(metadata, dict) or not isinstance(series, dict):
-        envelope = next(
-            (
-                (key, payload.get(key))
-                for key in ("Note", "Information", "Error Message")
-                if key in payload
-            ),
-            None,
-        )
-        if envelope is not None:
-            field, message = envelope
-            normalized = message.lower() if isinstance(message, str) else ""
-            quota_markers = (
-                "rate limit",
-                "call frequency",
-                "requests per day",
-                "requests per minute",
-                "api call frequency",
-            )
-            if any(marker in normalized for marker in quota_markers):
-                now = datetime.now(UTC)
-                if "per minute" in normalized:
-                    retry_at = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
-                elif "per day" in normalized or "daily" in normalized:
-                    retry_at = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
-                        days=1
-                    )
-                else:
-                    retry_at = now + timedelta(hours=1)
-                raise ProviderRateLimited(retry_at)
-            if field == "Error Message" and "invalid api call" in normalized:
-                raise ValueError("alpha_vantage_symbol_or_endpoint_unavailable")
-            if "premium" in normalized or "entitlement" in normalized:
-                raise ValueError("alpha_vantage_entitlement_unavailable")
-            raise ValueError("alpha_vantage_access_unavailable")
+        _raise_for_alpha_vantage_envelope(payload)
         raise ValueError("alpha_vantage_response_invalid")
     provider_symbol = metadata.get("2. Symbol")
     if not isinstance(provider_symbol, str) or provider_symbol.upper() not in set(

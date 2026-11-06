@@ -611,6 +611,50 @@ async def collect_gmail(
     return await _gmail_history_step(run, state, history_id)
 
 
+def _calendar_source_fields(
+    calendar_id: str,
+    event_id: str,
+    status: str,
+    recurrence: list[str],
+    raw_start_value: object,
+    start: dict[str, Any],
+    end: dict[str, Any],
+    event: dict[str, Any],
+) -> dict[str, object]:
+    """Build the allowlisted, length-bounded ``source_fields`` provenance for a Calendar event.
+
+    Identity, status and up to 32 recurrence rules are always present; times, time zones and the
+    HTML link appear only when the provider supplied strings, truncated to their storage limits.
+    """
+    return {
+        "calendar_id": calendar_id,
+        "event_id": event_id,
+        "status": status,
+        "recurrence": [_text(item, 255) for item in recurrence[:32]],
+        **({"start": _text(raw_start_value, 64)} if isinstance(raw_start_value, str) else {}),
+        **(
+            {"end": _text(end.get("dateTime") or end.get("date"), 64)}
+            if isinstance(end.get("dateTime") or end.get("date"), str)
+            else {}
+        ),
+        **(
+            {"start_timezone": _text(start["timeZone"], 128)}
+            if isinstance(start.get("timeZone"), str)
+            else {}
+        ),
+        **(
+            {"end_timezone": _text(end["timeZone"], 128)}
+            if isinstance(end.get("timeZone"), str)
+            else {}
+        ),
+        **(
+            {"html_link": _text(event["htmlLink"], 2048)}
+            if isinstance(event.get("htmlLink"), str)
+            else {}
+        ),
+    }
+
+
 def _calendar_event_record(
     calendar_id: str, event: object, collected_at: datetime
 ) -> IngestionRecord:
@@ -698,37 +742,9 @@ def _calendar_event_record(
                     if isinstance(event.get("description", ""), str)
                     else False
                 ),
-                source_fields={
-                    "calendar_id": calendar_id,
-                    "event_id": event_id,
-                    "status": status,
-                    "recurrence": [_text(item, 255) for item in recurrence[:32]],
-                    **(
-                        {"start": _text(raw_start_value, 64)}
-                        if isinstance(raw_start_value, str)
-                        else {}
-                    ),
-                    **(
-                        {"end": _text(end.get("dateTime") or end.get("date"), 64)}
-                        if isinstance(end.get("dateTime") or end.get("date"), str)
-                        else {}
-                    ),
-                    **(
-                        {"start_timezone": _text(start["timeZone"], 128)}
-                        if isinstance(start.get("timeZone"), str)
-                        else {}
-                    ),
-                    **(
-                        {"end_timezone": _text(end["timeZone"], 128)}
-                        if isinstance(end.get("timeZone"), str)
-                        else {}
-                    ),
-                    **(
-                        {"html_link": _text(event["htmlLink"], 2048)}
-                        if isinstance(event.get("htmlLink"), str)
-                        else {}
-                    ),
-                },
+                source_fields=_calendar_source_fields(
+                    calendar_id, event_id, status, recurrence, raw_start_value, start, end, event
+                ),
             ),
         },
     )

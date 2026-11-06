@@ -800,18 +800,13 @@ def _hint_binding_is_current(ctx: _HintAdmission) -> bool:
     )
 
 
-async def _admit_visibility_loss(ctx: _HintAdmission) -> GitHubHintEnqueueResult:
-    """Pause the Source and record a ``visibility_unverified`` hint for a lost-visibility target.
+async def _lock_pause_hints(
+    session: AsyncSession, binding: Any, target: Any
+) -> list[GithubSourceHint]:
+    """Lock, in id order, every pause-relevant hint of the binding's Source plus the target's own hint.
 
-    Locks the Source's pause-relevant hints, then global capacity, before pausing the Source in
-    this unit of work. Releases the slot of an already-reserved hint it rewrites. Commits through
-    ``commit_with_replay`` only when the Source was active (so subscribers see the pause);
-    otherwise a plain commit. Raises ``ConflictError`` when capacity or the Source vanished.
+    Takes ``FOR UPDATE`` with ``populate_existing`` so the rows reflect the latest committed state.
     """
-    from core.realtime import commit_with_replay, make_source_change
-    from modules.sources import public as sources
-
-    session, binding, target, scope = ctx.session, ctx.binding, ctx.target, ctx.scope
     pause_hints = list(
         await session.scalars(
             select(GithubSourceHint)
@@ -831,6 +826,54 @@ async def _admit_visibility_loss(ctx: _HintAdmission) -> GitHubHintEnqueueResult
             .execution_options(populate_existing=True)
         )
     )
+    return pause_hints
+
+
+def _rewrite_visibility_hint(
+    hint: GithubSourceHint,
+    source_generation: int,
+    binding: Any,
+    ctx: _HintAdmission,
+    capacity: GithubWebhookCapacity,
+) -> None:
+    """Re-point an existing hint at the paused Source as ``visibility_unverified`` and clear its claim.
+
+    Bumps ``dirty_revision`` and releases the hint's reserved capacity slot exactly once.
+
+    Raises:
+        ConflictError: when the hint holds a slot but the capacity counter is already zero.
+    """
+    hint.dirty_revision += 1
+    hint.source_generation = source_generation
+    hint.connector_revision = binding.connector_revision
+    hint.repository_id = binding.repository_id
+    hint.binding_revision = binding.binding_revision
+    hint.intent = "visibility_lost"
+    hint.last_delivery_id = ctx.delivery_receipt_id
+    hint.state = "visibility_unverified"
+    hint.claim_token = None
+    hint.claimed_revision = None
+    hint.claim_expires_at = None
+    if hint.capacity_reserved:
+        if capacity.pending_count < 1:
+            raise ConflictError("GitHub visibility capacity changed")
+        capacity.pending_count -= 1
+        hint.capacity_reserved = False
+
+
+async def _admit_visibility_loss(ctx: _HintAdmission) -> GitHubHintEnqueueResult:
+    """Pause the Source and record a ``visibility_unverified`` hint for a lost-visibility target.
+
+    Locks the Source's pause-relevant hints, then global capacity, before pausing the Source in
+    this unit of work. Releases the slot of an already-reserved hint it rewrites. Commits through
+    ``commit_with_replay`` only when the Source was active (so subscribers see the pause);
+    otherwise a plain commit. Raises ``ConflictError`` when capacity or the Source vanished.
+    """
+    from core.realtime import commit_with_replay, make_source_change
+    from modules.sources import public as sources
+
+    session, binding, target, scope = ctx.session, ctx.binding, ctx.target, ctx.scope
+    pause_hints = await _lock_pause_hints(session, binding, target)
     capacity = await session.scalar(
         select(GithubWebhookCapacity)
         .where(
@@ -886,22 +929,7 @@ async def _admit_visibility_loss(ctx: _HintAdmission) -> GitHubHintEnqueueResult
             )
         )
     else:
-        visibility_hint.dirty_revision += 1
-        visibility_hint.source_generation = paused.generation
-        visibility_hint.connector_revision = binding.connector_revision
-        visibility_hint.repository_id = binding.repository_id
-        visibility_hint.binding_revision = binding.binding_revision
-        visibility_hint.intent = "visibility_lost"
-        visibility_hint.last_delivery_id = ctx.delivery_receipt_id
-        visibility_hint.state = "visibility_unverified"
-        visibility_hint.claim_token = None
-        visibility_hint.claimed_revision = None
-        visibility_hint.claim_expires_at = None
-        if visibility_hint.capacity_reserved:
-            if capacity.pending_count < 1:
-                raise ConflictError("GitHub visibility capacity changed")
-            capacity.pending_count -= 1
-            visibility_hint.capacity_reserved = False
+        _rewrite_visibility_hint(visibility_hint, paused.generation, binding, ctx, capacity)
     result = ctx.persist_terminal(ctx.result("ignored"))
     if ctx.original_source_status == "active":
         await commit_with_replay(
@@ -1110,6 +1138,42 @@ async def enqueue_github_hint(
     return await _admit_resource_hint(ctx)
 
 
+async def _reserve_deferred_capacity(
+    session: AsyncSession, hint: GithubSourceHint, fence: Any, now: datetime
+) -> bool:
+    """Try to give a ``capacity_deferred`` hint a webhook capacity slot so it can be claimed.
+
+    A hint whose repository, binding revision or resource left the fence is downgraded to
+    ``visibility_unverified``; when capacity is missing or full the hint is retried in 60 seconds.
+    Both outcomes commit and return ``False``. On success the slot is reserved, the hint becomes
+    ``pending`` (uncommitted) and ``True`` is returned.
+    """
+    if (
+        hint.repository_id != fence.repository_id
+        or hint.binding_revision != fence.binding_revision
+        or hint.resource not in fence.resource_scope
+    ):
+        hint.state = "visibility_unverified"
+        hint.next_attempt_at = now
+        await session.commit()
+        return False
+    capacity = await session.scalar(
+        select(GithubWebhookCapacity)
+        .where(
+            GithubWebhookCapacity.id == 1,
+        )
+        .with_for_update()
+    )
+    if capacity is None or capacity.pending_count >= 100_000:
+        hint.next_attempt_at = now + timedelta(seconds=60)
+        await session.commit()
+        return False
+    capacity.pending_count += 1
+    hint.capacity_reserved = True
+    hint.state = "pending"
+    return True
+
+
 async def claim_github_hint(
     session: AsyncSession,
     *,
@@ -1180,29 +1244,8 @@ async def claim_github_hint(
         await session.rollback()
         return None
     if hint.state == "capacity_deferred" and not hint.capacity_reserved:
-        if (
-            hint.repository_id != fence.repository_id
-            or hint.binding_revision != fence.binding_revision
-            or hint.resource not in fence.resource_scope
-        ):
-            hint.state = "visibility_unverified"
-            hint.next_attempt_at = now
-            await session.commit()
+        if not await _reserve_deferred_capacity(session, hint, fence, now):
             return None
-        capacity = await session.scalar(
-            select(GithubWebhookCapacity)
-            .where(
-                GithubWebhookCapacity.id == 1,
-            )
-            .with_for_update()
-        )
-        if capacity is None or capacity.pending_count >= 100_000:
-            hint.next_attempt_at = now + timedelta(seconds=60)
-            await session.commit()
-            return None
-        capacity.pending_count += 1
-        hint.capacity_reserved = True
-        hint.state = "pending"
     token = uuid7()
     expires = now + timedelta(seconds=60)
     hint.claim_token = token

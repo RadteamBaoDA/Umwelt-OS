@@ -494,6 +494,76 @@ async def drive_activation(
     )
 
 
+async def _native_credential_error(
+    session: AsyncSession,
+    source: Any,
+    row: ConnectorProvisioning,
+    *,
+    scope: Scope,
+) -> str:
+    """Return an owner-action code when the native credential for this revision is unusable, else ``""``.
+
+    Checks, in lock order, the REST header credential (``FOR UPDATE``), the GitHub or Telegram
+    credential, then the Google/Reddit OAuth grant (``FOR UPDATE``); each must be ready and bound to
+    the source generation and desired revision. Codes: ``invalid_credential`` or
+    ``native_unsupported`` (unsupported auth method). Mutates nothing.
+    """
+    from modules.connectors import collection
+
+    desired = row.desired_configuration or {}
+    keyed_header = collection.KEYED_PROVIDERS.get(
+        source.provider or ""
+    )  # fixed header, no owner-set auth config
+    if keyed_header or desired.get("auth_method") == "http_header":
+        credential = await session.get(ConnectorRestCredential, source.id, with_for_update=True)
+        if (
+            credential is None
+            or credential.state != "ready"
+            or credential.encrypted_secret is None
+            or credential.source_generation != source.generation
+            or credential.configuration_revision != row.desired_revision
+            or credential.header_name != (keyed_header or desired.get("auth_header_name"))
+        ):
+            return "invalid_credential"
+    elif (row.desired_configuration or {}).get("auth_method") not in (None, "none"):
+        return "native_unsupported"
+    if source.provider == "github":  # GitHub needs the owner's grant for this exact revision
+        grant = await session.get(GithubOAuthGrant, source.id)
+        if (
+            grant is None
+            or grant.state != "ready"
+            or grant.encrypted_tokens is None
+            or grant.source_generation != source.generation
+            or grant.configuration_revision != row.desired_revision
+        ):
+            return "invalid_credential"
+    elif source.provider == "telegram":  # Telegram needs the bot credential for this exact revision
+        native_credential = await session.get(ConnectorNativeCredential, source.id)
+        if (
+            native_credential is None
+            or native_credential.state != "ready"
+            or native_credential.source_generation != source.generation
+            or native_credential.configuration_revision != row.desired_revision
+        ):
+            return "invalid_credential"
+    if source.provider in {"google_mail", "google_calendar", "google_drive", "reddit"}:
+        oauth_grant = await session.get(ConnectorOAuthGrant, source.id, with_for_update=True)
+        owner_id = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
+        if (
+            oauth_grant is None
+            or oauth_grant.state != "ready"
+            or oauth_grant.encrypted_tokens is None
+            or oauth_grant.provider != source.provider
+            or oauth_grant.workspace_id != source.workspace_id
+            or oauth_grant.owner_id != owner_id
+            or oauth_grant.source_generation != source.generation
+            or oauth_grant.configuration_revision != row.desired_revision
+            or oauth_grant.credential_revision != row.credential_revision
+        ):
+            return "invalid_credential"
+    return ""
+
+
 async def activate_native_in_uow(
     session: AsyncSession,
     source_id: UUID,
@@ -539,57 +609,9 @@ async def activate_native_in_uow(
         await provider_terms.require_terms_eligible(session, source)
     except (HTTPException, DomainError):
         return "terms_not_accepted"
-    desired = row.desired_configuration or {}
-    keyed_header = collection.KEYED_PROVIDERS.get(
-        source.provider or ""
-    )  # fixed header, no owner-set auth config
-    if keyed_header or desired.get("auth_method") == "http_header":
-        credential = await session.get(ConnectorRestCredential, source_id, with_for_update=True)
-        if (
-            credential is None
-            or credential.state != "ready"
-            or credential.encrypted_secret is None
-            or credential.source_generation != source.generation
-            or credential.configuration_revision != row.desired_revision
-            or credential.header_name != (keyed_header or desired.get("auth_header_name"))
-        ):
-            return "invalid_credential"
-    elif (row.desired_configuration or {}).get("auth_method") not in (None, "none"):
-        return "native_unsupported"
-    if source.provider == "github":  # GitHub needs the owner's grant for this exact revision
-        grant = await session.get(GithubOAuthGrant, source_id)
-        if (
-            grant is None
-            or grant.state != "ready"
-            or grant.encrypted_tokens is None
-            or grant.source_generation != source.generation
-            or grant.configuration_revision != row.desired_revision
-        ):
-            return "invalid_credential"
-    elif source.provider == "telegram":  # Telegram needs the bot credential for this exact revision
-        native_credential = await session.get(ConnectorNativeCredential, source_id)
-        if (
-            native_credential is None
-            or native_credential.state != "ready"
-            or native_credential.source_generation != source.generation
-            or native_credential.configuration_revision != row.desired_revision
-        ):
-            return "invalid_credential"
-    if source.provider in {"google_mail", "google_calendar", "google_drive", "reddit"}:
-        oauth_grant = await session.get(ConnectorOAuthGrant, source_id, with_for_update=True)
-        owner_id = scope.actor_user_id if isinstance(scope, InternalJobScope) else scope.user_id
-        if (
-            oauth_grant is None
-            or oauth_grant.state != "ready"
-            or oauth_grant.encrypted_tokens is None
-            or oauth_grant.provider != source.provider
-            or oauth_grant.workspace_id != source.workspace_id
-            or oauth_grant.owner_id != owner_id
-            or oauth_grant.source_generation != source.generation
-            or oauth_grant.configuration_revision != row.desired_revision
-            or oauth_grant.credential_revision != row.credential_revision
-        ):
-            return "invalid_credential"
+    credential_error = await _native_credential_error(session, source, row, scope=scope)
+    if credential_error:
+        return credential_error
     row.execution_backend = "native"
     row.desired_enabled = True
     row.state = "active"
