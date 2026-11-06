@@ -1,0 +1,4 @@
+[{"page":1,"pages":22,"per_page":3,"total":65,"sourceid":"2","lastupdated":"2026-07-01"},[
+{"indicator":{"id":"NY.GDP.MKTP.CD","value":"GDP (current US$)"},"country":{"id":"VN","value":"Viet Nam"},"countryiso3code":"VNM","date":"2025","value":null,"unit":"","obs_status":"","decimal":0},
+{"indicator":{"id":"NY.GDP.MKTP.CD","value":"GDP (current US$)"},"country":{"id":"VN","value":"Viet Nam"},"countryiso3code":"VNM","date":"2024","value":476388000000.5,"unit":"","obs_status":"","decimal":0},
+{"indicator":{"id":"NY.GDP.MKTP.CD","value":"GDP (current US$)"},"country":{"id":"VN","value":"Viet Nam"},"countryiso3code":"VNM","date":"2023","value":433000000000,"unit":"","obs_status":"","decimal":0}]]

@@ -1,0 +1,109 @@
+{
+ "count": 478,
+ "next": "https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=10&mode=list&offset=10",
+ "previous": null,
+ "results": [
+  {
+   "id": "3b430f81-0ff1-4d85-8a1a-cef0de326198",
+   "url": "https://ll.thespacedevs.com/2.2.0/launch/3b430f81-0ff1-4d85-8a1a-cef0de326198/",
+   "slug": "falcon-9-block-5-bandwagon-5-dedicated-mid-inclina",
+   "name": "Falcon 9 Block 5 | Bandwagon 5 (Dedicated Mid-Inclination Rideshare)",
+   "status": {
+    "id": 3,
+    "name": "Launch Successful",
+    "abbrev": "Success",
+    "description": "The launch vehicle successfully inserted its payload(s) into the target orbit(s)."
+   },
+   "last_updated": "2026-10-20T13:58:25Z",
+   "net": "2026-10-20T11:04:00Z",
+   "net_precision": {
+    "id": 0,
+    "name": "Second",
+    "abbrev": "SEC",
+    "description": "The T-0 is accurate to the second."
+   },
+   "window_end": "2026-10-20T11:30:00Z",
+   "window_start": "2026-10-20T10:30:00Z",
+   "lsp_name": "SpaceX",
+   "mission": "Bandwagon 5 (Dedicated Mid-Inclination Rideshare)",
+   "mission_type": "Dedicated Rideshare",
+   "pad": "Space Launch Complex 40",
+   "location": "Cape Canaveral SFS, FL, USA",
+   "landing": null,
+   "landing_success": null,
+   "launcher": null,
+   "orbit": null,
+   "image": "https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/falcon_9_liftof_image_20251102082912.jpg",
+   "infographic": null,
+   "type": "list"
+  },
+  {
+   "id": "c6f8b6b0-6bae-460a-99bb-c12a3d29effd",
+   "url": "https://ll.thespacedevs.com/2.2.0/launch/c6f8b6b0-6bae-460a-99bb-c12a3d29effd/",
+   "slug": "ceres-1s-xiguang-4-01",
+   "name": "Ceres-1S | Xiguang-4 01",
+   "status": {
+    "id": 3,
+    "name": "Launch Successful",
+    "abbrev": "Success",
+    "description": "The launch vehicle successfully inserted its payload(s) into the target orbit(s)."
+   },
+   "last_updated": "2026-10-21T07:02:23Z",
+   "net": "2026-10-21T03:39:00Z",
+   "net_precision": {
+    "id": 1,
+    "name": "Minute",
+    "abbrev": "MIN",
+    "description": "The T-0 is accurate to the minute."
+   },
+   "window_end": "2026-10-21T03:50:00Z",
+   "window_start": "2026-10-21T03:29:00Z",
+   "lsp_name": "Galactic Energy",
+   "mission": "Xiguang-4 01",
+   "mission_type": "Earth Science",
+   "pad": "Rizhao offshore launch location",
+   "location": "Haiyang Oriental Spaceport",
+   "landing": null,
+   "landing_success": null,
+   "launcher": null,
+   "orbit": null,
+   "image": "https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/ceres-1s_image_20230905114324.jpeg",
+   "infographic": null,
+   "type": "list"
+  },
+  {
+   "id": "f6af629d-39b5-4f86-bc0c-f8776444a858",
+   "url": "https://ll.thespacedevs.com/2.2.0/launch/f6af629d-39b5-4f86-bc0c-f8776444a858/",
+   "slug": "falcon-9-block-5-starlink-group-15-15",
+   "name": "Falcon 9 Block 5 | Starlink Group 15-15",
+   "status": {
+    "id": 1,
+    "name": "Go for Launch",
+    "abbrev": "Go",
+    "description": "Current T-0 confirmed by official or reliable sources."
+   },
+   "last_updated": "2026-10-21T07:23:26Z",
+   "net": "2026-10-21T23:02:41Z",
+   "net_precision": {
+    "id": 0,
+    "name": "Second",
+    "abbrev": "SEC",
+    "description": "The T-0 is accurate to the second."
+   },
+   "window_end": "2026-10-22T01:59:00Z",
+   "window_start": "2026-10-21T21:59:00Z",
+   "lsp_name": "SpaceX",
+   "mission": "Starlink Group 15-15",
+   "mission_type": "Communications",
+   "pad": "Space Launch Complex 4E",
+   "location": "Vandenberg SFB, CA, USA",
+   "landing": null,
+   "landing_success": null,
+   "launcher": null,
+   "orbit": null,
+   "image": "https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/falcon2520925_image_20221009234147.png",
+   "infographic": null,
+   "type": "list"
+  }
+ ]
+}

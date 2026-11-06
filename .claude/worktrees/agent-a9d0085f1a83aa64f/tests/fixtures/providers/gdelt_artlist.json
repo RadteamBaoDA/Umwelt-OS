@@ -1,0 +1,6 @@
+{"articles":[
+{"url":"https://example.com/a","url_mobile":"","title":"Economy grows","seendate":"20261007T080000Z","socialimage":"https://example.com/i.jpg","domain":"example.com","language":"English","sourcecountry":"United States"},
+{"url":"https://example.net/b","title":"Ekonomi tumbuh","seendate":"20261007T090000Z","domain":"example.net","language":"Indonesian","sourcecountry":"Indonesia"},
+{"url":"http://insecure.example/c","title":"insecure","seendate":"20261007T090000Z"},
+{"url":"https://example.com/a","title":"Economy grows","seendate":"20261007T100000Z","domain":"example.com","language":"English","sourcecountry":"United States"}
+]}

@@ -1,0 +1,273 @@
+import type { Page } from '@playwright/test';
+import { test as plainTest } from '@playwright/test';
+import { test, expect } from './fixtures';
+
+// Generative UI port (real browser, real built web app). The API is mocked with page.route (same pattern as
+// chat-web-search.spec.ts); what is NOT mocked and is under test: the iframe sandbox attribute, the srcdoc CSP,
+// the postMessage bridge (resize + sendPrompt), module loading from /vendor/genui/ and its CORS/cache headers.
+
+const NOW = '2026-10-19T00:00:00Z';
+type Json = Record<string, unknown>;
+
+const TABLE_UI: Json = {
+  kind: 'table', status: 'completed', title: 'Quarterly revenue',
+  table: {
+    title: 'Quarterly revenue',
+    columns: [{ key: 'quarter', label: 'Quarter' }, { key: 'revenue', label: 'Revenue' }],
+    rows: [{ quarter: 'Q1', revenue: 100 }, { quarter: 'Q2', revenue: 140 }],
+  },
+};
+
+/** Sandbox payload: tall content (resize), a button calling sendPrompt, and a marker proving scripts ran. */
+const SANDBOX_UI: Json = {
+  kind: 'sandboxed_ui', status: 'completed', title: 'Counter',
+  sandbox: {
+    initialHeight: 120,
+    css: '#tall { height: 480px; background: var(--surface); }',
+    html: '<div id="tall"><p id="msg">sandbox rendered</p><button id="ask" type="button">Ask more</button></div>',
+    jsExpressions: "document.getElementById('msg').textContent = 'js ran'; document.getElementById('ask').addEventListener('click', function () { window.sendPrompt('Tell me more about the counter'); });",
+  },
+};
+
+/** Sandbox payload importing the vendored d3 module through the importmap. */
+const D3_UI: Json = {
+  kind: 'sandboxed_ui', status: 'completed', title: 'D3 chart',
+  sandbox: {
+    initialHeight: 160,
+    html: '<div id="chart"></div><p id="status">pending</p>',
+    jsFunctions: "async function setup() { try { const d3 = await import('d3'); const svg = d3.select('#chart').append('svg').attr('width', 40).attr('height', 40); svg.append('rect').attr('width', 10 * d3.scaleLinear().domain([0, 1]).range([1, 3])(1)).attr('height', 10); document.getElementById('status').textContent = 'd3 ok ' + typeof d3.scaleLinear; } catch (e) { document.getElementById('status').textContent = 'd3 fail ' + e.message; } }",
+    jsExpressions: 'setup();',
+  },
+};
+
+/** Sandbox payload with an inline `onclick` handler calling a jsFunction, plus a vendored d3 import (strict app CSP). */
+const INLINE_HANDLER_UI: Json = {
+  kind: 'sandboxed_ui', status: 'completed', title: 'Inline handler',
+  sandbox: {
+    initialHeight: 160,
+    html: '<button id="go" type="button" onclick="bump(this)">Bump</button><p id="out">0</p><p id="lib">pending</p><button id="ask" type="button" onclick="sendPrompt(&quot;hello bridge&quot;)">Ask</button>',
+    jsFunctions: "function bump(el) { document.getElementById('out').textContent = 'clicked ' + el.id; } async function loadLib() { const d3 = await import('d3'); document.getElementById('lib').textContent = 'd3 ' + typeof d3.select; }",
+    jsExpressions: 'loadLib();',
+  },
+};
+
+/**
+ * Mocks the chat API for one conversation `c1`. The transcript is stateful: a POSTed user message is appended
+ * and, for streamed turns, the assistant reply is persisted so the refetch after `message.done` sees the widget.
+ */
+async function mockChat(page: Page, opts: { assistantUi?: Json; sse?: string; onSend?: (body: Json) => void } = {}) {
+  const conversation = { id: 'c1', title: 'Widget chat', context_kind: null, context_resource_id: null, pinned: false, archived: false, created_at: NOW, updated_at: NOW, metadata: {} };
+  const message = (id: string, role: string, content: string, extra: Json = {}) => ({ id, conversation_id: 'c1', role, content, client_request_id: null, model_identity: null, citations: [], response_id: null, revision_of_message_id: null, created_at: NOW, ...extra });
+  const messages: Json[] = [message('m1', 'user', 'show me something')];
+  if (opts.assistantUi && !opts.sse) messages.push(message('m2', 'assistant', 'Here you go.', { generative_ui: opts.assistantUi, response_id: 'r0' }));
+  await page.route('**/api/v1/settings/ai', (route) => route.fulfill({ json: { providers: [{ id: 'default', credential_configured: false, local: true, policy_denied: false, destination_id: null }], defaults: { chat: { model: 'e2e-model', provider_id: 'default' } }, web_search_provider: 'none', web_search_credential_configured: false, privacy: { allow_remote_web_search: false } } }));
+  await page.route('**/api/v1/conversations/c1', (route) => route.fulfill({ json: { ...conversation, active_response_id: null, messages } }));
+  await page.route(/\/api\/v1\/conversations(\?.*)?$/, (route) => route.fulfill({ json: [conversation] }));
+  await page.route('**/api/v1/conversations/c1/messages', async (route) => {
+    const body = route.request().postDataJSON() as Json;
+    opts.onSend?.(body);
+    messages.push(message(`u${messages.length}`, 'user', String(body.content), { response_id: 'r1' }));
+    if (opts.sse && opts.assistantUi) messages.push(message('a1', 'assistant', 'Done.', { generative_ui: opts.assistantUi, response_id: 'r1' }));
+    await route.fulfill({ status: 202, json: { message_id: 'u-new', response_id: 'r1', status: 'pending' } });
+  });
+  await page.route('**/api/v1/responses/r1/events**', (route) => opts.sse
+    ? route.fulfill({ status: 200, contentType: 'text/event-stream', body: opts.sse })
+    : route.fulfill({ status: 500, json: { detail: 'stop' } }));
+}
+
+/** Formats server-sent events the way the worker publishes them (`id`, `event`, `data` frames). */
+const sse = (frames: Array<[string, Json]>) => frames.map(([event, data], i) => `id: r1:${i + 1}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('');
+
+async function openChat(page: Page) {
+  await page.goto('/chat');
+  // /chat starts with its history rail collapsed; expand it (locale-independent) unless already open.
+  const toggle = page.locator('[aria-controls="chat-history-sidebar"]').first();
+  await toggle.waitFor();
+  if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
+  await page.getByText('Widget chat').first().click();
+}
+
+test.describe('render_table', () => {
+  test('a persisted table widget is visible', async ({ page }) => {
+    await mockChat(page, { assistantUi: TABLE_UI });
+    await openChat(page);
+    const widget = page.getByTestId('generative-ui-widget');
+    await expect(widget).toBeVisible();
+    await expect(widget).toContainText('Quarterly revenue');
+    await expect(widget.getByText('Q2')).toBeVisible();
+  });
+
+  test('a streamed turn ends with the persisted widget', async ({ page }) => {
+    const sent: Json[] = [];
+    const stream = sse([
+      ['message.ui.delta', { ...TABLE_UI, status: 'streaming' }],
+      ['message.delta', { text: 'Done.' }],
+      ['message.ui.done', TABLE_UI],
+      ['message.done', { text: 'Done.', citations: [], status: 'completed', generative_ui: TABLE_UI }],
+    ]);
+    await mockChat(page, { assistantUi: TABLE_UI, sse: stream, onSend: (b) => sent.push(b) });
+    await openChat(page);
+    await page.getByRole('textbox', { name: /Ask a question about your knowledge/ }).fill('table please');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => sent.length).toBe(1);
+    await expect(page.getByTestId('generative-ui-widget')).toContainText('Quarterly revenue');
+  });
+});
+
+test.describe('render_sandboxed_ui', () => {
+  // Tall viewport: the 480 px widget must fit so a real pointer click on the in-frame button is actionable.
+  test.use({ viewport: { width: 1280, height: 1600 } });
+
+  test('iframe is sandboxed without same-origin, renders, resizes and drafts sendPrompt into the composer without sending', async ({ page }) => {
+    const sent: Json[] = [];
+    await mockChat(page, { assistantUi: SANDBOX_UI, onSend: (b) => sent.push(b) });
+    await openChat(page);
+    const iframe = page.locator('[data-testid="sandboxed-ui-iframe"]');
+    await expect(iframe).toBeVisible();
+    await expect(iframe).toHaveAttribute('sandbox', 'allow-scripts');
+    const frame = page.frameLocator('[data-testid="sandboxed-ui-iframe"]');
+    await expect(frame.locator('#msg')).toHaveText('js ran');
+    // Resize: the host container grows from initialHeight (120) to the reported content height (>= 480).
+    const container = page.getByTestId('sandboxed-ui-container');
+    await expect.poll(async () => (await container.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(480);
+    await frame.locator('#ask').click();
+    // A sandboxed widget may only draft the prompt into the composer; it must never submit it on its own.
+    await expect(page.getByRole('textbox', { name: /Ask a question about your knowledge/ })).toHaveValue('Tell me more about the counter');
+    await page.waitForTimeout(500);
+    expect(sent).toHaveLength(0);
+  });
+
+  test('inline onclick + jsFunctions + vendored import run under the strict app CSP with no violations, host or frame', async ({ page, baseURL }) => {
+    const violations: string[] = [];
+    // A third-party host chunk feature-probes eval() inside try/catch (blocked by design, no 'unsafe-eval' in prod); not a widget concern.
+    page.on('console', (msg) => { if (/^(HOST|FRAME)CSPV/.test(msg.text()) && !/^HOSTCSPV script-src eval /.test(msg.text())) violations.push(msg.text()); });
+    // Every document (host and sandbox frame) reports its own violations; none is expected.
+    await page.addInitScript(() => {
+      const who = window.parent === window ? 'HOST' : 'FRAME';
+      document.addEventListener('securitypolicyviolation', (e) => console.error(`${who}CSPV ${e.violatedDirective} ${e.blockedURI} ${e.sourceFile}:${e.lineNumber} ${e.sample}`));
+    });
+    // Records frame -> host bridge messages independent of chat state (the prompt itself may be refused by a busy chat).
+    await page.addInitScript(() => {
+      if (window.parent !== window) return;
+      const seen: unknown[] = [];
+      (window as unknown as { __bridgeMsgs: unknown[] }).__bridgeMsgs = seen;
+      window.addEventListener('message', (e) => { if (e.origin === 'null') seen.push(e.data); });
+    });
+    await mockChat(page, { assistantUi: INLINE_HANDLER_UI });
+    await openChat(page);
+    const frame = page.frameLocator('[data-testid="sandboxed-ui-iframe"]');
+    await expect(frame.locator('#lib')).toHaveText('d3 function');
+    await frame.locator('#go').click();
+    await expect(frame.locator('#out')).toHaveText('clicked go');
+    // sendPrompt bridge: an inline handler posts a nonce-carrying message from the opaque-origin frame to the host.
+    await frame.locator('#ask').click();
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __bridgeMsgs: Array<Record<string, unknown>> }).__bridgeMsgs.some((m) => typeof m.nonce === 'string' && JSON.stringify(m).includes('hello bridge'))))
+      .toBe(true);
+    expect(violations, `CSP violations: ${violations.join(' | ')}`).toEqual([]);
+
+    // The host policy has no script 'unsafe-inline' and the frame shell carries its own, separate policy.
+    const host = await page.request.get('/login');
+    const hostCsp = host.headers()['content-security-policy'];
+    const hostScript = hostCsp.split('; ').find((d) => d.startsWith('script-src'))!;
+    expect(hostScript).not.toContain('unsafe-inline');
+    const shell = await page.request.get('/genui-frame');
+    expect(shell.status()).toBe(200);
+    const shellCsp = shell.headers()['content-security-policy'];
+    expect(shellCsp).toContain("default-src 'none'");
+    expect(shellCsp).toContain(`script-src 'unsafe-inline' ${new URL(baseURL!).origin}/vendor/genui/`);
+    expect(shellCsp).toContain("connect-src 'none'");
+    expect(shellCsp).toContain('sandbox allow-scripts');
+    expect(shell.headers()['x-frame-options']).toBeUndefined();
+    // No host nonce reaches the frame document.
+    const hostNonce = /'nonce-([^']+)'/.exec(hostCsp)?.[1];
+    expect(hostNonce).toBeTruthy();
+    const frameDoc = await page.locator('[data-testid="sandboxed-ui-iframe"]').getAttribute('name');
+    expect(frameDoc).not.toContain(hostNonce!);
+  });
+
+  test('imports vendored d3 from /vendor/genui with no external request and no CSP violation', async ({ page, baseURL }) => {
+    const origin = new URL(baseURL!).origin;
+    const external: string[] = [];
+    const vendor: string[] = [];
+    const violations: string[] = [];
+    page.on('request', (req) => {
+      const url = req.url();
+      if (/^(data|blob|about):/.test(url)) return;
+      if (new URL(url).origin !== origin) external.push(url);
+      if (url.includes('/vendor/genui/')) vendor.push(url);
+    });
+    page.on('console', (msg) => { if (/Content Security Policy|securitypolicyviolation|CSPV/i.test(msg.text())) violations.push(msg.text()); });
+    // Runs in every frame; only the opaque-origin sandbox iframe is asserted (host chunks probe eval on their own).
+    await page.addInitScript(() => {
+      if (window.parent === window) return;
+      document.addEventListener('securitypolicyviolation', (e) => console.error(`CSPV ${e.violatedDirective} ${e.blockedURI} ${e.sourceFile}:${e.lineNumber} ${e.sample}`));
+    });
+    await mockChat(page, { assistantUi: D3_UI });
+    await openChat(page);
+    const frame = page.frameLocator('[data-testid="sandboxed-ui-iframe"]');
+    await expect(frame.locator('#status')).toHaveText('d3 ok function');
+    await expect(frame.locator('#chart svg')).toBeVisible();
+    expect(vendor.some((u) => u.endsWith('/vendor/genui/d3.mjs'))).toBe(true);
+    expect(external, `external requests: ${external.join(', ')}`).toEqual([]);
+    expect(violations, `CSP violations: ${violations.join(' | ')}`).toEqual([]);
+  });
+});
+
+test.describe('vi-vi locale and dark theme', () => {
+  test.use({ locale: 'vi-VN', colorScheme: 'dark' });
+
+  test('sandbox widget renders', async ({ page }) => {
+    await mockChat(page, { assistantUi: SANDBOX_UI });
+    await openChat(page);
+    await expect(page.locator('html')).toHaveAttribute('lang', 'vi-VN');
+    await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains('dark'))).toBe(true);
+    await expect(page.getByTestId('generative-ui-widget')).toBeVisible();
+    await expect(page.frameLocator('[data-testid="sandboxed-ui-iframe"]').locator('#msg')).toHaveText('js ran');
+    const bg = await page.getByTestId('sandboxed-ui-container').evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(bg).not.toBe('rgb(255, 255, 255)');
+  });
+
+  test('table widget renders', async ({ page }) => {
+    await mockChat(page, { assistantUi: TABLE_UI });
+    await openChat(page);
+    await expect(page.getByTestId('generative-ui-widget')).toContainText('Quarterly revenue');
+  });
+});
+
+test.describe('vendored library headers', () => {
+  test('d3.mjs is served with CORS, CORP and an immutable cache', async ({ page }) => {
+    const res = await page.request.get('/vendor/genui/d3.mjs');
+    expect(res.status()).toBe(200);
+    const headers = res.headers();
+    expect(headers['access-control-allow-origin']).toBe('*');
+    expect(headers['cross-origin-resource-policy']).toBe('cross-origin');
+    expect(headers['cache-control']).toContain('immutable');
+    expect(headers['cache-control']).toContain('max-age=31536000');
+    expect(headers['content-type']).toMatch(/javascript/);
+  });
+});
+
+// Plain Playwright test: the shell route needs no auth or backend, so skip the owner-session fixture.
+plainTest.describe('frame shell opened top-level (window.name injection)', () => {
+  plainTest('a planted window.name never executes in the app origin', async ({ page, context, baseURL }) => {
+    // Same-origin window.open keeps the name (a cross-site top-level navigation would clear it and make this test vacuous).
+    const payload = '<script>document.title="PWNED";window.__pwned=1;</script>';
+    // Record the name as the shell document starts, before the shell script clears it: proves the payload reached the shell.
+    await context.addInitScript(() => {
+      (window as unknown as { __nameAtStart?: string }).__nameAtStart = window.name;
+    });
+    await page.goto(`${baseURL}/vendor/genui/d3.mjs`);
+    const popupPromise = page.waitForEvent('popup');
+    await page.evaluate((html) => { window.open('/genui-frame', html); }, payload);
+    const popup = await popupPromise;
+    await popup.waitForLoadState('load');
+    expect(new URL(popup.url()).pathname).toBe('/genui-frame');
+    expect(await popup.evaluate(() => (window as unknown as { __nameAtStart?: string }).__nameAtStart)).toBe(payload);
+    await expect(popup).not.toHaveTitle(/PWNED/);
+    expect(await popup.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+    // CSP `sandbox` alone (independent of the shell script's top-level check) gives the document an opaque origin.
+    expect(await popup.evaluate(() => self.origin)).toBe('null');
+    expect(await popup.evaluate(() => { try { localStorage.length; return 'allowed'; } catch { return 'blocked'; } })).toBe('blocked');
+  });
+});

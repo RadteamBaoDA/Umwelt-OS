@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pytest_target="${PYTEST_TARGET:-}"
+e2e_target="${E2E_TARGET:-}"
+e2e_only="${E2E_ONLY_RUN:-}"
+if [[ -n "$pytest_target" && ( -n "$e2e_target" || -n "$e2e_only" ) ]]; then
+  echo 'Choose only one of PYTEST_TARGET or E2E_TARGET.' >&2
+  exit 2
+fi
+
+if [[ -n "$pytest_target" && "$pytest_target" != tests/integration/* ]]; then
+  uv run pytest "$pytest_target" -q
+  exit
+fi
+
+if [[ -z "$pytest_target" && -z "$e2e_target" && -z "$e2e_only" ]]; then
+  uv run pytest -q
+fi
+
+project="bbd-os-test-$(python -c 'import secrets; print(secrets.token_hex(5))')"
+free_port() { python -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'; }
+export WEB_PORT="$(free_port)"
+export API_TEST_PORT="$(free_port)"
+while [[ "$API_TEST_PORT" == "$WEB_PORT" ]]; do export API_TEST_PORT="$(free_port)"; done
+export TEST_POSTGRES_PORT="$(free_port)"
+while [[ "$TEST_POSTGRES_PORT" == "$WEB_PORT" || "$TEST_POSTGRES_PORT" == "$API_TEST_PORT" ]]; do export TEST_POSTGRES_PORT="$(free_port)"; done
+export TEST_PUBLIC_ORIGIN="http://localhost:${WEB_PORT}"
+# Opt-in real-model chat e2e: public https providers are reachable only when .env.e2e-real holds a key (never exported to compose).
+if [[ -f .env.e2e-real ]] && grep -Eq '^[[:space:]]*E2E_REAL_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]]' .env.e2e-real; then export E2E_ALLOW_PUBLIC_PROVIDERS=true; fi
+export TEST_DATABASE_URL="postgresql+asyncpg://bbd_test:bbd-os-test-db-only@127.0.0.1:${TEST_POSTGRES_PORT}/bbd_test"
+export TEST_S3_PORT="$(free_port)"
+# Optional S3 profile (RustFS) backs tests/integration/test_storage_s3.py (disposable credentials from docker-compose.test.yml).
+export S3_TEST_ENDPOINT_URL="http://127.0.0.1:${TEST_S3_PORT}"
+export S3_TEST_ACCESS_KEY="bbd-os-test-s3"
+export S3_TEST_SECRET_KEY="bbd-os-test-s3-only"
+compose=(docker compose -p "$project" -f docker-compose.yml -f docker-compose.test.yml --profile s3)
+cleanup() { "${compose[@]}" down --volumes --remove-orphans; }
+trap cleanup EXIT
+"${compose[@]}" up -d --build
+# `up` waits for migration completion; this second run proves the revision is idempotent.
+"${compose[@]}" run --rm migrate
+"${compose[@]}" run --rm --no-deps api python -c 'import apps.api.main, core.auth.dependencies, modules'
+
+export INTEGRATION=1
+export API_URL="http://localhost:${API_TEST_PORT}"
+"${compose[@]}" exec -T postgres psql -U bbd_test -d bbd_test -At -c "SELECT current_database() || '|' || current_user" | grep -Fx 'bbd_test|bbd_test' >/dev/null
+if [[ -z "$e2e_only" ]]; then
+uv run pytest tests/integration/test_auth_race.py -q
+if [[ -n "$pytest_target" ]]; then
+  if [[ "$pytest_target" != tests/integration/test_auth_race.py ]]; then
+    uv run pytest "$pytest_target" -q
+  fi
+else
+  uv run pytest tests/integration -q --ignore=tests/integration/test_auth_race.py
+fi
+fi
+
+if [[ -z "$pytest_target" || -n "$e2e_target" ]]; then
+  # Only this uniquely named disposable project and verified test identity may be reset.
+  [[ "$project" =~ ^bbd-os-test-[0-9a-f]{10}$ ]]
+  e2e_reset() {
+    "${compose[@]}" exec -T postgres psql -U bbd_test -d bbd_test -v ON_ERROR_STOP=1 -c "$(tr -d '\r' < "$(dirname "${BASH_SOURCE[0]}")/sql/e2e-reset.sql" | tr '\n' ' ')"
+    "${compose[@]}" exec -T redis sh -c "unset REDISCLI_AUTH; redis-cli FLUSHALL" >/dev/null
+  }
+  export E2E_SETUP_TOKEN=bbd-os-disposable-test-token
+  export PLAYWRIGHT_BASE_URL="http://localhost:${WEB_PORT}"
+  export PLAYWRIGHT_EXTERNAL_SERVER=1
+  e2e_reset
+  if [[ -n "$e2e_target" ]]; then
+    npm run test:e2e -- "$e2e_target"
+  else
+    # Two groups, each with its own global timeout and a fresh owner bootstrap (see playwright.config.ts).
+    # The second group runs even when the first fails, so one slow provider cannot hide the rest of the suite.
+    status=0
+    E2E_GROUP=datasources npm run test:e2e || status=$?
+    e2e_reset
+    E2E_GROUP=rest npm run test:e2e || status=$?
+    exit "$status"
+  fi
+fi

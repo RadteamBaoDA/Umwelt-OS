@@ -1,0 +1,33 @@
+{
+  "name": "umwelt-os",
+  "private": true,
+  "workspaces": [
+    "apps/web"
+  ],
+  "overrides": {
+    "postcss": "^8.5.28",
+    "next": {
+      "postcss": "^8.5.28"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    }
+  },
+  "scripts": {
+    "dev": "concurrently -k -n be,worker,model,chat,fe -c blue,magenta,yellow,cyan,green \"npm:dev:be\" \"npm:dev:worker\" \"npm:dev:model\" \"npm:dev:chat\" \"npm:dev:fe\"",
+    "dev:be": "uv run --env-file .env python -m uvicorn apps.api.main:create_app --factory --host 127.0.0.1 --port 8000 --reload --reload-dir apps --reload-dir core --reload-dir modules",
+    "dev:worker": "uv run --env-file .env python -m watchfiles --filter python \"uv run --env-file .env python -m arq apps.worker.main.WorkerSettings\" apps core modules",
+    "dev:model": "uv run --env-file .env python -m watchfiles --filter python \"uv run --env-file .env python -m arq apps.worker.main.ModelWorkerSettings\" apps core modules",
+    "dev:chat": "uv run --env-file .env python -m watchfiles --filter python \"uv run --env-file .env python -m arq apps.worker.main.ChatWorkerSettings\" apps core modules",
+    "dev:fe": "npm run dev --workspace apps/web",
+    "dev:migrate": "uv run --env-file .env python -m alembic upgrade head && uv run --env-file .env python -m core.chat_sql_provision",
+    "lint": "npm run lint --workspace apps/web",
+    "typecheck": "npm run typecheck --workspace apps/web",
+    "build": "npm run build --workspace apps/web",
+    "test:e2e": "npm run test:e2e --workspace apps/web",
+    "check:api-types": "npm run gen:api:check --workspace apps/web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.5"
+  }
+}

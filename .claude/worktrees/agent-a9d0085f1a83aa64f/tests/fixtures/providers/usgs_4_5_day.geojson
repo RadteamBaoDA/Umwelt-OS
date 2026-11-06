@@ -1,0 +1,3 @@
+{"type":"FeatureCollection","metadata":{"generated":1759900000000,"status":200,"count":2},"features":[
+{"type":"Feature","id":"us7000abcd","properties":{"mag":5.1,"place":"10 km N of Somewhere","time":1759890000000,"updated":1759893000000,"type":"earthquake","status":"reviewed","magType":"mww","detail":"https://earthquake.usgs.gov/x"},"geometry":{"type":"Point","coordinates":[142.5,38.25,35.1]}},
+{"type":"Feature","id":"us7000abce","properties":{"mag":null,"place":null,"time":1759880000000,"updated":1759880500000,"type":"earthquake","status":"automatic","magType":null},"geometry":{"type":"Point","coordinates":[-70.1,-33.2,10]}}]}
