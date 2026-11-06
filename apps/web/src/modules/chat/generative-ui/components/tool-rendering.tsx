@@ -268,11 +268,7 @@ const KIND_RENDERERS: Record<string, (ctx: RenderContext) => React.ReactNode> = 
  * @param props - ToolRenderingProps containing payload, prompt callback, and locale.
  * @returns Rendered Generative UI widget, or null if payload is absent/unrecognized.
  */
-export function ToolRendering({
-  payload,
-  onSendPrompt,
-  locale,
-}: ToolRenderingProps) {
+export function ToolRendering({ payload, onSendPrompt, locale }: ToolRenderingProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
   const catalog = genUiCopy(resolvedLocale);
 

@@ -58,18 +58,29 @@ export function StoryList(props: StoryListProps) {
 
   const vm: StoryListVm = s3;
   return (
-    <section className={embedded
-      ? 'flex h-full min-h-0 flex-col gap-2 overflow-auto bg-card px-3 pb-3 text-card-foreground'
-      : 'flex flex-col gap-3 bg-card text-card-foreground'}>
-<StoryListChrome vm={vm} />
+    <section
+      className={
+        embedded
+          ? 'flex h-full min-h-0 flex-col gap-2 overflow-auto bg-card px-3 pb-3 text-card-foreground'
+          : 'flex flex-col gap-3 bg-card text-card-foreground'
+      }
+    >
+      <StoryListChrome vm={vm} />
 
-<StoryTrends vm={vm} />
+      <StoryTrends vm={vm} />
 
-<StoryListStatus vm={vm} />
+      <StoryListStatus vm={vm} />
 
-<StoryListBody vm={vm} />
+      <StoryListBody vm={vm} />
       {!storiesQuery.isError && storiesQuery.hasNextPage ? (
-        <Button variant="outline" className="mt-1 shrink-0" onClick={() => { void storiesQuery.fetchNextPage(); }} disabled={storiesQuery.isFetchingNextPage}>
+        <Button
+          variant="outline"
+          className="mt-1 shrink-0"
+          onClick={() => {
+            void storiesQuery.fetchNextPage();
+          }}
+          disabled={storiesQuery.isFetchingNextPage}
+        >
           {storiesQuery.isFetchingNextPage ? t('loading') : t('loadMore')}
         </Button>
       ) : null}
@@ -82,33 +93,40 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
   const { t, display, incompleteLabel, onSelectStory, translation, shown, relevanceVaries, relativeTime } = vm;
   const excerpt = cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt);
   return (
-        <li>
-            <Button type="button" variant="ghost" onClick={(event) => onSelectStory(story.id, event.currentTarget)} className={`h-auto w-full flex-col items-stretch justify-start whitespace-normal text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-none px-0 py-3`}>
-              <span className="flex items-start justify-between gap-2">
-                <span className="font-medium leading-snug">{shown(story)?.title ?? story.title}</span>
-                <ArrowUpRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-              </span>
-              {excerpt ? (
-                <span className="mt-1 line-clamp-3 text-sm text-muted-foreground">{excerpt}</span>
-              ) : null}
-              {!translation.results.has(story.id) && <TranslationNote issue={translation.issues.get(story.id)} />}
-              <span className="mt-2 block text-xs text-muted-foreground" title={formatDateTime(story.observed_at, display.locale, display.timezone)}>
-                {[
-                  // A lone source with a lone item carries no information, so only larger counts are shown.
-                  ...(story.source_count === 1 && story.evidence_count === 1 ? [] : [
-                    t('sources', { count: story.source_count }),
-                    t('evidence', { count: story.evidence_count }),
-                  ]),
-                  relativeTime(story.observed_at),
-                ].join(' · ')}
-                {story.relevance !== null && relevanceVaries ? ` · ${t('relevance')} ${Math.round(story.relevance * 100)}%` : null}
-              </span>
-              {story.incomplete_reasons.map((reason) => (
-                <span key={reason} className="mt-1 block text-xs text-muted-foreground">{incompleteLabel(reason)}</span>
-              ))}
-            </Button>
-            <Attribution story={story} />
-        </li>
+    <li>
+      <Button
+        type="button"
+        variant="ghost"
+        onClick={(event) => onSelectStory(story.id, event.currentTarget)}
+        className={`h-auto w-full flex-col items-stretch justify-start whitespace-normal text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-none px-0 py-3`}
+      >
+        <span className="flex items-start justify-between gap-2">
+          <span className="font-medium leading-snug">{shown(story)?.title ?? story.title}</span>
+          <ArrowUpRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+        </span>
+        {excerpt ? <span className="mt-1 line-clamp-3 text-sm text-muted-foreground">{excerpt}</span> : null}
+        {!translation.results.has(story.id) && <TranslationNote issue={translation.issues.get(story.id)} />}
+        <span
+          className="mt-2 block text-xs text-muted-foreground"
+          title={formatDateTime(story.observed_at, display.locale, display.timezone)}
+        >
+          {[
+            // A lone source with a lone item carries no information, so only larger counts are shown.
+            ...(story.source_count === 1 && story.evidence_count === 1
+              ? []
+              : [t('sources', { count: story.source_count }), t('evidence', { count: story.evidence_count })]),
+            relativeTime(story.observed_at),
+          ].join(' · ')}
+          {story.relevance !== null && relevanceVaries ? ` · ${t('relevance')} ${Math.round(story.relevance * 100)}%` : null}
+        </span>
+        {story.incomplete_reasons.map((reason) => (
+          <span key={reason} className="mt-1 block text-xs text-muted-foreground">
+            {incompleteLabel(reason)}
+          </span>
+        ))}
+      </Button>
+      <Attribution story={story} />
+    </li>
   );
 }
 
@@ -120,7 +138,20 @@ function Attribution({ story }: { story: Story }) {
   const href = safeHttpUrl(item.url);
   return (
     <p className="-mt-2 pb-3 text-xs text-muted-foreground" title={item.license_label ?? undefined}>
-      {t('publisher')}: {href ? <a className="text-foreground underline underline-offset-2" href={href} target="_blank" rel="noopener noreferrer" title={item.license_label ?? undefined}>{item.publisher}</a> : item.publisher}
+      {t('publisher')}:{' '}
+      {href ? (
+        <a
+          className="text-foreground underline underline-offset-2"
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={item.license_label ?? undefined}
+        >
+          {item.publisher}
+        </a>
+      ) : (
+        item.publisher
+      )}
     </p>
   );
 }
@@ -130,65 +161,95 @@ type StoryListVm = ReturnType<typeof buildStoryRenderers>;
 /** Top row: slim meta row when embedded, otherwise page actions portaled to the host or an own header. */
 function StoryListChrome({ vm }: { vm: StoryListVm }) {
   const { embedded, actionsHost, translation, incompleteNotice, showOriginal, setShowOriginal, refreshButton, pageActions } = vm;
-  return (
-      embedded ? (
-        // Slim meta row: partial-data notice on the left, translated badge + refresh on the right (no overlap with stories).
-        <div className="flex h-6 shrink-0 items-center justify-between gap-2">
-          <div className="min-w-0 truncate">{incompleteNotice}</div>
-          <div className="flex items-center gap-1">
-            {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
-            {refreshButton}
-          </div>
-        </div>
-      ) : actionsHost ? createPortal(pageActions, actionsHost) : (
-        <header className="flex items-center justify-end gap-1 border-b border-border pb-2">{pageActions}</header>
-      )
+  return embedded ? (
+    // Slim meta row: partial-data notice on the left, translated badge + refresh on the right (no overlap with stories).
+    <div className="flex h-6 shrink-0 items-center justify-between gap-2">
+      <div className="min-w-0 truncate">{incompleteNotice}</div>
+      <div className="flex items-center gap-1">
+        {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+        {refreshButton}
+      </div>
+    </div>
+  ) : actionsHost ? (
+    createPortal(pageActions, actionsHost)
+  ) : (
+    <header className="flex items-center justify-end gap-1 border-b border-border pb-2">{pageActions}</header>
   );
 }
 
 /** Matching-scope trends as a chip strip when embedded or a list otherwise. */
 function StoryTrends({ vm }: { vm: StoryListVm }) {
   const { t, trendItems, showTrends, embedded, onSelectStory } = vm;
-  return (
-      showTrends && trendItems.length && embedded ? (
-        // Embedded trends are a one-line chip strip (title + ratio) so stories stay the focus.
-        <section aria-label={t('trends')} className="flex shrink-0 gap-2 overflow-x-auto pb-1">
-          <h3 className="sr-only">{t('trends')}</h3>
-          {trendItems.slice(0, 5).map((trend) => (
-            <Button key={trend.story_id} type="button" variant="outline" size="sm" title={`${t('current24h')}: ${trend.current_count}`} onClick={(event) => onSelectStory(trend.story_id, event.currentTarget)} className="h-7 max-w-56 shrink-0 gap-1.5 rounded-full px-3 text-xs font-normal">
-              <span className="truncate">{trend.title}</span>
-              <span className="tabular-nums text-muted-foreground">{trend.low_baseline ? t('lowBaseline') : `${trend.ratio?.toFixed(1)}×`}</span>
-            </Button>
-          ))}
-        </section>
-      ) : showTrends && trendItems.length ? (
-        <section aria-label={t('trends')} className="space-y-2">
-          <h3 className="text-xs font-medium text-muted-foreground">{t('trends')}</h3>
-          {trendItems.slice(0, 5).map((trend) => (
-            <Button key={trend.story_id} type="button" variant="ghost" onClick={(event) => onSelectStory(trend.story_id, event.currentTarget)} className="h-auto w-full flex-col items-stretch justify-start whitespace-normal rounded-md border border-border p-2 text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <span className="block text-sm font-medium">{trend.title}</span>
-              <span className="text-xs text-muted-foreground">
-                {t('current24h')}: {trend.current_count} · {trend.low_baseline ? t('lowBaseline') : `${trend.ratio?.toFixed(1)}×`}
-              </span>
-            </Button>
-          ))}
-        </section>
-      ) : null
-  );
+  return showTrends && trendItems.length && embedded ? (
+    // Embedded trends are a one-line chip strip (title + ratio) so stories stay the focus.
+    <section aria-label={t('trends')} className="flex shrink-0 gap-2 overflow-x-auto pb-1">
+      <h3 className="sr-only">{t('trends')}</h3>
+      {trendItems.slice(0, 5).map((trend) => (
+        <Button
+          key={trend.story_id}
+          type="button"
+          variant="outline"
+          size="sm"
+          title={`${t('current24h')}: ${trend.current_count}`}
+          onClick={(event) => onSelectStory(trend.story_id, event.currentTarget)}
+          className="h-7 max-w-56 shrink-0 gap-1.5 rounded-full px-3 text-xs font-normal"
+        >
+          <span className="truncate">{trend.title}</span>
+          <span className="tabular-nums text-muted-foreground">
+            {trend.low_baseline ? t('lowBaseline') : `${trend.ratio?.toFixed(1)}×`}
+          </span>
+        </Button>
+      ))}
+    </section>
+  ) : showTrends && trendItems.length ? (
+    <section aria-label={t('trends')} className="space-y-2">
+      <h3 className="text-xs font-medium text-muted-foreground">{t('trends')}</h3>
+      {trendItems.slice(0, 5).map((trend) => (
+        <Button
+          key={trend.story_id}
+          type="button"
+          variant="ghost"
+          onClick={(event) => onSelectStory(trend.story_id, event.currentTarget)}
+          className="h-auto w-full flex-col items-stretch justify-start whitespace-normal rounded-md border border-border p-2 text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span className="block text-sm font-medium">{trend.title}</span>
+          <span className="text-xs text-muted-foreground">
+            {t('current24h')}: {trend.current_count} · {trend.low_baseline ? t('lowBaseline') : `${trend.ratio?.toFixed(1)}×`}
+          </span>
+        </Button>
+      ))}
+    </section>
+  ) : null;
 }
 
 /** Loading, error and empty states. */
 function StoryListStatus({ vm }: { vm: StoryListVm }) {
   const { t, storiesQuery, trendQuery, stories, showTrends, embedded, noSources, incompleteNotice } = vm;
   return (
-<>
-      {storiesQuery.isPending ? <p role="status" className="text-sm text-muted-foreground">{t('loading')}</p> : null}
-      {showTrends && trendQuery.isError ? <p role="alert" className="text-sm text-destructive">{t('error')}</p> : null}
+    <>
+      {storiesQuery.isPending ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          {t('loading')}
+        </p>
+      ) : null}
+      {showTrends && trendQuery.isError ? (
+        <p role="alert" className="text-sm text-destructive">
+          {t('error')}
+        </p>
+      ) : null}
       {!embedded ? incompleteNotice : null}
       {storiesQuery.isError ? (
         <div role="alert" className="flex items-center justify-between gap-2 text-sm text-destructive">
           <span>{t('error')}</span>
-          <Button variant="outline" size="sm" onClick={() => { void storiesQuery.refetch(); }}>{t('retry')}</Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void storiesQuery.refetch();
+            }}
+          >
+            {t('retry')}
+          </Button>
         </div>
       ) : null}
       {!storiesQuery.isPending && !storiesQuery.isError && stories.length === 0 ? (
@@ -196,52 +257,79 @@ function StoryListStatus({ vm }: { vm: StoryListVm }) {
           {noSources ? (
             <>
               <p className="m-0">{t('emptyNoSources')}</p>
-              <Button asChild variant="outline" size="sm"><Link href="/settings/sources">{t('addNewsSource')}</Link></Button>
+              <Button asChild variant="outline" size="sm">
+                <Link href="/settings/sources">{t('addNewsSource')}</Link>
+              </Button>
             </>
           ) : (
             <>
               <p className="m-0">{t('emptyAwaitingCollection')}</p>
-              <Button variant="outline" size="sm" onClick={() => { void storiesQuery.refetch(); }}>{t('refresh')}</Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  void storiesQuery.refetch();
+                }}
+              >
+                {t('refresh')}
+              </Button>
             </>
           )}
         </div>
       ) : null}
-</>
+    </>
   );
 }
 
 /** Lead story beside the list when embedded, otherwise the plain story list. */
 function StoryListBody({ vm }: { vm: StoryListVm }) {
   const { t, display, onSelectStory, shown, leadStory, listStories, relativeTime } = vm;
-  return (
-      leadStory ? (
-        // Wide gadgets put the lead left and the list right; narrow ones stack them.
-        <div className="grid shrink-0 gap-x-6 gap-y-2 @[40rem]/gadget:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-          <div data-testid="news-lead" className="min-w-0">
-            <Button type="button" variant="ghost" onClick={(event) => onSelectStory(leadStory.id, event.currentTarget)} className="h-auto w-full flex-col items-stretch justify-start whitespace-normal rounded-none px-0 py-2 text-left font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <span className="text-xl font-semibold leading-snug">{shown(leadStory)?.title ?? leadStory.title}</span>
-              {cleanExcerpt(shown(leadStory)?.title ?? leadStory.title, shown(leadStory)?.excerpt ?? leadStory.excerpt) ? (
-                <span className="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">{cleanExcerpt(shown(leadStory)?.title ?? leadStory.title, shown(leadStory)?.excerpt ?? leadStory.excerpt)}</span>
-              ) : null}
-              <span className="mt-3 flex items-baseline gap-1.5 text-xs text-muted-foreground">
-                {/* A single source is not a headline figure: show it as plain meta text instead. */}
-                {leadStory.source_count >= 2 ? (
-                  <>
-                    <span className="text-figure-sm text-foreground">{leadStory.source_count}</span>
-                    <span>{t('sourcesLabel', { count: leadStory.source_count })}</span>
-                  </>
-                ) : <span>{t('sources', { count: leadStory.source_count })}</span>}
-                <span aria-hidden="true">·</span>
-                <span className="tabular-nums" title={formatDateTime(leadStory.observed_at, display.locale, display.timezone)}>{relativeTime(leadStory.observed_at)}</span>
-              </span>
-            </Button>
-            <Attribution story={leadStory} />
-          </div>
-          <ol className="min-w-0 divide-y divide-border">{listStories.map((story) => <StoryRow key={story.id} vm={vm} story={story} />)}</ol>
-        </div>
-      ) : (
-        <ol className="shrink-0 divide-y divide-border">{listStories.map((story) => <StoryRow key={story.id} vm={vm} story={story} />)}</ol>
-      )
+  return leadStory ? (
+    // Wide gadgets put the lead left and the list right; narrow ones stack them.
+    <div className="grid shrink-0 gap-x-6 gap-y-2 @[40rem]/gadget:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+      <div data-testid="news-lead" className="min-w-0">
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={(event) => onSelectStory(leadStory.id, event.currentTarget)}
+          className="h-auto w-full flex-col items-stretch justify-start whitespace-normal rounded-none px-0 py-2 text-left font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span className="text-xl font-semibold leading-snug">{shown(leadStory)?.title ?? leadStory.title}</span>
+          {cleanExcerpt(shown(leadStory)?.title ?? leadStory.title, shown(leadStory)?.excerpt ?? leadStory.excerpt) ? (
+            <span className="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">
+              {cleanExcerpt(shown(leadStory)?.title ?? leadStory.title, shown(leadStory)?.excerpt ?? leadStory.excerpt)}
+            </span>
+          ) : null}
+          <span className="mt-3 flex items-baseline gap-1.5 text-xs text-muted-foreground">
+            {/* A single source is not a headline figure: show it as plain meta text instead. */}
+            {leadStory.source_count >= 2 ? (
+              <>
+                <span className="text-figure-sm text-foreground">{leadStory.source_count}</span>
+                <span>{t('sourcesLabel', { count: leadStory.source_count })}</span>
+              </>
+            ) : (
+              <span>{t('sources', { count: leadStory.source_count })}</span>
+            )}
+            <span aria-hidden="true">·</span>
+            <span className="tabular-nums" title={formatDateTime(leadStory.observed_at, display.locale, display.timezone)}>
+              {relativeTime(leadStory.observed_at)}
+            </span>
+          </span>
+        </Button>
+        <Attribution story={leadStory} />
+      </div>
+      <ol className="min-w-0 divide-y divide-border">
+        {listStories.map((story) => (
+          <StoryRow key={story.id} vm={vm} story={story} />
+        ))}
+      </ol>
+    </div>
+  ) : (
+    <ol className="shrink-0 divide-y divide-border">
+      {listStories.map((story) => (
+        <StoryRow key={story.id} vm={vm} story={story} />
+      ))}
+    </ol>
   );
 }
 
@@ -252,7 +340,17 @@ function flattenPages<P, T>(data: { pages: P[] } | undefined, pick: (page: P) =>
 
 /** Loads the paged stories and trends for the fixed source selection and derives the loaded items and incomplete reasons. */
 function useStoryListData(props: StoryListProps) {
-  const { sourceIds, topicId, query, limit = 25, showTrends = true, embedded = false, actionsHost, noSources = false, onSelectStory } = props;
+  const {
+    sourceIds,
+    topicId,
+    query,
+    limit = 25,
+    showTrends = true,
+    embedded = false,
+    actionsHost,
+    noSources = false,
+    onSelectStory,
+  } = props;
   const t = useTranslations('news');
   const display = useDisplayPreferences();
   const incompleteLabel = useNewsIncompleteLabel();
@@ -270,13 +368,31 @@ function useStoryListData(props: StoryListProps) {
   });
   // Failed refetches invalidate every cached page so stale excerpts do not survive authority errors.
   const stories = storiesQuery.isError ? [] : flattenPages(storiesQuery.data, (page) => page.items);
-  const trendItems = trendQuery.isError ? [] : trendQuery.data?.items ?? [];
+  const trendItems = trendQuery.isError ? [] : (trendQuery.data?.items ?? []);
   const incompleteReasons = new Set([
     ...(storiesQuery.isError ? [] : flattenPages(storiesQuery.data, (page) => page.incomplete_reasons)),
-    ...(showTrends && !trendQuery.isError ? trendQuery.data?.incomplete_reasons ?? [] : []),
+    ...(showTrends && !trendQuery.isError ? (trendQuery.data?.incomplete_reasons ?? []) : []),
   ]);
 
-  return { t, display, incompleteLabel, storiesQuery, trendQuery, stories, trendItems, incompleteReasons, sourceIds, topicId, query, limit, showTrends, embedded, actionsHost, noSources, onSelectStory };
+  return {
+    t,
+    display,
+    incompleteLabel,
+    storiesQuery,
+    trendQuery,
+    stories,
+    trendItems,
+    incompleteReasons,
+    sourceIds,
+    topicId,
+    query,
+    limit,
+    showTrends,
+    embedded,
+    actionsHost,
+    noSources,
+    onSelectStory,
+  };
 }
 
 /** Requests translations for loaded stories and derives the partial-data notice, relevance spread and lead story. */
@@ -287,11 +403,13 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   const translation = useContentTranslation('news_story', targets);
   const [showOriginal, setShowOriginal] = useState(false);
   /** Translated title/excerpt for a story, or undefined when showing the original or no translation exists. */
-  const shown = (story: Story) => (showOriginal ? undefined : translation.results.get(story.id)?.translation ?? undefined);
+  const shown = (story: Story) => (showOriginal ? undefined : (translation.results.get(story.id)?.translation ?? undefined));
 
   // Embedded gadgets show the partial-data notice in the slim top meta row.
   const incompleteNotice = incompleteReasons.size ? (
-    <p role="status" className="text-xs text-muted-foreground" title={[...incompleteReasons].map(incompleteLabel).join(' ') || undefined}>{t('incompleteNotice')}</p>
+    <p role="status" className="text-xs text-muted-foreground" title={[...incompleteReasons].map(incompleteLabel).join(' ') || undefined}>
+      {t('incompleteNotice')}
+    </p>
   ) : null;
 
   // A relevance score identical on every visible story carries no ranking signal, so it is hidden.
@@ -301,19 +419,41 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
   const relevanceVaries = scores.length > 1 && Math.max(...scores) - Math.min(...scores) >= 10;
 
   // Embedded lead: the story with the most sources (first on ties) gets the hero treatment.
-  const leadStory = embedded && stories.length > 0
-    ? stories.reduce((best, story) => (story.source_count > best.source_count ? story : best), stories[0])
-    : null;
+  const leadStory =
+    embedded && stories.length > 0
+      ? stories.reduce((best, story) => (story.source_count > best.source_count ? story : best), stories[0])
+      : null;
   const listStories = leadStory ? stories.filter((story) => story.id !== leadStory.id) : stories;
 
-  return { ...p, targets, translation, shown, incompleteNotice, scores, relevanceVaries, leadStory, listStories, showOriginal, setShowOriginal };
+  return {
+    ...p,
+    targets,
+    translation,
+    shown,
+    incompleteNotice,
+    scores,
+    relevanceVaries,
+    leadStory,
+    listStories,
+    showOriginal,
+    setShowOriginal,
+  };
 }
 
 /** Builds the refresh button and the translated-badge plus refresh action group. */
 function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
   const { t, storiesQuery, trendQuery, showTrends, embedded, translation, showOriginal, setShowOriginal } = p;
   const refreshButton = (
-    <Button variant="ghost" size="icon" className={embedded ? 'size-6' : undefined} onClick={() => { void storiesQuery.refetch(); if (showTrends) void trendQuery.refetch(); }} aria-label={t('retry')}>
+    <Button
+      variant="ghost"
+      size="icon"
+      className={embedded ? 'size-6' : undefined}
+      onClick={() => {
+        void storiesQuery.refetch();
+        if (showTrends) void trendQuery.refetch();
+      }}
+      aria-label={t('retry')}
+    >
       <RefreshCw className={`${embedded ? 'size-3.5' : 'size-4'} ${storiesQuery.isFetching ? 'animate-spin' : ''}`} />
     </Button>
   );
@@ -332,7 +472,8 @@ function buildStoryListActions(p: ReturnType<typeof useStoryListPresentation>) {
 function buildStoryRenderers(p: ReturnType<typeof buildStoryListActions>) {
   const { display } = p;
   /** Relative time ("2 hr. ago") for list meta; the full datetime lives in the element title. */
-  const relativeTime = (iso: string) => formatRelativeTime(iso, normalizeFormattingLocale(display.locale)) || formatDateTime(iso, display.locale, display.timezone);
+  const relativeTime = (iso: string) =>
+    formatRelativeTime(iso, normalizeFormattingLocale(display.locale)) || formatDateTime(iso, display.locale, display.timezone);
 
   return { ...p, relativeTime };
 }

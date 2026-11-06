@@ -63,10 +63,12 @@ export function historyPerSeries(items: WorldObservation[]): Map<string, ChartDa
     points.set(item.observed_at, item.value);
     byKey.set(key, points);
   }
-  return new Map([...byKey].map(([key, points]) => [
-    key,
-    [...points].sort(([a], [b]) => a.localeCompare(b)).map(([timestamp, value]) => ({ timestamp, value })),
-  ]));
+  return new Map(
+    [...byKey].map(([key, points]) => [
+      key,
+      [...points].sort(([a], [b]) => a.localeCompare(b)).map(([timestamp, value]) => ({ timestamp, value })),
+    ]),
+  );
 }
 
 /**
@@ -101,10 +103,12 @@ function formatReferenceDate(value: string, locale: ReturnType<typeof useDisplay
  * @param locale Display locale.
  * @returns Localized text, or an em dash for non-finite input.
  */
-export function formatObservationValue(item: WorldObservation, value: number, locale: ReturnType<typeof useDisplayPreferences>['locale']): string {
-  const smallValuePrecision = value !== 0 && Math.abs(value) < 0.0001
-    ? Math.min(10, Math.ceil(-Math.log10(Math.abs(value))) + 2)
-    : 4;
+export function formatObservationValue(
+  item: WorldObservation,
+  value: number,
+  locale: ReturnType<typeof useDisplayPreferences>['locale'],
+): string {
+  const smallValuePrecision = value !== 0 && Math.abs(value) < 0.0001 ? Math.min(10, Math.ceil(-Math.log10(Math.abs(value))) + 2) : 4;
   return formatChartValue(value, {
     currency: item.currency ?? undefined,
     locale,
@@ -134,7 +138,12 @@ function useProviderObservations(instance: GadgetInstance) {
   const metrics = definition.scope?.metrics ?? [];
   const symbols = definition.scope?.symbols ?? [];
   // Unset lookback follows the bound provider's catalog default (annual World Bank ~10 years), never below 30 days.
-  const { lookbackDays: rawLookback, ready: lookbackReady, catalog, sources } = useEffectiveLookback(sourceIds, definition.scope?.lookback_days, METRIC_FALLBACK_LOOKBACK_DAYS, true);
+  const {
+    lookbackDays: rawLookback,
+    ready: lookbackReady,
+    catalog,
+    sources,
+  } = useEffectiveLookback(sourceIds, definition.scope?.lookback_days, METRIC_FALLBACK_LOOKBACK_DAYS, true);
   const lookbackDays = Math.min(rawLookback, 3660);
   const queries = useQueries({
     queries: sourceIds.map((id) => {
@@ -146,20 +155,35 @@ function useProviderObservations(instance: GadgetInstance) {
           const to = new Date(Date.now() + 86_400_000);
           // `to` runs one day ahead (provider clock skew); keep the whole window within the API's 3660-day maximum.
           const from = new Date(to.getTime() - Math.min(lookbackDays + 1, 3660) * 86_400_000);
-          return listWorldObservationWindow({ sourceIds: [id], metrics, symbols: sourceSymbols, from, to, maxPages: 2, history: true }, signal);
+          return listWorldObservationWindow(
+            { sourceIds: [id], metrics, symbols: sourceSymbols, from, to, maxPages: 2, history: true },
+            signal,
+          );
         },
-        enabled: lookbackReady, staleTime: 60_000,
+        enabled: lookbackReady,
+        staleTime: 60_000,
       };
     }),
   });
-  const query = { isPending: queries.length === 0 || queries.some((item) => item.isPending), isError: queries.some((item) => item.isError) };
-  const sourceQuery = useQuery({ queryKey: ['connector-configuration', sourceId], queryFn: ({ signal }) => getConnectorConfiguration(sourceId, signal), enabled: Boolean(sourceId), staleTime: 300_000 });
+  const query = {
+    isPending: queries.length === 0 || queries.some((item) => item.isPending),
+    isError: queries.some((item) => item.isError),
+  };
+  const sourceQuery = useQuery({
+    queryKey: ['connector-configuration', sourceId],
+    queryFn: ({ signal }) => getConnectorConfiguration(sourceId, signal),
+    enabled: Boolean(sourceId),
+    staleTime: 300_000,
+  });
   const sourceItems = queries.flatMap((item, index) => (item.data?.items ?? []).filter((row) => row.source_id === sourceIds[index]));
   const items = latestPerSeries(sourceItems);
   const history = historyPerSeries(sourceItems);
   const providerNames = [...new Set(items.map((item) => PROVIDER_PRESENTATION[item.provider]?.name).filter(Boolean))].join(', ');
   // Provider attribution + freshness live in the frame footer, not in the body.
-  useReportGadgetFreshness(items.reduce<string | null>((max, item) => (!max || item.collected_at > max ? item.collected_at : max), null), providerNames ? t('providerObsAttribution', { provider: providerNames }) : null);
+  useReportGadgetFreshness(
+    items.reduce<string | null>((max, item) => (!max || item.collected_at > max ? item.collected_at : max), null),
+    providerNames ? t('providerObsAttribution', { provider: providerNames }) : null,
+  );
   return { sourceIds, sourceId, query, items, history, sources, sourceQuery };
 }
 
@@ -167,20 +191,41 @@ function useProviderObservations(instance: GadgetInstance) {
 function ObservationNotes({ items }: { items: WorldObservation[] }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
-  return <div className="space-y-0.5 text-xs text-muted-foreground @max-[24rem]/gadget:hidden">
-    {items.map((item) => {
-      const kind = periodKind(item.provider);
-      return <div key={item.id}>
-        {kind === 'referenceDate' && item.reference_date && <p>{t('providerObsReferenceDate', { date: formatReferenceDate(item.reference_date, display.locale) })}</p>}
-        {kind === 'annualPeriod' && item.period && <p>{t('providerObsPeriod', { period: item.period })}</p>}
-      </div>;
-    })}
-    {[...new Set(items.map((item) => item.provider))].map((provider) => PROVIDER_PRESENTATION[provider] && <p key={provider}><a className="underline" href={PROVIDER_PRESENTATION[provider].href} target="_blank" rel="noreferrer">{PROVIDER_PRESENTATION[provider].name}</a></p>)}
-  </div>;
+  return (
+    <div className="space-y-0.5 text-xs text-muted-foreground @max-[24rem]/gadget:hidden">
+      {items.map((item) => {
+        const kind = periodKind(item.provider);
+        return (
+          <div key={item.id}>
+            {kind === 'referenceDate' && item.reference_date && (
+              <p>{t('providerObsReferenceDate', { date: formatReferenceDate(item.reference_date, display.locale) })}</p>
+            )}
+            {kind === 'annualPeriod' && item.period && <p>{t('providerObsPeriod', { period: item.period })}</p>}
+          </div>
+        );
+      })}
+      {[...new Set(items.map((item) => item.provider))].map(
+        (provider) =>
+          PROVIDER_PRESENTATION[provider] && (
+            <p key={provider}>
+              <a className="underline" href={PROVIDER_PRESENTATION[provider].href} target="_blank" rel="noreferrer">
+                {PROVIDER_PRESENTATION[provider].name}
+              </a>
+            </p>
+          ),
+      )}
+    </div>
+  );
 }
 
 /** One reading as a KPI (single series) or a list of SeriesRows (several), with observed/published/collected tooltips. */
-function ObservationRows({ instance, items, history, sources, sourceIds }: {
+function ObservationRows({
+  instance,
+  items,
+  history,
+  sources,
+  sourceIds,
+}: {
   instance: GadgetInstance;
   items: WorldObservation[];
   history: ReturnType<typeof historyPerSeries>;
@@ -192,29 +237,60 @@ function ObservationRows({ instance, items, history, sources, sourceIds }: {
   /** Formats an observation timestamp with the display locale and timezone. */
   const fmt = (value: string) => formatDateTime(value, display.locale, display.timezone);
   /** Tooltip text listing the observed / published / collected times of one reading. */
-  const timesTitle = (item: WorldObservation) => [
-    `${t('providerObsObserved')}: ${fmt(item.observed_at)}`,
-    item.published_at ? `${t('providerObsPublished')}: ${fmt(item.published_at)}` : null,
-    `${t('observationCollectedAt')}: ${fmt(item.collected_at)}`,
-  ].filter(Boolean).join('\n');
+  const timesTitle = (item: WorldObservation) =>
+    [
+      `${t('providerObsObserved')}: ${fmt(item.observed_at)}`,
+      item.published_at ? `${t('providerObsPublished')}: ${fmt(item.published_at)}` : null,
+      `${t('observationCollectedAt')}: ${fmt(item.collected_at)}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
   /** Row label: symbol, region or humanized metric, prefixed with the source name when several sources are bound. */
   const baseLabel = (item: WorldObservation) => item.symbol ?? item.region ?? formatMetricLabel(item.metric, t);
-  const labelOf = (item: WorldObservation) => sourceIds.length < 2 ? baseLabel(item) : `${sources[item.source_id]?.name || PROVIDER_PRESENTATION[item.provider]?.name || item.provider} · ${baseLabel(item)}`;
+  const labelOf = (item: WorldObservation) =>
+    sourceIds.length < 2
+      ? baseLabel(item)
+      : `${sources[item.source_id]?.name || PROVIDER_PRESENTATION[item.provider]?.name || item.provider} · ${baseLabel(item)}`;
   /** Unit text shown beside the figure: bounded-index suffix, else the plain unit (bare "index" adds nothing). */
   const unitOf = (item: WorldObservation) => boundedIndexSuffix(item) ?? (item.unit === 'index' ? undefined : item.unit);
   const single = items.length === 1 ? items[0] : null;
   if (single) {
     return (
-      <div title={timesTitle(single)} data-testid="observation-row" role="group" aria-label={single.value === null ? t('weatherMissingValue') : `${single.value} ${single.currency ?? single.unit}`}>
-        <GadgetKpi label={labelOf(single)} value={single.value} currency={single.currency ?? undefined} unit={unitOf(single)} format={(v) => formatObservationValue(single, v, display.locale)} deltaPercent={deltaVsPrevious(history.get(seriesKey(single)))} better={metricBetterDirection(single.metric)} series={history.get(seriesKey(single))} />
+      <div
+        title={timesTitle(single)}
+        data-testid="observation-row"
+        role="group"
+        aria-label={single.value === null ? t('weatherMissingValue') : `${single.value} ${single.currency ?? single.unit}`}
+      >
+        <GadgetKpi
+          label={labelOf(single)}
+          value={single.value}
+          currency={single.currency ?? undefined}
+          unit={unitOf(single)}
+          format={(v) => formatObservationValue(single, v, display.locale)}
+          deltaPercent={deltaVsPrevious(history.get(seriesKey(single)))}
+          better={metricBetterDirection(single.metric)}
+          series={history.get(seriesKey(single))}
+        />
       </div>
     );
   }
   return (
     <ul className="divide-y divide-border" aria-label={instance.title || t('providerObsTitle')}>
-      {items.map((item) => <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
-        <SeriesRow label={labelOf(item)} value={item.value} currency={item.currency ?? undefined} unit={unitOf(item)} format={(v) => formatObservationValue(item, v, display.locale)} series={history.get(seriesKey(item))} deltaPercent={deltaVsPrevious(history.get(seriesKey(item)))} better={metricBetterDirection(item.metric)} />
-      </li>)}
+      {items.map((item) => (
+        <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
+          <SeriesRow
+            label={labelOf(item)}
+            value={item.value}
+            currency={item.currency ?? undefined}
+            unit={unitOf(item)}
+            format={(v) => formatObservationValue(item, v, display.locale)}
+            series={history.get(seriesKey(item))}
+            deltaPercent={deltaVsPrevious(history.get(seriesKey(item)))}
+            better={metricBetterDirection(item.metric)}
+          />
+        </li>
+      ))}
     </ul>
   );
 }
@@ -242,11 +318,21 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
   const lastCollected = items.reduce((max, item) => (item.collected_at > max ? item.collected_at : max), items[0].collected_at);
   const stale = isStale(lastCollected, interval);
 
-  return <section className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
-    {query.isError && <p role="alert" className="text-xs text-destructive">{t('providerObsRefreshFailed')}</p>}
-    {stale && <p role="status" className="text-xs text-muted-foreground">{t('providerObsStale')}</p>}
-    <ObservationRows instance={instance} items={items} history={history} sources={sources} sourceIds={sourceIds} />
-    {/* Reference date / annual period and the attribution link: hidden in small containers (figure + delta + spark only). */}
-    <ObservationNotes items={items} />
-  </section>;
+  return (
+    <section className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto overflow-x-hidden bg-card p-3 text-card-foreground">
+      {query.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          {t('providerObsRefreshFailed')}
+        </p>
+      )}
+      {stale && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t('providerObsStale')}
+        </p>
+      )}
+      <ObservationRows instance={instance} items={items} history={history} sources={sources} sourceIds={sourceIds} />
+      {/* Reference date / annual period and the attribution link: hidden in small containers (figure + delta + spark only). */}
+      <ObservationNotes items={items} />
+    </section>
+  );
 }

@@ -19,6 +19,105 @@ type Metric = 'temperature' | 'rain' | 'wind';
 /** Hours between chart points: 24 forecast hours shown as 8 readable columns. */
 const STEP_HOURS = 3;
 
+/** Weather chart row: one point every {@link STEP_HOURS} hours, values already in display units. */
+type ForecastRow = { hour: string; temperature: number | null; rain: number | null; wind: number | null };
+
+/**
+ * Temperature unit switch (°C | °F) persisted per device by the caller.
+ *
+ * @param props - Current unit and the choose callback.
+ * @returns Pressed-state button group.
+ */
+function UnitSwitch({ unit, onChoose }: { unit: 'c' | 'f'; onChoose: (unit: 'c' | 'f') => void }) {
+  const t = useTranslations('dashboard');
+  return (
+    <div className="flex items-start self-start text-sm" role="group" aria-label={t('weatherUnit')}>
+      {(['c', 'f'] as const).map((option, index) => (
+        <span key={option} className="flex items-center">
+          {index > 0 && (
+            <span className="px-0.5 text-muted-foreground" aria-hidden="true">
+              |
+            </span>
+          )}
+          <BareButton
+            type="button"
+            aria-pressed={unit === option}
+            onClick={() => onChoose(option)}
+            className="cursor-pointer rounded-sm border-0 bg-transparent p-0.5 text-muted-foreground hover:text-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            {option === 'c' ? '°C' : '°F'}
+          </BareButton>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Metric tabs plus the 24-hour forecast chart (bar for rain, line otherwise).
+ *
+ * @param props - Chart rows, selected metric, metric callback and the whole-number formatter.
+ * @returns Tabs and responsive chart block.
+ */
+function ForecastPanel({
+  rows,
+  metric,
+  onMetric,
+  whole,
+}: {
+  rows: ForecastRow[];
+  metric: Metric;
+  onMetric: (metric: Metric) => void;
+  whole: Intl.NumberFormat;
+}) {
+  const t = useTranslations('dashboard');
+  const suffix = metric === 'temperature' ? '°' : metric === 'rain' ? '%' : '';
+  const label = (value: unknown) => (typeof value === 'number' ? `${whole.format(value)}${suffix}` : '');
+  const axis = (
+    <XAxis dataKey="hour" tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} tickLine={false} axisLine={false} interval={0} />
+  );
+  const labels = <LabelList dataKey={metric} position="top" formatter={label} style={{ fontSize: 11, fill: 'var(--foreground)' }} />;
+  const chartLabel = metric === 'temperature' ? t('weatherTabTemperature') : metric === 'rain' ? t('weatherTabRain') : t('weatherTabWind');
+  return (
+    <div className="flex flex-col gap-1">
+      <Tabs value={metric} onValueChange={(value) => onMetric(value as Metric)}>
+        <TabsList aria-label={t('weatherForecastTabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0">
+          {(['temperature', 'rain', 'wind'] as const).map((tab) => (
+            <TabsTrigger
+              key={tab}
+              value={tab}
+              className="min-h-8 rounded-none border-b-2 border-transparent px-2 text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
+            >
+              {tab === 'temperature' ? t('weatherTabTemperature') : tab === 'rain' ? t('weatherTabRain') : t('weatherTabWind')}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+      <div className="h-28" role="img" aria-label={t('weatherNext24hChart', { metric: chartLabel })}>
+        <ResponsiveContainer width="100%" height="100%">
+          {metric === 'rain' ? (
+            <BarChart data={rows} margin={{ top: 18, right: 8, bottom: 0, left: 8 }}>
+              {axis}
+              <YAxis hide domain={[0, 100]} />
+              <Bar dataKey="rain" fill="var(--chart-1)" fillOpacity={0.6} radius={[2, 2, 0, 0]} isAnimationActive={false}>
+                {labels}
+              </Bar>
+            </BarChart>
+          ) : (
+            <LineChart data={rows} margin={{ top: 18, right: 12, bottom: 0, left: 12 }}>
+              {axis}
+              <YAxis hide domain={['dataMin - 2', 'dataMax + 2']} />
+              <Line dataKey={metric} stroke="var(--chart-1)" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls>
+                {labels}
+              </Line>
+            </LineChart>
+          )}
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Google-style local weather card: place, condition icon, temperature with a °C/°F switch (persisted per device),
  * rain chance / humidity / wind, observation time in the owner's timezone, condition text, and a 24-hour forecast
@@ -47,18 +146,14 @@ export function WeatherCard({ data }: { data: LocalWeather }) {
     data.wind_kmh != null ? t('weatherWind', { value: whole.format(data.wind_kmh) }) : null,
   ].filter((line): line is string => line !== null);
 
-  const rows = (data.hourly ?? []).filter((_, index) => index % STEP_HOURS === 0).map((point) => ({
-    hour: hourFormat.format(Date.parse(point.at)),
-    temperature: point.temperature_c == null ? null : Math.round(toUnit(point.temperature_c, unit)),
-    rain: point.precipitation_probability_pct == null ? null : Math.round(point.precipitation_probability_pct),
-    wind: point.wind_kmh == null ? null : Math.round(point.wind_kmh),
-  }));
-  const suffix = metric === 'temperature' ? '°' : metric === 'rain' ? '%' : '';
-  const label = (value: unknown) => (typeof value === 'number' ? `${whole.format(value)}${suffix}` : '');
-  const axis = <XAxis dataKey="hour" tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }} tickLine={false} axisLine={false} interval={0} />;
-  const labels = <LabelList dataKey={metric} position="top" formatter={label} style={{ fontSize: 11, fill: 'var(--foreground)' }} />;
-  const chartLabel = metric === 'temperature' ? t('weatherTabTemperature') : metric === 'rain' ? t('weatherTabRain') : t('weatherTabWind');
-
+  const rows = (data.hourly ?? [])
+    .filter((_, index) => index % STEP_HOURS === 0)
+    .map((point) => ({
+      hour: hourFormat.format(Date.parse(point.at)),
+      temperature: point.temperature_c == null ? null : Math.round(toUnit(point.temperature_c, unit)),
+      rain: point.precipitation_probability_pct == null ? null : Math.round(point.precipitation_probability_pct),
+      wind: point.wind_kmh == null ? null : Math.round(point.wind_kmh),
+    }));
   return (
     <section aria-label={t('localWeatherTitle')} className="flex w-[28rem] max-w-full min-w-0 flex-col gap-3 px-4 py-3">
       {data.place && (
@@ -70,22 +165,16 @@ export function WeatherCard({ data }: { data: LocalWeather }) {
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
         <div className="flex items-center gap-3">
           <Icon className="size-10 shrink-0 text-data" aria-hidden="true" />
-          <p className="m-0 text-4xl font-semibold leading-none tracking-tight text-foreground tabular-nums">{whole.format(toUnit(data.temperature_c, unit))}</p>
-          <div className="flex items-start self-start text-sm" role="group" aria-label={t('weatherUnit')}>
-            {(['c', 'f'] as const).map((option, index) => (
-              <span key={option} className="flex items-center">
-                {index > 0 && <span className="px-0.5 text-muted-foreground" aria-hidden="true">|</span>}
-                <BareButton type="button" aria-pressed={unit === option} onClick={() => chooseUnit(option)}
-                  className="cursor-pointer rounded-sm border-0 bg-transparent p-0.5 text-muted-foreground hover:text-foreground aria-pressed:font-semibold aria-pressed:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
-                  {option === 'c' ? '°C' : '°F'}
-                </BareButton>
-              </span>
-            ))}
-          </div>
+          <p className="m-0 text-4xl font-semibold leading-none tracking-tight text-foreground tabular-nums">
+            {whole.format(toUnit(data.temperature_c, unit))}
+          </p>
+          <UnitSwitch unit={unit} onChoose={chooseUnit} />
         </div>
         {details.length > 0 && (
           <ul className="m-0 list-none p-0 text-xs leading-5 text-muted-foreground tabular-nums">
-            {details.map((line) => <li key={line}>{line}</li>)}
+            {details.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
           </ul>
         )}
         <div className="ml-auto text-right">
@@ -93,35 +182,7 @@ export function WeatherCard({ data }: { data: LocalWeather }) {
           {when && <p className="m-0 text-xs text-muted-foreground first-letter:uppercase">{when}</p>}
         </div>
       </div>
-      {rows.length >= 2 && (
-        <div className="flex flex-col gap-1">
-          <Tabs value={metric} onValueChange={(value) => setMetric(value as Metric)}>
-            <TabsList aria-label={t('weatherForecastTabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0">
-              {(['temperature', 'rain', 'wind'] as const).map((tab) => (
-                <TabsTrigger key={tab} value={tab}
-                  className="min-h-8 rounded-none border-b-2 border-transparent px-2 text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
-                  {tab === 'temperature' ? t('weatherTabTemperature') : tab === 'rain' ? t('weatherTabRain') : t('weatherTabWind')}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-          <div className="h-28" role="img" aria-label={t('weatherNext24hChart', { metric: chartLabel })}>
-            <ResponsiveContainer width="100%" height="100%">
-              {metric === 'rain'
-                ? <BarChart data={rows} margin={{ top: 18, right: 8, bottom: 0, left: 8 }}>
-                    {axis}
-                    <YAxis hide domain={[0, 100]} />
-                    <Bar dataKey="rain" fill="var(--chart-1)" fillOpacity={0.6} radius={[2, 2, 0, 0]} isAnimationActive={false}>{labels}</Bar>
-                  </BarChart>
-                : <LineChart data={rows} margin={{ top: 18, right: 12, bottom: 0, left: 12 }}>
-                    {axis}
-                    <YAxis hide domain={['dataMin - 2', 'dataMax + 2']} />
-                    <Line dataKey={metric} stroke="var(--chart-1)" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls>{labels}</Line>
-                  </LineChart>}
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
+      {rows.length >= 2 && <ForecastPanel rows={rows} metric={metric} onMetric={setMetric} whole={whole} />}
     </section>
   );
 }
