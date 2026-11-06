@@ -148,6 +148,7 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
       $previousApiTestPort = $env:API_TEST_PORT
       $previousTestPostgresPort = $env:TEST_POSTGRES_PORT
       $previousTestDatabaseUrl = $env:TEST_DATABASE_URL
+      $previousChatSqlReaderUrl = $env:CHAT_SQL_READER_DATABASE_URL
       $previousIntegration = $env:INTEGRATION
       $previousApiUrl = $env:API_URL
       $previousTestOrigin = $env:TEST_PUBLIC_ORIGIN
@@ -167,6 +168,8 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
         $env:API_TEST_PORT = [string]$apiPort
         $env:TEST_POSTGRES_PORT = [string]$postgresPort
         $env:TEST_DATABASE_URL = "postgresql+asyncpg://bbd_test:bbd-os-test-db-only@127.0.0.1:$postgresPort/bbd_test"
+        # Host-side pytest reaches the chat SQL reader login (password provisioned by the compose stack).
+        $env:CHAT_SQL_READER_DATABASE_URL = "postgresql+asyncpg://umwelt_chat_sql_login:bbd-os-test-chat-sql-only@127.0.0.1:$postgresPort/bbd_test"
         $env:TEST_PUBLIC_ORIGIN = "http://localhost:$webPort"
         # Optional S3 profile (RustFS) backs tests/integration/test_storage_s3.py (disposable credentials from docker-compose.test.yml).
         $s3Port = Get-FreePort
@@ -240,6 +243,8 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
         else { $env:TEST_POSTGRES_PORT = $previousTestPostgresPort }
         if ($null -eq $previousTestDatabaseUrl) { Remove-Item Env:TEST_DATABASE_URL -ErrorAction SilentlyContinue }
         else { $env:TEST_DATABASE_URL = $previousTestDatabaseUrl }
+        if ($null -eq $previousChatSqlReaderUrl) { Remove-Item Env:CHAT_SQL_READER_DATABASE_URL -ErrorAction SilentlyContinue }
+        else { $env:CHAT_SQL_READER_DATABASE_URL = $previousChatSqlReaderUrl }
         if ($null -eq $previousIntegration) { Remove-Item Env:INTEGRATION -ErrorAction SilentlyContinue }
         else { $env:INTEGRATION = $previousIntegration }
         if ($null -eq $previousApiUrl) { Remove-Item Env:API_URL -ErrorAction SilentlyContinue }

@@ -76,8 +76,9 @@ def test_launch_paths_resolve_and_reject_unsafe(tmp_path: Path) -> None:
     )
     with pytest.raises(McpTransportError, match="absolute"):
         stdio._resolve_launch_paths(_profile(tmp_path, cwd="relative"), ("--flag",))
+    # "/" is not absolute on Windows (no drive), so use the filesystem anchor ("/" on POSIX, "C:\\" on Windows).
     with pytest.raises(McpTransportError, match="outside"):
-        stdio._resolve_launch_paths(_profile(tmp_path, cwd="/"), ("--flag",))
+        stdio._resolve_launch_paths(_profile(tmp_path, cwd=tmp_path.anchor), ("--flag",))
     with pytest.raises(McpTransportError, match="evaluation"):
         stdio._resolve_launch_paths(profile, ("-c", "x"))
     with pytest.raises(McpTransportError, match="entry script"):

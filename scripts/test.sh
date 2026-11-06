@@ -29,6 +29,8 @@ export TEST_PUBLIC_ORIGIN="http://localhost:${WEB_PORT}"
 # Opt-in real-model chat e2e: public https providers are reachable only when .env.e2e-real holds a key (never exported to compose).
 if [[ -f .env.e2e-real ]] && grep -Eq '^[[:space:]]*E2E_REAL_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]]' .env.e2e-real; then export E2E_ALLOW_PUBLIC_PROVIDERS=true; fi
 export TEST_DATABASE_URL="postgresql+asyncpg://bbd_test:bbd-os-test-db-only@127.0.0.1:${TEST_POSTGRES_PORT}/bbd_test"
+# Host-side pytest reaches the chat SQL reader login (password provisioned by the compose stack, see docker-compose.test.yml).
+export CHAT_SQL_READER_DATABASE_URL="postgresql+asyncpg://umwelt_chat_sql_login:bbd-os-test-chat-sql-only@127.0.0.1:${TEST_POSTGRES_PORT}/bbd_test"
 export TEST_S3_PORT="$(free_port)"
 # Optional S3 profile (RustFS) backs tests/integration/test_storage_s3.py (disposable credentials from docker-compose.test.yml).
 export S3_TEST_ENDPOINT_URL="http://127.0.0.1:${TEST_S3_PORT}"
