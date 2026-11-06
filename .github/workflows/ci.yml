@@ -67,6 +67,8 @@ jobs:
         run: docker run --rm -v "$PWD/infrastructure/monitoring:/m:ro" --entrypoint amtool prom/alertmanager:v0.28.1 config routes test --config.file=/m/alertmanager.yml --verify.receivers=owner-webhook alertname=UmweltOutboxPurgeBacklog severity=ticket
       - name: amtool route test (page alert reaches owner-page)
         run: docker run --rm -v "$PWD/infrastructure/monitoring:/m:ro" --entrypoint amtool prom/alertmanager:v0.28.1 config routes test --config.file=/m/alertmanager.yml --verify.receivers=owner-page alertname=UmweltApi5xxRateHigh severity=page
+      - name: Synthetic alert delivery (ticket + page reach a stub webhook sink)
+        run: bash scripts/alert-delivery-smoke.sh
       - name: promtool unit tests
         run: docker run --rm -v "$PWD/infrastructure/monitoring:/m:ro" -w /m --entrypoint promtool prom/prometheus:v3.5.0 test rules alerts.test.yml
 
