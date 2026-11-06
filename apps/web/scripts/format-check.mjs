@@ -11,6 +11,7 @@
  * Exit code 1 lists the unformatted files; 0 otherwise (including when nothing changed).
  */
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 const git = (args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).split('\n').filter(Boolean);
 
@@ -50,8 +51,13 @@ if (files.length === 0) {
   console.log('format-check: no changed ts/tsx files');
   process.exit(0);
 }
+// Run prettier's CLI with this Node binary: spawning `npx` fails on Windows (it is npx.cmd, so execFileSync throws
+// ENOENT without `shell: true`), and that failure used to exit 1 silently.
+const prettierBin = createRequire(import.meta.url).resolve('prettier/bin/prettier.cjs');
 try {
-  execFileSync('npx', ['prettier', '--check', ...files], { stdio: 'inherit' });
-} catch {
+  execFileSync(process.execPath, [prettierBin, '--check', ...files], { stdio: 'inherit' });
+} catch (error) {
+  // Prettier already printed the unformatted files; a spawn failure (no status) has no output, so say why.
+  if (error.status == null) console.error(`format-check: could not run prettier: ${error.message}`);
   process.exit(1);
 }

@@ -1,1 +1,16 @@
-{ "maxRouteFirstLoadKb": 1135, "totalClientKb": 2165 }
+{
+  "maxRouteFirstLoadKb": 1135,
+  "totalClientKb": 2165,
+  "routes": {
+    "/(public)/login/page": 540,
+    "/(public)/setup/page": 540,
+    "/(public)/invite/page": 495,
+    "/(public)/invitations/accept/page": 495,
+    "/(public)/account-deletion/page": 475,
+    "/(public)/pick/page": 435,
+    "/(public)/privacy/page": 430,
+    "/(public)/refunds/page": 430,
+    "/(public)/terms/page": 430,
+    "/(public)/page": 410
+  }
+}

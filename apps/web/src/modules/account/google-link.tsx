@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { apiFailureKey } from '@/core/api-failure-key';
 import { assignAuthorizationUrl } from '@/core/safe-url';
-import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { useWorkspaceSession } from '@/core/app-shell/workspace-session';
 
 type GoogleStatus = { configured: boolean; linked: boolean };
 
@@ -18,10 +18,12 @@ export function GoogleLink() {
   const s0 = useGoogleLinkController();
 
   const vm: GoogleLinkVm = s0;
-  return <section className="status-panel">
-<GoogleLinkStatus vm={vm} />
-<GoogleLinkControls vm={vm} />
-  </section>;
+  return (
+    <section className="status-panel">
+      <GoogleLinkStatus vm={vm} />
+      <GoogleLinkControls vm={vm} />
+    </section>
+  );
 }
 
 type GoogleLinkVm = ReturnType<typeof useGoogleLinkController>;
@@ -30,12 +32,20 @@ type GoogleLinkVm = ReturnType<typeof useGoogleLinkController>;
 function GoogleLinkStatus({ vm }: { vm: GoogleLinkVm }) {
   const { t, status } = vm;
   return (
-<>
-    <h2>{t('googleSignIn')}</h2>
-    {status.isPending && <p className="text-muted-foreground" role="status">{t('checkingGoogle')}</p>}
-    {status.isError && <p className="error" role="alert">{t('unavailable')}</p>}
-    {status.isSuccess && !status.data.configured && <p className="text-muted-foreground">{t('unconfigured')}</p>}
-</>
+    <>
+      <h2>{t('googleSignIn')}</h2>
+      {status.isPending && (
+        <p className="text-muted-foreground" role="status">
+          {t('checkingGoogle')}
+        </p>
+      )}
+      {status.isError && (
+        <p className="error" role="alert">
+          {t('unavailable')}
+        </p>
+      )}
+      {status.isSuccess && !status.data.configured && <p className="text-muted-foreground">{t('unconfigured')}</p>}
+    </>
   );
 }
 
@@ -43,18 +53,46 @@ function GoogleLinkStatus({ vm }: { vm: GoogleLinkVm }) {
 function GoogleLinkControls({ vm }: { vm: GoogleLinkVm }) {
   const { t, providerError, status, link, unlink, error, password, setPassword } = vm;
   return (
-<>
-    {status.isSuccess && status.data.configured && <>
-      <p className="text-muted-foreground">{status.data.linked ? t('linked') : t('unlinked')}</p>
-      {providerError && <p className="error" role="alert">{t('linkFailed')}</p>}
-      <p className="text-muted-foreground">{t('scopeHelp')}</p>
-      <div className="field"><Label htmlFor="google-password">{t('confirmPassword')}</Label><PasswordInput id="google-password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></div>
-      {status.data.linked
-        ? <Button type="button" variant="outline" disabled={!password || unlink.isPending} onClick={() => unlink.mutate()}>{unlink.isPending ? t('unlinking') : t('unlinkGoogle')}</Button>
-        : <Button type="button" disabled={!password || link.isPending} onClick={() => link.mutate()}>{link.isPending ? t('linking') : t('linkGoogle')}</Button>}
-      {error && <p className="error" role="alert">{t(error instanceof ApiError && error.code === 'password_incorrect' ? 'passwordIncorrect' : apiFailureKey(error) ?? 'changeFailed')}</p>}
-    </>}
-</>
+    <>
+      {status.isSuccess && status.data.configured && (
+        <>
+          <p className="text-muted-foreground">{status.data.linked ? t('linked') : t('unlinked')}</p>
+          {providerError && (
+            <p className="error" role="alert">
+              {t('linkFailed')}
+            </p>
+          )}
+          <p className="text-muted-foreground">{t('scopeHelp')}</p>
+          <div className="field">
+            <Label htmlFor="google-password">{t('confirmPassword')}</Label>
+            <PasswordInput
+              id="google-password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </div>
+          {status.data.linked ? (
+            <Button type="button" variant="outline" disabled={!password || unlink.isPending} onClick={() => unlink.mutate()}>
+              {unlink.isPending ? t('unlinking') : t('unlinkGoogle')}
+            </Button>
+          ) : (
+            <Button type="button" disabled={!password || link.isPending} onClick={() => link.mutate()}>
+              {link.isPending ? t('linking') : t('linkGoogle')}
+            </Button>
+          )}
+          {error && (
+            <p className="error" role="alert">
+              {t(
+                error instanceof ApiError && error.code === 'password_incorrect'
+                  ? 'passwordIncorrect'
+                  : (apiFailureKey(error) ?? 'changeFailed'),
+              )}
+            </p>
+          )}
+        </>
+      )}
+    </>
   );
 }
 
@@ -64,7 +102,11 @@ function useGoogleLinkController() {
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
   const [password, setPassword] = useState('');
-  const providerError = useSyncExternalStore(() => () => undefined, () => new URLSearchParams(window.location.search).get('google') === 'error', () => false);
+  const providerError = useSyncExternalStore(
+    () => () => undefined,
+    () => new URLSearchParams(window.location.search).get('google') === 'error',
+    () => false,
+  );
   const status = useQuery({ queryKey: ['auth-google-status'], queryFn: () => apiRequest<GoogleStatus>('/api/v1/auth/google/status') });
   const link = useMutation({
     mutationFn: async () => {

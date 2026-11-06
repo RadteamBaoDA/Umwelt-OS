@@ -78,7 +78,7 @@ const total = readdirSync(chunkDir)
 const kb = (n) => Math.round((n / 1024) * 10) / 10;
 const ranked = Object.entries(routes).sort((a, b) => b[1] - a[1]);
 console.log('Largest routes by first-load JS (gzip KB):');
-for (const [route, size] of ranked.slice(0, 8)) console.log(`  ${String(kb(size)).padStart(8)}  ${route}`);
+for (const [route, size] of process.argv.includes('--all') ? ranked : ranked.slice(0, 8)) console.log(`  ${String(kb(size)).padStart(8)}  ${route}`);
 const worst = ranked[0] ?? ['(none)', 0];
 console.log(`Max route first-load: ${kb(worst[1])} KB (budget ${budget.maxRouteFirstLoadKb})`);
 console.log(`Total client JS:      ${kb(total)} KB (budget ${budget.totalClientKb})`);
