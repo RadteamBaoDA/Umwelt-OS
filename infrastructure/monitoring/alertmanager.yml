@@ -25,8 +25,8 @@ receivers:
     webhook_configs:
       - url_file: /run/secrets/alert_webhook_url
         send_resolved: true
-  # Same mechanism as owner-webhook; /run/secrets/alert_page_webhook_url defaults to the same URL file in compose
-  # (ALERT_PAGE_WEBHOOK_URL_FILE) so a distinct paging endpoint is optional.
+  # Same mechanism as owner-webhook. alertmanager-entrypoint.sh refuses to start when this URL file is missing or
+  # identical to the ticket file (unless ALERT_ALLOW_SHARED_PAGE_URL=true), so a distinct paging endpoint is required.
   - name: owner-page
     webhook_configs:
       - url_file: /run/secrets/alert_page_webhook_url

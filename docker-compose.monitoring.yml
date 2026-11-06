@@ -62,6 +62,9 @@ services:
   alertmanager:
     profiles: ["monitoring"]
     image: prom/alertmanager:v0.28.1
+    entrypoint: ["/bin/sh", "/etc/alertmanager/entrypoint.sh"]
+    environment:
+      ALERT_ALLOW_SHARED_PAGE_URL: ${ALERT_ALLOW_SHARED_PAGE_URL:-}
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
@@ -70,6 +73,7 @@ services:
       - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
     volumes:
       - ./infrastructure/monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./infrastructure/monitoring/alertmanager-entrypoint.sh:/etc/alertmanager/entrypoint.sh:ro
       - alertmanager-data:/alertmanager
     secrets: [alert_webhook_url, alert_page_webhook_url]
     deploy:
@@ -110,7 +114,8 @@ secrets:
   # Single-line webhook URL receiving alerts (git-ignored; no trailing newline). Override with ALERT_WEBHOOK_URL_FILE.
   alert_webhook_url:
     file: ${ALERT_WEBHOOK_URL_FILE:-./infrastructure/monitoring/alert_webhook_url.local}
-  # Optional separate endpoint for severity=page alerts; defaults to the ticket webhook file.
+  # Endpoint for severity=page alerts. Defaults to the ticket file, which the Alertmanager preflight REJECTS unless
+  # ALERT_ALLOW_SHARED_PAGE_URL=true (see alertmanager-entrypoint.sh).
   alert_page_webhook_url:
     file: ${ALERT_PAGE_WEBHOOK_URL_FILE:-./infrastructure/monitoring/alert_webhook_url.local}
 
