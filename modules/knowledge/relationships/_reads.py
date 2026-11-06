@@ -50,6 +50,72 @@ from modules.knowledge.relationships.schemas import (
 from modules.sources import public as sources
 
 
+async def _read_current_relationship_page(
+    session: AsyncSession,
+    *,
+    limit: int,
+    cursor: str | None,
+    entity_id: UUID | None,
+    valid_at: datetime | None,
+    include_unknown_validity: bool,
+    fingerprint: str,
+    scope: Scope,
+) -> tuple[list[Relationship], str | None]:
+    """Read one page of current relationships under the validity filters and build the next cursor.
+
+    Newest first, ``limit + 1`` rows fetched to detect more; the cursor is bound to ``fingerprint``
+    (an invalid or foreign cursor raises through ``_decode_bound_cursor``). Read-only.
+    """
+    statement = select(Relationship).where(Relationship.workspace_id == scope.workspace_id)
+    known = Relationship.valid_from.is_not(None) & Relationship.valid_to.is_not(None)
+    if not include_unknown_validity:
+        statement = statement.where(known)
+    if valid_at is not None:
+        in_interval = or_(
+            Relationship.valid_from.is_(None), Relationship.valid_from <= valid_at
+        ) & or_(
+            Relationship.valid_to.is_(None),
+            Relationship.valid_to > valid_at,
+        )
+        statement = statement.where(in_interval)
+    if entity_id is not None:
+        statement = statement.where(
+            or_(
+                Relationship.source_entity_id == entity_id,
+                Relationship.target_entity_id == entity_id,
+            )
+        )
+    if cursor:
+        created_at, identifier = _decode_bound_cursor(
+            cursor, fingerprint, "Invalid relationship filter cursor"
+        )
+        statement = statement.where(
+            tuple_(Relationship.created_at, Relationship.id) < (created_at, identifier)
+        )
+    rows = list(
+        (
+            await session.scalars(
+                statement.order_by(desc(Relationship.created_at), desc(Relationship.id)).limit(
+                    limit + 1
+                )
+            )
+        ).all()
+    )
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = None
+    if has_more and rows:
+        next_cursor = b64url_encode(
+            json.dumps(
+                [
+                    fingerprint,
+                    encode_cursor(rows[-1].created_at, rows[-1].id),
+                ]
+            ).encode()
+        )
+    return rows, next_cursor
+
+
 async def list_relationships(
     session: AsyncSession,
     limit: int,
@@ -102,53 +168,16 @@ async def list_relationships(
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
         )
-    statement = select(Relationship).where(Relationship.workspace_id == scope.workspace_id)
-    known = Relationship.valid_from.is_not(None) & Relationship.valid_to.is_not(None)
-    if not include_unknown_validity:
-        statement = statement.where(known)
-    if valid_at is not None:
-        in_interval = or_(
-            Relationship.valid_from.is_(None), Relationship.valid_from <= valid_at
-        ) & or_(
-            Relationship.valid_to.is_(None),
-            Relationship.valid_to > valid_at,
-        )
-        statement = statement.where(in_interval)
-    if entity_id is not None:
-        statement = statement.where(
-            or_(
-                Relationship.source_entity_id == entity_id,
-                Relationship.target_entity_id == entity_id,
-            )
-        )
-    if cursor:
-        created_at, identifier = _decode_bound_cursor(
-            cursor, fingerprint, "Invalid relationship filter cursor"
-        )
-        statement = statement.where(
-            tuple_(Relationship.created_at, Relationship.id) < (created_at, identifier)
-        )
-    rows = list(
-        (
-            await session.scalars(
-                statement.order_by(desc(Relationship.created_at), desc(Relationship.id)).limit(
-                    limit + 1
-                )
-            )
-        ).all()
+    rows, next_cursor = await _read_current_relationship_page(
+        session,
+        limit=limit,
+        cursor=cursor,
+        entity_id=entity_id,
+        valid_at=valid_at,
+        include_unknown_validity=include_unknown_validity,
+        fingerprint=fingerprint,
+        scope=scope,
     )
-    has_more = len(rows) > limit
-    rows = rows[:limit]
-    next_cursor = None
-    if has_more and rows:
-        next_cursor = b64url_encode(
-            json.dumps(
-                [
-                    fingerprint,
-                    encode_cursor(rows[-1].created_at, rows[-1].id),
-                ]
-            ).encode()
-        )
     items = []
     for row in rows:
         try:

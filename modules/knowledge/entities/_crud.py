@@ -209,6 +209,45 @@ async def create_entity(
     return result
 
 
+async def _apply_owner_text_edits(
+    session: AsyncSession, entity: Entity, payload: EntityPatch, *, scope: Scope
+) -> None:
+    """Apply owner name/description edits and drop the replaced field-evidence rows.
+
+    Marks each edited field owner-authored and deletes that field's derived evidence for the entity
+    (workspace-scoped through the membership) before the caller bumps the revision. No commit.
+    """
+    if "name" in payload.model_fields_set and payload.name is not None:
+        entity.name = payload.name
+        entity.canonical_name = canonicalize_name(payload.name)
+        entity.name_origin = "owner"
+        await session.execute(
+            delete(EntityFieldEvidence).where(
+                EntityFieldEvidence.entity_id == entity.id,
+                EntityFieldEvidence.field_name == "name",
+                EntityFieldEvidence.membership_id.in_(
+                    select(EntityEvidenceMembership.id).where(
+                        EntityEvidenceMembership.workspace_id == scope.workspace_id,
+                    )
+                ),
+            )
+        )
+    if "description" in payload.model_fields_set:
+        entity.description = payload.description
+        entity.description_origin = "owner"
+        await session.execute(
+            delete(EntityFieldEvidence).where(
+                EntityFieldEvidence.entity_id == entity.id,
+                EntityFieldEvidence.field_name == "description",
+                EntityFieldEvidence.membership_id.in_(
+                    select(EntityEvidenceMembership.id).where(
+                        EntityEvidenceMembership.workspace_id == scope.workspace_id,
+                    )
+                ),
+            )
+        )
+
+
 async def update_entity(
     session: AsyncSession,
     entity_id: UUID,
@@ -264,35 +303,7 @@ async def update_entity(
         raise ValueError("Entity revision is stale")
     if not payload.model_fields_set - {"expected_revision", "reason"}:
         raise ValueError("At least one entity field is required")
-    if "name" in payload.model_fields_set and payload.name is not None:
-        entity.name = payload.name
-        entity.canonical_name = canonicalize_name(payload.name)
-        entity.name_origin = "owner"
-        await session.execute(
-            delete(EntityFieldEvidence).where(
-                EntityFieldEvidence.entity_id == entity_id,
-                EntityFieldEvidence.field_name == "name",
-                EntityFieldEvidence.membership_id.in_(
-                    select(EntityEvidenceMembership.id).where(
-                        EntityEvidenceMembership.workspace_id == scope.workspace_id,
-                    )
-                ),
-            )
-        )
-    if "description" in payload.model_fields_set:
-        entity.description = payload.description
-        entity.description_origin = "owner"
-        await session.execute(
-            delete(EntityFieldEvidence).where(
-                EntityFieldEvidence.entity_id == entity_id,
-                EntityFieldEvidence.field_name == "description",
-                EntityFieldEvidence.membership_id.in_(
-                    select(EntityEvidenceMembership.id).where(
-                        EntityEvidenceMembership.workspace_id == scope.workspace_id,
-                    )
-                ),
-            )
-        )
+    await _apply_owner_text_edits(session, entity, payload, scope=scope)
     if "metadata" in payload.model_fields_set and payload.metadata is not None:
         entity.metadata_json = payload.metadata
     entity.revision += 1
