@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from modules.dashboard import gadgets, public
+from tests.unit.split_patching import patch_split
 
 
 def test_validator_rules() -> None:
@@ -96,11 +97,11 @@ async def test_preset_apply_validates_slot_sources(monkeypatch: pytest.MonkeyPat
     async def noop(*_a: object, **_k: object) -> None:
         return None
 
-    monkeypatch.setattr(public, "_admit", fake_admit)
-    monkeypatch.setattr(public, "_actor", lambda _s: uuid4())
-    monkeypatch.setattr(public, "_lock_owner_creation_quota", noop)
-    monkeypatch.setattr(public, "_lock_selected_sources", noop)
-    monkeypatch.setattr(public, "_validate_selected_sources", fake_validate)
+    patch_split(monkeypatch, "modules.dashboard", "_admit", fake_admit)
+    patch_split(monkeypatch, "modules.dashboard", "_actor", lambda _s: uuid4())
+    patch_split(monkeypatch, "modules.dashboard", "_lock_owner_creation_quota", noop)
+    patch_split(monkeypatch, "modules.dashboard", "_lock_selected_sources", noop)
+    patch_split(monkeypatch, "modules.dashboard", "_validate_selected_sources", fake_validate)
     payload = SimpleNamespace(slot_sources={slot.slot_id: [uuid4()]}, target_dashboard_id=None)
     with pytest.raises(ValueError, match="incompatible"):
         await public.apply_preset(

@@ -37,6 +37,7 @@ from modules.timeline.public import (
     remove_entity_participants,
 )
 from modules.timeline.schemas import EventRead, TimelinePage, TimelineQuery
+from tests.unit.split_patching import patch_split_attr
 
 SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
 KW = {"scope": SCOPE, "multi_workspace_enabled": False}
@@ -45,7 +46,7 @@ KW = {"scope": SCOPE, "multi_workspace_enabled": False}
 @pytest.fixture(autouse=True)
 def _admitted() -> object:
     """Admission is covered in test_scope; these tests exercise the domain logic past it."""
-    with patch("modules.timeline.public._admit", AsyncMock(return_value=MagicMock())):
+    with patch_split_attr("modules.timeline", "_admit", AsyncMock(return_value=MagicMock())):
         yield
 
 
@@ -255,7 +256,9 @@ class TestEntityAndSourceLinkage:
         # duplicate scalar check returns None (no duplicate row)
         session.scalar.return_value = None
 
-        with patch("modules.timeline.public._schedule_temporal_event", return_value=None):
+        with patch_split_attr(
+            "modules.timeline", "_schedule_temporal_event", MagicMock(return_value=None)
+        ):
             result = await apply_entity_merge(
                 session, source_id=source_id, target_id=target_id, event_ids=[event_id], **KW
             )
@@ -274,7 +277,9 @@ class TestEntityAndSourceLinkage:
         scalars_mock.all.return_value = []
         session.scalars.return_value = scalars_mock
 
-        with patch("modules.timeline.public._schedule_temporal_event", return_value=None):
+        with patch_split_attr(
+            "modules.timeline", "_schedule_temporal_event", MagicMock(return_value=None)
+        ):
             result = await apply_entity_split(
                 session,
                 source_id=source_id,
@@ -296,7 +301,9 @@ class TestEntityAndSourceLinkage:
         scalars_mock.all.return_value = [event_id]
         session.scalars.return_value = scalars_mock
 
-        with patch("modules.timeline.public._schedule_temporal_event", return_value=None):
+        with patch_split_attr(
+            "modules.timeline", "_schedule_temporal_event", MagicMock(return_value=None)
+        ):
             result = await remove_entity_participants(session, [entity_id], **KW)
             assert result == [event_id]
 
@@ -317,7 +324,9 @@ class TestEntityAndSourceLinkage:
         session.get.return_value = unsupported_event
         session.scalar.return_value = None  # No remaining evidence
 
-        with patch("modules.timeline.public._schedule_temporal_event", return_value=None):
+        with patch_split_attr(
+            "modules.timeline", "_schedule_temporal_event", MagicMock(return_value=None)
+        ):
             await _hide_unsupported(session, [event_id], workspace_id=workspace_id)
             assert unsupported_event.deleted_at is not None
             assert unsupported_event.title == "[unsupported derived event]"

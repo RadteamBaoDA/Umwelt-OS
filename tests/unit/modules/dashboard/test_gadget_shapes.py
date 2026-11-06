@@ -6,6 +6,7 @@ import pytest
 
 from modules.dashboard import gadgets, public
 from modules.dashboard.schemas import GadgetConfiguration, GadgetScope
+from tests.unit.split_patching import patch_split
 
 
 def test_shape_rules() -> None:
@@ -152,7 +153,7 @@ def _patch_persistence(monkeypatch: pytest.MonkeyPatch, rows: list[tuple[str, st
         return [SimpleNamespace(provider=p, type=t) for p, t in rows]
 
     for name in ("_admit", "_lock_owner_creation_quota", "_lock_selected_sources"):
-        monkeypatch.setattr(public, name, noop)
+        patch_split(monkeypatch, "modules.dashboard", name, noop)
     monkeypatch.setattr(public.sources, "get_gadget_sources", fetch)
 
 
@@ -213,9 +214,9 @@ async def test_patch_name_only_skips_source_and_measurement_checks(
     async def stop(*_a: object, **_k: object) -> None:
         raise _Stop
 
-    monkeypatch.setattr(public, "_lock_definition", lock_definition)
-    monkeypatch.setattr(
-        public, "validate_highlight_rules", stop
+    patch_split(monkeypatch, "modules.dashboard", "_lock_definition", lock_definition)
+    patch_split(
+        monkeypatch, "modules.dashboard", "validate_highlight_rules", stop
     )  # reached only after source validation
     scope = WorkspaceContext(workspace_id=uuid4(), user_id=1, role="owner", membership_revision=1)
     with pytest.raises(_Stop):
@@ -262,8 +263,8 @@ async def _patch_saved(
     async def stop(*_a: object, **_k: object) -> None:
         raise _Stop
 
-    monkeypatch.setattr(public, "_lock_definition", lock_definition)
-    monkeypatch.setattr(public, "validate_highlight_rules", stop)
+    patch_split(monkeypatch, "modules.dashboard", "_lock_definition", lock_definition)
+    patch_split(monkeypatch, "modules.dashboard", "validate_highlight_rules", stop)
     scope = WorkspaceContext(workspace_id=uuid4(), user_id=1, role="owner", membership_revision=1)
     if "scope" in patch:
         patch = {**patch, "scope": GadgetScope.model_validate(patch["scope"])}
@@ -400,8 +401,8 @@ def _preview_stubs(
             for i in ids
         }  # type: ignore[attr-defined]
 
-    monkeypatch.setattr(public, "_admit", admit)
-    monkeypatch.setattr(public, "_source_states", states)
+    patch_split(monkeypatch, "modules.dashboard", "_admit", admit)
+    patch_split(monkeypatch, "modules.dashboard", "_source_states", states)
     monkeypatch.setattr(public.sources, "list_active_source_kinds", kinds)
 
 
@@ -622,7 +623,7 @@ async def test_preset_apply_rejects_incompatible_foreign_and_archived_sources(
         return [SimpleNamespace(provider=state["provider"], type="api")]
 
     for name in ("_admit", "_lock_owner_creation_quota"):
-        monkeypatch.setattr(public, name, noop)
+        patch_split(monkeypatch, "modules.dashboard", name, noop)
     monkeypatch.setattr(public.sources, "lock_source", lock_source)
     monkeypatch.setattr(public.sources, "get_gadget_sources", get_sources)
     scope = WorkspaceContext(workspace_id=uuid4(), user_id=1, role="owner", membership_revision=1)
@@ -686,7 +687,7 @@ async def test_preset_apply_foreign_workspace_source_is_unavailable_through_real
         return [SimpleNamespace(provider="noaa_kp", type="api")]
 
     for name in ("_admit", "_lock_owner_creation_quota"):
-        monkeypatch.setattr(public, name, noop)
+        patch_split(monkeypatch, "modules.dashboard", name, noop)
     monkeypatch.setattr(
         sources_public, "_admit_source_scope", noop
     )  # admission is not under test; the row query is

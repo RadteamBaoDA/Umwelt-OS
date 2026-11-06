@@ -1,6 +1,6 @@
 """Event title/summary search reuses the listing visibility filters (P15 T2, BM-22)."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -8,9 +8,9 @@ from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
 
 from core.workspaces.schemas import WorkspaceContext
-from modules.timeline import public
 from modules.timeline.public import _list_partition, list_events
 from modules.timeline.schemas import TimelineQuery
+from tests.unit.split_patching import patch_split_attr
 
 BS = chr(92)
 WS = uuid4()
@@ -55,7 +55,7 @@ def test_q_length_and_blank_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_blank_q_via_list_events_is_value_error() -> None:
-    with pytest.raises(ValueError), patch.object(public, "_admit", AsyncMock()):
+    with pytest.raises(ValueError), patch_split_attr("modules.timeline", "_admit", AsyncMock()):
         await list_events(AsyncMock(), q="  ", source_id=uuid4(), **CTX)
 
 
@@ -63,6 +63,6 @@ async def test_blank_q_via_list_events_is_value_error() -> None:
 async def test_cursor_is_bound_to_q() -> None:
     session = MagicMock()
     session.scalars = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
-    with patch.object(public, "_admit", AsyncMock()):
+    with patch_split_attr("modules.timeline", "_admit", AsyncMock()):
         cursor_page = await list_events(session, q="a", limit=1, **CTX)
     assert cursor_page.next_cursor is None

@@ -15,6 +15,7 @@ from modules.timeline import public
 from modules.timeline.extraction import EventExtractionOutput, EventProposal, ParticipantProposal
 from modules.timeline.models import Event, EventAudit, EventEvidence, EventParticipant
 from modules.timeline.schemas import EventPatch
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
@@ -151,15 +152,17 @@ async def _publish(
         patch.object(
             public.documents, "read_extraction_evidence_refs", AsyncMock(return_value=[s.ref])
         ),
-        patch.object(public, "_read_evidence_closure", AsyncMock(return_value=[s.ref])),
+        patch_split_attr(
+            "modules.timeline", "_read_evidence_closure", AsyncMock(return_value=[s.ref])
+        ),
         patch.object(
             public.entities,
             "list_version_membership_refs",
             AsyncMock(return_value=[s.membership_ref]),
         ),
         patch.object(public.entities, "get_entity_refs", probes.entity_refs),
-        patch.object(public, "finish_extraction_work", probes.finish),
-        patch.object(public, "_schedule_temporal_event", probes.schedule),
+        patch_split_attr("modules.timeline", "finish_extraction_work", probes.finish),
+        patch_split_attr("modules.timeline", "_schedule_temporal_event", probes.schedule),
     ):
         result = await public.publish_extracted_events(
             session,
@@ -437,17 +440,19 @@ async def _update(
         read=AsyncMock(return_value="READ"),
     )
     with (
-        patch.object(public, "_admit", AsyncMock(return_value=FENCE)),
-        patch.object(public, "_read_evidence_closure", probes.closure),
+        patch_split_attr("modules.timeline", "_admit", AsyncMock(return_value=FENCE)),
+        patch_split_attr("modules.timeline", "_read_evidence_closure", probes.closure),
         patch("modules.sources.public.lock_source", probes.lock_source),
         patch.object(public.documents, "lock_document_ids", probes.lock_docs),
         patch.object(public.entities, "get_entity_refs", probes.entity_refs),
-        patch.object(public, "_set_participants", probes.set_participants),
-        patch.object(public, "_evidence_rows", probes.evidence_rows),
-        patch.object(public, "_remove_unsupported_derived_participants", probes.remove),
-        patch.object(public, "_schedule_temporal_event", probes.schedule),
-        patch.object(public, "commit_with_replay", probes.commit),
-        patch.object(public, "_event_read", probes.read),
+        patch_split_attr("modules.timeline", "_set_participants", probes.set_participants),
+        patch_split_attr("modules.timeline", "_evidence_rows", probes.evidence_rows),
+        patch_split_attr(
+            "modules.timeline", "_remove_unsupported_derived_participants", probes.remove
+        ),
+        patch_split_attr("modules.timeline", "_schedule_temporal_event", probes.schedule),
+        patch_split_attr("modules.timeline", "commit_with_replay", probes.commit),
+        patch_split_attr("modules.timeline", "_event_read", probes.read),
     ):
         result = await public.update_event(session, event.id if event else uuid4(), payload, **KW)  # type: ignore[arg-type]
     return result, probes, session

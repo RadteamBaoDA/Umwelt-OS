@@ -19,6 +19,7 @@ from modules.dashboard.schemas import (
     HighlightPreviewRequest,
     HighlightRule,
 )
+from tests.unit.split_patching import patch_split
 
 SRC_A, SRC_B, TOPIC = uuid4(), uuid4(), uuid4()
 WS = uuid4()
@@ -129,8 +130,8 @@ def scope_edges(monkeypatch: pytest.MonkeyPatch) -> None:
     async def prefs(_s: Any, **_k: Any) -> Any:
         return SimpleNamespace(timezone="UTC")
 
-    monkeypatch.setattr(public, "_admit", admit)
-    monkeypatch.setattr(public, "commit_with_replay", commit)
+    patch_split(monkeypatch, "modules.dashboard", "_admit", admit)
+    patch_split(monkeypatch, "modules.dashboard", "commit_with_replay", commit)
     monkeypatch.setattr(sources_public, "get_gadget_sources", get_sources)
     monkeypatch.setattr(sources_public, "lock_source", lock_source)
     monkeypatch.setattr(settings_public, "read_owner_preferences", prefs)
@@ -218,9 +219,9 @@ async def test_create_and_patch_call_validation(monkeypatch: pytest.MonkeyPatch)
     async def fake_lock_sources(*_a: Any, **_k: Any) -> None:
         return None
 
-    monkeypatch.setattr(public, "validate_highlight_rules", fake_validate)
-    monkeypatch.setattr(public, "_lock_selected_sources", fake_lock_sources)
-    monkeypatch.setattr(public, "_lock_owner_creation_quota", fake_lock_sources)
+    patch_split(monkeypatch, "modules.dashboard", "validate_highlight_rules", fake_validate)
+    patch_split(monkeypatch, "modules.dashboard", "_lock_selected_sources", fake_lock_sources)
+    patch_split(monkeypatch, "modules.dashboard", "_lock_owner_creation_quota", fake_lock_sources)
     r = rule(topic_ids=[TOPIC])
     payload = GadgetDefinitionCreate(
         name="n", renderer="highlights", source_ids=[SRC_A], highlight_rules=[r]
@@ -244,7 +245,7 @@ async def test_create_and_patch_call_validation(monkeypatch: pytest.MonkeyPatch)
     async def lock_definition(*_a: Any, **_k: Any) -> Any:
         return row
 
-    monkeypatch.setattr(public, "_lock_definition", lock_definition)
+    patch_split(monkeypatch, "modules.dashboard", "_lock_definition", lock_definition)
     with pytest.raises(_Stop):
         await public.patch_definition(
             _PatchSession(),
@@ -417,7 +418,7 @@ _REAL_ADMIT = public._admit  # captured before the autouse fixture replaces it
 @pytest.mark.asyncio
 async def test_member_is_forbidden_on_preview_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:
 
-    monkeypatch.setattr(public, "_admit", _REAL_ADMIT)
+    patch_split(monkeypatch, "modules.dashboard", "_admit", _REAL_ADMIT)
     member = WorkspaceContext(workspace_id=WS, user_id=2, role="member", membership_revision=1)
     request = HighlightPreviewRequest(source_ids=[SRC_A], rules=[rule(keywords=["a"])])
     for call in (

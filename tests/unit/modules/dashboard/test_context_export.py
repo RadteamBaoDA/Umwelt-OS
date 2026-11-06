@@ -10,6 +10,7 @@ from sqlalchemy.dialects import postgresql
 from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
 from modules.dashboard import context, public
+from tests.unit.split_patching import patch_split_attr
 
 
 def test_dashboard_export_scope_binds_workspace_owner_and_cutoff() -> None:
@@ -28,7 +29,7 @@ async def test_export_validation_dashboards_reaches_scope_without_name_error() -
     scope = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
     session = AsyncMock()
     session.scalar.return_value = 3
-    with patch.object(public, "_admit", AsyncMock(return_value=None)):
+    with patch_split_attr("modules.dashboard", "_admit", AsyncMock(return_value=None)):
         result = await public.validate_export_fences(
             session,
             owner_id=1,
