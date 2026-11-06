@@ -14,6 +14,5 @@
   "modules/ingestion/worker.py": 2941,
   "modules/knowledge/documents/worker.py": 1746,
   "modules/knowledge/entities/worker.py": 2034,
-  "modules/knowledge/observations/public.py": 1872,
-  "modules/news/stories.py": 1985
+  "modules/knowledge/observations/public.py": 1872
 }

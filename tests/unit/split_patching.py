@@ -53,11 +53,11 @@ def patch_split(
 @contextmanager
 def patch_split_attr(
     package: str, name: str, value: Any, facade: str | None = "public"
-) -> Iterator[None]:
+) -> Iterator[Any]:
     """Context-manager form of :func:`patch_split` using ``unittest.mock.patch.object``."""
     from unittest.mock import patch
 
     with ExitStack() as stack:
         for module in _holders(package, name, facade):
             stack.enter_context(patch.object(module, name, value))
-        yield
+        yield value

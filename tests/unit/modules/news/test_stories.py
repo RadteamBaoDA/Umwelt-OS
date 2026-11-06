@@ -43,6 +43,7 @@ from modules.news.stories import (
     _tokens,
     cluster_observation,
 )
+from tests.unit.split_patching import patch_split_attr
 
 FENCE = AccessFence(
     workspace_id=uuid4(), user_id=1, membership_revision=2, configuration_revision=3
@@ -244,7 +245,9 @@ class TestStoryClustering:
             patch(
                 "modules.knowledge.documents.public.get_news_document_projection", return_value=proj
             ),
-            patch("modules.news.stories.get_provider_spec", return_value=measurement),
+            patch_split_attr(
+                "modules.news.stories", "get_provider_spec", MagicMock(return_value=measurement)
+            ),
         ):
             result = await cluster_observation(
                 session, document_id=proj.document_id, expected_source_generation=1, **KW

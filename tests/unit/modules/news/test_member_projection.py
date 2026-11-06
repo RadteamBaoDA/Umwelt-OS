@@ -14,6 +14,7 @@ from core.workspaces.schemas import AccessFence, GrantRef, WorkspaceContext
 from modules.news import stories
 from modules.news.models import NewsObservation
 from modules.news.schemas import StoryEvidence, StoryFilter, StoryRead
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 MEMBER = WorkspaceContext(user_id=7, workspace_id=WS, role="member", membership_revision=3)
@@ -168,7 +169,7 @@ async def test_visibility_hash_changes_with_grant_and_membership_revision() -> N
         )
         detail = SimpleNamespace(story=story, evidence_cursor=None)
         with (
-            patch.object(stories, "get_story", AsyncMock(return_value=detail)),
+            patch_split_attr("modules.news.stories", "get_story", AsyncMock(return_value=detail)),
             patch.object(
                 stories.workspaces, "read_resource_grants", AsyncMock(return_value=(grant,))
             ),
