@@ -12,13 +12,22 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
-    # severity=page alerts re-notify faster than ticket-level ones.
+    # severity=page alerts (worker/queue/cron outages) go to the page receiver: shorter group_wait and repeat so an
+    # outage is not held back or forgotten. severity=ticket falls through to the default owner-webhook route.
     - matchers: ['severity="page"']
-      receiver: owner-webhook
+      receiver: owner-page
+      group_wait: 10s
+      group_interval: 2m
       repeat_interval: 1h
 
 receivers:
   - name: owner-webhook
     webhook_configs:
       - url_file: /run/secrets/alert_webhook_url
+        send_resolved: true
+  # Same mechanism as owner-webhook; /run/secrets/alert_page_webhook_url defaults to the same URL file in compose
+  # (ALERT_PAGE_WEBHOOK_URL_FILE) so a distinct paging endpoint is optional.
+  - name: owner-page
+    webhook_configs:
+      - url_file: /run/secrets/alert_page_webhook_url
         send_resolved: true

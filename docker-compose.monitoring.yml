@@ -71,7 +71,7 @@ services:
     volumes:
       - ./infrastructure/monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
-    secrets: [alert_webhook_url]
+    secrets: [alert_webhook_url, alert_page_webhook_url]
     deploy:
       resources:
         limits: {memory: 128M}
@@ -110,6 +110,9 @@ secrets:
   # Single-line webhook URL receiving alerts (git-ignored; no trailing newline). Override with ALERT_WEBHOOK_URL_FILE.
   alert_webhook_url:
     file: ${ALERT_WEBHOOK_URL_FILE:-./infrastructure/monitoring/alert_webhook_url.local}
+  # Optional separate endpoint for severity=page alerts; defaults to the ticket webhook file.
+  alert_page_webhook_url:
+    file: ${ALERT_PAGE_WEBHOOK_URL_FILE:-./infrastructure/monitoring/alert_webhook_url.local}
 
 volumes:
   prometheus-data:
