@@ -3,6 +3,7 @@
 Private implementation of ``modules.knowledge.relationships.public``; import from that facade.
 """
 
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
@@ -40,33 +41,22 @@ from modules.knowledge.relationships.schemas import (
 )
 
 
-async def publish_extracted_relationship(
+async def _matching_membership_refs(
     session: AsyncSession,
     *,
     source_entity_id: UUID,
     target_entity_id: UUID,
-    relationship_type: str,
     document_version_id: UUID,
     chunk_id: UUID,
     source_membership_id: UUID,
     target_membership_id: UUID,
-    confidence: float,
     scope: Scope,
     multi_workspace_enabled: bool,
-) -> UUID | None:
-    """Publish exact extraction support, observed history and temporal desired state.
+) -> None:
+    """Lock both endpoint memberships for write and require them to match the cited chunk.
 
-    Caller owns source/document fences and canonical transaction; no commit or
-    external work. Stored observation history begins now, never at fact validity.
+    Raises ``ValueError`` when either membership belongs to a different entity, version or chunk.
     """
-    if source_entity_id == target_entity_id:
-        return None
-    refs = await documents.read_evidence_refs(
-        session,
-        [(document_version_id, chunk_id)],
-        scope=scope,
-        multi_workspace_enabled=multi_workspace_enabled,
-    )
     memberships = await entities.get_membership_refs(
         session,
         [source_membership_id, target_membership_id],
@@ -86,32 +76,25 @@ async def publish_extracted_relationship(
             or item.chunk_id != chunk_id
         ):
             raise ValueError("Relationship evidence memberships do not match the cited chunk")
-    ref = refs[0]
-    relationship = await session.scalar(
-        select(Relationship)
-        .where(
-            Relationship.workspace_id == scope.workspace_id,
-            Relationship.source_entity_id == source_entity_id,
-            Relationship.target_entity_id == target_entity_id,
-            Relationship.type == relationship_type,
-            Relationship.origin == "derived",
-            Relationship.valid_from.is_(None),
-            Relationship.valid_to.is_(None),
-        )
-        .with_for_update()
-    )
-    created = relationship is None
-    if relationship is None:
-        relationship = Relationship(
-            workspace_id=scope.workspace_id,
-            source_entity_id=source_entity_id,
-            target_entity_id=target_entity_id,
-            type=relationship_type,
-            origin="derived",
-            confidence=confidence,
-        )
-        session.add(relationship)
-        await session.flush()
+
+
+async def _upsert_extracted_support(
+    session: AsyncSession,
+    relationship: Relationship,
+    ref: Any,
+    *,
+    document_version_id: UUID,
+    chunk_id: UUID,
+    source_membership_id: UUID,
+    target_membership_id: UUID,
+    confidence: float,
+    scope: Scope,
+) -> bool:
+    """Insert or raise the exact support row for one extracted relationship and flush.
+
+    The existing row is locked; confidence only ever increases. Returns whether the support set
+    changed (new row or higher confidence) so the caller knows to record history.
+    """
     evidence = await session.scalar(
         select(RelationshipEvidence)
         .where(
@@ -142,6 +125,84 @@ async def publish_extracted_relationship(
     else:
         evidence.confidence = max(evidence.confidence, confidence)
     await session.flush()
+    return support_changed
+
+
+async def publish_extracted_relationship(
+    session: AsyncSession,
+    *,
+    source_entity_id: UUID,
+    target_entity_id: UUID,
+    relationship_type: str,
+    document_version_id: UUID,
+    chunk_id: UUID,
+    source_membership_id: UUID,
+    target_membership_id: UUID,
+    confidence: float,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> UUID | None:
+    """Publish exact extraction support, observed history and temporal desired state.
+
+    Caller owns source/document fences and canonical transaction; no commit or
+    external work. Stored observation history begins now, never at fact validity.
+    """
+    if source_entity_id == target_entity_id:
+        return None
+    refs = await documents.read_evidence_refs(
+        session,
+        [(document_version_id, chunk_id)],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    await _matching_membership_refs(
+        session,
+        source_entity_id=source_entity_id,
+        target_entity_id=target_entity_id,
+        document_version_id=document_version_id,
+        chunk_id=chunk_id,
+        source_membership_id=source_membership_id,
+        target_membership_id=target_membership_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    ref = refs[0]
+    relationship = await session.scalar(
+        select(Relationship)
+        .where(
+            Relationship.workspace_id == scope.workspace_id,
+            Relationship.source_entity_id == source_entity_id,
+            Relationship.target_entity_id == target_entity_id,
+            Relationship.type == relationship_type,
+            Relationship.origin == "derived",
+            Relationship.valid_from.is_(None),
+            Relationship.valid_to.is_(None),
+        )
+        .with_for_update()
+    )
+    created = relationship is None
+    if relationship is None:
+        relationship = Relationship(
+            workspace_id=scope.workspace_id,
+            source_entity_id=source_entity_id,
+            target_entity_id=target_entity_id,
+            type=relationship_type,
+            origin="derived",
+            confidence=confidence,
+        )
+        session.add(relationship)
+        await session.flush()
+    support_changed = await _upsert_extracted_support(
+        session,
+        relationship,
+        ref,
+        document_version_id=document_version_id,
+        chunk_id=chunk_id,
+        source_membership_id=source_membership_id,
+        target_membership_id=target_membership_id,
+        confidence=confidence,
+        scope=scope,
+    )
     supported_confidence = await session.scalar(
         select(func.max(RelationshipEvidence.confidence)).where(
             _evidence_scope(scope),
@@ -166,6 +227,77 @@ async def publish_extracted_relationship(
             multi_workspace_enabled=multi_workspace_enabled,
         )
     return relationship.id
+
+
+async def _lock_create_endpoints(
+    session: AsyncSession,
+    payload: RelationshipCreate,
+    endpoints: list[UUID],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> dict[UUID, Any]:
+    """Lock the endpoint entities and cited memberships for write; return memberships by id.
+
+    Endpoint failures (missing or terminal entity) surface as ``LookupError``; a missing evidence
+    membership surfaces as ``ValueError``. Endpoints are locked before memberships.
+    """
+    try:
+        await entities.get_entity_refs(
+            session,
+            endpoints,
+            for_write=True,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    except entities.TerminalEntityConflict as exc:
+        raise LookupError("Relationship entity not found") from exc
+    except LookupError as exc:
+        raise LookupError("Relationship entity not found") from exc
+    membership_ids = sorted(
+        {
+            identifier
+            for item in payload.evidence
+            for identifier in (item.source_membership_id, item.target_membership_id)
+            if identifier is not None
+        },
+        key=str,
+    )
+    try:
+        memberships = await entities.get_membership_refs(
+            session,
+            membership_ids,
+            for_write=True,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    except LookupError as exc:
+        raise ValueError("Relationship endpoint evidence membership is missing") from exc
+    memberships_by_id = {item.id: item for item in memberships}
+    return memberships_by_id
+
+
+def _new_relationship_row(payload: RelationshipCreate, scope: Scope) -> Relationship:
+    """Build the unsaved relationship row for a create request.
+
+    Pure: derived relationships take the maximum evidence confidence, owner ones the payload value.
+    """
+    relationship = Relationship(
+        workspace_id=scope.workspace_id,
+        source_entity_id=payload.source_entity_id,
+        target_entity_id=payload.target_entity_id,
+        type=payload.type,
+        origin=payload.origin,
+        confidence=(
+            max((item.confidence for item in payload.evidence), default=None)
+            if payload.origin == "derived"
+            else payload.confidence
+        ),
+        valid_from=payload.valid_from,
+        valid_to=payload.valid_to,
+        metadata_json=payload.metadata,
+    )
+    return relationship
 
 
 async def create_relationship(
@@ -213,54 +345,15 @@ async def create_relationship(
     )
     by_pair = {(ref.document_version_id, ref.chunk_id): ref for ref in evidence_refs}
     endpoints = [payload.source_entity_id, payload.target_entity_id]
-    try:
-        await entities.get_entity_refs(
-            session,
-            endpoints,
-            for_write=True,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-    except entities.TerminalEntityConflict as exc:
-        raise LookupError("Relationship entity not found") from exc
-    except LookupError as exc:
-        raise LookupError("Relationship entity not found") from exc
-    membership_ids = sorted(
-        {
-            identifier
-            for item in payload.evidence
-            for identifier in (item.source_membership_id, item.target_membership_id)
-            if identifier is not None
-        },
-        key=str,
+    memberships_by_id = await _lock_create_endpoints(
+        session,
+        payload,
+        endpoints,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
     )
-    try:
-        memberships = await entities.get_membership_refs(
-            session,
-            membership_ids,
-            for_write=True,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-    except LookupError as exc:
-        raise ValueError("Relationship endpoint evidence membership is missing") from exc
-    memberships_by_id = {item.id: item for item in memberships}
     evidence_rows = _build_evidence_rows(payload, by_pair, memberships_by_id)
-    relationship = Relationship(
-        workspace_id=scope.workspace_id,
-        source_entity_id=payload.source_entity_id,
-        target_entity_id=payload.target_entity_id,
-        type=payload.type,
-        origin=payload.origin,
-        confidence=(
-            max((item.confidence for item in payload.evidence), default=None)
-            if payload.origin == "derived"
-            else payload.confidence
-        ),
-        valid_from=payload.valid_from,
-        valid_to=payload.valid_to,
-        metadata_json=payload.metadata,
-    )
+    relationship = _new_relationship_row(payload, scope)
     session.add(relationship)
     await session.flush()
     for evidence in evidence_rows:

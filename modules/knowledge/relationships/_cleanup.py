@@ -296,6 +296,50 @@ async def lock_relationship_ids(
         )
 
 
+async def _reread_delete_closure(
+    session: AsyncSession, ids: list[UUID], relationship_ids: list[UUID], *, scope: Scope
+) -> tuple[list[Relationship], list[RelationshipEvidence]]:
+    """Re-read incident edges and their supports after the row locks are held.
+
+    Both reads refresh identity-mapped rows (``populate_existing``) and are ordered by id so the
+    caller can compare them with the pre-lock snapshot. Edges are read before supports.
+    """
+    refreshed_edges = list(
+        (
+            await session.scalars(
+                select(Relationship)
+                .where(
+                    Relationship.workspace_id == scope.workspace_id,
+                    or_(
+                        Relationship.source_entity_id.in_(ids),
+                        Relationship.target_entity_id.in_(ids),
+                    ),
+                )
+                .order_by(Relationship.id)
+                .execution_options(populate_existing=True)
+            )
+        ).all()
+    )
+    refreshed_supports = (
+        list(
+            (
+                await session.scalars(
+                    select(RelationshipEvidence)
+                    .where(
+                        _evidence_scope(scope),
+                        RelationshipEvidence.relationship_id.in_(relationship_ids),
+                    )
+                    .order_by(RelationshipEvidence.id)
+                    .execution_options(populate_existing=True)
+                )
+            ).all()
+        )
+        if relationship_ids
+        else []
+    )
+    return refreshed_edges, refreshed_supports
+
+
 async def lock_delete_closure(
     session: AsyncSession,
     entity_ids: list[UUID],
@@ -375,38 +419,8 @@ async def lock_delete_closure(
             .with_for_update()
             .execution_options(populate_existing=True)
         )
-    refreshed_edges = list(
-        (
-            await session.scalars(
-                select(Relationship)
-                .where(
-                    Relationship.workspace_id == scope.workspace_id,
-                    or_(
-                        Relationship.source_entity_id.in_(ids),
-                        Relationship.target_entity_id.in_(ids),
-                    ),
-                )
-                .order_by(Relationship.id)
-                .execution_options(populate_existing=True)
-            )
-        ).all()
-    )
-    refreshed_supports = (
-        list(
-            (
-                await session.scalars(
-                    select(RelationshipEvidence)
-                    .where(
-                        _evidence_scope(scope),
-                        RelationshipEvidence.relationship_id.in_(relationship_ids),
-                    )
-                    .order_by(RelationshipEvidence.id)
-                    .execution_options(populate_existing=True)
-                )
-            ).all()
-        )
-        if relationship_ids
-        else []
+    refreshed_edges, refreshed_supports = await _reread_delete_closure(
+        session, ids, relationship_ids, scope=scope
     )
     if (
         [item.id for item in refreshed_edges] != relationship_ids

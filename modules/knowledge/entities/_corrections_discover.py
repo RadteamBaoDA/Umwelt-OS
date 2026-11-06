@@ -27,22 +27,12 @@ from modules.knowledge.relationships import public as relationships
 from modules.timeline import public as timeline
 
 
-async def _discover_owned_rows(
-    session: AsyncSession,
-    ids: list[UUID],
-    *,
-    scope: Scope,
-    include_target_memberships: bool,
-) -> tuple[
-    list[EntityEvidenceMembership],
-    list[EntityAlias],
-    list[EntityAliasEvidence],
-    list[EntityFieldEvidence],
-]:
-    """Read the bounded memberships, aliases and derived supports owned by the correction entities.
+async def _read_correction_memberships(
+    session: AsyncSession, ids: list[UUID], *, scope: Scope, include_target_memberships: bool
+) -> list[EntityEvidenceMembership]:
+    """Read the source (and optionally target) entity memberships, bounded and ordered by id.
 
-    Queries run in a fixed order (source memberships, optional target memberships, aliases, alias supports,
-    field supports), each limited to ``MAX_CORRECTION_MEMBERSHIPS + 1``; exceeding the bound raises
+    Each read is limited to ``MAX_CORRECTION_MEMBERSHIPS + 1``; exceeding the combined bound raises
     ``CorrectionConflictError("correction_too_large")``. Read-only.
     """
     source_memberships = (
@@ -83,6 +73,30 @@ async def _discover_owned_rows(
         raise _conflict(
             "correction_too_large", "Correction membership closure exceeds 200", entity_ids=ids
         )
+    return source_memberships
+
+
+async def _discover_owned_rows(
+    session: AsyncSession,
+    ids: list[UUID],
+    *,
+    scope: Scope,
+    include_target_memberships: bool,
+) -> tuple[
+    list[EntityEvidenceMembership],
+    list[EntityAlias],
+    list[EntityAliasEvidence],
+    list[EntityFieldEvidence],
+]:
+    """Read the bounded memberships, aliases and derived supports owned by the correction entities.
+
+    Queries run in a fixed order (source memberships, optional target memberships, aliases, alias supports,
+    field supports), each limited to ``MAX_CORRECTION_MEMBERSHIPS + 1``; exceeding the bound raises
+    ``CorrectionConflictError("correction_too_large")``. Read-only.
+    """
+    source_memberships = await _read_correction_memberships(
+        session, ids, scope=scope, include_target_memberships=include_target_memberships
+    )
     aliases = (
         list(
             (

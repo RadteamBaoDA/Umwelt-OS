@@ -96,46 +96,19 @@ def _after(cursor: str | None, fingerprint: str) -> int:
         raise ValueError("Invalid temporal cursor") from exc
 
 
-async def schedule_version(
+async def _reserve_partition_slot(
     session: AsyncSession,
     ready: documents.ReadyVersionRef,
+    chunk_count: int,
     *,
     scope: Scope,
-    multi_workspace_enabled: bool,
-) -> UUID:
-    """Reserve one immutable bounded bucket/episode and durable intent under the caller's source/document fence.
+) -> GraphPartition:
+    """Reserve one episode slot (and its evidence slots) in the source generation's open bucket.
 
-    No provider work or commit occurs here. Bucket slots include tombstones and failed
-    attempts permanently; retry never moves an episode into a new graph context.
-    Out-of-bound immutable input creates blocked mapping/intent status without
-    rolling back canonical readiness or truncating evidence for graph inference.
+    Ensures and row-locks the generation's allocator (allocator before partition), reuses the newest
+    unsealed partition when it has room, otherwise seals it and opens the next ordinal. Tombstones and
+    failed attempts keep their slot. Flushes only when a new partition is created; never commits.
     """
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    mapping = await session.scalar(
-        select(GraphMapping)
-        .where(
-            GraphMapping.workspace_id == scope.workspace_id,
-            GraphMapping.document_version_id == ready.document_version_id,
-            GraphMapping.source_generation == ready.source_generation,
-        )
-        .with_for_update()
-    )
-    if mapping is not None:
-        return mapping.id
-    input_error = None
-    try:
-        data = await documents.read_extraction_input(
-            session,
-            ready.document_version_id,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-    except documents.ExtractionInputLimitError:
-        # An optional projection's capacity limit must not poison the canonical
-        # ready event/outbox transaction or its other consumers' durable work.
-        data = None
-        input_error = "graph_extraction_input_limit"
-    chunk_count = len(data.chunks) if data is not None else 0
     await session.execute(
         insert(GraphAllocation)
         .values(
@@ -192,6 +165,50 @@ async def schedule_version(
         await session.flush()
     partition.reservations += 1
     partition.evidence_reservations += chunk_count
+    return partition
+
+
+async def schedule_version(
+    session: AsyncSession,
+    ready: documents.ReadyVersionRef,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> UUID:
+    """Reserve one immutable bounded bucket/episode and durable intent under the caller's source/document fence.
+
+    No provider work or commit occurs here. Bucket slots include tombstones and failed
+    attempts permanently; retry never moves an episode into a new graph context.
+    Out-of-bound immutable input creates blocked mapping/intent status without
+    rolling back canonical readiness or truncating evidence for graph inference.
+    """
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    mapping = await session.scalar(
+        select(GraphMapping)
+        .where(
+            GraphMapping.workspace_id == scope.workspace_id,
+            GraphMapping.document_version_id == ready.document_version_id,
+            GraphMapping.source_generation == ready.source_generation,
+        )
+        .with_for_update()
+    )
+    if mapping is not None:
+        return mapping.id
+    input_error = None
+    try:
+        data = await documents.read_extraction_input(
+            session,
+            ready.document_version_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    except documents.ExtractionInputLimitError:
+        # An optional projection's capacity limit must not poison the canonical
+        # ready event/outbox transaction or its other consumers' durable work.
+        data = None
+        input_error = "graph_extraction_input_limit"
+    chunk_count = len(data.chunks) if data is not None else 0
+    partition = await _reserve_partition_slot(session, ready, chunk_count, scope=scope)
     state = {"version_id": str(ready.document_version_id), "generation": ready.source_generation}
     mapping = GraphMapping(
         workspace_id=scope.workspace_id,
