@@ -2,7 +2,7 @@
 
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { formatChartValue, type ChartDataPoint } from '@/core/charts/recharts-wrapper';
+import { formatChartValue, type ChartDataPoint } from '@/core/charts/chart-format';
 import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { listWorldObservationWindow, type WorldObservation } from '@/modules/observations';

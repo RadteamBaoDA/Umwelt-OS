@@ -1,6 +1,6 @@
 {
-  "maxRouteFirstLoadKb": 1005,
-  "totalClientKb": 2100,
+  "maxRouteFirstLoadKb": 841,
+  "totalClientKb": 2313,
   "routes": {
     "/(public)/login/page": 375,
     "/(public)/setup/page": 375,

@@ -1,12 +1,13 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import * as React from 'react';
-import type { ChartSeries } from '@/core/charts/recharts-wrapper';
+import type { ChartSeries } from '@/core/charts/chart-format';
 import type { AppLocaleId } from '@/core/i18n';
 import { OpenGenerativeUIRenderer } from '../sandbox';
 import type { GenerativeUIPayload } from '../sandbox/schema';
-import { GenerativeBarChart, type GenerativeBarDatum } from './charts/bar-chart';
-import { GenerativePieChart, type GenerativePieDatum } from './charts/pie-chart';
+import type { GenerativeBarDatum } from './charts/bar-chart';
+import type { GenerativePieDatum } from './charts/pie-chart';
 import { InputForm } from './input-form';
 import { MeetingTimePicker, type MeetingTimeSlot } from './meeting-time-picker';
 import { genUiCopy, resolveWidgetLocale } from '../copy';
@@ -155,6 +156,15 @@ function chartCommon(chartObj: Record<string, unknown>) {
     isSample: chartObj.is_sample === true,
   };
 }
+
+/** Placeholder while a chart chunk loads (same neutral surface the dashboard gadgets use). */
+function ChartChunkSkeleton(): React.ReactElement {
+  return <div className="skeleton h-64 w-full" aria-hidden="true" />;
+}
+
+/** Charts are lazy so Recharts loads only when a chart payload actually renders, not with the chat route. */
+const GenerativeBarChart = dynamic(() => import('./charts/bar-chart').then((m) => m.GenerativeBarChart), { loading: ChartChunkSkeleton });
+const GenerativePieChart = dynamic(() => import('./charts/pie-chart').then((m) => m.GenerativePieChart), { loading: ChartChunkSkeleton });
 
 /** Bar / line / scatter / distribution chart (`chart_type`, default bar). */
 function renderBarChart({ payload, raw, catalog, locale }: RenderContext): React.ReactNode {

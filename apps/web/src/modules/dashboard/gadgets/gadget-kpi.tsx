@@ -2,7 +2,7 @@
 
 import { ArrowDownRight, ArrowUpRight } from 'lucide-react';
 import React from 'react';
-import { formatChartValue, type ChartDataPoint } from '@/core/charts/recharts-wrapper';
+import { formatChartValue, type ChartDataPoint } from '@/core/charts/chart-format';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { BetterDirection } from './metric-direction';
 import { Sparkline } from './sparkline';

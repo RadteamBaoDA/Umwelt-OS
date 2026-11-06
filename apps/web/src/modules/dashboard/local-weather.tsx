@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import dynamic from 'next/dynamic';
 import { useTranslations } from 'next-intl';
 import { Info, MapPin } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
@@ -8,9 +9,12 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { getLocalWeather, type LocalWeather as LocalWeatherReading } from './api';
-import { toUnit, useWeatherUnit, weatherCondition, WeatherCard } from './weather-card';
+import { toUnit, useWeatherUnit, weatherCondition } from './weather-model';
 import { BareButton } from '@/components/bare-button';
 import { getNumberFormat } from '@/modules/shared';
+
+/** Popover forecast card, loaded on first open so the chart library stays out of the header's bundle. */
+const WeatherCard = dynamic(() => import('./weather-card').then((m) => m.WeatherCard), { ssr: false });
 
 type Coords = { lat: number; lon: number };
 type Phase = 'checking' | 'ask' | 'granted' | 'hidden';

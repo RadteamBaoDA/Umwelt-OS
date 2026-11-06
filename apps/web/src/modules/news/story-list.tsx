@@ -16,7 +16,7 @@ import { TranslationNote } from '@/modules/translations';
 import { useContentTranslation } from '@/modules/translations';
 import { safeHttpUrl } from '@/core/safe-url';
 import { cleanExcerpt } from './excerpt';
-import { formatRelativeTime } from '@/modules/dashboard';
+import { formatRelativeTime } from '@/modules/dashboard/public-api';
 import type { Story } from './story-types';
 
 /** Props for the source-scoped story gadget renderer. */

@@ -30,7 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { formatChartValue } from '@/core/charts/recharts-wrapper';
+import { formatChartValue } from '@/core/charts/chart-format';
 import { normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
 import { genUiCopy, resolveWidgetLocale, TABLE_COPY } from '../copy';
 import { BareButton } from '@/components/bare-button';

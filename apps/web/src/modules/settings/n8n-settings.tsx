@@ -15,7 +15,7 @@ import { apiFailureKey } from '@/core/api-failure-key';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { StatusDot } from '@/modules/observability';
+import { StatusDot } from '@/modules/observability/public-api';
 import type { Tone } from '@/modules/observability';
 import { deactivateConnector, triggerCollection } from '@/modules/sources';
 import { SecretField, SettingsActions, SettingsPageHeader, SettingsSection } from '@/components/settings-layout';

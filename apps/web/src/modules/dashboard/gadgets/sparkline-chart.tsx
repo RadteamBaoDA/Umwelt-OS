@@ -2,7 +2,7 @@
 
 import React, { useMemo } from 'react';
 import { Area, AreaChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import type { ChartDataPoint } from '@/core/charts/recharts-wrapper';
+import type { ChartDataPoint } from '@/core/charts/chart-format';
 
 /** Props for the axis-free Sparkline. */
 export interface SparklineProps {

@@ -1,4 +1,4 @@
-import type { ChartDataPoint } from '@/core/charts/recharts-wrapper';
+import type { ChartDataPoint } from '@/core/charts/chart-format';
 
 /**
  * Formats an ISO timestamp as a short localized relative phrase ("2 hr. ago", "yesterday").

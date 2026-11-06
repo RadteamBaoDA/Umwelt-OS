@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { formatChartValue, type ChartDataPoint } from '@/core/charts/recharts-wrapper';
+import { formatChartValue, type ChartDataPoint } from '@/core/charts/chart-format';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { DeltaPill } from './gadget-kpi';
 import type { BetterDirection } from './metric-direction';
