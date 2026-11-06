@@ -973,6 +973,42 @@ async def discover_google_source_resources(
     return {"items": rows, "token_revision": token_revision, "truncated": truncated}
 
 
+async def _lock_google_grant(session: AsyncSession, source_id: UUID) -> Any:
+    """Lock and return the source's OAuth grant row (``FOR UPDATE``), or ``None`` when absent."""
+    return await session.scalar(
+        select(ConnectorOAuthGrant)
+        .where(ConnectorOAuthGrant.source_id == source_id)
+        .with_for_update()
+    )
+
+
+def _grant_refresh_token(settings: Any, grant: Any, source_id: UUID) -> str:
+    """Decrypt the grant's token cipher and return its non-empty refresh token.
+
+    Raises:
+        HTTPException: 503 when the cipher cannot be opened or holds no refresh token, so the
+            operator must reconcile the credential.
+    """
+    key = settings.connector_credential_encryption_key.get_secret_value()
+    try:
+        token_set = _open_cipher(
+            key,
+            grant.encrypted_tokens or "",
+            source_id,
+            grant.operation_id,
+            grant.source_generation,
+            grant.configuration_revision,
+        )
+        refresh_token = token_set.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            raise ValueError("google_refresh_token_missing")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503, detail="Google credential requires operator reconciliation"
+        ) from exc
+    return refresh_token
+
+
 @router.post("/{source_id}/oauth/google/disconnect")
 async def disconnect_google_source(
     source_id: str,
@@ -993,13 +1029,7 @@ async def disconnect_google_source(
     source, row = await _current_source(
         session, request, parsed_id, None, scope, fence, allow_paused=True
     )
-    grant = await session.scalar(
-        select(ConnectorOAuthGrant)
-        .where(
-            ConnectorOAuthGrant.source_id == parsed_id,
-        )
-        .with_for_update()
-    )
+    grant = await _lock_google_grant(session, parsed_id)
     if (
         source is None
         or source.provider not in _PROVIDER_SCOPES
@@ -1016,23 +1046,7 @@ async def disconnect_google_source(
         raise HTTPException(
             status_code=409, detail="Google credential changed; reload before disconnecting"
         )
-    key = settings.connector_credential_encryption_key.get_secret_value()
-    try:
-        token_set = _open_cipher(
-            key,
-            grant.encrypted_tokens or "",
-            parsed_id,
-            grant.operation_id,
-            grant.source_generation,
-            grant.configuration_revision,
-        )
-        refresh_token = token_set.get("refresh_token")
-        if not isinstance(refresh_token, str) or not refresh_token:
-            raise ValueError("google_refresh_token_missing")
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=503, detail="Google credential requires operator reconciliation"
-        ) from exc
+    refresh_token = _grant_refresh_token(settings, grant, parsed_id)
     row.credential_revision += 1
     grant.credential_revision = row.credential_revision
     grant.state, grant.error_code = "revocation_pending", None
@@ -1051,13 +1065,7 @@ async def disconnect_google_source(
         source, row = await _current_source(
             session, request, parsed_id, None, scope, fence, allow_paused=True
         )
-        grant = await session.scalar(
-            select(ConnectorOAuthGrant)
-            .where(
-                ConnectorOAuthGrant.source_id == parsed_id,
-            )
-            .with_for_update()
-        )
+        grant = await _lock_google_grant(session, parsed_id)
         if (
             grant is not None
             and grant.token_revision == payload.expected_token_revision
@@ -1076,13 +1084,7 @@ async def disconnect_google_source(
     source, row = await _current_source(
         session, request, parsed_id, None, scope, fence, allow_paused=True
     )
-    grant = await session.scalar(
-        select(ConnectorOAuthGrant)
-        .where(
-            ConnectorOAuthGrant.source_id == parsed_id,
-        )
-        .with_for_update()
-    )
+    grant = await _lock_google_grant(session, parsed_id)
     if (
         grant is None
         or grant.provider != source.provider

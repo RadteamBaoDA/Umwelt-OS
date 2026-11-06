@@ -688,6 +688,41 @@ async def reddit_authorization_status(
     }
 
 
+async def _lock_grant(session: AsyncSession, source_id: UUID) -> ConnectorOAuthGrant | None:
+    """Lock and return the source's OAuth grant row (``FOR UPDATE``), or ``None`` when absent."""
+    return await session.scalar(
+        select(ConnectorOAuthGrant)
+        .where(ConnectorOAuthGrant.source_id == source_id)
+        .with_for_update()
+    )
+
+
+def _grant_refresh_token(settings: Any, grant: ConnectorOAuthGrant, source_id: UUID) -> str:
+    """Decrypt the grant's token cipher and return its non-empty refresh token.
+
+    Raises:
+        HTTPException: 503 when the cipher cannot be opened or holds no refresh token, so the
+            operator must reconcile the credential.
+    """
+    try:
+        tokens = _open(
+            settings.connector_credential_encryption_key.get_secret_value(),
+            cast(str, grant.encrypted_tokens),
+            source_id,
+            grant.operation_id,
+            grant.source_generation,
+            grant.configuration_revision,
+        )
+        refresh_token = tokens.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            raise ValueError("reddit_refresh_token_missing")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503, detail="Reddit credential requires operator reconciliation"
+        ) from exc
+    return refresh_token
+
+
 @router.post("/{source_id}/oauth/reddit/disconnect")
 async def disconnect_reddit_source(
     source_id: str,
@@ -708,13 +743,7 @@ async def disconnect_reddit_source(
     source, row = await _current_source(
         session, request, parsed_id, scope, fence, allow_paused=True
     )
-    grant = await session.scalar(
-        select(ConnectorOAuthGrant)
-        .where(
-            ConnectorOAuthGrant.source_id == parsed_id,
-        )
-        .with_for_update()
-    )
+    grant = await _lock_grant(session, parsed_id)
     if (
         source.generation != payload.expected_source_generation
         or row.desired_revision != payload.expected_revision
@@ -729,22 +758,7 @@ async def disconnect_reddit_source(
         raise HTTPException(
             status_code=409, detail="Reddit credential changed; reload before disconnecting"
         )
-    try:
-        tokens = _open(
-            settings.connector_credential_encryption_key.get_secret_value(),
-            grant.encrypted_tokens,
-            parsed_id,
-            grant.operation_id,
-            grant.source_generation,
-            grant.configuration_revision,
-        )
-        refresh_token = tokens.get("refresh_token")
-        if not isinstance(refresh_token, str) or not refresh_token:
-            raise ValueError("reddit_refresh_token_missing")
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=503, detail="Reddit credential requires operator reconciliation"
-        ) from exc
+    refresh_token = _grant_refresh_token(settings, grant, parsed_id)
     owner_session_hash, owner_id = owner.token_hash, owner.owner_id
     row.credential_revision += 1
     grant.credential_revision = row.credential_revision
@@ -758,13 +772,7 @@ async def disconnect_reddit_source(
         source, row = await _current_source(
             session, request, parsed_id, scope, fence, allow_paused=True
         )
-        grant = await session.scalar(
-            select(ConnectorOAuthGrant)
-            .where(
-                ConnectorOAuthGrant.source_id == parsed_id,
-            )
-            .with_for_update()
-        )
+        grant = await _lock_grant(session, parsed_id)
         if (
             grant is not None
             and grant.token_revision == payload.expected_token_revision
@@ -783,13 +791,7 @@ async def disconnect_reddit_source(
     source, row = await _current_source(
         session, request, parsed_id, scope, fence, allow_paused=True
     )
-    grant = await session.scalar(
-        select(ConnectorOAuthGrant)
-        .where(
-            ConnectorOAuthGrant.source_id == parsed_id,
-        )
-        .with_for_update()
-    )
+    grant = await _lock_grant(session, parsed_id)
     if (
         grant is None
         or grant.provider != "reddit"

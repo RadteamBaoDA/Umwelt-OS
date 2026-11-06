@@ -351,6 +351,50 @@ async def reset_github_sync(
     return {"status": "reset"}
 
 
+async def _require_recoverable(
+    session: AsyncSession,
+    operation: GithubOAuthOperation | None,
+    coordinator: GithubOAuthCoordinator | None,
+    actor: int,
+    operation_id: UUID,
+) -> tuple[GithubOAuthOperation, GithubOAuthCoordinator]:
+    """Ensure the locked operation/coordinator pair may be acknowledged now and return it narrowed.
+
+    Requires the owner's coordinator to point at this operation in a recoverable state, outside
+    the recovery grace window unless already ``reconciliation_required``, and the operation still
+    unresolved. Rolls back the session before raising.
+
+    Raises:
+        HTTPException: 409 for a changed, still-in-window or already resolved operation.
+    """
+    if (
+        operation is None
+        or operation.owner_id != actor
+        or coordinator is None
+        or coordinator.operation_id != operation_id
+        or coordinator.state not in {"reconciliation_required", "authorizing", "refreshing"}
+    ):
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="GitHub reconciliation operation changed; reload connection status",
+        )
+    if (
+        coordinator.state != "reconciliation_required"
+        and coordinator.updated_at > datetime.now(UTC) - RECOVERY_GRACE
+    ):
+        await session.rollback()
+        raise HTTPException(
+            status_code=409, detail="GitHub operation is still within its recovery window"
+        )
+    if operation.state not in {"in_progress", "reconciliation_required"}:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409, detail="GitHub recovery operation was already resolved"
+        )
+    return operation, coordinator
+
+
 @router.post("/{source_id}/github/reconcile/reconnect")
 async def acknowledge_github_reconnect(
     source_id: str,
@@ -414,31 +458,9 @@ async def acknowledge_github_reconnect(
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if (
-        operation is None
-        or operation.owner_id != actor
-        or coordinator is None
-        or coordinator.operation_id != payload.operation_id
-        or coordinator.state not in {"reconciliation_required", "authorizing", "refreshing"}
-    ):
-        await session.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="GitHub reconciliation operation changed; reload connection status",
-        )
-    if (
-        coordinator.state != "reconciliation_required"
-        and coordinator.updated_at > datetime.now(UTC) - RECOVERY_GRACE
-    ):
-        await session.rollback()
-        raise HTTPException(
-            status_code=409, detail="GitHub operation is still within its recovery window"
-        )
-    if operation.state not in {"in_progress", "reconciliation_required"}:
-        await session.rollback()
-        raise HTTPException(
-            status_code=409, detail="GitHub recovery operation was already resolved"
-        )
+    operation, coordinator = await _require_recoverable(
+        session, operation, coordinator, actor, payload.operation_id
+    )
     recovery_error = (
         coordinator.error_code
         or operation.error_code

@@ -28,6 +28,70 @@ from modules.ingestion.public import (
 )
 
 
+async def _require_google_grant(
+    session: Any, a: Any, lease: Any, binding: tuple[UUID, int]
+) -> None:
+    """Lock the source's Google OAuth grant and require it to match the captured binding.
+
+    The grant must be ready, at the attempt's credential revision, the captured
+    ``(operation_id, token_revision)`` and the lease's generation/revision.
+
+    Raises:
+        CollectionFenceLost: ``credential_changed`` on any mismatch.
+    """
+    from modules.connectors.models import ConnectorOAuthGrant
+
+    grant = await session.scalar(
+        select(ConnectorOAuthGrant)
+        .where(
+            ConnectorOAuthGrant.source_id == a.source.id,
+        )
+        .with_for_update()
+    )
+    if (
+        grant is None
+        or grant.state != "ready"
+        or grant.credential_revision != a.credential_revision
+        or (grant.operation_id, grant.token_revision) != binding
+        or grant.source_generation != lease.source_generation
+        or grant.configuration_revision != lease.connector_revision
+    ):
+        raise CollectionFenceLost("credential_changed", "revision_changed")
+
+
+async def _require_reddit_grant(
+    session: Any, a: Any, lease: Any, binding: tuple[UUID, int]
+) -> None:
+    """Lock the source's Reddit OAuth grant and require it to match the captured binding.
+
+    Same checks as Google plus provider, workspace and owner identity.
+
+    Raises:
+        CollectionFenceLost: ``credential_changed`` on any mismatch.
+    """
+    from modules.connectors.models import ConnectorOAuthGrant
+
+    grant = await session.scalar(
+        select(ConnectorOAuthGrant)
+        .where(
+            ConnectorOAuthGrant.source_id == a.source.id,
+        )
+        .with_for_update()
+    )
+    if (
+        grant is None
+        or grant.provider != "reddit"
+        or grant.state != "ready"
+        or grant.workspace_id != a.scope.workspace_id
+        or grant.owner_id != a.scope.actor_user_id
+        or grant.credential_revision != a.credential_revision
+        or (grant.operation_id, grant.token_revision) != binding
+        or grant.source_generation != lease.source_generation
+        or grant.configuration_revision != lease.connector_revision
+    ):
+        raise CollectionFenceLost("credential_changed", "revision_changed")
+
+
 async def _credential_fence(
     run: Run,
     *,
@@ -41,7 +105,7 @@ async def _credential_fence(
     GitHub, Telegram, Google and Reddit bindings are compared with their captured operation/revision;
     the lease and request must still be current before network bytes or a receipt are accepted.
     """
-    from modules.connectors.models import ConnectorOAuthGrant, GithubOAuthGrant
+    from modules.connectors.models import GithubOAuthGrant
 
     a, lease = run.attempt, run.extras["lease"]
     async with run.factory() as session:
@@ -107,42 +171,9 @@ async def _credential_fence(
                 if now_native != telegram or telegram.access_fence != a.access_fence:
                     raise CollectionFenceLost("credential_changed", "revision_changed")
             if google is not None:
-                grant = await session.scalar(
-                    select(ConnectorOAuthGrant)
-                    .where(
-                        ConnectorOAuthGrant.source_id == a.source.id,
-                    )
-                    .with_for_update()
-                )
-                if (
-                    grant is None
-                    or grant.state != "ready"
-                    or grant.credential_revision != a.credential_revision
-                    or (grant.operation_id, grant.token_revision) != google
-                    or grant.source_generation != lease.source_generation
-                    or grant.configuration_revision != lease.connector_revision
-                ):
-                    raise CollectionFenceLost("credential_changed", "revision_changed")
+                await _require_google_grant(session, a, lease, google)
             if reddit is not None:
-                grant = await session.scalar(
-                    select(ConnectorOAuthGrant)
-                    .where(
-                        ConnectorOAuthGrant.source_id == a.source.id,
-                    )
-                    .with_for_update()
-                )
-                if (
-                    grant is None
-                    or grant.provider != "reddit"
-                    or grant.state != "ready"
-                    or grant.workspace_id != a.scope.workspace_id
-                    or grant.owner_id != a.scope.actor_user_id
-                    or grant.credential_revision != a.credential_revision
-                    or (grant.operation_id, grant.token_revision) != reddit
-                    or grant.source_generation != lease.source_generation
-                    or grant.configuration_revision != lease.connector_revision
-                ):
-                    raise CollectionFenceLost("credential_changed", "revision_changed")
+                await _require_reddit_grant(session, a, lease, reddit)
             if not await ingestion.validate_connector_collection_in_uow(
                 session,
                 lease,
@@ -387,28 +418,26 @@ async def _accept_proof(
     run.extras["accepted"] = True
 
 
-async def _run_github(run: Run) -> None:
-    """GitHub: lease, claim a due webhook hint, open the OAuth grant, one fenced GET, validate, record."""
+async def _open_github_grant(run: Run, lease: Any) -> tuple[Any, tuple[UUID, int], dict[str, Any]]:
+    """Lock the connector and GitHub binding, validate the ready grant and open its token cipher.
+
+    Lock order: connector (all credential slots), binding fence, then the grant row. The grant must
+    be ready, unexpired and bound to the lease's generation and revision; the session is rolled back
+    before returning so no lock is held across the provider call.
+
+    Returns:
+        ``(binding_fence, (operation_id, token_revision), token_pair)``.
+
+    Raises:
+        CredentialMissing: when the binding or a usable grant is absent.
+    """
     from sqlalchemy import select
 
     from modules.connectors.github import oauth as github_oauth
-    from modules.connectors.github.adapter import collect_github_segment
-    from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
-    from modules.connectors.github.sync import validate_github_segment
     from modules.connectors.models import GithubOAuthGrant
 
     a = run.attempt
-    source, collected_at = a.source, datetime.now(UTC)
-    lease = await _lease(run)
-    async with run.factory() as session:
-        claim = await connectors.claim_github_hint(
-            session,
-            source_id=source.id,
-            source_generation=lease.source_generation,
-            connector_revision=lease.connector_revision,
-            multi_workspace_enabled=a.multi,
-            scope=a.scope,
-        )
+    source = a.source
     async with run.factory() as session:
         try:
             await provisioning.lock_connector(
@@ -457,6 +486,29 @@ async def _run_github(run: Run) -> None:
             )
         finally:
             await session.rollback()
+    return fence, binding, pair
+
+
+async def _run_github(run: Run) -> None:
+    """GitHub: lease, claim a due webhook hint, open the OAuth grant, one fenced GET, validate, record."""
+
+    from modules.connectors.github.adapter import collect_github_segment
+    from modules.connectors.github.schemas import GitHubHintClaimProof, project_github_source_config
+    from modules.connectors.github.sync import validate_github_segment
+
+    a = run.attempt
+    source, collected_at = a.source, datetime.now(UTC)
+    lease = await _lease(run)
+    async with run.factory() as session:
+        claim = await connectors.claim_github_hint(
+            session,
+            source_id=source.id,
+            source_generation=lease.source_generation,
+            connector_revision=lease.connector_revision,
+            multi_workspace_enabled=a.multi,
+            scope=a.scope,
+        )
+    fence, binding, pair = await _open_github_grant(run, lease)
     token = pair.get("access_token")
     if not isinstance(token, str) or not token:
         raise CredentialMissing
@@ -512,18 +564,22 @@ async def _run_github(run: Run) -> None:
     )
 
 
-async def _run_telegram(run: Run) -> None:
-    """Telegram: bot token read under locks, getUpdates fenced per send; one accepted page per request.
+async def _open_telegram_credential(run: Run, lease: Any) -> tuple[Any, str, Any]:
+    """Read the ready Telegram bot credential under connector locks and load the stream cursor.
 
-    Pages that only replay already-ingested updates advance the offset (fresh lease each time, at most
-    five pages); the first page with new work is accepted and settles the request.
+    Locks the connector (all credential slots), reads the native credential snapshot for the lease's
+    exact generation/revision and decrypts the bot token; the session is rolled back before the
+    cursor read so no lock outlives the credential read.
+
+    Returns:
+        ``(snapshot, bot_token, collection_cursor)``.
+
+    Raises:
+        CredentialMissing: when the credential is absent, not ready, unencrypted or unverified.
     """
     from modules.connectors.credentials import decrypt_native_token
-    from modules.connectors.providers.telegram import fetch_telegram_updates, map_telegram_update
-    from modules.ingestion.public import classify_telegram_probe
 
     a, source = run.attempt, run.attempt.source
-    lease = await _lease(run)
     async with run.factory() as session:
         try:
             await provisioning.lock_connector(
@@ -557,6 +613,21 @@ async def _run_telegram(run: Run) -> None:
         cursor = await ingestion.read_telegram_collection_state(
             session, lease, scope=a.scope, multi_workspace_enabled=a.multi
         )
+    return snapshot, token, cursor
+
+
+async def _run_telegram(run: Run) -> None:
+    """Telegram: bot token read under locks, getUpdates fenced per send; one accepted page per request.
+
+    Pages that only replay already-ingested updates advance the offset (fresh lease each time, at most
+    five pages); the first page with new work is accepted and settles the request.
+    """
+    from modules.connectors.providers.telegram import fetch_telegram_updates, map_telegram_update
+    from modules.ingestion.public import classify_telegram_probe
+
+    a, source = run.attempt, run.attempt.source
+    lease = await _lease(run)
+    snapshot, token, cursor = await _open_telegram_credential(run, lease)
     allowed = frozenset(cast("list[str]", source.configuration["telegram_chat_ids"]))
 
     async def before_send() -> None:
