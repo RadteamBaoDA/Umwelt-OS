@@ -5,7 +5,6 @@
   "modules/automations/execution.py": 2985,
   "modules/chat/public.py": 2841,
   "modules/chat/routes.py": 1813,
-  "modules/connectors/github/routes.py": 2109,
   "modules/connectors/provider_specs.py": 1548,
   "modules/connectors/routes.py": 1680,
   "modules/connectors/service/github_hints.py": 1621,
