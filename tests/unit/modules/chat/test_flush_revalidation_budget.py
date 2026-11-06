@@ -16,6 +16,7 @@ from modules.chat.schemas import AnswerContext
 from modules.knowledge.documents import _chat_evidence
 from modules.sources import public as sources_public
 from tests.unit.modules.chat._worker_patch import patch_worker
+from tests.unit.sources_patching import patch_sources
 from tests.unit.typing_regressions.test_none_handling_regressions import _evidence
 
 SCOPE = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
@@ -205,7 +206,7 @@ async def test_get_source_fences_reads_many_sources_with_one_statement(
         )
         for i in ids
     ]
-    monkeypatch.setattr(sources_public, "_admit_source_scope", AsyncMock())
+    patch_sources(monkeypatch, "_admit_source_scope", AsyncMock())
     session = _Recorder(rows)
     fences = await sources_public.get_source_fences(
         session, [*ids, ids[0]], scope=SCOPE, multi_workspace_enabled=False

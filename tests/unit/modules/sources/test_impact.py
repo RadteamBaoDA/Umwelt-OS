@@ -19,10 +19,10 @@ from modules.connectors.native_fetch import collection_error_code as _collection
 from modules.connectors.providers.telegram import _TelegramAPIError
 from modules.dashboard import public as dashboard
 from modules.knowledge.documents import public as documents
-from modules.sources import public as source_public
 from modules.sources import public as sources
 from modules.sources import routes as source_routes
 from tests.unit.modules._documents_patch import monkeypatch_documents
+from tests.unit.sources_patching import patch_sources
 
 WORKSPACE_ID = uuid4()
 
@@ -98,12 +98,12 @@ async def test_impact_route_404_and_409(monkeypatch: pytest.MonkeyPatch) -> None
     async def pending(*_a: Any, **_kw: Any) -> None:
         raise HTTPException(status_code=409, detail="Source purge is pending")
 
-    monkeypatch.setattr(source_public, "get_source_impact", missing)
+    patch_sources(monkeypatch, "get_source_impact", missing)
     with pytest.raises(HTTPException) as nf:
         await source_routes.get_source_impact(uuid4(), None, REQUEST, SCOPE)  # type: ignore[arg-type]
     assert nf.value.status_code == 404
     assert seen == {"scope": SCOPE, "multi_workspace_enabled": False}
-    monkeypatch.setattr(source_public, "get_source_impact", pending)
+    patch_sources(monkeypatch, "get_source_impact", pending)
     with pytest.raises(HTTPException) as conflict:
         await source_routes.get_source_impact(uuid4(), None, REQUEST, SCOPE)  # type: ignore[arg-type]
     assert conflict.value.status_code == 409
@@ -160,7 +160,7 @@ async def test_impact_foreign_source_is_none_without_running_counts(
     async def boom(*_a: Any, **_kw: Any) -> Any:
         raise AssertionError("counts must not run for a foreign source")
 
-    monkeypatch.setattr(sources, "get_source", not_found)
+    patch_sources(monkeypatch, "get_source", not_found)
     monkeypatch.setattr(documents, "count_source_documents", boom)
     assert (
         await sources.get_source_impact(
@@ -178,7 +178,7 @@ async def test_impact_is_409_while_purge_pending(monkeypatch: pytest.MonkeyPatch
     async def found(*_a: Any, **_kw: Any) -> object:
         return object()
 
-    monkeypatch.setattr(sources, "get_source", found)
+    patch_sources(monkeypatch, "get_source", found)
     with pytest.raises(DomainError) as caught:
         await sources.get_source_impact(
             ImpactSession(None),
@@ -208,7 +208,7 @@ async def test_impact_passes_scope_to_all_counts(monkeypatch: pytest.MonkeyPatch
         seen.append(scope)
         return 4
 
-    monkeypatch.setattr(sources, "get_source", found)
+    patch_sources(monkeypatch, "get_source", found)
     monkeypatch.setattr(documents, "count_source_documents", doc_count)
     monkeypatch.setattr(dashboard, "count_source_gadgets", gadget_count, raising=False)
     monkeypatch.setattr(chat, "count_source_conversations", conv_count)

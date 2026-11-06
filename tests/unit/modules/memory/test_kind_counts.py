@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from sqlalchemy.dialects import postgresql
@@ -12,6 +12,7 @@ from core.workspaces.schemas import WorkspaceContext
 from modules.memory import public
 from modules.memory.public import MemoryService
 from modules.memory.schemas import MemoryPage
+from tests.unit.memory_patching import patch_memory_attr
 
 WS = uuid4()
 OWNER = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=2)
@@ -43,9 +44,9 @@ async def _page(
     session = MagicMock()
     session.scalars = AsyncMock(side_effect=scalars)
     with (
-        patch.object(public, "_admit", AsyncMock()),
-        patch.object(public, "lock_export_privacy", AsyncMock()),
-        patch.object(public, "_verified_memory_read", verified),
+        patch_memory_attr("_admit", AsyncMock()),
+        patch_memory_attr("lock_export_privacy", AsyncMock()),
+        patch_memory_attr("_verified_memory_read", verified),
     ):
         return await MemoryService(session).get_memories(**CTX, **kwargs)  # type: ignore[arg-type]
 
@@ -121,9 +122,9 @@ async def test_search_skips_counts_and_scan_under_privacy_lock() -> None:
     session = MagicMock()
     session.scalars = AsyncMock(return_value=MagicMock(all=list))
     with (
-        patch.object(public, "_admit", AsyncMock()),
-        patch.object(public, "lock_export_privacy", AsyncMock()),
-        patch.object(public, "_verified_memory_read", AsyncMock(return_value=SimpleNamespace())),
+        patch_memory_attr("_admit", AsyncMock()),
+        patch_memory_attr("lock_export_privacy", AsyncMock()),
+        patch_memory_attr("_verified_memory_read", AsyncMock(return_value=SimpleNamespace())),
     ):
         page = await MemoryService(session).get_memories(query="50%_off", **CTX)
     assert session.scalars.await_count == 1  # list only; counts would add a second scan
@@ -147,8 +148,8 @@ async def test_counts_scan_sql_is_workspace_scoped_and_other_workspace_excluded(
     session = MagicMock()
     session.scalars = AsyncMock(side_effect=scalars)
     with (
-        patch.object(public, "_admit", AsyncMock()),
-        patch.object(public, "lock_export_privacy", AsyncMock()),
+        patch_memory_attr("_admit", AsyncMock()),
+        patch_memory_attr("lock_export_privacy", AsyncMock()),
     ):
         await MemoryService(session).get_memories(**CTX)
     assert len(stmts) == 2  # counts scan + list

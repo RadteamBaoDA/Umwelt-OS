@@ -22,6 +22,7 @@ from modules.chat import public as chat_public
 from modules.ingestion import routes
 from modules.sources import public as sources_public
 from modules.sources.models import Source
+from tests.unit.sources_patching import patch_sources
 
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=3)
@@ -55,7 +56,7 @@ def _upload(name: str, content: bytes, mime: str) -> UploadFile:
 
 def _admit(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     admit = AsyncMock(return_value=SimpleNamespace(name="fence"))
-    monkeypatch.setattr(sources_public, "_admit_source_scope", admit)
+    patch_sources(monkeypatch, "_admit_source_scope", admit)
     return admit
 
 
@@ -92,8 +93,8 @@ async def test_get_or_create_creates_one_local_only_manual_source(
     session.flush = AsyncMock()
     session.refresh = AsyncMock()
     replay = AsyncMock()
-    monkeypatch.setattr(sources_public, "commit_with_replay", replay)
-    monkeypatch.setattr(sources_public, "make_source_change", MagicMock())
+    patch_sources(monkeypatch, "commit_with_replay", replay)
+    patch_sources(monkeypatch, "make_source_change", MagicMock())
 
     source = await sources_public.get_or_create_chat_attachments_source(session, **KW)
 
@@ -112,7 +113,7 @@ async def test_marker_check_is_scoped_and_requires_the_server_set_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     get = AsyncMock(return_value=Source(configuration={"chat_attachments": True}))
-    monkeypatch.setattr(sources_public, "get_source", get)
+    patch_sources(monkeypatch, "get_source", get)
     assert await sources_public.is_chat_attachments_source(MagicMock(), uuid4(), **KW) is True
     assert get.await_args.kwargs == KW
     get.return_value = Source(configuration={})
@@ -417,8 +418,8 @@ async def test_attachment_becomes_a_selection_reference_and_local_only_is_refuse
     assert resolved["selected_refs"][0]["chunk_id"] == str(chunk_id)
     assert resolved["selection_fences"][0]["local_only"] is True
 
-    monkeypatch.setattr(
-        sources_public,
+    patch_sources(
+        monkeypatch,
         "get_source",
         AsyncMock(return_value=Source(local_only=True, configuration={"chat_attachments": True})),
     )
@@ -429,8 +430,8 @@ async def test_attachment_becomes_a_selection_reference_and_local_only_is_refuse
 
 
 async def test_per_message_attachment_count_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        sources_public,
+    patch_sources(
+        monkeypatch,
         "get_source",
         AsyncMock(return_value=Source(local_only=False, configuration={"chat_attachments": True})),
     )
@@ -489,8 +490,8 @@ async def test_get_or_create_variant_has_own_lock_lookup_and_privacy(
     session.scalar = AsyncMock(return_value=None)
     session.flush = AsyncMock()
     session.refresh = AsyncMock()
-    monkeypatch.setattr(sources_public, "commit_with_replay", AsyncMock())
-    monkeypatch.setattr(sources_public, "make_source_change", MagicMock())
+    patch_sources(monkeypatch, "commit_with_replay", AsyncMock())
+    patch_sources(monkeypatch, "make_source_change", MagicMock())
 
     source = await sources_public.get_or_create_chat_attachments_source(
         session, shared=shared, **KW
@@ -572,15 +573,15 @@ async def test_shared_attachment_is_sendable_and_private_one_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fence = {"selection_fences": [{"source_id": str(uuid4()), "local_only": False}]}
-    monkeypatch.setattr(
-        sources_public,
+    patch_sources(
+        monkeypatch,
         "get_source",
         AsyncMock(return_value=Source(local_only=False, configuration={"chat_attachments": True})),
     )
     await chat_public.reject_unsendable_selection(MagicMock(), fence, **KW)
     # A stale fence snapshot is not trusted: the source's current local_only decides.
-    monkeypatch.setattr(
-        sources_public,
+    patch_sources(
+        monkeypatch,
         "get_source",
         AsyncMock(return_value=Source(local_only=True, configuration={"chat_attachments": True})),
     )
@@ -622,8 +623,8 @@ def _chat_route_mocks(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, Async
     monkeypatch.setattr(chat_routes, "_reject_active_response", AsyncMock())
     dispatch = AsyncMock()
     monkeypatch.setattr(chat_routes, "_dispatch_response_run", dispatch)
-    monkeypatch.setattr(
-        sources_public,
+    patch_sources(
+        monkeypatch,
         "get_source",
         AsyncMock(return_value=Source(local_only=True, configuration={"chat_attachments": True})),
     )
@@ -718,8 +719,8 @@ async def test_get_or_create_uploads_source_creates_one_local_only_marked_source
     session.scalar = AsyncMock(return_value=None)
     session.flush = AsyncMock()
     session.refresh = AsyncMock()
-    monkeypatch.setattr(sources_public, "commit_with_replay", AsyncMock())
-    monkeypatch.setattr(sources_public, "make_source_change", MagicMock())
+    patch_sources(monkeypatch, "commit_with_replay", AsyncMock())
+    patch_sources(monkeypatch, "make_source_change", MagicMock())
 
     source = await sources_public.get_or_create_uploads_source(session, **KW)
 
