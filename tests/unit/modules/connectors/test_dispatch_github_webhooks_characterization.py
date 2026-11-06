@@ -18,6 +18,7 @@ import pytest
 from core.errors import ConflictError, ForbiddenError
 from modules.connectors import public as connectors
 from modules.connectors import worker
+from tests.unit.modules.connectors._worker_patch import patch_worker
 
 WORKSPACE_ID = uuid4()
 SOURCE_ID = uuid4()
@@ -157,9 +158,9 @@ def _page(*, cursor_after: str | None = None) -> dict[str, Any]:
 async def _dispatch(factory: _Factory, **patches: Any) -> int:
     ctx = {"settings": SETTINGS, "session_factory": factory}
     with (
-        patch.object(worker, "expire_github_webhook_details", AsyncMock(return_value=0)),
-        patch.object(worker, "reclaim_github_webhook_digests", AsyncMock(return_value=0)),
-        patch.object(worker, "revoke_deleted_source_github_grants", AsyncMock(return_value=0)),
+        patch_worker("expire_github_webhook_details", AsyncMock(return_value=0)),
+        patch_worker("reclaim_github_webhook_digests", AsyncMock(return_value=0)),
+        patch_worker("revoke_deleted_source_github_grants", AsyncMock(return_value=0)),
         patch(
             "modules.settings.public.module_is_enabled",
             patches.get("enabled", AsyncMock(return_value=True)),
@@ -172,9 +173,7 @@ async def _dispatch(factory: _Factory, **patches: Any) -> int:
             "reconcile_github_source_hints_lifecycle",
             patches.get("reconcile", AsyncMock()),
         ),
-        patch.object(
-            worker, "_admit_source_job", patches.get("admit", AsyncMock(return_value=None))
-        ),
+        patch_worker("_admit_source_job", patches.get("admit", AsyncMock(return_value=None))),
     ):
         return await worker.dispatch_github_webhooks(ctx)  # type: ignore[arg-type]
 

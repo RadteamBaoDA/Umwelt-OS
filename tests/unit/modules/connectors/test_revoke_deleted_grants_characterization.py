@@ -15,6 +15,7 @@ import pytest
 from core.errors import ForbiddenError
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.connectors import worker
+from tests.unit.modules.connectors._worker_patch import patch_worker
 
 SOURCE_ID = uuid4()
 WORKSPACE_ID = uuid4()
@@ -125,15 +126,15 @@ async def _run(
     spies["replay"] = AsyncMock()
     spies["lock"] = lock or AsyncMock(return_value=(SimpleNamespace(), None, {}))
     with (
-        patch.object(worker, "_read_cursor", AsyncMock(return_value=None)),
-        patch.object(worker, "_write_cursor", AsyncMock()),
-        patch.object(worker, "_admit_source_job", admit or AsyncMock(return_value=(SCOPE, FENCE))),
+        patch_worker("_read_cursor", AsyncMock(return_value=None)),
+        patch_worker("_write_cursor", AsyncMock()),
+        patch_worker("_admit_source_job", admit or AsyncMock(return_value=(SCOPE, FENCE))),
         patch.object(worker.provisioning, "lock_connector", spies["lock"]),
         patch.object(
             worker.provisioning, "github_grant_has_active_peer", AsyncMock(return_value=peer)
         ),
         patch.object(worker.provisioning, "finish_deleted_source_grant_revoke", spies["finish"]),
-        patch.object(worker, "commit_with_replay", spies["replay"]),
+        patch_worker("commit_with_replay", spies["replay"]),
         patch(
             "modules.connectors.github.oauth._open_token_cipher",
             MagicMock(return_value={"access_token": token}),

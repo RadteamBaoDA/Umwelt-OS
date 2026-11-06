@@ -21,6 +21,7 @@ from modules.connectors import mcp, worker
 from modules.connectors import public as connectors_public
 from modules.connectors.github import _routes_common, mapping, routes
 from modules.connectors.service import collection_requests as collection_requests_service
+from tests.unit.modules.connectors._worker_patch import patch_worker
 
 WORKSPACE_ID = uuid4()
 SOURCE_ID = uuid4()
@@ -346,8 +347,8 @@ def test_legacy_or_malformed_envelope_is_quarantined(envelope) -> None:
 async def test_admission_requires_the_recorded_fence_exactly() -> None:
     session = MagicMock()
     session.rollback = AsyncMock()
-    with patch.object(
-        worker, "read_access_fence", AsyncMock(return_value=AccessFence(WORKSPACE_ID, 7, 3, 6))
+    with patch_worker(
+        "read_access_fence", AsyncMock(return_value=AccessFence(WORKSPACE_ID, 7, 3, 6))
     ):
         assert (
             await worker._admit_lineage(
@@ -356,7 +357,7 @@ async def test_admission_requires_the_recorded_fence_exactly() -> None:
             is None
         )
     session.rollback.assert_awaited()
-    with patch.object(worker, "read_access_fence", AsyncMock(return_value=FENCE)):
+    with patch_worker("read_access_fence", AsyncMock(return_value=FENCE)):
         assert await worker._admit_lineage(
             session, SOURCE_ID, _envelope(), multi_workspace_enabled=False
         ) == (SCOPE, FENCE)
@@ -366,8 +367,8 @@ async def test_admission_requires_the_recorded_fence_exactly() -> None:
 async def test_denied_admission_skips_and_other_errors_propagate(status) -> None:
     session = MagicMock()
     session.rollback = AsyncMock()
-    with patch.object(
-        worker, "read_access_fence", AsyncMock(side_effect=HTTPException(status_code=status))
+    with patch_worker(
+        "read_access_fence", AsyncMock(side_effect=HTTPException(status_code=status))
     ):
         assert (
             await worker._admit_lineage(
@@ -376,9 +377,7 @@ async def test_denied_admission_skips_and_other_errors_propagate(status) -> None
             is None
         )
     with (
-        patch.object(
-            worker, "read_access_fence", AsyncMock(side_effect=HTTPException(status_code=503))
-        ),
+        patch_worker("read_access_fence", AsyncMock(side_effect=HTTPException(status_code=503))),
         pytest.raises(HTTPException),
     ):
         await worker._admit_lineage(session, SOURCE_ID, _envelope(), multi_workspace_enabled=False)
@@ -452,13 +451,13 @@ def _delete_harness(envelope: dict, *, delete=None, retained_denied: bool = Fals
 async def test_delete_success_acknowledges_under_original_scope_and_fence() -> None:
     session, prov, client, claimed = _delete_harness(_envelope())
     with (
-        patch.object(worker, "read_access_fence", AsyncMock(return_value=FENCE)),
-        patch.object(worker, "provisioning", prov),
+        patch_worker("read_access_fence", AsyncMock(return_value=FENCE)),
+        patch_worker("provisioning", prov),
         patch(
             "modules.settings.public.resolve_n8n",
             AsyncMock(return_value=SimpleNamespace(service_url="http://n8n", api_key="key")),
         ),
-        patch.object(worker, "N8nCredentials", return_value=client),
+        patch_worker("N8nCredentials", MagicMock(return_value=client)),
     ):
         assert (
             await worker._delete_credential(
@@ -500,13 +499,13 @@ async def test_delete_rejection_is_known_and_timeout_is_unknown() -> None:
         )
         session, prov, client, _claimed = _delete_harness(_envelope(), delete=failing)
         with (
-            patch.object(worker, "read_access_fence", AsyncMock(return_value=FENCE)),
-            patch.object(worker, "provisioning", prov),
+            patch_worker("read_access_fence", AsyncMock(return_value=FENCE)),
+            patch_worker("provisioning", prov),
             patch(
                 "modules.settings.public.resolve_n8n",
                 AsyncMock(return_value=SimpleNamespace(service_url="http://n8n", api_key="key")),
             ),
-            patch.object(worker, "N8nCredentials", return_value=client),
+            patch_worker("N8nCredentials", MagicMock(return_value=client)),
         ):
             assert (
                 await worker._delete_credential(
@@ -527,13 +526,13 @@ async def test_delete_rejection_is_known_and_timeout_is_unknown() -> None:
 async def test_delete_after_access_loss_journals_the_transport_and_changes_nothing_else() -> None:
     session, prov, client, _claimed = _delete_harness(_envelope(), retained_denied=True)
     with (
-        patch.object(worker, "read_access_fence", AsyncMock(return_value=FENCE)),
-        patch.object(worker, "provisioning", prov),
+        patch_worker("read_access_fence", AsyncMock(return_value=FENCE)),
+        patch_worker("provisioning", prov),
         patch(
             "modules.settings.public.resolve_n8n",
             AsyncMock(return_value=SimpleNamespace(service_url="http://n8n", api_key="key")),
         ),
-        patch.object(worker, "N8nCredentials", return_value=client),
+        patch_worker("N8nCredentials", MagicMock(return_value=client)),
     ):
         assert (
             await worker._delete_credential(
@@ -563,8 +562,8 @@ async def test_delete_never_claims_or_sends_without_the_original_admission(fence
         else AsyncMock(side_effect=HTTPException(status_code=404))
     )
     with (
-        patch.object(worker, "read_access_fence", read),
-        patch.object(worker, "provisioning", prov),
+        patch_worker("read_access_fence", read),
+        patch_worker("provisioning", prov),
     ):
         assert (
             await worker._delete_credential(
@@ -756,7 +755,7 @@ async def test_denied_phase_three_releases_only_our_own_coordinator_claim(foreig
             coordinator.operation_id = other
 
     with (
-        patch.object(worker, "_admit_source_job", AsyncMock(return_value=(SCOPE, FENCE))),
+        patch_worker("_admit_source_job", AsyncMock(return_value=(SCOPE, FENCE))),
         patch.object(
             worker.provisioning,
             "lock_connector",
@@ -772,8 +771,8 @@ async def test_denied_phase_three_releases_only_our_own_coordinator_claim(foreig
             "modules.connectors.github.oauth.revoke_github_grant",
             AsyncMock(side_effect=provider_revoke),
         ),
-        patch.object(worker, "commit_with_replay", AsyncMock()),
-        patch.object(worker, "select", MagicMock()),
+        patch_worker("commit_with_replay", AsyncMock()),
+        patch_worker("select", MagicMock()),
     ):
         assert (
             await worker.revoke_deleted_source_github_grants(

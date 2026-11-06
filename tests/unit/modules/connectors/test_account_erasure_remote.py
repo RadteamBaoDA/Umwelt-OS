@@ -15,6 +15,7 @@ from modules.connectors.models import (
     ConnectorProvisioning,
     GithubOAuthGrant,
 )
+from tests.unit.modules.connectors._worker_patch import monkeypatch_worker
 
 
 class _Session:
@@ -466,7 +467,7 @@ async def test_background_dispatch_uses_each_admitted_workspaces_url_and_key(
     async def resolve(_session, _settings, *, workspace_id):
         return configurations[workspace_id]
 
-    monkeypatch.setattr(worker, "_admit_lineage", admit)
+    monkeypatch_worker(monkeypatch, "_admit_lineage", admit)
     monkeypatch.setattr("modules.settings.public.resolve_n8n", resolve)
     monkeypatch.setattr("modules.settings.public.module_is_enabled", AsyncMock(return_value=True))
     observed = []
@@ -489,14 +490,14 @@ async def test_background_dispatch_uses_each_admitted_workspaces_url_and_key(
 
     monkeypatch.setattr(provisioning, "drive_workflow_operation", workflow_driver)
     monkeypatch.setattr(activation, "drive_activation", activation_driver)
-    monkeypatch.setattr(worker, "_settle_credential_delete", AsyncMock(return_value=True))
+    monkeypatch_worker(monkeypatch, "_settle_credential_delete", AsyncMock(return_value=True))
     monkeypatch.setattr(
         provisioning,
         "claim_credential_operation",
         AsyncMock(return_value={"target_id": "credential"}),
     )
     if operation == "credential":
-        monkeypatch.setattr(worker, "N8nCredentials", CredentialClient)
+        monkeypatch_worker(monkeypatch, "N8nCredentials", CredentialClient)
     settings = SimpleNamespace(
         multi_workspace_enabled=True,
         connector_credential_encryption_key=SimpleNamespace(get_secret_value=lambda: "unused"),
@@ -539,8 +540,8 @@ async def test_background_workflow_kill_switch_is_scoped_and_preserves_cleanup(
         ),
         rollback=AsyncMock(),
     )
-    monkeypatch.setattr(
-        worker,
+    monkeypatch_worker(
+        monkeypatch,
         "_admit_lineage",
         AsyncMock(return_value=(SimpleNamespace(workspace_id=workspace_id), object())),
     )
