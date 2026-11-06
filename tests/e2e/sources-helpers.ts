@@ -221,6 +221,11 @@ export const BUILTINS: [id: string, label: string][] = [
   ['disease_sh', 'disease.sh global COVID-19 totals'],
   ['ioda', 'IODA internet outage events'],
   ['nvd', 'NVD recent CVEs'],
+  ['vn_stock', 'Vietnam stocks (VNDirect, unofficial)'],
+  ['vietnamworks_jobs', 'VietnamWorks jobs (unofficial)'],
+  ['itviec_jobs', 'ITviec jobs (crawled)'],
+  ['github_trending', 'GitHub Trending (mirror)'],
+  ['wwr_jobs', 'We Work Remotely jobs'],
 ];
 
 /** Opens the "Add datasource" > "Connect an API" wizard dialog from the sources settings page. */

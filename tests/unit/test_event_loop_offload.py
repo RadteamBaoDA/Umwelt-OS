@@ -63,9 +63,18 @@ def test_parse_page_matches_the_former_inline_parser():
     assert collection._parse_page(html) == (page.parts, page.links)
 
 
-async def test_run_web_parses_big_pages_off_the_loop(monkeypatch, loop_block_guard):
+async def test_run_web_parses_big_pages_off_the_loop(monkeypatch):
+    """Deterministic: the page parse runs on a worker thread, never the event-loop thread (no wall-clock budget)."""
     html = _big_html()
-    await loop_block_guard.reset()  # building the input is test setup, not the code under test
+    loop_thread = threading.get_ident()
+    parse_threads: list[int] = []
+    real_parse = collection._parse_page
+
+    def recording_parse(text):
+        parse_threads.append(threading.get_ident())
+        return real_parse(text)
+
+    monkeypatch.setattr(collection, "_parse_page", recording_parse)
     accepted: list[list[dict]] = []
 
     class Gate:
@@ -92,7 +101,8 @@ async def test_run_web_parses_big_pages_off_the_loop(monkeypatch, loop_block_gua
     expected = collection._PageText()
     expected.feed(html)
     assert accepted[0][0]["content"] == "\n".join(expected.parts)[:200_000]
-    loop_block_guard.assert_clean()
+    assert parse_threads
+    assert loop_thread not in parse_threads
 
 
 async def test_inline_page_parse_would_be_flagged(loop_block_guard):
