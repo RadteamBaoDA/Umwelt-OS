@@ -246,21 +246,11 @@ async def list_briefs(
     )
 
 
-async def _facts(
-    session: AsyncSession,
-    widgets: Sequence[DailyWidget],
-    *,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-    lock_events: bool = False,
-) -> list[dict[str, Any]]:
-    """Flatten current owner widgets into numbered citable facts under source privacy policy.
+def _fact_candidates(widgets: Sequence[DailyWidget]) -> tuple[list[dict[str, Any]], set[str]]:
+    """Flatten widget items into unvetted fact candidates and the source ids they reference.
 
-    A fact is kept only when every source it references resolves to an existing, active, non
-    local-only source. Story facts with no source and any unresolved ID are dropped. Owner-authored
-    task/goal facts and source-less manual events carry no source and are kept. This fact-only
-    contract deliberately does not load the saved brief, revision history or notifications.
-    Every prompt fact carries its complete bounded support set; incomplete lineage aborts.
+    News facts without any source id are skipped. ``_canonical_title`` keeps the untruncated title
+    so support lookups can compare against the stored value. Pure; privacy filtering happens later.
     """
     candidates: list[dict[str, Any]] = []
     wanted: set[str] = set()
@@ -283,6 +273,17 @@ async def _facts(
                 }
             )
             wanted.update(ids)
+    return candidates, wanted
+
+
+async def _allowed_source_ids(
+    session: AsyncSession, wanted: set[str], *, scope: Scope, multi_workspace_enabled: bool
+) -> set[str]:
+    """Return which of the referenced source ids are existing, active and not local-only.
+
+    Resolved in sorted chunks of 32 through the sources owner so foreign, paused or local-only ids
+    simply drop out; the caller keeps only facts whose sources are all allowed.
+    """
     allowed: set[str] = set()
     ordered = sorted(wanted)
     for start in range(0, len(ordered), 32):
@@ -294,6 +295,42 @@ async def _facts(
             )
             if item.status == "active" and not item.local_only
         )
+    return allowed
+
+
+def _support_rows(evidence: Any) -> list[dict[str, str]]:
+    """Detach owner evidence refs into the string-id support rows stored on a fact. Pure."""
+    return [
+        {
+            "document_id": str(item.document_id),
+            "document_version_id": str(item.document_version_id),
+            "chunk_id": str(item.chunk_id),
+            "source_id": str(item.source_id),
+        }
+        for item in evidence
+    ]
+
+
+async def _facts(
+    session: AsyncSession,
+    widgets: Sequence[DailyWidget],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    lock_events: bool = False,
+) -> list[dict[str, Any]]:
+    """Flatten current owner widgets into numbered citable facts under source privacy policy.
+
+    A fact is kept only when every source it references resolves to an existing, active, non
+    local-only source. Story facts with no source and any unresolved ID are dropped. Owner-authored
+    task/goal facts and source-less manual events carry no source and are kept. This fact-only
+    contract deliberately does not load the saved brief, revision history or notifications.
+    Every prompt fact carries its complete bounded support set; incomplete lineage aborts.
+    """
+    candidates, wanted = _fact_candidates(widgets)
+    allowed = await _allowed_source_ids(
+        session, wanted, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
     facts = [fact for fact in candidates if set(fact["source_ids"]) <= allowed][:MAX_FACTS]
     from modules.news import public as news
     from modules.timeline import public as timeline
@@ -319,15 +356,7 @@ async def _facts(
             if not support.complete:
                 raise BriefUnavailable("A story fact has incomplete exact document support")
             fact["_lineage_status"] = "supported"
-            fact["_supports"] = [
-                {
-                    "document_id": str(item.document_id),
-                    "document_version_id": str(item.document_version_id),
-                    "chunk_id": str(item.chunk_id),
-                    "source_id": str(item.source_id),
-                }
-                for item in support.evidence
-            ]
+            fact["_supports"] = _support_rows(support.evidence)
         elif fact["kind"] == "events":
             event_support = await timeline.brief_event_support(
                 session,
@@ -342,15 +371,7 @@ async def _facts(
             fact["_lineage_status"] = (
                 "supported" if not event_support.independent else "independent"
             )
-            fact["_supports"] = [
-                {
-                    "document_id": str(item.document_id),
-                    "document_version_id": str(item.document_version_id),
-                    "chunk_id": str(item.chunk_id),
-                    "source_id": str(item.source_id),
-                }
-                for item in event_support.evidence
-            ]
+            fact["_supports"] = _support_rows(event_support.evidence)
         else:
             fact["_lineage_status"] = "independent"
             fact["_supports"] = []

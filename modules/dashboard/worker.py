@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from redis.asyncio import Redis
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core import worker_cursors
 from core.config import Settings
@@ -14,7 +15,7 @@ from core.errors import DomainError
 from core.realtime import commit_with_replay
 from core.worker_context import worker_session_factory
 from core.workspaces import public as workspaces
-from core.workspaces.schemas import InternalJobScope
+from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.dashboard import briefs, public
 from modules.dashboard.daily_schemas import BriefSchedule
 from modules.dashboard.models import BriefSchedule as BriefScheduleRow
@@ -118,6 +119,59 @@ async def run_scheduled_highlights(ctx: dict[str, object]) -> int:
     return evaluated
 
 
+async def _ensure_schedule_row(
+    session: AsyncSession,
+    scope: InternalJobScope,
+    owner_id: int,
+    access_fence: AccessFence,
+    *,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Lock the owner's schedule row, creating the default when missing; return whether to run it.
+
+    The caller already holds the schedule-slot advisory lock and the access fence. A missing row is
+    created with the default schedule and committed with replay (the default is enabled and
+    internally owned); an existing row is only read and the transaction rolled back so the lock is
+    released before any model I/O. Disabled and automation-owned schedules return ``False``.
+    """
+    schedule_row = await session.scalar(
+        select(BriefScheduleRow)
+        .where(
+            BriefScheduleRow.workspace_id == scope.workspace_id,
+            BriefScheduleRow.owner_id == owner_id,
+        )
+        .with_for_update()
+    )
+    if schedule_row is None:
+        default = BriefSchedule()
+        schedule_row = BriefScheduleRow(
+            workspace_id=scope.workspace_id,
+            owner_id=owner_id,
+            enabled=default.enabled,
+            hour=default.hour,
+            minute=default.minute,
+            timezone=default.timezone,
+            schedule_owner="internal_brief",
+            automation_id=None,
+        )
+        session.add(schedule_row)
+        await session.flush()
+        schedule = default
+        should_run = schedule.enabled
+        await commit_with_replay(
+            session,
+            [],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=access_fence,
+        )
+    else:
+        schedule = BriefSchedule.model_validate(schedule_row)
+        should_run = schedule.enabled and schedule_row.schedule_owner == "internal_brief"
+        await session.rollback()  # release the schedule lock before possible model I/O
+    return should_run
+
+
 async def run_scheduled_brief(ctx: dict[str, object]) -> bool:
     """Preserve default enabled schedules with a fair ten-workspace initialization bound.
 
@@ -175,43 +229,13 @@ async def run_scheduled_brief(ctx: dict[str, object]) -> bool:
                     multi_workspace_enabled=settings.multi_workspace_enabled,
                 )
                 await briefs._lock_schedule_slot(session, workspace_id)
-                schedule_row = await session.scalar(
-                    select(BriefScheduleRow)
-                    .where(
-                        BriefScheduleRow.workspace_id == workspace_id,
-                        BriefScheduleRow.owner_id == owner.user_id,
-                    )
-                    .with_for_update()
+                should_run = await _ensure_schedule_row(
+                    session,
+                    scope,
+                    owner.user_id,
+                    access_fence,
+                    multi_workspace_enabled=settings.multi_workspace_enabled,
                 )
-                if schedule_row is None:
-                    default = BriefSchedule()
-                    schedule_row = BriefScheduleRow(
-                        workspace_id=workspace_id,
-                        owner_id=owner.user_id,
-                        enabled=default.enabled,
-                        hour=default.hour,
-                        minute=default.minute,
-                        timezone=default.timezone,
-                        schedule_owner="internal_brief",
-                        automation_id=None,
-                    )
-                    session.add(schedule_row)
-                    await session.flush()
-                    schedule = default
-                    should_run = schedule.enabled
-                    await commit_with_replay(
-                        session,
-                        [],
-                        scope=scope,
-                        multi_workspace_enabled=settings.multi_workspace_enabled,
-                        access_fence=access_fence,
-                    )
-                else:
-                    schedule = BriefSchedule.model_validate(schedule_row)
-                    should_run = (
-                        schedule.enabled and schedule_row.schedule_owner == "internal_brief"
-                    )
-                    await session.rollback()  # release the schedule lock before possible model I/O
                 if should_run:
                     created = await briefs.run_due_brief(
                         session,

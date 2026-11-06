@@ -351,6 +351,54 @@ async def _lock_highlight_scan(
     return definition, progress
 
 
+async def _owner_timezone(
+    session: AsyncSession, owner_id: int, *, multi_workspace_enabled: bool
+) -> tzinfo:
+    """Resolve the owner's preferred timezone for quiet-hours evaluation (unlocked preferences read)."""
+    return _owner_tzinfo(
+        (
+            await settings_public.read_owner_preferences(
+                session,
+                actor_user_id=owner_id,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        ).timezone
+    )
+
+
+async def _suppressed_dedupe_keys(
+    session: AsyncSession, definition_id: UUID, keys: list[str]
+) -> set[str]:
+    """Return which of ``keys`` were already suppressed for this definition (BM-34 decisions)."""
+    from modules.dashboard.models import GadgetHighlightSuppression
+
+    return set(
+        (
+            await session.execute(
+                select(GadgetHighlightSuppression.dedupe_key).where(
+                    GadgetHighlightSuppression.definition_id == definition_id,
+                    GadgetHighlightSuppression.dedupe_key.in_(keys),
+                )
+            )
+        ).scalars()
+    )
+
+
+async def _record_suppression(session: AsyncSession, definition_id: UUID, dedupe_key: str) -> None:
+    """Persist a suppress decision idempotently so a rescan of the same version cannot deliver it.
+
+    Keyed by the locked, scoped ``definition_id``; the table has no workspace column. Safe to call
+    twice for the same key (``ON CONFLICT DO NOTHING``).
+    """
+    from modules.dashboard.models import GadgetHighlightSuppression
+
+    await session.execute(
+        pg_insert(GadgetHighlightSuppression)
+        .values(definition_id=definition_id, dedupe_key=dedupe_key)
+        .on_conflict_do_nothing()
+    )
+
+
 async def _deliver_highlight_matches(
     session: AsyncSession,
     scan: _HighlightScan,
@@ -369,7 +417,6 @@ async def _deliver_highlight_matches(
     (writes happen under the definition lock). Updates ``progress.rule_last_notified``.
     """
     from modules.dashboard.highlights import match_compiled, notification_allowed
-    from modules.dashboard.models import GadgetHighlightSuppression
     from modules.notifications.public import NotificationEmit, NotificationEvidence, emit
 
     now = datetime.now(UTC)
@@ -382,14 +429,8 @@ async def _deliver_highlight_matches(
     }
     tz: tzinfo = UTC
     if any(rule.quiet_start for rule in rules):
-        tz = _owner_tzinfo(
-            (
-                await settings_public.read_owner_preferences(
-                    session,
-                    actor_user_id=owner_id,
-                    multi_workspace_enabled=multi_workspace_enabled,
-                )
-            ).timezone
+        tz = await _owner_timezone(
+            session, owner_id, multi_workspace_enabled=multi_workspace_enabled
         )
     found = [
         (item, match)
@@ -407,15 +448,8 @@ async def _deliver_highlight_matches(
 
     suppressed_keys: set[str] = set()
     if found:
-        suppressed_keys = set(
-            (
-                await session.execute(
-                    select(GadgetHighlightSuppression.dedupe_key).where(
-                        GadgetHighlightSuppression.definition_id == definition.id,
-                        GadgetHighlightSuppression.dedupe_key.in_([key_of(i, m) for i, m in found]),
-                    )
-                )
-            ).scalars()
+        suppressed_keys = await _suppressed_dedupe_keys(
+            session, definition.id, [key_of(i, m) for i, m in found]
         )
     matches: list[DashboardHighlightRead] = []
     for item, match in found:
@@ -434,14 +468,7 @@ async def _deliver_highlight_matches(
                 expires is not None and now >= expires
             ):  # expiry is permanent until edit
                 # Keyed by the locked, scoped definition.id above; the table has no workspace column.
-                await session.execute(
-                    pg_insert(GadgetHighlightSuppression)
-                    .values(
-                        definition_id=definition.id,
-                        dedupe_key=dedupe_key,
-                    )
-                    .on_conflict_do_nothing()
-                )
+                await _record_suppression(session, definition.id, dedupe_key)
         matches.append(_highlight_read(item, match))
         if deliver and await emit(
             session,
@@ -686,6 +713,28 @@ def _match_items(items: Sequence[Any], compiled: Sequence[Any]) -> list[list[Any
     return [match_compiled(item.excerpt, compiled, source_id=item.source_id) for item in items]
 
 
+async def _match_items_bounded(items: list[Any], compiled: Any) -> list[Any]:
+    """Run the CPU-bound rule matching off the event loop under the preview time budget.
+
+    Returns per-item match lists aligned with ``items``. Raises ``GatewayTimeoutError`` with the
+    ``preview_timeout`` code when matching exceeds ``PREVIEW_MATCH_TIMEOUT_SECONDS``; the worker
+    thread cannot be cancelled, so it finishes in the background and its result is discarded.
+    """
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_match_items, items, compiled),
+            PREVIEW_MATCH_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise GatewayTimeoutError(
+            detail={
+                "code": "preview_timeout",
+                "message": "Preview took too long",
+                "details": {},
+            },
+        ) from exc
+
+
 async def preview_highlights(
     session: AsyncSession,
     payload: HighlightPreviewRequest,
@@ -745,38 +794,12 @@ async def preview_highlights(
             item for item in page.items if not item_scope or str(item.document_id) in item_scope
         ]
         scanned += len(items)
-        # Regex work is CPU-bound; keep it off the event loop.
-        try:
-            per_item = await asyncio.wait_for(
-                asyncio.to_thread(_match_items, items, compiled),
-                PREVIEW_MATCH_TIMEOUT_SECONDS,
-            )
-        except TimeoutError as exc:
-            raise GatewayTimeoutError(
-                detail={
-                    "code": "preview_timeout",
-                    "message": "Preview took too long",
-                    "details": {},
-                },
-            ) from exc
+        per_item = await _match_items_bounded(items, compiled)
         for item, item_matches in zip(items, per_item, strict=True):
             for match in item_matches:
                 counts[match.rule_id] += 1
                 if len(matches) < PREVIEW_MAX_MATCHES:
-                    matches.append(
-                        DashboardHighlightRead(
-                            document_id=item.document_id,
-                            document_version_id=item.document_version_id,
-                            source_id=item.source_id,
-                            title=item.title,
-                            observed_at=item.observed_at,
-                            rule_id=match.rule_id,
-                            matched_keywords=list(match.matched_keywords),
-                            severity=match.severity,
-                            notify=match.notify,
-                            reason=match.reason,
-                        )
-                    )
+                    matches.append(_highlight_read(item, match))
         cursor = page.next_cursor
         if cursor is None:
             break
