@@ -23,14 +23,14 @@ SESSION_LOCK_ALLOWLIST = {
     "modules/agents/worker.py",
     "modules/agents/harness.py",
     # HNSW CREATE INDEX CONCURRENTLY serialised per index name on an autocommit connection.
-    "modules/search/indexing.py",
+    "modules/search/indexing/_vector_index.py",
 }
 DIRECT_ENGINE_USERS = SESSION_LOCK_ALLOWLIST - {"modules/agents/harness.py"}
 # Session ``SET``/``RESET`` is allowed only where the connection never passes through the pooler:
-# * indexing.py lifts statement/lock timeouts for the autocommit HNSW build on ``direct_engine`` (asserted by
+# * indexing/_vector_index.py lifts statement/lock timeouts for the autocommit HNSW build on ``direct_engine`` (asserted by
 #   DIRECT_ENGINE_USERS; CREATE INDEX CONCURRENTLY cannot run in a transaction, so SET LOCAL is impossible);
 # * migration_support.py runs only inside Alembic, whose env.py always prefers DATABASE_DIRECT_URL (asserted below).
-SESSION_SET_ALLOWLIST = {"modules/search/indexing.py", "core/migration_support.py"}
+SESSION_SET_ALLOWLIST = {"modules/search/indexing/_vector_index.py", "core/migration_support.py"}
 # Cypher (Neo4j) strings start with SET too; they never reach PostgreSQL.
 CYPHER_ALLOWLIST = {
     "modules/knowledge/temporal/graph_fence.py",
@@ -121,7 +121,7 @@ def test_session_set_allowlist_runs_only_on_direct_connections() -> None:
             and NON_LOCAL_SET.match(node.value)
             for node in ast.walk(tree)
         ), f"{rel} no longer issues a session SET; drop it from the allowlist"
-    assert "modules/search/indexing.py" in DIRECT_ENGINE_USERS
+    assert "modules/search/indexing/_vector_index.py" in DIRECT_ENGINE_USERS
     env = (ROOT / "infrastructure/postgres/migrations/env.py").read_text(encoding="utf-8")
     assert 'os.environ.get("DATABASE_DIRECT_URL") or os.environ.get("DATABASE_URL")' in env
 

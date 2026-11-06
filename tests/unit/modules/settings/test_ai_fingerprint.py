@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -15,6 +15,7 @@ from core.model_gateway.schemas import (
     PrivacySettings,
 )
 from modules.settings import public
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 SECRET = "sk-super-secret"
@@ -48,12 +49,14 @@ async def _fp(
     config: AIExecutionConfig | None, role: str = "chat", owner: object = object()
 ) -> str | None:
     with (
-        patch.object(
-            public,
+        patch_split_attr(
+            "modules.settings",
             "resolve_workspace_owner_context",
             AsyncMock(return_value=owner if config else None),
         ),
-        patch.object(public, "get_ai_execution_config", AsyncMock(return_value=config)),
+        patch_split_attr(
+            "modules.settings", "get_ai_execution_config", AsyncMock(return_value=config)
+        ),
     ):
         return await public.read_ai_policy_fingerprint(
             AsyncMock(), Settings(), None, workspace_id=WS, role=role

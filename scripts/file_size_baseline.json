@@ -10,8 +10,5 @@
   "modules/connectors/worker.py": 2039,
   "modules/knowledge/documents/worker.py": 1671,
   "modules/knowledge/entities/worker.py": 2034,
-  "modules/knowledge/observations/public.py": 1855,
-  "modules/news/stories.py": 1985,
-  "modules/search/indexing.py": 2204,
-  "modules/settings/public.py": 2151
+  "modules/knowledge/observations/public.py": 1855
 }

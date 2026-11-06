@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from core.errors import ConflictError
 from modules.search import indexing
+from tests.unit.split_patching import patch_split
 
 pytestmark = pytest.mark.asyncio
 
@@ -169,8 +170,8 @@ async def test_commit_precedes_build_and_relock_follows(monkeypatch: pytest.Monk
         log.append(f"admit:lock={kwargs['lock']}:expected={kwargs['expected']}")
         return "NEW-FENCE"
 
-    monkeypatch.setattr(indexing, "build_vector_index_concurrently", build)
-    monkeypatch.setattr(indexing, "_admit", admit)
+    patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
+    patch_split(monkeypatch, "modules.search.indexing", "_admit", admit)
     session = _Session(log, generation)
 
     result = await indexing._build_index_outside_transaction(session, ctx, generation)  # type: ignore[arg-type]
@@ -207,8 +208,8 @@ async def test_state_change_during_build_rolls_back_without_activating(
     async def admit(*_a: Any, **_k: Any) -> str:
         return "F"
 
-    monkeypatch.setattr(indexing, "build_vector_index_concurrently", build)
-    monkeypatch.setattr(indexing, "_admit", admit)
+    patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
+    patch_split(monkeypatch, "modules.search.indexing", "_admit", admit)
     session = _Session(log, changed, unfinished)
     assert (
         await indexing._build_index_outside_transaction(session, _ctx(generation.id), generation)
@@ -229,8 +230,8 @@ async def test_denied_admission_after_build_rolls_back_and_skips(
     async def admit(*_a: Any, **_k: Any) -> str:
         raise ConflictError(detail="Workspace access changed")
 
-    monkeypatch.setattr(indexing, "build_vector_index_concurrently", build)
-    monkeypatch.setattr(indexing, "_admit", admit)
+    patch_split(monkeypatch, "modules.search.indexing", "build_vector_index_concurrently", build)
+    patch_split(monkeypatch, "modules.search.indexing", "_admit", admit)
     session = _Session(log, generation)
     assert (
         await indexing._build_index_outside_transaction(session, _ctx(generation.id), generation)

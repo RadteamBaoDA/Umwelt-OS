@@ -1,0 +1,140 @@
+"""News story clustering and member-visible story reads (facade over private submodules).
+
+The implementation lives in ``_common`` (constants, text/URL normalisation, attribution), ``_cluster``, ``_cursors``, ``_live``, ``_member`` and ``_read``; every name that was importable from the former single module stays importable here."""
+
+from __future__ import annotations
+
+from core.workspaces import public as workspaces
+from modules.connectors.public import get_provider_spec
+from modules.knowledge.documents import public as documents
+from modules.news import topics
+from modules.news.schemas import StoryCursor, StoryEvidence
+from modules.news.stories._cluster import (
+    _fuzzy_candidate,
+    _lock_and_find_identity_story,
+    _register_story_identities,
+    cluster_observation,
+)
+from modules.news.stories._common import (
+    _LIVE_STATUS,
+    _MD_IMAGE,
+    _MD_INLINE_HEADING,
+    _MD_INLINE_MARK,
+    _MD_LINE_MARK,
+    _MD_LINK,
+    _RELEASE_PREFIX,
+    ALGORITHM_VERSION,
+    FUZZY_THRESHOLD,
+    FUZZY_WINDOW,
+    MAX_CANDIDATES,
+    LiveStoryRows,
+    _admit,
+    _attribution,
+    _canonical_url,
+    _identity_keys,
+    _initial_signal_provenance,
+    _plain_excerpt,
+    _stored_attribution,
+    _tokens,
+    _translation_revision,
+)
+from modules.news.stories._cursors import (
+    _DETAIL_CURSOR_FIELDS,
+    DETAIL_CURSOR_DOMAIN,
+    DETAIL_CURSOR_SORT,
+    _decode_cursor,
+    _decode_detail_cursor,
+    _encode_cursor,
+    _encode_detail_cursor,
+    _filter_hash,
+)
+from modules.news.stories._live import (
+    _candidate_story_page,
+    _current_entity_ids,
+    _current_projection,
+    _enrich_with_relevance,
+    _evidence_still_current,
+    _filter_live_story,
+    _group_live_supports,
+    _live_story_rows,
+    _next_story_cursor,
+    _ranked_support_rows,
+    _resolve_source_scope,
+)
+from modules.news.stories._member import (
+    _member_evidence,
+    _member_get_story,
+    _member_list_stories,
+    _member_obs,
+    _representative,
+)
+from modules.news.stories._read import (
+    _detail_support_is_current,
+    get_story,
+    list_stories,
+    read_story_translation_input,
+)
+from modules.sources import public as sources
+
+__all__ = [
+    "ALGORITHM_VERSION",
+    "MAX_CANDIDATES",
+    "FUZZY_WINDOW",
+    "FUZZY_THRESHOLD",
+    "_admit",
+    "LiveStoryRows",
+    "_MD_IMAGE",
+    "_MD_LINK",
+    "_MD_LINE_MARK",
+    "_MD_INLINE_MARK",
+    "_MD_INLINE_HEADING",
+    "_RELEASE_PREFIX",
+    "_plain_excerpt",
+    "_canonical_url",
+    "_identity_keys",
+    "_tokens",
+    "_initial_signal_provenance",
+    "_LIVE_STATUS",
+    "_translation_revision",
+    "_attribution",
+    "_stored_attribution",
+    "_lock_and_find_identity_story",
+    "_register_story_identities",
+    "cluster_observation",
+    "_fuzzy_candidate",
+    "_filter_hash",
+    "_encode_cursor",
+    "_decode_cursor",
+    "DETAIL_CURSOR_DOMAIN",
+    "DETAIL_CURSOR_SORT",
+    "_DETAIL_CURSOR_FIELDS",
+    "_encode_detail_cursor",
+    "_decode_detail_cursor",
+    "_resolve_source_scope",
+    "_current_projection",
+    "_candidate_story_page",
+    "_ranked_support_rows",
+    "_group_live_supports",
+    "_live_story_rows",
+    "_current_entity_ids",
+    "_filter_live_story",
+    "_enrich_with_relevance",
+    "_evidence_still_current",
+    "_next_story_cursor",
+    "_member_obs",
+    "_member_evidence",
+    "_representative",
+    "_member_list_stories",
+    "_member_get_story",
+    "list_stories",
+    "_detail_support_is_current",
+    "get_story",
+    "read_story_translation_input",
+    "workspaces",
+    "documents",
+    "topics",
+    "sources",
+    "StoryCursor",
+    "StoryEvidence",
+    "get_provider_spec",
+]

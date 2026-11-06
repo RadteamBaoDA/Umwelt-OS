@@ -16,6 +16,7 @@ from tests.unit.modules.search.test_indexing_fences import (
     _generation,
     _patch_generation_run,
 )
+from tests.unit.split_patching import patch_split
 
 pytestmark = pytest.mark.asyncio
 
@@ -39,12 +40,12 @@ def _setup(
     async def commit(*_a: Any, publish: bool = True, **_k: Any) -> None:
         publishes.append(publish)
 
-    monkeypatch.setattr(indexing, "_commit_index_change", commit)
+    patch_split(monkeypatch, "modules.search.indexing", "_commit_index_change", commit)
 
     async def boom(*_a: Any, **_k: Any) -> None:
         raise AssertionError("must not finalize on a keyset probe")
 
-    monkeypatch.setattr(indexing, "activate_generation", boom)
+    patch_split(monkeypatch, "modules.search.indexing", "activate_generation", boom)
     return factory, generation, publishes
 
 
@@ -77,14 +78,19 @@ async def test_keyset_probe_never_finalizes_running_generation(
 async def test_deadline_stops_new_items(monkeypatch: pytest.MonkeyPatch) -> None:
     factory, _g, _p = _setup(monkeypatch, 3)
     clock = {"t": 0.0}
-    monkeypatch.setattr(indexing, "time", SimpleNamespace(monotonic=lambda: clock["t"]))
+    patch_split(
+        monkeypatch,
+        "modules.search.indexing",
+        "time",
+        SimpleNamespace(monotonic=lambda: clock["t"]),
+    )
     orig = indexing._recheck_prepared
 
     async def recheck(*a: Any, **k: Any) -> Any:
         clock["t"] = 1000.0  # first item finishes after the run deadline
         return await orig(*a, **k)
 
-    monkeypatch.setattr(indexing, "_recheck_prepared", recheck)
+    patch_split(monkeypatch, "modules.search.indexing", "_recheck_prepared", recheck)
     done = await indexing._index_generation(factory, None, SETTINGS, uuid4(), WORKSPACE)  # type: ignore[arg-type]
     assert done == 1
 

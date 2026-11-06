@@ -12,6 +12,7 @@ import pytest
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.news import stories
 from modules.news.schemas import StoryFilter
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=2)
@@ -231,9 +232,13 @@ async def _list(
     if not current:
         proj.document_version_id = uuid4()
     with (
-        patch.object(stories, "_admit", AsyncMock(return_value=FENCE)),
-        patch.object(stories, "_resolve_source_scope", AsyncMock(return_value=((source,), True))),
-        patch.object(stories, "_live_story_rows", AsyncMock(return_value=live)),
+        patch_split_attr("modules.news.stories", "_admit", AsyncMock(return_value=FENCE)),
+        patch_split_attr(
+            "modules.news.stories",
+            "_resolve_source_scope",
+            AsyncMock(return_value=((source,), True)),
+        ),
+        patch_split_attr("modules.news.stories", "_live_story_rows", AsyncMock(return_value=live)),
         patch.object(stories.topics, "get_topic", AsyncMock(return_value=topic)),
         patch.object(
             stories.documents, "get_news_document_projection", AsyncMock(return_value=proj)
@@ -295,8 +300,8 @@ async def test_list_stories_drops_changed_evidence_and_filters() -> None:
 async def test_list_stories_topic_profile_requires_lexical_or_entity_hit() -> None:
     """An active topic profile keeps lexically matching stories and drops the rest."""
     source = uuid4()
-    entities_patch = patch.object(
-        stories, "_current_entity_ids", AsyncMock(return_value=(set(), None))
+    entities_patch = patch_split_attr(
+        "modules.news.stories", "_current_entity_ids", AsyncMock(return_value=(set(), None))
     )
     hit = SimpleNamespace(is_active=True, name="port", description=None, keywords=[], entity_ids=[])
     miss = SimpleNamespace(
@@ -320,11 +325,15 @@ async def test_get_story_returns_current_page_or_continuation() -> None:
 
     async def run(projection: SimpleNamespace | None) -> Any:
         with (
-            patch.object(stories, "_admit", AsyncMock(return_value=FENCE)),
-            patch.object(
-                stories, "_resolve_source_scope", AsyncMock(return_value=((source,), False))
+            patch_split_attr("modules.news.stories", "_admit", AsyncMock(return_value=FENCE)),
+            patch_split_attr(
+                "modules.news.stories",
+                "_resolve_source_scope",
+                AsyncMock(return_value=((source,), False)),
             ),
-            patch.object(stories, "_live_story_rows", AsyncMock(return_value=live)) as rows,
+            patch_split_attr(
+                "modules.news.stories", "_live_story_rows", AsyncMock(return_value=live)
+            ) as rows,
             patch.object(
                 stories.documents,
                 "get_news_document_projection",
@@ -358,9 +367,13 @@ async def test_get_story_without_any_match_returns_none_or_scan_continuation() -
         [], False, {"support_scan_limit"}, None, {}, (uuid4(), uuid4(), uuid4())
     )
     with (
-        patch.object(stories, "_admit", AsyncMock(return_value=FENCE)),
-        patch.object(stories, "_resolve_source_scope", AsyncMock(return_value=((uuid4(),), False))),
-        patch.object(stories, "_live_story_rows", AsyncMock(return_value=empty)),
+        patch_split_attr("modules.news.stories", "_admit", AsyncMock(return_value=FENCE)),
+        patch_split_attr(
+            "modules.news.stories",
+            "_resolve_source_scope",
+            AsyncMock(return_value=((uuid4(),), False)),
+        ),
+        patch_split_attr("modules.news.stories", "_live_story_rows", AsyncMock(return_value=empty)),
     ):
         detail = await stories.get_story(AsyncMock(), uuid4(), (), **KW)
         assert detail.story is None and detail.incomplete_reasons == [
