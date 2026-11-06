@@ -35,7 +35,69 @@ from modules.knowledge.temporal.models import (
 )
 
 
-async def _finish(  # noqa: C901, PLR0912, PLR0915
+def _apply_finish_operation(
+    partition: GraphPartition | None,
+    operation: GraphOperation,
+    token: UUID,
+    status: str,
+    error_code: str | None,
+) -> GraphPartition:
+    """Stamp the finished operation and update the partition lease/uncertainty marker.
+
+    Operates on already-locked ORM rows with no I/O: records status, error and the capped
+    exponential retry backoff, releases the partition lease when ``token`` still owns it, and sets
+    or clears ``uncertain_operation_id`` (durable unknown blocks the partition until recovery).
+    Raises ``RuntimeError`` if the partition row is missing; returns it for the caller.
+    """
+    operation.status, operation.error_code = status, error_code
+    operation.lease_owner, operation.lease_expires_at = None, None
+    operation.next_attempt_at = datetime.now(UTC) + timedelta(
+        seconds=min(300, 5 * 2 ** min(operation.attempts, 5))
+    )
+    if partition is None:
+        raise RuntimeError("invariant violated: partition must not be None")
+    if partition.lease_token == token:
+        partition.lease_token, partition.lease_expires_at = None, None
+    if status == "reconcile_needed":
+        partition.uncertain_operation_id = operation.id
+    elif partition.uncertain_operation_id == operation.id:
+        partition.uncertain_operation_id = None
+    return partition
+
+
+def _apply_finish_mapping(
+    operation: GraphOperation,
+    mapping: GraphMapping,
+    status: str,
+    error_code: str | None,
+    external_state: str | None,
+    current_revision: bool,
+) -> None:
+    """Update the locked mapping row for a finished attempt, only for the current revision.
+
+    No I/O. A stale operation (mapping already moved to a newer desired revision) never touches
+    the mapping, so an older success cannot certify the newer revision.
+    """
+    if status == "reconcile_needed" and current_revision:
+        mapping.status = "tombstoned" if mapping.tombstoned else "reconcile_needed"
+    if external_state and current_revision:
+        mapping.external_state = external_state
+    if status == "succeeded" and current_revision:
+        mapping.applied_revision, mapping.applied_digest = (
+            operation.desired_revision,
+            operation.desired_digest,
+        )
+        mapping.status = "tombstoned" if mapping.tombstoned else "synchronized"
+        mapping.applied_at = datetime.now(UTC)
+    elif current_revision and status != "reconcile_needed" and not mapping.tombstoned:
+        # An older intent may converge after a correction queued a newer
+        # desired revision. Its success cannot certify that new revision.
+        mapping.status = "pending" if status == "succeeded" else status
+    if current_revision:
+        mapping.error_code = error_code
+
+
+async def _finish(
     factory: async_sessionmaker[AsyncSession],
     adm: _Admission,
     operation_id: UUID,
@@ -67,56 +129,10 @@ async def _finish(  # noqa: C901, PLR0912, PLR0915
             mapping.desired_revision == operation.desired_revision
             and mapping.desired_digest == operation.desired_digest
         )
-        operation.status, operation.error_code = status, error_code
-        operation.lease_owner, operation.lease_expires_at = None, None
-        operation.next_attempt_at = datetime.now(UTC) + timedelta(
-            seconds=min(300, 5 * 2 ** min(operation.attempts, 5))
+        _apply_finish_operation(partition, operation, token, status, error_code)
+        _apply_finish_mapping(
+            operation, mapping, status, error_code, external_state, current_revision
         )
-        if partition is None:
-            raise RuntimeError("invariant violated: partition must not be None")
-        if partition.lease_token == token:
-            if partition is None:
-                raise RuntimeError("invariant violated: partition must not be None")
-            partition.lease_token, partition.lease_expires_at = None, None
-        if status == "reconcile_needed":
-            if operation is None:
-                raise RuntimeError("invariant violated: operation must not be None")
-            if partition is None:
-                raise RuntimeError("invariant violated: partition must not be None")
-            partition.uncertain_operation_id = operation.id
-            if current_revision:
-                if mapping is None:
-                    raise RuntimeError("invariant violated: mapping must not be None")
-                mapping.status = "tombstoned" if mapping.tombstoned else "reconcile_needed"
-        elif partition.uncertain_operation_id == operation.id:
-            if partition is None:
-                raise RuntimeError("invariant violated: partition must not be None")
-            partition.uncertain_operation_id = None
-        if external_state and current_revision:
-            if mapping is None:
-                raise RuntimeError("invariant violated: mapping must not be None")
-            mapping.external_state = external_state
-        if status == "succeeded" and current_revision:
-            if mapping is None:
-                raise RuntimeError("invariant violated: mapping must not be None")
-            if operation is None:
-                raise RuntimeError("invariant violated: operation must not be None")
-            mapping.applied_revision, mapping.applied_digest = (
-                operation.desired_revision,
-                operation.desired_digest,
-            )
-            mapping.status = "tombstoned" if mapping.tombstoned else "synchronized"
-            mapping.applied_at = datetime.now(UTC)
-        elif current_revision and status != "reconcile_needed" and not mapping.tombstoned:
-            # An older intent may converge after a correction queued a newer
-            # desired revision. Its success cannot certify that new revision.
-            if mapping is None:
-                raise RuntimeError("invariant violated: mapping must not be None")
-            mapping.status = "pending" if status == "succeeded" else status
-        if current_revision:
-            if mapping is None:
-                raise RuntimeError("invariant violated: mapping must not be None")
-            mapping.error_code = error_code
         if mapping is None:
             raise RuntimeError("invariant violated: mapping must not be None")
         if operation is None:

@@ -35,6 +35,43 @@ ERASURE_TABLES: tuple[str, ...] = (
 ERASURE_OWNER = AccountErasureOwner(ERASURE_TABLES)
 
 
+async def _unlink_orphan_original(
+    factory: Any, storage: Any, scope: AccountErasureScope, uri: str
+) -> None:
+    """Unlink one orphan original unless another workspace still references its raw URI.
+
+    Re-authorizes the erasure, takes the raw-URI transaction lock, rejects the unlink with
+    ``RuntimeError`` when a peer document or cleanup receipt shares the URI, then deletes the
+    file (``missing_ok=False`` confirms the file exists) and rolls the read-only session back.
+    """
+    from modules.knowledge.documents.public import lock_raw_uri_identity
+
+    async with factory() as session:
+        await authorize_account_erasure(session, scope)
+        await lock_raw_uri_identity(session, uri)
+        peer = await session.scalar(
+            select(Document.id)
+            .where(
+                Document.raw_uri == uri,
+                Document.workspace_id != scope.workspace_id,
+            )
+            .limit(1)
+        )
+        peer_receipt = await session.scalar(
+            select(DocumentCleanupOperation.id)
+            .where(
+                DocumentCleanupOperation.raw_uri == uri,
+                DocumentCleanupOperation.workspace_id != scope.workspace_id,
+            )
+            .limit(1)
+        )
+        if peer is not None or peer_receipt is not None:
+            raise RuntimeError("Scoped original is referenced by another workspace")
+        # delete(missing_ok=False) confirms absence itself (Path.exists semantics).
+        await storage.delete(uri, missing_ok=False)
+        await session.rollback()
+
+
 async def erase_account_storage_page(
     ctx: dict[str, Any],
     scope: AccountErasureScope,
@@ -75,30 +112,7 @@ async def erase_account_storage_page(
                 # "file" probes always carry a key
                 if uri is None:
                     raise RuntimeError("invariant violated: uri must not be None")
-                async with factory() as session:
-                    await authorize_account_erasure(session, scope)
-                    await lock_raw_uri_identity(session, uri)
-                    peer = await session.scalar(
-                        select(Document.id)
-                        .where(
-                            Document.raw_uri == uri,
-                            Document.workspace_id != scope.workspace_id,
-                        )
-                        .limit(1)
-                    )
-                    peer_receipt = await session.scalar(
-                        select(DocumentCleanupOperation.id)
-                        .where(
-                            DocumentCleanupOperation.raw_uri == uri,
-                            DocumentCleanupOperation.workspace_id != scope.workspace_id,
-                        )
-                        .limit(1)
-                    )
-                    if peer is not None or peer_receipt is not None:
-                        raise RuntimeError("Scoped original is referenced by another workspace")
-                    # delete(missing_ok=False) confirms absence itself (Path.exists semantics).
-                    await storage.delete(uri, missing_ok=False)
-                    await session.rollback()
+                await _unlink_orphan_original(factory, storage, scope, uri)
                 return False, {"kind": "orphans"}
             model = Document if kind == "documents" else DocumentCleanupOperation
             async with factory() as session:

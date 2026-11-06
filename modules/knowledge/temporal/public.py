@@ -628,6 +628,104 @@ async def mapping_statuses(
     ]
 
 
+async def _search_partition_episodes(
+    session: AsyncSession,
+    partition_id: UUID,
+    now: datetime,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> tuple[UUID, ...]:
+    """Validate one search bucket and return its active episode ids.
+
+    Read-only. Raises ``ValueError`` when the partition is missing, uncertain or leased, its
+    source generation is unavailable, a dispatch has not ceased, mappings exceed the lifetime
+    bound or are unconverged, deletion is unproven, or active evidence fences are stale.
+
+    """
+    partition = await session.scalar(
+        select(GraphPartition).where(
+            GraphPartition.id == partition_id,
+            GraphPartition.workspace_id == scope.workspace_id,
+        )
+    )
+    if (
+        partition is None
+        or partition.uncertain_operation_id is not None
+        or (partition.lease_expires_at is not None and partition.lease_expires_at > now)
+    ):
+        raise ValueError("Graph partition requires recovery or is busy")
+    source = await sources.get_connector_source(
+        session,
+        partition.source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if source is None or source.status != "active" or source.generation != partition.generation:
+        raise ValueError("Graph partition source generation is unavailable")
+    unresolved = await session.scalar(
+        select(GraphDispatch.id)
+        .join(
+            GraphOperation,
+            GraphOperation.id == GraphDispatch.operation_id,
+        )
+        .where(
+            GraphOperation.workspace_id == scope.workspace_id,
+            GraphDispatch.workspace_id == scope.workspace_id,
+            GraphOperation.partition_id == partition_id,
+            GraphDispatch.completed_at.is_(None),
+            GraphDispatch.cessation_verified_at.is_(None),
+        )
+        .limit(1)
+    )
+    if unresolved is not None:
+        raise ValueError("Graph partition dispatch has not ceased")
+    rows = (
+        await session.scalars(
+            select(GraphMapping)
+            .where(
+                GraphMapping.workspace_id == scope.workspace_id,
+                GraphMapping.partition_id == partition_id,
+            )
+            .order_by(GraphMapping.id)
+            .limit(101)
+        )
+    ).all()
+    if len(rows) > 100:
+        raise ValueError("Graph partition exceeds its lifetime mapping bound")
+    active = [row for row in rows if not row.tombstoned]
+    fences = await documents.review_version_fences(
+        session,
+        [row.document_version_id for row in active],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    for row in rows:
+        if (
+            row.source_id != partition.source_id
+            or row.source_generation != partition.generation
+            or row.applied_revision != row.desired_revision
+            or row.applied_digest != row.desired_digest
+            or row.error_code is not None
+        ):
+            raise ValueError("Graph partition contains unconverged mappings")
+        if row.tombstoned:
+            if row.external_state != "absent":
+                raise ValueError("Graph partition deletion is not proven")
+        else:
+            fence = fences.get(row.document_version_id)
+            if (
+                row.status != "synchronized"
+                or row.external_state != "present"
+                or fence is None
+                or fence.document_id != row.document_id
+                or fence.source_id != row.source_id
+                or fence.current_source_generation != row.source_generation
+            ):
+                raise ValueError("Graph partition evidence is unavailable")
+    return tuple(row.episode_id for row in active)
+
+
 async def select_search_partitions(
     session: AsyncSession,
     partition_ids: list[UUID],
@@ -650,87 +748,13 @@ async def select_search_partitions(
     result = {}
     now = datetime.now(UTC)
     for partition_id in partition_ids:
-        partition = await session.scalar(
-            select(GraphPartition).where(
-                GraphPartition.id == partition_id,
-                GraphPartition.workspace_id == scope.workspace_id,
-            )
-        )
-        if (
-            partition is None
-            or partition.uncertain_operation_id is not None
-            or (partition.lease_expires_at is not None and partition.lease_expires_at > now)
-        ):
-            raise ValueError("Graph partition requires recovery or is busy")
-        source = await sources.get_connector_source(
+        result[partition_id] = await _search_partition_episodes(
             session,
-            partition.source_id,
+            partition_id,
+            now,
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
         )
-        if source is None or source.status != "active" or source.generation != partition.generation:
-            raise ValueError("Graph partition source generation is unavailable")
-        unresolved = await session.scalar(
-            select(GraphDispatch.id)
-            .join(
-                GraphOperation,
-                GraphOperation.id == GraphDispatch.operation_id,
-            )
-            .where(
-                GraphOperation.workspace_id == scope.workspace_id,
-                GraphDispatch.workspace_id == scope.workspace_id,
-                GraphOperation.partition_id == partition_id,
-                GraphDispatch.completed_at.is_(None),
-                GraphDispatch.cessation_verified_at.is_(None),
-            )
-            .limit(1)
-        )
-        if unresolved is not None:
-            raise ValueError("Graph partition dispatch has not ceased")
-        rows = (
-            await session.scalars(
-                select(GraphMapping)
-                .where(
-                    GraphMapping.workspace_id == scope.workspace_id,
-                    GraphMapping.partition_id == partition_id,
-                )
-                .order_by(GraphMapping.id)
-                .limit(101)
-            )
-        ).all()
-        if len(rows) > 100:
-            raise ValueError("Graph partition exceeds its lifetime mapping bound")
-        active = [row for row in rows if not row.tombstoned]
-        fences = await documents.review_version_fences(
-            session,
-            [row.document_version_id for row in active],
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        for row in rows:
-            if (
-                row.source_id != partition.source_id
-                or row.source_generation != partition.generation
-                or row.applied_revision != row.desired_revision
-                or row.applied_digest != row.desired_digest
-                or row.error_code is not None
-            ):
-                raise ValueError("Graph partition contains unconverged mappings")
-            if row.tombstoned:
-                if row.external_state != "absent":
-                    raise ValueError("Graph partition deletion is not proven")
-            else:
-                fence = fences.get(row.document_version_id)
-                if (
-                    row.status != "synchronized"
-                    or row.external_state != "present"
-                    or fence is None
-                    or fence.document_id != row.document_id
-                    or fence.source_id != row.source_id
-                    or fence.current_source_generation != row.source_generation
-                ):
-                    raise ValueError("Graph partition evidence is unavailable")
-        result[partition_id] = tuple(row.episode_id for row in active)
     return result
 
 

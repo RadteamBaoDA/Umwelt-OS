@@ -58,15 +58,12 @@ def register_version_superseded_hook(hook: Callable[[AsyncSession, UUID], Awaita
         _superseded_version_hooks.append(hook)
 
 
-async def backfill_current_chunks(
-    session: AsyncSession, limit: int = 2, *, multi_workspace_enabled: bool
-) -> int:
-    """Fill legacy manual revisions created before chunking was enabled.
+async def _backfill_candidates(session: AsyncSession, limit: int) -> list[tuple[UUID, UUID, int]]:
+    """Read a bounded window of current versions that still lack chunks.
 
-    System path: each version's Source resolves its own internal job scope, then admission,
-    Source and Document locks are taken in order and held through publish and commit. One
-    transaction per version, so no two workspaces' locks are ever held together. A version
-    whose lineage is denied or stale is skipped; nothing is rebased onto another actor.
+    Read-only; returns ``(version_id, document_id, version_number)`` for active-source documents
+    whose current version has content but no chunk, ordered by version id and capped at ``limit * 10``.
+
     """
     # Only the three identity columns are needed; selecting entities would load every version body.
     candidates = [
@@ -92,6 +89,20 @@ async def backfill_current_chunks(
             )
         ).all()
     ]
+    return candidates
+
+
+async def backfill_current_chunks(
+    session: AsyncSession, limit: int = 2, *, multi_workspace_enabled: bool
+) -> int:
+    """Fill legacy manual revisions created before chunking was enabled.
+
+    System path: each version's Source resolves its own internal job scope, then admission,
+    Source and Document locks are taken in order and held through publish and commit. One
+    transaction per version, so no two workspaces' locks are ever held together. A version
+    whose lineage is denied or stale is skipped; nothing is rebased onto another actor.
+    """
+    candidates = await _backfill_candidates(session, limit)
     await session.rollback()
     done = 0
     for version_id, document_id, version_number in candidates:

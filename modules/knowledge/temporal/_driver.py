@@ -501,6 +501,42 @@ def _replace_with_hardened_client(
     )
 
 
+async def _execute_guarded_query(
+    transact: Callable[..., Awaitable[list[tuple[list[dict[str, Any]], list[str]]]]],
+    own_database: str,
+    cypher_query_: str,
+    kwargs: dict[str, Any],
+) -> Any:
+    """Run one Graphiti statement through ``transact`` and return ``(rows, None, keys)``.
+
+    Pops Graphiti's ``params``/``routing_``/``database_`` keywords, rejects a foreign database
+    with ``GraphOperationError``, strips NUL bytes from parameters, and resolves the dispatch
+    scope's metadata. An already-existing index (``graph_index_exists``) yields ``None``.
+    """
+    params = dict(kwargs.pop("params", None) or {})
+    routing = kwargs.pop("routing_", None)
+    database = kwargs.pop("database_", None)
+    if database not in (None, own_database):
+        raise GraphOperationError("graph_dispatch_partition_mismatch")
+    params.update(kwargs)
+    read = getattr(routing, "value", routing) == "r"
+    scope = _dispatch_scope.get()
+    metadata = _resolve_query_metadata(cypher_query_, scope)
+    try:
+        results = await transact(
+            [(cypher_query_, _strip_nul_bytes(params))],
+            read=read,
+            metadata=metadata,
+            scope=scope,
+        )
+    except GraphOperationError as exc:
+        if str(exc) == "graph_index_exists":
+            return None
+        raise
+    rows, keys = results[0]
+    return rows, None, keys
+
+
 def _make_driver_type() -> type[Any]:
     """Load Graphiti after telemetry is disabled and wrap every Neo4j query path.
 
@@ -562,28 +598,9 @@ def _make_driver_type() -> type[Any]:
 
             Requires an active dispatch scope except for the health probe and index DDL.
             """
-            params = dict(kwargs.pop("params", None) or {})
-            routing = kwargs.pop("routing_", None)
-            database = kwargs.pop("database_", None)
-            if database not in (None, self._database):
-                raise GraphOperationError("graph_dispatch_partition_mismatch")
-            params.update(kwargs)
-            read = getattr(routing, "value", routing) == "r"
-            scope = _dispatch_scope.get()
-            metadata = _resolve_query_metadata(cypher_query_, scope)
-            try:
-                results = await self._transact(
-                    [(cypher_query_, _strip_nul_bytes(params))],
-                    read=read,
-                    metadata=metadata,
-                    scope=scope,
-                )
-            except GraphOperationError as exc:
-                if str(exc) == "graph_index_exists":
-                    return None
-                raise
-            rows, keys = results[0]
-            return rows, None, keys
+            return await _execute_guarded_query(
+                self._transact, self._database, cypher_query_, kwargs
+            )
 
         def session(self, database: str | None = None) -> Any:
             """Return a protected session retaining the request-scoped prewrite hook."""

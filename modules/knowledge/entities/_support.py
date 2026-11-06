@@ -68,38 +68,16 @@ def _require_cleanup_fences(
         raise HTTPException(status_code=409, detail="Cleanup authority changed")
 
 
-async def support_cleanup_ids(
-    session: AsyncSession,
-    *,
-    source_id: UUID,
-    document_id: UUID | None = None,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> EntitySupportClosure:
-    """Discover (nonlocking, ID-only) the entity support rows of one Source or Document."""
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    workspace_id = scope.workspace_id
+async def _membership_alias_field_support(
+    session: AsyncSession, workspace_id: UUID, membership_ids: list[UUID]
+) -> tuple[set[UUID], list[UUID], list[UUID], bool]:
+    """Read alias and field evidence ids attached to the given memberships (ID-only, nonlocking).
+
+    Each read is capped at ``_CLEANUP_LIMIT``; returns ``(alias_ids, alias_evidence_ids,
+    field_evidence_ids, overflow)`` where ``overflow`` is true when either read had more rows.
+
+    """
     overflow = False
-    member_where = [
-        EntityEvidenceMembership.workspace_id == workspace_id,
-        EntityEvidenceMembership.source_id == source_id,
-    ]
-    if document_id is not None:
-        member_where.append(EntityEvidenceMembership.document_id == document_id)
-    members = list(
-        (
-            await session.execute(
-                select(EntityEvidenceMembership.id, EntityEvidenceMembership.entity_id)
-                .where(*member_where)
-                .order_by(EntityEvidenceMembership.id)
-                .limit(_CLEANUP_LIMIT + 1)
-            )
-        ).all()
-    )
-    overflow |= len(members) > _CLEANUP_LIMIT
-    members = members[:_CLEANUP_LIMIT]
-    membership_ids = [row[0] for row in members]
-    entity_ids = {row[1] for row in members}
     alias_ids: set[UUID] = set()
     alias_evidence_ids: list[UUID] = []
     field_evidence_ids: list[UUID] = []
@@ -144,6 +122,48 @@ async def support_cleanup_ids(
         )
         overflow |= len(field_evidence_ids) > _CLEANUP_LIMIT
         field_evidence_ids = field_evidence_ids[:_CLEANUP_LIMIT]
+    return alias_ids, alias_evidence_ids, field_evidence_ids, overflow
+
+
+async def support_cleanup_ids(
+    session: AsyncSession,
+    *,
+    source_id: UUID,
+    document_id: UUID | None = None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> EntitySupportClosure:
+    """Discover (nonlocking, ID-only) the entity support rows of one Source or Document."""
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    workspace_id = scope.workspace_id
+    overflow = False
+    member_where = [
+        EntityEvidenceMembership.workspace_id == workspace_id,
+        EntityEvidenceMembership.source_id == source_id,
+    ]
+    if document_id is not None:
+        member_where.append(EntityEvidenceMembership.document_id == document_id)
+    members = list(
+        (
+            await session.execute(
+                select(EntityEvidenceMembership.id, EntityEvidenceMembership.entity_id)
+                .where(*member_where)
+                .order_by(EntityEvidenceMembership.id)
+                .limit(_CLEANUP_LIMIT + 1)
+            )
+        ).all()
+    )
+    overflow |= len(members) > _CLEANUP_LIMIT
+    members = members[:_CLEANUP_LIMIT]
+    membership_ids = [row[0] for row in members]
+    entity_ids = {row[1] for row in members}
+    (
+        alias_ids,
+        alias_evidence_ids,
+        field_evidence_ids,
+        support_overflow,
+    ) = await _membership_alias_field_support(session, workspace_id, membership_ids)
+    overflow |= support_overflow
     alias_clauses = [EntityAlias.source_id == source_id] if document_id is None else []
     if alias_ids:
         alias_clauses.append(EntityAlias.id.in_(alias_ids))

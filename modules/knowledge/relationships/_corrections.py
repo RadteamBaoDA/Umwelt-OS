@@ -3,6 +3,7 @@
 Private implementation of ``modules.knowledge.relationships.public``; import from that facade.
 """
 
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -34,6 +35,27 @@ from modules.knowledge.relationships.schemas import (
     CorrectionRelationshipRef,
     CorrectionSupportRef,
 )
+
+
+def _group_correction_supports(
+    supports: Sequence[RelationshipEvidence],
+) -> dict[UUID, list[CorrectionSupportRef]]:
+    """Group evidence rows into public support refs keyed by relationship id, preserving row order."""
+    by_edge: dict[UUID, list[CorrectionSupportRef]] = {}
+    for row in supports:
+        by_edge.setdefault(row.relationship_id, []).append(
+            CorrectionSupportRef(
+                id=row.id,
+                document_id=row.document_id,
+                source_id=row.source_id,
+                document_version_id=row.document_version_id,
+                chunk_id=row.chunk_id,
+                source_membership_id=row.source_membership_id,
+                target_membership_id=row.target_membership_id,
+                confidence=row.confidence,
+            )
+        )
+    return by_edge
 
 
 async def list_correction_relationship_refs(
@@ -110,20 +132,7 @@ async def list_correction_relationship_refs(
         > 200
     ):
         raise ValueError("Correction membership closure exceeds its atomic limit")
-    by_edge: dict[UUID, list[CorrectionSupportRef]] = {}
-    for row in supports:
-        by_edge.setdefault(row.relationship_id, []).append(
-            CorrectionSupportRef(
-                id=row.id,
-                document_id=row.document_id,
-                source_id=row.source_id,
-                document_version_id=row.document_version_id,
-                chunk_id=row.chunk_id,
-                source_membership_id=row.source_membership_id,
-                target_membership_id=row.target_membership_id,
-                confidence=row.confidence,
-            )
-        )
+    by_edge = _group_correction_supports(supports)
     return [
         CorrectionRelationshipRef(
             id=edge.id,
