@@ -159,6 +159,40 @@ class HarnessContext:
         except Exception as exc:
             raise RunCancelled("Run lease connection is unavailable") from exc
 
+    async def _assert_profile_current(self, session: AsyncSession) -> None:
+        """Verify the live agent profile still permits the frozen specialist snapshot.
+
+        No-op for non-profile runs. Raises ``RunCancelled`` when the snapshot id is malformed, the profile was
+        disabled, a snapshot tool permission differs from the current profile, or the snapshot's source scope is
+        no longer a subset of the profile's sources. A deleted profile is tolerated (the run keeps its snapshot).
+        """
+        if self.profile_snapshot is not None:
+            profile_id = self.profile_snapshot.get("id")
+            if not isinstance(profile_id, str):
+                raise RunCancelled("Run profile snapshot is invalid")
+            profile = await session.scalar(
+                select(AgentProfile).where(
+                    AgentProfile.workspace_id == self.scope.workspace_id,
+                    AgentProfile.profile_id == profile_id,
+                )
+            )
+            if profile is not None:
+                if not profile.enabled:
+                    raise RunCancelled("Agent profile is disabled")
+                current_tools = {
+                    item.get("name"): item
+                    for item in profile.allowed_tools
+                    if isinstance(item, dict)
+                }
+                if any(
+                    current_tools.get(item.get("name")) != item
+                    for item in self.profile_snapshot.get("allowed_tools", [])
+                ):
+                    raise RunCancelled("Agent profile tool permission changed")
+                current_sources = {str(item) for item in profile.source_ids}
+                if not set(self.profile_snapshot.get("source_ids", [])) <= current_sources:
+                    raise RunCancelled("Agent profile source scope changed")
+
     async def _run_snapshot(self) -> AgentRun:
         """Read the current run and verify workspace epoch, owner, auth session, version, cancellation, and claim fence."""
         async with self.session_factory() as session:
@@ -195,32 +229,7 @@ class HarnessContext:
                 )
             ):
                 raise RunCancelled("Run state or version changed")
-            if self.profile_snapshot is not None:
-                profile_id = self.profile_snapshot.get("id")
-                if not isinstance(profile_id, str):
-                    raise RunCancelled("Run profile snapshot is invalid")
-                profile = await session.scalar(
-                    select(AgentProfile).where(
-                        AgentProfile.workspace_id == self.scope.workspace_id,
-                        AgentProfile.profile_id == profile_id,
-                    )
-                )
-                if profile is not None:
-                    if not profile.enabled:
-                        raise RunCancelled("Agent profile is disabled")
-                    current_tools = {
-                        item.get("name"): item
-                        for item in profile.allowed_tools
-                        if isinstance(item, dict)
-                    }
-                    if any(
-                        current_tools.get(item.get("name")) != item
-                        for item in self.profile_snapshot.get("allowed_tools", [])
-                    ):
-                        raise RunCancelled("Agent profile tool permission changed")
-                    current_sources = {str(item) for item in profile.source_ids}
-                    if not set(self.profile_snapshot.get("source_ids", [])) <= current_sources:
-                        raise RunCancelled("Agent profile source scope changed")
+            await self._assert_profile_current(session)
             detached = AgentRun(
                 id=row.id,
                 workspace_id=row.workspace_id,

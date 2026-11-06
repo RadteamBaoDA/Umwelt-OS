@@ -93,6 +93,33 @@ async def _lock_native_output_fences_for_publication(
     )
 
 
+def _check_slot_replay(
+    row: AgentRun,
+    existing: AgentToolCall | None,
+    tool_ordinal: int,
+    input_source_fences: dict[str, Any] | None,
+    recover_legacy_reservation: bool,
+) -> None:
+    """Reject a tool-slot reservation that disagrees with the persisted run counters or recorded model input.
+
+    A replayed slot must present the same captured model-input evidence, a new slot must be the next ordinal
+    (unless a legacy read-only reservation is being recovered), and an existing slot cannot exceed the persisted
+    tool counter. Raises ``RunIncompatible``; reads only, no side effects.
+    """
+    existing_call = existing.id if existing is not None else None
+    if existing is not None and existing.input_provenance_version == 1:
+        if input_source_fences is None or existing.input_source_fences != input_source_fences:
+            raise RunIncompatible("Tool slot model-input evidence changed")
+    if (
+        existing_call is None
+        and not recover_legacy_reservation
+        and row.tool_calls != tool_ordinal - 1
+    ):
+        raise RunIncompatible("Persisted tool counter has no matching durable action slot")
+    if existing_call is not None and row.tool_calls < tool_ordinal:
+        raise RunIncompatible("Durable action slot exceeds the persisted tool counter")
+
+
 async def _reserve_step(
     context: HarnessContext,
     *,
@@ -147,20 +174,9 @@ async def _reserve_step(
             and row.tool_calls >= tool_ordinal
         )
         if tool_name is not None and tool_ordinal is not None:
-            if existing is not None and existing.input_provenance_version == 1:
-                if (
-                    input_source_fences is None
-                    or existing.input_source_fences != input_source_fences
-                ):
-                    raise RunIncompatible("Tool slot model-input evidence changed")
-            if (
-                existing_call is None
-                and not recover_legacy_reservation
-                and row.tool_calls != tool_ordinal - 1
-            ):
-                raise RunIncompatible("Persisted tool counter has no matching durable action slot")
-            if existing_call is not None and row.tool_calls < tool_ordinal:
-                raise RunIncompatible("Durable action slot exceeds the persisted tool counter")
+            _check_slot_replay(
+                row, existing, tool_ordinal, input_source_fences, recover_legacy_reservation
+            )
         if (
             tool_name is not None
             and existing_call is None

@@ -262,6 +262,51 @@ async def _admission(
     return None, max(run_at, now)
 
 
+async def _document_trigger_admissible(
+    session: AsyncSession,
+    *,
+    trigger_type: str,
+    trigger_key: str,
+    trigger_event_id: str | None,
+    payload: Mapping[str, Any],
+    document_id: UUID | None,
+    document_version_id: UUID | None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Decide whether the Document provenance of a trigger permits planning a run.
+
+    For ``new_document`` triggers the event token must be a canonical UUID matching both the trigger key and
+    event id, and the retained Document evidence must still be current under a freshly admitted access fence;
+    any miss returns False (no run). Other trigger types must carry no Document provenance, else ``ValueError``.
+    """
+    if trigger_type == "new_document":
+        if document_id is None or document_version_id is None:
+            return False
+        event_token = trigger_key.removeprefix("event:")
+        try:
+            event_id = UUID(event_token)
+        except (TypeError, ValueError):
+            return False
+        if trigger_key != f"event:{event_id}" or trigger_event_id != str(event_id):
+            return False
+        fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+        if not await _retained_document_evidence_current(
+            session,
+            payload,
+            event_id=event_id,
+            document_id=document_id,
+            document_version_id=document_version_id,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+            access_fence=fence,
+        ):
+            return False
+    elif document_id is not None or document_version_id is not None:
+        raise ValueError("Document provenance is valid only for new-document runs")
+    return True
+
+
 async def plan_run(
     session: AsyncSession,
     *,
@@ -289,30 +334,18 @@ async def plan_run(
     outcome has a durable slot. The caller commits.
     """
     _require_owner(scope)
-    if trigger_type == "new_document":
-        if document_id is None or document_version_id is None:
-            return None
-        event_token = trigger_key.removeprefix("event:")
-        try:
-            event_id = UUID(event_token)
-        except (TypeError, ValueError):
-            return None
-        if trigger_key != f"event:{event_id}" or trigger_event_id != str(event_id):
-            return None
-        fence = await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-        if not await _retained_document_evidence_current(
-            session,
-            payload,
-            event_id=event_id,
-            document_id=document_id,
-            document_version_id=document_version_id,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-            access_fence=fence,
-        ):
-            return None
-    elif document_id is not None or document_version_id is not None:
-        raise ValueError("Document provenance is valid only for new-document runs")
+    if not await _document_trigger_admissible(
+        session,
+        trigger_type=trigger_type,
+        trigger_key=trigger_key,
+        trigger_event_id=trigger_event_id,
+        payload=payload,
+        document_id=document_id,
+        document_version_id=document_version_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    ):
+        return None
     if apply_conditions and rev.conditions and not evaluate(rev.conditions, dict(payload))[0]:
         return None
     now = datetime.now(UTC)

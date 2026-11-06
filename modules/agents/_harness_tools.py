@@ -701,6 +701,24 @@ async def _settle_effect_state(context: HarnessContext, outcome: _ToolOutcome) -
     return True
 
 
+def _require_publishable_run(context: HarnessContext, run: AgentRun | None) -> AgentRun:
+    """Return the locked run row if it still belongs to this claim, else raise ``RunCancelled``.
+
+    The row must exist, be owned by the context's owner, be ``running`` under the same claim generation and be
+    neither cancel-requested nor evidence-revoked; anything else means publication must not proceed.
+    """
+    if (
+        run is None
+        or run.owner_id != context.owner_id
+        or run.status != "running"
+        or run.claim_generation != context.claim_generation
+        or run.cancel_requested
+        or run.evidence_revoked
+    ):
+        raise RunCancelled("Run was cancelled before tool publication")
+    return run
+
+
 async def _publish_tool_result(
     context: HarnessContext,
     state: HarnessState,
@@ -732,23 +750,17 @@ async def _publish_tool_result(
                 outcome,
                 tool_messages,
             )
-        run = await session.scalar(
-            select(AgentRun)
-            .where(
-                AgentRun.id == context.run_id,
-                AgentRun.workspace_id == context.scope.workspace_id,
-            )
-            .with_for_update()
+        run = _require_publishable_run(
+            context,
+            await session.scalar(
+                select(AgentRun)
+                .where(
+                    AgentRun.id == context.run_id,
+                    AgentRun.workspace_id == context.scope.workspace_id,
+                )
+                .with_for_update()
+            ),
         )
-        if (
-            run is None
-            or run.owner_id != context.owner_id
-            or run.status != "running"
-            or run.claim_generation != context.claim_generation
-            or run.cancel_requested
-            or run.evidence_revoked
-        ):
-            raise RunCancelled("Run was cancelled before tool publication")
         # Approval invalidation takes run→approval→effect→call; publication must lock
         # run→call too, or a stale-approval GET can deadlock against a completed tool.
         stored_call = await session.scalar(
@@ -865,6 +877,19 @@ def _merge_handoff_usage(state: HarnessState, handoff_usage: dict[str, Any]) -> 
     }
 
 
+def _tool_is_exact(context: HarnessContext, name: str, definition: Any) -> bool:
+    """Report whether ``name`` resolves to a registered, allowed tool whose frozen contract is still supported.
+
+    Pure predicate over the run's allow-list and contracts; an inexact tool is denied as ``tool_unavailable``
+    by ``execute_tool`` without invocation.
+    """
+    return (
+        definition is not None
+        and name in context.allowed_tools
+        and context.supports_definition(definition, context.tool_contracts.get(name, {}))
+    )
+
+
 async def execute_tool(context: HarnessContext, state: HarnessState) -> dict[str, Any]:
     """Invoke one exact tool in a replay-stable slot and fence output against its run and Chat lifetime.
 
@@ -892,11 +917,7 @@ async def execute_tool(context: HarnessContext, state: HarnessState) -> dict[str
         input_source_fences=state.get("pending_source_fences"),
         legacy_readonly_slot=legacy_readonly_slot,
     )
-    exact = (
-        definition is not None
-        and request["name"] in context.allowed_tools
-        and context.supports_definition(definition, context.tool_contracts.get(request["name"], {}))
-    )
+    exact = _tool_is_exact(context, request["name"], definition)
     if (
         exact
         and definition is not None

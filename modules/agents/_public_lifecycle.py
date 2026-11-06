@@ -73,6 +73,58 @@ async def purge_conversation_actions(
         cursor = run_ids[-1]
 
 
+async def _redact_run_effects_and_approvals(session: AsyncSession, run: AgentRun) -> None:
+    """Lock and redact one run's approvals and effects while retaining independent effect tombstones.
+
+    Locks approvals (by id) then effects (by action id) for ``run`` -- the same order as the inline purge it was
+    extracted from. In-flight effects become ``requires_review`` and reserved ones ``failed`` so an ambiguous send
+    is never replayed; pending or approved approvals are cancelled (or kept for review when their effect is);
+    payloads, arguments and source fences are cleared.
+    """
+    approvals = list(
+        (
+            await session.scalars(
+                select(AgentApproval)
+                .where(
+                    AgentApproval.run_id == run.id,
+                )
+                .order_by(AgentApproval.id)
+                .with_for_update()
+            )
+        ).all()
+    )
+    effects = list(
+        (
+            await session.scalars(
+                select(AgentEffect)
+                .where(
+                    AgentEffect.run_id == run.id,
+                )
+                .order_by(AgentEffect.action_id)
+                .with_for_update()
+            )
+        ).all()
+    )
+    effects_by_id = {effect.action_id: effect for effect in effects}
+    for effect in effects:
+        if effect.state == "in_flight":
+            effect.state = "requires_review"
+        elif effect.state == "reserved":
+            effect.state = "failed"
+        effect.payload = None
+    for approval in approvals:
+        approval_effect = effects_by_id.get(approval.action_id)
+        if approval.status in {"pending", "approved"}:
+            approval.status = (
+                "requires_review"
+                if approval_effect and approval_effect.state == "requires_review"
+                else "cancelled"
+            )
+            approval.resolved_at = datetime.now(UTC)
+        approval.arguments = None
+        approval.source_fences = {}
+
+
 async def purge_agent_runs(
     session: AsyncSession,
     run_ids: list[UUID],
@@ -105,48 +157,7 @@ async def purge_agent_runs(
         else []
     )
     for run in runs:
-        approvals = list(
-            (
-                await session.scalars(
-                    select(AgentApproval)
-                    .where(
-                        AgentApproval.run_id == run.id,
-                    )
-                    .order_by(AgentApproval.id)
-                    .with_for_update()
-                )
-            ).all()
-        )
-        effects = list(
-            (
-                await session.scalars(
-                    select(AgentEffect)
-                    .where(
-                        AgentEffect.run_id == run.id,
-                    )
-                    .order_by(AgentEffect.action_id)
-                    .with_for_update()
-                )
-            ).all()
-        )
-        effects_by_id = {effect.action_id: effect for effect in effects}
-        for effect in effects:
-            if effect.state == "in_flight":
-                effect.state = "requires_review"
-            elif effect.state == "reserved":
-                effect.state = "failed"
-            effect.payload = None
-        for approval in approvals:
-            approval_effect = effects_by_id.get(approval.action_id)
-            if approval.status in {"pending", "approved"}:
-                approval.status = (
-                    "requires_review"
-                    if approval_effect and approval_effect.state == "requires_review"
-                    else "cancelled"
-                )
-                approval.resolved_at = datetime.now(UTC)
-            approval.arguments = None
-            approval.source_fences = {}
+        await _redact_run_effects_and_approvals(session, run)
         await session.execute(
             update(AgentToolCall)
             .where(
