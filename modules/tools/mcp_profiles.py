@@ -14,6 +14,117 @@ from modules.tools.mcp_repository import McpUnavailable
 from modules.tools.mcp_stdio import StdioDeploymentProfile
 
 
+def _read_manifest(manifest_path: str) -> Any:
+    """Validate the manifest path and its root-owned immutable ancestry, then parse the bounded JSON.
+
+    Raises ``ValueError`` for any path, ownership, size, JSON or version-1 envelope violation; the parsed
+    value is returned only when it is a dict with exactly ``version`` (1) and ``profiles`` keys.
+    """
+    path = Path(manifest_path)
+    if (
+        not path.is_absolute()
+        or str(path) != manifest_path
+        or path == Path("/data")
+        or Path("/data") in path.parents
+    ):
+        raise ValueError("MCP stdio manifest path must be canonical, absolute, and outside /data")
+    try:
+        resolved = path.resolve(strict=True)
+        info = path.stat()
+        if (
+            str(resolved) != manifest_path
+            or path.is_symlink()
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_uid != 0
+            or info.st_mode & 0o022
+            or os.access(path, os.W_OK)
+            or info.st_size > 1_048_576
+        ):
+            raise ValueError(
+                "MCP stdio manifest must be a bounded root-owned immutable regular file"
+            )
+        parent = path.parent
+        while True:
+            parent_info = parent.stat()
+            if (
+                not stat.S_ISDIR(parent_info.st_mode)
+                or parent_info.st_uid != 0
+                or parent_info.st_mode & 0o022
+                or os.access(parent, os.W_OK)
+            ):
+                raise ValueError("MCP stdio manifest ancestry must be root-owned and immutable")
+            if parent == parent.parent:
+                break
+            parent = parent.parent
+        with path.open("rb") as manifest_file:
+            raw = manifest_file.read(1_048_577)
+        if len(raw) > 1_048_576:
+            raise ValueError("MCP stdio manifest exceeds its 1 MiB bound")
+        data = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=lambda pairs: dict(pairs) if len(dict(pairs)) == len(pairs) else None,
+        )
+    except (OSError, RuntimeError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError("MCP stdio manifest is unavailable or invalid") from exc
+    if (
+        not isinstance(data, dict)
+        or set(data) != {"version", "profiles"}
+        or type(data["version"]) is not int
+        or data["version"] != 1
+    ):
+        raise ValueError("MCP stdio manifest must use version 1 and a finite profile map")
+    return data
+
+
+def _profile_shape_valid(profile_id: object, profile: object) -> bool:
+    """True when ``profile_id`` and ``profile`` match the bounded, typed stdio profile schema exactly."""
+    required = {
+        "profile_hash",
+        "enabled",
+        "platform",
+        "executable",
+        "argv",
+        "cwd",
+        "environment",
+        "immutable_root",
+        "artifact_sha256",
+        "runtime_kind",
+        "entry_script",
+    }
+    return not (
+        not isinstance(profile_id, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", profile_id) is None
+        or not isinstance(profile, dict)
+        or set(profile) != required
+        or not isinstance(profile["profile_hash"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", profile["profile_hash"]) is None
+        or type(profile["enabled"]) is not bool
+        or profile["platform"] != "posix"
+        or not isinstance(profile["runtime_kind"], str)
+        or profile["runtime_kind"] not in {"native", "python", "node"}
+        or not all(isinstance(profile[key], str) for key in ("executable", "cwd", "immutable_root"))
+        or not isinstance(profile["argv"], list)
+        or not 1 <= len(profile["argv"]) <= 32
+        or any(
+            not isinstance(value, str) or not value or len(value) > 2048
+            for value in profile["argv"]
+        )
+        or not isinstance(profile["environment"], dict)
+        or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in profile["environment"].items()
+        )
+        or not isinstance(profile["artifact_sha256"], dict)
+        or any(
+            not isinstance(key, str)
+            or not isinstance(value, str)
+            or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for key, value in profile["artifact_sha256"].items()
+        )
+        or (profile["entry_script"] is not None and not isinstance(profile["entry_script"], str))
+    )
+
+
 class StdioProfileCatalog:
     """Load immutable deployment profiles once and resolve only exact reviewed identities."""
 
@@ -29,117 +140,12 @@ class StdioProfileCatalog:
             return
         if os.name != "posix" or not isinstance(manifest_path, str):
             raise ValueError("MCP stdio manifest requires a POSIX absolute path")
-        path = Path(manifest_path)
-        if (
-            not path.is_absolute()
-            or str(path) != manifest_path
-            or path == Path("/data")
-            or Path("/data") in path.parents
-        ):
-            raise ValueError(
-                "MCP stdio manifest path must be canonical, absolute, and outside /data"
-            )
-        try:
-            resolved = path.resolve(strict=True)
-            info = path.stat()
-            if (
-                str(resolved) != manifest_path
-                or path.is_symlink()
-                or not stat.S_ISREG(info.st_mode)
-                or info.st_uid != 0
-                or info.st_mode & 0o022
-                or os.access(path, os.W_OK)
-                or info.st_size > 1_048_576
-            ):
-                raise ValueError(
-                    "MCP stdio manifest must be a bounded root-owned immutable regular file"
-                )
-            parent = path.parent
-            while True:
-                parent_info = parent.stat()
-                if (
-                    not stat.S_ISDIR(parent_info.st_mode)
-                    or parent_info.st_uid != 0
-                    or parent_info.st_mode & 0o022
-                    or os.access(parent, os.W_OK)
-                ):
-                    raise ValueError("MCP stdio manifest ancestry must be root-owned and immutable")
-                if parent == parent.parent:
-                    break
-                parent = parent.parent
-            with path.open("rb") as manifest_file:
-                raw = manifest_file.read(1_048_577)
-            if len(raw) > 1_048_576:
-                raise ValueError("MCP stdio manifest exceeds its 1 MiB bound")
-            data = json.loads(
-                raw.decode("utf-8"),
-                object_pairs_hook=lambda pairs: (
-                    dict(pairs) if len(dict(pairs)) == len(pairs) else None
-                ),
-            )
-        except (OSError, RuntimeError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
-            raise ValueError("MCP stdio manifest is unavailable or invalid") from exc
-        if (
-            not isinstance(data, dict)
-            or set(data) != {"version", "profiles"}
-            or type(data["version"]) is not int
-            or data["version"] != 1
-        ):
-            raise ValueError("MCP stdio manifest must use version 1 and a finite profile map")
+        data = _read_manifest(manifest_path)
         profiles = data["profiles"]
-        required = {
-            "profile_hash",
-            "enabled",
-            "platform",
-            "executable",
-            "argv",
-            "cwd",
-            "environment",
-            "immutable_root",
-            "artifact_sha256",
-            "runtime_kind",
-            "entry_script",
-        }
         if not isinstance(profiles, dict) or len(profiles) > 32:
             raise ValueError("MCP stdio manifest supports at most 32 profiles")
         for profile_id, profile in profiles.items():
-            if (
-                not isinstance(profile_id, str)
-                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", profile_id) is None
-                or not isinstance(profile, dict)
-                or set(profile) != required
-                or not isinstance(profile["profile_hash"], str)
-                or re.fullmatch(r"[0-9a-f]{64}", profile["profile_hash"]) is None
-                or type(profile["enabled"]) is not bool
-                or profile["platform"] != "posix"
-                or not isinstance(profile["runtime_kind"], str)
-                or profile["runtime_kind"] not in {"native", "python", "node"}
-                or not all(
-                    isinstance(profile[key], str) for key in ("executable", "cwd", "immutable_root")
-                )
-                or not isinstance(profile["argv"], list)
-                or not 1 <= len(profile["argv"]) <= 32
-                or any(
-                    not isinstance(value, str) or not value or len(value) > 2048
-                    for value in profile["argv"]
-                )
-                or not isinstance(profile["environment"], dict)
-                or any(
-                    not isinstance(key, str) or not isinstance(value, str)
-                    for key, value in profile["environment"].items()
-                )
-                or not isinstance(profile["artifact_sha256"], dict)
-                or any(
-                    not isinstance(key, str)
-                    or not isinstance(value, str)
-                    or re.fullmatch(r"[0-9a-f]{64}", value) is None
-                    for key, value in profile["artifact_sha256"].items()
-                )
-                or (
-                    profile["entry_script"] is not None
-                    and not isinstance(profile["entry_script"], str)
-                )
-            ):
+            if not _profile_shape_valid(profile_id, profile):
                 raise ValueError("MCP stdio profile has an invalid bounded shape")
             self._profiles[profile_id] = profile
 

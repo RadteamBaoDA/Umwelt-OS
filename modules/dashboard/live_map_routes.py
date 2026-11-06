@@ -276,6 +276,38 @@ async def _backoff(request: Request, provider: str, until: datetime) -> None:
         await session.commit()
 
 
+async def _store_cached(key: tuple[Any, ...], provider: str, result: dict[str, Any]) -> None:
+    """Cache a freshly fetched result under ``_lock``, evicting the oldest entry once 128 are held."""
+    async with _lock:
+        if key not in _cache and len(_cache) >= 128:
+            _cache.pop(next(iter(_cache)))
+        _cache[key] = (time.monotonic() + live_map.live_cache_seconds(provider), result)
+
+
+async def _record_rate_limit(request: Request, provider: str, until: datetime) -> None:
+    """Persist the provider-directed backoff, then hold this process's next send until it elapses (1s-1h)."""
+    await _backoff(request, provider, until)
+    async with _lock:
+        _next_send[provider] = time.monotonic() + min(
+            3600, max(1, (until - datetime.now(UTC)).total_seconds())
+        )
+
+
+def _value_error_response(exc: ValueError) -> HTTPException:
+    """Map a provider ``ValueError`` to a public 422/503 response; unknown messages become invalid-response."""
+    detail = (
+        str(exc)
+        if str(exc)
+        in {"provider_scope_invalid", "provider_temporarily_unavailable", "contact_required"}
+        else "provider_response_invalid"
+    )
+    return HTTPException(
+        422 if detail in {"provider_scope_invalid", "contact_required"} else 503,
+        detail,
+        headers=_HEADERS,
+    )
+
+
 @router.get("/events")
 async def events(
     provider: Annotated[str, Query(max_length=32)],
@@ -318,10 +350,7 @@ async def events(
         if await request.is_disconnected():
             raise HTTPException(499, "client_disconnected", headers=_HEADERS)
         if fetched:
-            async with _lock:
-                if key not in _cache and len(_cache) >= 128:
-                    _cache.pop(next(iter(_cache)))
-                _cache[key] = (time.monotonic() + live_map.live_cache_seconds(provider), result)
+            await _store_cached(key, provider, result)
         require_publication_gate(
             request,
             PublicationFence(
@@ -363,24 +392,10 @@ async def events(
         ) as result:
             return await _while_connected(request, publish(result, fetched=True))
     except ProviderRateLimited as exc:
-        await _backoff(request, provider, exc.next_eligible_at)
-        async with _lock:
-            _next_send[provider] = time.monotonic() + min(
-                3600, max(1, (exc.next_eligible_at - datetime.now(UTC)).total_seconds())
-            )
+        await _record_rate_limit(request, provider, exc.next_eligible_at)
         raise HTTPException(429, "provider_rate_limited", headers=_HEADERS) from None
     except ValueError as exc:
-        detail = (
-            str(exc)
-            if str(exc)
-            in {"provider_scope_invalid", "provider_temporarily_unavailable", "contact_required"}
-            else "provider_response_invalid"
-        )
-        raise HTTPException(
-            422 if detail in {"provider_scope_invalid", "contact_required"} else 503,
-            detail,
-            headers=_HEADERS,
-        ) from None
+        raise _value_error_response(exc) from None
     except (
         httpx.HTTPError,
         OSError,

@@ -150,6 +150,69 @@ def _renderer_warnings(renderer_id: str) -> list[dict[str, str]]:
     ]
 
 
+async def _definitions_batched_source_states(
+    session: AsyncSession,
+    definitions: dict[UUID, GadgetDefinition],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> dict[UUID, Any]:
+    """Project lifecycle state for every distinct source referenced by ``definitions``.
+
+    Reads in batches of 32 IDs, the owning module's query ceiling; read-only.
+    """
+    source_ids = list(
+        dict.fromkeys(
+            UUID(str(source_id))
+            for definition in definitions.values()
+            for source_id in definition.source_ids
+        )
+    )
+    source_states: dict[UUID, Any] = {}
+    # Each source projection stays within its owning module's 32-ID query ceiling.
+    for offset in range(0, len(source_ids), 32):
+        source_states.update(
+            await _source_states(
+                session,
+                source_ids[offset : offset + 32],
+                scope=scope,
+                multi_workspace_enabled=multi_workspace_enabled,
+            )
+        )
+    return source_states
+
+
+def _instance_payloads(
+    instances: Any, definitions: dict[Any, Any], source_states: dict[UUID, Any]
+) -> list[dict[str, Any]]:
+    """Render each gadget instance with its definition, renderer runtime state and source warnings."""
+    instance_payloads = []
+    for instance in instances:
+        definition = definitions[instance.definition_id]
+        instance_payloads.append(
+            {
+                "id": instance.id,
+                "group_id": instance.group_id,
+                "definition_id": definition.id,
+                "title": instance.title,
+                "position": instance.position,
+                "definition": {
+                    "id": definition.id,
+                    "name": definition.name,
+                    "revision": definition.revision,
+                    "renderer": definition.renderer,
+                    "source_ids": [UUID(str(item)) for item in definition.source_ids],
+                    "scope": definition.scope,
+                    "filters": definition.filters,
+                    "highlight_rules": definition.highlight_rules,
+                    "runtime_state": gadgets.renderer_descriptor(definition.renderer).runtime_state,
+                    "warnings": _definition_warnings(definition, source_states),
+                },
+            }
+        )
+    return instance_payloads
+
+
 async def _dashboard_read(
     session: AsyncSession,
     dashboard: Dashboard,
@@ -173,24 +236,9 @@ async def _dashboard_read(
         ).all()
     )
     instances, _minimums, definitions = await _instance_minima(session, dashboard.id, scope=scope)
-    source_ids = list(
-        dict.fromkeys(
-            UUID(str(source_id))
-            for definition in definitions.values()
-            for source_id in definition.source_ids
-        )
+    source_states = await _definitions_batched_source_states(
+        session, definitions, scope=scope, multi_workspace_enabled=multi_workspace_enabled
     )
-    source_states: dict[UUID, Any] = {}
-    # Each source projection stays within its owning module's 32-ID query ceiling.
-    for offset in range(0, len(source_ids), 32):
-        source_states.update(
-            await _source_states(
-                session,
-                source_ids[offset : offset + 32],
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-            )
-        )
     placements = list(
         (
             await session.scalars(
@@ -227,30 +275,7 @@ async def _dashboard_read(
         ).all()
     )
     columns = {item.breakpoint: item.columns for item in layout_rows}
-    instance_payloads = []
-    for instance in instances:
-        definition = definitions[instance.definition_id]
-        instance_payloads.append(
-            {
-                "id": instance.id,
-                "group_id": instance.group_id,
-                "definition_id": definition.id,
-                "title": instance.title,
-                "position": instance.position,
-                "definition": {
-                    "id": definition.id,
-                    "name": definition.name,
-                    "revision": definition.revision,
-                    "renderer": definition.renderer,
-                    "source_ids": [UUID(str(item)) for item in definition.source_ids],
-                    "scope": definition.scope,
-                    "filters": definition.filters,
-                    "highlight_rules": definition.highlight_rules,
-                    "runtime_state": gadgets.renderer_descriptor(definition.renderer).runtime_state,
-                    "warnings": _definition_warnings(definition, source_states),
-                },
-            }
-        )
+    instance_payloads = _instance_payloads(instances, definitions, source_states)
     return DashboardDetail.model_validate(
         {
             "id": dashboard.id,

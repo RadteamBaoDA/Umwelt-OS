@@ -300,20 +300,14 @@ def public_live_credentials(value: LiveCredentials, *, is_operator: bool) -> dic
     }
 
 
-async def save_live_credentials(
-    session: AsyncSession,
-    value: LiveCredentialUpdate,
-    *,
-    scope: WorkspaceContext,
-    settings: Settings,
-    multi_workspace_enabled: bool,
-    auth_sessions: tuple[AccountSessionRef, ...],
-    is_operator: bool,
-) -> LiveCredentials:
-    """CAS-update encrypted settings under an exclusive workspace fence; caller owns commit.
+def _validated_terms_selection(
+    value: LiveCredentialUpdate, *, is_operator: bool
+) -> tuple[list[str], list[str], dict[str, Any]]:
+    """Validate a credential/terms update and return its ``(accepted, revoked, catalog)`` terms selection.
 
-    Bumping the workspace revision atomically prevents an in-flight result from publishing
-    after a concurrent credential or contact update. No provider request is made here.
+    Raises ``ValidationFailedError`` for an empty or inconsistent selection, ``ConflictError`` when the declared use
+    is ineligible for a provider, and ``ForbiddenError`` when review confirmation lacks an operator and evidence.
+    Performs no I/O, so it runs before the workspace revision bump.
     """
     changed_fields = value.model_fields_set & {
         "openweather_key",
@@ -346,6 +340,74 @@ async def save_live_credentials(
         is_operator and value.terms_evidence_ref and value.terms_evidence_ref.strip()
     ):
         raise ForbiddenError(detail="operator_review_required")
+    return accepted, revoked, catalog
+
+
+async def _apply_terms_changes(
+    session: AsyncSession,
+    term_rows: dict[str, LiveMapTerms],
+    value: LiveCredentialUpdate,
+    *,
+    scope: WorkspaceContext,
+    accepted: list[str],
+    revoked: list[str],
+    catalog: dict[str, Any],
+    is_operator: bool,
+) -> None:
+    """Delete revoked and upsert accepted provider-terms rows; ``term_rows`` is updated in place.
+
+    Rows are expected to be locked by the caller. Accepting resets review to pending unless an operator confirms
+    review of a ``review``-eligibility provider in the same call. Caller owns the commit.
+    """
+    for provider in revoked:
+        if provider in term_rows:
+            await session.delete(term_rows.pop(provider))
+    for provider in accepted:
+        term = catalog[provider]
+        record = term_rows.get(provider)
+        if record is None:
+            record = LiveMapTerms(
+                workspace_id=scope.workspace_id, owner_id=scope.user_id, provider_id=provider
+            )
+            session.add(record)
+            term_rows[provider] = record
+        # ``terms_use`` is non-None here: an accepted provider without it was rejected above.
+        record.version, record.declared_use, record.acknowledged_at = (
+            term["version"],
+            cast(str, value.terms_use),
+            datetime.now(UTC),
+        )
+        record.review_state, record.reviewer_user_id, record.reviewed_at, record.evidence_ref = (
+            "pending",
+            None,
+            None,
+            None,
+        )
+        if term["eligibility"] == "review" and is_operator and value.terms_review_confirmed:
+            record.review_state, record.reviewer_user_id, record.reviewed_at = (
+                "approved",
+                1,
+                datetime.now(UTC),
+            )
+            record.evidence_ref = (value.terms_evidence_ref or "").strip()
+
+
+async def save_live_credentials(
+    session: AsyncSession,
+    value: LiveCredentialUpdate,
+    *,
+    scope: WorkspaceContext,
+    settings: Settings,
+    multi_workspace_enabled: bool,
+    auth_sessions: tuple[AccountSessionRef, ...],
+    is_operator: bool,
+) -> LiveCredentials:
+    """CAS-update encrypted settings under an exclusive workspace fence; caller owns commit.
+
+    Bumping the workspace revision atomically prevents an in-flight result from publishing
+    after a concurrent credential or contact update. No provider request is made here.
+    """
+    accepted, revoked, catalog = _validated_terms_selection(value, is_operator=is_operator)
     await workspaces.bump_configuration_revision(
         session,
         scope=scope,
@@ -387,37 +449,16 @@ async def save_live_credentials(
         .with_for_update()
     )
     term_rows = {r.provider_id: r for r in existing}
-    for provider in revoked:
-        if provider in term_rows:
-            await session.delete(term_rows.pop(provider))
-    for provider in accepted:
-        term = catalog[provider]
-        record = term_rows.get(provider)
-        if record is None:
-            record = LiveMapTerms(
-                workspace_id=scope.workspace_id, owner_id=scope.user_id, provider_id=provider
-            )
-            session.add(record)
-            term_rows[provider] = record
-        # ``terms_use`` is non-None here: an accepted provider without it was rejected above.
-        record.version, record.declared_use, record.acknowledged_at = (
-            term["version"],
-            cast(str, value.terms_use),
-            datetime.now(UTC),
-        )
-        record.review_state, record.reviewer_user_id, record.reviewed_at, record.evidence_ref = (
-            "pending",
-            None,
-            None,
-            None,
-        )
-        if term["eligibility"] == "review" and is_operator and value.terms_review_confirmed:
-            record.review_state, record.reviewer_user_id, record.reviewed_at = (
-                "approved",
-                1,
-                datetime.now(UTC),
-            )
-            record.evidence_ref = (value.terms_evidence_ref or "").strip()
+    await _apply_terms_changes(
+        session,
+        term_rows,
+        value,
+        scope=scope,
+        accepted=accepted,
+        revoked=revoked,
+        catalog=catalog,
+        is_operator=is_operator,
+    )
     row.revision += 1
     retained = {name: item for name, item in data.items() if item is not None}
     row.encrypted_payload = (

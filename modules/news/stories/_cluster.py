@@ -100,6 +100,82 @@ async def _register_story_identities(
             )
 
 
+def _is_measurement(projection: Any) -> bool:
+    """Return True when the document is a measurement (weather, ISS position, prices), not an article."""
+    spec = get_provider_spec(projection.provider)
+    return (spec is not None and spec.data_kind == "measurement") or (
+        projection.provider_metadata is not None
+        and projection.provider_metadata.world_data is not None
+    )
+
+
+async def _membership_entity_ids(
+    session: AsyncSession,
+    projection: Any,
+    incomplete_reasons: list[str],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> list[str]:
+    """Return the sorted entity ids mentioned by the version's chunks.
+
+    When the owner reports the membership limit (``ValueError``) the ids are empty and
+    ``entity_membership_limit`` is appended to ``incomplete_reasons`` (mutated in place).
+    """
+    try:
+        memberships = await entities.list_version_membership_refs(
+            session,
+            projection.document_version_id,
+            [chunk.id for chunk in projection.chunks],
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        return sorted({str(item.entity_id) for item in memberships})
+    except ValueError:
+        incomplete_reasons.append("entity_membership_limit")
+        return []
+
+
+def _new_observation(
+    projection: Any,
+    story: NewsStory,
+    *,
+    scope: Scope,
+    representative: Any,
+    observed_at: datetime,
+    entity_ids: list[str],
+    match_method: str,
+    match_evidence: dict[str, object],
+    incomplete_reasons: list[str],
+) -> NewsObservation:
+    """Build (without adding) the observation row recording this version's grouping decision for ``story``."""
+    title = " ".join(projection.title.split())[:500] or "Untitled"
+    excerpt = _plain_excerpt(title, representative.content)
+    return NewsObservation(
+        workspace_id=scope.workspace_id,
+        story_id=story.id,
+        document_id=projection.document_id,
+        document_version_id=projection.document_version_id,
+        chunk_id=representative.id,
+        source_id=projection.source_id,
+        source_generation=projection.current_source_generation,
+        version_number=projection.version_number,
+        canonical_url=_canonical_url(projection.canonical_url),
+        content_hash=projection.content_hash,
+        title=title,
+        excerpt=excerpt,
+        provider=projection.provider,
+        observed_at=observed_at,
+        published_at=projection.published_at,
+        local_only=projection.local_only,
+        membership_entity_ids=entity_ids,
+        match_method=match_method,
+        match_evidence=match_evidence,
+        incomplete_reason=",".join(incomplete_reasons) or None,
+        recorded_signals=_initial_signal_provenance(),
+    )
+
+
 async def cluster_observation(
     session: AsyncSession,
     *,
@@ -135,30 +211,19 @@ async def cluster_observation(
     if prior is not None:
         return prior.story_id
     # Measurements (weather, ISS position, prices) are observations, not articles: keep them out of stories.
-    spec = get_provider_spec(projection.provider)
-    if (spec is not None and spec.data_kind == "measurement") or (
-        projection.provider_metadata is not None
-        and projection.provider_metadata.world_data is not None
-    ):
+    if _is_measurement(projection):
         return None
     representative = projection.chunks[0]
     incomplete_reasons: list[str] = []
     if projection.chunks_truncated:
         incomplete_reasons.append("chunk_limit")
-    try:
-        memberships = await entities.list_version_membership_refs(
-            session,
-            projection.document_version_id,
-            [chunk.id for chunk in projection.chunks],
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        entity_ids = sorted({str(item.entity_id) for item in memberships})
-    except ValueError:
-        entity_ids = []
-        incomplete_reasons.append("entity_membership_limit")
-    title = " ".join(projection.title.split())[:500] or "Untitled"
-    excerpt = _plain_excerpt(title, representative.content)
+    entity_ids = await _membership_entity_ids(
+        session,
+        projection,
+        incomplete_reasons,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     observed_at = projection.observed_at.astimezone(UTC)
     identities = _identity_keys(projection.canonical_url, projection.content_hash)
     kind, key, story = await _lock_and_find_identity_story(session, identities, scope=scope)
@@ -195,28 +260,16 @@ async def cluster_observation(
         await session.flush()
     await _register_story_identities(session, story, identities, scope=scope)
     session.add(
-        NewsObservation(
-            workspace_id=scope.workspace_id,
-            story_id=story.id,
-            document_id=projection.document_id,
-            document_version_id=projection.document_version_id,
-            chunk_id=representative.id,
-            source_id=projection.source_id,
-            source_generation=projection.current_source_generation,
-            version_number=projection.version_number,
-            canonical_url=_canonical_url(projection.canonical_url),
-            content_hash=projection.content_hash,
-            title=title,
-            excerpt=excerpt,
-            provider=projection.provider,
+        _new_observation(
+            projection,
+            story,
+            scope=scope,
+            representative=representative,
             observed_at=observed_at,
-            published_at=projection.published_at,
-            local_only=projection.local_only,
-            membership_entity_ids=entity_ids,
+            entity_ids=entity_ids,
             match_method=match_method,
             match_evidence=match_evidence,
-            incomplete_reason=",".join(incomplete_reasons) or None,
-            recorded_signals=_initial_signal_provenance(),
+            incomplete_reasons=incomplete_reasons,
         )
     )
     await session.flush()

@@ -522,18 +522,11 @@ def _apply_task_patch(
         task.completed_at = None
 
 
-async def update_task(
-    session: AsyncSession,
-    task_id: UUID,
-    payload: TaskUpdate,
-    *,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> TaskRead:
-    """Apply a revision-fenced patch with coherent due and completion transitions."""
-    fence = await _admit(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
-    )
+async def _task_goal_locator(session: AsyncSession, task_id: UUID, scope: Scope) -> UUID | None:
+    """Read the live task's goal link without locking, so goal locks can be taken before the task row.
+
+    Returns ``None`` for an unlinked task and raises ``TaskMissing`` when no live task exists in the workspace.
+    """
     locator = await session.scalar(
         select(Task.goal_id).where(
             Task.id == task_id,
@@ -549,6 +542,43 @@ async def update_task(
         )
     ):
         raise TaskMissing
+    return locator
+
+
+def _require_update_revision(task: Task, locator: UUID | None, expected_revision: int) -> None:
+    """Reject an update whose goal link moved since the unlocked read, whose revision is stale or exhausted.
+
+    Raises ``TaskConflict`` (``stale_revision`` or ``revision_exhausted``) carrying the task's current revision.
+    """
+    if task.goal_id != locator:
+        raise TaskConflict("stale_revision", "Task link changed during update", task.revision)
+    if task.revision != expected_revision:
+        raise TaskConflict(
+            "stale_revision",
+            f"Expected revision {expected_revision} but task is at {task.revision}",
+            task.revision,
+        )
+    if task.revision >= MAX_REVISION:
+        raise TaskConflict(
+            "revision_exhausted",
+            "Task revision counter has reached the maximum safe integer limit",
+            task.revision,
+        )
+
+
+async def update_task(
+    session: AsyncSession,
+    task_id: UUID,
+    payload: TaskUpdate,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> TaskRead:
+    """Apply a revision-fenced patch with coherent due and completion transitions."""
+    fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
+    )
+    locator = await _task_goal_locator(session, task_id, scope)
     requested_goal = payload.goal_id if "goal_id" in payload.model_fields_set else locator
     locked_goals = await _locked_goal_ids(
         session,
@@ -568,20 +598,7 @@ async def update_task(
     )
     if task is None:
         raise TaskMissing
-    if task.goal_id != locator:
-        raise TaskConflict("stale_revision", "Task link changed during update", task.revision)
-    if task.revision != payload.expected_revision:
-        raise TaskConflict(
-            "stale_revision",
-            f"Expected revision {payload.expected_revision} but task is at {task.revision}",
-            task.revision,
-        )
-    if task.revision >= MAX_REVISION:
-        raise TaskConflict(
-            "revision_exhausted",
-            "Task revision counter has reached the maximum safe integer limit",
-            task.revision,
-        )
+    _require_update_revision(task, locator, payload.expected_revision)
 
     fields = payload.model_fields_set
     next_goal_id = payload.goal_id if "goal_id" in fields else task.goal_id

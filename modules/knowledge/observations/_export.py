@@ -393,6 +393,131 @@ async def export_page(
     )
 
 
+def _export_read(row: Observation) -> ObservationExportRead:
+    """Project one persisted observation row into its exported record shape (pure, no I/O)."""
+    return ObservationExportRead(
+        id=row.id,
+        source_id=row.source_id,
+        source_generation=row.source_generation,
+        provider=row.provider,
+        external_id=row.external_id,
+        revision=row.revision,
+        metric=row.metric,
+        symbol=row.symbol,
+        region=row.region,
+        latitude=row.latitude,
+        longitude=row.longitude,
+        observed_at=row.observed_at,
+        published_at=row.published_at,
+        collected_at=row.collected_at,
+        accepted_at=row.accepted_at,
+        value=row.value,
+        unit=row.unit,
+        currency=row.currency,
+        timezone=row.timezone,
+        quality=row.quality,
+        missing_reason=row.missing_reason,
+        document_id=row.document_id,
+        document_version_id=row.document_version_id,
+    )
+
+
+async def _export_fence_unchanged(
+    session: AsyncSession,
+    fence: ObservationExportFence,
+    snapshot_at: datetime,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> bool:
+    """Return True when one exported record still matches its fence.
+
+    Rechecks the row, source and provider-scope generations, the provider-scope digest, current/accepted-by-snapshot
+    state, source export eligibility, evidence generation and the exact record digest. Reads only; any drift
+    returns False and the caller reports ``record_changed``.
+    """
+    row = await session.scalar(
+        select(Observation)
+        .where(
+            Observation.id == fence.id,
+            Observation.workspace_id == scope.workspace_id,
+        )
+        .execution_options(populate_existing=True)
+    )
+    if (
+        row is None
+        or row.source_id != fence.source_id
+        or row.source_generation != fence.accepted_source_generation
+    ):
+        return False
+    source = await sources.get_connector_source(
+        session,
+        row.source_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    provider_scope = (
+        await connectors.export_provider_scope(
+            session,
+            row.source_id,
+            source.generation,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        if source is not None
+        else None
+    )
+    if (
+        source is None
+        or source.generation != fence.current_source_generation
+        or provider_scope is None
+        or provider_scope.provider_id != row.provider
+        or hashlib.sha256(provider_scope.discriminator.encode()).hexdigest()
+        != fence.provider_scope_digest
+    ):
+        return False
+    item = _export_read(row)
+    evidence = await documents.export_observation_evidence(
+        session,
+        documents.ObservationExportEvidenceCandidate(
+            observation_id=row.id,
+            source_id=row.source_id,
+            accepted_source_generation=row.source_generation,
+            provider=row.provider,
+            provider_scope_discriminator=row.provider_scope_discriminator,
+            external_id=row.external_id,
+            document_id=row.document_id,
+            document_version_id=row.document_version_id,
+        ),
+        provider_scope,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    eligible = await sources.filter_export_eligible_sources(
+        session,
+        [
+            SourceExportFence(
+                source_id=fence.source_id,
+                workspace_id=scope.workspace_id,
+                generation=fence.current_source_generation,
+            )
+        ],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if (
+        not row.is_current
+        or row.accepted_at > snapshot_at
+        or row.source_id not in eligible
+        or evidence is None
+        or evidence.current_source_generation != fence.current_source_generation
+    ):
+        return False
+    if _observation_export_digest(item) != fence.record_digest:
+        return False
+    return True
+
+
 async def validate_export_fences(
     session: AsyncSession,
     *,
@@ -421,114 +546,13 @@ async def validate_export_fences(
             valid=False, reason="snapshot_count_changed", observed_snapshot_count=observed
         )
     for fence in fences:
-        row = await session.scalar(
-            select(Observation)
-            .where(
-                Observation.id == fence.id,
-                Observation.workspace_id == scope.workspace_id,
-            )
-            .execution_options(populate_existing=True)
-        )
-        if (
-            row is None
-            or row.source_id != fence.source_id
-            or row.source_generation != fence.accepted_source_generation
-        ):
-            return ObservationExportFenceValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed
-            )
-        source = await sources.get_connector_source(
+        if not await _export_fence_unchanged(
             session,
-            row.source_id,
+            fence,
+            snapshot_at,
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
-        )
-        provider_scope = (
-            await connectors.export_provider_scope(
-                session,
-                row.source_id,
-                source.generation,
-                scope=scope,
-                multi_workspace_enabled=multi_workspace_enabled,
-            )
-            if source is not None
-            else None
-        )
-        if (
-            source is None
-            or source.generation != fence.current_source_generation
-            or provider_scope is None
-            or provider_scope.provider_id != row.provider
-            or hashlib.sha256(provider_scope.discriminator.encode()).hexdigest()
-            != fence.provider_scope_digest
         ):
-            return ObservationExportFenceValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed
-            )
-        item = ObservationExportRead(
-            id=row.id,
-            source_id=row.source_id,
-            source_generation=row.source_generation,
-            provider=row.provider,
-            external_id=row.external_id,
-            revision=row.revision,
-            metric=row.metric,
-            symbol=row.symbol,
-            region=row.region,
-            latitude=row.latitude,
-            longitude=row.longitude,
-            observed_at=row.observed_at,
-            published_at=row.published_at,
-            collected_at=row.collected_at,
-            accepted_at=row.accepted_at,
-            value=row.value,
-            unit=row.unit,
-            currency=row.currency,
-            timezone=row.timezone,
-            quality=row.quality,
-            missing_reason=row.missing_reason,
-            document_id=row.document_id,
-            document_version_id=row.document_version_id,
-        )
-        evidence = await documents.export_observation_evidence(
-            session,
-            documents.ObservationExportEvidenceCandidate(
-                observation_id=row.id,
-                source_id=row.source_id,
-                accepted_source_generation=row.source_generation,
-                provider=row.provider,
-                provider_scope_discriminator=row.provider_scope_discriminator,
-                external_id=row.external_id,
-                document_id=row.document_id,
-                document_version_id=row.document_version_id,
-            ),
-            provider_scope,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        eligible = await sources.filter_export_eligible_sources(
-            session,
-            [
-                SourceExportFence(
-                    source_id=fence.source_id,
-                    workspace_id=scope.workspace_id,
-                    generation=fence.current_source_generation,
-                )
-            ],
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        if (
-            not row.is_current
-            or row.accepted_at > snapshot_at
-            or row.source_id not in eligible
-            or evidence is None
-            or evidence.current_source_generation != fence.current_source_generation
-        ):
-            return ObservationExportFenceValidation(
-                valid=False, reason="record_changed", observed_snapshot_count=observed
-            )
-        if _observation_export_digest(item) != fence.record_digest:
             return ObservationExportFenceValidation(
                 valid=False, reason="record_changed", observed_snapshot_count=observed
             )

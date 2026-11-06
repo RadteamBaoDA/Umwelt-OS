@@ -1,5 +1,6 @@
 """Connector configuration, draft validation, catalog and n8n workflow routes (registered on the shared router)."""
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
@@ -389,6 +390,106 @@ class CoinSearchRead(BaseModel):
     items: list[coin_catalog.Coin]
 
 
+def _decrypt_coingecko_key(
+    encryption_key: str,
+    ciphertext: str,
+    *,
+    source_id: UUID,
+    operation_id: UUID,
+    source_generation: int,
+    configuration_revision: int,
+) -> str:
+    """Decrypt the stored Demo key bound to its source, operation and revisions.
+
+    Raises a 503 ``HTTPException`` when the credential encryption key cannot open it so the owner re-enters it.
+    """
+    try:
+        return decrypt_rest_secret(
+            encryption_key,
+            ciphertext,
+            source_id=source_id,
+            operation_id=operation_id,
+            source_generation=source_generation,
+            configuration_revision=configuration_revision,
+            header_name="x-cg-demo-api-key",
+        )
+    except CredentialEncryptionUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail="Stored CoinGecko key is unavailable; re-enter it"
+        ) from exc
+
+
+def _coingecko_key_changed(
+    current: Any,
+    current_row: Any,
+    current_credential: Any,
+    *,
+    source_generation: int,
+    configuration_revision: int,
+    credential_revision: int,
+    operation_id: UUID,
+) -> bool:
+    """Return True when the source, its activation row or the stored Demo key differs from the searched one."""
+    return (
+        current.status not in {"active", "paused"}
+        or current.provider != "coingecko"
+        or current.generation != source_generation
+        or current_row is None
+        or current_row.desired_revision != configuration_revision
+        or current_row.credential_revision != credential_revision
+        or current_credential is None
+        or current_credential.state != "ready"
+        or current_credential.operation_id != operation_id
+        or current_credential.header_name != "x-cg-demo-api-key"
+    )
+
+
+async def _load_coingecko_catalog(
+    session: AsyncSession,
+    secret: str,
+    before_send: Callable[[], Awaitable[None]],
+    fingerprint: str,
+) -> tuple[coin_catalog.Coin, ...]:
+    """Load the CoinGecko catalog and map provider failures to the route's HTTP errors.
+
+    ``before_send`` runs the pre-wire recheck and quota debit. A provider rate limit records a shared deferral
+    (committed) before answering 429; the session is always rolled back on exit to drop any open transaction.
+    """
+    try:
+        return await coin_catalog.load_catalog(secret, before_send)
+    except quota.QuotaDeferred as exc:
+        raise HTTPException(
+            status_code=429, detail="CoinGecko request budget is exhausted; try again later"
+        ) from exc
+    except ProviderRateLimited as exc:
+        await quota.defer_provider(
+            session, provider_id="coingecko", until=exc.next_eligible_at, credential=fingerprint
+        )
+        await session.commit()
+        raise HTTPException(
+            status_code=429, detail="CoinGecko is rate limiting catalog requests; try again later"
+        ) from exc
+    except rest.ProviderHttpError as exc:
+        detail = (
+            "CoinGecko rejected the Demo API key"
+            if exc.status_code in {401, 403}
+            else "CoinGecko coin catalog is unavailable"
+        )
+        raise HTTPException(status_code=502, detail=detail) from exc
+    except (
+        rest.CollectionIncomplete,
+        rest.UnsafeDestination,
+        ValueError,
+        TimeoutError,
+        httpx.HTTPError,
+    ) as exc:
+        raise HTTPException(
+            status_code=502, detail="CoinGecko coin catalog is unavailable"
+        ) from exc
+    finally:
+        await session.rollback()
+
+
 @router.get("/{source_id}/coingecko/coins", response_model=CoinSearchRead)
 async def search_coingecko_coins(
     source_id: UUID,
@@ -432,21 +533,15 @@ async def search_coingecko_coins(
     source_generation, configuration_revision = source.generation, row.desired_revision
     credential_revision, operation_id = row.credential_revision, credential.operation_id
     ciphertext = credential.encrypted_secret
-    try:
-        encryption_key = settings.connector_credential_encryption_key.get_secret_value()
-        secret = decrypt_rest_secret(
-            encryption_key,
-            ciphertext,
-            source_id=source_id,
-            operation_id=operation_id,
-            source_generation=source_generation,
-            configuration_revision=configuration_revision,
-            header_name="x-cg-demo-api-key",
-        )
-    except CredentialEncryptionUnavailable as exc:
-        raise HTTPException(
-            status_code=503, detail="Stored CoinGecko key is unavailable; re-enter it"
-        ) from exc
+    encryption_key = settings.connector_credential_encryption_key.get_secret_value()
+    secret = _decrypt_coingecko_key(
+        encryption_key,
+        ciphertext,
+        source_id=source_id,
+        operation_id=operation_id,
+        source_generation=source_generation,
+        configuration_revision=configuration_revision,
+    )
     fingerprint = quota.credential_fingerprint(secret, deployment_key=encryption_key)
     await (
         session.rollback()
@@ -461,17 +556,14 @@ async def search_coingecko_coins(
                 session, source_id, multi_workspace_enabled=multi, scope=scope
             )
             current_credential = await session.get(ConnectorRestCredential, source_id)
-            if (
-                current.status not in {"active", "paused"}
-                or current.provider != "coingecko"
-                or current.generation != source_generation
-                or current_row is None
-                or current_row.desired_revision != configuration_revision
-                or current_row.credential_revision != credential_revision
-                or current_credential is None
-                or current_credential.state != "ready"
-                or current_credential.operation_id != operation_id
-                or current_credential.header_name != "x-cg-demo-api-key"
+            if _coingecko_key_changed(
+                current,
+                current_row,
+                current_credential,
+                source_generation=source_generation,
+                configuration_revision=configuration_revision,
+                credential_revision=credential_revision,
+                operation_id=operation_id,
             ):
                 raise HTTPException(
                     status_code=409, detail="CoinGecko source or key changed; search again"
@@ -494,39 +586,7 @@ async def search_coingecko_coins(
             await session.rollback()
             raise
 
-    try:
-        coins = await coin_catalog.load_catalog(secret, before_send)
-    except quota.QuotaDeferred as exc:
-        raise HTTPException(
-            status_code=429, detail="CoinGecko request budget is exhausted; try again later"
-        ) from exc
-    except ProviderRateLimited as exc:
-        await quota.defer_provider(
-            session, provider_id="coingecko", until=exc.next_eligible_at, credential=fingerprint
-        )
-        await session.commit()
-        raise HTTPException(
-            status_code=429, detail="CoinGecko is rate limiting catalog requests; try again later"
-        ) from exc
-    except rest.ProviderHttpError as exc:
-        detail = (
-            "CoinGecko rejected the Demo API key"
-            if exc.status_code in {401, 403}
-            else "CoinGecko coin catalog is unavailable"
-        )
-        raise HTTPException(status_code=502, detail=detail) from exc
-    except (
-        rest.CollectionIncomplete,
-        rest.UnsafeDestination,
-        ValueError,
-        TimeoutError,
-        httpx.HTTPError,
-    ) as exc:
-        raise HTTPException(
-            status_code=502, detail="CoinGecko coin catalog is unavailable"
-        ) from exc
-    finally:
-        await session.rollback()
+    coins = await _load_coingecko_catalog(session, secret, before_send, fingerprint)
     return CoinSearchRead(items=coin_catalog.search_catalog(coins, q))
 
 

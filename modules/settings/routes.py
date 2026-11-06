@@ -1,5 +1,6 @@
 import hashlib
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 import httpx
@@ -562,6 +563,90 @@ async def _test_typesafe_router(
     return VizRouterTestResult(ok=True, category=category)
 
 
+def _viz_probe_policy(config: Any, destination: str) -> RequestPolicy:
+    """Build the one-destination request policy for the synthetic router probe from the gateway ``config``."""
+    return RequestPolicy(
+        workspace_id=config.workspace_id,
+        actor_user_id=config.actor_user_id,
+        membership_revision=config.membership_revision,
+        gateway_identity=config.gateway_identity,
+        reasoning_allowed=True,  # consent verified by resolve_viz_router
+        permitted_destinations=frozenset({destination}),
+        reasoning_destinations=frozenset({destination}),
+        configuration_revision=config.configuration_revision,
+    )
+
+
+def _viz_probe_gateway(
+    redis: Any,
+    config: Any,
+    destination: str,
+    owner: Any,
+    recheck_send: Callable[[], Awaitable[None]],
+) -> ModelGateway:
+    """Create the 15s-timeout gateway for the router probe; ``recheck_send`` runs before every egress."""
+    return ModelGateway(
+        redis,
+        config.gateway_base_url,
+        config.gateway_api_key,
+        destination,
+        timeout_seconds=15,
+        scope=owner,
+        configuration_revision=config.configuration_revision,
+        gateway_identity=config.gateway_identity,
+        model_identity=config.model_identity,
+        before_send=recheck_send,
+        approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
+        allow_public_endpoints=config.allow_public_providers,
+        kind=config.gateway_kind,
+    )
+
+
+async def _record_viz_capability(
+    session: Any,
+    settings: Any,
+    config: Any,
+    mapping: Any,
+    mode: str | None,
+    owner: Any,
+    recheck_config: Callable[[], Awaitable[None]],
+) -> None:
+    """Persist the supported-capability evidence for a working router mode, then commit.
+
+    Rechecks the settings fence first; a ``ValueError`` (evidence no longer matches the configured mapping)
+    becomes a 409 so a mid-test settings change is reported, never a 500. Always ends with a rollback.
+    """
+    capability = "tools" if mode == "forced_tool" else "structured"
+    result = public.new_capability_result(
+        public.VIZ_ROUTER_ROLE,
+        mapping,
+        capability,
+        "supported",
+        config=config,
+        scope=owner,
+        multi_workspace_enabled=settings.multi_workspace_enabled,
+    )
+    try:
+        await recheck_config()
+        await public.save_capability(
+            session,
+            result,
+            config=config,
+            configured_mapping=mapping,
+            scope=owner,
+            multi_workspace_enabled=settings.multi_workspace_enabled,
+        )
+        await session.commit()
+    except ValueError:
+        # Evidence did not match the configured mapping (settings changed mid-test): report, never 500.
+        await session.rollback()
+        raise HTTPException(
+            status_code=409, detail="Visualization router settings changed; test again"
+        ) from None
+    finally:
+        await session.rollback()
+
+
 @router.post(
     "/viz-router/test",
     response_model=VizRouterTestResult,
@@ -598,16 +683,7 @@ async def test_viz_router(
             ok=False, error="credential_required" if not resolved.api_key else "network_denied"
         )
     destination = config.endpoint_destination_id or "remote"
-    policy = RequestPolicy(
-        workspace_id=config.workspace_id,
-        actor_user_id=config.actor_user_id,
-        membership_revision=config.membership_revision,
-        gateway_identity=config.gateway_identity,
-        reasoning_allowed=True,  # consent verified by resolve_viz_router
-        permitted_destinations=frozenset({destination}),
-        reasoning_destinations=frozenset({destination}),
-        configuration_revision=config.configuration_revision,
-    )
+    policy = _viz_probe_policy(config, destination)
     session_ref = authenticated_session_ref(request)
 
     async def recheck_config() -> None:
@@ -629,21 +705,7 @@ async def test_viz_router(
             await session.rollback()
 
     await session.rollback()
-    gateway = ModelGateway(
-        redis,
-        config.gateway_base_url,
-        config.gateway_api_key,
-        destination,
-        timeout_seconds=15,
-        scope=_owner,
-        configuration_revision=config.configuration_revision,
-        gateway_identity=config.gateway_identity,
-        model_identity=config.model_identity,
-        before_send=recheck_send,
-        approved_endpoint_cidrs=config.endpoint_allowed_cidrs,
-        allow_public_endpoints=config.allow_public_providers,
-        kind=config.gateway_kind,
-    )
+    gateway = _viz_probe_gateway(redis, config, destination, _owner, recheck_send)
     # Decisions API: one adapter, no constraint modes (None); otherwise the configured mode then the other one.
     modes: list[str | None] = (
         [None]
@@ -673,35 +735,15 @@ async def test_viz_router(
             if exc.code in {"mode_unsupported", "invalid_category"}:
                 continue  # this endpoint may support the other constrained-output mode
             return VizRouterTestResult(ok=False, error=exc.code)
-        capability = "tools" if mode == "forced_tool" else "structured"
-        result = public.new_capability_result(
-            public.VIZ_ROUTER_ROLE,
+        await _record_viz_capability(
+            session,
+            settings,
+            config,
             mapping,
-            capability,
-            "supported",
-            config=config,
-            scope=_owner,
-            multi_workspace_enabled=settings.multi_workspace_enabled,
+            mode,
+            _owner,
+            recheck_config,
         )
-        try:
-            await recheck_config()
-            await public.save_capability(
-                session,
-                result,
-                config=config,
-                configured_mapping=mapping,
-                scope=_owner,
-                multi_workspace_enabled=settings.multi_workspace_enabled,
-            )
-            await session.commit()
-        except ValueError:
-            # Evidence did not match the configured mapping (settings changed mid-test): report, never 500.
-            await session.rollback()
-            raise HTTPException(
-                status_code=409, detail="Visualization router settings changed; test again"
-            ) from None
-        finally:
-            await session.rollback()
         return VizRouterTestResult(ok=True, category=category, mode=mode)
     return VizRouterTestResult(ok=False, error=error)
 

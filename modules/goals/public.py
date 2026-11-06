@@ -1005,6 +1005,34 @@ async def _create_plan_tasks_and_milestones(
     return milestone_values, task_ids, created
 
 
+def _require_plan_acceptable(
+    goal: Goal, proposal: PlanProposal, manifest: list[dict[str, Any]]
+) -> None:
+    """Reject acceptance for an inactive goal, a stale or exhausted revision, or a full manifest.
+
+    Raises ``GoalConflict`` (``goal_inactive``, ``stale_revision``, ``revision_exhausted``) or ``ValueError`` when
+    the goal already retains 1000 accepted proposal manifests. Checked in that order; no I/O.
+    """
+    if goal.status != "active":
+        raise GoalConflict(
+            "goal_inactive", "Plan proposals can only be accepted by an active goal", goal.revision
+        )
+    if proposal.expected_revision != goal.revision:
+        raise GoalConflict(
+            "stale_revision",
+            f"Expected revision {proposal.expected_revision} but goal is at {goal.revision}",
+            goal.revision,
+        )
+    if goal.revision >= MAX_REVISION:
+        raise GoalConflict(
+            "revision_exhausted",
+            "Goal revision counter has reached the maximum safe integer limit",
+            goal.revision,
+        )
+    if len(manifest) >= 1000:
+        raise ValueError("A goal may retain at most 1000 accepted proposal manifests")
+
+
 async def accept_plan(
     session: AsyncSession,
     goal_id: UUID,
@@ -1034,24 +1062,7 @@ async def accept_plan(
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
         )
-    if goal.status != "active":
-        raise GoalConflict(
-            "goal_inactive", "Plan proposals can only be accepted by an active goal", goal.revision
-        )
-    if proposal.expected_revision != goal.revision:
-        raise GoalConflict(
-            "stale_revision",
-            f"Expected revision {proposal.expected_revision} but goal is at {goal.revision}",
-            goal.revision,
-        )
-    if goal.revision >= MAX_REVISION:
-        raise GoalConflict(
-            "revision_exhausted",
-            "Goal revision counter has reached the maximum safe integer limit",
-            goal.revision,
-        )
-    if len(manifest) >= 1000:
-        raise ValueError("A goal may retain at most 1000 accepted proposal manifests")
+    _require_plan_acceptable(goal, proposal, manifest)
     proposal_milestone_ids, proposal_entity_ids = _check_plan_bounds(goal, proposal, manifest)
 
     from modules.tasks import public as tasks

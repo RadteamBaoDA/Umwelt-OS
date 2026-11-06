@@ -148,6 +148,46 @@ def register_webhook_tool(registry: ToolRegistry, settings: Settings) -> None:
     )
 
 
+async def _record_webhook_response(
+    status_code: int, context: dict[str, Any], action_id: str, result_reference: str
+) -> ToolResult:
+    """Persist the effect outcome for a received webhook response and build the tool result.
+
+    A 2xx response is recorded as succeeded; any other status is review-only because generic receivers give
+    no idempotency guarantee.
+    """
+    from modules.agents.public import mark_effect_outcome
+
+    if 200 <= status_code < 300:
+        await mark_effect_outcome(
+            context["session_factory"],
+            action_id,
+            "succeeded",
+            result_reference,
+            result_status_code=status_code,
+        )
+        return ToolResult(
+            success=True,
+            data={
+                "accepted": True,
+                "status_code": status_code,
+                "result_reference": result_reference,
+            },
+        )
+    await mark_effect_outcome(
+        context["session_factory"],
+        action_id,
+        "requires_review",
+        result_reference,
+        result_status_code=status_code,
+    )
+    return ToolResult(
+        success=False,
+        error="Webhook outcome requires review",
+        error_code="execution_failed",
+    )
+
+
 async def _send_webhook(arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
     """Send at most one credential-free POST after the approval owner commits the no-replay slot.
 
@@ -206,33 +246,8 @@ async def _send_webhook(arguments: dict[str, Any], context: dict[str, Any]) -> T
                 headers={"Idempotency-Key": action_id},
             )
             await response.aread()
-            if 200 <= response.status_code < 300:
-                await mark_effect_outcome(
-                    context["session_factory"],
-                    action_id,
-                    "succeeded",
-                    result_reference,
-                    result_status_code=response.status_code,
-                )
-                return ToolResult(
-                    success=True,
-                    data={
-                        "accepted": True,
-                        "status_code": response.status_code,
-                        "result_reference": result_reference,
-                    },
-                )
-            await mark_effect_outcome(
-                context["session_factory"],
-                action_id,
-                "requires_review",
-                result_reference,
-                result_status_code=response.status_code,
-            )
-            return ToolResult(
-                success=False,
-                error="Webhook outcome requires review",
-                error_code="execution_failed",
+            return await _record_webhook_response(
+                response.status_code, context, action_id, result_reference
             )
     except asyncio.CancelledError:
         # Registry/harness deadline or run cancel: a started send has an unknown outcome, so record

@@ -285,6 +285,53 @@ def _preview_preset_slot(
     }
 
 
+def _preview_layouts(
+    preset: Any, preset_id: str, slots: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Compute the default desktop and mobile layouts of a preset preview, keyed by preset slot id. Pure (no I/O).
+
+    Each slot gets a deterministic UUID derived from ``preset_id`` and its slot id so the layout engine can place
+    it with its renderer minimum size, and the resulting items are mapped back to the stable slot ids.
+    """
+    minimums = {
+        uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"): (
+            gadgets.renderer_descriptor(slot["renderer"]).minimum_width,
+            gadgets.renderer_descriptor(slot["renderer"]).minimum_height,
+        )
+        for slot in slots
+    }
+    defaults = {
+        key: gadgets.preset_slot_size(slot)
+        for key, slot in zip(minimums, preset.slots, strict=True)
+    }
+    desktop = layouts.default_desktop_layout(defaults, minimum_sizes=minimums)
+    mobile = layouts.default_mobile_layout(defaults, minimum_sizes=minimums)
+    slot_ids_by_uuid = {
+        uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"): slot[
+            "slot_id"
+        ]
+        for slot in slots
+    }
+
+    def items(placed: Any) -> dict[str, Any]:
+        """Serialize placed layout items of one breakpoint with their stable slot ids."""
+        return {
+            "columns": 20,
+            "items": [
+                {
+                    "slot_id": slot_ids_by_uuid[item.instance_id],
+                    "x": item.x,
+                    "y": item.y,
+                    "w": item.w,
+                    "h": item.h,
+                }
+                for item in placed
+            ],
+        }
+
+    return {"desktop": items(desktop), "mobile": items(mobile)}
+
+
 async def preview_preset(
     session: AsyncSession,
     preset_id: str,
@@ -353,25 +400,6 @@ async def preview_preset(
     slots = [
         _preview_preset_slot(slot, slot_source_ids[slot.slot_id], states) for slot in preset.slots
     ]
-    minimums = {
-        uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"): (
-            gadgets.renderer_descriptor(slot["renderer"]).minimum_width,
-            gadgets.renderer_descriptor(slot["renderer"]).minimum_height,
-        )
-        for slot in slots
-    }
-    defaults = {
-        key: gadgets.preset_slot_size(slot)
-        for key, slot in zip(minimums, preset.slots, strict=True)
-    }
-    desktop = layouts.default_desktop_layout(defaults, minimum_sizes=minimums)
-    mobile = layouts.default_mobile_layout(defaults, minimum_sizes=minimums)
-    slot_ids_by_uuid = {
-        uuid5(NAMESPACE_URL, f"bbd-os-dashboard-preset:{preset_id}:{slot['slot_id']}"): slot[
-            "slot_id"
-        ]
-        for slot in slots
-    }
     proposed = {
         "template_version": 1,
         "preset_id": preset_id,
@@ -379,34 +407,7 @@ async def preview_preset(
         "slots": slots,
         "target_dashboard_id": payload.target_dashboard_id,
         "target_revision": target_revision,
-        "layouts": {
-            "desktop": {
-                "columns": 20,
-                "items": [
-                    {
-                        "slot_id": slot_ids_by_uuid[item.instance_id],
-                        "x": item.x,
-                        "y": item.y,
-                        "w": item.w,
-                        "h": item.h,
-                    }
-                    for item in desktop
-                ],
-            },
-            "mobile": {
-                "columns": 20,
-                "items": [
-                    {
-                        "slot_id": slot_ids_by_uuid[item.instance_id],
-                        "x": item.x,
-                        "y": item.y,
-                        "w": item.w,
-                        "h": item.h,
-                    }
-                    for item in mobile
-                ],
-            },
-        },
+        "layouts": _preview_layouts(preset, preset_id, slots),
     }
     canonical = json.dumps(proposed, sort_keys=True, separators=(",", ":"), default=str).encode()
     return PresetPreviewRead.model_validate(
