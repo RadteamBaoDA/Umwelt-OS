@@ -38,3 +38,6 @@ apps/web/public/vendor/genui/
 infrastructure/monitoring/metrics_token.local
 infrastructure/monitoring/alert_webhook_url.local
 apps/web/coverage/
+
+# Claude Code agent worktrees (local only)
+.claude/worktrees/

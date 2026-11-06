@@ -1,8 +1,0 @@
-{"data":[
-{"code":"FPT","date":"2026-10-21","time":"15:11:07","floor":"HOSE","type":"STOCK","open":50.3,"high":51.7,"low":49.55,"close":50.4,"nmVolume":9249300.0},
-{"code":"VCB","date":"2026-10-21","time":"15:11:07","floor":"HOSE","type":"STOCK","open":54.2,"high":54.5,"low":53.1,"close":53.5,"nmVolume":1974000.0},
-{"code":"FPT","date":"2026-10-20","time":"15:11:07","floor":"HOSE","type":"STOCK","open":50.0,"high":50.9,"low":49.8,"close":50.2,"nmVolume":8000000.0},
-{"code":"ZZZ","date":"2026-10-21","time":"15:11:07","floor":"HOSE","type":"STOCK","open":1.0,"high":1.0,"low":1.0,"close":1.0,"nmVolume":1.0},
-{"code":"VNINDEX","floor":"HOSE","date":"2026-10-21","time":"15:11:09","type":"COMPOSITE","open":1710.04,"high":1713.02,"low":1689.32,"close":1699.62,"nmVolume":515501785.0},
-{"code":"VN30","floor":"HOSE","date":"2026-10-21","time":"15:11:09","type":"CAP_WEIGHTED","open":1814.29,"high":1835.11,"low":1810.95,"close":1834.7,"nmVolume":200000000.0}
-],"currentPage":1,"size":60,"totalElements":6,"totalPages":1}
