@@ -151,7 +151,7 @@ def test_registry_names_each_missing_scope_field_without_values():
 def test_invalid_detail_appends_only_plain_value_errors():
     from pydantic import BaseModel, ValidationError
 
-    from modules.connectors.provisioning_routes import _invalid_detail
+    from modules.connectors.provisioning.routes import _invalid_detail
 
     assert _invalid_detail(
         "Draft connector configuration is invalid", ValueError("Missing required fields: news_site")

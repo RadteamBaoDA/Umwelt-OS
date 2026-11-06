@@ -68,7 +68,7 @@ from modules.connectors.provider_specs import (
     get_realtime_tier,
     min_interval_minutes,
 )
-from modules.connectors.provisioning_routes import ActivationRequest, _owner_access, activate_native
+from modules.connectors.provisioning.routes import ActivationRequest, _owner_access, activate_native
 from modules.connectors.public import (
     ConnectorConfig,
     DataShape,

@@ -14,10 +14,12 @@ from fastapi import HTTPException
 
 from core.errors import DomainError
 from core.workspaces.schemas import WorkspaceContext
-from modules.connectors import provisioning, provisioning_routes, public, routes, worker
+from modules.connectors import provisioning, public, routes, worker
 from modules.connectors.n8n import CALLBACK_BASE
+from modules.connectors.provisioning import routes as provisioning_routes
 from modules.connectors.service import packaged as packaged_service
 from modules.sources.public import ConnectorStatusRead
+from tests.unit.modules.connectors._routes_patch import patch_routes
 
 WS = uuid4()
 OWNER = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
@@ -72,8 +74,8 @@ async def test_activate_returns_503_when_disabled() -> None:
     payload = SimpleNamespace(expected_revision=1, execution_backend="n8n")
     n8n = SimpleNamespace(enabled=False, api_key="k", webhook_token="t")
     with (
-        patch.object(provisioning_routes, "_owner_access", AsyncMock(return_value=object())),
-        patch.object(provisioning_routes, "_source", AsyncMock(return_value=source)),
+        patch_routes("_owner_access", AsyncMock(return_value=object())),
+        patch_routes("_source", AsyncMock(return_value=source)),
         patch.object(
             provisioning_routes.provisioning, "activation_status", AsyncMock(return_value=row)
         ),
@@ -82,9 +84,9 @@ async def test_activate_returns_503_when_disabled() -> None:
             "unresolved_credential_error",
             AsyncMock(return_value=None),
         ),
-        patch.object(provisioning_routes, "_choose_backend", return_value="n8n"),
-        patch.object(provisioning_routes, "_is_fresh", return_value=True),
-        patch.object(provisioning_routes, "resolve_n8n", AsyncMock(return_value=n8n)),
+        patch_routes("_choose_backend", return_value="n8n"),
+        patch_routes("_is_fresh", return_value=True),
+        patch_routes("resolve_n8n", AsyncMock(return_value=n8n)),
         pytest.raises(HTTPException) as exc,
     ):
         await provisioning_routes.activate_source(uuid4(), payload, MagicMock(), _http(), OWNER)  # type: ignore[arg-type]

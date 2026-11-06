@@ -6,9 +6,11 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from modules.connectors import collection, provisioning_routes
+from modules.connectors import collection
 from modules.connectors.providers.rest import UnsafeDestination
+from modules.connectors.provisioning import routes as provisioning_routes
 from tests.unit.modules.connectors._collection_patch import patch_collection
+from tests.unit.modules.connectors._routes_patch import patch_routes_mp
 
 
 def _call(actor_user_id: int) -> SimpleNamespace:
@@ -43,8 +45,8 @@ async def test_put_configuration_403_for_non_operator(monkeypatch):
     async def source(*_a, **_k):
         return SimpleNamespace(status="active", type="api", provider="home_assistant")
 
-    monkeypatch.setattr(provisioning_routes, "_owner_access", fence)
-    monkeypatch.setattr(provisioning_routes, "_source", source)
+    patch_routes_mp(monkeypatch, "_owner_access", fence)
+    patch_routes_mp(monkeypatch, "_source", source)
     monkeypatch.setattr(provisioning_routes.registry, "SUPPORTED_TYPES", {"api"})
     request = SimpleNamespace(
         app=SimpleNamespace(

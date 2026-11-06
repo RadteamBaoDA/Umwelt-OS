@@ -8,8 +8,10 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from modules.connectors import coin_catalog, provisioning_routes
+from modules.connectors import coin_catalog
 from modules.connectors.providers import rest
+from modules.connectors.provisioning import routes as provisioning_routes
+from tests.unit.modules.connectors._routes_patch import patch_routes_mp
 
 
 def test_catalog_keeps_duplicate_symbols_and_searches_by_name_id_or_symbol():
@@ -83,9 +85,9 @@ async def test_search_requires_saved_current_key_before_catalog_fetch(monkeypatc
             state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False))
         )
     )
-    monkeypatch.setattr(provisioning_routes, "_owner_access", AsyncMock(return_value=object()))
-    monkeypatch.setattr(
-        provisioning_routes,
+    patch_routes_mp(monkeypatch, "_owner_access", AsyncMock(return_value=object()))
+    patch_routes_mp(
+        monkeypatch,
         "_source",
         AsyncMock(
             return_value=SimpleNamespace(provider="coingecko", status="active", generation=1)
@@ -129,9 +131,9 @@ async def test_paused_source_with_saved_key_can_search_catalog(monkeypatch):
             )
         )
     )
-    monkeypatch.setattr(provisioning_routes, "_owner_access", AsyncMock(return_value=object()))
-    monkeypatch.setattr(
-        provisioning_routes,
+    patch_routes_mp(monkeypatch, "_owner_access", AsyncMock(return_value=object()))
+    patch_routes_mp(
+        monkeypatch,
         "_source",
         AsyncMock(
             return_value=SimpleNamespace(provider="coingecko", status="paused", generation=1)
@@ -145,9 +147,7 @@ async def test_paused_source_with_saved_key_can_search_catalog(monkeypatch):
     monkeypatch.setattr(
         provisioning_routes.provider_terms, "require_terms_eligible", AsyncMock(return_value=1)
     )
-    monkeypatch.setattr(
-        provisioning_routes, "decrypt_rest_secret", lambda *args, **kwargs: "demo-key"
-    )
+    patch_routes_mp(monkeypatch, "decrypt_rest_secret", lambda *args, **kwargs: "demo-key")
     fetch = AsyncMock(return_value=({"id": "bitcoin", "symbol": "BTC", "name": "Bitcoin"},))
     monkeypatch.setattr(coin_catalog, "load_catalog", fetch)
     result = await provisioning_routes.search_coingecko_coins(

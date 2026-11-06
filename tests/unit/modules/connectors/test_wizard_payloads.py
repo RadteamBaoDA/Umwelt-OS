@@ -14,7 +14,7 @@ from modules.connectors import registry
 from modules.connectors.backends import GENERIC_CATALOG_SOURCE_TYPES, PROVIDER_SOURCE_TYPES
 from modules.connectors.catalog import get_catalog_entry, list_catalog
 from modules.connectors.provider_specs import min_interval_minutes
-from modules.connectors.provisioning_routes import ConnectorSettingsRequest
+from modules.connectors.provisioning.routes import ConnectorSettingsRequest
 from modules.connectors.public import serialize_source_configuration
 from modules.sources.schemas import ConnectorSource
 

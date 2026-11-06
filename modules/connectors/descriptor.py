@@ -37,7 +37,7 @@ class ConnectorsDescriptor(ModuleDescriptor):
         RouterSpec("modules.connectors.routes", 150),
         RouterSpec("modules.connectors.routes:operator_router", 160),
         RouterSpec("modules.connectors.builtins", 180),
-        RouterSpec("modules.connectors.provisioning_routes", 190),
+        RouterSpec("modules.connectors.provisioning.routes", 190),
         RouterSpec("modules.connectors.github.routes", 200),
         RouterSpec("modules.connectors.oauth_routes", 210),
         RouterSpec("modules.connectors.reddit_oauth_routes", 220),
