@@ -1,7 +1,7 @@
 """Connector configuration, draft validation, catalog and n8n workflow routes (registered on the shared router)."""
 
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 import httpx
@@ -634,6 +634,73 @@ async def list_n8n_workflows(
     ]
 
 
+def _require_matching_auth(source: Any, payload: ConnectorSettingsRequest) -> None:
+    """Reject an authentication mode or header the provider and source type cannot use.
+
+    Telegram needs a bot token, header-auth and revisioned REST providers need ``http_header`` with
+    the ``Authorization`` header (Mastodon alone may choose ``none``), and header auth is limited to
+    REST sources. Pure validation.
+
+    Raises:
+        HTTPException: 422 on any mismatch.
+    """
+    expected_auth = (
+        "telegram_bot_token"
+        if source.provider == "telegram"
+        else "http_header"
+        if source.provider
+        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
+        else "none"
+        if source.provider
+        else None
+    )
+    if source.provider == "mastodon" and payload.auth_method == "none":
+        expected_auth = (
+            "none"  # Mastodon's bearer token is optional: public reads need no credential.
+        )
+    if expected_auth is not None and payload.auth_method != expected_auth:
+        raise HTTPException(
+            status_code=422, detail="Authentication mode does not match the provider"
+        )
+    if (
+        expected_auth == "http_header"
+        and source.provider
+        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
+        and payload.auth_header_name != "Authorization"
+    ):
+        raise HTTPException(
+            status_code=422, detail="Provider bearer credentials require the Authorization header"
+        )
+    if source.provider is None and payload.auth_method == "telegram_bot_token":
+        raise HTTPException(
+            status_code=422, detail="Telegram authentication requires a Telegram source"
+        )
+    if payload.auth_method == "http_header" and source.type != "api":
+        raise HTTPException(
+            status_code=422, detail="Header authentication is supported only for REST sources"
+        )
+
+
+def _require_saveable(pending: Any) -> None:
+    """Refuse a configuration save while a deactivation or backend transition is still running.
+
+    Raises:
+        HTTPException: 409 when the provisioning row is waiting for deactivation or mid-transition.
+    """
+    if (
+        pending is not None
+        and pending.state == "disabled"
+        and pending.error_code == "deactivation_pending"
+    ):
+        raise HTTPException(
+            status_code=409, detail="Wait for source deactivation to finish before saving"
+        )
+    if pending is not None and pending.transition_phase != "idle":
+        raise HTTPException(
+            status_code=409, detail="Wait for the backend transition to finish before saving"
+        )
+
+
 @router.put("/{source_id}/configuration", response_model=ActivationRead)
 async def put_configuration(
     source_id: UUID,
@@ -673,53 +740,8 @@ async def put_configuration(
     pending = await provisioning.activation_status(
         session, source_id, multi_workspace_enabled=multi_workspace_enabled, scope=scope
     )
-    if (
-        pending is not None
-        and pending.state == "disabled"
-        and pending.error_code == "deactivation_pending"
-    ):
-        raise HTTPException(
-            status_code=409, detail="Wait for source deactivation to finish before saving"
-        )
-    if pending is not None and pending.transition_phase != "idle":
-        raise HTTPException(
-            status_code=409, detail="Wait for the backend transition to finish before saving"
-        )
-    expected_auth = (
-        "telegram_bot_token"
-        if source.provider == "telegram"
-        else "http_header"
-        if source.provider
-        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
-        else "none"
-        if source.provider
-        else None
-    )
-    if source.provider == "mastodon" and payload.auth_method == "none":
-        expected_auth = (
-            "none"  # Mastodon's bearer token is optional: public reads need no credential.
-        )
-    if expected_auth is not None and payload.auth_method != expected_auth:
-        raise HTTPException(
-            status_code=422, detail="Authentication mode does not match the provider"
-        )
-    if (
-        expected_auth == "http_header"
-        and source.provider
-        in collection.HEADER_AUTH_PROVIDERS | collection.REVISIONED_REST_PROVIDERS
-        and payload.auth_header_name != "Authorization"
-    ):
-        raise HTTPException(
-            status_code=422, detail="Provider bearer credentials require the Authorization header"
-        )
-    if source.provider is None and payload.auth_method == "telegram_bot_token":
-        raise HTTPException(
-            status_code=422, detail="Telegram authentication requires a Telegram source"
-        )
-    if payload.auth_method == "http_header" and source.type != "api":
-        raise HTTPException(
-            status_code=422, detail="Header authentication is supported only for REST sources"
-        )
+    _require_saveable(pending)
+    _require_matching_auth(source, payload)
     try:
         source_configuration = serialize_source_configuration(source, payload.configuration)
     except ValueError as exc:

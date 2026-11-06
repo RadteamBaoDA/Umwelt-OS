@@ -676,6 +676,70 @@ async def complete_credential_operation(
     return True
 
 
+def _release_prepared_siblings(row: Any, slots: dict[str, Any], activation_id: str) -> None:
+    """Clear every other slot's prepared operation that belongs to the same activation.
+
+    Each released slot returns to ``ready`` when it holds a credential, otherwise ``queued``.
+    Mutates locked ORM rows only; the caller flushes.
+    """
+    for sibling in slots.values():
+        sibling_envelope = sibling.operation_envelope
+        if (
+            sibling is not row
+            and isinstance(sibling_envelope, dict)
+            and sibling_envelope.get("activation_id") == activation_id
+            and sibling_envelope.get("state") == "prepared"
+        ):
+            sibling.operation_id = None
+            sibling.operation_envelope = None
+            sibling.state = "ready" if sibling.credential_id else "queued"
+
+
+def _dispatched_envelope_matches(
+    row: Any,
+    envelope: dict[str, Any],
+    operation_id: UUID,
+    original_operation: dict[str, object],
+    *,
+    source_id: UUID,
+    scope: Scope,
+    access_fence: AccessFence,
+) -> bool:
+    """Return whether ``envelope`` is the still-dispatched, un-settled operation captured in the original.
+
+    Requires the slot's operation id/revision/generation to equal the envelope's, no retained
+    effect result already recorded, and the retained-operation identity to match. Pure; no I/O.
+    """
+    return (
+        row.operation_id == operation_id
+        and envelope.get("state") == "dispatched"
+        and envelope.get("id") == str(operation_id)
+        and row.operation_revision == envelope.get("revision")
+        and row.source_generation == envelope.get("source_generation")
+        and not envelope.get("retained_effect_result")
+        and _retained_operation_matches(
+            envelope,
+            original_operation,
+            source_id=source_id,
+            scope=scope,
+            access_fence=access_fence,
+        )
+    )
+
+
+def _desired_matches_envelope(desired: Any, envelope: dict[str, Any]) -> bool:
+    """Return whether the provisioning row still sits at the envelope's revision and generation.
+
+    False when ``desired`` is missing. Pure; used to decide if a failed credential operation may
+    also disable or flag the owner's desired configuration.
+    """
+    return (
+        desired is not None
+        and desired.desired_revision == int(envelope["revision"])
+        and desired.source_generation == envelope.get("source_generation")
+    )
+
+
 async def fail_credential_operation(
     session: AsyncSession,
     source_id: UUID,
@@ -711,15 +775,11 @@ async def fail_credential_operation(
     envelope = copy.deepcopy(row.operation_envelope) if row is not None else None
     if (
         row is None
-        or row.operation_id != operation_id
         or not isinstance(envelope, dict)
-        or envelope.get("state") != "dispatched"
-        or envelope.get("id") != str(operation_id)
-        or row.operation_revision != envelope.get("revision")
-        or row.source_generation != envelope.get("source_generation")
-        or envelope.get("retained_effect_result")
-        or not _retained_operation_matches(
+        or not _dispatched_envelope_matches(
+            row,
             envelope,
+            operation_id,
             original_operation,
             source_id=source_id,
             scope=scope,
@@ -745,28 +805,14 @@ async def fail_credential_operation(
         row.error_code = error_code
         activation_id = envelope.get("activation_id")
         if isinstance(activation_id, str):
-            for sibling in slots.values():
-                sibling_envelope = sibling.operation_envelope
-                if (
-                    sibling is not row
-                    and isinstance(sibling_envelope, dict)
-                    and sibling_envelope.get("activation_id") == activation_id
-                    and sibling_envelope.get("state") == "prepared"
-                ):
-                    sibling.operation_id = None
-                    sibling.operation_envelope = None
-                    sibling.state = "ready" if sibling.credential_id else "queued"
+            _release_prepared_siblings(row, slots, activation_id)
             if (
                 desired is not None
                 and isinstance(desired.activation_intent, dict)
                 and desired.activation_intent.get("id") == activation_id
             ):
                 desired.activation_intent = None
-        if (
-            desired is not None
-            and desired.desired_revision == int(envelope["revision"])
-            and desired.source_generation == envelope.get("source_generation")
-        ):
+        if _desired_matches_envelope(desired, envelope):
             desired.desired_enabled = False
             desired.state = "saved_not_active"
             desired.error_code = error_code
@@ -776,17 +822,7 @@ async def fail_credential_operation(
         row.state = "reconciliation_required"
         activation_id = envelope.get("activation_id")
         if isinstance(activation_id, str):
-            for sibling in slots.values():
-                sibling_envelope = sibling.operation_envelope
-                if (
-                    sibling is not row
-                    and isinstance(sibling_envelope, dict)
-                    and sibling_envelope.get("activation_id") == activation_id
-                    and sibling_envelope.get("state") == "prepared"
-                ):
-                    sibling.operation_id = None
-                    sibling.operation_envelope = None
-                    sibling.state = "ready" if sibling.credential_id else "queued"
+            _release_prepared_siblings(row, slots, activation_id)
             if (
                 desired is not None
                 and isinstance(desired.activation_intent, dict)
@@ -795,12 +831,7 @@ async def fail_credential_operation(
                 desired.activation_intent["state"] = "outcome_unknown"
     row.error_code = error_code
     row.operation_envelope = envelope
-    if (
-        desired is not None
-        and unknown
-        and desired.desired_revision == int(envelope["revision"])
-        and desired.source_generation == envelope.get("source_generation")
-    ):
+    if unknown and _desired_matches_envelope(desired, envelope):
         desired.state = "reconciliation_required"
         desired.error_code = error_code
     await session.flush()

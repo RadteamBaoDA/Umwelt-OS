@@ -185,28 +185,20 @@ async def _status_cursor(
     return cursor, cursor_invalid, scope_sha256
 
 
-@router.get("/{source_id}/github/status")
-async def github_connection_status(
-    source_id: str,
-    session: Session,
-    request: Request,
-    _owner: OwnerRead,
-    scope: WorkspaceRead,
+async def _sync_status(
+    session: AsyncSession,
+    source: Any,
+    source_uuid: UUID,
+    grant: GithubOAuthGrant | None,
+    scope: WorkspaceContext,
+    flag: bool,
 ) -> dict[str, object]:
-    """Return a safe Settings grant, scan, and uncertainty summary without exposing token material.
+    """Build the safe scan/gap/hint summary shown in Settings for one GitHub source.
 
-    The Source must belong to the selected workspace (otherwise 404); the OAuth coordinator and
-    operation shown are the actor's own and the operation must carry this workspace.
+    Reads the last reset, the sweep cursor (GitHub sources only), unverified and exhausted hint
+    counts and the configured history window. An invalid draft configuration falls back to 90
+    days so the status poll still answers. Read-only; exposes no token material.
     """
-    flag = _flag(request)
-    await _admit(session, request, scope, lock=False)
-    source_uuid = UUID(source_id)
-    source = await sources.get_connector_source(
-        session, source_uuid, scope=scope, multi_workspace_enabled=flag
-    )
-    if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
-    grant = await session.get(GithubOAuthGrant, source_uuid)
     last_reset = await session.scalar(
         select(GithubSyncReset)
         .where(GithubSyncReset.source_id == source_uuid)
@@ -225,7 +217,7 @@ async def github_connection_status(
         except ValidationError:
             # A draft whose repository scope is not chosen yet has no valid config; the status poll must still answer.
             pass
-    sync_status = {
+    sync_status: dict[str, object] = {
         "history_days": history_days,
         "scope_sha256": scope_sha256,
         "last_reset_at": last_reset.reset_at if last_reset else None,
@@ -269,6 +261,32 @@ async def github_connection_status(
         if cursor is not None
         else [],
     }
+    return sync_status
+
+
+@router.get("/{source_id}/github/status")
+async def github_connection_status(
+    source_id: str,
+    session: Session,
+    request: Request,
+    _owner: OwnerRead,
+    scope: WorkspaceRead,
+) -> dict[str, object]:
+    """Return a safe Settings grant, scan, and uncertainty summary without exposing token material.
+
+    The Source must belong to the selected workspace (otherwise 404); the OAuth coordinator and
+    operation shown are the actor's own and the operation must carry this workspace.
+    """
+    flag = _flag(request)
+    await _admit(session, request, scope, lock=False)
+    source_uuid = UUID(source_id)
+    source = await sources.get_connector_source(
+        session, source_uuid, scope=scope, multi_workspace_enabled=flag
+    )
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    grant = await session.get(GithubOAuthGrant, source_uuid)
+    sync_status = await _sync_status(session, source, source_uuid, grant, scope, flag)
     coordinator = await session.get(GithubOAuthCoordinator, scope.user_id)
     operation = (
         await session.scalar(
