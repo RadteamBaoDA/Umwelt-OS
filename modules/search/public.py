@@ -178,33 +178,18 @@ class NewsSimilarityResult:
     capability: str
 
 
-async def compare_news_evidence_embeddings(
-    session: AsyncSession,
+def _news_similarity_statement(
+    generation: IndexGeneration,
     incoming_chunk_id: UUID,
     candidate_chunk_ids: tuple[UUID, ...],
     *,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> NewsSimilarityResult:
-    """Compare only active stored embeddings for current visible news chunks.
+    workspace_id: UUID,
+) -> Select[Any]:
+    """Build the cosine-similarity SELECT between one incoming chunk and its candidates.
 
-    No gateway call or embedding generation occurs here. Both sides must be
-    succeeded in the same active generation and current ready documents from
-    active remotely indexable sources. At most 100 candidates are inspected.
+    Both sides must be succeeded index items of ``generation`` and belong to current-version, ready
+    documents of active remotely indexable sources in ``workspace_id``. The caller applies the limit.
     """
-    if len(candidate_chunk_ids) > 100 or len(set(candidate_chunk_ids)) != len(candidate_chunk_ids):
-        raise ValueError("News similarity accepts at most 100 unique candidates")
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    if not candidate_chunk_ids:
-        return NewsSimilarityResult(items=(), capability="no_candidates")
-    generation = await session.scalar(
-        select(IndexGeneration).where(
-            IndexGeneration.workspace_id == scope.workspace_id,
-            IndexGeneration.status == "active",
-        )
-    )
-    if generation is None or generation.dimensions is None:
-        return NewsSimilarityResult(items=(), capability="index_unavailable")
     incoming = aliased(SearchIndexItem, name="news_incoming_index_item")
     candidate = aliased(SearchIndexItem, name="news_candidate_index_item")
     left_source = aliased(Source, name="news_incoming_source")
@@ -246,9 +231,9 @@ async def compare_news_evidence_embeddings(
             incoming.generation_id == generation.id,
             IndexGeneration.status == "active",
             candidate.chunk_id.in_(candidate_chunk_ids),
-            IndexGeneration.workspace_id == scope.workspace_id,
-            left_doc.workspace_id == scope.workspace_id,
-            right_doc.workspace_id == scope.workspace_id,
+            IndexGeneration.workspace_id == workspace_id,
+            left_doc.workspace_id == workspace_id,
+            right_doc.workspace_id == workspace_id,
             left_doc.current_version == left_version.version_number,
             right_doc.current_version == right_version.version_number,
             left_doc.extraction_status.in_(("ready", "succeeded")),
@@ -258,6 +243,39 @@ async def compare_news_evidence_embeddings(
             left_source.local_only.is_(False),
             right_source.local_only.is_(False),
         )
+    )
+    return stmt
+
+
+async def compare_news_evidence_embeddings(
+    session: AsyncSession,
+    incoming_chunk_id: UUID,
+    candidate_chunk_ids: tuple[UUID, ...],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> NewsSimilarityResult:
+    """Compare only active stored embeddings for current visible news chunks.
+
+    No gateway call or embedding generation occurs here. Both sides must be
+    succeeded in the same active generation and current ready documents from
+    active remotely indexable sources. At most 100 candidates are inspected.
+    """
+    if len(candidate_chunk_ids) > 100 or len(set(candidate_chunk_ids)) != len(candidate_chunk_ids):
+        raise ValueError("News similarity accepts at most 100 unique candidates")
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    if not candidate_chunk_ids:
+        return NewsSimilarityResult(items=(), capability="no_candidates")
+    generation = await session.scalar(
+        select(IndexGeneration).where(
+            IndexGeneration.workspace_id == scope.workspace_id,
+            IndexGeneration.status == "active",
+        )
+    )
+    if generation is None or generation.dimensions is None:
+        return NewsSimilarityResult(items=(), capability="index_unavailable")
+    stmt = _news_similarity_statement(
+        generation, incoming_chunk_id, candidate_chunk_ids, workspace_id=scope.workspace_id
     )
     rows: list[Any] = list((await session.execute(stmt.limit(101))).all())
     if len(rows) > 100:
@@ -718,25 +736,22 @@ async def _hybrid_vector_candidates(
         return [], "lexical", [FALLBACK_WARNING]
 
 
-async def _hydrate_hits(
+async def _hydration_rows(
     session: AsyncSession,
     request: SearchRequest,
     selected: list[UUID],
-    ranked: dict[UUID, float],
     *,
     destination: ToolDestination,
     source_generation_fences: dict[UUID, int] | None,
     scope: Scope,
     grants: Any,
-    member: bool,
-) -> tuple[list[SearchHit], dict[UUID, tuple[UUID, UUID, UUID, int]]]:
-    """Hydrate the selected page into hits plus the exact (document, version, source, generation) fences.
+) -> Sequence[Any]:
+    """Read the visible chunk/version/document/source rows for the ``selected`` ids.
 
-    Only current/active rows allowed by the original source generations and destination are read.
-    A member page with any vanished chunk fails whole (409) instead of returning a partial page;
-    owners silently skip vanished chunks. The extra look-ahead chunk is never hydrated.
+    Applies the destination, source-generation and member-grant filters of the original query; an empty
+    selection issues no SQL.
     """
-    rows: Sequence[Any] = (
+    return (
         (
             await session.execute(
                 _filters(
@@ -770,6 +785,35 @@ async def _hydrate_hits(
         ).all()
         if selected
         else []
+    )
+
+
+async def _hydrate_hits(
+    session: AsyncSession,
+    request: SearchRequest,
+    selected: list[UUID],
+    ranked: dict[UUID, float],
+    *,
+    destination: ToolDestination,
+    source_generation_fences: dict[UUID, int] | None,
+    scope: Scope,
+    grants: Any,
+    member: bool,
+) -> tuple[list[SearchHit], dict[UUID, tuple[UUID, UUID, UUID, int]]]:
+    """Hydrate the selected page into hits plus the exact (document, version, source, generation) fences.
+
+    Only current/active rows allowed by the original source generations and destination are read.
+    A member page with any vanished chunk fails whole (409) instead of returning a partial page;
+    owners silently skip vanished chunks. The extra look-ahead chunk is never hydrated.
+    """
+    rows = await _hydration_rows(
+        session,
+        request,
+        selected,
+        destination=destination,
+        source_generation_fences=source_generation_fences,
+        scope=scope,
+        grants=grants,
     )
     visible = {row[0]: row for row in rows}
     items: list[SearchHit] = []
@@ -823,6 +867,54 @@ async def _hydrate_hits(
             )
         )
     return items, expected_fences
+
+
+async def _require_member_page_current(
+    session: AsyncSession,
+    *,
+    member: bool,
+    current_ids: set[UUID],
+    expected_fences: dict[UUID, tuple[UUID, UUID, UUID, int]],
+    admitted_fence: AccessFence,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> None:
+    """Fail a member page whole (409) if any hydrated chunk vanished or the access fence moved.
+
+    Owners are never checked here: they silently drop vanished chunks. The access fence is re-read only
+    when every expected chunk is still current, exactly as the inline check short-circuited before.
+    """
+    if member and (
+        current_ids != set(expected_fences)
+        or await workspaces.read_access_fence(
+            session,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+        != admitted_fence
+    ):
+        raise _stale_member_read()
+
+
+def _fuse_rankings(
+    lexical: list[UUID],
+    vector: list[UUID],
+    *,
+    hybrid: bool,
+    offset: int,
+    limit: int,
+) -> tuple[dict[UUID, float], list[UUID]]:
+    """Fuse lexical (and, when ``hybrid``, vector) candidates by reciprocal rank (k=60).
+
+    Returns the score map and the ordered page slice ``[offset : offset + limit + 1]``; the extra
+    look-ahead id signals a next page. Ties break on the chunk id string for a stable order.
+    """
+    ranked: dict[UUID, float] = {}
+    for candidates in (lexical, vector) if hybrid else (lexical,):
+        for rank, chunk_id in enumerate(candidates, 1):
+            ranked[chunk_id] = ranked.get(chunk_id, 0.0) + 1 / (60 + rank)
+    ordered = sorted(ranked, key=lambda chunk_id: (-ranked[chunk_id], str(chunk_id)))
+    return ranked, ordered[offset : offset + limit + 1]
 
 
 async def search(
@@ -898,12 +990,9 @@ async def search(
             before_embedding_send=before_embedding_send,
             release_during_embed=release_during_embed,
         )
-    ranked: dict[UUID, float] = {}
-    for candidates in (lexical, vector) if effective_mode == "hybrid" else (lexical,):
-        for rank, chunk_id in enumerate(candidates, 1):
-            ranked[chunk_id] = ranked.get(chunk_id, 0.0) + 1 / (60 + rank)
-    ordered = sorted(ranked, key=lambda chunk_id: (-ranked[chunk_id], str(chunk_id)))
-    selected = ordered[offset : offset + request.limit + 1]
+    ranked, selected = _fuse_rankings(
+        lexical, vector, hybrid=effective_mode == "hybrid", offset=offset, limit=request.limit
+    )
     items, expected_fences = await _hydrate_hits(
         session,
         request,
@@ -924,16 +1013,15 @@ async def search(
         multi_workspace_enabled=multi_workspace_enabled,
         allow_member=member,
     )
-    if member and (
-        current_ids != set(expected_fences)
-        or await workspaces.read_access_fence(
-            session,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-        != admitted_fence
-    ):
-        raise _stale_member_read()
+    await _require_member_page_current(
+        session,
+        member=member,
+        current_ids=current_ids,
+        expected_fences=expected_fences,
+        admitted_fence=admitted_fence,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
     items = [item for item in items if item.chunk_id in current_ids]
     next_cursor = (
         _encode_cursor(

@@ -29,6 +29,40 @@ def queue_writable(redis_memory: dict[str, int]) -> bool | None:
     return redis_memory.get("used_bytes", 0) < max_bytes * QUEUE_FULL_RATIO
 
 
+async def _stored_configuration(session: AsyncSession, postgres: str) -> tuple[bool, bool]:
+    """Return ``(gateway_configured, n8n_stored)`` from saved AI settings; both False when Postgres is down or a probe fails.
+
+    Configured = some owner saved a provider with an endpoint (no env bootstrap); not a connectivity claim.
+    """
+    gateway_configured = n8n_stored = False
+    try:
+        async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
+            if postgres != "healthy":
+                raise TimeoutError
+            gateway_configured = bool(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT 1 FROM ai_settings, jsonb_each(providers) AS p(id, rec) "
+                            "WHERE rec->>'base_url' IS NOT NULL LIMIT 1"
+                        )
+                    )
+                ).first()
+            )
+            n8n_stored = bool(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT 1 FROM ai_settings WHERE n8n->>'api_key_ciphertext' IS NOT NULL LIMIT 1"
+                        )
+                    )
+                ).first()
+            )
+    except (SQLAlchemyError, TimeoutError):
+        pass
+    return gateway_configured, n8n_stored
+
+
 async def system_health(session: AsyncSession, redis: Redis, settings: Settings) -> dict[str, Any]:
     """Probe PostgreSQL, Redis, and worker heartbeat with bounded timeouts and report configured optional services without claiming connectivity."""
     started = time.perf_counter()
@@ -71,33 +105,7 @@ async def system_health(session: AsyncSession, redis: Redis, settings: Settings)
         model_worker_status = "unavailable"
         cron_worker_status = "unavailable"
 
-    # Configured = some owner saved a provider with an endpoint (no env bootstrap); not a connectivity claim.
-    gateway_configured = n8n_stored = False
-    try:
-        async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
-            if postgres != "healthy":
-                raise TimeoutError
-            gateway_configured = bool(
-                (
-                    await session.execute(
-                        text(
-                            "SELECT 1 FROM ai_settings, jsonb_each(providers) AS p(id, rec) "
-                            "WHERE rec->>'base_url' IS NOT NULL LIMIT 1"
-                        )
-                    )
-                ).first()
-            )
-            n8n_stored = bool(
-                (
-                    await session.execute(
-                        text(
-                            "SELECT 1 FROM ai_settings WHERE n8n->>'api_key_ciphertext' IS NOT NULL LIMIT 1"
-                        )
-                    )
-                ).first()
-            )
-    except (SQLAlchemyError, TimeoutError):
-        pass
+    gateway_configured, n8n_stored = await _stored_configuration(session, postgres)
     gateway_status = "configured" if gateway_configured else "unconfigured"
     components = {
         "postgres": {"status": postgres, "latency_ms": postgres_ms},

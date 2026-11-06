@@ -1026,6 +1026,40 @@ async def execute_browser_read(
     )
 
 
+def _browser_authorization(owner_id: int, row: BrowserReadJob) -> Any:
+    """Rebuild the run authorization captured on ``row`` so its authority can be revalidated unchanged."""
+    from modules.agents.public import BrowserRunAuthorization
+
+    return BrowserRunAuthorization(
+        owner_id,
+        row.run_id,
+        row.tool_slot,
+        row.arguments_hash,
+        row.auth_session_hash,
+        row.conversation_id,
+        row.profile_id,
+        row.profile_revision_hash,
+        frozenset(UUID(item) for item in row.authorized_source_ids),
+        row.claim_generation,
+        0,
+        0,
+        0,
+        0,
+    )
+
+
+def _grant_matches_read_job(grant: Any, row: BrowserReadJob) -> bool:
+    """True only when the live source grant is enabled and still matches every revision the job captured."""
+    return not (
+        grant is None
+        or not grant.enabled
+        or grant.scope_hash != row.scope_hash
+        or grant.source_generation != row.source_generation
+        or grant.connector_revision != row.connector_revision
+        or grant.grant_revision != row.grant_revision
+    )
+
+
 async def read_browser_result(
     session: AsyncSession,
     auth_session_hash: str,
@@ -1039,7 +1073,7 @@ async def read_browser_result(
     from sqlalchemy import select
 
     from core.auth.public import revalidate_account_session
-    from modules.agents.public import BrowserRunAuthorization, revalidate_browser_run_authority
+    from modules.agents.public import revalidate_browser_run_authority
     from modules.connectors import public as connectors
     from modules.tools.models import BrowserPageEvidence
 
@@ -1060,22 +1094,7 @@ async def read_browser_result(
         or row.expires_at <= datetime.now(row.expires_at.tzinfo)
     ):
         return None
-    authorization = BrowserRunAuthorization(
-        owner_id,
-        row.run_id,
-        row.tool_slot,
-        row.arguments_hash,
-        row.auth_session_hash,
-        row.conversation_id,
-        row.profile_id,
-        row.profile_revision_hash,
-        frozenset(UUID(item) for item in row.authorized_source_ids),
-        row.claim_generation,
-        0,
-        0,
-        0,
-        0,
-    )
+    authorization = _browser_authorization(owner_id, row)
     if row.auth_session_hash != auth_session_hash:
         return None
     async with session_factory() as fresh:
@@ -1098,14 +1117,7 @@ async def read_browser_result(
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
         )
-    if (
-        grant is None
-        or not grant.enabled
-        or grant.scope_hash != row.scope_hash
-        or grant.source_generation != row.source_generation
-        or grant.connector_revision != row.connector_revision
-        or grant.grant_revision != row.grant_revision
-    ):
+    if not _grant_matches_read_job(grant, row):
         return None
     pages = list(
         (

@@ -1,9 +1,6 @@
 {
   "core/model_gateway/client.py": 1791,
-  "modules/chat/routes.py": 1781,
   "modules/connectors/provider_specs.py": 1548,
   "modules/connectors/routes.py": 1680,
-  "modules/connectors/service/github_hints.py": 1573,
-  "modules/knowledge/documents/worker.py": 1671,
-  "modules/knowledge/observations/public.py": 1855
+  "modules/connectors/service/github_hints.py": 1561
 }

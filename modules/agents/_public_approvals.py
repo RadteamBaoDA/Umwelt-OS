@@ -31,6 +31,53 @@ from modules.tools.public import (
 )
 
 
+async def _conversation_approval_rows(
+    session: AsyncSession, run_ids: list[UUID], owner_id: int, *, scope: Scope
+) -> list[AgentApproval]:
+    """Read up to 50 newest owner approvals with stored arguments for ``run_ids`` in the caller's workspace."""
+    return list(
+        (
+            await session.scalars(
+                select(AgentApproval)
+                .where(
+                    AgentApproval.run_id.in_(run_ids),
+                    AgentApproval.workspace_id == scope.workspace_id,
+                    AgentApproval.owner_id == owner_id,
+                    AgentApproval.arguments.is_not(None),
+                    AgentApproval.status.in_(
+                        {"pending", "approved", "denied", "expired", "cancelled", "requires_review"}
+                    ),
+                )
+                .order_by(AgentApproval.created_at.desc())
+                .limit(50)
+            )
+        ).all()
+    )
+
+
+async def _approval_effects(
+    session: AsyncSession, rows: list[AgentApproval], *, scope: Scope
+) -> dict[UUID, tuple[str | None, str | None]]:
+    """Map each approval's action id to its effect ``(result_reference, state)``; empty when no rows."""
+    if not rows:
+        return {}
+    return {
+        item[0]: (item[1], item[2])
+        for item in (
+            await session.execute(
+                select(
+                    AgentEffect.action_id,
+                    AgentEffect.result_reference,
+                    AgentEffect.state,
+                ).where(
+                    AgentEffect.action_id.in_([item.action_id for item in rows]),
+                    AgentEffect.workspace_id == scope.workspace_id,
+                )
+            )
+        ).all()
+    }
+
+
 async def list_conversation_approvals(
     session: AsyncSession,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
@@ -60,43 +107,8 @@ async def list_conversation_approvals(
     )
     if not run_ids:
         return []
-    rows = list(
-        (
-            await session.scalars(
-                select(AgentApproval)
-                .where(
-                    AgentApproval.run_id.in_(run_ids),
-                    AgentApproval.workspace_id == scope.workspace_id,
-                    AgentApproval.owner_id == owner_id,
-                    AgentApproval.arguments.is_not(None),
-                    AgentApproval.status.in_(
-                        {"pending", "approved", "denied", "expired", "cancelled", "requires_review"}
-                    ),
-                )
-                .order_by(AgentApproval.created_at.desc())
-                .limit(50)
-            )
-        ).all()
-    )
-    effects = (
-        {
-            item[0]: (item[1], item[2])
-            for item in (
-                await session.execute(
-                    select(
-                        AgentEffect.action_id,
-                        AgentEffect.result_reference,
-                        AgentEffect.state,
-                    ).where(
-                        AgentEffect.action_id.in_([item.action_id for item in rows]),
-                        AgentEffect.workspace_id == scope.workspace_id,
-                    )
-                )
-            ).all()
-        }
-        if rows
-        else {}
-    )
+    rows = await _conversation_approval_rows(session, run_ids, owner_id, scope=scope)
+    effects = await _approval_effects(session, rows, scope=scope)
     reads: list[ApprovalRead] = []
     # The account session was revalidated above; one batched link check replaces a per-row query
     # (it also re-checks the Chat session and the link's retention window in Chat's own contract).

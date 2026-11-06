@@ -14,6 +14,7 @@ from modules.chat import routes, worker
 from modules.chat import user_input as ui
 from modules.chat.schemas import SubmitInputRequest
 from modules.chat.stream import format_sse_event
+from tests.unit.modules.chat._routes_patch import patch_routes
 
 WS = uuid4()
 
@@ -28,8 +29,8 @@ def _owner() -> Any:
 
 @pytest.fixture(autouse=True)
 def _scope(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        routes, "owner_default_scope", AsyncMock(return_value=SimpleNamespace(workspace_id=WS))
+    patch_routes(
+        monkeypatch, "owner_default_scope", AsyncMock(return_value=SimpleNamespace(workspace_id=WS))
     )
 
 
@@ -57,7 +58,7 @@ def test_body_is_strict() -> None:
 
 async def test_submit_success_commits(monkeypatch: pytest.MonkeyPatch) -> None:
     submit = AsyncMock(return_value="{}")
-    monkeypatch.setattr(routes, "submit_input", submit)
+    patch_routes(monkeypatch, "submit_input", submit)
     session, rid = _session(), uuid4()
     out = await routes.submit_response_input(
         rid, SubmitInputRequest(request_id="r1", answer="s1"), session, _owner()
@@ -82,8 +83,8 @@ async def test_submit_success_commits(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_submit_errors_map_to_http(
     monkeypatch: pytest.MonkeyPatch, status: int, code: str, commits: int
 ) -> None:
-    monkeypatch.setattr(
-        routes, "submit_input", AsyncMock(side_effect=ui.InputRequestError(status, code))
+    patch_routes(
+        monkeypatch, "submit_input", AsyncMock(side_effect=ui.InputRequestError(status, code))
     )
     session = _session()
     with pytest.raises(HTTPException) as exc:

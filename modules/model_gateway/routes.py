@@ -278,6 +278,28 @@ def _resolve_probe_target(
     return config, config.defaults.resolve(role), None
 
 
+def _draft_probe_policy(owner: Any, identity: str, destination: str | None) -> RequestPolicy:
+    """Build the transient request policy authorizing one synthetic draft probe against ``destination``.
+
+    The user-initiated probe is the explicit, transient authorization; it cannot create production capability
+    evidence (configuration revision 0, no saved role mapping).
+    """
+    return RequestPolicy(
+        workspace_id=owner.workspace_id,
+        actor_user_id=owner.user_id,
+        membership_revision=owner.membership_revision,
+        gateway_identity=identity,
+        # A user-initiated synthetic draft probe is the explicit, transient
+        # authorization; it cannot create production capability evidence.
+        reasoning_allowed=True,
+        embeddings_allowed=True,
+        permitted_destinations=frozenset({destination} if destination else set()),
+        reasoning_destinations=frozenset({destination}),
+        embedding_destinations=frozenset({destination}),
+        configuration_revision=0,
+    )
+
+
 @router.post("/draft-test", dependencies=[Depends(require_budget("model_probe", 10, 60))])
 async def probe_draft(
     request: Request,
@@ -310,20 +332,7 @@ async def probe_draft(
         ).encode()
     ).hexdigest()
     await session.rollback()
-    policy = RequestPolicy(
-        workspace_id=_owner.workspace_id,
-        actor_user_id=_owner.user_id,
-        membership_revision=_owner.membership_revision,
-        gateway_identity=identity,
-        # A user-initiated synthetic draft probe is the explicit, transient
-        # authorization; it cannot create production capability evidence.
-        reasoning_allowed=True,
-        embeddings_allowed=True,
-        permitted_destinations=frozenset({destination} if destination else set()),
-        reasoning_destinations=frozenset({destination}),
-        embedding_destinations=frozenset({destination}),
-        configuration_revision=0,
-    )
+    policy = _draft_probe_policy(_owner, identity, destination)
     if body.capability in {"embeddings", "reranking"} and not policy.embeddings_allowed:
         raise HTTPException(status_code=403, detail="Probe denied by privacy policy")
     if body.capability not in {"embeddings", "reranking"} and not policy.reasoning_allowed:

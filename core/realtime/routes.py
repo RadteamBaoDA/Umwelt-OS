@@ -632,6 +632,64 @@ async def _read_replay_page(
         await _cleanup_session(session)
 
 
+async def _stream_body(
+    request: Request,
+    *,
+    workspace: WorkspaceContext,
+    fence: AccessFence,
+    auth_session: AccountSessionRef,
+    head: ReplayState,
+    initial: ReplayCursor,
+    initial_reason: str | None,
+) -> AsyncIterator[str]:
+    """Stream body for ``stream_events``: yield an immediate retry preamble, then detached same-stream events/resync or 15s heartbeat.
+
+    The preamble carries no `id:` so it never moves the replay cursor; no SQL transaction survives a yield.
+    """
+    position = initial
+    if initial_reason:
+        yield _resync(
+            initial_reason, ReplayCursor(epoch=head.epoch, sequence=head.sequence).encode()
+        )
+        return
+    # The Next /api rewrite proxy holds response headers until the first body byte, so without an
+    # immediate chunk EventSource.onopen would not fire until the first heartbeat (UI stuck "Connecting").
+    yield "retry: 3000\n\n"
+    last_heartbeat = asyncio.get_running_loop().time()
+    while not await request.is_disconnected():
+        try:
+            page = await _read_replay_page(
+                request,
+                workspace=workspace,
+                fence=fence,
+                auth_session=auth_session,
+                position=position,
+            )
+        except (HTTPException, TimeoutError, SQLAlchemyError):
+            return
+        if page.reason:
+            yield _resync(
+                page.reason,
+                ReplayCursor(epoch=page.head.epoch, sequence=page.head.sequence).encode(),
+            )
+            return
+        if page.messages:
+            for event_position, message in page.messages:
+                if await request.is_disconnected():
+                    return
+                yield message
+                # A downstream send failure closes/cancels this iterator. Advancing
+                # locally after yield therefore cannot resume a failed connection.
+                position = event_position
+            last_heartbeat = asyncio.get_running_loop().time()
+            continue
+        now = asyncio.get_running_loop().time()
+        if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
+            yield ": heartbeat\n\n"
+            last_heartbeat = now
+        await _wait_for_realtime_wakeup(request, workspace.workspace_id, POLL_INTERVAL_SECONDS)
+
+
 @router.get("/events")
 async def stream_events(
     session: Session,
@@ -669,53 +727,15 @@ async def stream_events(
         else None
     )
 
-    async def body() -> AsyncIterator[str]:
-        """Yield an immediate retry preamble, then detached same-stream events/resync or 15s heartbeat.
-
-        The preamble carries no `id:` so it never moves the replay cursor; no SQL transaction survives a yield.
-        """
-        position = initial
-        if initial_reason:
-            yield _resync(
-                initial_reason, ReplayCursor(epoch=head.epoch, sequence=head.sequence).encode()
-            )
-            return
-        # The Next /api rewrite proxy holds response headers until the first body byte, so without an
-        # immediate chunk EventSource.onopen would not fire until the first heartbeat (UI stuck "Connecting").
-        yield "retry: 3000\n\n"
-        last_heartbeat = asyncio.get_running_loop().time()
-        while not await request.is_disconnected():
-            try:
-                page = await _read_replay_page(
-                    request,
-                    workspace=workspace,
-                    fence=fence,
-                    auth_session=auth_session,
-                    position=position,
-                )
-            except (HTTPException, TimeoutError, SQLAlchemyError):
-                return
-            if page.reason:
-                yield _resync(
-                    page.reason,
-                    ReplayCursor(epoch=page.head.epoch, sequence=page.head.sequence).encode(),
-                )
-                return
-            if page.messages:
-                for event_position, message in page.messages:
-                    if await request.is_disconnected():
-                        return
-                    yield message
-                    # A downstream send failure closes/cancels this iterator. Advancing
-                    # locally after yield therefore cannot resume a failed connection.
-                    position = event_position
-                last_heartbeat = asyncio.get_running_loop().time()
-                continue
-            now = asyncio.get_running_loop().time()
-            if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
-                yield ": heartbeat\n\n"
-                last_heartbeat = now
-            await _wait_for_realtime_wakeup(request, workspace.workspace_id, POLL_INTERVAL_SECONDS)
+    body = _stream_body(
+        request,
+        workspace=workspace,
+        fence=fence,
+        auth_session=auth_session,
+        head=head,
+        initial=initial,
+        initial_reason=initial_reason,
+    )
 
     semaphore: asyncio.Semaphore = request.app.state.realtime_connections
     acquired = False
@@ -732,7 +752,7 @@ async def stream_events(
             ) from exc
         response = _RealtimeResponse(
             _PollingStreamingResponse(
-                body(),
+                body,
                 media_type="text/event-stream",
                 headers={
                     **_PRIVATE_HEADERS,

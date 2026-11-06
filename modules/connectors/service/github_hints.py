@@ -3,7 +3,6 @@
 Internal implementation behind ``modules.connectors.public`` (the stable facade).
 """
 
-import base64
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -29,7 +28,6 @@ from core.errors import (
     ValidationFailedError,
 )
 from core.ids import uuid7
-from core.pagination import b64url_encode
 from core.workspaces.schemas import AccessFence, InternalJobScope, Scope
 from modules.connectors.models import (
     ConnectorProvisioning,
@@ -38,6 +36,10 @@ from modules.connectors.models import (
     GithubWebhookCapacity,
     GithubWebhookDelivery,
     GithubWebhookOutbox,
+)
+from modules.connectors.service._github_bindings import (
+    _decode_binding_cursor,
+    _encode_binding_cursor,
 )
 from modules.sources.public import ConnectorSource, SourceFence
 
@@ -352,6 +354,46 @@ async def persist_verified_github_delivery(
     )
 
 
+def _build_event_binding(
+    scope: Any, access_fence: Any, source: Any, grant: Any, revision: int
+) -> GitHubEventBinding:
+    """Project one Source and its OAuth grant into an event binding with its enabled resource scope.
+
+    Raises ``TypeError``/``ValueError`` when the stored source configuration no longer projects, which the
+    caller treats as "skip this binding". Pure apart from the lazy schema import.
+    """
+    from modules.connectors.github.schemas import project_github_source_config
+
+    config = project_github_source_config(source.configuration)
+    resources = tuple(
+        name
+        for name, enabled in (
+            ("issue", config.include_issues),
+            ("pull", config.include_pulls),
+            ("commit", config.include_commits),
+            ("release", config.include_releases),
+        )
+        if enabled
+    )
+    return GitHubEventBinding(
+        workspace_id=scope.workspace_id,
+        actor_user_id=scope.actor_user_id,
+        membership_revision=scope.membership_revision,
+        workspace_configuration_revision=access_fence.configuration_revision,
+        source_id=source.id,
+        source_status=source.status,
+        source_generation=source.generation,
+        connector_revision=revision,
+        grant_state=grant.state,
+        grant_expires_at=grant.expires_at,
+        repository_id=grant.repository_id,
+        installation_id=grant.installation_id,
+        app_id=grant.app_id,
+        binding_revision=grant.binding_revision,
+        resource_scope=resources,
+    )
+
+
 async def list_github_event_bindings(
     session: AsyncSession,
     *,
@@ -378,19 +420,7 @@ async def list_github_event_bindings(
         raise PermissionError("Instance binding enumeration requires configured operator admission")
     if isinstance(limit, bool) or not 1 <= limit <= 50:
         raise ValueError("GitHub binding page limit must be between 1 and 50")
-    after: UUID | None = None
-    if cursor is not None:
-        try:
-            decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
-            if (
-                decoded.get("app") != app_id
-                or decoded.get("installation") != installation_id
-                or decoded.get("repository") != repository_id
-            ):
-                raise ValueError
-            after = UUID(decoded["after"])
-        except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
-            raise ValueError("GitHub binding cursor is invalid") from exc
+    after = _decode_binding_cursor(cursor, app_id, installation_id, repository_id)
     query = select(GithubOAuthGrant.source_id).where(
         GithubOAuthGrant.app_id == app_id,
         GithubOAuthGrant.installation_id == installation_id,
@@ -437,56 +467,14 @@ async def list_github_event_bindings(
             else grant.configuration_revision
         )
         try:
-            from modules.connectors.github.schemas import project_github_source_config
-
-            config = project_github_source_config(source.configuration)
-            resources = tuple(
-                name
-                for name, enabled in (
-                    ("issue", config.include_issues),
-                    ("pull", config.include_pulls),
-                    ("commit", config.include_commits),
-                    ("release", config.include_releases),
-                )
-                if enabled
-            )
-            bindings.append(
-                GitHubEventBinding(
-                    workspace_id=scope.workspace_id,
-                    actor_user_id=scope.actor_user_id,
-                    membership_revision=scope.membership_revision,
-                    workspace_configuration_revision=access_fence.configuration_revision,
-                    source_id=source.id,
-                    source_status=source.status,
-                    source_generation=source.generation,
-                    connector_revision=revision,
-                    grant_state=grant.state,
-                    grant_expires_at=grant.expires_at,
-                    repository_id=grant.repository_id,
-                    installation_id=grant.installation_id,
-                    app_id=grant.app_id,
-                    binding_revision=grant.binding_revision,
-                    resource_scope=resources,
-                )
-            )
+            bindings.append(_build_event_binding(scope, access_fence, source, grant, revision))
         except (TypeError, ValueError):
             continue
-    next_cursor = None
-    if has_more and page:
-        token = json.dumps(
-            {
-                "app": app_id,
-                "installation": installation_id,
-                "repository": repository_id,
-                "after": str(page[-1]),
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        ).encode()
-        next_cursor = b64url_encode(token)
-        if len(next_cursor) > 512:
-            raise ValueError("GitHub binding cursor exceeds its bound")
+    next_cursor = (
+        _encode_binding_cursor(app_id, installation_id, repository_id, page[-1])
+        if has_more and page
+        else None
+    )
     return GitHubEventBindingPage(items=tuple(bindings), next_cursor=next_cursor)
 
 

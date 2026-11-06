@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, text, tuple_
+from sqlalchemy import Select, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.errors import (
@@ -241,6 +241,51 @@ async def create_profile_run_in_uow(
     return _read(run)
 
 
+def _run_history_statement(
+    scope: Scope,
+    owner_id: Any,
+    profile_id: str | None,
+    conversation_id: UUID | None,
+    scan_anchor: tuple[datetime, UUID] | None,
+) -> Select[AgentRun]:
+    """Build the owner-scoped run-history candidate query, narrowed by profile, conversation link and scan anchor."""
+    statement = select(AgentRun).where(
+        AgentRun.workspace_id == scope.workspace_id,
+        AgentRun.owner_id == owner_id,
+    )
+    if profile_id is not None:
+        statement = statement.where(AgentRun.agent_id == profile_id)
+    if conversation_id is not None:
+        # Unlinked runs are never visible in a conversation view; filtering in SQL avoids
+        # loading whole rows (prompt/answer/activities) only to drop them in Python.
+        statement = statement.where(AgentRun.chat_link_required.is_(True))
+    if scan_anchor is not None:
+        statement = statement.where(tuple_(AgentRun.created_at, AgentRun.id) < scan_anchor)
+    return statement
+
+
+async def _live_linked_run_ids(
+    session: AsyncSession,
+    batch: list[AgentRun],
+    owner_id: Any,
+    auth_session_hash: str | None,
+    conversation_id: UUID | None,
+) -> Any:
+    """Return the ids of Chat-linked runs in ``batch`` that Chat still reports live for this session (empty without a session hash)."""
+    from modules.chat.public import filter_live_agent_run_ids
+
+    linked_ids = [row.id for row in batch if row.chat_link_required]
+    if linked_ids and auth_session_hash:
+        return await filter_live_agent_run_ids(
+            session,
+            linked_ids,
+            owner_id,
+            auth_session_hash or "",
+            conversation_id=conversation_id,
+        )
+    return frozenset()
+
+
 async def list_runs(
     session: AsyncSession,
     *,
@@ -278,18 +323,9 @@ async def list_runs(
     has_more = False
     scan_anchor = anchor
     while scanned < 100 and len(page) <= limit:
-        statement = select(AgentRun).where(
-            AgentRun.workspace_id == scope.workspace_id,
-            AgentRun.owner_id == owner_id,
+        statement = _run_history_statement(
+            scope, owner_id, profile_id, conversation_id, scan_anchor
         )
-        if profile_id is not None:
-            statement = statement.where(AgentRun.agent_id == profile_id)
-        if conversation_id is not None:
-            # Unlinked runs are never visible in a conversation view; filtering in SQL avoids
-            # loading whole rows (prompt/answer/activities) only to drop them in Python.
-            statement = statement.where(AgentRun.chat_link_required.is_(True))
-        if scan_anchor is not None:
-            statement = statement.where(tuple_(AgentRun.created_at, AgentRun.id) < scan_anchor)
         batch = list(
             (
                 await session.scalars(
@@ -302,19 +338,8 @@ async def list_runs(
         )
         if not batch:
             break
-        from modules.chat.public import filter_live_agent_run_ids
-
-        linked_ids = [row.id for row in batch if row.chat_link_required]
-        live_ids = (
-            await filter_live_agent_run_ids(
-                session,
-                linked_ids,
-                owner_id,
-                auth_session_hash or "",
-                conversation_id=conversation_id,
-            )
-            if linked_ids and auth_session_hash
-            else frozenset()
+        live_ids = await _live_linked_run_ids(
+            session, batch, owner_id, auth_session_hash, conversation_id
         )
         for row in batch:
             scanned += 1

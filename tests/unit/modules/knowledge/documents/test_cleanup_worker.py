@@ -13,6 +13,7 @@ from sqlalchemy.dialects import postgresql
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.knowledge.documents import public, worker
 from modules.knowledge.documents.schemas import DocumentCleanupJobIdentity
+from tests.unit.modules.knowledge.documents._worker_patch import patch_worker
 
 WS, SRC, OP, EVENT = uuid4(), uuid4(), uuid4(), uuid4()
 CLAIM = datetime(2026, 1, 1, tzinfo=UTC)
@@ -88,7 +89,7 @@ async def test_resolver_none_means_no_receipt_read_no_uri_lock_no_owner_call() -
             worker.ingestion, "resolve_ingestion_event_scope", AsyncMock(return_value=None)
         ),
         patch.object(worker.documents, "lock_raw_uri_identity", AsyncMock()) as uri_lock,
-        patch.object(worker, "lock_export_privacy_in_uow", AsyncMock()) as privacy,
+        patch_worker("lock_export_privacy_in_uow", AsyncMock()) as privacy,
     ):
         proceed = await worker._advance_raw_document_cleanup(
             _factory(session), MagicMock(), False, EVENT
@@ -113,9 +114,7 @@ async def test_stale_configuration_is_not_admitted() -> None:
         patch.object(
             worker.documents, "read_document_cleanup_job_identity", AsyncMock(return_value=IDENTITY)
         ),
-        patch.object(
-            worker, "read_access_fence", AsyncMock(return_value=AccessFence(WS, 7, 3, 99))
-        ),
+        patch_worker("read_access_fence", AsyncMock(return_value=AccessFence(WS, 7, 3, 99))),
     ):
         assert await worker._admit_cleanup(session, EVENT, False) is None
     for status, claim in (("pending", CLAIM), ("queued", None)):  # not a claimed queued event
@@ -153,11 +152,10 @@ async def test_authorization_loss_is_not_admitted() -> None:
 def _raw_patches(receipt, *, claim=True, referenced=False, calls=None):
     calls = calls or _Calls()
     return calls, [
-        patch.object(worker, "_admit_cleanup", AsyncMock(return_value=ADMITTED)),
-        patch.object(worker, "lock_export_privacy_in_uow", calls.mock("privacy")),
+        patch_worker("_admit_cleanup", AsyncMock(return_value=ADMITTED)),
+        patch_worker("lock_export_privacy_in_uow", calls.mock("privacy")),
         patch.object(worker.documents, "lock_raw_uri_identity", calls.mock("uri")),
-        patch.object(
-            worker,
+        patch_worker(
             "_lock_claim",
             AsyncMock(side_effect=lambda *a: calls.order.append("event") or claim),
         ),
@@ -166,9 +164,9 @@ def _raw_patches(receipt, *, claim=True, referenced=False, calls=None):
             "raw_uri_is_referenced_for_cleanup",
             referenced if isinstance(referenced, AsyncMock) else AsyncMock(return_value=referenced),
         ),
-        patch.object(worker, "_commit", AsyncMock()),
-        patch.object(worker, "_publish_wakeups", AsyncMock()),
-        patch.object(worker, "_hint", MagicMock()),
+        patch_worker("_commit", AsyncMock()),
+        patch_worker("_publish_wakeups", AsyncMock()),
+        patch_worker("_hint", MagicMock()),
     ]
 
 
@@ -180,7 +178,7 @@ async def _run_raw(receipt, session=None, **kwargs):
     for item in patches:
         item.start()
     try:
-        with patch.object(worker, "get_storage_backend", MagicMock(return_value=backend)):
+        with patch_worker("get_storage_backend", MagicMock(return_value=backend)):
             proceed = await worker._advance_raw_document_cleanup(
                 _factory(session),
                 SimpleNamespace(data_dir="d"),
@@ -230,8 +228,7 @@ async def test_raw_traversal_uri_fails_closed() -> None:
     for item in patches:
         item.start()
     try:
-        with patch.object(
-            worker,
+        with patch_worker(
             "get_storage_backend",
             MagicMock(
                 return_value=SimpleNamespace(delete=AsyncMock(side_effect=ValueError("outside")))
@@ -296,8 +293,8 @@ async def test_agent_preflight_after_admission_and_blocked_defers_without_privac
     agents = MagicMock(preflight_document_copied_evidence_lease=preflight)
     admit = AsyncMock(return_value=ADMITTED)
     with (
-        patch.object(worker, "_admit_cleanup", admit),
-        patch.object(worker, "_attempt_progress_snapshot", return_value=("p",)),
+        patch_worker("_admit_cleanup", admit),
+        patch_worker("_attempt_progress_snapshot", return_value=("p",)),
         patch.object(
             worker.documents,
             "list_document_cleanup_evidence_scope",
@@ -305,9 +302,9 @@ async def test_agent_preflight_after_admission_and_blocked_defers_without_privac
         ),
         patch.dict("sys.modules", {"modules.agents.public": agents}),
         patch("modules.agents.public", agents, create=True),
-        patch.object(worker, "lock_export_privacy_in_uow", AsyncMock()) as privacy,
-        patch.object(worker, "_settle", AsyncMock(return_value=True)) as settle,
-        patch.object(worker, "_commit", AsyncMock()) as commit,
+        patch_worker("lock_export_privacy_in_uow", AsyncMock()) as privacy,
+        patch_worker("_settle", AsyncMock(return_value=True)) as settle,
+        patch_worker("_commit", AsyncMock()) as commit,
     ):
         attempt = worker._Attempt()
         committed = await worker._advance_copied_cleanup(_factory(session), False, EVENT, attempt)
@@ -322,7 +319,7 @@ async def test_agent_preflight_after_admission_and_blocked_defers_without_privac
 
 async def test_copied_stage_not_admitted_performs_no_receipt_read() -> None:
     session = _session()
-    with patch.object(worker, "_admit_cleanup", AsyncMock(return_value=None)):
+    with patch_worker("_admit_cleanup", AsyncMock(return_value=None)):
         assert (
             await worker._advance_copied_cleanup(_factory(session), False, EVENT, worker._Attempt())
             is False
@@ -358,14 +355,14 @@ async def _recover(
     attempt = worker._Attempt(admitted=ADMITTED, progress=progress, stage=stage)
     settle = AsyncMock(return_value=True)
     with (
-        patch.object(worker, "_admit_cleanup", AsyncMock(return_value=admitted)),
-        patch.object(worker, "lock_export_privacy_in_uow", AsyncMock()),
-        patch.object(worker, "_attempt_progress_snapshot", return_value=snapshot_value),
-        patch.object(worker, "_lock_claim", AsyncMock(return_value=True)),
-        patch.object(worker, "_hint", MagicMock()),
-        patch.object(worker, "_settle", settle),
-        patch.object(worker, "_commit", AsyncMock()) as commit,
-        patch.object(worker, "_publish_wakeups", AsyncMock()),
+        patch_worker("_admit_cleanup", AsyncMock(return_value=admitted)),
+        patch_worker("lock_export_privacy_in_uow", AsyncMock()),
+        patch_worker("_attempt_progress_snapshot", return_value=snapshot_value),
+        patch_worker("_lock_claim", AsyncMock(return_value=True)),
+        patch_worker("_hint", MagicMock()),
+        patch_worker("_settle", settle),
+        patch_worker("_commit", AsyncMock()) as commit,
+        patch_worker("_publish_wakeups", AsyncMock()),
     ):
         await worker._recover_attempt(_factory(session), False, EVENT, attempt, malformed=malformed)
     return settle, commit, session
@@ -424,7 +421,7 @@ async def test_reconcilers_use_one_distinct_session_per_id_and_skip_unadmitted()
         patch.object(
             worker.documents, "pending_document_memory_cleanup_ids", AsyncMock(return_value=ids)
         ),
-        patch.object(worker, "_reopen_cleanup_event", opened),
+        patch_worker("_reopen_cleanup_event", opened),
     ):
         assert await worker.reconcile_document_memory_cleanup(ctx) == 2
     assert opened.await_count == 3
@@ -452,7 +449,7 @@ async def test_reopen_publishes_exact_envelope_under_receipt_scope_and_skips_leg
         ),
         patch.object(worker.ingestion, "get_document_cleanup_event", AsyncMock(return_value=None)),
         patch.object(worker.ingestion, "publish_event", publish),
-        patch.object(worker, "commit_with_replay", AsyncMock()) as commit,
+        patch_worker("commit_with_replay", AsyncMock()) as commit,
     ):
         assert (
             await worker._reopen_cleanup_event(_factory(session), False, OP, datetime.now(UTC))
@@ -477,7 +474,7 @@ async def test_reopen_failed_quarantined_event_cas_on_status_and_claim() -> None
         ),
         patch.object(worker.ingestion, "get_document_cleanup_event", AsyncMock(return_value=event)),
         patch.object(worker.ingestion, "settle_document_cleanup_event_in_uow", settle),
-        patch.object(worker, "commit_with_replay", AsyncMock()),
+        patch_worker("commit_with_replay", AsyncMock()),
     ):
         assert (
             await worker._reopen_cleanup_event(_factory(_session()), False, OP, datetime.now(UTC))
@@ -558,7 +555,7 @@ async def test_cleanup_is_not_module_gated() -> None:
     assert "module_is_enabled" not in source.replace("``module_is_enabled``", "")
     with (
         patch("modules.settings.public.module_is_enabled", AsyncMock()) as gate,
-        patch.object(worker, "_admit_cleanup", AsyncMock(return_value=None)),
+        patch_worker("_admit_cleanup", AsyncMock(return_value=None)),
     ):
         ctx = {
             "session_factory": _factory(_session()),

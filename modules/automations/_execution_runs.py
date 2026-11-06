@@ -389,6 +389,87 @@ def _destination_stale(settings: Settings, spec: Mapping[str, Any], bound: str |
         return True
 
 
+async def _approval_problem(
+    session: AsyncSession,
+    run: AutomationRun,
+    row: AutomationRunAction,
+    rev: AutomationRevision | None,
+    spec: Any,
+    ordinal: int,
+    now: datetime,
+    settings: Settings,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: Any,
+) -> tuple[str, str] | None:
+    """Return ``(error_code, message)`` for the first reason an approval decision cannot proceed, else ``None``.
+
+    Checks run in a fixed order and stop at the first failure: expiry, approval-hash match, document trigger
+    evidence, revision fence, webhook destination drift, then missing module dependencies. Read-only.
+    """
+    if row.approval_expires_at is None or row.approval_expires_at <= now:
+        return ("approval_expired", "Approval expired")
+    if spec is None or row.approval_hash != _approval_hash(
+        run, ordinal, spec, row.destination_revision
+    ):
+        return ("approval_mismatch", "Approval no longer matches the action")
+    if not await _run_evidence_current(
+        session,
+        run,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    ):
+        return (
+            "document_evidence_unavailable",
+            "Document trigger evidence is no longer available",
+        )
+    if not await _fence_current(session, run, scope=scope):
+        return ("stale_revision", "Rule changed after this run was queued")
+    if _destination_stale(settings, spec, row.destination_revision):
+        return (
+            "stale_destination",
+            "Webhook destination changed after this approval was requested",
+        )
+    if rev is not None and dependencies_missing(rev):
+        return ("dependency_unavailable", "A required module is unavailable")
+    return None
+
+
+async def _record_rejected_decision(
+    session: AsyncSession,
+    run: AutomationRun,
+    row: AutomationRunAction,
+    problem: tuple[str, str],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: Any,
+) -> None:
+    """Persist that an approval decision hit ``problem``: fence-class problems drop the run, others fail it.
+
+    Marks the action and run terminal, skips remaining pending actions and commits so the caller can raise
+    ``RunConflict`` afterwards without losing the recorded outcome.
+    """
+    dropped = problem[0] in (
+        "stale_revision",
+        "stale_destination",
+        "dependency_unavailable",
+        "document_evidence_unavailable",
+    )
+    row.status, row.error_code = ("skipped" if dropped else "failed"), problem[0]
+    _finish(run, "dropped" if dropped else "failed", problem[0])
+    await _skip_pending(session, run.id, problem[0])
+    await commit_with_replay(
+        session,
+        [],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
+
+
 async def decide_action(
     session: AsyncSession,
     session_hash: str,
@@ -444,46 +525,25 @@ async def decide_action(
         )
     )
     spec = rev.actions[ordinal - 1] if rev is not None and ordinal <= len(rev.actions) else None
-    problem = None
-    if row.approval_expires_at is None or row.approval_expires_at <= now:
-        problem = ("approval_expired", "Approval expired")
-    elif spec is None or row.approval_hash != _approval_hash(
-        run, ordinal, spec, row.destination_revision
-    ):
-        problem = ("approval_mismatch", "Approval no longer matches the action")
-    elif not await _run_evidence_current(
+    problem = await _approval_problem(
         session,
         run,
+        row,
+        rev,
+        spec,
+        ordinal,
+        now,
+        settings,
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
         access_fence=fence,
-    ):
-        problem = (
-            "document_evidence_unavailable",
-            "Document trigger evidence is no longer available",
-        )
-    elif not await _fence_current(session, run, scope=scope):
-        problem = ("stale_revision", "Rule changed after this run was queued")
-    elif _destination_stale(settings, spec, row.destination_revision):
-        problem = (
-            "stale_destination",
-            "Webhook destination changed after this approval was requested",
-        )
-    elif rev is not None and dependencies_missing(rev):
-        problem = ("dependency_unavailable", "A required module is unavailable")
+    )
     if problem is not None:
-        dropped = problem[0] in (
-            "stale_revision",
-            "stale_destination",
-            "dependency_unavailable",
-            "document_evidence_unavailable",
-        )
-        row.status, row.error_code = ("skipped" if dropped else "failed"), problem[0]
-        _finish(run, "dropped" if dropped else "failed", problem[0])
-        await _skip_pending(session, run.id, problem[0])
-        await commit_with_replay(
+        await _record_rejected_decision(
             session,
-            [],
+            run,
+            row,
+            problem,
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
             access_fence=fence,

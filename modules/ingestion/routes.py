@@ -322,6 +322,60 @@ async def _existing_duplicate_document(
     return existing
 
 
+async def _stage_upload(
+    request: Request,
+    session: AsyncSession,
+    *,
+    scope: WorkspaceContext,
+    upload: UploadFile,
+    access_fence: Any,
+    session_ref: Any,
+) -> tuple[UUID, str, str, str, int, str]:
+    """Validate and write the upload bytes under the workspace storage lease, off the SQL transaction.
+
+    Returns ``(document_id, mime_type, original_name, raw_uri, size, sha256)``. Raises 503 when workspace
+    storage is busy, 413/415 for size/type rejection, and propagates revalidation failures from the lease.
+    """
+    settings = request.app.state.settings
+    storage = get_storage_backend(settings)
+    enabled = settings.multi_workspace_enabled
+    try:
+        # Reads up to the size cap from the spooled file: keep it off the event loop, and join the
+        # thread on cancellation so the request cannot close the temp file while it is still read.
+        suffix, mime_type, original_name = await to_thread_joined(
+            validate_upload, upload.filename, upload.content_type, upload.file
+        )
+        await session.rollback()
+        document_id = uuid7()
+        async with workspace_storage_lease(
+            request.app.state.session_factory, scope.workspace_id
+        ) as connection:
+            # Use the lease's connection for revalidation: a burst of uploads must not hold
+            # every pool slot and then deadlock waiting for a second SQL connection each.
+            await _revalidate_access_on_lease(
+                connection,
+                scope=scope,
+                access_fence=access_fence,
+                multi_workspace_enabled=enabled,
+                session_ref=session_ref,
+            )
+            stored = await storage.put_stream(
+                build_document_key(scope.workspace_id, document_id, suffix),
+                iter_upload(upload),
+                settings.upload_max_bytes,
+                workspace_id=scope.workspace_id,
+            )
+            raw_uri, size, digest = stored.key, stored.size, stored.sha256
+    except WorkspaceStorageBusy as exc:
+        raise HTTPException(
+            status_code=503, detail="Workspace storage is temporarily unavailable"
+        ) from exc
+    except ValueError as exc:
+        status = 413 if "size limit" in str(exc) else 415
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    return document_id, mime_type, original_name, raw_uri, size, digest
+
+
 async def _intake_upload(
     request: Request,
     session: AsyncSession,
@@ -357,40 +411,14 @@ async def _intake_upload(
     await session.rollback()
     if upload.size is not None and upload.size > settings.upload_max_bytes:
         raise HTTPException(status_code=413, detail="Upload exceeds the configured size limit")
-    try:
-        # Reads up to the size cap from the spooled file: keep it off the event loop, and join the
-        # thread on cancellation so the request cannot close the temp file while it is still read.
-        suffix, mime_type, original_name = await to_thread_joined(
-            validate_upload, upload.filename, upload.content_type, upload.file
-        )
-        await session.rollback()
-        document_id = uuid7()
-        async with workspace_storage_lease(
-            request.app.state.session_factory, scope.workspace_id
-        ) as connection:
-            # Use the lease's connection for revalidation: a burst of uploads must not hold
-            # every pool slot and then deadlock waiting for a second SQL connection each.
-            await _revalidate_access_on_lease(
-                connection,
-                scope=scope,
-                access_fence=access_fence,
-                multi_workspace_enabled=enabled,
-                session_ref=session_ref,
-            )
-            stored = await storage.put_stream(
-                build_document_key(scope.workspace_id, document_id, suffix),
-                iter_upload(upload),
-                settings.upload_max_bytes,
-                workspace_id=scope.workspace_id,
-            )
-            raw_uri, size, digest = stored.key, stored.size, stored.sha256
-    except WorkspaceStorageBusy as exc:
-        raise HTTPException(
-            status_code=503, detail="Workspace storage is temporarily unavailable"
-        ) from exc
-    except ValueError as exc:
-        status = 413 if "size limit" in str(exc) else 415
-        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    document_id, mime_type, original_name, raw_uri, size, digest = await _stage_upload(
+        request,
+        session,
+        scope=scope,
+        upload=upload,
+        access_fence=access_fence,
+        session_ref=session_ref,
+    )
     filename = _display_filename(original_name)
     try:
         await lock_access_fence(

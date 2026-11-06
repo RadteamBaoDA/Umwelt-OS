@@ -14,6 +14,7 @@ from uuid import uuid4
 import pytest
 
 from modules.knowledge.documents import worker
+from tests.unit.modules.knowledge.documents._worker_patch import patch_worker
 from tests.unit.modules.knowledge.documents.test_cleanup_worker import (
     ADMITTED,
     EVENT,
@@ -109,24 +110,22 @@ class _Run:
         self.attempt = attempt
         with ExitStack() as stack:
             for item in (
-                patch.object(worker, "_admit_cleanup", AsyncMock(return_value=ADMITTED)),
-                patch.object(
-                    worker,
+                patch_worker("_admit_cleanup", AsyncMock(return_value=ADMITTED)),
+                patch_worker(
                     "lock_export_privacy_in_uow",
                     AsyncMock(side_effect=lambda *a, **k: self.order.append("privacy")),
                 ),
-                patch.object(
-                    worker,
+                patch_worker(
                     "_lock_claim",
                     AsyncMock(side_effect=lambda *a: self.order.append("claim") or self.claim),
                 ),
-                patch.object(worker, "_settle", self.settle),
-                patch.object(worker, "_commit", self.commit),
-                patch.object(worker, "_requeue", self.requeue),
-                patch.object(worker, "_hint", self.hints),
-                patch.object(worker, "_advance_memory_cleanup", self.memory),
-                patch.object(worker, "_advance_materialization_cleanup", self.materialization),
-                patch.object(worker, "_advance_brief_cleanup", self.brief),
+                patch_worker("_settle", self.settle),
+                patch_worker("_commit", self.commit),
+                patch_worker("_requeue", self.requeue),
+                patch_worker("_hint", self.hints),
+                patch_worker("_advance_memory_cleanup", self.memory),
+                patch_worker("_advance_materialization_cleanup", self.materialization),
+                patch_worker("_advance_brief_cleanup", self.brief),
                 patch.object(
                     worker.documents,
                     "list_document_cleanup_evidence_scope",
@@ -152,7 +151,7 @@ def _near(value: datetime | None, delay: timedelta) -> bool:
 @pytest.mark.asyncio
 async def test_missing_receipt_hint_rolls_back_without_locks() -> None:
     session = _session(None)
-    with patch.object(worker, "_admit_cleanup", AsyncMock(return_value=ADMITTED)):
+    with patch_worker("_admit_cleanup", AsyncMock(return_value=ADMITTED)):
         assert (
             await worker._advance_copied_cleanup(_factory(session), False, EVENT, worker._Attempt())
             is False

@@ -13,6 +13,7 @@ from core.workspaces.schemas import InternalJobScope
 from modules.chat import public as chat_public
 from modules.chat import routes, worker
 from modules.chat.models import Message
+from tests.unit.modules.chat._routes_patch import patch_routes
 from tests.unit.modules.chat._worker_patch import patch_worker
 from tests.unit.modules.chat.test_p14_generation_worker import _Gen
 
@@ -150,13 +151,13 @@ async def test_auth_row_requires_active_account_and_default_workspace(
     session = MagicMock()
     session.scalar = AsyncMock(return_value=7)
     monkeypatch.setattr(auth_public, "revalidate_account_session", AsyncMock(return_value=True))
-    monkeypatch.setattr(routes, "owner_default_scope", AsyncMock(return_value=object()))
+    patch_routes(monkeypatch, "owner_default_scope", AsyncMock(return_value=object()))
     assert await routes._auth_row_current(session, h) == 7
-    monkeypatch.setattr(
-        routes, "owner_default_scope", AsyncMock(side_effect=HTTPException(status_code=404))
+    patch_routes(
+        monkeypatch, "owner_default_scope", AsyncMock(side_effect=HTTPException(status_code=404))
     )
     assert await routes._auth_row_current(session, h) is None  # default workspace gone
-    monkeypatch.setattr(routes, "owner_default_scope", AsyncMock(return_value=object()))
+    patch_routes(monkeypatch, "owner_default_scope", AsyncMock(return_value=object()))
     monkeypatch.setattr(auth_public, "revalidate_account_session", AsyncMock(return_value=False))
     assert await routes._auth_row_current(session, h) is None  # account disabled
     session.scalar = AsyncMock(return_value=None)
@@ -166,7 +167,7 @@ async def test_auth_row_requires_active_account_and_default_workspace(
 
 async def test_run_scope_rejects_run_of_another_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = SimpleNamespace(workspace_id=WS)
-    monkeypatch.setattr(routes, "owner_default_scope", AsyncMock(return_value=ctx))
+    patch_routes(monkeypatch, "owner_default_scope", AsyncMock(return_value=ctx))
     assert (
         await routes._run_scope(MagicMock(), SimpleNamespace(actor_user_id=1, workspace_id=WS))
         is ctx
@@ -264,12 +265,10 @@ def _events_request() -> Any:
 
 
 async def test_other_accounts_session_cannot_stream_a_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        routes, "_session_is_current", AsyncMock(return_value=2)
+    patch_routes(
+        monkeypatch, "_session_is_current", AsyncMock(return_value=2)
     )  # requester is account 2
-    monkeypatch.setattr(
-        routes, "_run_scope", AsyncMock(return_value=SCOPE)
-    )  # old code stopped here
+    patch_routes(monkeypatch, "_run_scope", AsyncMock(return_value=SCOPE))  # old code stopped here
     with pytest.raises(HTTPException) as exc:
         await routes.get_response_events(uuid4(), _events_request(), MagicMock(close=AsyncMock()))  # type: ignore[arg-type]
     assert exc.value.status_code == 404
@@ -283,8 +282,8 @@ async def test_other_accounts_session_cannot_cancel_a_run(monkeypatch: pytest.Mo
             )
         )
     )
-    monkeypatch.setattr(
-        routes, "owner_default_scope", AsyncMock(return_value=SimpleNamespace(workspace_id=WS))
+    patch_routes(
+        monkeypatch, "owner_default_scope", AsyncMock(return_value=SimpleNamespace(workspace_id=WS))
     )
     with pytest.raises(HTTPException) as exc:
         await routes.cancel_response(uuid4(), MagicMock(), session, SimpleNamespace(owner_id=2))  # type: ignore[arg-type]
@@ -314,8 +313,8 @@ async def test_poll_ends_stream_when_requester_is_not_run_actor(
     }
     session = MagicMock()
     session.scalar = AsyncMock(side_effect=lambda stmt: rows[stmt.column_descriptions[0]["entity"]])
-    monkeypatch.setattr(routes, "_run_scope", AsyncMock(return_value=SCOPE))
-    monkeypatch.setattr(routes, "read_export_privacy", AsyncMock(return_value=object()))
-    monkeypatch.setattr(routes, "_privacy_fence", lambda _p: fence)
-    monkeypatch.setattr(routes, "_auth_row_current", AsyncMock(return_value=requester))
+    patch_routes(monkeypatch, "_run_scope", AsyncMock(return_value=SCOPE))
+    patch_routes(monkeypatch, "read_export_privacy", AsyncMock(return_value=object()))
+    patch_routes(monkeypatch, "_privacy_fence", lambda _p: fence)
+    patch_routes(monkeypatch, "_auth_row_current", AsyncMock(return_value=requester))
     assert await routes._poll_needs_lock(session, uuid4(), 0, "h") is expected

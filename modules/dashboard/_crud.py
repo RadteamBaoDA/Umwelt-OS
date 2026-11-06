@@ -435,6 +435,80 @@ async def create_definition(
     )
 
 
+async def _definition_dashboard_ids(
+    session: AsyncSession, definition_id: UUID, *, scope: Scope
+) -> list[UUID]:
+    """Return the ids of workspace dashboards whose gadget instances reference ``definition_id`` (unlocked read)."""
+    return list(
+        (
+            await session.scalars(
+                select(GadgetInstance.dashboard_id)
+                .join(Dashboard, Dashboard.id == GadgetInstance.dashboard_id)
+                .where(
+                    GadgetInstance.definition_id == definition_id,
+                    Dashboard.workspace_id == scope.workspace_id,
+                )
+                .distinct()
+            )
+        ).all()
+    )
+
+
+def _patched_definition_candidate(
+    payload: GadgetDefinitionPatch, row: GadgetDefinition
+) -> tuple[dict[str, Any], GadgetConfiguration]:
+    """Merge a definition patch over the stored row into ``(candidate fields, validated configuration)``.
+
+    Omitted fields keep their stored value; ``scope``/``filters``/``highlight_rules`` fall back to the stored JSON.
+    Pure apart from pydantic validation, which may raise ``ValidationError`` for a corrupt stored value.
+    """
+    candidate: dict[str, Any] = {
+        "name": payload.name if payload.name is not None else row.name,
+        "renderer": payload.renderer if payload.renderer is not None else row.renderer,
+        "source_ids": payload.source_ids
+        if payload.source_ids is not None
+        else [UUID(str(item)) for item in row.source_ids],
+        "scope": payload.scope if "scope" in payload.model_fields_set else None,
+        "filters": payload.filters if "filters" in payload.model_fields_set else None,
+        "highlight_rules": payload.highlight_rules
+        if "highlight_rules" in payload.model_fields_set
+        else None,
+    }
+    config = GadgetConfiguration(
+        scope=candidate["scope"]
+        if candidate["scope"] is not None
+        else GadgetScope.model_validate(row.scope),
+        filters=candidate["filters"]
+        if candidate["filters"] is not None
+        else GadgetFilters.model_validate(row.filters),
+        highlight_rules=candidate["highlight_rules"]
+        if candidate["highlight_rules"] is not None
+        else [HighlightRule.model_validate(item) for item in row.highlight_rules],
+    )
+    return candidate, config
+
+
+def _definition_changes(
+    candidate: dict[str, Any], row: GadgetDefinition, config: GadgetConfiguration
+) -> tuple[bool, bool]:
+    """Return ``(binding_changed, scope_changed)`` for a patched definition against its stored row.
+
+    Pure comparison of values (not field presence), so unchanged resent fields never trigger revalidation.
+    """
+    binding_changed = {str(item) for item in candidate["source_ids"]} != {
+        str(item) for item in row.source_ids
+    } or candidate["renderer"] != row.renderer
+    # Only metrics/symbols/regions feed the measurement catalog rule; lookback and other selectors may differ
+    # (the editor resends lookback_days) without re-validating a legacy row.
+    stored_scope = GadgetScope.model_validate(row.scope)
+    scope_changed = (
+        config.scope.metrics != stored_scope.metrics
+        or config.scope.symbols != stored_scope.symbols
+        or config.scope.regions != stored_scope.regions
+    )
+    return binding_changed, scope_changed
+
+
 async def patch_definition(
     session: AsyncSession,
     definition_id: UUID,
@@ -465,63 +539,19 @@ async def patch_definition(
         getattr(payload, name) is None for name in payload.model_fields_set - {"expected_revision"}
     ):
         raise ValueError("Definition fields cannot be cleared")
-    references = list(
-        (
-            await session.scalars(
-                select(GadgetInstance.dashboard_id)
-                .join(Dashboard, Dashboard.id == GadgetInstance.dashboard_id)
-                .where(
-                    GadgetInstance.definition_id == definition_id,
-                    Dashboard.workspace_id == scope.workspace_id,
-                )
-                .distinct()
-            )
-        ).all()
-    )
+    references = await _definition_dashboard_ids(session, definition_id, scope=scope)
     for dashboard_id in sorted(set(references), key=str):
         await _lock_dashboard(session, dashboard_id, scope=scope)
     if "renderer" in payload.model_fields_set and payload.renderer != row.renderer and references:
         raise DashboardConflict(
             "renderer_in_use", "Renderer cannot change while referenced", row.revision
         )
-    candidate: dict[str, Any] = {
-        "name": payload.name if payload.name is not None else row.name,
-        "renderer": payload.renderer if payload.renderer is not None else row.renderer,
-        "source_ids": payload.source_ids
-        if payload.source_ids is not None
-        else [UUID(str(item)) for item in row.source_ids],
-        "scope": payload.scope if "scope" in payload.model_fields_set else None,
-        "filters": payload.filters if "filters" in payload.model_fields_set else None,
-        "highlight_rules": payload.highlight_rules
-        if "highlight_rules" in payload.model_fields_set
-        else None,
-    }
-    config = GadgetConfiguration(
-        scope=candidate["scope"]
-        if candidate["scope"] is not None
-        else GadgetScope.model_validate(row.scope),
-        filters=candidate["filters"]
-        if candidate["filters"] is not None
-        else GadgetFilters.model_validate(row.filters),
-        highlight_rules=candidate["highlight_rules"]
-        if candidate["highlight_rules"] is not None
-        else [HighlightRule.model_validate(item) for item in row.highlight_rules],
-    )
+    candidate, config = _patched_definition_candidate(payload, row)
     gadgets.validate_renderer_configuration(candidate["renderer"], config)
     # Only re-check datasource compatibility when the binding changes, so older saved definitions keep saving.
     # Measurement scope is re-checked only when metrics/symbols or the binding changed, so legacy rows still rename.
     # Compare values, not field presence: the editor resends unchanged source_ids/scope on every save.
-    binding_changed = {str(item) for item in candidate["source_ids"]} != {
-        str(item) for item in row.source_ids
-    } or candidate["renderer"] != row.renderer
-    # Only metrics/symbols/regions feed the measurement catalog rule; lookback and other selectors may differ
-    # (the editor resends lookback_days) without re-validating a legacy row.
-    stored_scope = GadgetScope.model_validate(row.scope)
-    scope_changed = (
-        config.scope.metrics != stored_scope.metrics
-        or config.scope.symbols != stored_scope.symbols
-        or config.scope.regions != stored_scope.regions
-    )
+    binding_changed, scope_changed = _definition_changes(candidate, row, config)
     if binding_changed or scope_changed:
         await _validate_selected_sources(
             session,

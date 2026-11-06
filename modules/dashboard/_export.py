@@ -759,52 +759,22 @@ async def _brief_schedule_export_validation(
     )
 
 
-async def export_page(
+async def _dashboard_export_page(
     session: AsyncSession,
     *,
     owner_id: int,
     record_kind: str,
-    limit: int = 50,
-    cursor: str | None = None,
+    limit: int,
+    cursor: str | None,
     scope: Scope,
     multi_workspace_enabled: bool,
-) -> DashboardExportPage | GadgetDefinitionExportPage | BriefExportPage | BriefScheduleExportPage:
-    """Return one cutoff-bound dashboard, definition, retained-brief or schedule page.
+    access_fence: AccessFence,
+) -> DashboardExportPage:
+    """Return one cutoff-bound page of dashboards for ``export_page`` (the ``dashboards`` record kind).
 
-    Each dataset is owner-scoped and size-bounded. Dashboard placements exclude newer unretained
-    definition revisions; definitions include unplaced saved selectors; brief prose is emitted only
-    when every actual fact kind/ID/title/source citation remains currently eligible; schedule output
-    excludes automation ownership identifiers. The aggregate caller must revalidate returned fences.
+    Rejects other kinds or an out-of-range limit, omits the whole dataset when a gadget definition changed
+    after the owner cutoff, and binds the continuation cursor to ``access_fence``.
     """
-    access_fence = await _admit(
-        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-    )
-    if owner_id != _actor(scope):
-        raise ValueError("Dashboard export actor does not match the admitted workspace")
-    if record_kind == "gadget_definitions":
-        return await _definition_export_page(
-            session,
-            owner_id=owner_id,
-            limit=limit,
-            cursor=cursor,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-    if record_kind == "daily_briefs":
-        return await _brief_export_page(
-            session,
-            owner_id=owner_id,
-            limit=limit,
-            cursor=cursor,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-        )
-    if record_kind == "brief_schedule":
-        if cursor is not None:
-            raise ValueError("Brief schedule export does not accept a cursor")
-        return await _brief_schedule_export_page(
-            session, owner_id=owner_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
-        )
     if record_kind != "dashboards" or not 1 <= limit <= 100:
         raise ValueError("Dashboard export owner, kind or page limit is invalid")
     if cursor is None:
@@ -887,6 +857,64 @@ async def export_page(
         )
         if has_more and rows
         else None,
+    )
+
+
+async def export_page(
+    session: AsyncSession,
+    *,
+    owner_id: int,
+    record_kind: str,
+    limit: int = 50,
+    cursor: str | None = None,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> DashboardExportPage | GadgetDefinitionExportPage | BriefExportPage | BriefScheduleExportPage:
+    """Return one cutoff-bound dashboard, definition, retained-brief or schedule page.
+
+    Each dataset is owner-scoped and size-bounded. Dashboard placements exclude newer unretained
+    definition revisions; definitions include unplaced saved selectors; brief prose is emitted only
+    when every actual fact kind/ID/title/source citation remains currently eligible; schedule output
+    excludes automation ownership identifiers. The aggregate caller must revalidate returned fences.
+    """
+    access_fence = await _admit(
+        session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if owner_id != _actor(scope):
+        raise ValueError("Dashboard export actor does not match the admitted workspace")
+    if record_kind == "gadget_definitions":
+        return await _definition_export_page(
+            session,
+            owner_id=owner_id,
+            limit=limit,
+            cursor=cursor,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    if record_kind == "daily_briefs":
+        return await _brief_export_page(
+            session,
+            owner_id=owner_id,
+            limit=limit,
+            cursor=cursor,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
+        )
+    if record_kind == "brief_schedule":
+        if cursor is not None:
+            raise ValueError("Brief schedule export does not accept a cursor")
+        return await _brief_schedule_export_page(
+            session, owner_id=owner_id, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        )
+    return await _dashboard_export_page(
+        session,
+        owner_id=owner_id,
+        record_kind=record_kind,
+        limit=limit,
+        cursor=cursor,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
     )
 
 

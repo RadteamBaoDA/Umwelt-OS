@@ -10,6 +10,7 @@ from modules.automations import public as automations
 from modules.chat import worker as chat_worker
 from modules.connectors import scheduler
 from modules.ingestion import public as ingestion
+from tests.unit.split_patching import patch_split
 
 NOW = datetime(2026, 10, 13, tzinfo=UTC)
 
@@ -161,7 +162,9 @@ async def test_purged_deterministic_cleanup_event_is_republished_not_treated_as_
     monkeypatch.setattr(worker.documents, "resolve_document_cleanup_job_identity", resolve)
     monkeypatch.setattr(worker.ingestion, "get_document_cleanup_event", missing_event)
     monkeypatch.setattr(worker.ingestion, "publish_event", publish)
-    monkeypatch.setattr(worker, "commit_with_replay", commit)
+    patch_split(
+        monkeypatch, "modules.knowledge.documents", "commit_with_replay", commit, facade="worker"
+    )
     operation_id = uuid4()
     assert await worker._reopen_cleanup_event(_Factory(_Sess()), False, operation_id, NOW) is True  # type: ignore[arg-type]
     assert [getattr(e, "type", None) for e in published] == ["document.cleanup.requested"]

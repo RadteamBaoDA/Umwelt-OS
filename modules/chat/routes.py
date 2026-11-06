@@ -1,16 +1,9 @@
 """Owner-authenticated HTTP routes for chat conversations, messages, SSE streaming, and run cancellation."""
 
 import asyncio
-import hashlib
-import hmac
-import json
 import logging
-import re
-from collections.abc import AsyncGenerator
-from contextlib import aclosing
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
@@ -19,10 +12,9 @@ from redis.asyncio import Redis
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from core.auth.dependencies import SESSION_COOKIE, require_account, require_account_write
+from core.auth.dependencies import require_account, require_account_write
 from core.auth.models import AuthSession
 from core.database import get_session
-from core.errors import DomainError
 from core.rate_limit import require_budget
 from core.realtime.routes import _PermitResponse
 from core.workspaces.dependencies import (
@@ -32,6 +24,129 @@ from core.workspaces.dependencies import (
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import conversation_service, signals
 from modules.chat import public as chat_public
+from modules.chat._routes_guards import (
+    _TOKEN_RE as _TOKEN_RE,
+)
+from modules.chat._routes_guards import (
+    ACTIVE_RUN_STATUSES as ACTIVE_RUN_STATUSES,
+)
+from modules.chat._routes_guards import (
+    DB_READ_TIMEOUT as DB_READ_TIMEOUT,
+)
+from modules.chat._routes_guards import (
+    _auth_row_current as _auth_row_current,
+)
+from modules.chat._routes_guards import (
+    _dispatch_response_run as _dispatch_response_run,
+)
+from modules.chat._routes_guards import (
+    _filter_citation_lists as _filter_citation_lists,
+)
+from modules.chat._routes_guards import (
+    _lock_conversation as _lock_conversation,
+)
+from modules.chat._routes_guards import (
+    _message_mutation_digest as _message_mutation_digest,
+)
+from modules.chat._routes_guards import (
+    _message_reasoning as _message_reasoning,
+)
+from modules.chat._routes_guards import (
+    _mutation_model_override as _mutation_model_override,
+)
+from modules.chat._routes_guards import (
+    _poll_needs_lock as _poll_needs_lock,
+)
+from modules.chat._routes_guards import (
+    _privacy_fence as _privacy_fence,
+)
+from modules.chat._routes_guards import (
+    _reject_active_response as _reject_active_response,
+)
+from modules.chat._routes_guards import (
+    _reject_expired_conversation as _reject_expired_conversation,
+)
+from modules.chat._routes_guards import (
+    _run_context as _run_context,
+)
+from modules.chat._routes_guards import (
+    _run_scope as _run_scope,
+)
+from modules.chat._routes_guards import (
+    _session_is_current as _session_is_current,
+)
+from modules.chat._routes_guards import (
+    _token_hash as _token_hash,
+)
+from modules.chat._routes_guards import (
+    _validate_model_pair as _validate_model_pair,
+)
+from modules.chat._routes_guards import (
+    _validated_model_override as _validated_model_override,
+)
+from modules.chat._routes_mutation import (
+    _load_mutation_originals as _load_mutation_originals,
+)
+from modules.chat._routes_mutation import (
+    _message_reads as _message_reads,
+)
+from modules.chat._routes_mutation import (
+    _mutation_digest_for as _mutation_digest_for,
+)
+from modules.chat._routes_mutation import (
+    _replay_mutation_or_reject_collision as _replay_mutation_or_reject_collision,
+)
+from modules.chat._routes_mutation import (
+    _require_history_storage as _require_history_storage,
+)
+from modules.chat._routes_mutation import (
+    _stage_mutation_branch as _stage_mutation_branch,
+)
+from modules.chat._routes_stream import (
+    _TERMINAL_RUN_STATUSES as _TERMINAL_RUN_STATUSES,
+)
+from modules.chat._routes_stream import (
+    HEARTBEAT_INTERVAL as HEARTBEAT_INTERVAL,
+)
+from modules.chat._routes_stream import (
+    STREAM_BATCH_MAX_BYTES as STREAM_BATCH_MAX_BYTES,
+)
+from modules.chat._routes_stream import (
+    STREAM_BATCH_SIZE as STREAM_BATCH_SIZE,
+)
+from modules.chat._routes_stream import (
+    STREAM_POLL_INTERVAL as STREAM_POLL_INTERVAL,
+)
+from modules.chat._routes_stream import (
+    STREAM_POLL_MAX_INTERVAL as STREAM_POLL_MAX_INTERVAL,
+)
+from modules.chat._routes_stream import (
+    _authorize_stream_run as _authorize_stream_run,
+)
+from modules.chat._routes_stream import (
+    _frames_for_batch as _frames_for_batch,
+)
+from modules.chat._routes_stream import (
+    _idle_wait as _idle_wait,
+)
+from modules.chat._routes_stream import (
+    _locked_poll as _locked_poll,
+)
+from modules.chat._routes_stream import (
+    _poll_loop as _poll_loop,
+)
+from modules.chat._routes_stream import (
+    _PollState as _PollState,
+)
+from modules.chat._routes_stream import (
+    _publish_locked_events as _publish_locked_events,
+)
+from modules.chat._routes_stream import (
+    _sse_event_stream as _sse_event_stream,
+)
+from modules.chat._routes_stream import (
+    _stream_start_seq as _stream_start_seq,
+)
 from modules.chat._routes_support import (
     _redact_cancelled_run_in_fresh_session,
     _replayed_send_response,
@@ -39,37 +154,28 @@ from modules.chat._routes_support import (
 from modules.chat.models import (
     Conversation,
     Message,
-    MessageMutationReceipt,
     ResponseRun,
-    StreamEvent,
 )
 from modules.chat.schemas import (
-    DB_QUERY_KEY,
-    GADGET_SCOPE_KEY,
-    MODEL_OVERRIDE_KEY,
-    WEB_SEARCH_KEY,
     CancelResponse,
     ConversationCreate,
     ConversationDetailRead,
     ConversationPatch,
     ConversationRead,
     MessageMutationRequest,
-    MessageRead,
     SendMessageRequest,
     SendMessageResponse,
     SubmitInputRequest,
     SubmitInputResponse,
-    WebSearchOutcomeRead,
-    parse_generative_ui_parts,
 )
 from modules.chat.scope import multi_workspace_enabled, owner_default_scope
-from modules.chat.stream import format_sse_event, parse_event_id
+from modules.chat.stream import (
+    format_sse_event as format_sse_event,  # re-exported: tests read routes.format_sse_event
+)
 from modules.chat.user_input import InputRequestError, submit_input
 from modules.chat.worker import (
     CANCEL_KEY_PREFIX,
-    CHAT_QUEUE,
     _cancel_response_locked,
-    _mark_privacy_cancelled,
     _privacy_cancel_locked,
     _require_privacy_fence,
 )
@@ -77,9 +183,6 @@ from modules.memory.public import lock_export_privacy, read_export_privacy
 from modules.settings.public import module_dependency
 
 logger = logging.getLogger(__name__)
-
-# Runs that count as active (defined with the queries that use it); re-exported for tests and SSE.
-ACTIVE_RUN_STATUSES = conversation_service.ACTIVE_RUN_STATUSES
 
 router = APIRouter(tags=["chat"], dependencies=[Depends(module_dependency("chat"))])
 
@@ -104,402 +207,8 @@ async def _account_write(
 
 OwnerRead = Annotated[AuthSession, Depends(_account_read)]
 OwnerWrite = Annotated[AuthSession, Depends(_account_write)]
-
-_TOKEN_RE = re.compile(r"^[0-9a-f]{64}$")
-DB_READ_TIMEOUT = 3.0
-STREAM_POLL_INTERVAL = 0.1
-# A stream lives only while its run is pending/streaming (terminal runs drain and return), so this cap
-# bounds the polling delay added to first token and after mid-run pauses: <= 0.5 s (mean ~0.25 s).
-STREAM_POLL_MAX_INTERVAL = 0.5
-STREAM_BATCH_SIZE = 64
-STREAM_BATCH_MAX_BYTES = 256 * 1024  # bounds the user-space buffer one stalled stream can pin
 MAX_CHAT_STREAMS_PER_API_PROCESS = 64
-HEARTBEAT_INTERVAL = 15.0
 EPHEMERAL_TTL = timedelta(hours=24)
-
-
-def _privacy_fence(privacy: Any) -> dict[str, object]:
-    """Serialize the public Memory consent snapshot onto a newly admitted response."""
-    return {
-        "store_conversation_history": privacy.store_conversation_history,
-        "persisted": privacy.persisted,
-        "updated_at": privacy.updated_at.isoformat() if privacy.updated_at is not None else None,
-    }
-
-
-def _reject_expired_conversation(conversation: Conversation) -> None:
-    """Prevent an expired ephemeral conversation from being read or extended."""
-    if conversation.ephemeral and (
-        conversation.expires_at is None or conversation.expires_at <= datetime.now(UTC)
-    ):
-        raise HTTPException(status_code=410, detail="This temporary conversation has expired")
-
-
-async def _lock_conversation(
-    session: AsyncSession, conversation_id: UUID, scope: WorkspaceContext
-) -> Conversation:
-    """Take the Chat parent lock used to serialize message creation and mutation.
-
-    The same parent-before-child order is used by conversation deletion. Every send or
-    mutation must hold this row through its active-run check and durable insert so concurrent
-    requests cannot both observe an idle conversation.
-    """
-    conversation = await session.scalar(
-        select(Conversation)
-        .where(Conversation.id == conversation_id, Conversation.workspace_id == scope.workspace_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return conversation
-
-
-async def _reject_active_response(session: AsyncSession, conversation_id: UUID) -> None:
-    """Reject a second turn while this conversation already owns an uncompleted response.
-
-    Args:
-        session: Transaction that already holds the conversation row lock.
-        conversation_id: Conversation whose pending/streaming runs must be checked.
-    """
-    active_id = await session.scalar(
-        select(ResponseRun.id)
-        .where(
-            ResponseRun.conversation_id == conversation_id,
-            ResponseRun.status.in_(ACTIVE_RUN_STATUSES),
-        )
-        .limit(1)
-    )
-    if active_id is not None:
-        raise HTTPException(
-            status_code=409, detail="A response is already active for this conversation"
-        )
-
-
-async def _dispatch_response_run(request: Request, response_id: UUID) -> None:
-    """Enqueue an already committed response run on the dedicated chat worker queue.
-
-    PostgreSQL holds the durable run row; a lost push is replayed by `recover_chat_runs`.
-    """
-    try:
-        await request.app.state.redis.enqueue_job(
-            "process_chat_response",
-            str(response_id),
-            _job_id=f"chat-response:{response_id}",
-            _queue_name=CHAT_QUEUE,
-        )
-    except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
-        logger.warning("Failed to enqueue chat response %s (%s)", response_id, type(exc).__name__)
-
-
-def _run_context(
-    inherited: dict[str, Any] | None,
-    privacy: Any,
-    web_search: bool,
-    model_override: dict[str, str] | None = None,
-    *,
-    db_query: bool = False,
-) -> dict[str, Any]:
-    """Build a run's retrieval context: client-visible keys kept, every server-private "_" key rewritten.
-
-    Stale "_" keys (old privacy fence, web opt-in, web outcome) are never inherited, so each send,
-    regenerate and edit carries only its own fence and its own explicit web-search choice.
-    """
-    kept = {k: v for k, v in (inherited or {}).items() if not k.startswith("_")}
-    context: dict[str, Any] = {
-        **kept,
-        "_chat_privacy_fence": _privacy_fence(privacy),
-        WEB_SEARCH_KEY: {"requested": web_search},
-    }
-    is_gadget = kept.get("kind") == "gadget"
-    if db_query or is_gadget:
-        context[DB_QUERY_KEY] = {"requested": True, "auto_gadget": is_gadget}
-    if is_gadget:
-        context[GADGET_SCOPE_KEY] = {
-            "gadget_id": kept.get("gadget_id") or "",
-            "title": kept.get("title") or "",
-            "renderer": kept.get("renderer") or "",
-            "source_scope": kept.get("source_scope") or [],
-            "scope": kept.get("gadget_scope") or {},
-        }
-    if model_override:
-        context[MODEL_OVERRIDE_KEY] = model_override
-    return context
-
-
-async def _validate_model_pair(
-    request: Request,
-    session: AsyncSession,
-    scope: Any,
-    provider_id: str,
-    model: str,
-) -> dict[str, str]:
-    """Validate one provider/model pair against the owner's current execution config.
-
-    The provider must exist and not be policy-denied, and the model must be one of its configured models
-    that the `chat` role accepts (type `llm`). Anything else is a 422 so a stale picker never silently
-    falls back to a different model.
-
-    Raises:
-        HTTPException: 422 when the provider or model is unknown, denied, or not a chat-capable model.
-    """
-    from modules.settings import public as settings_public
-
-    config = await settings_public.get_ai_execution_config(
-        session,
-        request.app.state.settings,
-        request.app.state.redis,
-        scope=scope,
-    )
-    provider = config.providers.get(provider_id)
-    chosen = next((m for m in provider.models if m.id == model), None) if provider else None
-    if (
-        provider is None
-        or provider.policy_denied
-        or chosen is None
-        or not settings_public.role_accepts("chat", chosen)
-    ):
-        raise HTTPException(status_code=422, detail="Selected chat model is not available")
-    return {"provider_id": provider_id, "model": model}
-
-
-async def _validated_model_override(
-    request: Request,
-    session: AsyncSession,
-    scope: Any,
-    payload: SendMessageRequest | MessageMutationRequest,
-) -> dict[str, str] | None:
-    """Return the validated per-request chat model override, or None when the owner's default applies.
-
-    Raises:
-        HTTPException: 422 when the provider or model is unknown, denied, or not a chat-capable model.
-    """
-    if payload.model is None or payload.provider_id is None:
-        return None
-    return await _validate_model_pair(request, session, scope, payload.provider_id, payload.model)
-
-
-async def _mutation_model_override(
-    request: Request,
-    session: AsyncSession,
-    scope: Any,
-    payload: MessageMutationRequest,
-    original_context: dict[str, Any] | None,
-) -> dict[str, str] | None:
-    """Pick the model for a regenerate/edit run: an explicit payload choice wins, else the original run's.
-
-    `_run_context` strips server-private "_" keys, so the original run's override is carried forward
-    here and revalidated exactly like a fresh send; a model that is no longer valid is a 422 rather
-    than a silent switch to a different model.
-
-    Raises:
-        HTTPException: 422 when the chosen or carried model is no longer available.
-    """
-    explicit = await _validated_model_override(request, session, scope, payload)
-    if explicit is not None:
-        return explicit
-    carried = (original_context or {}).get(MODEL_OVERRIDE_KEY)
-    if not isinstance(carried, dict):
-        return None
-    provider_id, model = carried.get("provider_id"), carried.get("model")
-    if not isinstance(provider_id, str) or not isinstance(model, str):
-        return None
-    return await _validate_model_pair(request, session, scope, provider_id, model)
-
-
-def _message_reasoning(metadata: Any) -> str | None:
-    """Return the stored model reasoning text from a message's metadata, or None when absent or malformed."""
-    value = metadata.get("reasoning") if isinstance(metadata, dict) else None
-    return value if isinstance(value, str) and value else None
-
-
-def _message_mutation_digest(
-    *,
-    action: str,
-    target_message_id: UUID,
-    base_content_hash: str,
-    content: str | None,
-    web_search: bool = False,
-    model_override: dict[str, str] | None = None,
-) -> str:
-    """Hash canonical mutation fields so a request key cannot be replayed with new data.
-
-    Args:
-        action: Edit or regenerate operation selected by the user.
-        target_message_id: Immutable transcript entry acted upon.
-        base_content_hash: SHA-256 of the displayed message used for the concurrency fence.
-        content: Trimmed replacement text for edits, or None for regeneration.
-        web_search: Per-run web search opt-in; hashed only when true so pre-deploy receipts stay valid.
-        model_override: Explicit client model choice; hashed only when present for the same reason.
-
-    Returns:
-        Lowercase SHA-256 digest of the canonical JSON payload.
-    """
-    fields: dict[str, object] = {
-        "action": action,
-        "target_message_id": str(target_message_id),
-        "base_content_hash": base_content_hash,
-        "content": content,
-    }
-    if web_search:
-        fields["web_search"] = True
-    if model_override:
-        fields["model_override"] = model_override
-    canonical = json.dumps(
-        fields,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _token_hash(request: Request) -> str | None:
-    """Compute the SHA-256 hash of the session cookie for safe auth lookup.
-
-    Args:
-        request: FastAPI HTTP request.
-
-    Returns:
-        Hex-encoded SHA-256 token digest, or None if the cookie is missing.
-    """
-    token = request.cookies.get(SESSION_COOKIE)
-    return hashlib.sha256(token.encode()).hexdigest() if token else None
-
-
-async def _session_is_current(request: Request) -> int | None:
-    """Admit only a live session whose account still has its active default workspace.
-
-    Returns:
-        The requester's account id; None when missing, expired, disabled or without a default workspace.
-
-    Raises:
-        HTTPException: 503 when session verification times out.
-    """
-    th = _token_hash(request)
-    if th is None or not _TOKEN_RE.fullmatch(th):
-        return None
-    factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
-    try:
-        async with asyncio.timeout(DB_READ_TIMEOUT):
-            async with factory() as session:
-                return await _auth_row_current(session, th)
-    except TimeoutError as exc:
-        raise HTTPException(
-            status_code=503, detail="Session verification temporarily unavailable"
-        ) from exc
-
-
-async def _auth_row_current(session: AsyncSession, token_hash: str | None) -> int | None:
-    """Account + default-workspace admission of the hashed session token; the requester's account id or None."""
-    from core.auth.public import revalidate_account_session
-
-    if token_hash is None or not _TOKEN_RE.fullmatch(token_hash):
-        return None
-    account_id = await session.scalar(
-        select(AuthSession.owner_id)
-        .where(
-            AuthSession.token_hash == token_hash,
-            AuthSession.expires_at > datetime.now(UTC),
-        )
-        .limit(1)
-    )
-    if account_id is None or not await revalidate_account_session(
-        session,
-        token_hash,
-        account_id,
-        multi_workspace_enabled=multi_workspace_enabled(),
-    ):
-        return None
-    try:
-        await owner_default_scope(session, account_id)
-    except (HTTPException, DomainError):
-        return None
-    return int(account_id)
-
-
-async def _run_scope(session: AsyncSession, run: ResponseRun) -> WorkspaceContext:
-    """The run actor's default-workspace scope; 404 unless it is the workspace the run was stamped with."""
-    scope = await owner_default_scope(session, run.actor_user_id)
-    if scope.workspace_id != run.workspace_id:
-        raise HTTPException(status_code=404, detail="Response run not found")
-    return scope
-
-
-async def _poll_needs_lock(
-    session: AsyncSession,
-    response_id: UUID,
-    current_seq: int,
-    token_hash: str | None,
-) -> bool:
-    """Lock-free pre-check for one SSE poll: is there an event to publish or a reason to close the stream?
-
-    Idle polls of active runs otherwise each took the GLOBAL Memory privacy key plus Conversation/Run
-    FOR UPDATE just to find nothing; 64 idle streams serialized on that key and exhausted the pool
-    (P14-T4 integration). This reads committed state only and publishes nothing, so I1-I5 are unchanged:
-    every write, and every terminal decision (missing/expired run or parent, fence change, revoked
-    session), still happens in the locked transaction, which re-checks all of it. A change committed
-    after this probe is seen by the next poll, as before.
-    """
-    run = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
-    if run is None or run.status not in ACTIVE_RUN_STATUSES:
-        return True
-    newer = await session.scalar(
-        select(StreamEvent.seq)
-        .where(
-            StreamEvent.response_id == response_id,
-            StreamEvent.seq > current_seq,
-        )
-        .limit(1)
-    )
-    if newer is not None:
-        return True
-    parent = await session.scalar(
-        select(Conversation).where(Conversation.id == run.conversation_id)
-    )
-    if parent is None or (
-        parent.ephemeral and (parent.expires_at is None or parent.expires_at <= datetime.now(UTC))
-    ):
-        return True
-    try:
-        current = _privacy_fence(
-            await read_export_privacy(
-                session,
-                scope=await _run_scope(session, run),
-                multi_workspace_enabled=multi_workspace_enabled(),
-            )
-        )
-    except Exception:  # noqa: BLE001  # deliberate boundary: the locked path re-reads and cancels/reports
-        return True
-    stamp = (run.retrieval_context or {}).get("_chat_privacy_fence")
-    if stamp != current:
-        return True
-    account_id = await _auth_row_current(session, token_hash)
-    return account_id is None or run.actor_user_id != account_id
-
-
-async def _filter_citation_lists(
-    session: AsyncSession,
-    lists: list[object],
-    scope: WorkspaceContext,
-) -> list[list[dict[str, object]]]:
-    """Filter many citation lists with ONE `filter_current_citations` call (one evidence lock per 100 refs).
-
-    `filter_current_citations` returns the kept raw dicts themselves and keeps or drops each citation
-    independently of the others, so mapping kept objects back by identity reproduces exactly the
-    per-list output, in each list's original order. Non-list inputs yield [] as before.
-    """
-    flat = [citation for raw in lists if isinstance(raw, list) for citation in raw]
-    kept = {
-        id(citation)
-        for citation in await chat_public.filter_current_citations(
-            session,
-            flat,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled(),
-        )
-    }
-    return [[c for c in raw if id(c) in kept] if isinstance(raw, list) else [] for raw in lists]
 
 
 @router.get("/api/v1/conversations", response_model=list[ConversationRead])
@@ -665,43 +374,6 @@ async def create_conversation(
     )
 
 
-def _message_reads(
-    messages_rows: list[Message],
-    current_citations: list[Any],
-    response_ids_by_user_message: dict[UUID, UUID],
-    web_search_by_assistant: dict[UUID, WebSearchOutcomeRead],
-) -> list[MessageRead]:
-    """Translate stored messages into API DTOs using already-filtered current citations.
-
-    Pure mapping: ``current_citations`` aligns one-to-one with ``messages_rows`` (strict zip).
-    The first generative-UI part is mirrored into ``generative_ui`` for older clients.
-    """
-    return [
-        MessageRead(
-            id=m.id,
-            conversation_id=m.conversation_id,
-            role=m.role,
-            content=m.content,
-            client_request_id=m.client_request_id,
-            model_identity=m.model_identity,
-            citations=citations,
-            response_id=m.response_id or response_ids_by_user_message.get(m.id),
-            revision_of_message_id=m.revision_of_message_id,
-            created_at=m.created_at,
-            web_search=web_search_by_assistant.get(m.id),
-            generative_ui=parts[0] if parts else None,  # first part, for older clients
-            generative_ui_parts=parts,
-            reasoning=_message_reasoning(getattr(m, "metadata_json", None)),
-        )
-        for m, citations, parts in zip(
-            messages_rows,
-            current_citations,
-            (parse_generative_ui_parts(getattr(m, "metadata_json", None)) for m in messages_rows),
-            strict=True,
-        )
-    ]
-
-
 @router.get("/api/v1/conversations/{conversation_id}", response_model=ConversationDetailRead)
 async def get_conversation(
     conversation_id: UUID,
@@ -864,15 +536,6 @@ async def delete_conversation(
     await session.commit()
 
 
-def _require_history_storage(privacy: Any, conversation: Conversation) -> None:
-    """Refuse (409) a persistent turn while Memory consent disables conversation history."""
-    if not privacy.store_conversation_history and not conversation.ephemeral:
-        raise HTTPException(
-            status_code=409,
-            detail="History storage is disabled. Start a new temporary conversation to continue.",
-        )
-
-
 @router.post(
     "/api/v1/conversations/{conversation_id}/messages",
     response_model=SendMessageResponse,
@@ -978,173 +641,6 @@ async def send_message(
     )
 
 
-def _mutation_digest_for(
-    payload: MessageMutationRequest,
-    message_id: UUID,
-    normalized_content: str | None,
-) -> str:
-    """Compute the idempotency digest binding a mutation request to its exact inputs."""
-    return _message_mutation_digest(
-        action=payload.action,
-        target_message_id=message_id,
-        base_content_hash=payload.base_content_hash,
-        content=normalized_content,
-        web_search=payload.web_search,
-        model_override=(
-            {"provider_id": payload.provider_id, "model": payload.model}
-            if payload.provider_id and payload.model
-            else None
-        ),
-    )
-
-
-async def _replay_mutation_or_reject_collision(
-    session: AsyncSession,
-    conversation_id: UUID,
-    payload: MessageMutationRequest,
-    digest: str,
-) -> SendMessageResponse | None:
-    """Return the original response for an identical retry, or ``None`` for a fresh request key.
-
-    Raises:
-        HTTPException: 409 when the key was used with different content, the stored receipt's
-            run is gone, or the key already belongs to a normal send.
-    """
-    receipt = await conversation_service.find_mutation_receipt(
-        session,
-        conversation_id,
-        payload.client_request_id,
-    )
-    if receipt is not None:
-        if not hmac.compare_digest(receipt.request_digest, digest):
-            raise HTTPException(
-                status_code=409,
-                detail="Mutation request ID was already used with different content",
-            )
-        replayed_run = await conversation_service.find_run_by_id(session, receipt.response_id)
-        if replayed_run is None:
-            raise HTTPException(status_code=409, detail="Mutation receipt is no longer available")
-        return SendMessageResponse(
-            message_id=receipt.result_user_message_id,
-            response_id=replayed_run.id,
-            status=replayed_run.status,
-        )
-
-    # A request key belongs to one creation path; reject a collision with a normal send.
-    if await conversation_service.request_id_in_use_by_run(
-        session, conversation_id, payload.client_request_id
-    ):
-        raise HTTPException(status_code=409, detail="Mutation request ID is already in use")
-    return None
-
-
-async def _load_mutation_originals(
-    session: AsyncSession,
-    conversation_id: UUID,
-    message_id: UUID,
-    payload: MessageMutationRequest,
-) -> tuple[Message, ResponseRun, Message]:
-    """Lock the mutation target and load the original run and prompt it derives from.
-
-    Order: target row lock, role check, base-content hash check, original run, original prompt.
-
-    Raises:
-        HTTPException: 404 missing target; 422 action/role mismatch; 409 stale content or missing
-            original context/prompt.
-    """
-    target = await conversation_service.lock_mutation_target(session, conversation_id, message_id)
-    if target is None:
-        raise HTTPException(status_code=404, detail="Message not found")
-    expected_role = "user" if payload.action == "edit" else "assistant"
-    if target.role != expected_role:
-        raise HTTPException(
-            status_code=422, detail="Mutation action does not match the message role"
-        )
-    actual_hash = hashlib.sha256(target.content.encode("utf-8")).hexdigest()
-    if not hmac.compare_digest(actual_hash, payload.base_content_hash):
-        raise HTTPException(
-            status_code=409, detail="Message changed; reload the conversation before retrying"
-        )
-
-    original_run = await conversation_service.find_original_run(
-        session, conversation_id, target, payload.action
-    )
-    if original_run is None:
-        raise HTTPException(status_code=409, detail="The original response context is unavailable")
-    original_prompt = await conversation_service.find_original_prompt(
-        session, conversation_id, original_run
-    )
-    if original_prompt is None:
-        raise HTTPException(status_code=409, detail="The original prompt is unavailable")
-    return target, original_run, original_prompt
-
-
-async def _stage_mutation_branch(
-    session: AsyncSession,
-    conversation: Conversation,
-    payload: MessageMutationRequest,
-    *,
-    target: Message,
-    original_run: ResponseRun,
-    original_prompt: Message,
-    normalized_content: str | None,
-    privacy: Any,
-    model_override: dict[str, str] | None,
-    digest: str,
-) -> tuple[Message, ResponseRun]:
-    """Stage the revised prompt, its pending run and the idempotency receipt (flush, no commit).
-
-    The prompt is flushed first for its id, then the run, then the receipt referencing both; the
-    caller commits all three atomically and bumps nothing else. ``conversation.updated_at`` is
-    set here so the commit publishes it with the branch.
-    """
-    conversation_id = conversation.id
-    user_message = Message(
-        conversation_id=conversation_id,
-        role="user",
-        content=normalized_content if payload.action == "edit" else original_prompt.content,
-        client_request_id=payload.client_request_id,
-        revision_of_message_id=target.id,
-    )
-    session.add(user_message)
-    await session.flush()
-    response_run = ResponseRun(
-        workspace_id=conversation.workspace_id,
-        actor_user_id=conversation.actor_user_id,
-        conversation_id=conversation_id,
-        user_message_id=user_message.id,
-        client_request_id=payload.client_request_id,
-        status="pending",
-        # Retain the original client-visible context; every server-private `_` key (privacy fence,
-        # web search opt-in) is rewritten by `_run_context`. The worker rechecks its source/version
-        # fences before retrieval and before remote send.
-        retrieval_context=_run_context(
-            original_run.retrieval_context,
-            privacy,
-            payload.web_search,
-            model_override,
-            db_query=payload.db_query,
-        ),
-        ephemeral=conversation.ephemeral,
-        expires_at=conversation.expires_at,
-    )
-    session.add(response_run)
-    await session.flush()
-    session.add(
-        MessageMutationReceipt(
-            conversation_id=conversation_id,
-            client_request_id=payload.client_request_id,
-            request_digest=digest,
-            action=payload.action,
-            target_message_id=target.id,
-            result_user_message_id=user_message.id,
-            response_id=response_run.id,
-        )
-    )
-    conversation.updated_at = func.now()
-    return user_message, response_run
-
-
 @router.post(
     "/api/v1/conversations/{conversation_id}/messages/{message_id}/mutations",
     response_model=SendMessageResponse,
@@ -1244,339 +740,6 @@ async def mutate_message(
         response_id=response_run.id,
         status="pending",
     )
-
-
-_TERMINAL_RUN_STATUSES = ("completed", "cancelled", "failed")
-
-
-@dataclass
-class _PollState:
-    """Mutable outcome of one SSE poll, shared between the stream loop and its locked poll.
-
-    ``current_seq`` is the last event sequence delivered (carried across polls); the flags are
-    per-poll results the loop reads after the poll finishes. ``stop`` ends the stream without a
-    further status frame (the run, parent or privacy fence is gone or was already reported, or a
-    terminal run's final batch was just delivered with nothing left queued).
-    """
-
-    current_seq: int
-    batch_sent: bool = False
-    batch_full: bool = False
-    terminal_without_event: bool = False
-    auth_expired: bool = False
-    stop: bool = False
-
-
-async def _authorize_stream_run(
-    factory: async_sessionmaker[AsyncSession],
-    request: Request,
-    response_id: UUID,
-) -> None:
-    """Verify the requester owns a live run before any stream resources are taken.
-
-    Uses one short session. The stream is the requester's own run only: actor and default
-    workspace must both match, and an expired temporary parent conversation is refused.
-
-    Raises:
-        HTTPException: 401 when unauthenticated; 404 for an unknown or foreign run/conversation;
-            410 for an expired temporary conversation.
-    """
-    requester_id = await _session_is_current(request)
-    if requester_id is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    async with factory() as session:
-        run = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
-        if run is None:
-            raise HTTPException(status_code=404, detail="Response run not found")
-        if run.actor_user_id != requester_id:
-            raise HTTPException(status_code=404, detail="Response run not found")
-        await _run_scope(session, run)
-        parent = await session.scalar(
-            select(Conversation).where(Conversation.id == run.conversation_id)
-        )
-        if parent is None:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        _reject_expired_conversation(parent)
-
-
-def _stream_start_seq(last_event_id: str | None, cursor: str | None) -> int:
-    """First event sequence to replay: one past a valid resume cursor, else 1 (malformed -> full replay)."""
-    selected_cursor = last_event_id or cursor
-    if selected_cursor:
-        try:
-            _, parsed_seq = parse_event_id(selected_cursor)
-            return parsed_seq + 1
-        except ValueError:
-            return 1
-    return 1
-
-
-async def _frames_for_batch(
-    session: AsyncSession,
-    run: ResponseRun,
-    events: list[StreamEvent],
-    state: _PollState,
-) -> str:
-    """Render ``events`` as one joined SSE chunk with citations re-filtered against current evidence.
-
-    Filtering happens inside the caller's locked transaction so no object loaded before another
-    transaction's redaction is replayed. Advances ``state.current_seq`` per rendered event and
-    sets ``state.batch_full`` when the batch size or byte cap left events for the next poll.
-    """
-    citations = await _filter_citation_lists(
-        session,
-        [event.data.get("citations") if isinstance(event.data, dict) else None for event in events],
-        await _run_scope(session, run),
-    )
-    frames: list[str] = []
-    size = 0
-    state.batch_full = len(events) == STREAM_BATCH_SIZE
-    for event, current_citations in zip(events, citations, strict=True):
-        if size >= STREAM_BATCH_MAX_BYTES:
-            state.batch_full = True  # rest is re-read (and re-filtered) next poll
-            break
-        event_data = event.data
-        if isinstance(event_data, dict) and isinstance(event_data.get("citations"), list):
-            event_data = {**event_data, "citations": current_citations}
-        frame = format_sse_event(
-            event=event.event_type,
-            data=event_data,
-            event_id=event.event_id,
-        )
-        frames.append(frame)
-        size += len(frame.encode())
-        state.current_seq = event.seq
-    return "".join(frames)
-
-
-async def _publish_locked_events(
-    session: AsyncSession,
-    current_run: ResponseRun,
-    response_id: UUID,
-    token_hash: str | None,
-    state: _PollState,
-) -> AsyncGenerator[str, None]:
-    """Inside the locked poll transaction, authenticate then yield the next batch of events.
-
-    The auth row is read in the same transaction and snapshot as the event read (I5), so no frame
-    follows a revocation. The joined chunk is yielded BEFORE the caller commits: the ASGI send
-    then finds the transport drained and the bytes are written while every lock is still held.
-    Sets ``state`` flags (``auth_expired``, ``batch_sent``, ``terminal_without_event``, and ``stop``
-    when the delivered batch drained a terminal run).
-    """
-    account_id = await _auth_row_current(session, token_hash)
-    if account_id is None or current_run.actor_user_id != account_id:
-        state.auth_expired = True
-        return
-    events = list(
-        (
-            await session.scalars(
-                select(StreamEvent)
-                .where(
-                    StreamEvent.response_id == response_id,
-                    StreamEvent.seq > state.current_seq,
-                )
-                .order_by(StreamEvent.seq.asc())
-                .limit(STREAM_BATCH_SIZE)
-                .execution_options(populate_existing=True)
-            )
-        ).all()
-    )
-    if events:
-        chunk = await _frames_for_batch(session, current_run, events, state)
-        # ONE send -> one non-blocking transport.write, under the locks.
-        yield chunk
-        state.batch_sent = True
-        # A terminal run whose backlog fit in this batch has nothing left to send: end now instead of
-        # idling one more fallback interval holding the permit and pub/sub. The loop reads ``stop``
-        # only after the poll commits, so locks are released first.
-        state.stop = not state.batch_full and current_run.status in _TERMINAL_RUN_STATUSES
-    else:
-        state.terminal_without_event = current_run.status in _TERMINAL_RUN_STATUSES
-
-
-async def _locked_poll(
-    factory: async_sessionmaker[AsyncSession],
-    response_id: UUID,
-    token_hash: str | None,
-    state: _PollState,
-) -> AsyncGenerator[str, None]:
-    """One poll: lock-free probe, then (only if work exists) the locked publish transaction.
-
-    Lock order is unchanged: Memory privacy, Conversation, ResponseRun, then evidence locks.
-    Yields frames while the transaction is open and commits only after the consumer resumes.
-    A failed privacy fence rolls back, redacts in a fresh transaction and emits a terminal
-    ``cancelled`` status. Early exits set ``state.stop``; errors propagate to the stream loop.
-    """
-    async with factory() as probe:
-        # Lock-free probe: an idle poll (nothing to publish or close) takes no lock.
-        needs_lock = await _poll_needs_lock(probe, response_id, state.current_seq, token_hash)
-    if not needs_lock:
-        return
-    async with factory() as session:
-        run_hint = await session.scalar(select(ResponseRun).where(ResponseRun.id == response_id))
-        if run_hint is None:
-            state.stop = True
-            return
-        # Current-evidence output follows Memory privacy before Chat parent/run locks
-        # for both active and terminal transcripts.
-        await lock_export_privacy(session, run_hint.workspace_id, shared=True)
-        parent = await session.scalar(
-            select(Conversation)
-            .where(
-                Conversation.id == run_hint.conversation_id,
-            )
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-        if parent is None:
-            state.stop = True
-            return
-        if parent.ephemeral and (
-            parent.expires_at is None or parent.expires_at <= datetime.now(UTC)
-        ):
-            state.stop = True
-            return
-        current_run = await session.scalar(
-            select(ResponseRun)
-            .where(
-                ResponseRun.id == response_id,
-            )
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-        if current_run is None:
-            state.stop = True
-            return
-        if current_run.status in ACTIVE_RUN_STATUSES:
-            stamp = (current_run.retrieval_context or {}).get("_chat_privacy_fence")
-            try:
-                await _require_privacy_fence(
-                    session,
-                    stamp,
-                    scope=await _run_scope(session, current_run),
-                )
-            except Exception:  # noqa: BLE001  # deliberate boundary: failure is recorded/handled so the loop or request continues
-                # A failed read can poison the transaction; release locks and retry
-                # redaction in a fresh transaction before emitting only terminal status.
-                await session.rollback()
-                await _mark_privacy_cancelled(response_id, factory, state.current_seq)
-                yield format_sse_event("status", {"status": "cancelled"})
-                state.stop = True
-                return
-        # aclosing guarantees the inner generator (and its yield-point state) is closed promptly
-        # if the client disconnects while a chunk is pending, exactly like the former inline code.
-        async with aclosing(
-            _publish_locked_events(session, current_run, response_id, token_hash, state)
-        ) as chunks:
-            async for chunk in chunks:
-                yield chunk
-        await session.commit()
-
-
-async def _sse_event_stream(
-    request: Request,
-    factory: async_sessionmaker[AsyncSession],
-    response_id: UUID,
-    token_hash: str | None,
-    start_seq: int,
-    started: asyncio.Event,
-    semaphore: asyncio.Semaphore,
-    redis: Any = None,
-) -> AsyncGenerator[str, None]:
-    """Publish batches of locked, revalidated events; wait for slow clients with no lock held.
-
-    Each poll first yields an empty chunk OUTSIDE any transaction. Through the pure-ASGI stack,
-    uvicorn's `send` awaits `flow.drain()` for earlier bytes before it writes (httptools_impl and
-    h11_impl both drain first, then call the non-blocking `transport.write`), so a slow reader is
-    waited for here, holding nothing. Then one transaction (``_locked_poll``) takes Memory privacy
-    -> Conversation -> ResponseRun -> evidence locks (unchanged order), checks expiry, the privacy
-    fence and the auth row, reads up to STREAM_BATCH_SIZE events, filters their citations once, and
-    yields ONE joined chunk before commit: that `send` finds the transport just drained, so the
-    bytes reach `transport.write` while every lock is held. A purge/redaction/revocation therefore
-    commits entirely before this read (and is seen) or entirely after the write (and the next poll
-    sees it). The stream permit is released when the generator ends for any reason.
-
-    Idle waits: when ``redis`` is given the stream subscribes to ``chat:response:<id>`` BEFORE the first
-    poll and waits on that wake-up (published by the worker after each commit), polling only every
-    ``STREAM_SIGNAL_FALLBACK_INTERVAL`` as a safety net; without a subscription it keeps the original
-    0.1-0.5 s backoff. The signal only decides WHEN to poll; the locked read path, ``seq`` cursor,
-    ordering, dedup and resume semantics are untouched.
-    """
-    started.set()
-    try:
-        async with (
-            signals.subscribed(redis, response_id) as signal,
-            aclosing(
-                _poll_loop(request, factory, response_id, token_hash, start_seq, signal),
-            ) as frames,
-        ):
-            async for frame in frames:
-                yield frame
-    finally:
-        semaphore.release()
-
-
-async def _idle_wait(signal: signals.ResponseSignalSubscription, delay: float) -> None:
-    """Pause between polls: wait on the Redis wake-up (slow fallback poll) or, unsubscribed, sleep ``delay``.
-
-    Holds no transaction or lock. A wake-up or the fallback timeout both just trigger the next locked poll.
-    """
-    if signal.active:
-        await signal.wait(signals.STREAM_SIGNAL_FALLBACK_INTERVAL)
-    else:
-        await asyncio.sleep(delay)
-
-
-async def _poll_loop(
-    request: Request,
-    factory: async_sessionmaker[AsyncSession],
-    response_id: UUID,
-    token_hash: str | None,
-    start_seq: int,
-    signal: signals.ResponseSignalSubscription,
-) -> AsyncGenerator[str, None]:
-    """Run the poll/publish loop of one SSE connection; sleeps are signal-aware (see ``_sse_event_stream``)."""
-    current_seq = start_seq - 1
-    loop = asyncio.get_running_loop()
-    last_heartbeat = loop.time()
-    delay = STREAM_POLL_INTERVAL
-
-    while not await request.is_disconnected():
-        yield ""  # drain point: no transaction or lock is open here
-        state = _PollState(current_seq=current_seq)
-        try:
-            async with aclosing(_locked_poll(factory, response_id, token_hash, state)) as chunks:
-                async for chunk in chunks:
-                    yield chunk
-        except Exception as exc:  # noqa: BLE001  # boundary: failure logged, caller degrades safely
-            logger.warning("Error querying stream events: %s", type(exc).__name__)
-            yield format_sse_event("status", {"status": "unavailable"})
-            return
-        current_seq = state.current_seq
-        if state.stop:
-            return
-        if state.auth_expired:
-            yield format_sse_event("status", {"status": "auth_expired"})
-            return
-        if state.batch_sent:
-            last_heartbeat = loop.time()
-            delay = STREAM_POLL_INTERVAL
-            if state.batch_full:
-                continue  # more is queued: poll again without sleeping
-            # A partial batch drained the backlog; the worker flushes at most every STREAM_FLUSH_SECONDS (0.4 s).
-            await _idle_wait(signal, delay)
-            continue
-        if state.terminal_without_event:
-            return
-
-        now = loop.time()
-        if now - last_heartbeat >= HEARTBEAT_INTERVAL:
-            yield ": heartbeat\n\n"
-            last_heartbeat = now
-
-        await _idle_wait(signal, delay)
-        delay = min(delay * 2, STREAM_POLL_MAX_INTERVAL)
 
 
 @router.get(

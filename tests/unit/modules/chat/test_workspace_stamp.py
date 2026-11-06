@@ -13,6 +13,7 @@ from modules.chat import routes, seed
 from modules.chat.models import AgentActivityLink, Conversation, Message, ResponseRun
 from modules.chat.schemas import MessageMutationRequest, SendMessageRequest
 from tests.unit.chat_public_patching import patch_chat_public
+from tests.unit.modules.chat._routes_patch import patch_routes
 
 WS = uuid4()
 CTX = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
@@ -48,17 +49,17 @@ def _added(session, cls):
 
 
 def _patch_routes(monkeypatch, conv):
-    monkeypatch.setattr(routes, "lock_export_privacy", AsyncMock())
-    monkeypatch.setattr(routes, "owner_default_scope", AsyncMock(return_value=CTX))
+    patch_routes(monkeypatch, "lock_export_privacy", AsyncMock())
+    patch_routes(monkeypatch, "owner_default_scope", AsyncMock(return_value=CTX))
     monkeypatch.setattr(
         routes,
         "read_export_privacy",
         AsyncMock(return_value=SimpleNamespace(store_conversation_history=True)),
     )
-    monkeypatch.setattr(routes, "_lock_conversation", AsyncMock(return_value=conv))
-    monkeypatch.setattr(routes, "_reject_active_response", AsyncMock())
-    monkeypatch.setattr(routes, "_privacy_fence", lambda _p: {})
-    monkeypatch.setattr(routes, "_dispatch_response_run", AsyncMock())
+    patch_routes(monkeypatch, "_lock_conversation", AsyncMock(return_value=conv))
+    patch_routes(monkeypatch, "_reject_active_response", AsyncMock())
+    patch_routes(monkeypatch, "_privacy_fence", lambda _p: {})
+    patch_routes(monkeypatch, "_dispatch_response_run", AsyncMock())
     monkeypatch.setattr(routes.chat_public, "resolve_gadget_context", AsyncMock(return_value={}))
 
 

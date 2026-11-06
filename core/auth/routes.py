@@ -993,6 +993,41 @@ async def _google_link_branch(
     return owner, reauthenticated_at
 
 
+async def _consume_google_state(redis: Redis, state: str) -> Any:
+    """Atomically take (get-and-delete) the OAuth state transaction; ``None`` when absent or malformed.
+
+    Raises a 503 when Redis is unavailable or slow (2s bound), so a lost state never looks like a replay.
+    """
+    try:
+        async with asyncio.timeout(2):
+            raw = (
+                await redis.getdel(f"auth:google:state:{state}")
+                if state and len(state) <= 256
+                else None
+            )
+    except (RedisError, TimeoutError):
+        raise HTTPException(
+            status_code=503, detail="Authentication is temporarily unavailable"
+        ) from None
+    try:
+        return json.loads(raw) if raw else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _google_userinfo_valid(userinfo: Any) -> bool:
+    """True when the OIDC userinfo has the Google issuer, a bounded subject and a verified string email."""
+    return not (
+        not userinfo
+        or userinfo.get("iss") != GOOGLE_ISSUER
+        or not isinstance(userinfo.get("sub"), str)
+        or not userinfo["sub"]
+        or len(userinfo["sub"]) > 255
+        or userinfo.get("email_verified") is not True
+        or not isinstance(userinfo.get("email"), str)
+    )
+
+
 @router.get("/google/callback")
 async def google_callback(
     request: Request,
@@ -1009,21 +1044,7 @@ async def google_callback(
     """
     settings: Settings = request.app.state.settings
     state = request.query_params.get("state", "")
-    try:
-        async with asyncio.timeout(2):
-            raw = (
-                await redis.getdel(f"auth:google:state:{state}")
-                if state and len(state) <= 256
-                else None
-            )
-    except (RedisError, TimeoutError):
-        raise HTTPException(
-            status_code=503, detail="Authentication is temporarily unavailable"
-        ) from None
-    try:
-        transaction = json.loads(raw) if raw else None
-    except (ValueError, TypeError):
-        transaction = None
+    transaction = await _consume_google_state(redis, state)
     response = Response(status_code=303, headers={"location": "/login?google=error"})
     purpose = transaction.get("purpose") if isinstance(transaction, dict) else None
     if purpose == "link":
@@ -1046,15 +1067,7 @@ async def google_callback(
     except (TimeoutError, httpx.HTTPError, AuthlibBaseError, JoseError, ValueError, RuntimeError):
         return response
     userinfo = token.get("userinfo")
-    if (
-        not userinfo
-        or userinfo.get("iss") != GOOGLE_ISSUER
-        or not isinstance(userinfo.get("sub"), str)
-        or not userinfo["sub"]
-        or len(userinfo["sub"]) > 255
-        or userinfo.get("email_verified") is not True
-        or not isinstance(userinfo.get("email"), str)
-    ):
+    if not _google_userinfo_valid(userinfo):
         return response
     try:
         email = normalize_account_email(userinfo["email"])
