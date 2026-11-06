@@ -261,6 +261,34 @@ async def _seed_copied_evidence(
     return ids
 
 
+async def _wait_for_outbox_quiescence(
+    engine: AsyncEngine, source_id: UUID, operation_id: Any, document_ids: list[Any]
+) -> None:
+    """Wait until every dispatchable outbox event of this Source has reached a terminal status.
+
+    The purge operation can report ``succeeded`` while its continuation event is still pending or
+    queued for the worker; the replay step only re-delivers ``delivered`` events, so it must not
+    start before those settle. Fails with the leftover rows after ``PURGE_TIMEOUT_SECONDS``.
+    """
+    deadline = time.monotonic() + PURGE_TIMEOUT_SECONDS
+    while True:
+        pending = await _rows(
+            engine,
+            "SELECT id, type, status FROM event_outbox WHERE status NOT IN ('delivered', 'failed') "
+            "AND type = ANY(:types) AND (payload::text LIKE :source OR payload::text LIKE :operation "
+            "OR payload::text LIKE ANY(:documents))",
+            types=list(WORKER_BY_EVENT),
+            source=f"%{source_id}%",
+            operation=f"%{operation_id}%",
+            documents=[f"%{document_id}%" for document_id in document_ids],
+        )
+        if not pending:
+            return
+        if time.monotonic() >= deadline:
+            pytest.fail(f"outbox events did not settle in time: {pending}")
+        await asyncio.sleep(2)
+
+
 async def _wait_for_operation(
     engine: AsyncEngine,
     source_id: UUID,
@@ -424,6 +452,7 @@ async def test_source_purge_erases_derived_data_and_replays_never_resurrect_it( 
     again = await client.delete(f"/api/v1/sources/{source_id}", params={"with_data": "true"})
     assert again.status_code == 202 and again.json()["operation_id"] == str(operation["id"])
 
+    await _wait_for_outbox_quiescence(engine, source_id, operation["id"], document_ids)
     settled = await snapshot()
 
     # Replay: re-deliver every dispatchable event that was already delivered for this Source (purge,
