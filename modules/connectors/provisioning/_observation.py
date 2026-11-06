@@ -112,6 +112,84 @@ async def capture_connector_observation(
     return _connector_observation(source, row, slots, access_fence)
 
 
+async def _read_observation(
+    session: AsyncSession, before: ConnectorObservation, access_fence: AccessFence
+) -> ConnectorObservation:
+    """Read the current provisioning and credential rows and project the redacted observation.
+
+    Unresolved credential operations force ``credential_operation_pending`` and, unless disabled,
+    ``reconciliation_required``. A missing provisioning row yields the saved-not-active default.
+    Read-only; uses the caller's session and the already admitted ``access_fence``.
+    """
+    result = await session.execute(
+        select(
+            ConnectorProvisioning.desired_revision,
+            ConnectorProvisioning.applied_revision,
+            ConnectorProvisioning.state,
+            ConnectorProvisioning.error_code,
+            ConnectorProvisioning.desired_enabled,
+            ConnectorProvisioning.desired_configuration,
+        ).where(ConnectorProvisioning.source_id == before.fence.id)
+    )
+    row = result.one_or_none()
+    credential_rows = list(
+        (
+            await session.execute(
+                select(
+                    ConnectorManagedCredential.slot,
+                    ConnectorManagedCredential.credential_id.is_not(None),
+                    ConnectorManagedCredential.state,
+                ).where(ConnectorManagedCredential.source_id == before.fence.id)
+            )
+        ).all()
+    )
+    if row is None:
+        after = ConnectorObservation(
+            fence=before.fence,
+            access_fence=access_fence,
+            desired_revision=0,
+            applied_revision=0,
+            state="saved_not_active",
+            error_code=None,
+            credential_recovery="supported",
+            desired_enabled=False,
+            credential_presence=(),
+            header_auth_configured=False,
+        )
+    else:
+        values = {slot: (present, state) for slot, present, state in credential_rows}
+        unresolved = any(
+            state in {"dispatching", "reconciliation_required", "delete_pending"}
+            for _present, state in values.values()
+        )
+        state = row.state
+        error_code = row.error_code
+        if unresolved:
+            error_code = "credential_operation_pending"
+            if state != "disabled":
+                state = "reconciliation_required"
+        desired_configuration = row.desired_configuration
+        after = ConnectorObservation(
+            fence=before.fence,
+            access_fence=access_fence,
+            desired_revision=row.desired_revision,
+            applied_revision=row.applied_revision,
+            state=state,
+            error_code=error_code,
+            credential_recovery="unsupported_operation" if unresolved else "supported",
+            desired_enabled=row.desired_enabled,
+            credential_presence=tuple(
+                (slot, bool(values.get(slot, (False, "queued"))[0]))
+                for slot in _ALL_CREDENTIAL_SLOTS
+            ),
+            header_auth_configured=bool(
+                isinstance(desired_configuration, dict)
+                and desired_configuration.get("auth_method") == "http_header"
+            ),
+        )
+    return after
+
+
 async def commit_connector_observation(
     session: AsyncSession,
     before: ConnectorObservation | None,
@@ -144,72 +222,7 @@ async def commit_connector_observation(
     await session.flush()
     drafts: list[ReplayDraft] = []
     if before is not None:
-        result = await session.execute(
-            select(
-                ConnectorProvisioning.desired_revision,
-                ConnectorProvisioning.applied_revision,
-                ConnectorProvisioning.state,
-                ConnectorProvisioning.error_code,
-                ConnectorProvisioning.desired_enabled,
-                ConnectorProvisioning.desired_configuration,
-            ).where(ConnectorProvisioning.source_id == before.fence.id)
-        )
-        row = result.one_or_none()
-        credential_rows = list(
-            (
-                await session.execute(
-                    select(
-                        ConnectorManagedCredential.slot,
-                        ConnectorManagedCredential.credential_id.is_not(None),
-                        ConnectorManagedCredential.state,
-                    ).where(ConnectorManagedCredential.source_id == before.fence.id)
-                )
-            ).all()
-        )
-        if row is None:
-            after = ConnectorObservation(
-                fence=before.fence,
-                access_fence=access_fence,
-                desired_revision=0,
-                applied_revision=0,
-                state="saved_not_active",
-                error_code=None,
-                credential_recovery="supported",
-                desired_enabled=False,
-                credential_presence=(),
-                header_auth_configured=False,
-            )
-        else:
-            values = {slot: (present, state) for slot, present, state in credential_rows}
-            unresolved = any(
-                state in {"dispatching", "reconciliation_required", "delete_pending"}
-                for _present, state in values.values()
-            )
-            state = row.state
-            error_code = row.error_code
-            if unresolved:
-                error_code = "credential_operation_pending"
-                if state != "disabled":
-                    state = "reconciliation_required"
-            desired_configuration = row.desired_configuration
-            after = ConnectorObservation(
-                fence=before.fence,
-                access_fence=access_fence,
-                desired_revision=row.desired_revision,
-                applied_revision=row.applied_revision,
-                state=state,
-                error_code=error_code,
-                credential_recovery="unsupported_operation" if unresolved else "supported",
-                desired_enabled=row.desired_enabled,
-                credential_presence=tuple(
-                    (slot, bool(values.get(slot, (False, "queued"))[0]))
-                    for slot in _ALL_CREDENTIAL_SLOTS
-                ),
-                header_auth_configured=bool(
-                    isinstance(desired_configuration, dict)
-                    and desired_configuration.get("auth_method") == "http_header"
-                ),
-            )
+        after = await _read_observation(session, before, access_fence)
         if after != before:
             drafts.append(
                 make_source_change(

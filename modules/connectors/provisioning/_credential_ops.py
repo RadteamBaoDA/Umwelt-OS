@@ -276,6 +276,85 @@ async def _credential_send_allowed(
         await session.rollback()
 
 
+def _prepared_intent_validity(
+    envelope: dict[str, object],
+    source: Any,
+    desired: Any,
+    slot: str,
+    operation_id: UUID,
+) -> tuple[bool, bool]:
+    """Return ``(valid_enable, valid_delete)`` for a prepared envelope against current source intent.
+
+    An enable (create/update) must match the active source, enabled provisioning row, activation
+    intent, generation and revision; a delete must match a paused source with disabled intent.
+    Pure; no I/O.
+    """
+    valid_enable = bool(
+        envelope.get("kind") in {"create", "update"}
+        and source is not None
+        and source.status == "active"
+        and desired is not None
+        and desired.desired_enabled
+        and isinstance(desired.activation_intent, dict)
+        and envelope.get("activation_id") == desired.activation_intent.get("id")
+        and isinstance(desired.activation_intent.get("required_credentials"), dict)
+        and isinstance(desired.activation_intent["required_credentials"].get(slot), dict)
+        and desired.activation_intent["required_credentials"][slot].get("operation_id")
+        == str(operation_id)
+        and source.generation == envelope.get("source_generation")
+        and desired.source_generation == envelope.get("source_generation")
+        and desired.desired_revision == envelope.get("revision")
+    )
+    valid_delete = bool(
+        envelope.get("kind") == "delete"
+        and source is not None
+        and source.status == "paused"
+        and desired is not None
+        and not desired.desired_enabled
+        and source.generation == envelope.get("source_generation")
+        and desired.desired_revision == envelope.get("revision")
+    )
+    return valid_enable, valid_delete
+
+
+def _discard_stale_prepared_intent(
+    row: Any, slots: dict[str, Any], desired: Any, source: Any, envelope: dict[str, object]
+) -> None:
+    """Clear a stale prepared credential operation and, when it owns the activation intent, the intent.
+
+    Resets ``row`` and any sibling slot prepared for the same activation, then disables the
+    desired state. Mutates locked ORM rows only; the caller commits the observation.
+    """
+    activation_id = envelope.get("activation_id")
+    row.operation_envelope = None
+    row.operation_id = None
+    row.state = "ready" if row.credential_id else "queued"
+    row.error_code = "prepared_credential_intent_stale"
+    if (
+        isinstance(activation_id, str)
+        and desired is not None
+        and isinstance(desired.activation_intent, dict)
+    ):
+        if desired.activation_intent.get("id") == activation_id:
+            for sibling in slots.values():
+                sibling_envelope = sibling.operation_envelope
+                if (
+                    sibling is not row
+                    and isinstance(sibling_envelope, dict)
+                    and sibling_envelope.get("activation_id") == activation_id
+                    and sibling_envelope.get("state") == "prepared"
+                ):
+                    sibling.operation_id = None
+                    sibling.operation_envelope = None
+                    sibling.state = "ready" if sibling.credential_id else "queued"
+            desired.activation_intent = None
+            desired.desired_enabled = False
+            desired.state = (
+                "disabled" if source is None or source.status != "active" else "saved_not_active"
+            )
+            desired.error_code = "activation_intent_stale"
+
+
 async def claim_credential_operation(
     session: AsyncSession,
     source_id: UUID,
@@ -315,62 +394,11 @@ async def claim_credential_operation(
         return None
     if envelope.get("state") != "prepared":
         return None
-    valid_enable = bool(
-        envelope.get("kind") in {"create", "update"}
-        and source is not None
-        and source.status == "active"
-        and desired is not None
-        and desired.desired_enabled
-        and isinstance(desired.activation_intent, dict)
-        and envelope.get("activation_id") == desired.activation_intent.get("id")
-        and isinstance(desired.activation_intent.get("required_credentials"), dict)
-        and isinstance(desired.activation_intent["required_credentials"].get(slot), dict)
-        and desired.activation_intent["required_credentials"][slot].get("operation_id")
-        == str(operation_id)
-        and source.generation == envelope.get("source_generation")
-        and desired.source_generation == envelope.get("source_generation")
-        and desired.desired_revision == envelope.get("revision")
-    )
-    valid_delete = bool(
-        envelope.get("kind") == "delete"
-        and source is not None
-        and source.status == "paused"
-        and desired is not None
-        and not desired.desired_enabled
-        and source.generation == envelope.get("source_generation")
-        and desired.desired_revision == envelope.get("revision")
+    valid_enable, valid_delete = _prepared_intent_validity(
+        envelope, source, desired, slot, operation_id
     )
     if not valid_enable and not valid_delete:
-        activation_id = envelope.get("activation_id")
-        row.operation_envelope = None
-        row.operation_id = None
-        row.state = "ready" if row.credential_id else "queued"
-        row.error_code = "prepared_credential_intent_stale"
-        if (
-            isinstance(activation_id, str)
-            and desired is not None
-            and isinstance(desired.activation_intent, dict)
-        ):
-            if desired.activation_intent.get("id") == activation_id:
-                for sibling in slots.values():
-                    sibling_envelope = sibling.operation_envelope
-                    if (
-                        sibling is not row
-                        and isinstance(sibling_envelope, dict)
-                        and sibling_envelope.get("activation_id") == activation_id
-                        and sibling_envelope.get("state") == "prepared"
-                    ):
-                        sibling.operation_id = None
-                        sibling.operation_envelope = None
-                        sibling.state = "ready" if sibling.credential_id else "queued"
-                desired.activation_intent = None
-                desired.desired_enabled = False
-                desired.state = (
-                    "disabled"
-                    if source is None or source.status != "active"
-                    else "saved_not_active"
-                )
-                desired.error_code = "activation_intent_stale"
+        _discard_stale_prepared_intent(row, slots, desired, source, envelope)
         await commit_connector_observation(
             session, before, scope=scope, multi_workspace_enabled=multi_workspace_enabled
         )

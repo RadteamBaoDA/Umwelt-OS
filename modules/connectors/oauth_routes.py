@@ -538,6 +538,47 @@ def _write_grant(
         grant.state, grant.error_code = "ready", None
 
 
+async def _reject_stale_exchange(session: Session, tokens: dict[str, Any]) -> NoReturn:
+    """Discard a token exchange whose source or grant changed mid-flight: roll back, revoke, raise 409.
+
+    The remote refresh-token revocation is best effort and never masks the 409; an unconfirmed
+    revocation cannot restore local authority because the result is never stored.
+    """
+    # A grant may have been replaced while Google was exchanging the code; discard this result.
+    await session.rollback()
+    try:
+        await _revoke_token(tokens["refresh_token"])
+    except Exception:  # best-effort remote cleanup; never masks the 409 below
+        # A stale callback can never be stored; an unconfirmed remote cleanup cannot restore local authority.
+        logger.debug("google_stale_token_revoke_failed", exc_info=True)
+    raise HTTPException(
+        status_code=409, detail="Connector changed during authorization; reconnect to continue"
+    )
+
+
+def _validate_callback_request(request: Request, settings: Any) -> str:
+    """Check the callback URL matches the registered one and return the bounded ``state`` parameter.
+
+    Raises:
+        HTTPException: 400 for a URL that differs in scheme, host or path from the registration, or
+            for a missing/over-256-character state.
+    """
+    callback = urlsplit(settings.connector_google_callback_url)
+    actual = urlsplit(str(request.url))
+    if (actual.scheme, actual.netloc, actual.path) != (
+        callback.scheme,
+        callback.netloc,
+        callback.path,
+    ):
+        raise HTTPException(
+            status_code=400, detail="Google callback URL does not match registration"
+        )
+    state = request.query_params.get("state", "")
+    if not state or len(state) > 256:
+        raise HTTPException(status_code=400, detail="Google authorization state is invalid")
+    return state
+
+
 @router.get("/oauth/google/callback")
 async def complete_google_authorization(
     request: Request,
@@ -553,19 +594,7 @@ async def complete_google_authorization(
     """
     settings = request.app.state.settings
     _configured(settings)
-    callback = urlsplit(settings.connector_google_callback_url)
-    actual = urlsplit(str(request.url))
-    if (actual.scheme, actual.netloc, actual.path) != (
-        callback.scheme,
-        callback.netloc,
-        callback.path,
-    ):
-        raise HTTPException(
-            status_code=400, detail="Google callback URL does not match registration"
-        )
-    state = request.query_params.get("state", "")
-    if not state or len(state) > 256:
-        raise HTTPException(status_code=400, detail="Google authorization state is invalid")
+    state = _validate_callback_request(request, settings)
     owner_token_hash, owner_id = owner.token_hash, owner.owner_id
     fence = await _admit(session, request, scope)
     attempt = await _consume_attempt(session, settings, state, owner_token_hash, owner_id, scope)
@@ -624,16 +653,7 @@ async def complete_google_authorization(
             or grant.owner_id != owner_id
         )
     ):
-        # A grant may have been replaced while Google was exchanging the code; discard this result.
-        await session.rollback()
-        try:
-            await _revoke_token(tokens["refresh_token"])
-        except Exception:  # best-effort remote cleanup; never masks the 409 below
-            # A stale callback can never be stored; an unconfirmed remote cleanup cannot restore local authority.
-            logger.debug("google_stale_token_revoke_failed", exc_info=True)
-        raise HTTPException(
-            status_code=409, detail="Connector changed during authorization; reconnect to continue"
-        )
+        await _reject_stale_exchange(session, tokens)
     _write_grant(
         session,
         settings,

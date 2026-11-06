@@ -226,6 +226,49 @@ def _provider_credential_state(
     )
 
 
+async def _load_credential_rows(
+    session: AsyncSession, source: Any, row: Any
+) -> tuple[Any, Any, Any, Any]:
+    """Load the provider-specific credential rows that feed a configuration snapshot.
+
+    Returns ``(native, world, rest, oauth_grant)``; each is ``None`` unless the source's provider
+    and provisioning backend make that credential kind relevant. Read-only, no row locks.
+    """
+    native_credential = None
+    if source.provider == "telegram" and row is not None:
+        native_credential = await session.scalar(
+            select(ConnectorNativeCredential)
+            .where(
+                ConnectorNativeCredential.source_id == source.id,
+                ConnectorNativeCredential.source_generation == source.generation,
+                ConnectorNativeCredential.configuration_revision == row.desired_revision,
+            )
+            .execution_options(populate_existing=True)
+        )
+    world_credential = (
+        await session.get(ConnectorWorldCredential, source.id)
+        if source.provider == "alpha_vantage"
+        else None
+    )
+    rest_credential = (
+        await session.get(ConnectorRestCredential, source.id)
+        if row is not None and "native" in (row.execution_backend, row.target_backend)
+        else None
+    )
+    oauth_grant = (
+        await session.get(ConnectorOAuthGrant, source.id)
+        if source.provider
+        in {
+            "google_mail",
+            "google_calendar",
+            "google_drive",
+            "reddit",
+        }
+        else None
+    )
+    return native_credential, world_credential, rest_credential, oauth_grant
+
+
 async def get_connector_configuration(
     session: AsyncSession,
     source_id: UUID,
@@ -254,37 +297,8 @@ async def get_connector_configuration(
     if source.generation != source_fence.generation:
         raise RuntimeError("Locked source snapshot generation mismatch")
     provider_credential = credentials.get("provider")
-    native_credential = None
-    if source.provider == "telegram" and row is not None:
-        native_credential = await session.scalar(
-            select(ConnectorNativeCredential)
-            .where(
-                ConnectorNativeCredential.source_id == source_id,
-                ConnectorNativeCredential.source_generation == source.generation,
-                ConnectorNativeCredential.configuration_revision == row.desired_revision,
-            )
-            .execution_options(populate_existing=True)
-        )
-    world_credential = (
-        await session.get(ConnectorWorldCredential, source_id)
-        if source.provider == "alpha_vantage"
-        else None
-    )
-    rest_credential = (
-        await session.get(ConnectorRestCredential, source_id)
-        if row is not None and "native" in (row.execution_backend, row.target_backend)
-        else None
-    )
-    oauth_grant = (
-        await session.get(ConnectorOAuthGrant, source_id)
-        if source.provider
-        in {
-            "google_mail",
-            "google_calendar",
-            "google_drive",
-            "reddit",
-        }
-        else None
+    native_credential, world_credential, rest_credential, oauth_grant = await _load_credential_rows(
+        session, source, row
     )
     configuration = _projected_configuration(source)
     desired = row.desired_configuration if row is not None else {}
