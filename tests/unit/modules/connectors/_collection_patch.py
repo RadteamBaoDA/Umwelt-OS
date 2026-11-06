@@ -12,11 +12,11 @@ import pytest
 
 _MODULES = (
     "modules.connectors.collection",
-    "modules.connectors._collection_base",
-    "modules.connectors._collection_web",
-    "modules.connectors._collection_oauth",
-    "modules.connectors._collection_native",
-    "modules.connectors._collection_providers",
+    "modules.connectors._collection.base",
+    "modules.connectors._collection.web",
+    "modules.connectors._collection.oauth",
+    "modules.connectors._collection.native",
+    "modules.connectors._collection.providers",
 )
 
 

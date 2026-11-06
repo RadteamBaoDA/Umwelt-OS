@@ -29,7 +29,7 @@ from modules.chat import (
 from modules.chat import web_search as web  # noqa: F401
 
 # Re-exports: ``modules.chat.worker`` keeps its original public and test-visible surface.
-from modules.chat._worker_base import (  # noqa: F401
+from modules.chat._worker.base import (  # noqa: F401
     _CHAT_ROLE,
     _CLAIM_SEQ,
     _UI_MILESTONE_KEYS,
@@ -65,22 +65,22 @@ from modules.chat._worker_base import (  # noqa: F401
     is_run_cancelled,
     logger,
 )
-from modules.chat._worker_base import (
+from modules.chat._worker.base import (
     CANCEL_KEY_PREFIX as CANCEL_KEY_PREFIX,
 )
-from modules.chat._worker_base import (
+from modules.chat._worker.base import (
     CHAT_JOB_TIMEOUT as CHAT_JOB_TIMEOUT,
 )
-from modules.chat._worker_base import (
+from modules.chat._worker.base import (
     CHAT_QUEUE as CHAT_QUEUE,
 )
-from modules.chat._worker_base import (
+from modules.chat._worker.base import (
     _require_privacy_fence as _require_privacy_fence,
 )
-from modules.chat._worker_base import (
+from modules.chat._worker.base import (
     is_history_storage_enabled as is_history_storage_enabled,
 )
-from modules.chat._worker_finalize import (  # noqa: F401
+from modules.chat._worker.finalize import (  # noqa: F401
     _assistant_metadata,
     _CitedAnswer,
     _finalize_widgets,
@@ -90,35 +90,35 @@ from modules.chat._worker_finalize import (  # noqa: F401
     _validate_document_citations,
     _web_citations_for,
 )
-from modules.chat._worker_purge import (  # noqa: F401
+from modules.chat._worker.purge import (  # noqa: F401
     _purge_expired_activity_links,
     _purge_expired_conversations,
     _purge_expired_runs,
     purge_terminal_message_deltas,
 )
-from modules.chat._worker_purge import (
+from modules.chat._worker.purge import (
     purge_expired_chat_runs as purge_expired_chat_runs,
 )
-from modules.chat._worker_settle import (
+from modules.chat._worker.settle import (
     _cancel_response_locked as _cancel_response_locked,
 )
-from modules.chat._worker_settle import (
+from modules.chat._worker.settle import (
     _mark_failed,
     _release_on_shutdown,
 )
-from modules.chat._worker_settle import (
+from modules.chat._worker.settle import (
     _mark_privacy_cancelled as _mark_privacy_cancelled,
 )
-from modules.chat._worker_settle import (
+from modules.chat._worker.settle import (
     _privacy_cancel_locked as _privacy_cancel_locked,
 )
-from modules.chat._worker_settle import (
+from modules.chat._worker.settle import (
     neutralize_ui_events as neutralize_ui_events,
 )
-from modules.chat._worker_settle import (
+from modules.chat._worker.settle import (
     purge_run_model_copies as purge_run_model_copies,
 )
-from modules.chat._worker_setup import (  # noqa: F401
+from modules.chat._worker.setup import (  # noqa: F401
     _build_gateway,
     _build_model_setup,
     _compose_system_text,
@@ -135,7 +135,7 @@ from modules.chat._worker_setup import (  # noqa: F401
     _SendAttemptFence,
     _web_prompt_suffix,
 )
-from modules.chat._worker_state import (  # noqa: F401
+from modules.chat._worker.state import (  # noqa: F401
     _add_event,
     _claim_run,
     _ClaimedRun,
@@ -153,7 +153,7 @@ from modules.chat._worker_state import (  # noqa: F401
     _StreamState,
     _TurnInputs,
 )
-from modules.chat._worker_stream import (  # noqa: F401
+from modules.chat._worker.stream import (  # noqa: F401
     _answer_tool_calls,
     _apply_sse_line,
     _apply_text_delta,
@@ -166,7 +166,7 @@ from modules.chat._worker_stream import (  # noqa: F401
     _RoundCalls,
     _stream_turn,
 )
-from modules.chat._worker_tools import (  # noqa: F401
+from modules.chat._worker.tools import (  # noqa: F401
     _TOOL_HANDLERS,
     ChatToolHandler,
     _flush_pending,
@@ -182,7 +182,7 @@ from modules.chat._worker_tools import (  # noqa: F401
     _TurnState,
     register_chat_tool,
 )
-from modules.chat._worker_web import (  # noqa: F401
+from modules.chat._worker.web import (  # noqa: F401
     REWRITE_INSTRUCTIONS,
     REWRITE_MESSAGE_CHARS,
     REWRITE_QUERY_CHARS,

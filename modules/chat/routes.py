@@ -24,130 +24,130 @@ from core.workspaces.dependencies import (
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import conversation_service, signals
 from modules.chat import public as chat_public
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _TOKEN_RE as _TOKEN_RE,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     ACTIVE_RUN_STATUSES as ACTIVE_RUN_STATUSES,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     DB_READ_TIMEOUT as DB_READ_TIMEOUT,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _auth_row_current as _auth_row_current,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _dispatch_response_run as _dispatch_response_run,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _filter_citation_lists as _filter_citation_lists,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _lock_conversation as _lock_conversation,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _message_mutation_digest as _message_mutation_digest,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _message_reasoning as _message_reasoning,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _mutation_model_override as _mutation_model_override,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _poll_needs_lock as _poll_needs_lock,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _privacy_fence as _privacy_fence,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _reject_active_response as _reject_active_response,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _reject_expired_conversation as _reject_expired_conversation,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _run_context as _run_context,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _run_scope as _run_scope,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _session_is_current as _session_is_current,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _token_hash as _token_hash,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _validate_model_pair as _validate_model_pair,
 )
-from modules.chat._routes_guards import (
+from modules.chat._routes.guards import (
     _validated_model_override as _validated_model_override,
 )
-from modules.chat._routes_mutation import (
+from modules.chat._routes.mutation import (
     _load_mutation_originals as _load_mutation_originals,
 )
-from modules.chat._routes_mutation import (
+from modules.chat._routes.mutation import (
     _message_reads as _message_reads,
 )
-from modules.chat._routes_mutation import (
+from modules.chat._routes.mutation import (
     _mutation_digest_for as _mutation_digest_for,
 )
-from modules.chat._routes_mutation import (
+from modules.chat._routes.mutation import (
     _replay_mutation_or_reject_collision as _replay_mutation_or_reject_collision,
 )
-from modules.chat._routes_mutation import (
+from modules.chat._routes.mutation import (
     _require_history_storage as _require_history_storage,
 )
-from modules.chat._routes_mutation import (
+from modules.chat._routes.mutation import (
     _stage_mutation_branch as _stage_mutation_branch,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     _TERMINAL_RUN_STATUSES as _TERMINAL_RUN_STATUSES,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     HEARTBEAT_INTERVAL as HEARTBEAT_INTERVAL,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     STREAM_BATCH_MAX_BYTES as STREAM_BATCH_MAX_BYTES,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     STREAM_BATCH_SIZE as STREAM_BATCH_SIZE,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     STREAM_POLL_INTERVAL as STREAM_POLL_INTERVAL,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     STREAM_POLL_MAX_INTERVAL as STREAM_POLL_MAX_INTERVAL,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     _authorize_stream_run as _authorize_stream_run,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     _frames_for_batch as _frames_for_batch,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     _idle_wait as _idle_wait,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     _locked_poll as _locked_poll,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     _poll_loop as _poll_loop,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     _PollState as _PollState,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     _publish_locked_events as _publish_locked_events,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     _sse_event_stream as _sse_event_stream,
 )
-from modules.chat._routes_stream import (
+from modules.chat._routes.stream import (
     _stream_start_seq as _stream_start_seq,
 )
-from modules.chat._routes_support import (
+from modules.chat._routes.support import (
     _redact_cancelled_run_in_fresh_session,
     _replayed_send_response,
 )

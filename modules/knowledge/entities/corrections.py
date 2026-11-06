@@ -4,7 +4,7 @@ from modules.knowledge.documents import (
     public as documents,  # noqa: F401  (patched via the facade by tests)
 )
 from modules.knowledge.entities import public as entities  # noqa: F401
-from modules.knowledge.entities._corrections_common import (
+from modules.knowledge.entities._corrections.common import (
     MAX_CORRECTION_ENTITIES,
     MAX_CORRECTION_EVIDENCE_REFS,
     MAX_CORRECTION_MEMBERSHIPS,
@@ -16,7 +16,7 @@ from modules.knowledge.entities._corrections_common import (
     _temporal_before_relationships,
     _temporal_correction,
 )
-from modules.knowledge.entities._corrections_delete import (
+from modules.knowledge.entities._corrections.delete import (
     _delete_closure_rows,
     _delete_owned_rows,
     _delete_redirect_closure,
@@ -24,12 +24,12 @@ from modules.knowledge.entities._corrections_delete import (
     _lock_delete_closure,
     delete_canonical_entity,
 )
-from modules.knowledge.entities._corrections_discover import (
+from modules.knowledge.entities._corrections.discover import (
     _discover,
     _discover_owned_rows,
     _discover_redirects,
 )
-from modules.knowledge.entities._corrections_merge import (
+from modules.knowledge.entities._corrections.merge import (
     _check_future_scope,
     _locked_closure,
     _merge_aliases,
@@ -43,7 +43,7 @@ from modules.knowledge.entities._corrections_merge import (
     preview_merge,
     preview_split,
 )
-from modules.knowledge.entities._corrections_split import (
+from modules.knowledge.entities._corrections.split import (
     _split_alias_supports,
     _split_clear_source_fields,
     _split_move_evidence,

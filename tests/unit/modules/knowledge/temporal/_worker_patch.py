@@ -7,8 +7,6 @@ up in the submodule that defines and calls it. These helpers patch the name on t
 
 from __future__ import annotations
 
-import importlib
-import pkgutil
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from types import ModuleType
@@ -19,16 +17,12 @@ import pytest
 
 import modules.knowledge.temporal as _pkg
 from modules.knowledge.temporal import worker as _facade
+from tests.unit.split_patching import private_submodules
 
 
 def _modules() -> list[ModuleType]:
     """Return the facade plus every private ``_worker_*`` implementation submodule."""
-    subs = [
-        importlib.import_module(f"{_pkg.__name__}.{info.name}")
-        for info in pkgutil.iter_modules(_pkg.__path__)
-        if info.name.startswith("_worker_")
-    ]
-    return [_facade, *subs]
+    return [_facade, *private_submodules(_pkg, "worker")]
 
 
 def _holders(name: str) -> list[ModuleType]:

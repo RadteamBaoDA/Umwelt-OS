@@ -14,9 +14,9 @@ import pytest
 
 _MODULES = (
     "modules.connectors.provisioning.routes",
-    "modules.connectors.provisioning._routes_common",
-    "modules.connectors.provisioning._routes_config",
-    "modules.connectors.provisioning._routes_activation",
+    "modules.connectors.provisioning._routes.common",
+    "modules.connectors.provisioning._routes.config",
+    "modules.connectors.provisioning._routes.activation",
 )
 
 

@@ -405,7 +405,7 @@ def test_ingestion_worker_publishes_both_ready_events() -> None:
     """The normalization worker must publish document.version.ready and news.document.ready."""
     import inspect
 
-    from modules.ingestion import _worker_normalize as worker
+    from modules.ingestion._worker import normalize as worker
 
     src = inspect.getsource(worker)
     assert '("document.version.ready", "news.document.ready")' in src

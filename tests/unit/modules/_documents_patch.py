@@ -8,14 +8,13 @@ without hard-coding which private module owns which function.
 """
 
 import contextlib
-import importlib
-import pkgutil
 from types import ModuleType
 from typing import Any
 from unittest.mock import patch
 
 import modules.knowledge.documents as _package
 import modules.knowledge.documents.public as _facade
+from tests.unit.split_patching import private_submodules
 
 _UNSET: Any = object()
 
@@ -27,10 +26,7 @@ def documents_modules(name: str) -> list[ModuleType]:
         AttributeError: no Documents module defines or imports ``name``.
     """
     found = [_facade] if hasattr(_facade, name) else []
-    for info in pkgutil.iter_modules(_package.__path__):
-        if not info.name.startswith("_"):
-            continue
-        module = importlib.import_module(f"{_package.__name__}.{info.name}")
+    for module in private_submodules(_package):
         if name in vars(module):
             found.append(module)
     if not found:

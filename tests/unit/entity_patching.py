@@ -7,8 +7,6 @@ binds it, which is equivalent to the former single-module patch.
 
 from __future__ import annotations
 
-import importlib
-import pkgutil
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from types import ModuleType
@@ -18,16 +16,12 @@ import pytest
 
 import modules.knowledge.entities as _pkg
 from modules.knowledge.entities import public as _public
+from tests.unit.split_patching import private_submodules
 
 
 def _modules() -> list[ModuleType]:
     """Return the facade plus every private implementation submodule of the entities package."""
-    subs = [
-        importlib.import_module(f"{_pkg.__name__}.{info.name}")
-        for info in pkgutil.iter_modules(_pkg.__path__)
-        if info.name.startswith("_")
-    ]
-    return [_public, *subs]
+    return [_public, *private_submodules(_pkg)]
 
 
 def _holders(name: str) -> list[ModuleType]:

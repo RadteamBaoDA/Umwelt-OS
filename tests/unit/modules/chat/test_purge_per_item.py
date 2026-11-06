@@ -52,7 +52,7 @@ async def test_purge_commits_between_items_and_locks_once_per_transaction(
 
     deleted = AsyncMock(return_value=True)
     delta_purge = AsyncMock(return_value=0)
-    # The call site lives in modules.chat._worker_purge, so patching the facade alone would not reach it.
+    # The call site lives in modules.chat._worker.purge, so patching the facade alone would not reach it.
     patch_worker(monkeypatch, "purge_terminal_message_deltas", delta_purge)
     with (
         patch("modules.chat.public.delete_conversation", deleted),

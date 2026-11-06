@@ -49,9 +49,9 @@ BOT = "123"
 # Modules that may own the implementation (the facade today, an internal submodule after the split).
 _CANDIDATES = (
     "modules.ingestion.public",
-    "modules.ingestion._native_collection",
-    "modules.ingestion._native_verifiers",
-    "modules.ingestion._native_records",
+    "modules.ingestion._native.collection",
+    "modules.ingestion._native.verifiers",
+    "modules.ingestion._native.records",
     "modules.ingestion._collection",
     "modules.ingestion._credentials",
 )
@@ -1483,7 +1483,7 @@ async def test_request_ref_flows_to_authorization_and_settlement(monkeypatch):
 @pytest.mark.asyncio
 async def test_registry_selects_verifier_by_provider_and_accepts_new_providers(monkeypatch):
     """A verifier registered for a new provider id is used without editing the orchestrator."""
-    from modules.ingestion import _native_verifiers as verifiers
+    from modules.ingestion._native import verifiers as verifiers
 
     assert isinstance(verifiers.native_verifier_for("telegram"), verifiers.TelegramVerifier)
     assert isinstance(verifiers.native_verifier_for("google_drive"), verifiers.GoogleOAuthVerifier)
@@ -1511,7 +1511,7 @@ async def test_registry_selects_verifier_by_provider_and_accepts_new_providers(m
 @pytest.mark.asyncio
 async def test_params_entry_point_is_equivalent_to_the_legacy_keywords(monkeypatch):
     """The typed parameter object and the keyword wrapper produce the same receipt and call order."""
-    from modules.ingestion import _native_verifiers as verifiers
+    from modules.ingestion._native import verifiers as verifiers
 
     legacy = Harness(monkeypatch, Case("telegram"))
     receipt_a = await legacy.run()

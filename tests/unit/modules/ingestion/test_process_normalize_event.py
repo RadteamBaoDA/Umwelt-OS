@@ -288,7 +288,7 @@ class Env:
         """Replace the Telegram delivery validator in every module that binds it."""
         for name in (
             "modules.ingestion.public",
-            "modules.ingestion._native_records",
+            "modules.ingestion._native.records",
             "modules.ingestion._normalize_metadata",
         ):
             try:

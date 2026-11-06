@@ -12,15 +12,15 @@ import pytest
 
 _MODULES = (
     "modules.chat.worker",
-    "modules.chat._worker_base",
-    "modules.chat._worker_web",
-    "modules.chat._worker_purge",
-    "modules.chat._worker_settle",
-    "modules.chat._worker_state",
-    "modules.chat._worker_setup",
-    "modules.chat._worker_tools",
-    "modules.chat._worker_stream",
-    "modules.chat._worker_finalize",
+    "modules.chat._worker.base",
+    "modules.chat._worker.web",
+    "modules.chat._worker.purge",
+    "modules.chat._worker.settle",
+    "modules.chat._worker.state",
+    "modules.chat._worker.setup",
+    "modules.chat._worker.tools",
+    "modules.chat._worker.stream",
+    "modules.chat._worker.finalize",
 )
 
 

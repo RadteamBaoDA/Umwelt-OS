@@ -32,7 +32,7 @@ from modules.connectors import (  # noqa: F401  (patched via the facade by tests
     scheduler,
 )
 from modules.connectors import public as connectors
-from modules.connectors._collection_base import (
+from modules.connectors._collection.base import (
     _HTTP_ERRORS,
     ADAPTERS,
     DEDUP_ONLY_PROVIDERS,
@@ -83,7 +83,7 @@ from modules.connectors._collection_base import (
     _with_header,
     snapshot_matches,
 )
-from modules.connectors._collection_native import (
+from modules.connectors._collection.native import (
     _NATIVE_HANDLERS,
     NativeCall,
     NativeHandler,
@@ -101,7 +101,7 @@ from modules.connectors._collection_native import (
     _run_native,
     register_native_provider,
 )
-from modules.connectors._collection_oauth import (
+from modules.connectors._collection.oauth import (
     _accept_proof,
     _credential_fence,
     _google_access_token,
@@ -109,7 +109,7 @@ from modules.connectors._collection_oauth import (
     _run_github,
     _run_telegram,
 )
-from modules.connectors._collection_providers import (
+from modules.connectors._collection.providers import (
     _fetch_sections,
     _keyed_secret,
     _run_coingecko,
@@ -125,7 +125,7 @@ from modules.connectors._collection_providers import (
     _run_vietnamworks,
     _run_vn_stock,
 )
-from modules.connectors._collection_web import (
+from modules.connectors._collection.web import (
     _NotModified,
     _PageText,
     _parse_page,
