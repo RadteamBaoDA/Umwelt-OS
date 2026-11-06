@@ -12,6 +12,7 @@ from modules.chat import public as chat_public
 from modules.chat import routes, seed
 from modules.chat.models import AgentActivityLink, Conversation, Message, ResponseRun
 from modules.chat.schemas import MessageMutationRequest, SendMessageRequest
+from tests.unit.chat_public_patching import patch_chat_public
 
 WS = uuid4()
 CTX = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
@@ -115,7 +116,7 @@ async def test_link_agent_run_stamps_workspace(monkeypatch):
     conv = _conv()
     session = _session(AsyncMock(return_value=conv))
     monkeypatch.setattr("core.auth.public.revalidate_account_session", AsyncMock(return_value=True))
-    monkeypatch.setattr(chat_public, "is_history_storage_enabled", AsyncMock(return_value=True))
+    patch_chat_public(monkeypatch, "is_history_storage_enabled", AsyncMock(return_value=True))
     await chat_public.link_agent_run(session, conv.id, uuid4(), 1, "h" * 64)
     (link,) = _added(session, AgentActivityLink)
     assert link.workspace_id == WS and link.owner_id == 1

@@ -11,6 +11,7 @@ from core.workspaces.schemas import WorkspaceContext
 from modules.chat import public as chat_public
 from modules.chat import scope as chat_scope
 from modules.chat.models import AgentActivityLink
+from tests.unit.chat_public_patching import patch_chat_public
 
 WS = uuid4()
 OWNER7 = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=1)
@@ -33,7 +34,7 @@ async def test_revalidate_chat_session_passes_flag(monkeypatch):
 async def test_link_agent_run_allows_owner_7_and_denies_other_actor(monkeypatch):
     _flag(monkeypatch)
     monkeypatch.setattr("core.auth.public.revalidate_account_session", AsyncMock(return_value=True))
-    monkeypatch.setattr(chat_public, "is_history_storage_enabled", AsyncMock(return_value=True))
+    patch_chat_public(monkeypatch, "is_history_storage_enabled", AsyncMock(return_value=True))
     conv = SimpleNamespace(
         id=uuid4(), workspace_id=WS, actor_user_id=7, ephemeral=False, expires_at=None
     )

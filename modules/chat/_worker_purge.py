@@ -1,6 +1,7 @@
 """Chat worker retention purges: expired conversations, activity links, runs and terminal message deltas."""
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -18,6 +19,68 @@ from modules.chat.models import (
     ResponseRun,
     StreamEvent,
 )
+
+
+async def _count_conversation_child_rows(session: AsyncSession, conversation_id: UUID) -> int:
+    """Count every Chat child row a conversation delete cascades over.
+
+    Counts runs, messages, mutation receipts, stream events (via their runs) and agent activity links, issuing
+    the five queries in that order on ``session``. Callers hold the locked conversation parent, which prevents
+    supported send/stream/link writers from adding rows during the count.
+    """
+    run_count = (
+        await session.scalar(
+            select(func.count())
+            .select_from(ResponseRun)
+            .where(
+                ResponseRun.conversation_id == conversation_id,
+            )
+        )
+        or 0
+    )
+    message_count = (
+        await session.scalar(
+            select(func.count())
+            .select_from(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+            )
+        )
+        or 0
+    )
+    receipt_count = (
+        await session.scalar(
+            select(func.count())
+            .select_from(MessageMutationReceipt)
+            .where(
+                MessageMutationReceipt.conversation_id == conversation_id,
+            )
+        )
+        or 0
+    )
+    stream_count = (
+        await session.scalar(
+            select(func.count())
+            .select_from(StreamEvent)
+            .join(
+                ResponseRun,
+                StreamEvent.response_id == ResponseRun.id,
+            )
+            .where(ResponseRun.conversation_id == conversation_id)
+        )
+        or 0
+    )
+    link_count = (
+        await session.scalar(
+            select(func.count())
+            .select_from(AgentActivityLink)
+            .where(
+                AgentActivityLink.conversation_id == conversation_id,
+            )
+        )
+        or 0
+    )
+    return run_count + message_count + receipt_count + stream_count + link_count
 
 
 async def _purge_expired_conversations(session: AsyncSession, page_size: int) -> int:
@@ -69,79 +132,26 @@ async def _purge_expired_conversations(session: AsyncSession, page_size: int) ->
             continue
         # Count every row in Chat's child tables covered by this cascade. The locked parent
         # prevents supported send/stream/link writers from adding more rows during the count.
-        run_count = (
-            await session.scalar(
-                select(func.count())
-                .select_from(ResponseRun)
-                .where(
-                    ResponseRun.conversation_id == conversation_id,
-                )
-            )
-            or 0
-        )
-        message_count = (
-            await session.scalar(
-                select(func.count())
-                .select_from(Message)
-                .where(
-                    Message.conversation_id == conversation_id,
-                )
-            )
-            or 0
-        )
-        receipt_count = (
-            await session.scalar(
-                select(func.count())
-                .select_from(MessageMutationReceipt)
-                .where(
-                    MessageMutationReceipt.conversation_id == conversation_id,
-                )
-            )
-            or 0
-        )
-        stream_count = (
-            await session.scalar(
-                select(func.count())
-                .select_from(StreamEvent)
-                .join(
-                    ResponseRun,
-                    StreamEvent.response_id == ResponseRun.id,
-                )
-                .where(ResponseRun.conversation_id == conversation_id)
-            )
-            or 0
-        )
-        link_count = (
-            await session.scalar(
-                select(func.count())
-                .select_from(AgentActivityLink)
-                .where(
-                    AgentActivityLink.conversation_id == conversation_id,
-                )
-            )
-            or 0
-        )
+        child_rows = await _count_conversation_child_rows(session, conversation_id)
         # The conversation's own actor owns the delete; the public helper resolves that actor's scope.
         if await delete_chat_conversation(
             session, conversation_id, owner_id=conversation.actor_user_id
         ):
-            removed += 1 + run_count + message_count + receipt_count + stream_count + link_count
+            removed += 1 + child_rows
     return removed
 
 
-async def _purge_expired_activity_links(session: AsyncSession, page_size: int) -> int:
-    """Remove expired ephemeral Agent activity links of retained conversations via the Agent public API.
+async def _expired_activity_link_candidates(
+    session: AsyncSession, page_size: int
+) -> list[tuple[UUID, UUID, UUID]]:
+    """Select up to ``page_size`` expired ephemeral activity links as ``(link, conversation, workspace)`` ids.
 
-    Lock order: Memory privacy, Chat parent, then Agent-owned state; link identity and expiry are rechecked
-    after the Agent locks. Each candidate is its own short transaction. Returns the number of links removed.
+    Ordered by link id so pages are deterministic; read-only and unlocked, so each candidate must be rechecked
+    under the Chat and Agent locks before any mutation.
     """
-    removed = 0
-    from modules.memory.public import lock_export_privacy
-
-    # Expired activity links can belong to an otherwise retained conversation. Retain the
-    # Agent run identity and effect rows while removing only payloads through the Agent API.
-    candidate_links = list(
-        (
+    return [
+        (link_id, conversation_id, workspace_id)
+        for link_id, conversation_id, workspace_id in (
             await session.execute(
                 select(
                     AgentActivityLink.id,
@@ -158,7 +168,21 @@ async def _purge_expired_activity_links(session: AsyncSession, page_size: int) -
                 .limit(page_size)
             )
         ).all()
-    )
+    ]
+
+
+async def _purge_expired_activity_links(session: AsyncSession, page_size: int) -> int:
+    """Remove expired ephemeral Agent activity links of retained conversations via the Agent public API.
+
+    Lock order: Memory privacy, Chat parent, then Agent-owned state; link identity and expiry are rechecked
+    after the Agent locks. Each candidate is its own short transaction. Returns the number of links removed.
+    """
+    removed = 0
+    from modules.memory.public import lock_export_privacy
+
+    # Expired activity links can belong to an otherwise retained conversation. Retain the
+    # Agent run identity and effect rows while removing only payloads through the Agent API.
+    candidate_links = await _expired_activity_link_candidates(session, page_size)
     for link_id, conversation_id, workspace_id in candidate_links:
         await (
             session.commit()

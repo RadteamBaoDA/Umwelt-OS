@@ -15,6 +15,8 @@ from core.errors import ConflictError
 from core.workspaces.schemas import AccessFence, InternalJobScope
 from modules.ingestion import worker
 
+from .patching import patch_worker
+
 NOW = datetime(2026, 1, 2, tzinfo=UTC)
 WORKSPACE = uuid4()
 SOURCE_ID = uuid4()
@@ -187,18 +189,18 @@ class Harness:
             return "obs-prep"
 
         mp.setattr(worker.ingestion_api, "resolve_ingestion_event_scope", resolve_scope)
-        mp.setattr(worker, "read_access_fence", access)
+        patch_worker(mp, "read_access_fence", access)
         mp.setattr(worker.ingestion_api, "get_event_delivery", delivery)
         mp.setattr(worker.ingestion_api, "resolve_ingestion_run_scope", run_scope)
         mp.setattr(worker.sources, "lock_source_set", lock_sources)
         mp.setattr(worker.sources, "get_connector_source", projection)
         mp.setattr(worker.connectors, "require_collection_fence", collection_fence)
-        mp.setattr(worker, "_capture_normalization_retry_claim_in_uow", capture_claim)
+        patch_worker(mp, "_capture_normalization_retry_claim_in_uow", capture_claim)
         mp.setattr(worker.documents, "lock_document_for_extraction", lock_document)
         mp.setattr(worker.documents, "prepare_normalized_document_keys", prepare_documents)
         mp.setattr(worker.observations, "prepare_ingestion_observation_keys", prepare_observations)
-        mp.setattr(worker, "valid_event_envelope", lambda event, scope: h.valid_envelope)
-        mp.setattr(worker, "_same_worker_claim", lambda work, claim: True)
+        patch_worker(mp, "valid_event_envelope", lambda event, scope: h.valid_envelope)
+        patch_worker(mp, "_same_worker_claim", lambda work, claim: True)
 
     async def call(self, **kwargs: Any) -> Any:
         """Run ``_lock_worker_event`` for this harness's event type."""
@@ -432,7 +434,7 @@ async def test_normalize_conflicts_carry_the_original_claim(monkeypatch):
     async def spent(*_a, **_k):
         return SimpleNamespace(attempts=worker.MAX_STAGE_ATTEMPTS, batch_id=BATCH_ID)
 
-    h3.mp.setattr(worker, "_capture_normalization_retry_claim_in_uow", spent)
+    patch_worker(h3.mp, "_capture_normalization_retry_claim_in_uow", spent)
     with pytest.raises(worker.NormalizationPreparationConflict) as exc3:
         await h3.call()
     assert exc3.value.code == "normalization_retry_exhausted"

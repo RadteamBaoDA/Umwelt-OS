@@ -11,6 +11,8 @@ from core.workspaces.schemas import InternalJobScope
 from modules.ingestion import public as ingestion_api
 from modules.ingestion import worker
 
+from .patching import patch_worker_attr
+
 SCOPE = InternalJobScope(
     workspace_id=uuid4(),
     actor_user_id=7,
@@ -54,8 +56,8 @@ async def test_ingestion_entrypoints_check_ingestion_module(
     )
     delivered = AsyncMock()
     with (
-        patch.object(worker, "_lock_worker_event", AsyncMock(return_value=work)),
-        patch.object(worker, "_worker_flag", return_value=False),
+        patch_worker_attr("_lock_worker_event", AsyncMock(return_value=work)),
+        patch_worker_attr("_worker_flag", return_value=False),
         patch.object(ingestion_api, "mark_event_delivered", delivered),
         # Real registry: only the persisted disable set is faked, so "ingestion" must be a valid module id.
         patch(

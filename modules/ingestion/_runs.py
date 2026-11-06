@@ -204,6 +204,51 @@ def _decode_history_cursor(cursor: str, binding: str) -> tuple[datetime, UUID]:
         raise ValidationFailedError(detail="Invalid or stale ingestion cursor") from exc
 
 
+async def _stage_rows_for_runs(
+    session: AsyncSession, run_rows: list[IngestionRun]
+) -> list[IngestionStage]:
+    """Load the stages of ``run_rows`` ordered by stage key; no query is issued for an empty run list."""
+    if not run_rows:
+        return []
+    return list(
+        (
+            await session.scalars(
+                select(IngestionStage)
+                .where(IngestionStage.run_id.in_([run.id for run in run_rows]))
+                .order_by(IngestionStage.stage_key)
+            )
+        ).all()
+    )
+
+
+async def _receipt_stats_by_run(
+    session: AsyncSession, source_id: UUID, run_rows: list[IngestionRun]
+) -> dict[UUID, dict[str, Any]]:
+    """Map run id to its receipt ``collection_stats`` for ``run_rows`` of one Source (one bounded query).
+
+    Receipt telemetry for these runs only; runs without a receipt (or with null stats) are absent, so the
+    caller reports ``None`` for them. No query is issued for an empty run list.
+    """
+    stats_by_run: dict[UUID, dict[str, Any]] = {}
+    if run_rows:
+        for stats_run_id, stats in (
+            (
+                await session.execute(
+                    select(CollectionReceipt.run_id, CollectionReceipt.collection_stats).where(
+                        CollectionReceipt.run_id.in_([run.id for run in run_rows]),
+                        CollectionReceipt.source_id == source_id,
+                        CollectionReceipt.collection_stats.is_not(None),
+                    )
+                )
+            )
+            .tuples()
+            .all()
+        ):
+            if stats_run_id is not None and stats is not None:
+                stats_by_run[stats_run_id] = stats
+    return stats_by_run
+
+
 async def list_source_runs(
     session: AsyncSession,
     source_id: UUID,
@@ -265,19 +310,7 @@ async def list_source_runs(
         .limit(1)
     )
     run_rows = list({run.id: run for run in [*page_rows, *([current] if current else [])]}.values())
-    stage_rows = (
-        list(
-            (
-                await session.scalars(
-                    select(IngestionStage)
-                    .where(IngestionStage.run_id.in_([run.id for run in run_rows]))
-                    .order_by(IngestionStage.stage_key)
-                )
-            ).all()
-        )
-        if run_rows
-        else []
-    )
+    stage_rows = await _stage_rows_for_runs(session, run_rows)
     stages_by_run: dict[UUID, list[IngestionStage]] = {run.id: [] for run in run_rows}
     for stage in stage_rows:
         stages_by_run[stage.run_id].append(stage)
@@ -287,24 +320,7 @@ async def list_source_runs(
         )
         for run_id, stages in stages_by_run.items()
     }
-    # Receipt telemetry for these runs only (one bounded query); runs without a receipt report None.
-    stats_by_run: dict[UUID, dict[str, Any]] = {}
-    if run_rows:
-        for stats_run_id, stats in (
-            (
-                await session.execute(
-                    select(CollectionReceipt.run_id, CollectionReceipt.collection_stats).where(
-                        CollectionReceipt.run_id.in_([run.id for run in run_rows]),
-                        CollectionReceipt.source_id == source_id,
-                        CollectionReceipt.collection_stats.is_not(None),
-                    )
-                )
-            )
-            .tuples()
-            .all()
-        ):
-            if stats_run_id is not None and stats is not None:
-                stats_by_run[stats_run_id] = stats
+    stats_by_run = await _receipt_stats_by_run(session, source_id, run_rows)
 
     def detach(run: IngestionRun) -> RunRead:
         """Project an ORM run and its stages into a detached response."""

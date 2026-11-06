@@ -15,6 +15,8 @@ from core.workspaces.schemas import InternalJobScope
 from modules.ingestion import worker
 from modules.ingestion.parsers import ParsedDocument
 
+from .patching import patch_worker
+
 RUN_ID, STAGE_ID, DOC_ID, SOURCE_ID = uuid4(), uuid4(), uuid4(), uuid4()
 # Leases are computed from the real clock at use time: the worker compares them against datetime.now(UTC).
 RAW = f"workspaces/{uuid4()}/documents/{DOC_ID}/a.pdf"
@@ -109,15 +111,17 @@ class Env:
                 env.log.append(("download", uri))
                 yield "/tmp/x"  # noqa: S108  # fake path string used as fixture data; nothing is written
 
-        monkeypatch.setattr(worker, "_lock_worker_event", lock)
-        monkeypatch.setattr(worker, "_ingestion_enabled", enabled)
-        monkeypatch.setattr(worker, "_capture_worker_claim", lambda work: "claim")
-        monkeypatch.setattr(worker, "_commit_ingestion_change", commit)
-        monkeypatch.setattr(worker, "parse_file_bounded", parse)
-        monkeypatch.setattr(worker, "to_thread_joined", joined)
-        monkeypatch.setattr(worker, "get_storage_backend", lambda settings: Storage())
-        monkeypatch.setattr(
-            worker, "count", lambda name, **labels: env.log.append(("count", labels["outcome"]))
+        patch_worker(monkeypatch, "_lock_worker_event", lock)
+        patch_worker(monkeypatch, "_ingestion_enabled", enabled)
+        patch_worker(monkeypatch, "_capture_worker_claim", lambda work: "claim")
+        patch_worker(monkeypatch, "_commit_ingestion_change", commit)
+        patch_worker(monkeypatch, "parse_file_bounded", parse)
+        patch_worker(monkeypatch, "to_thread_joined", joined)
+        patch_worker(monkeypatch, "get_storage_backend", lambda settings: Storage())
+        patch_worker(
+            monkeypatch,
+            "count",
+            lambda name, **labels: env.log.append(("count", labels["outcome"])),
         )
         monkeypatch.setattr(worker.documents, "set_extraction_status", set_status)
         monkeypatch.setattr(worker.documents, "save_extraction", save)

@@ -1,9 +1,10 @@
 """Ingestion purge preparation and retention sweeps (internal; import through ``public``)."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import String, and_, cast, delete, func, not_, or_, select, update
+from sqlalchemy import Exists, Select, String, and_, cast, delete, func, not_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.dml import Delete
 
@@ -73,6 +74,63 @@ async def _validate_source_ingestion_purge_in_uow(
         raise ConflictError(detail="Source ingestion purge proof is stale")
 
 
+def _invalid_journal_exists(
+    source_id: UUID,
+    scope: InternalJobScope,
+    observation_ids: Select[Any],
+    run_ids: Select[Any],
+    stage_ids: Select[Any],
+) -> Exists:
+    """Build the EXISTS predicate for normalization journal rows whose lineage contradicts the Source purge.
+
+    A journal row is invalid when it touches this Source (directly or via its observation/run/stage) yet has a
+    different Source or workspace, or has no matching observation/batch/run/stage parent chain with the same
+    Source, workspace, actor and generation. Pure SQL construction; executes nothing.
+    """
+    matching_journal_parents = (
+        select(SourceObservation.id)
+        .join(
+            IngestionRun,
+            IngestionRun.batch_id == SourceObservation.batch_id,
+        )
+        .join(IngestionStage, IngestionStage.run_id == IngestionRun.id)
+        .join(
+            IngestionBatch,
+            IngestionBatch.id == IngestionRun.batch_id,
+        )
+        .where(
+            SourceObservation.id == ObservationNormalization.observation_id,
+            IngestionRun.id == ObservationNormalization.run_id,
+            IngestionStage.id == ObservationNormalization.stage_id,
+            SourceObservation.source_id == source_id,
+            IngestionBatch.source_id == source_id,
+            IngestionRun.source_id == source_id,
+            IngestionRun.workspace_id == scope.workspace_id,
+            IngestionRun.actor_user_id == scope.actor_user_id,
+            IngestionBatch.source_generation == ObservationNormalization.source_generation,
+        )
+        .correlate(ObservationNormalization)
+        .exists()
+    )
+    return (
+        select(ObservationNormalization.id)
+        .where(
+            or_(
+                ObservationNormalization.source_id == source_id,
+                ObservationNormalization.observation_id.in_(observation_ids),
+                ObservationNormalization.run_id.in_(run_ids),
+                ObservationNormalization.stage_id.in_(stage_ids),
+            ),
+            or_(
+                ObservationNormalization.source_id != source_id,
+                ObservationNormalization.workspace_id != scope.workspace_id,
+                ~matching_journal_parents,
+            ),
+        )
+        .exists()
+    )
+
+
 async def _source_ingestion_purge_lineage(
     session: AsyncSession,
     source_id: UUID,
@@ -120,48 +178,7 @@ async def _source_ingestion_purge_lineage(
         )
         .exists()
     )
-    matching_journal_parents = (
-        select(SourceObservation.id)
-        .join(
-            IngestionRun,
-            IngestionRun.batch_id == SourceObservation.batch_id,
-        )
-        .join(IngestionStage, IngestionStage.run_id == IngestionRun.id)
-        .join(
-            IngestionBatch,
-            IngestionBatch.id == IngestionRun.batch_id,
-        )
-        .where(
-            SourceObservation.id == ObservationNormalization.observation_id,
-            IngestionRun.id == ObservationNormalization.run_id,
-            IngestionStage.id == ObservationNormalization.stage_id,
-            SourceObservation.source_id == source_id,
-            IngestionBatch.source_id == source_id,
-            IngestionRun.source_id == source_id,
-            IngestionRun.workspace_id == scope.workspace_id,
-            IngestionRun.actor_user_id == scope.actor_user_id,
-            IngestionBatch.source_generation == ObservationNormalization.source_generation,
-        )
-        .correlate(ObservationNormalization)
-        .exists()
-    )
-    invalid_journal = (
-        select(ObservationNormalization.id)
-        .where(
-            or_(
-                ObservationNormalization.source_id == source_id,
-                ObservationNormalization.observation_id.in_(observation_ids),
-                ObservationNormalization.run_id.in_(run_ids),
-                ObservationNormalization.stage_id.in_(stage_ids),
-            ),
-            or_(
-                ObservationNormalization.source_id != source_id,
-                ObservationNormalization.workspace_id != scope.workspace_id,
-                ~matching_journal_parents,
-            ),
-        )
-        .exists()
-    )
+    invalid_journal = _invalid_journal_exists(source_id, scope, observation_ids, run_ids, stage_ids)
     invalid_state = (
         select(SourceIngestionState.source_id)
         .where(

@@ -32,6 +32,10 @@ from core.workspaces.dependencies import (
 from core.workspaces.schemas import WorkspaceContext
 from modules.chat import conversation_service, signals
 from modules.chat import public as chat_public
+from modules.chat._routes_support import (
+    _redact_cancelled_run_in_fresh_session,
+    _replayed_send_response,
+)
 from modules.chat.models import (
     Conversation,
     Message,
@@ -907,21 +911,9 @@ async def send_message(
     _reject_expired_conversation(conv)
 
     # Idempotency check with client_request_id
-    if payload.client_request_id:
-        existing_run = await conversation_service.find_run_by_client_request(
-            session,
-            conversation_id,
-            payload.client_request_id,
-        )
-        if existing_run is not None:
-            # A replay returns the original run and ignores every changed field (content and web_search
-            # alike): no new run is created, so a flipped flag cannot cause egress. Mutations hash the
-            # flag into their digest and answer 409 instead, because they have no other identity check.
-            return SendMessageResponse(
-                message_id=existing_run.user_message_id,
-                response_id=existing_run.id,
-                status=existing_run.status,
-            )
+    replay = await _replayed_send_response(session, conversation_id, payload)
+    if replay is not None:
+        return replay
 
     privacy = await read_export_privacy(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled()
@@ -1736,33 +1728,9 @@ async def cancel_response(
             # A failed Memory read can leave this transaction aborted; retry durable redaction
             # under the same public Memory lock in a fresh Chat transaction before returning.
             await session.rollback()
-            async with request.app.state.session_factory() as redaction_session:
-                await lock_export_privacy(redaction_session, scope.workspace_id, shared=True)
-                current_hint = await redaction_session.scalar(
-                    select(ResponseRun).where(
-                        ResponseRun.id == response_id,
-                    )
-                )
-                if current_hint is not None:
-                    await redaction_session.scalar(
-                        select(Conversation)
-                        .where(
-                            Conversation.id == current_hint.conversation_id,
-                        )
-                        .with_for_update()
-                        .execution_options(populate_existing=True)
-                    )
-                    current_run = await redaction_session.scalar(
-                        select(ResponseRun)
-                        .where(
-                            ResponseRun.id == response_id,
-                        )
-                        .with_for_update()
-                        .execution_options(populate_existing=True)
-                    )
-                    if current_run is not None:
-                        await _privacy_cancel_locked(redaction_session, current_run)
-                await redaction_session.commit()
+            await _redact_cancelled_run_in_fresh_session(
+                request.app.state.session_factory, scope.workspace_id, response_id
+            )
     else:
         await _cancel_response_locked(session, run)
         await session.commit()

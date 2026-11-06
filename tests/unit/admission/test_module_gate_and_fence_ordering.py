@@ -204,6 +204,7 @@ async def test_p3_7_connector_module_gate_runs_after_access_check():
 @pytest.mark.asyncio
 async def test_p3_8_normalize_event_is_module_gated():
     from modules.ingestion import worker
+    from tests.unit.modules.ingestion.patching import patch_worker_attr
 
     session = MagicMock()
     session.rollback = AsyncMock()
@@ -215,10 +216,10 @@ async def test_p3_8_normalize_event_is_module_gated():
     work = SimpleNamespace(scope=None)
     ctx = {"session_factory": factory, "settings": SimpleNamespace(multi_workspace_enabled=False)}
     with (
-        patch.object(worker, "_lock_worker_event", AsyncMock(return_value=work)),
+        patch_worker_attr("_lock_worker_event", AsyncMock(return_value=work)),
         patch("modules.settings.public.module_is_enabled", AsyncMock(return_value=False)),
-        patch.object(
-            worker, "_capture_worker_claim", MagicMock(side_effect=AssertionError("ungated"))
+        patch_worker_attr(
+            "_capture_worker_claim", MagicMock(side_effect=AssertionError("ungated"))
         ),
     ):
         await worker.process_normalize_event(ctx, str(uuid4()))

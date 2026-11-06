@@ -439,6 +439,29 @@ async def receive_connector_batch(
 _NO_EXPECTED_CURSOR: object = object()
 
 
+async def _lock_or_create_state_refreshed(
+    session: AsyncSession, source_id: UUID
+) -> SourceIngestionState:
+    """Lock the Source's ingestion state row, creating an empty one when absent, with a fresh read.
+
+    ``populate_existing`` overwrites any identity-mapped copy so the cursor and lease compared afterwards
+    are the locked database values, not a stale session snapshot. Caller owns the transaction and commit.
+    """
+    state = await session.scalar(
+        select(SourceIngestionState)
+        .where(
+            SourceIngestionState.source_id == source_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if state is None:
+        state = SourceIngestionState(source_id=source_id, cursor=None)
+        session.add(state)
+        await session.flush()
+    return state
+
+
 async def accept_collection_no_changes(
     session: AsyncSession,
     *,
@@ -493,18 +516,7 @@ async def accept_collection_no_changes(
         request_ref=request_ref,
         scope=scope,
     )
-    state = await session.scalar(
-        select(SourceIngestionState)
-        .where(
-            SourceIngestionState.source_id == source_id,
-        )
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    if state is None:
-        state = SourceIngestionState(source_id=source_id, cursor=None)
-        session.add(state)
-        await session.flush()
+    state = await _lock_or_create_state_refreshed(session, source_id)
     cursor_before = state.cursor
     if expected_cursor is not _NO_EXPECTED_CURSOR and cursor_before != expected_cursor:
         raise ConflictError(detail="Collection cursor changed")
@@ -731,6 +743,80 @@ async def _insert_crawl_graph(
     return batch, run, stage
 
 
+async def _lock_or_create_state(session: AsyncSession, source_id: UUID) -> SourceIngestionState:
+    """Lock the Source's ingestion state row by primary key, creating an empty one when absent.
+
+    Unlike :func:`_lock_or_create_state_refreshed` this uses ``session.get`` and so may return an
+    identity-mapped copy. Caller owns the transaction and commit.
+    """
+    state = await session.get(SourceIngestionState, source_id, with_for_update=True)
+    if state is None:
+        state = SourceIngestionState(source_id=source_id, cursor=None)
+        session.add(state)
+        await session.flush()
+    return state
+
+
+def _crawl_batch_key(
+    source_id: UUID, cursor_before: str | None, configuration: dict[str, Any], now: datetime
+) -> str:
+    """Return the idempotency key of a generic crawl: Source, cursor, configuration and wall-clock minute.
+
+    Repeated queueing within the same minute with the same inputs yields the same key, which the batch
+    uniqueness turns into a replay instead of a second run.
+    """
+    minute = now.replace(second=0, microsecond=0).isoformat()
+    return "crawl:" + _digest(
+        {
+            "source_id": str(source_id),
+            "cursor": cursor_before,
+            "config": configuration,
+            "minute": minute,
+        }
+    )
+
+
+def _lease_state_to_run(state: SourceIngestionState, run: IngestionRun, now: datetime) -> None:
+    """Hand the Source's collection lease to ``run`` for ``COLLECTION_LEASE`` starting at ``now``.
+
+    Clears any collector token because a queued generic crawl is leased by run id alone. In-memory only; the
+    caller's commit persists it.
+    """
+    state.lease_run_id = run.id
+    state.collection_lease_token = None
+    state.lease_expires_at = now + COLLECTION_LEASE
+
+
+async def _commit_queued_crawl(
+    session: AsyncSession,
+    source: Any,
+    run: IngestionRun,
+    stage: IngestionStage,
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+    access_fence: Any,
+) -> None:
+    """Commit a newly queued crawl together with its Source and ingestion realtime changes, then refresh ``run``.
+
+    The single commit persists the stage, request event, cursor lease and settled request staged by the
+    caller; the realtime replay drafts are written inside the same transaction.
+    """
+    await commit_with_replay(
+        session,
+        [
+            make_source_change(source.id, source.generation, source.status, scope=scope),
+            make_ingestion_change(
+                source.id, run.id, run.status, stage.stage_key, stage.status, scope=scope
+            ),
+        ],
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+    )
+    await session.refresh(run)
+
+
 async def queue_connector_crawl(
     session: AsyncSession,
     source_id: UUID,
@@ -760,21 +846,9 @@ async def queue_connector_crawl(
         multi_workspace_enabled=multi_workspace_enabled,
         request_ref=request_ref,
     )
-    state = await session.get(SourceIngestionState, source_id, with_for_update=True)
-    if state is None:
-        state = SourceIngestionState(source_id=source_id, cursor=None)
-        session.add(state)
-        await session.flush()
+    state = await _lock_or_create_state(session, source_id)
     now = datetime.now(UTC)
-    minute = now.replace(second=0, microsecond=0).isoformat()
-    key = "crawl:" + _digest(
-        {
-            "source_id": str(source_id),
-            "cursor": cursor_before,
-            "config": configuration,
-            "minute": minute,
-        }
-    )
+    key = _crawl_batch_key(source_id, cursor_before, configuration, now)
     existing = await session.scalar(
         select(IngestionBatch).where(
             IngestionBatch.source_id == source_id, IngestionBatch.batch_key == key
@@ -817,9 +891,7 @@ async def queue_connector_crawl(
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
     )
-    state.lease_run_id = run.id
-    state.collection_lease_token = None
-    state.lease_expires_at = now + COLLECTION_LEASE
+    _lease_state_to_run(state, run, now)
     await _settle_request(
         session,
         request_ref,
@@ -834,19 +906,15 @@ async def queue_connector_crawl(
         cursor_before=cursor_before,
         cursor_after=cursor_before,
     )
-    await commit_with_replay(
+    await _commit_queued_crawl(
         session,
-        [
-            make_source_change(source.id, source.generation, source.status, scope=scope),
-            make_ingestion_change(
-                source.id, run.id, run.status, stage.stage_key, stage.status, scope=scope
-            ),
-        ],
+        source,
+        run,
+        stage,
         scope=scope,
         multi_workspace_enabled=multi_workspace_enabled,
         access_fence=access_fence,
     )
-    await session.refresh(run)
     return CrawlReceipt(workspace_id=scope.workspace_id, run_id=run.id)
 
 
