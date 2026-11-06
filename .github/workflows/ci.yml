@@ -63,8 +63,10 @@ jobs:
           docker run --rm -v "$PWD/infrastructure/monitoring:/m:ro" --entrypoint amtool prom/alertmanager:v0.28.1 check-config /m/alertmanager.yml
       # Synthetic alert routing proof: labels of a real alert (UmweltOutboxPurgeBacklog, severity=ticket) must resolve to
       # the expected receiver; amtool exits non-zero when --verify.receivers does not match the resolved receivers.
-      - name: amtool route test (synthetic alert reaches owner-webhook)
+      - name: amtool route test (ticket alert reaches owner-webhook)
         run: docker run --rm -v "$PWD/infrastructure/monitoring:/m:ro" --entrypoint amtool prom/alertmanager:v0.28.1 config routes test --config.file=/m/alertmanager.yml --verify.receivers=owner-webhook alertname=UmweltOutboxPurgeBacklog severity=ticket
+      - name: amtool route test (page alert reaches owner-page)
+        run: docker run --rm -v "$PWD/infrastructure/monitoring:/m:ro" --entrypoint amtool prom/alertmanager:v0.28.1 config routes test --config.file=/m/alertmanager.yml --verify.receivers=owner-page alertname=UmweltApi5xxRateHigh severity=page
       - name: promtool unit tests
         run: docker run --rm -v "$PWD/infrastructure/monitoring:/m:ro" -w /m --entrypoint promtool prom/prometheus:v3.5.0 test rules alerts.test.yml
 

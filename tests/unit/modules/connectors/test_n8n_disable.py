@@ -20,6 +20,7 @@ from modules.connectors.provisioning import routes as provisioning_routes
 from modules.connectors.service import packaged as packaged_service
 from modules.sources.public import ConnectorStatusRead
 from tests.unit.modules.connectors._routes_patch import patch_routes
+from tests.unit.modules.connectors._worker_patch import patch_worker
 
 WS = uuid4()
 OWNER = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
@@ -158,21 +159,21 @@ async def test_reconcile_discovers_all_workspaces_without_instance_wide_kill_swi
         "session_factory": lambda: _Session(),
     }
     with (
-        patch.object(worker, "dispatch_github_webhooks", AsyncMock(return_value=0)),
-        patch.object(worker, "_advance_transitions", AsyncMock(return_value=0)),
+        patch_worker("dispatch_github_webhooks", AsyncMock(return_value=0)),
+        patch_worker("_advance_transitions", AsyncMock(return_value=0)),
         patch(
             "modules.settings.public.resolve_n8n",
             AsyncMock(side_effect=AssertionError("unscoped n8n settings must not be resolved")),
         ),
-        patch.object(worker, "_cursor_ctx", MagicMock()),
-        patch.object(worker, "_read_cursor", AsyncMock(return_value=None)),
-        patch.object(worker, "_read_slot_cursor", MagicMock(return_value=None)),
-        patch.object(worker, "_write_slot_cursor", MagicMock()),
-        patch.object(worker, "_write_cursor", AsyncMock()),
-        patch.object(worker, "_delete_credential", drive_credential),
-        patch.object(worker, "_drive_workflow", drive_workflow),
-        patch.object(worker, "_resume_activation", resume),
-        patch.object(worker, "_recover_unknown_create", recover),
+        patch_worker("_cursor_ctx", MagicMock()),
+        patch_worker("_read_cursor", AsyncMock(return_value=None)),
+        patch_worker("_read_slot_cursor", MagicMock(return_value=None)),
+        patch_worker("_write_slot_cursor", MagicMock()),
+        patch_worker("_write_cursor", AsyncMock()),
+        patch_worker("_delete_credential", drive_credential),
+        patch_worker("_drive_workflow", drive_workflow),
+        patch_worker("_resume_activation", resume),
+        patch_worker("_recover_unknown_create", recover),
     ):
         await worker.reconcile_connectors(ctx)  # type: ignore[arg-type]
     drive_credential.assert_awaited_once()

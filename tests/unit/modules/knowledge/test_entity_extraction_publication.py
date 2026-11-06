@@ -18,6 +18,7 @@ from modules.knowledge.entities import worker as entities_worker
 from modules.knowledge.entities.extraction import ExtractedEntity, ExtractedRelationship
 from modules.knowledge.entities.schemas import canonicalize_name
 from tests.unit.modules.knowledge import test_extraction_lock_release as lock_tests
+from tests.unit.modules.knowledge._entity_worker_patch import patch_entity_worker
 from tests.unit.modules.knowledge.test_extraction_lock_release import SRC, _harness
 
 C1, C2, C3 = uuid4(), uuid4(), uuid4()
@@ -91,8 +92,8 @@ def _setup(
     monkeypatch.setattr(
         entities_worker.documents, "read_extraction_input", AsyncMock(return_value=data)
     )
-    monkeypatch.setattr(
-        entities_worker, "response_content", lambda _r: (extracted, "actual-model", {"tokens": 3})
+    patch_entity_worker(
+        monkeypatch, "response_content", lambda _r: (extracted, "actual-model", {"tokens": 3})
     )
     refs = [SimpleNamespace(chunk_id=cid) for cid in (C1, C2, C3)]
 
@@ -166,11 +167,11 @@ def _setup(
     monkeypatch.setattr(target, "finish_extraction_work", finish)
     monkeypatch.setattr(entities_worker.documents, "read_extraction_evidence_refs", evidence)
     monkeypatch.setattr(entities_worker.relationships, "publish_extracted_relationship", relation)
-    monkeypatch.setattr(
-        entities_worker, "make_graph_change", lambda *, entity_id, scope: ("graph", entity_id)
+    patch_entity_worker(
+        monkeypatch, "make_graph_change", lambda *, entity_id, scope: ("graph", entity_id)
     )
     replay = AsyncMock()
-    monkeypatch.setattr(entities_worker, "commit_with_replay", replay)
+    patch_entity_worker(monkeypatch, "commit_with_replay", replay)
     return _Run(m=m, log=log, created=created, replay=replay)
 
 
@@ -454,7 +455,7 @@ async def test_http_error_other_than_409_terminalizes(monkeypatch: pytest.Monkey
     """Lost permission mid-run is terminal; a 409 keeps the retry budget with ``extraction_failed``."""
     run = _setup(monkeypatch, _output([_entity("a", "Zelda", [C1])]))
     terminalize = AsyncMock()
-    monkeypatch.setattr(entities_worker, "terminalize", terminalize)
+    patch_entity_worker(monkeypatch, "terminalize", terminalize)
     monkeypatch.setattr(
         entities_worker.entities,
         "create_extracted_entity",

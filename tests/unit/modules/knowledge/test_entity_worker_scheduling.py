@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 
 from modules.knowledge.entities import worker as w
+from tests.unit.modules.knowledge._entity_worker_patch import patch_entity_worker
 
 WS, DOC, SRC, VER = uuid4(), uuid4(), uuid4(), uuid4()
 
@@ -273,8 +274,8 @@ def _recovery_setup(
     factory = _Factory()
     scope = SimpleNamespace(workspace_id=WS)
     log: list[tuple[str, Any]] = []
-    monkeypatch.setattr(w, "_recovery_workspace_ids", AsyncMock(return_value=[WS]))
-    monkeypatch.setattr(w, "_workspace_job_scope", AsyncMock(return_value=scope))
+    patch_entity_worker(monkeypatch, "_recovery_workspace_ids", AsyncMock(return_value=[WS]))
+    patch_entity_worker(monkeypatch, "_workspace_job_scope", AsyncMock(return_value=scope))
     monkeypatch.setattr(w.settings_public, "module_is_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(
         w.documents, "list_ready_version_refs", AsyncMock(return_value=(refs, "next"))
@@ -369,8 +370,8 @@ async def test_recovery_requeues_blocked_work_when_dependency_changed(
         w.settings_public, "get_ai_execution_config", AsyncMock(return_value=config)
     )
     monkeypatch.setattr(w.settings_public, "derive_for_role", lambda cfg, _r: cfg)
-    monkeypatch.setattr(w, "_dependency_snapshot", AsyncMock(return_value=("new", True)))
-    monkeypatch.setattr(w, "_policy_allows_extraction", lambda *_a: True)
+    patch_entity_worker(monkeypatch, "_dependency_snapshot", AsyncMock(return_value=("new", True)))
+    patch_entity_worker(monkeypatch, "_policy_allows_extraction", lambda *_a: True)
     s.redis.get = AsyncMock(return_value=None)
     assert await w.recover_entity_extraction_work(s.ctx) == 1
     w.entities.requeue_blocked_extraction_work.assert_awaited_once()

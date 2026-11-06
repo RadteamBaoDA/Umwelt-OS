@@ -1,6 +1,6 @@
 """Tests for the unknown-create workflow discovery helper extracted from ``_recover_unknown_create``."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import httpx
@@ -8,6 +8,7 @@ import pytest
 
 from core.model_gateway.transport import EndpointNetworkPolicyError
 from modules.connectors import worker
+from tests.unit.modules.connectors._worker_patch import patch_worker
 
 SOURCE_ID = uuid4()
 OPERATION_ID = uuid4()
@@ -20,8 +21,8 @@ async def test_single_exact_match_is_returned() -> None:
     api = AsyncMock()
     api.get_workflow.return_value = {"nodes": []}
     with (
-        patch.object(worker, "find_workflows_by_name", AsyncMock(return_value=[{"id": "w1"}])),
-        patch.object(worker, "workflow_matches", return_value=True),
+        patch_worker("find_workflows_by_name", AsyncMock(return_value=[{"id": "w1"}])),
+        patch_worker("workflow_matches", MagicMock(return_value=True)),
     ):
         assert await worker._discover_created_workflow(api, ORIGINAL, STEP, SOURCE_ID) == (
             OPERATION_ID,
@@ -32,16 +33,14 @@ async def test_single_exact_match_is_returned() -> None:
 @pytest.mark.asyncio
 async def test_ambiguous_or_mismatched_matches_leave_workflow_unset() -> None:
     api = AsyncMock()
-    with patch.object(
-        worker, "find_workflows_by_name", AsyncMock(return_value=[{"id": "a"}, {"id": "b"}])
-    ):
+    with patch_worker("find_workflows_by_name", AsyncMock(return_value=[{"id": "a"}, {"id": "b"}])):
         assert await worker._discover_created_workflow(api, ORIGINAL, STEP, SOURCE_ID) == (
             OPERATION_ID,
             None,
         )
     with (
-        patch.object(worker, "find_workflows_by_name", AsyncMock(return_value=[{"id": "a"}])),
-        patch.object(worker, "workflow_matches", return_value=False),
+        patch_worker("find_workflows_by_name", AsyncMock(return_value=[{"id": "a"}])),
+        patch_worker("workflow_matches", MagicMock(return_value=False)),
     ):
         assert await worker._discover_created_workflow(api, ORIGINAL, STEP, SOURCE_ID) == (
             OPERATION_ID,
@@ -54,9 +53,7 @@ async def test_transport_and_shape_errors_are_logged_at_debug_and_leave_workflow
     api = AsyncMock()
     with (
         patch.object(worker.logger, "debug") as debug,
-        patch.object(
-            worker, "find_workflows_by_name", AsyncMock(side_effect=httpx.ConnectError("down"))
-        ),
+        patch_worker("find_workflows_by_name", AsyncMock(side_effect=httpx.ConnectError("down"))),
     ):
         assert await worker._discover_created_workflow(api, ORIGINAL, STEP, SOURCE_ID) == (
             OPERATION_ID,
@@ -81,7 +78,7 @@ async def test_egress_policy_and_runtime_errors_keep_create_unknown(error: Excep
     api = AsyncMock()
     with (
         patch.object(worker.logger, "debug") as debug,
-        patch.object(worker, "find_workflows_by_name", AsyncMock(side_effect=error)),
+        patch_worker("find_workflows_by_name", AsyncMock(side_effect=error)),
     ):
         assert await worker._discover_created_workflow(api, ORIGINAL, STEP, SOURCE_ID) == (
             OPERATION_ID,

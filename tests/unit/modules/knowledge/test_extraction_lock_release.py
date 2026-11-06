@@ -11,6 +11,7 @@ from core.errors import ConflictError, error_status
 from core.model_gateway.client import PrivacyPolicyDenied
 from modules.knowledge.entities import worker as entities_worker
 from modules.timeline import worker as timeline_worker
+from tests.unit.modules.knowledge._entity_worker_patch import patch_worker_module
 
 WS = uuid4()
 DOC, SRC = uuid4(), uuid4()
@@ -114,7 +115,7 @@ def _harness(monkeypatch: pytest.MonkeyPatch, name: str) -> SimpleNamespace:
         return ready
 
     scope = SimpleNamespace(workspace_id=WS)
-    monkeypatch.setattr(mod, "_workspace_job_scope", AsyncMock(return_value=scope))
+    patch_worker_module(monkeypatch, mod, "_workspace_job_scope", AsyncMock(return_value=scope))
     monkeypatch.setattr(mod.settings_public, "module_is_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(
         mod.settings_public, "get_ai_execution_config", AsyncMock(return_value=config)
@@ -130,24 +131,27 @@ def _harness(monkeypatch: pytest.MonkeyPatch, name: str) -> SimpleNamespace:
     monkeypatch.setattr(mod.documents, "lock_document_for_extraction", AsyncMock(return_value=True))
     monkeypatch.setattr(mod.documents, "read_extraction_input", AsyncMock(return_value=data))
     monkeypatch.setattr(mod.sources, "lock_source", m.lock_source)
-    monkeypatch.setattr(mod, "_dependency_snapshot", AsyncMock(return_value=("fp", True)))
-    monkeypatch.setattr(mod, "ModelGateway", _Gateway)
-    monkeypatch.setattr(mod, "extraction_messages", lambda *_a, **_k: [])
-    monkeypatch.setattr(mod, "response_schema", dict)
-    monkeypatch.setattr(mod, "commit_with_replay", m.commit_replay)
+    patch_worker_module(
+        monkeypatch, mod, "_dependency_snapshot", AsyncMock(return_value=("fp", True))
+    )
+    patch_worker_module(monkeypatch, mod, "ModelGateway", _Gateway)
+    patch_worker_module(monkeypatch, mod, "extraction_messages", lambda *_a, **_k: [])
+    patch_worker_module(monkeypatch, mod, "response_schema", dict)
+    patch_worker_module(monkeypatch, mod, "commit_with_replay", m.commit_replay)
     if timeline:
-        monkeypatch.setattr(mod, "_allowed", lambda *_a: True)
-        monkeypatch.setattr(mod, "_policy", lambda *_a: None)
+        patch_worker_module(monkeypatch, mod, "_allowed", lambda *_a: True)
+        patch_worker_module(monkeypatch, mod, "_policy", lambda *_a: None)
         monkeypatch.setattr(
             mod.entities, "list_version_membership_refs", AsyncMock(return_value=[])
         )
-        monkeypatch.setattr(mod, "response_content", lambda _r: ([], "m"))
+        patch_worker_module(monkeypatch, mod, "response_content", lambda _r: ([], "m"))
         monkeypatch.setattr(target, "publish_extracted_events", m.publish)
     else:
-        monkeypatch.setattr(mod, "_policy_allows_extraction", lambda *_a: True)
-        monkeypatch.setattr(mod, "may_send", lambda *_a: True)
-        monkeypatch.setattr(mod, "RequestPolicy", lambda **_k: None)
-        monkeypatch.setattr(
+        patch_worker_module(monkeypatch, mod, "_policy_allows_extraction", lambda *_a: True)
+        patch_worker_module(monkeypatch, mod, "may_send", lambda *_a: True)
+        patch_worker_module(monkeypatch, mod, "RequestPolicy", lambda **_k: None)
+        patch_worker_module(
+            monkeypatch,
             mod,
             "response_content",
             lambda _r: (SimpleNamespace(entities=[], relationships=[]), "m", None),

@@ -32,6 +32,7 @@ from core.workspaces import public as core_workspaces_public
 from core.workspaces.schemas import InternalJobScope, WorkspaceContext
 from modules.chat.schemas import AnswerContext, AnswerContextRequest, EvidenceItem
 from tests.unit.modules.chat._worker_patch import patch_worker
+from tests.unit.modules.knowledge._entity_worker_patch import patch_worker_module
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 OWNER = WorkspaceContext(user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1)
@@ -869,7 +870,7 @@ def _recovery_session(workspace_id: Any) -> MagicMock:
 def _recovery_setup(monkeypatch: pytest.MonkeyPatch, worker: Any) -> tuple[Any, InternalJobScope]:
     ws = uuid4()
     scope = InternalJobScope(workspace_id=ws, actor_user_id=1, membership_revision=1)
-    monkeypatch.setattr(worker, "_workspace_job_scope", AsyncMock(return_value=scope))
+    patch_worker_module(monkeypatch, worker, "_workspace_job_scope", AsyncMock(return_value=scope))
     monkeypatch.setattr(worker.settings_public, "module_is_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(
         worker.documents, "list_ready_document_workspace_ids", AsyncMock(return_value=())

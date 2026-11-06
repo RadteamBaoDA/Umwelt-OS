@@ -17,6 +17,7 @@ from modules.knowledge.temporal import worker as temporal_worker
 from modules.news import worker as news_worker
 from modules.search import indexing as search_indexing
 from modules.timeline import worker as timeline_worker
+from tests.unit.modules.knowledge._entity_worker_patch import patch_worker_module
 from tests.unit.modules.knowledge.temporal._worker_patch import patch_worker
 from tests.unit.split_patching import patch_split
 
@@ -149,9 +150,9 @@ async def test_denial_never_raises_and_is_terminal(
         run = lambda: temporal_worker.process_graph_operation(ctx, str(uuid4()))  # noqa: E731  # terse test stub
     elif name in {"timeline", "entities_work"}:
         mod = timeline_worker if name == "timeline" else entities_worker
-        monkeypatch.setattr(mod, "_workspace_job_scope", scope)
+        patch_worker_module(monkeypatch, mod, "_workspace_job_scope", scope)
         monkeypatch.setattr(mod.settings_public, "module_is_enabled", AsyncMock(return_value=True))
-        monkeypatch.setattr(mod, "terminalize", recorded)
+        patch_worker_module(monkeypatch, mod, "terminalize", recorded)
         target = mod.timeline if name == "timeline" else mod.entities
         monkeypatch.setattr(target, "claim_extraction_work", deny)
         entry = (
