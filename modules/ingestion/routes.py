@@ -1,6 +1,6 @@
 from io import BytesIO
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import (
@@ -254,6 +254,74 @@ async def retry_run(
     )
 
 
+async def _revalidate_access_on_lease(
+    connection: Any,
+    *,
+    scope: WorkspaceContext,
+    access_fence: Any,
+    multi_workspace_enabled: bool,
+    session_ref: Any,
+) -> None:
+    """Re-lock the originally admitted access fence on the storage lease's own connection, then roll back.
+
+    Reusing the lease connection (rather than a pool connection) keeps a burst of uploads from holding every
+    pool slot while each waits for a second SQL connection. Raises when the fence or session changed; leaves
+    no transaction open across the filesystem write that follows.
+    """
+    async with AsyncSession(bind=connection, expire_on_commit=False) as writer_session:
+        await lock_access_fence(
+            writer_session,
+            scope=scope,
+            expected=access_fence,
+            multi_workspace_enabled=multi_workspace_enabled,
+            auth_sessions=(session_ref,),
+        )
+        await writer_session.rollback()
+
+
+def _display_filename(original_name: str) -> str:
+    """Return a display-only filename: basename of either path flavour, control characters removed.
+
+    Truncated to 255 characters; an empty result becomes ``upload``. Never used as a storage path.
+    """
+    return (
+        "".join(
+            character
+            for character in PurePosixPath(PureWindowsPath(original_name).name).name
+            if ord(character) >= 32 and ord(character) != 127
+        )[:255]
+        or "upload"
+    )
+
+
+async def _existing_duplicate_document(
+    session: AsyncSession,
+    source_id: UUID,
+    digest: str,
+    *,
+    scope: WorkspaceContext,
+    multi_workspace_enabled: bool,
+) -> UUID:
+    """Return the Document that already owns the uploaded bytes identified by ``digest``.
+
+    Raises 409 when the identity exists only as a deleted document: the bytes were ingested before and
+    cannot be re-ingested under the same file identity.
+    """
+    existing = await documents.find_document_identity(
+        session,
+        source_id,
+        f"file:{digest}",
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+    )
+    if existing is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This file was previously ingested and its document was deleted",
+        )
+    return existing
+
+
 async def _intake_upload(
     request: Request,
     session: AsyncSession,
@@ -302,15 +370,13 @@ async def _intake_upload(
         ) as connection:
             # Use the lease's connection for revalidation: a burst of uploads must not hold
             # every pool slot and then deadlock waiting for a second SQL connection each.
-            async with AsyncSession(bind=connection, expire_on_commit=False) as writer_session:
-                await lock_access_fence(
-                    writer_session,
-                    scope=scope,
-                    expected=access_fence,
-                    multi_workspace_enabled=enabled,
-                    auth_sessions=(session_ref,),
-                )
-                await writer_session.rollback()
+            await _revalidate_access_on_lease(
+                connection,
+                scope=scope,
+                access_fence=access_fence,
+                multi_workspace_enabled=enabled,
+                session_ref=session_ref,
+            )
             stored = await storage.put_stream(
                 build_document_key(scope.workspace_id, document_id, suffix),
                 iter_upload(upload),
@@ -325,14 +391,7 @@ async def _intake_upload(
     except ValueError as exc:
         status = 413 if "size limit" in str(exc) else 415
         raise HTTPException(status_code=status, detail=str(exc)) from exc
-    filename = (
-        "".join(
-            character
-            for character in PurePosixPath(PureWindowsPath(original_name).name).name
-            if ord(character) >= 32 and ord(character) != 127
-        )[:255]
-        or "upload"
-    )
+    filename = _display_filename(original_name)
     try:
         await lock_access_fence(
             session,
@@ -366,19 +425,9 @@ async def _intake_upload(
         raise
     if not created:
         await storage.delete(raw_uri)
-        existing = await documents.find_document_identity(
-            session,
-            source_id,
-            f"file:{digest}",
-            scope=scope,
-            multi_workspace_enabled=enabled,
+        document_id = await _existing_duplicate_document(
+            session, source_id, digest, scope=scope, multi_workspace_enabled=enabled
         )
-        if existing is None:
-            raise HTTPException(
-                status_code=409,
-                detail="This file was previously ingested and its document was deleted",
-            )
-        document_id = existing
     return run, document_id
 
 

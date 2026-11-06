@@ -120,7 +120,7 @@
   "modules/ingestion/_worker_lock.py::_lock_normalization_retry_event": 150,
   "modules/ingestion/_worker_lock.py::_lock_normalization_rows": 104,
   "modules/ingestion/_worker_lock.py::_lock_worker_event": 105,
-  "modules/ingestion/routes.py::_intake_upload": 126,
+  "modules/ingestion/routes.py::_intake_upload": 107,
   "modules/knowledge/documents/_chat_evidence.py::read_chat_evidence_chunks": 111,
   "modules/knowledge/documents/_chunks.py::backfill_current_chunks": 103,
   "modules/knowledge/documents/_deletion.py::_capture_source_document_cleanup": 153,
