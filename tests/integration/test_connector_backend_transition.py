@@ -22,7 +22,14 @@ from core.errors import DomainError
 from core.worker_cursors import STATE_KEY
 from core.workspaces.public import read_access_fence
 from core.workspaces.schemas import InternalJobScope
-from modules.connectors import activation, backends, provisioning, upgrade_templates, worker
+from modules.connectors import (
+    _worker_reconcile,
+    activation,
+    backends,
+    provisioning,
+    upgrade_templates,
+    worker,
+)
 from modules.connectors.models import ConnectorProvisioning, ConnectorSchedule
 from modules.sources import public as sources
 
@@ -260,7 +267,7 @@ async def test_crash_between_draining_and_deactivating_old_is_resumed_by_the_swe
     await env.begin("native")  # the process dies here: durable phase is draining, nothing was sent
     assert (await env.row()).transition_phase == "draining" and not await env.admits()
     n8n = FakeN8n()
-    monkeypatch.setattr(worker, "N8nApi", lambda *_a, **_k: n8n)
+    monkeypatch.setattr(_worker_reconcile, "N8nApi", lambda *_a, **_k: n8n)
     advanced = await worker._advance_transitions(env.factory, _settings(), {STATE_KEY: {}})
     assert advanced >= 1 and n8n.calls == [("wf-old", False)]
     row = await env.row()
