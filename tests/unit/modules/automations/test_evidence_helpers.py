@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 
 from modules.automations import execution
+from tests.unit.split_patching import patch_split
 
 DOC, VERSION, SOURCE = uuid4(), uuid4(), uuid4()
 
@@ -95,8 +96,12 @@ def _run(**over: Any) -> SimpleNamespace:
 
 async def _current(run: Any, monkeypatch: pytest.MonkeyPatch, retained: bool = True) -> bool:
     """Evaluate ``_run_evidence_current`` with the retained-evidence check stubbed."""
-    monkeypatch.setattr(
-        execution, "_retained_document_evidence_current", AsyncMock(return_value=retained)
+    patch_split(
+        monkeypatch,
+        "modules.automations",
+        "_retained_document_evidence_current",
+        AsyncMock(return_value=retained),
+        facade="execution",
     )
     return await execution._run_evidence_current(
         SimpleNamespace(),

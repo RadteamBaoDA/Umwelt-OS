@@ -42,6 +42,7 @@ from modules.agents.schemas import (
     AgentRunStart,
     ProfileRunStart,
 )
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 SCOPE = WorkspaceContext(user_id=1, workspace_id=WS, role="owner", membership_revision=1)
@@ -53,7 +54,9 @@ EPOCH = {"workspace_id": WS, "membership_revision": 1, "configuration_revision":
 @pytest.fixture(autouse=True)
 def _module_map():
     """Per-call module availability is covered in test_scope.py; here the shared map applies."""
-    with patch("modules.agents.public.read_workspace_modules", AsyncMock(return_value=None)):
+    with patch_split_attr(
+        "modules.agents", "read_workspace_modules", AsyncMock(return_value=None), facade="public"
+    ):
         yield
 
 
@@ -63,7 +66,9 @@ def _admitted():
     with (
         patch("modules.agents.access.workspaces.read_access_fence", AsyncMock(return_value=FENCE)),
         patch("modules.agents.access.workspaces.lock_access_fence", AsyncMock(return_value=FENCE)),
-        patch("modules.agents.public.commit_with_replay", AsyncMock()) as commit,
+        patch_split_attr(
+            "modules.agents", "commit_with_replay", AsyncMock(), facade="public"
+        ) as commit,
     ):
         yield commit
 
@@ -221,8 +226,15 @@ class TestStepLifecycleAndManagement:
         session.scalars.return_value = scalars_mock
 
         with (
-            patch("modules.agents.public.publish_agent_activity_safely", return_value=None),
-            patch("modules.agents.public.purge_browser_results_in_uow", AsyncMock()),
+            patch_split_attr(
+                "modules.agents",
+                "publish_agent_activity_safely",
+                AsyncMock(return_value=None),
+                facade="public",
+            ),
+            patch_split_attr(
+                "modules.agents", "purge_browser_results_in_uow", AsyncMock(), facade="public"
+            ),
         ):
             result = await request_cancel(session, run_id, MagicMock(), **CTX)
             assert isinstance(result, AgentRunRead)
@@ -250,7 +262,12 @@ class TestStepLifecycleAndManagement:
         ]
         session.scalars.return_value = scalars_mock
 
-        with patch("modules.agents.public.purge_browser_results_in_uow", return_value=None):
+        with patch_split_attr(
+            "modules.agents",
+            "purge_browser_results_in_uow",
+            AsyncMock(return_value=None),
+            facade="public",
+        ):
             deleted_count = await purge_agent_runs(session, [r1.id, r2.id], **CTX)
             assert deleted_count == 2
             assert r1.cancel_requested is True
@@ -298,7 +315,9 @@ class TestToolAuthorizationAndEvidenceFences:
             allowed_tools=["knowledge.search", "webhook.send"],
             profile_snapshot=None,
         )
-        with patch("modules.agents.public.ToolExecutionPrincipal") as principal_cls:
+        with patch_split_attr(
+            "modules.agents", "ToolExecutionPrincipal", MagicMock(), facade="public"
+        ) as principal_cls:
             principal = _result_principal(run)
         assert principal is principal_cls.return_value
         kwargs = principal_cls.call_args.kwargs
@@ -391,7 +410,12 @@ class TestToolAuthorizationAndEvidenceFences:
             allowed_tools=["knowledge.search"],
         )
 
-        with patch("modules.agents.public.revalidate_native_output_fences", return_value=False):
+        with patch_split_attr(
+            "modules.agents",
+            "revalidate_native_output_fences",
+            AsyncMock(return_value=False),
+            facade="public",
+        ):
             mock_factory = MagicMock()
             result = await _read_current_result(run, mock_factory, multi_workspace_enabled=False)
             assert result.answer is None  # Suppressed!
@@ -435,7 +459,12 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with (
-            patch("modules.agents.public._browser_profile_current", return_value=True),
+            patch_split_attr(
+                "modules.agents",
+                "_browser_profile_current",
+                MagicMock(return_value=True),
+                facade="public",
+            ),
             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()),
         ):
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
@@ -483,7 +512,12 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with (
-            patch("modules.agents.public._browser_profile_current", return_value=True),
+            patch_split_attr(
+                "modules.agents",
+                "_browser_profile_current",
+                MagicMock(return_value=True),
+                facade="public",
+            ),
             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()),
         ):
             with pytest.raises(PermissionError, match="Browser run budget is exhausted"):
@@ -532,7 +566,12 @@ class TestBrowserBudgetTrackingAndAuthority:
         session.scalar.side_effect = [run, MagicMock(spec=AgentProfile), tool_call]
 
         with (
-            patch("modules.agents.public._browser_profile_current", return_value=True),
+            patch_split_attr(
+                "modules.agents",
+                "_browser_profile_current",
+                MagicMock(return_value=True),
+                facade="public",
+            ),
             patch("modules.chat.public.live_agent_conversation_id", return_value=uuid4()),
         ):
             with pytest.raises(

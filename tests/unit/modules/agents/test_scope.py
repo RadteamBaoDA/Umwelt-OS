@@ -15,6 +15,7 @@ from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceCont
 from modules.agents import access, approvals, internal_writes, worker
 from modules.agents import public as agents
 from modules.agents.harness import HarnessContext, RunCancelled
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 OWNER = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=2)
@@ -207,9 +208,18 @@ async def test_create_run_stores_workspace_actor_and_original_epoch() -> None:
     now = datetime.now(UTC)
     with (
         patch.object(access.workspaces, "lock_access_fence", AsyncMock(return_value=FENCE)) as lock,
-        patch.object(agents, "commit_with_replay", AsyncMock()) as commit,
-        patch.object(agents, "read_workspace_modules", AsyncMock(return_value={"m": 1})),
-        patch.object(agents, "_read", MagicMock(return_value="read")),
+        patch_split_attr(
+            "modules.agents", "commit_with_replay", AsyncMock(), facade="public"
+        ) as commit,
+        patch_split_attr(
+            "modules.agents",
+            "read_workspace_modules",
+            AsyncMock(return_value={"m": 1}),
+            facade="public",
+        ),
+        patch_split_attr(
+            "modules.agents", "_read", MagicMock(return_value="read"), facade="public"
+        ),
     ):
         assert await agents.create_run(session, "a" * 64, request, registry, **CTX) == "read"
     assert registry.list_tools.call_args.kwargs["modules"] == {"m": 1}
@@ -253,9 +263,11 @@ async def test_create_profile_run_locks_fence_first_and_stores_epoch() -> None:
     )
     with (
         patch.object(access.workspaces, "lock_access_fence", lock),
-        patch.object(agents, "resolve_profile_snapshot", resolve),
+        patch_split_attr("modules.agents", "resolve_profile_snapshot", resolve, facade="public"),
         patch("modules.chat.public.link_agent_run", AsyncMock()),
-        patch.object(agents, "_read", MagicMock(return_value="read")),
+        patch_split_attr(
+            "modules.agents", "_read", MagicMock(return_value="read"), facade="public"
+        ),
     ):
         assert (
             await agents.create_profile_run_in_uow(
@@ -423,7 +435,9 @@ async def test_harness_cancels_when_the_original_epoch_is_gone() -> None:
 async def test_harness_principal_carries_the_run_scope_and_rejects_foreign_scope() -> None:
     context = _context()
     context.registry.get_tool.return_value = None
-    with patch("modules.agents.harness.ToolExecutionPrincipal") as principal_cls:
+    with patch_split_attr(
+        "modules.agents", "ToolExecutionPrincipal", MagicMock(), facade="harness"
+    ) as principal_cls:
         context.owner_principal({}, "dest")  # type: ignore[arg-type]
     assert principal_cls.call_args.kwargs["scope"] == JOB
     foreign = InternalJobScope(workspace_id=uuid4(), actor_user_id=7, membership_revision=2)

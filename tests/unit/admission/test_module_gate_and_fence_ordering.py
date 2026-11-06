@@ -9,6 +9,7 @@ import pytest
 from fastapi import HTTPException
 
 from core.workspaces.schemas import WorkspaceContext
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 OWNER = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=1)
@@ -163,7 +164,7 @@ async def test_p3_7_automation_module_gate_runs_after_admission_lock():
         patch.object(
             execution.workspaces, "resolve_workspace_owner_context", AsyncMock(return_value=owner)
         ),
-        patch.object(execution, "_admit", admit),
+        patch_split_attr("modules.automations", "_admit", admit, facade="execution"),
         patch.object(execution.settings_public, "module_is_enabled", module),
     ):
         assert await execution.process_run(ctx, str(uuid4())) == "paused"

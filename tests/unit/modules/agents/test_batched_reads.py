@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from modules.agents import public
+from tests.unit.split_patching import patch_split
 
 
 def _row(fenced: bool) -> Any:
@@ -22,10 +23,20 @@ async def test_read_current_results_hides_only_stale_rows(monkeypatch: pytest.Mo
         )
         for r in rows
     }
-    monkeypatch.setattr(public, "_read", lambda r: results[r.id])
-    monkeypatch.setattr(public, "_result_principal", lambda r: None if r is rows[3] else object())
-    monkeypatch.setattr(
-        public, "_restore_fences", lambda v: {"records": [], "source_generations": {}}
+    patch_split(monkeypatch, "modules.agents", "_read", lambda r: results[r.id], facade="public")
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "_result_principal",
+        lambda r: None if r is rows[3] else object(),
+        facade="public",
+    )
+    patch_split(
+        monkeypatch,
+        "modules.agents",
+        "_restore_fences",
+        lambda v: {"records": [], "source_generations": {}},
+        facade="public",
     )
     seen: list[int] = []
 
@@ -33,7 +44,9 @@ async def test_read_current_results_hides_only_stale_rows(monkeypatch: pytest.Mo
         seen.append(len(items))
         return [True, False]
 
-    monkeypatch.setattr(public, "revalidate_native_output_fences_many", many)
+    patch_split(
+        monkeypatch, "modules.agents", "revalidate_native_output_fences_many", many, facade="public"
+    )
     out = await public._read_current_results(rows, object(), multi_workspace_enabled=False)  # type: ignore[arg-type]
     assert [o.answer for o in out] == ["a", "a", None, None]
     assert seen == [2]  # one batched call for the two rows with usable principals
@@ -50,7 +63,7 @@ async def test_read_current_results_without_factory_suppresses_fenced_answers(
         )
         for r in rows
     }
-    monkeypatch.setattr(public, "_read", lambda r: results[r.id])
+    patch_split(monkeypatch, "modules.agents", "_read", lambda r: results[r.id], facade="public")
     out = await public._read_current_results(rows, None, multi_workspace_enabled=False)
     assert [o.answer for o in out] == ["a", None]
 
@@ -116,13 +129,13 @@ async def test_conversation_approvals_batch_session_and_link_checks(
         async def execute(self, *_a: Any) -> Any:
             return SimpleNamespace(all=list)
 
-    monkeypatch.setattr(public, "admit", admit)
-    monkeypatch.setattr(public, "actor", lambda _s: 1)
+    patch_split(monkeypatch, "modules.agents", "admit", admit, facade="public")
+    patch_split(monkeypatch, "modules.agents", "actor", lambda _s: 1, facade="public")
     monkeypatch.setattr(auth, "revalidate_account_session", revalidate)
     monkeypatch.setattr(chat, "list_agent_run_ids_for_owner", run_ids)
     monkeypatch.setattr(chat, "filter_live_agent_run_ids", live)
-    monkeypatch.setattr(public, "_approval_run_is_revoked", revoked)
-    monkeypatch.setattr(public, "_approval_fences_current", fences)
+    patch_split(monkeypatch, "modules.agents", "_approval_run_is_revoked", revoked, facade="public")
+    patch_split(monkeypatch, "modules.agents", "_approval_fences_current", fences, facade="public")
     out = await public.list_conversation_approvals(
         _Session(),
         object(),

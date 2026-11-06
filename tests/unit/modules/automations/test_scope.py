@@ -21,6 +21,7 @@ from modules.automations.models import AutomationCursor
 from modules.automations.schemas import AutomationCreate, AutomationUpdate, PreviewRequest
 from modules.chat.public import Conversation
 from modules.tools.mcp_credentials import hash_inbound_token
+from tests.unit.split_patching import patch_split_attr
 
 WS = uuid4()
 OWNER = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=1)
@@ -134,8 +135,12 @@ async def test_dispatch_runs_scopes_runs_before_limit() -> None:
 
     session.scalars = scalars
     with (
-        patch("modules.automations.execution._admit", AsyncMock(return_value=MagicMock())),
-        patch("modules.automations.execution.commit_with_replay", AsyncMock()),
+        patch_split_attr(
+            "modules.automations", "_admit", AsyncMock(return_value=MagicMock()), facade="execution"
+        ),
+        patch_split_attr(
+            "modules.automations", "commit_with_replay", AsyncMock(), facade="execution"
+        ),
     ):
         await execution.dispatch_runs(_factory(session), AsyncMock(), **SC)
     assert len(statements) == 2
@@ -599,13 +604,14 @@ async def test_start_agent_http_errors_retry_5xx_and_reject_4xx(
     run = SimpleNamespace(id=uuid4())
     mark, retry = AsyncMock(), AsyncMock(return_value="retry")
     with (
-        patch.object(
-            execution,
+        patch_split_attr(
+            "modules.automations",
             "_admit",
             AsyncMock(side_effect=HTTPException(status_code=status, detail="x")),
+            facade="execution",
         ),
-        patch.object(execution, "_mark", mark),
-        patch.object(execution, "_transient", retry),
+        patch_split_attr("modules.automations", "_mark", mark, facade="execution"),
+        patch_split_attr("modules.automations", "_transient", retry, facade="execution"),
     ):
         result = await execution._start_agent(
             ctx, run, 0, {"type": "run_agent"}, "hash", "rule", **SC
@@ -657,12 +663,14 @@ async def test_start_agent_locks_fence_before_run_and_sources_and_drift_is_trans
 
         mark, retry = AsyncMock(), AsyncMock(return_value="retry")
         with (
-            patch.object(execution, "_admit", admit),
-            patch.object(execution, "_locked_run", locked_run),
-            patch.object(execution, "_run_evidence_current", evidence),
+            patch_split_attr("modules.automations", "_admit", admit, facade="execution"),
+            patch_split_attr("modules.automations", "_locked_run", locked_run, facade="execution"),
+            patch_split_attr(
+                "modules.automations", "_run_evidence_current", evidence, facade="execution"
+            ),
             patch.object(execution.settings_public, "get_ai_execution_config", config),
-            patch.object(execution, "_mark", mark),
-            patch.object(execution, "_transient", retry),
+            patch_split_attr("modules.automations", "_mark", mark, facade="execution"),
+            patch_split_attr("modules.automations", "_transient", retry, facade="execution"),
         ):
             result = await execution._start_agent(
                 ctx, run, 0, {"type": "run_agent"}, "hash", "rule", **SC

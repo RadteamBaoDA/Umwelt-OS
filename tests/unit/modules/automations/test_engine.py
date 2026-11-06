@@ -33,6 +33,7 @@ from modules.automations.models import (
     AutomationRunAction,
 )
 from modules.automations.schemas import RunRead
+from tests.unit.split_patching import patch_split_attr
 
 OWNER = WorkspaceContext(user_id=7, workspace_id=uuid4(), role="owner", membership_revision=1)
 SC = {"scope": OWNER, "multi_workspace_enabled": False}
@@ -42,8 +43,12 @@ SC = {"scope": OWNER, "multi_workspace_enabled": False}
 def _fenced():
     """Admission and the fenced commit are covered in test_scope; here they are stubs."""
     with (
-        patch("modules.automations.execution._admit", AsyncMock(return_value=MagicMock())),
-        patch("modules.automations.execution.commit_with_replay", AsyncMock()) as commit,
+        patch_split_attr(
+            "modules.automations", "_admit", AsyncMock(return_value=MagicMock()), facade="execution"
+        ),
+        patch_split_attr(
+            "modules.automations", "commit_with_replay", AsyncMock(), facade="execution"
+        ) as commit,
     ):
         yield commit
 
@@ -68,7 +73,12 @@ class TestDeduplicationAndTriggerInbox:
         mock_result.scalar_one_or_none.return_value = None  # Conflict: no insert
         session.execute.return_value = mock_result
 
-        with patch("modules.automations.execution.validate_sample", return_value=None):
+        with patch_split_attr(
+            "modules.automations",
+            "validate_sample",
+            MagicMock(return_value=None),
+            facade="execution",
+        ):
             inserted = await enqueue_trigger(
                 session,
                 trigger_type="new_event",
@@ -82,7 +92,12 @@ class TestDeduplicationAndTriggerInbox:
     async def test_enqueue_trigger_webhook_requires_hook_name(self) -> None:
         """enqueue_trigger raises ValueError if webhook trigger lacks a hook identifier."""
         session = AsyncMock()
-        with patch("modules.automations.execution.validate_sample", return_value=None):
+        with patch_split_attr(
+            "modules.automations",
+            "validate_sample",
+            MagicMock(return_value=None),
+            facade="execution",
+        ):
             with pytest.raises(ValueError, match="webhook triggers need a hook name"):
                 await enqueue_trigger(
                     session,
@@ -131,7 +146,12 @@ class TestAdmissionAndCooldownWindows:
         rev = self._sample_revision()
         now = datetime.now(UTC)
 
-        with patch("modules.automations.execution.dependencies_missing", return_value=[]):
+        with patch_split_attr(
+            "modules.automations",
+            "dependencies_missing",
+            MagicMock(return_value=[]),
+            facade="execution",
+        ):
             reason, run_at = await _admission(
                 session,
                 rev,
@@ -152,7 +172,12 @@ class TestAdmissionAndCooldownWindows:
         rev = self._sample_revision(auto_id=auto_id)
         now = datetime.now(UTC)
 
-        with patch("modules.automations.execution.dependencies_missing", return_value=[]):
+        with patch_split_attr(
+            "modules.automations",
+            "dependencies_missing",
+            MagicMock(return_value=[]),
+            facade="execution",
+        ):
             reason, _run_at = await _admission(
                 session,
                 rev,
@@ -174,7 +199,12 @@ class TestAdmissionAndCooldownWindows:
         # Mock count of runs in the last hour >= 30
         session.scalar.return_value = MAX_RUNS_PER_HOUR
 
-        with patch("modules.automations.execution.dependencies_missing", return_value=[]):
+        with patch_split_attr(
+            "modules.automations",
+            "dependencies_missing",
+            MagicMock(return_value=[]),
+            facade="execution",
+        ):
             reason, _run_at = await _admission(
                 session,
                 rev,
@@ -197,7 +227,12 @@ class TestAdmissionAndCooldownWindows:
         # 1st scalar: hourly count (0), 2nd scalar: last planned attempt
         session.scalar.side_effect = [0, last_attempt]
 
-        with patch("modules.automations.execution.dependencies_missing", return_value=[]):
+        with patch_split_attr(
+            "modules.automations",
+            "dependencies_missing",
+            MagicMock(return_value=[]),
+            facade="execution",
+        ):
             reason, run_at = await _admission(
                 session,
                 rev,
@@ -284,10 +319,30 @@ class TestActionDispatchingAndDecisions:
         session.scalar.side_effect = [run, action, rev]
 
         with (
-            patch("modules.automations.execution._approval_hash", return_value="valid_hash"),
-            patch("modules.automations.execution._fence_current", return_value=True),
-            patch("modules.automations.execution.dependencies_missing", return_value=[]),
-            patch("modules.automations.execution._reads", return_value=[MagicMock(spec=RunRead)]),
+            patch_split_attr(
+                "modules.automations",
+                "_approval_hash",
+                MagicMock(return_value="valid_hash"),
+                facade="execution",
+            ),
+            patch_split_attr(
+                "modules.automations",
+                "_fence_current",
+                AsyncMock(return_value=True),
+                facade="execution",
+            ),
+            patch_split_attr(
+                "modules.automations",
+                "dependencies_missing",
+                MagicMock(return_value=[]),
+                facade="execution",
+            ),
+            patch_split_attr(
+                "modules.automations",
+                "_reads",
+                AsyncMock(return_value=[MagicMock(spec=RunRead)]),
+                facade="execution",
+            ),
         ):
             await decide_action(
                 session,
@@ -337,10 +392,30 @@ class TestActionDispatchingAndDecisions:
         session.scalars.return_value = MagicMock(all=MagicMock(return_value=[]))
 
         with (
-            patch("modules.automations.execution._approval_hash", return_value="valid_hash"),
-            patch("modules.automations.execution._fence_current", return_value=True),
-            patch("modules.automations.execution.dependencies_missing", return_value=[]),
-            patch("modules.automations.execution._reads", return_value=[MagicMock(spec=RunRead)]),
+            patch_split_attr(
+                "modules.automations",
+                "_approval_hash",
+                MagicMock(return_value="valid_hash"),
+                facade="execution",
+            ),
+            patch_split_attr(
+                "modules.automations",
+                "_fence_current",
+                AsyncMock(return_value=True),
+                facade="execution",
+            ),
+            patch_split_attr(
+                "modules.automations",
+                "dependencies_missing",
+                MagicMock(return_value=[]),
+                facade="execution",
+            ),
+            patch_split_attr(
+                "modules.automations",
+                "_reads",
+                AsyncMock(return_value=[MagicMock(spec=RunRead)]),
+                facade="execution",
+            ),
         ):
             await decide_action(
                 session,

@@ -16,16 +16,16 @@ ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = ("apps", "core", "modules", "scripts")
 
 # Files that legitimately hold a session advisory lease. Each obtains its connection from
-# ``core.database.direct_engine`` (asserted below); harness.py only re-probes the connection its caller leased.
+# ``core.database.direct_engine`` (asserted below); _harness_context.py only re-probes the connection its caller leased.
 SESSION_LOCK_ALLOWLIST = {
     "core/auth/deletion_worker.py",
     "core/storage/admission.py",
     "modules/agents/worker.py",
-    "modules/agents/harness.py",
+    "modules/agents/_harness_context.py",
     # HNSW CREATE INDEX CONCURRENTLY serialised per index name on an autocommit connection.
     "modules/search/indexing/_vector_index.py",
 }
-DIRECT_ENGINE_USERS = SESSION_LOCK_ALLOWLIST - {"modules/agents/harness.py"}
+DIRECT_ENGINE_USERS = SESSION_LOCK_ALLOWLIST - {"modules/agents/_harness_context.py"}
 # Session ``SET``/``RESET`` is allowed only where the connection never passes through the pooler:
 # * indexing/_vector_index.py lifts statement/lock timeouts for the autocommit HNSW build on ``direct_engine`` (asserted by
 #   DIRECT_ENGINE_USERS; CREATE INDEX CONCURRENTLY cannot run in a transaction, so SET LOCAL is impossible);
