@@ -170,6 +170,49 @@ async def fail_news_document_ready_event(
     return True
 
 
+async def _materialize_normalizations(
+    session: AsyncSession,
+    observations: list[SourceObservation],
+    run: IngestionRun,
+    stage: IngestionStage,
+    source_generation: int,
+    received_at: datetime,
+    scope: Scope,
+) -> None:
+    """Add a normalization row for each observation lacking one on ``stage`` and stamp ``received_at``.
+
+    Idempotent: existing rows for this stage and normalization version are skipped, so a replayed batch adds
+    nothing. Observations with no ``received_at`` get ``received_at``. Flushes; caller owns commit.
+    """
+    existing_ids = set(
+        (
+            await session.scalars(
+                select(ObservationNormalization.observation_id).where(
+                    ObservationNormalization.stage_id == stage.id,
+                    *_materialization_scope(scope),
+                    ObservationNormalization.normalization_version == NORMALIZATION_VERSION,
+                )
+            )
+        ).all()
+    )
+    for observation in observations:
+        if observation.id not in existing_ids:
+            session.add(
+                ObservationNormalization(
+                    workspace_id=scope.workspace_id,
+                    observation_id=observation.id,
+                    source_id=observation.source_id,
+                    run_id=run.id,
+                    stage_id=stage.id,
+                    source_generation=source_generation,
+                    normalization_version=NORMALIZATION_VERSION,
+                )
+            )
+        if observation.received_at is None:
+            observation.received_at = received_at
+    await session.flush()
+
+
 async def schedule_normalization(
     session: AsyncSession,
     run: IngestionRun,
@@ -245,33 +288,9 @@ async def schedule_normalization(
         await publish_event(
             session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled
         )
-    existing_ids = set(
-        (
-            await session.scalars(
-                select(ObservationNormalization.observation_id).where(
-                    ObservationNormalization.stage_id == stage.id,
-                    *_materialization_scope(scope),
-                    ObservationNormalization.normalization_version == NORMALIZATION_VERSION,
-                )
-            )
-        ).all()
+    await _materialize_normalizations(
+        session, observations, run, stage, source_generation, received_at, scope
     )
-    for observation in observations:
-        if observation.id not in existing_ids:
-            session.add(
-                ObservationNormalization(
-                    workspace_id=scope.workspace_id,
-                    observation_id=observation.id,
-                    source_id=observation.source_id,
-                    run_id=run.id,
-                    stage_id=stage.id,
-                    source_generation=source_generation,
-                    normalization_version=NORMALIZATION_VERSION,
-                )
-            )
-        if observation.received_at is None:
-            observation.received_at = received_at
-    await session.flush()
     return stage
 
 
