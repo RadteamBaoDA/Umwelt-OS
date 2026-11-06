@@ -14,6 +14,7 @@ from modules.connectors import collection
 from modules.connectors.credentials import decrypt_rest_secret
 from modules.connectors.providers import rest
 from modules.connectors.providers.crypto import COINGECKO_KEY_HEADER, coingecko_request
+from tests.unit.modules.connectors._collection_patch import patch_collection
 
 KEY = "CG-demo-key-1234567890"
 SOURCE_ID = uuid4()
@@ -48,9 +49,9 @@ def make_run(monkeypatch, secret):
             raise secret
         return secret
 
-    monkeypatch.setattr(collection, "_lease", lease)
-    monkeypatch.setattr(collection, "_accept_native", accept)
-    monkeypatch.setattr(collection, "_rest_secret", stored)
+    patch_collection(monkeypatch, "_lease", lease)
+    patch_collection(monkeypatch, "_accept_native", accept)
+    patch_collection(monkeypatch, "_rest_secret", stored)
     settings = SimpleNamespace(
         connector_credential_encryption_key=SimpleNamespace(get_secret_value=lambda: DEPLOY)
     )

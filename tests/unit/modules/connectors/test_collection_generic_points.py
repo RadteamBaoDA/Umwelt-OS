@@ -8,6 +8,7 @@ import pytest
 
 from modules.connectors import collection, n8n
 from modules.connectors.providers import rest
+from tests.unit.modules.connectors._collection_patch import patch_collection
 from tests.unit.modules.connectors.test_collection import _capture, _rest_harness, attempt
 
 NOW = datetime.now(UTC).replace(microsecond=0)
@@ -109,7 +110,7 @@ def _mcp_run(monkeypatch, per_call: list[int | Exception]):
             [{"provider_id": f"{n}-{j}"} for j in range(n)] if isinstance(n, int) else []
         ),
     )
-    monkeypatch.setattr(collection, "_state", state)
+    patch_collection(monkeypatch, "_state", state)
     run = SimpleNamespace(
         attempt=attempt(source_type="mcp"),
         ctx={"agent_mcp_runtime": object()},

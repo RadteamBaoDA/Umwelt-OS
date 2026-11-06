@@ -13,6 +13,7 @@ import pytest
 from modules.connectors import collection
 from modules.connectors.providers import keyed, rest
 from modules.connectors.providers.macro import ProviderPayloadError
+from tests.unit.modules.connectors._collection_patch import patch_collection
 
 KEY = "SECRET-key-0123456789abcdef"
 NOW = datetime(2026, 10, 22, 0, 0, tzinfo=UTC)
@@ -343,9 +344,9 @@ def make_run(monkeypatch, provider, secret, body=b"{}"):
             raise secret
         return secret
 
-    monkeypatch.setattr(collection, "_lease", lease)
-    monkeypatch.setattr(collection, "_accept_native", accept)
-    monkeypatch.setattr(collection, "_rest_secret", stored)
+    patch_collection(monkeypatch, "_lease", lease)
+    patch_collection(monkeypatch, "_accept_native", accept)
+    patch_collection(monkeypatch, "_rest_secret", stored)
     settings = SimpleNamespace(
         connector_credential_encryption_key=SimpleNamespace(get_secret_value=lambda: "x" * 44)
     )

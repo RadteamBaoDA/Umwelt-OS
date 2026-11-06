@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from modules.connectors import collection, provisioning_routes
 from modules.connectors.providers.rest import UnsafeDestination
+from tests.unit.modules.connectors._collection_patch import patch_collection
 
 
 def _call(actor_user_id: int) -> SimpleNamespace:
@@ -28,7 +29,7 @@ async def test_collection_allows_operator_past_guard(monkeypatch):
     async def no_secret(_run):
         return None, None
 
-    monkeypatch.setattr(collection, "_rest_secret", no_secret)
+    patch_collection(monkeypatch, "_rest_secret", no_secret)
     with pytest.raises(collection.CredentialMissing):
         await collection._native_local_service(_call(1))
 

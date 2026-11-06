@@ -10,6 +10,7 @@ from modules.connectors.provider_specs import INCREMENTAL_PROVIDERS
 from modules.connectors.providers.json_feed import JSON_FEEDS
 from modules.ingestion import public as ingestion
 from modules.ingestion.schemas import IngestionRecord
+from tests.unit.modules.connectors._collection_patch import patch_collection
 from tests.unit.modules.connectors.test_collection import attempt, factory
 
 T0 = (datetime.now(UTC) - timedelta(days=1)).replace(microsecond=0)
@@ -49,10 +50,10 @@ def _run(
         keys = list(kw["keys"])
         return seen(keys) if seen else set()
 
-    monkeypatch.setattr(collection, "_lease", lease)
-    monkeypatch.setattr(collection, "_state", state)
-    monkeypatch.setattr(collection, "_get_body", get_body)
-    monkeypatch.setattr(collection, "_accept_native", accept)
+    patch_collection(monkeypatch, "_lease", lease)
+    patch_collection(monkeypatch, "_state", state)
+    patch_collection(monkeypatch, "_get_body", get_body)
+    patch_collection(monkeypatch, "_accept_native", accept)
     monkeypatch.setattr(ingestion, "seen_record_keys", seen_keys)
     return run, accepted
 

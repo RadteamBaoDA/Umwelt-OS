@@ -12,6 +12,7 @@ from modules.connectors import collection, n8n, quota
 from modules.connectors import public as connectors
 from modules.connectors.collection_schemas import CollectionAdmissionRead, CollectionRequestRef
 from modules.connectors.providers import rest
+from tests.unit.modules.connectors._collection_patch import patch_collection
 
 REF = CollectionRequestRef(request_id=uuid4(), admission_token=uuid4())
 
@@ -178,11 +179,11 @@ def harness(monkeypatch, adapter, att=None, settled=None):
     async def noop(*_a, **_k):
         return None
 
-    monkeypatch.setattr(collection, "_load_attempt", load)
-    monkeypatch.setattr(collection, "_settle", settle)
-    monkeypatch.setattr(collection, "_release_lease", noop)
-    monkeypatch.setattr(collection, "_record_rate_limit", noop)
-    monkeypatch.setattr(collection, "_adapter_for", lambda source: adapter)
+    patch_collection(monkeypatch, "_load_attempt", load)
+    patch_collection(monkeypatch, "_settle", settle)
+    patch_collection(monkeypatch, "_release_lease", noop)
+    patch_collection(monkeypatch, "_record_rate_limit", noop)
+    patch_collection(monkeypatch, "_adapter_for", lambda source: adapter)
     ctx = {
         "settings": SimpleNamespace(multi_workspace_enabled=True),
         "session_factory": factory([]),
@@ -309,7 +310,7 @@ async def test_generic_accept_uses_request_ref_and_a_request_scoped_batch_key(mo
     async def no_changes(session, **kwargs):
         calls["none"] = kwargs
 
-    monkeypatch.setattr(collection, "lock_access_fence", lock)
+    patch_collection(monkeypatch, "lock_access_fence", lock)
     monkeypatch.setattr(collection.ingestion, "receive_connector_batch", receive)
     monkeypatch.setattr(collection.ingestion, "accept_collection_no_changes", no_changes)
     seen: set[str] = set()
@@ -398,7 +399,7 @@ def _capture(monkeypatch):
     async def accept(run, records, before, after, update=None):
         got.update(records=records, before=before, after=after, update=update)
 
-    monkeypatch.setattr(collection, "_accept_generic", accept)
+    patch_collection(monkeypatch, "_accept_generic", accept)
     return got
 
 
@@ -481,7 +482,7 @@ def _rest_harness(monkeypatch, state, pages):
         sent.append((url, kwargs.get("headers")))
         return pages.pop(0)
 
-    monkeypatch.setattr(collection, "_state", get_state)
+    patch_collection(monkeypatch, "_state", get_state)
     from modules.connectors import registry
 
     monkeypatch.setattr(

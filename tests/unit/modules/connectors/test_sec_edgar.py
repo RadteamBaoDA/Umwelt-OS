@@ -10,6 +10,7 @@ from modules.connectors.provider_specs import DISPATCHABLE, get_provider_spec
 from modules.connectors.providers import rest
 from modules.connectors.providers.filings import map_sec_edgar, sec_edgar_request
 from modules.connectors.providers.macro import ProviderPayloadError
+from tests.unit.modules.connectors._collection_patch import patch_collection
 from tests.unit.modules.connectors.p3_helpers import NOW
 
 CIK = "0000320193"
@@ -102,8 +103,8 @@ async def test_executor_sends_once_with_user_agent_and_never_without_contact(mon
     async def accept(_run, _lease, records, coverage, _at, *_):
         accepted.append((records, coverage))
 
-    monkeypatch.setattr(collection, "_lease", lease)
-    monkeypatch.setattr(collection, "_accept_native", accept)
+    patch_collection(monkeypatch, "_lease", lease)
+    patch_collection(monkeypatch, "_accept_native", accept)
 
     def run(config):
         source = SimpleNamespace(provider="sec_edgar", configuration=config)

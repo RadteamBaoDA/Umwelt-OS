@@ -9,6 +9,7 @@ import pytest
 from modules.connectors import collection, provisioning
 from modules.connectors import public as connectors
 from modules.ingestion import public as ingestion
+from tests.unit.modules.connectors._collection_patch import patch_collection
 from tests.unit.modules.connectors.test_collection import attempt, factory
 
 SNAPSHOT = SimpleNamespace(
@@ -74,7 +75,7 @@ async def test_telegram_missing_bot_credential_sends_nothing(monkeypatch):
     async def snapshot(*_a, **_k):
         return None
 
-    monkeypatch.setattr(collection, "_lease", lease)
+    patch_collection(monkeypatch, "_lease", lease)
     monkeypatch.setattr(provisioning, "lock_connector", lock)
     monkeypatch.setattr(connectors, "get_native_credential_snapshot", snapshot)
     with pytest.raises(collection.CredentialMissing):
@@ -116,8 +117,8 @@ async def test_telegram_page_is_fenced_then_accepted_with_native_operation(monke
     async def fence(_run, **kw):
         fences.append(kw)
 
-    monkeypatch.setattr(collection, "_lease", lease)
-    monkeypatch.setattr(collection, "_credential_fence", fence)
+    patch_collection(monkeypatch, "_lease", lease)
+    patch_collection(monkeypatch, "_credential_fence", fence)
     monkeypatch.setattr(provisioning, "lock_connector", lock)
     monkeypatch.setattr(connectors, "get_native_credential_snapshot", snapshot)
     monkeypatch.setattr(ingestion, "read_telegram_collection_state", none)
