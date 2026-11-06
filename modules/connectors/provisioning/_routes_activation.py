@@ -39,6 +39,9 @@ from modules.connectors.models import (
 )
 from modules.connectors.n8n import N8nApi
 from modules.connectors.provider_specs import TERMS_INELIGIBLE
+from modules.connectors.provisioning import (
+    _routes_config,  # noqa: F401  (import first: config routes register before activation routes, preserving the recorded route order)
+)
 from modules.connectors.provisioning._routes_common import (
     ActivationRead,
     ActivationRequest,
