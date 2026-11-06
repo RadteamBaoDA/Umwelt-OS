@@ -171,6 +171,39 @@ class TestDispatcherWork:
             )
         session.commit.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_set_event_delivery_cannot_overwrite_terminal_status(self) -> None:
+        """The UPDATE is guarded on non-terminal prior statuses; a stale call matches no row and reports False."""
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None  # terminal row: guarded WHERE matches nothing
+        session.execute.return_value = result
+
+        with patch_ingestion("_admit_ingestion_scope", AsyncMock()):
+            assert (
+                await dispatcher.mark_event_delivered(
+                    session, uuid4(), scope=SCOPE, multi_workspace_enabled=False
+                )
+                is False
+            )
+            await public.set_event_delivery(
+                session,
+                uuid4(),
+                "pending",
+                from_statuses=("delivered", "failed"),
+                scope=SCOPE,
+                multi_workspace_enabled=False,
+            )
+
+        def prior_statuses(call: object) -> list[str]:
+            params = call.args[0].compile().params  # type: ignore[attr-defined]
+            return sorted(s for k, v in params.items() if k.startswith("status_") for s in v)
+
+        calls = session.execute.await_args_list
+        assert "event_outbox.status IN" in str(calls[0].args[0].compile())
+        assert prior_statuses(calls[0]) == ["pending", "queued"]
+        assert prior_statuses(calls[1]) == ["delivered", "failed"]
+
 
 class TestBatchAndRunStatusTransitions:
     """Test IngestionRun, IngestionStage status progressions and retry checks."""
