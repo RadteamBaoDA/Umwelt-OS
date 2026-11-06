@@ -17,6 +17,7 @@ from modules.knowledge.documents.schemas import (
 )
 from modules.sources import public, worker
 from modules.sources.schemas import SourcePurgeJobIdentity
+from tests.unit.sources_patching import patch_sources_attr
 
 WS, SRC, OP = uuid4(), uuid4(), uuid4()
 
@@ -128,12 +129,10 @@ async def _start(current):
     session = _session()
     session.scalar = AsyncMock(return_value=current)
     with (
-        patch.object(
-            public, "_lock_source_row", AsyncMock(return_value=(source, _fence(config=9)))
-        ),
-        patch.object(public, "_fence_connector_source", AsyncMock()),
-        patch.object(public, "commit_with_replay", AsyncMock()),
-        patch.object(public, "make_source_change", MagicMock(return_value=object())),
+        patch_sources_attr("_lock_source_row", AsyncMock(return_value=(source, _fence(config=9)))),
+        patch_sources_attr("_fence_connector_source", AsyncMock()),
+        patch_sources_attr("commit_with_replay", AsyncMock()),
+        patch_sources_attr("make_source_change", MagicMock(return_value=object())),
         patch("modules.ingestion.public.publish_event", AsyncMock()),
     ):
         result = await public.start_source_purge(
@@ -160,7 +159,7 @@ async def test_start_source_purge_does_not_recapture_existing_operation() -> Non
 
 
 async def test_capture_reader_returns_dto_on_exact_match() -> None:
-    with patch.object(public, "_admit_source_scope", AsyncMock(return_value=_fence())):
+    with patch_sources_attr("_admit_source_scope", AsyncMock(return_value=_fence())):
         capture = await public.read_source_purge_job_capture(
             _session(_row()), OP, scope=_scope(), multi_workspace_enabled=True
         )
@@ -176,7 +175,7 @@ async def test_capture_reader_returns_dto_on_exact_match() -> None:
     ],
 )
 async def test_capture_reader_null_or_stale_returns_none(row, fence) -> None:
-    with patch.object(public, "_admit_source_scope", AsyncMock(return_value=fence)):
+    with patch_sources_attr("_admit_source_scope", AsyncMock(return_value=fence)):
         assert (
             await public.read_source_purge_job_capture(
                 _session(row), OP, scope=_scope(), multi_workspace_enabled=True
@@ -187,7 +186,7 @@ async def test_capture_reader_null_or_stale_returns_none(row, fence) -> None:
 
 async def test_capture_reader_query_binds_membership_and_selects_no_uri() -> None:
     session = _session(_row())
-    with patch.object(public, "_admit_source_scope", AsyncMock(return_value=_fence())):
+    with patch_sources_attr("_admit_source_scope", AsyncMock(return_value=_fence())):
         await public.read_source_purge_job_capture(
             session, OP, scope=_scope(), multi_workspace_enabled=True
         )
@@ -200,8 +199,8 @@ async def test_capture_reader_query_binds_membership_and_selects_no_uri() -> Non
 
 
 async def test_identity_delegates_to_capture_and_projects_scope() -> None:
-    with patch.object(
-        public, "read_source_purge_job_capture", AsyncMock(return_value=_identity())
+    with patch_sources_attr(
+        "read_source_purge_job_capture", AsyncMock(return_value=_identity())
     ) as read:
         assert (
             await public.read_source_purge_job_identity(
@@ -210,7 +209,7 @@ async def test_identity_delegates_to_capture_and_projects_scope() -> None:
             == _scope()
         )
     read.assert_awaited_once()
-    with patch.object(public, "read_source_purge_job_capture", AsyncMock(return_value=None)):
+    with patch_sources_attr("read_source_purge_job_capture", AsyncMock(return_value=None)):
         assert (
             await public.read_source_purge_job_identity(
                 None, OP, scope=_scope(), multi_workspace_enabled=True
@@ -258,7 +257,7 @@ async def test_resolver_permission_loss_propagates() -> None:
 async def test_resolver_returns_exact_scope_after_capture_reread() -> None:
     with (
         patch.object(public.workspaces, "authorize_internal_job", AsyncMock(return_value=_fence())),
-        patch.object(public, "read_source_purge_job_capture", AsyncMock(return_value=_identity())),
+        patch_sources_attr("read_source_purge_job_capture", AsyncMock(return_value=_identity())),
     ):
         assert (
             await public.resolve_source_purge_job_scope(
@@ -268,8 +267,7 @@ async def test_resolver_returns_exact_scope_after_capture_reread() -> None:
         )
     with (
         patch.object(public.workspaces, "authorize_internal_job", AsyncMock(return_value=_fence())),
-        patch.object(
-            public,
+        patch_sources_attr(
             "read_source_purge_job_capture",
             AsyncMock(return_value=_identity(source_generation=5)),
         ),
@@ -307,7 +305,7 @@ async def test_pending_coverage_keeps_failed_memory_done_operation_with_unsettle
     None
 ):
     session = _session()
-    with patch.object(public, "_admit_source_scope", AsyncMock(return_value=_fence())):
+    with patch_sources_attr("_admit_source_scope", AsyncMock(return_value=_fence())):
         await public.pending_source_coverage_ids(
             session, scope=_scope(), multi_workspace_enabled=True
         )

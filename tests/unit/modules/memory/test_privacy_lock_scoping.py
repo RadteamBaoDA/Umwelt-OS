@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from modules.memory import public
+from tests.unit.memory_patching import patch_memory
 
 ROOT = pathlib.Path(__file__).resolve().parents[4]
 LOCK_CALLS = {"lock_export_privacy", "lock_export_privacy_in_uow", "lock_export_privacy_workspaces"}
@@ -34,13 +35,13 @@ READERS = {
     ("modules/chat/_worker_settle.py", "_mark_privacy_cancelled"),
     ("modules/chat/_worker_settle.py", "_mark_failed"),
     ("modules/chat/worker.py", "_fail_expired_pending"),
-    ("modules/memory/public.py", "export_page"),
-    ("modules/memory/public.py", "validate_export_fences"),
-    ("modules/memory/public.py", "_verified_memory_read"),
-    ("modules/memory/public.py", "_verified_candidate_read"),
-    ("modules/memory/public.py", "MemoryService.get_memories"),
-    ("modules/memory/public.py", "MemoryService.get_memory"),
-    ("modules/memory/public.py", "MemoryService.get_candidates"),
+    ("modules/memory/_export.py", "export_page"),
+    ("modules/memory/_export.py", "validate_export_fences"),
+    ("modules/memory/_reads.py", "_verified_memory_read"),
+    ("modules/memory/_reads.py", "_verified_candidate_read"),
+    ("modules/memory/_service.py", "MemoryService.get_memories"),
+    ("modules/memory/_service.py", "MemoryService.get_memory"),
+    ("modules/memory/_service.py", "MemoryService.get_candidates"),
 }
 WRITERS = {
     ("modules/agents/public.py", "_cleanup_finalized_marker"),
@@ -56,19 +57,22 @@ WRITERS = {
     ("modules/knowledge/documents/worker.py", "_evict_memory_cache_after_commit"),
     ("modules/knowledge/documents/worker.py", "_advance_copied_cleanup"),
     ("modules/knowledge/documents/worker.py", "_recover_attempt"),
-    ("modules/memory/public.py", "lock_export_privacy_workspaces"),  # forwards its own shared flag
-    ("modules/memory/public.py", "lock_export_privacy_in_uow"),
-    ("modules/memory/public.py", "MemoryService.create_memory"),
-    ("modules/memory/public.py", "MemoryService.update_memory"),
-    ("modules/memory/public.py", "MemoryService.forget_memory"),
-    ("modules/memory/public.py", "MemoryService.invalidate_memory"),
-    ("modules/memory/public.py", "MemoryService.supersede_memory"),
-    ("modules/memory/public.py", "MemoryService.get_privacy_config"),
-    ("modules/memory/public.py", "MemoryService._read_privacy_config_under_fence"),
-    ("modules/memory/public.py", "MemoryService.update_privacy_config"),
-    ("modules/memory/public.py", "MemoryService.accept_candidate"),
-    ("modules/memory/public.py", "MemoryService.reject_candidate"),
-    ("modules/memory/public.py", "MemoryService.purge_memories"),
+    (
+        "modules/memory/_privacy_cleanup.py",
+        "lock_export_privacy_workspaces",
+    ),  # forwards its own shared flag
+    ("modules/memory/_privacy_cleanup.py", "lock_export_privacy_in_uow"),
+    ("modules/memory/_service.py", "MemoryService.create_memory"),
+    ("modules/memory/_service.py", "MemoryService.update_memory"),
+    ("modules/memory/_service.py", "MemoryService.forget_memory"),
+    ("modules/memory/_service.py", "MemoryService.invalidate_memory"),
+    ("modules/memory/_service.py", "MemoryService.supersede_memory"),
+    ("modules/memory/_service.py", "MemoryService.get_privacy_config"),
+    ("modules/memory/_service.py", "MemoryService._read_privacy_config_under_fence"),
+    ("modules/memory/_service.py", "MemoryService.update_privacy_config"),
+    ("modules/memory/_service.py", "MemoryService.accept_candidate"),
+    ("modules/memory/_service.py", "MemoryService.reject_candidate"),
+    ("modules/memory/_service.py", "MemoryService.purge_memories"),
     ("modules/sources/worker.py", "_lock_operation"),
 }
 
@@ -193,8 +197,8 @@ async def test_in_uow_lock_uses_the_scope_workspace(monkeypatch: pytest.MonkeyPa
     workspace = uuid4()
     fence = object()
     lock = AsyncMock()
-    monkeypatch.setattr(public, "_admit", AsyncMock(return_value=fence))
-    monkeypatch.setattr(public, "lock_export_privacy", lock)
+    patch_memory(monkeypatch, "_admit", AsyncMock(return_value=fence))
+    patch_memory(monkeypatch, "lock_export_privacy", lock)
     session = object()
     await public.lock_export_privacy_in_uow(
         session,

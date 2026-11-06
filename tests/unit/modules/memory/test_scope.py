@@ -12,6 +12,7 @@ from core.errors import DomainError, ForbiddenError
 from core.workspaces.schemas import AccessFence, InternalJobScope, WorkspaceContext
 from modules.memory import public
 from modules.memory.public import MemoryService
+from tests.unit.memory_patching import patch_memory_attr
 
 WS = uuid4()
 OWNER = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=2)
@@ -88,7 +89,7 @@ async def test_get_memories_filters_workspace_before_limit() -> None:
         patch.object(
             public.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)
         ) as admit,
-        patch.object(public, "lock_export_privacy", AsyncMock()),
+        patch_memory_attr("lock_export_privacy", AsyncMock()),
     ):
         await MemoryService(session).get_memories(limit=5, **CTX)
     admit.assert_awaited_once()
@@ -109,7 +110,7 @@ async def test_export_page_rejects_foreign_owner_id_before_query() -> None:
     session.scalar = AsyncMock()
     with (
         patch.object(public.workspaces, "read_access_fence", AsyncMock(return_value=FENCE)),
-        patch.object(public, "lock_export_privacy", AsyncMock()),
+        patch_memory_attr("lock_export_privacy", AsyncMock()),
         pytest.raises(ValueError),
     ):
         await public.export_page(session, owner_id=99, record_kind="memories", **CTX)

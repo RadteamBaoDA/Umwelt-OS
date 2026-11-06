@@ -6,6 +6,7 @@ import pytest
 
 from modules.dashboard import gadgets, public
 from modules.dashboard.schemas import GadgetConfiguration, GadgetScope
+from tests.unit.sources_patching import patch_sources
 
 
 def test_shape_rules() -> None:
@@ -677,7 +678,6 @@ async def test_preset_apply_foreign_workspace_source_is_unavailable_through_real
 
     from core.workspaces.schemas import WorkspaceContext
     from modules.dashboard.schemas import PresetApplyRequest
-    from modules.sources import public as sources_public
 
     async def noop(*_a: object, **_k: object) -> object:
         return SimpleNamespace()
@@ -687,8 +687,8 @@ async def test_preset_apply_foreign_workspace_source_is_unavailable_through_real
 
     for name in ("_admit", "_lock_owner_creation_quota"):
         monkeypatch.setattr(public, name, noop)
-    monkeypatch.setattr(
-        sources_public, "_admit_source_scope", noop
+    patch_sources(
+        monkeypatch, "_admit_source_scope", noop
     )  # admission is not under test; the row query is
     monkeypatch.setattr(public.sources, "get_gadget_sources", get_sources)
     scope = WorkspaceContext(workspace_id=uuid4(), user_id=1, role="owner", membership_revision=1)

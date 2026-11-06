@@ -13,6 +13,7 @@ from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.sources import public
 from modules.sources.models import Source
 from modules.sources.schemas import SourcePatch
+from tests.unit.sources_patching import patch_sources_attr
 
 WORKSPACE_ID = uuid4()
 SCOPE = WorkspaceContext(user_id=7, workspace_id=WORKSPACE_ID, role="owner", membership_revision=3)
@@ -411,7 +412,7 @@ class TestSourceLifecycleMutations:
         session = AsyncMock()
         session.scalar.return_value = src
 
-        with patch("modules.sources.public.commit_with_replay", new_callable=AsyncMock):
+        with patch_sources_attr("commit_with_replay", new_callable=AsyncMock):
             updated = await public.update_source(
                 session,
                 src,
@@ -430,8 +431,8 @@ class TestSourceLifecycleMutations:
         session.scalar.return_value = src
 
         with (
-            patch("modules.sources.public._fence_connector_source", new_callable=AsyncMock),
-            patch("modules.sources.public.commit_with_replay", new_callable=AsyncMock),
+            patch_sources_attr("_fence_connector_source", new_callable=AsyncMock),
+            patch_sources_attr("commit_with_replay", new_callable=AsyncMock),
         ):
             updated = await public.update_source(
                 session,
@@ -466,7 +467,7 @@ class TestSourceLifecycleMutations:
         session = AsyncMock()
         session.scalar.return_value = src
 
-        with patch("modules.sources.public._fence_connector_source", new_callable=AsyncMock):
+        with patch_sources_attr("_fence_connector_source", new_callable=AsyncMock):
             cs = await public.pause_source_for_connector(
                 session, src.id, scope=SCOPE, multi_workspace_enabled=False
             )
@@ -483,8 +484,8 @@ class TestSourceLifecycleMutations:
         session.scalar.return_value = src
 
         with (
-            patch("modules.sources.public._fence_connector_source", new_callable=AsyncMock),
-            patch("modules.sources.public.commit_with_replay", new_callable=AsyncMock),
+            patch_sources_attr("_fence_connector_source", new_callable=AsyncMock),
+            patch_sources_attr("commit_with_replay", new_callable=AsyncMock),
         ):
             archived = await public.archive_source(
                 session, src.id, scope=SCOPE, multi_workspace_enabled=False
@@ -728,7 +729,7 @@ class TestSourceFenceCarriesToggles:
                 "modules.tools.public.purge_source_browser_results_in_uow",
                 tools.purge_source_browser_results_in_uow,
             ),
-            patch("modules.sources.public._transitioned_source_scope", return_value=SCOPE),
+            patch_sources_attr("_transitioned_source_scope", return_value=SCOPE),
         ):
             await public._fence_connector_source(
                 AsyncMock(),
@@ -748,9 +749,9 @@ class TestSourceFenceCarriesToggles:
         access = AccessFence(WORKSPACE_ID, 7, 3, 5)
         apply = AsyncMock()
         with (
-            patch("modules.sources.public._source_in_uow", AsyncMock(return_value=src)),
-            patch("modules.sources.public._transitioned_source_scope", return_value=SCOPE),
-            patch("modules.sources.public._connector_source", return_value=MagicMock()),
+            patch_sources_attr("_source_in_uow", AsyncMock(return_value=src)),
+            patch_sources_attr("_transitioned_source_scope", return_value=SCOPE),
+            patch_sources_attr("_connector_source", return_value=MagicMock()),
             patch("modules.ingestion.public.revoke_source_credentials", AsyncMock()),
             patch("modules.tools.public.purge_source_browser_results_in_uow", AsyncMock()),
             patch("modules.connectors.public.apply_source_pause_cleanup_in_uow", apply),
@@ -799,7 +800,7 @@ class TestSourceFenceCarriesToggles:
 
         session = AsyncMock()
         session.execute.side_effect = execute
-        with patch("modules.sources.public._admit_source_scope", AsyncMock(return_value=access)):
+        with patch_sources_attr("_admit_source_scope", AsyncMock(return_value=access)):
             got = await public.get_connector_retained_effect_anchor_in_uow(
                 session,
                 src.id,

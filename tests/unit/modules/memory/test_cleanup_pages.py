@@ -15,6 +15,7 @@ from modules.memory import public
 from modules.memory.models import Memory, MemoryCandidate
 from modules.memory.public import MemoryService, SourceCopiedEvidenceScope
 from modules.sources.schemas import SourceFence
+from tests.unit.memory_patching import patch_memory_attr
 
 WS = uuid4()
 OWNER = WorkspaceContext(user_id=7, workspace_id=WS, role="owner", membership_revision=2)
@@ -120,7 +121,7 @@ async def _doc_page(
 ) -> Any:
     with (
         patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=FENCE)),
-        patch.object(public, "bound_cleanup_lock_waits", AsyncMock()),
+        patch_memory_attr("bound_cleanup_lock_waits", AsyncMock()),
     ):
         return await public.purge_document_copied_evidence_page(
             session,
@@ -242,7 +243,7 @@ async def _source_page(
     _, job, fence = _source_scope()
     with (
         patch("core.workspaces.public.read_access_fence", AsyncMock(return_value=FENCE)),
-        patch.object(public, "bound_cleanup_lock_waits", AsyncMock()),
+        patch_memory_attr("bound_cleanup_lock_waits", AsyncMock()),
     ):
         return await public.purge_source_copied_evidence_page_in_uow(
             session,
@@ -507,14 +508,14 @@ async def test_suggest_candidates_persists_skips_duplicates_and_projects_safely(
             "_read_privacy_config_under_fence",
             AsyncMock(return_value=(privacy, FENCE)),
         ) as read_privacy,
-        patch.object(public, "extract_candidate_proposals", lambda _t: proposals),
-        patch.object(public, "_lock_live_provenance_evidence", AsyncMock()) as lock_evidence,
-        patch.object(public, "_verified_memory_read", verified),
-        patch.object(public, "evaluate_candidate", lambda *_a, **_k: next(evaluations)),
-        patch.object(public, "_to_candidate_read", lambda row: SimpleNamespace(id=row.id)),
-        patch.object(public, "commit_with_replay", commit),
+        patch_memory_attr("extract_candidate_proposals", lambda _t: proposals),
+        patch_memory_attr("_lock_live_provenance_evidence", AsyncMock()) as lock_evidence,
+        patch_memory_attr("_verified_memory_read", verified),
+        patch_memory_attr("evaluate_candidate", lambda *_a, **_k: next(evaluations)),
+        patch_memory_attr("_to_candidate_read", lambda row: SimpleNamespace(id=row.id)),
+        patch_memory_attr("commit_with_replay", commit),
         patch.object(MemoryService, "_invalidate_cache", AsyncMock()) as invalidate,
-        patch.object(public, "_verified_candidate_read", projected_candidate),
+        patch_memory_attr("_verified_candidate_read", projected_candidate),
     ):
         result = await service.suggest_candidates(
             "text",
@@ -567,7 +568,7 @@ async def test_suggest_candidates_skips_when_disabled_or_empty() -> None:
                 )
             ),
         ),
-        patch.object(public, "_lock_live_provenance_evidence", AsyncMock()) as lock_evidence,
+        patch_memory_attr("_lock_live_provenance_evidence", AsyncMock()) as lock_evidence,
     ):
         assert await service.suggest_candidates("t", **KW) == []
     with (
@@ -581,8 +582,8 @@ async def test_suggest_candidates_skips_when_disabled_or_empty() -> None:
                 )
             ),
         ),
-        patch.object(public, "extract_candidate_proposals", lambda _t: []),
-        patch.object(public, "_lock_live_provenance_evidence", AsyncMock()) as lock_evidence,
+        patch_memory_attr("extract_candidate_proposals", lambda _t: []),
+        patch_memory_attr("_lock_live_provenance_evidence", AsyncMock()) as lock_evidence,
     ):
         assert await service.suggest_candidates("t", **KW) == []
     lock_evidence.assert_not_awaited()
