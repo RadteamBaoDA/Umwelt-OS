@@ -23,6 +23,7 @@ from sqlalchemy.dialects import postgresql
 from modules.knowledge.entities import corrections as cor
 from modules.knowledge.entities.schemas import EntityCreate, EntityMergeRequest, EntitySplitRequest
 from modules.knowledge.relationships.schemas import CorrectionRelationshipRef, CorrectionSupportRef
+from tests.unit.modules.knowledge.entities._corrections_patch import patch_corrections_mp
 
 GOLDEN_PATH = Path(__file__).with_name("golden_corrections.json")
 NOW = datetime(2026, 5, 1, tzinfo=UTC)
@@ -232,7 +233,7 @@ def _collaborators(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
 
     monkeypatch.setattr(cor.relationships, "list_correction_relationship_refs", refs)
     monkeypatch.setattr(cor.timeline, "correction_event_ids", tl_ids)
-    monkeypatch.setattr(cor, "uuid7", lambda: U("new-entity"))
+    patch_corrections_mp(monkeypatch, "uuid7", lambda: U("new-entity"))
     for module, names in (
         (cor.sources, ["lock_source"]),
         (cor.documents, ["lock_document_ids"]),
@@ -254,14 +255,14 @@ def _collaborators(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             monkeypatch.setattr(
                 module, attr, logged(f"{module.__name__.split('.')[-2]}.{attr}", default)
             )
-    monkeypatch.setattr(cor, "_admit", logged("admit", "fence"))
-    monkeypatch.setattr(cor, "_actor", lambda _scope: 7)
-    monkeypatch.setattr(cor, "_temporal_before_relationships", logged("temporal_before"))
-    monkeypatch.setattr(cor, "_temporal_correction", logged("temporal_correction"))
-    monkeypatch.setattr(cor, "_record_assignments", logged("record_assignments"))
-    monkeypatch.setattr(cor, "commit_with_replay", logged("commit"))
-    monkeypatch.setattr(
-        cor,
+    patch_corrections_mp(monkeypatch, "_admit", logged("admit", "fence"))
+    patch_corrections_mp(monkeypatch, "_actor", lambda _scope: 7)
+    patch_corrections_mp(monkeypatch, "_temporal_before_relationships", logged("temporal_before"))
+    patch_corrections_mp(monkeypatch, "_temporal_correction", logged("temporal_correction"))
+    patch_corrections_mp(monkeypatch, "_record_assignments", logged("record_assignments"))
+    patch_corrections_mp(monkeypatch, "commit_with_replay", logged("commit"))
+    patch_corrections_mp(
+        monkeypatch,
         "make_graph_change",
         lambda **k: (
             f"change:{json.dumps(label({n: v for n, v in k.items() if n != 'scope'}), default=str, sort_keys=True)}"
@@ -509,7 +510,7 @@ async def test_delete_canonical_entity_write_order(
         _collaborators.log.append(f"discover_delete:{calls['n']}")
         return closure
 
-    monkeypatch.setattr(cor, "_discover_delete_closure", discover_delete)
+    patch_corrections_mp(monkeypatch, "_discover_delete_closure", discover_delete)
     session = Session(_collaborators.log)
     session.delete = Session.delete.__get__(session)  # type: ignore[method-assign]
     result = await cor.delete_canonical_entity(
@@ -613,7 +614,7 @@ async def test_merge_entity_write_order(
         _collaborators.log.append("apply_entity_merge_tl")
         return [U("ev1")]
 
-    monkeypatch.setattr(cor, "_locked_closure", locked)
+    patch_corrections_mp(monkeypatch, "_locked_closure", locked)
     monkeypatch.setattr(cor.relationships, "apply_entity_merge", rel_merge)
     monkeypatch.setattr(cor.timeline, "apply_entity_merge", tl_merge)
     monkeypatch.setattr(
@@ -711,7 +712,7 @@ async def test_split_entity_write_order(
         _collaborators.log.append("apply_entity_split_tl")
         return [U("ev1")]
 
-    monkeypatch.setattr(cor, "_locked_closure", locked)
+    patch_corrections_mp(monkeypatch, "_locked_closure", locked)
     monkeypatch.setattr(cor.relationships, "apply_entity_split", rel_split)
     monkeypatch.setattr(cor.timeline, "apply_entity_split", tl_split)
     monkeypatch.setattr(

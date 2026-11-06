@@ -52,6 +52,7 @@ from modules.knowledge.entities.schemas import (
 )
 from modules.knowledge.relationships.schemas import CorrectionRelationshipRef
 from tests.unit.entity_patching import patch_entity_attr
+from tests.unit.modules.knowledge.entities._corrections_patch import patch_corrections
 
 
 def _make_sample_entity(
@@ -135,7 +136,7 @@ def _admitted() -> object:
     """Admission is covered elsewhere; these tests exercise correction logic past it."""
     admitted = AsyncMock(return_value=MagicMock())
     with (
-        patch("modules.knowledge.entities.corrections._admit", admitted),
+        patch_corrections("_admit", admitted),
         patch_entity_attr("_admit", admitted),
         patch("modules.knowledge.relationships.public._admit", admitted),
     ):
@@ -607,8 +608,8 @@ class TestPreviewsAndExecution:
 
         with (
             patch_entity_attr("resolve_canonical_entity_id", AsyncMock(return_value=ent_id)),
-            patch(
-                "modules.knowledge.entities.corrections._discover",
+            patch_corrections(
+                "_discover",
                 side_effect=_conflict("mock_err", "Mock error"),
             ),
         ):
@@ -687,15 +688,13 @@ class TestPreviewsAndExecution:
             patch_entity_attr(
                 "resolve_canonical_entity_id", AsyncMock(side_effect=[src.id, tgt.id])
             ),
-            patch(
-                "modules.knowledge.entities.corrections._locked_closure",
+            patch_corrections(
+                "_locked_closure",
                 AsyncMock(return_value=closure),
             ),
-            patch(
-                "modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()
-            ),
-            patch("modules.knowledge.entities.corrections._temporal_correction", AsyncMock()),
-            patch("modules.knowledge.entities.corrections.commit_with_replay", AsyncMock()),
+            patch_corrections("_temporal_before_relationships", AsyncMock()),
+            patch_corrections("_temporal_correction", AsyncMock()),
+            patch_corrections("commit_with_replay", AsyncMock()),
             patch("modules.timeline.public.apply_entity_merge", AsyncMock(return_value=[])),
             patch("modules.timeline.public.revise_corrected_events", AsyncMock(return_value=[])),
         ):
@@ -750,15 +749,13 @@ class TestPreviewsAndExecution:
 
         with (
             patch_entity_attr("resolve_canonical_entity_id", AsyncMock(return_value=src.id)),
-            patch(
-                "modules.knowledge.entities.corrections._locked_closure",
+            patch_corrections(
+                "_locked_closure",
                 AsyncMock(return_value=closure),
             ),
-            patch(
-                "modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()
-            ),
-            patch("modules.knowledge.entities.corrections._temporal_correction", AsyncMock()),
-            patch("modules.knowledge.entities.corrections.commit_with_replay", AsyncMock()),
+            patch_corrections("_temporal_before_relationships", AsyncMock()),
+            patch_corrections("_temporal_correction", AsyncMock()),
+            patch_corrections("commit_with_replay", AsyncMock()),
             patch("modules.timeline.public.apply_entity_split", AsyncMock(return_value=[])),
             patch("modules.timeline.public.revise_corrected_events", AsyncMock(return_value=[])),
             patch(
@@ -814,15 +811,13 @@ class TestPreviewsAndExecution:
 
         with (
             patch_entity_attr("resolve_canonical_entity_id", AsyncMock(return_value=ent.id)),
-            patch(
-                "modules.knowledge.entities.corrections._locked_closure",
+            patch_corrections(
+                "_locked_closure",
                 AsyncMock(return_value=closure),
             ),
-            patch(
-                "modules.knowledge.entities.corrections._temporal_before_relationships", AsyncMock()
-            ),
-            patch("modules.knowledge.entities.corrections._temporal_correction", AsyncMock()),
-            patch("modules.knowledge.entities.corrections.commit_with_replay", AsyncMock()),
+            patch_corrections("_temporal_before_relationships", AsyncMock()),
+            patch_corrections("_temporal_correction", AsyncMock()),
+            patch_corrections("commit_with_replay", AsyncMock()),
             patch_entity_attr("record_owner_action", AsyncMock()),
             patch(
                 "modules.knowledge.relationships.public.remove_entity_closure",
