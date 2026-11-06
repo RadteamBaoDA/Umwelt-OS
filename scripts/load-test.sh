@@ -12,6 +12,7 @@
 #   LOAD_DURATION_SCALE    scenario length multiplier (default 1; 0.1 for a smoke run)
 #   SLO_LATENCY_SCALE      multiplier on every latency threshold (default 1)
 #   SEED_DOCS              documents uploaded before the run (default 8)
+#   LOAD_TEST_LIMITS       1 layers docker-compose.limits.yml (2 CPU / 8 GiB split, docs/performance-report.md)
 #   K6_IMAGE               override the pinned image
 # The run fails (exit 99, k6's threshold-failure code) when any SLO threshold is crossed.
 set -euo pipefail
@@ -39,6 +40,7 @@ while [[ "$TEST_POSTGRES_PORT" == "$WEB_PORT" || "$TEST_POSTGRES_PORT" == "$API_
 export TEST_PUBLIC_ORIGIN="http://localhost:${WEB_PORT}"
 
 compose=(docker compose -p "$project" -f docker-compose.yml -f docker-compose.test.yml)
+[[ "${LOAD_TEST_LIMITS:-0}" == "1" ]] && compose+=(-f docker-compose.limits.yml)
 cleanup() {
   # Keep the stack's state next to the results: `down` destroys the only evidence of a container that died mid-run.
   "${compose[@]}" ps -a >"$out_dir/compose-ps.txt" 2>&1 || true
