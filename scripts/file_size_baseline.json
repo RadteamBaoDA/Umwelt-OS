@@ -10,7 +10,6 @@
   "modules/connectors/routes.py": 1680,
   "modules/connectors/service/github_hints.py": 1621,
   "modules/connectors/worker.py": 2039,
-  "modules/dashboard/briefs.py": 1722,
   "modules/ingestion/worker.py": 2941,
   "modules/knowledge/documents/worker.py": 1746,
   "modules/knowledge/entities/worker.py": 2034,
