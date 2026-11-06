@@ -311,3 +311,29 @@ Verdict: the hypothesis is supported. Raising cron-worker from 0.1 to 0.3 CPU (p
 Dispatcher cadence (from code): `dispatch_pending_work` runs as a cron safety net every 30 s (`apps/worker/main.py:474`, `CronSpec(dispatch_pending_work, 30, run_at_startup=True)`) and is also woken on commit of every published outbox event (`core/events/publisher.py:79`, `notify_on_commit(session, "dispatch_pending_work")`). Each pass reserves one page of at most 100 outbox identities (`core/events/dispatch.py:208` and `:219`, `.limit(100)`). Queue age therefore has no config-set floor beyond the commit wake; the 30 s period only bounds recovery when a wake is lost, so queue age under load is set by how fast the cron-worker can drain 100-row pages, which is CPU-bound.
 
 Reproduce the passing cron-worker split: `LOAD_TEST_LIMITS=1 scripts/load-test.sh` layers the committed `docker-compose.limits.yml` (api 0.4 CPU / 1.5 GiB, postgres 0.3 / 2.5 GiB, worker 0.4 / 1.5 GiB, chat-worker 0.4 / 1 GiB, model-worker 0.1 / 768 MiB, cron-worker 0.3 / 512 MiB, redis 0.1 / 256 MiB) after `docker-compose.test.yml`. Outside the script: `docker compose -f docker-compose.yml -f docker-compose.limits.yml up -d`. The caps only model the 2 CPU / 8 GiB budget on a larger host; they are not target-host evidence.
+
+#### Reproducibility: 3 runs under docker-compose.limits.yml (2026-11-06, 084f0fc0)
+
+Three consecutive full runs (`LOAD_DURATION_SCALE=1`, `all.js`, fake model, k6 0.57.0) of the committed `docker-compose.limits.yml` split (api 0.4 / 1.5 GiB, postgres 0.3 / 2.5 GiB, worker 0.4 / 1.5 GiB, chat-worker 0.4 / 1 GiB, model-worker 0.1 / 768 MiB, cron-worker 0.3 / 512 MiB, redis 0.1 / 256 MiB) at commit 084f0fc0. Each run used a fresh disposable Compose stack (own project, built and torn down per run). The stock `scripts/load-test.sh` cannot run under Git Bash on this Windows host (`python3` resolves to the Microsoft Store stub, and bind-mount paths need `pwd -W`), so a copy with `python`, `pwd -W` and `MSYS_NO_PATHCONV=1` was used; the Compose layers (`docker-compose.yml`, `docker-compose.test.yml`, `docker-compose.limits.yml`), k6 image and k6 arguments are identical. Run windows (UTC): run 1 14:15:38 to 14:20:22, run 2 14:20:22 to 14:25:05, run 3 14:25:05 to 14:29:41. k6 exit status 0 in all three runs.
+
+| SLO | Metric | Run 1 | Run 2 | Run 3 | Median | Spread (max-min) | Threshold | Result |
+|---|---|---|---|---|---|---|---|---|
+| SLO-1 | `http_req_failed` | 0.00 % | 0.00 % | 0.00 % | 0.00 % | 0.00 % | < 0.5 % | pass |
+| SLO-2a | dashboard p(95) | 56.4 ms | 69.7 ms | 52.7 ms | 56.4 ms | 17.0 ms | p(95) < 400 ms | pass |
+| SLO-2a | dashboard p(99) | 133.1 ms | 166.1 ms | 142.6 ms | 142.6 ms | 33.0 ms | p(99) < 800 ms | pass |
+| SLO-2b | search p(95) | 78.7 ms | 84.6 ms | 78.8 ms | 78.8 ms | 5.9 ms | p(95) < 800 ms | pass |
+| SLO-2b | search p(99) | 269.2 ms | 184.3 ms | 360.4 ms | 269.2 ms | 176.2 ms | p(99) < 1500 ms | pass |
+| SLO-2c | documents p(95) | 65.2 ms | 75.0 ms | 62.6 ms | 65.2 ms | 12.5 ms | p(95) < 300 ms | pass |
+| SLO-2c | documents p(99) | 118.4 ms | 144.3 ms | 162.0 ms | 144.3 ms | 43.5 ms | p(99) < 600 ms | pass |
+| SLO-3 | chat TTFT p95 | 847.2 ms | 962.4 ms | 921.8 ms | 921.8 ms | 115.2 ms | < 2000 ms | pass |
+| SLO-3 | chat TTFT p99 | 1418.3 ms | 1724.4 ms | 1433.9 ms | 1433.9 ms | 306.1 ms | < 4000 ms | pass |
+| SLO-3b | chat send p95 | 113.0 ms | 190.0 ms | 153.0 ms | 153.0 ms | 77.0 ms | < 500 ms | pass |
+| SLO-4 | ingest lag p95 | 3284.4 ms | 2684.6 ms | 2590.6 ms | 2684.6 ms | 693.8 ms | < 30000 ms | pass |
+| SLO-4 | ingest lag p99 | 3363.3 ms | 2904.9 ms | 2824.5 ms | 2904.9 ms | 538.8 ms | < 60000 ms | pass |
+| SLO-5 | SSE open p95 | 97.8 ms | 164.2 ms | 103.4 ms | 103.4 ms | 66.4 ms | < 500 ms | pass |
+| SLO-6 | ingest queue age p95 | 2684.2 ms | 2668.1 ms | 2567.4 ms | 2668.1 ms | 116.7 ms | < 5000 ms | pass |
+| SLO-7 | checks | 100.00 % | 100.00 % | 100.00 % | 100.00 % | 0.00 pp | > 99 % | pass |
+
+All three runs met every SLO threshold; no run failed. Dashboards, search and documents latencies are the `http_req_duration{endpoint:...}` sub-metrics. Largest relative spreads are in tail percentiles (search p99 184 to 360 ms, chat send p95 113 to 190 ms, ingest lag p95 2.6 to 3.3 s), all far inside thresholds. Ingest queue age p95 (the SLO that failed in the earlier splits) was 2.57 to 2.68 s, a 116 ms spread, with at least 1.9x headroom under the 5 s threshold.
+
+Host notes: Windows 11 Pro development machine, Docker Desktop (WSL2) reporting 14 CPUs and about 31.1 GiB (33370607616 bytes) to the Docker engine. The containers were capped to the 2 CPU / ~8 GiB split above; the k6 container was uncapped and ran on the same host. Other load: the long-lived `umwelt-os-*` dev stack (redis, postgres, graph) was running idle (about 0 to 1 % CPU) and an editor session was open; no other test stacks were running. Host CPU load was not sampled during the runs, and no `docker stats` samples were taken. Not target-host evidence: the caps only model the 2 CPU / 8 GiB budget on a larger host.
