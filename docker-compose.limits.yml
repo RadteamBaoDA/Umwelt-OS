@@ -1,0 +1,13 @@
+# Optional CPU/memory caps modelling the 2 CPU / 8 GiB SLO target on a larger host (docs/performance-report.md,
+# "Cron-worker split"). Not part of the default stack; layer it last:
+#   docker compose -f docker-compose.yml -f docker-compose.limits.yml up -d
+# or for the load test: LOAD_TEST_LIMITS=1 scripts/load-test.sh
+# Cron-worker split 2 CPU / ~8 GiB: api .4/1.5g pg .3/2.5g worker .4/1.5g chat .4/1g model .1/.75g cron .3/.5g redis .1/.25g
+services:
+  api:          {deploy: {resources: {limits: {cpus: "0.4", memory: 1536M}}}}
+  postgres:     {deploy: {resources: {limits: {cpus: "0.3", memory: 2560M}}}}
+  worker:       {deploy: {resources: {limits: {cpus: "0.4", memory: 1536M}}}}
+  chat-worker:  {deploy: {resources: {limits: {cpus: "0.4", memory: 1024M}}}}
+  model-worker: {deploy: {resources: {limits: {cpus: "0.1", memory: 768M}}}}
+  cron-worker:  {deploy: {resources: {limits: {cpus: "0.3", memory: 512M}}}}
+  redis:        {deploy: {resources: {limits: {cpus: "0.1", memory: 256M}}}}

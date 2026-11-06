@@ -31,6 +31,8 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     env_file: .env
+    # Shares the dedicated `storage` network with the optional rustfs service (profile s3).
+    networks: [default, storage]
     init: true
     volumes:
       - app-data:/data
@@ -63,6 +65,8 @@ services:
       dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.WorkerSettings"]
     env_file: .env
+    # Shares the dedicated `storage` network with the optional rustfs service (profile s3).
+    networks: [default, storage]
     healthcheck:
       test: ["CMD", "python", "-m", "core.worker_healthcheck", "bbd:worker:health"]
       interval: 30s
@@ -96,6 +100,8 @@ services:
       dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.CronWorkerSettings"]
     env_file: .env
+    # Shares the dedicated `storage` network with the optional rustfs service (profile s3).
+    networks: [default, storage]
     healthcheck:
       test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:cron:health-check"]
       interval: 30s

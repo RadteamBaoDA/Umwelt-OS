@@ -389,6 +389,7 @@ async def _arm_coverage_event(
             event_id,
             "pending",
             next_attempt_at=now,
+            from_statuses=("delivered", "failed"),  # deliberate reopen of a terminal coverage event
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
         )

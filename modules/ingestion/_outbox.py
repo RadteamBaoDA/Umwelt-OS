@@ -1,5 +1,6 @@
 """Outbox delivery, ready-event reads, normalization scheduling and cleanup-event settlement (internal)."""
 
+from collections.abc import Collection
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -550,13 +551,17 @@ async def set_event_delivery(
     status: Literal["failed", "pending", "delivered"],
     *,
     next_attempt_at: datetime | None = None,
+    from_statuses: Collection[str] = ("pending", "queued"),
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> bool:
-    """Update exact scoped outbox status/retry time without earlier locks or commit.
+    """Compare-and-set exact scoped outbox status/retry time without earlier locks or commit.
 
     Caller holds ordered admission/domain locks; nonlocking revision revalidation
-    cannot rebase a retained epoch. Foreign rows return False.
+    cannot rebase a retained epoch. The row only transitions from ``from_statuses`` (default the
+    non-terminal ``pending``/``queued``), so a stale or duplicate call cannot overwrite a terminal
+    ``delivered``/``failed`` status; deliberate reopen callers pass the terminal statuses explicitly.
+    Foreign rows and rows not in an expected prior status return False (no write).
     """
     await _admit_ingestion_scope(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled
@@ -566,7 +571,11 @@ async def set_event_delivery(
         values["next_attempt_at"] = next_attempt_at
     result = await session.execute(
         update(EventOutbox)
-        .where(EventOutbox.id == event_id, *_event_scope(scope))
+        .where(
+            EventOutbox.id == event_id,
+            EventOutbox.status.in_(tuple(from_statuses)),
+            *_event_scope(scope),
+        )
         .values(**values)
         .returning(EventOutbox.id)
     )

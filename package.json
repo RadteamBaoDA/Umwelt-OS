@@ -8,6 +8,9 @@
     "postcss": "^8.5.28",
     "next": {
       "postcss": "^8.5.28"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
     }
   },
   "scripts": {
