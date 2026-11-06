@@ -443,6 +443,170 @@ async def _settle_operation(
     return progress.active_copy_work
 
 
+async def _deliver_and_commit(
+    session: AsyncSession,
+    event_id: UUID,
+    drafts: list[ReplayDraft],
+    *,
+    scope: InternalJobScope,
+    flag: bool,
+    access_fence: AccessFence,
+) -> None:
+    """Mark the purge event delivered and commit the drafts with the replay in one transaction.
+
+    The caller has already locked the operation and verified the delivery is still the queued
+    dispatch it captured; this only terminates the event and publishes ``drafts``. Used by every
+    terminal failure path so delivery status and operation status commit atomically.
+    """
+    await ingestion.set_event_delivery(
+        session, event_id, "delivered", scope=scope, multi_workspace_enabled=flag
+    )
+    await commit_with_replay(
+        session, drafts, scope=scope, multi_workspace_enabled=flag, access_fence=access_fence
+    )
+
+
+async def _verified_purge_source(
+    session: AsyncSession,
+    event_id: UUID,
+    source: Source | None,
+    operation: SourcePurgeOperation,
+    *,
+    scope: InternalJobScope,
+    flag: bool,
+    access_fence: AccessFence,
+) -> Source | None:
+    """Return the Source to purge, or fail the purge and return ``None`` when it cannot proceed.
+
+    Runs after the operation and delivery rows are locked and the queued dispatch is verified, so
+    the status writes here are safe. On a generation change Documents is marked failed unless it
+    was already unavailable. Returns ``None`` after committing the terminal failure and delivering
+    the event; otherwise returns ``source`` (now known non-null) so the purge continues.
+    """
+    operation_id = operation.id
+    if source is None or source.generation != operation.generation:
+        operation.status = "failed"
+        if operation.documents_status != "unavailable":
+            operation.documents_status = "failed"
+            operation.error_code = "source_generation_changed"
+            operation.pending_owner_codes = ["documents"]
+        await _deliver_and_commit(
+            session,
+            event_id,
+            _source_drafts(source, operation_id, scope),
+            scope=scope,
+            flag=flag,
+            access_fence=access_fence,
+        )
+        return None
+    if operation.documents_status in {"failed", "unavailable"}:
+        operation.status = "failed"
+        operation.error_code = operation.error_code or "evidence_identity_unavailable"
+        await _deliver_and_commit(
+            session,
+            event_id,
+            _source_drafts(source, operation_id, scope),
+            scope=scope,
+            flag=flag,
+            access_fence=access_fence,
+        )
+        return None
+    return source
+
+
+async def _delete_source_documents_or_fail(
+    session: AsyncSession,
+    event_id: UUID,
+    source: Source,
+    operation: SourcePurgeOperation,
+    source_fence: SourceFence,
+    drafts: list[ReplayDraft],
+    *,
+    scope: InternalJobScope,
+    flag: bool,
+    access_fence: AccessFence,
+) -> list[ReplayDraft] | None:
+    """Delete the Source's documents in this unit of work, or fail the operation at a known limit.
+
+    Returns the timeline drafts to publish on success. When Documents reports its cleanup
+    dependency limit or the atomic document limit, the operation is failed with the matching error
+    code, the event delivered and ``drafts`` committed, and ``None`` tells the caller to stop. Any
+    other error propagates untouched.
+    """
+    try:
+        return list(
+            await documents.delete_source_documents_in_uow(
+                session,
+                source.id,
+                source_purge_operation_id=operation.id,
+                scope=scope,
+                multi_workspace_enabled=flag,
+                access_fence=access_fence,
+                source_fence=source_fence,
+            )
+        )
+    except documents.DocumentCleanupPreparationLimitError:
+        error_code = "source_cleanup_dependency_limit_exceeded"
+    except ValueError as exc:
+        if str(exc) != "Source graph cleanup exceeds its atomic document limit":
+            raise
+        error_code = "source_document_limit_exceeded"
+    operation.documents_status = "failed"
+    operation.status = "failed"
+    operation.error_code = error_code
+    operation.pending_owner_codes = ["documents"]
+    await _deliver_and_commit(
+        session, event_id, drafts, scope=scope, flag=flag, access_fence=access_fence
+    )
+    return None
+
+
+async def _settle_and_commit_purge(
+    session: AsyncSession,
+    event_id: UUID,
+    operation: SourcePurgeOperation,
+    drafts: list[ReplayDraft],
+    *,
+    scope: InternalJobScope,
+    flag: bool,
+    access_fence: AccessFence,
+) -> None:
+    """Settle the operation, schedule or finish the delivery, arm coverage and commit once.
+
+    While copy work is active on a running operation the event goes back to ``pending`` after the
+    continuation delay; otherwise it is delivered. Memory coverage is armed when Memory is neither
+    complete nor durably unavailable. Delivery, coverage and ``drafts`` commit atomically; the
+    caller already holds the operation and delivery locks and verified the queued dispatch.
+    """
+    active_copy_work = await _settle_operation(
+        session, operation, scope=scope, multi_workspace_enabled=flag
+    )
+    if operation.status == "running" and active_copy_work:
+        await ingestion.set_event_delivery(
+            session,
+            event_id,
+            "pending",
+            next_attempt_at=datetime.now(UTC) + _CONTINUATION_DELAY,
+            scope=scope,
+            multi_workspace_enabled=flag,
+        )
+    else:
+        await ingestion.set_event_delivery(
+            session, event_id, "delivered", scope=scope, multi_workspace_enabled=flag
+        )
+    if not _memory_complete(operation) and not _memory_unavailable(operation):
+        await _arm_coverage_event(
+            session,
+            operation.id,
+            now=datetime.now(UTC),
+            scope=scope,
+            multi_workspace_enabled=flag,
+        )
+    await commit_with_replay(
+        session, drafts, scope=scope, multi_workspace_enabled=flag, access_fence=access_fence
+    )
+
+
 async def process_source_purge(ctx: dict[str, object], event_id: str) -> None:
     """Delete canonical Source content once under exact durable scope/generation/claim.
 
@@ -491,83 +655,32 @@ async def process_source_purge(ctx: dict[str, object], event_id: str) -> None:
             or event.dispatched_at != captured_delivery.dispatched_at
         ):
             return
-        if source is None or source.generation != operation.generation:
-            operation.status = "failed"
-            if operation.documents_status != "unavailable":
-                operation.documents_status = "failed"
-                operation.error_code = "source_generation_changed"
-                operation.pending_owner_codes = ["documents"]
-            await ingestion.set_event_delivery(
-                session, identifier, "delivered", scope=scope, multi_workspace_enabled=flag
-            )
-            await commit_with_replay(
-                session,
-                _source_drafts(source, operation_id, scope),
-                scope=scope,
-                multi_workspace_enabled=flag,
-                access_fence=access_fence,
-            )
-            return
-        if operation.documents_status in {"failed", "unavailable"}:
-            operation.status = "failed"
-            operation.error_code = operation.error_code or "evidence_identity_unavailable"
-            await ingestion.set_event_delivery(
-                session, identifier, "delivered", scope=scope, multi_workspace_enabled=flag
-            )
-            await commit_with_replay(
-                session,
-                _source_drafts(source, operation_id, scope),
-                scope=scope,
-                multi_workspace_enabled=flag,
-                access_fence=access_fence,
-            )
+        source = await _verified_purge_source(
+            session,
+            identifier,
+            source,
+            operation,
+            scope=scope,
+            flag=flag,
+            access_fence=access_fence,
+        )
+        if source is None:
             return
         drafts = _source_drafts(source, operation_id, scope)
         source_fence = _source_fence(source)
         if operation.documents_status == "queued":
-            try:
-                timeline_drafts = await documents.delete_source_documents_in_uow(
-                    session,
-                    source.id,
-                    source_purge_operation_id=operation.id,
-                    scope=scope,
-                    multi_workspace_enabled=flag,
-                    access_fence=access_fence,
-                    source_fence=source_fence,
-                )
-            except documents.DocumentCleanupPreparationLimitError:
-                operation.documents_status = "failed"
-                operation.status = "failed"
-                operation.error_code = "source_cleanup_dependency_limit_exceeded"
-                operation.pending_owner_codes = ["documents"]
-                await ingestion.set_event_delivery(
-                    session, identifier, "delivered", scope=scope, multi_workspace_enabled=flag
-                )
-                await commit_with_replay(
-                    session,
-                    drafts,
-                    scope=scope,
-                    multi_workspace_enabled=flag,
-                    access_fence=access_fence,
-                )
-                return
-            except ValueError as exc:
-                if str(exc) != "Source graph cleanup exceeds its atomic document limit":
-                    raise
-                operation.documents_status = "failed"
-                operation.status = "failed"
-                operation.error_code = "source_document_limit_exceeded"
-                operation.pending_owner_codes = ["documents"]
-                await ingestion.set_event_delivery(
-                    session, identifier, "delivered", scope=scope, multi_workspace_enabled=flag
-                )
-                await commit_with_replay(
-                    session,
-                    drafts,
-                    scope=scope,
-                    multi_workspace_enabled=flag,
-                    access_fence=access_fence,
-                )
+            timeline_drafts = await _delete_source_documents_or_fail(
+                session,
+                identifier,
+                source,
+                operation,
+                source_fence,
+                drafts,
+                scope=scope,
+                flag=flag,
+                access_fence=access_fence,
+            )
+            if timeline_drafts is None:
                 return
             operation.documents_status = "deleted"
             await ingestion.cancel_and_purge_source_ingestion(
@@ -581,33 +694,77 @@ async def process_source_purge(ctx: dict[str, object], event_id: str) -> None:
             drafts.extend(
                 [make_knowledge_change(source.id, deleted=True, scope=scope), *timeline_drafts]
             )
-        active_copy_work = await _settle_operation(
-            session, operation, scope=scope, multi_workspace_enabled=flag
+        await _settle_and_commit_purge(
+            session,
+            identifier,
+            operation,
+            drafts,
+            scope=scope,
+            flag=flag,
+            access_fence=access_fence,
         )
-        if operation.status == "running" and active_copy_work:
-            await ingestion.set_event_delivery(
-                session,
-                identifier,
-                "pending",
-                next_attempt_at=datetime.now(UTC) + _CONTINUATION_DELAY,
-                scope=scope,
-                multi_workspace_enabled=flag,
-            )
-        else:
-            await ingestion.set_event_delivery(
-                session, identifier, "delivered", scope=scope, multi_workspace_enabled=flag
-            )
-        if not _memory_complete(operation) and not _memory_unavailable(operation):
-            await _arm_coverage_event(
-                session,
-                operation.id,
-                now=datetime.now(UTC),
-                scope=scope,
-                multi_workspace_enabled=flag,
-            )
-        await commit_with_replay(
-            session, drafts, scope=scope, multi_workspace_enabled=flag, access_fence=access_fence
-        )
+
+
+async def _lock_pending_cache_eviction(
+    session: AsyncSession,
+    operation_id: UUID,
+    event_id: UUID,
+    *,
+    scope: InternalJobScope,
+    multi_workspace_enabled: bool,
+    dispatched_at: datetime,
+    attempt: tuple[object, ...],
+    access_fence: AccessFence,
+) -> tuple[Source, SourcePurgeOperation, AccessFence] | None:
+    """Admit, lock and re-verify the pending cache-eviction stage; ``None`` when it was superseded.
+
+    Order: coverage-event admission under ``access_fence``, operation (Memory phase) lock, delivery
+    lock, then the exact checks: pending delivery with the original ``dispatched_at``, unchanged
+    Source generation, the ``attempt`` Memory snapshot and the durable cache-pending marker. Any
+    mismatch means a newer dispatch or snapshot owns the stage, so the caller must do nothing.
+    Returns the locked Source, operation and the freshly admitted fence.
+    """
+    admitted = await _admit_event(
+        session,
+        event_id,
+        multi_workspace_enabled=multi_workspace_enabled,
+        event_types=_COVERAGE_EVENTS,
+        expected_scope=scope,
+        expected_fence=access_fence,
+    )
+    if admitted is None or admitted[0] != operation_id:
+        return None
+    _, _, access_fence, captured_delivery = admitted
+    if captured_delivery.status != "pending" or captured_delivery.dispatched_at != dispatched_at:
+        return None
+    source, operation = await _lock_operation(
+        session,
+        operation_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        access_fence=access_fence,
+        memory_phase=True,
+    )
+    event = await _lock_delivery(
+        session,
+        event_id,
+        operation_id,
+        scope=scope,
+        multi_workspace_enabled=multi_workspace_enabled,
+        event_types=_COVERAGE_EVENTS,
+    )
+    if (
+        operation is None
+        or source is None
+        or source.generation != scope.source_generation
+        or event is None
+        or event.status != "pending"
+        or event.dispatched_at != dispatched_at
+        or _memory_snapshot(operation) != attempt
+        or not operation.memory_cache_pending
+    ):
+        return None
+    return source, operation, access_fence
 
 
 async def _evict_memory_cache_after_commit(
@@ -629,49 +786,19 @@ async def _evict_memory_cache_after_commit(
     operation/delivery transactions before Redis. Failure leaves durable marker for retry.
     """
     async with factory() as session:
-        admitted = await _admit_event(
-            session,
-            event_id,
-            multi_workspace_enabled=multi_workspace_enabled,
-            event_types=_COVERAGE_EVENTS,
-            expected_scope=scope,
-            expected_fence=access_fence,
-        )
-        if admitted is None or admitted[0] != operation_id:
-            return
-        _, _, access_fence, captured_delivery = admitted
-        if (
-            captured_delivery.status != "pending"
-            or captured_delivery.dispatched_at != dispatched_at
-        ):
-            return
-        source, operation = await _lock_operation(
+        locked = await _lock_pending_cache_eviction(
             session,
             operation_id,
+            event_id,
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
+            dispatched_at=dispatched_at,
+            attempt=attempt,
             access_fence=access_fence,
-            memory_phase=True,
         )
-        event = await _lock_delivery(
-            session,
-            event_id,
-            operation_id,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-            event_types=_COVERAGE_EVENTS,
-        )
-        if (
-            operation is None
-            or source is None
-            or source.generation != scope.source_generation
-            or event is None
-            or event.status != "pending"
-            or event.dispatched_at != dispatched_at
-            or _memory_snapshot(operation) != attempt
-            or not operation.memory_cache_pending
-        ):
+        if locked is None:
             return
+        _, _, access_fence = locked
         await session.rollback()
     try:
         await memory.invalidate_memory_cache(redis, scope=scope)
@@ -679,49 +806,19 @@ async def _evict_memory_cache_after_commit(
         logger.warning("Source Memory cache eviction deferred (%s)", type(exc).__name__)
         return
     async with factory() as session:
-        admitted = await _admit_event(
-            session,
-            event_id,
-            multi_workspace_enabled=multi_workspace_enabled,
-            event_types=_COVERAGE_EVENTS,
-            expected_scope=scope,
-            expected_fence=access_fence,
-        )
-        if admitted is None or admitted[0] != operation_id:
-            return
-        _, _, access_fence, captured_delivery = admitted
-        if (
-            captured_delivery.status != "pending"
-            or captured_delivery.dispatched_at != dispatched_at
-        ):
-            return
-        source, operation = await _lock_operation(
+        locked = await _lock_pending_cache_eviction(
             session,
             operation_id,
+            event_id,
             scope=scope,
             multi_workspace_enabled=multi_workspace_enabled,
+            dispatched_at=dispatched_at,
+            attempt=attempt,
             access_fence=access_fence,
-            memory_phase=True,
         )
-        event = await _lock_delivery(
-            session,
-            event_id,
-            operation_id,
-            scope=scope,
-            multi_workspace_enabled=multi_workspace_enabled,
-            event_types=_COVERAGE_EVENTS,
-        )
-        if (
-            operation is None
-            or source is None
-            or source.generation != scope.source_generation
-            or event is None
-            or event.status != "pending"
-            or event.dispatched_at != dispatched_at
-            or _memory_snapshot(operation) != attempt
-            or not operation.memory_cache_pending
-        ):
+        if locked is None:
             return
+        source, operation, access_fence = locked
         operation.memory_cache_pending = False
         await _settle_operation(
             session, operation, scope=scope, multi_workspace_enabled=multi_workspace_enabled
@@ -819,6 +916,126 @@ async def _memory_coverage_step(
     return next_attempt_at
 
 
+async def _lock_queued_coverage(
+    session: AsyncSession,
+    event_id: UUID,
+    operation_id: UUID,
+    captured_delivery: EventDelivery,
+    *,
+    scope: InternalJobScope,
+    flag: bool,
+    access_fence: AccessFence,
+) -> tuple[Source | None, SourcePurgeOperation, datetime | None] | None:
+    """Lock the Memory-phase operation then the coverage delivery and re-verify the queued dispatch.
+
+    Returns ``(source, operation, dispatched_at)`` only while the delivery is still ``queued`` with
+    the ``dispatched_at`` captured at admission; a missing operation, delivery or any change means
+    another worker owns the stage and the caller must stop. Takes locks in operation, delivery
+    order under the already-held admission.
+    """
+    source, operation = await _lock_operation(
+        session,
+        operation_id,
+        scope=scope,
+        multi_workspace_enabled=flag,
+        access_fence=access_fence,
+        memory_phase=True,
+    )
+    if operation is None:
+        return None
+    event = await _lock_delivery(
+        session,
+        event_id,
+        operation_id,
+        scope=scope,
+        multi_workspace_enabled=flag,
+        event_types=_COVERAGE_EVENTS,
+    )
+    if (
+        event is None
+        or event.status != "queued"
+        or event.dispatched_at != captured_delivery.dispatched_at
+    ):
+        return None
+    return source, operation, event.dispatched_at
+
+
+def _operation_marker(
+    operation: SourcePurgeOperation, snapshot: tuple[object, ...]
+) -> tuple[object, ...]:
+    """Capture the operation fields whose change requires a replay commit, plus a Memory snapshot.
+
+    Compared before and after a coverage step so an idle retry (no change, no continuation) can
+    commit without publishing a replay. Pure; copies the owner-code list so later mutation cannot
+    alias the earlier marker.
+    """
+    return (
+        operation.status,
+        operation.error_code,
+        operation.pending_child_count,
+        operation.failed_child_count,
+        list(operation.pending_owner_codes or []),
+        snapshot,
+    )
+
+
+def _is_invalid_cursor_error(exc: Exception) -> bool:
+    """Return whether ``exc`` means the stored Memory continuation cursor must be reset."""
+    return isinstance(exc, _MalformedMemoryCursorError) or (
+        isinstance(exc, ValueError) and str(exc) == "Source Memory cleanup cursor is invalid"
+    )
+
+
+async def _apply_coverage_step(
+    session: AsyncSession,
+    event_id: UUID,
+    operation: SourcePurgeOperation,
+    source: Source | None,
+    operation_id: UUID,
+    attempt: tuple[object, ...],
+    *,
+    scope: InternalJobScope,
+    flag: bool,
+    access_fence: AccessFence,
+) -> tuple[UUID, tuple[object, ...]] | None:
+    """Run one Memory coverage step and commit its scrub, cursor, delivery and replay atomically.
+
+    The caller holds the operation and delivery locks and has verified the queued dispatch.
+    The event goes back to ``pending`` when the step asks for a continuation, else it is delivered.
+    An idle step (no continuation and no observable change) commits without a replay. Returns the
+    operation id and Memory snapshot to evict from the cache after commit, or ``None`` when no
+    eviction is due.
+    """
+    eviction: tuple[UUID, tuple[object, ...]] | None = None
+    before = _operation_marker(operation, attempt)
+    next_attempt_at = await _memory_coverage_step(
+        session, operation, source, scope=scope, access_fence=access_fence, flag=flag
+    )
+    await _settle_operation(session, operation, scope=scope, multi_workspace_enabled=flag)
+    await ingestion.set_event_delivery(
+        session,
+        event_id,
+        "pending" if next_attempt_at is not None else "delivered",
+        next_attempt_at=next_attempt_at,
+        scope=scope,
+        multi_workspace_enabled=flag,
+    )
+    if operation.memory_cache_pending and next_attempt_at is not None:
+        eviction = operation.id, _memory_snapshot(operation)
+    after = _operation_marker(operation, _memory_snapshot(operation))
+    if next_attempt_at is None and before == after:
+        await session.commit()
+        return eviction
+    await commit_with_replay(
+        session,
+        _source_drafts(source, operation_id, scope),
+        scope=scope,
+        multi_workspace_enabled=flag,
+        access_fence=access_fence,
+    )
+    return eviction
+
+
 async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) -> None:
     """Sweep <=100 Source-local Memory copies per exact admitted delivery.
 
@@ -850,31 +1067,18 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
                 captured_delivery.dispatched_at, datetime
             ):
                 return
-            source, operation = await _lock_operation(
-                session,
-                operation_id,
-                scope=scope,
-                multi_workspace_enabled=flag,
-                access_fence=access_fence,
-                memory_phase=True,
-            )
-            if operation is None:
-                return
-            event = await _lock_delivery(
+            locked = await _lock_queued_coverage(
                 session,
                 identifier,
                 operation_id,
+                captured_delivery,
                 scope=scope,
-                multi_workspace_enabled=flag,
-                event_types=_COVERAGE_EVENTS,
+                flag=flag,
+                access_fence=access_fence,
             )
-            if (
-                event is None
-                or event.status != "queued"
-                or event.dispatched_at != captured_delivery.dispatched_at
-            ):
+            if locked is None:
                 return
-            dispatched_at = event.dispatched_at
+            source, operation, dispatched_at = locked
             if operation.documents_status != "deleted":
                 await ingestion.set_event_delivery(
                     session, identifier, "delivered", scope=scope, multi_workspace_enabled=flag
@@ -882,44 +1086,15 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
                 await session.commit()
                 return
             attempt = _memory_snapshot(operation)
-            before = (
-                operation.status,
-                operation.error_code,
-                operation.pending_child_count,
-                operation.failed_child_count,
-                list(operation.pending_owner_codes or []),
-                attempt,
-            )
-            next_attempt_at = await _memory_coverage_step(
-                session, operation, source, scope=scope, access_fence=access_fence, flag=flag
-            )
-            await _settle_operation(session, operation, scope=scope, multi_workspace_enabled=flag)
-            await ingestion.set_event_delivery(
+            eviction = await _apply_coverage_step(
                 session,
                 identifier,
-                "pending" if next_attempt_at is not None else "delivered",
-                next_attempt_at=next_attempt_at,
+                operation,
+                source,
+                operation_id,
+                attempt,
                 scope=scope,
-                multi_workspace_enabled=flag,
-            )
-            if operation.memory_cache_pending and next_attempt_at is not None:
-                eviction = operation.id, _memory_snapshot(operation)
-            after = (
-                operation.status,
-                operation.error_code,
-                operation.pending_child_count,
-                operation.failed_child_count,
-                list(operation.pending_owner_codes or []),
-                _memory_snapshot(operation),
-            )
-            if next_attempt_at is None and before == after:
-                await session.commit()
-                return
-            await commit_with_replay(
-                session,
-                _source_drafts(source, operation_id, scope),
-                scope=scope,
-                multi_workspace_enabled=flag,
+                flag=flag,
                 access_fence=access_fence,
             )
         if (
@@ -944,14 +1119,7 @@ async def process_source_memory_coverage(ctx: dict[str, object], event_id: str) 
         raise
     except Exception as exc:  # noqa: BLE001  # coverage failure is recorded and recovered below; the worker must not crash
         logger.warning("Source Memory coverage deferred (%s)", type(exc).__name__)
-        reset_cursor = (
-            reset_cursor
-            or isinstance(exc, _MalformedMemoryCursorError)
-            or (
-                isinstance(exc, ValueError)
-                and str(exc) == "Source Memory cleanup cursor is invalid"
-            )
-        )
+        reset_cursor = reset_cursor or _is_invalid_cursor_error(exc)
         await _recover_memory_coverage(
             factory,
             identifier,

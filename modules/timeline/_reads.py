@@ -382,7 +382,7 @@ def _correlation_statement(
     end: datetime,
     regions: list[str],
     selected_sources: set[UUID],
-) -> Select[tuple[Event]]:
+) -> Select[Event]:
     """Build the bounded candidate query for correlation signals (limit 1001 to sense truncation).
 
     Only timed, live events of ``domain`` inside ``[start, end)`` whose recorded region is listed and
@@ -547,7 +547,7 @@ async def list_correlation_signals(
     return CorrelationSignalPage(items=signals[:limit], truncated=truncated)
 
 
-def _partition_base_statement(query: TimelineQuery, scope: Scope) -> Select[tuple[Event]]:
+def _partition_base_statement(query: TimelineQuery, scope: Scope) -> Select[Event]:
     """Return the partition-independent timeline query: live, evidence-or-manual events plus filters.
 
     Applies workspace scope, the manual-or-evidenced visibility rule, and the optional source,

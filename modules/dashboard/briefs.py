@@ -42,9 +42,7 @@ from modules.dashboard._brief_evidence import (
     MAX_PROMPT_TITLE as MAX_PROMPT_TITLE,
 )
 from modules.dashboard._brief_evidence import (
-    _captured_inputs_match,
-    _prompt_fact_digest,
-    _prompt_title,
+    _captured_inputs_match as _captured_inputs_match,
 )
 from modules.dashboard._brief_evidence import (
     _captured_support_eligible as _captured_support_eligible,
@@ -54,6 +52,10 @@ from modules.dashboard._brief_evidence import (
 )
 from modules.dashboard._brief_evidence import (
     _load_evidence_groups as _load_evidence_groups,
+)
+from modules.dashboard._brief_evidence import (
+    _prompt_fact_digest,
+    _prompt_title,
 )
 from modules.dashboard._brief_evidence import (
     _validate_citations as _validate_citations,
