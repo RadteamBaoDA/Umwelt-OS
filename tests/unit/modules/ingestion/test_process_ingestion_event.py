@@ -15,6 +15,8 @@ from sqlalchemy.exc import OperationalError
 from core.workspaces.schemas import InternalJobScope
 from modules.ingestion import worker
 
+from .patching import patch_worker
+
 RUN_ID = uuid4()
 STAGE_ID = uuid4()
 # Leases are computed from the real clock at use time: the worker compares them against datetime.now(UTC).
@@ -95,13 +97,13 @@ class Env:
                 raise env.collect_error
 
         self.collect_error: BaseException | None = None
-        monkeypatch.setattr(worker, "_lock_worker_event", lock)
-        monkeypatch.setattr(worker, "_ingestion_enabled", enabled)
-        monkeypatch.setattr(worker, "_capture_worker_claim", lambda work: env.claim)
-        monkeypatch.setattr(worker, "_commit_ingestion_change", commit)
-        monkeypatch.setattr(worker, "_fail_ingestion_stage", fail)
-        monkeypatch.setattr(worker, "_collect_web_job", collect)
-        monkeypatch.setattr(worker, "_refresh_run_status", refresh)
+        patch_worker(monkeypatch, "_lock_worker_event", lock)
+        patch_worker(monkeypatch, "_ingestion_enabled", enabled)
+        patch_worker(monkeypatch, "_capture_worker_claim", lambda work: env.claim)
+        patch_worker(monkeypatch, "_commit_ingestion_change", commit)
+        patch_worker(monkeypatch, "_fail_ingestion_stage", fail)
+        patch_worker(monkeypatch, "_collect_web_job", collect)
+        patch_worker(monkeypatch, "_refresh_run_status", refresh)
         monkeypatch.setattr(worker.ingestion_api, "mark_event_delivered", delivered)
         monkeypatch.setattr(worker.sources, "record_collection_result_in_uow", result)
         monkeypatch.setattr(worker.connectors, "is_native_provider", lambda provider: native)
@@ -143,7 +145,7 @@ async def test_crawl_event_claims_runs_and_completes(monkeypatch):
             env.stage.status = "running"
         return env.work
 
-    monkeypatch.setattr(worker, "_lock_worker_event", lock)
+    patch_worker(monkeypatch, "_lock_worker_event", lock)
     await env.run_event()
     assert env.log == [
         ("lock", False),
@@ -173,7 +175,7 @@ async def test_missing_observations_fail_the_stage_after_rollback(monkeypatch):
             env.stage.lease_expires_at = datetime.now(UTC) + timedelta(minutes=1)
         return env.work
 
-    monkeypatch.setattr(worker, "_lock_worker_event", lock)
+    patch_worker(monkeypatch, "_lock_worker_event", lock)
     await env.run_event()
     assert env.log[-2:] == ["rollback", ("fail", "missing_observations")]
 
@@ -254,7 +256,7 @@ async def test_retry_budget_spent_during_failure_settles_instead_of_retrying(mon
             env.stage.attempts = worker.MAX_STAGE_ATTEMPTS
         return env.work
 
-    monkeypatch.setattr(worker, "_lock_worker_event", lock)
+    patch_worker(monkeypatch, "_lock_worker_event", lock)
     await env.run_event()
     assert env.log[-2:] == ["rollback", ("fail", "retry_exhausted")]
 
@@ -279,7 +281,7 @@ async def test_lost_claim_stops_silently_at_each_phase(monkeypatch):
         calls["n"] += 1
         return env.work if kw.get("expected") is None else None
 
-    monkeypatch.setattr(worker, "_lock_worker_event", lock)
+    patch_worker(monkeypatch, "_lock_worker_event", lock)
     await env.run_event()  # retry phase: work None -> returns without raising Retry
     env.collect_error = None
     await env.run_event()  # completion phase: work None -> returns

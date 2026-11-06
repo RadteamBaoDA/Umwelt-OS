@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import pytest
 from arq import Retry
+from fastapi import HTTPException
 from sqlalchemy.exc import OperationalError
 
 from core.workspaces.schemas import InternalJobScope
@@ -24,6 +25,8 @@ from modules.ingestion import worker
 from modules.ingestion.schemas import IngestionRecord
 from modules.knowledge.documents import public as documents
 from modules.knowledge.documents.schemas import ProviderRecordMetadata
+
+from .patching import patch_worker
 
 NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 SOURCE_ID = uuid4()
@@ -255,19 +258,19 @@ class Env:
             env.events.append(("retry_lock", kw["expected"]))
             return env.retry_work
 
-        mp.setattr(worker, "_lock_worker_event", lock_worker_event)
-        mp.setattr(worker, "_ingestion_enabled", enabled)
-        mp.setattr(worker, "_capture_worker_claim", lambda work: CLAIM)
-        mp.setattr(worker, "_commit_ingestion_change", commit)
-        mp.setattr(worker, "_lock_normalization_retry_event", retry_lock)
+        patch_worker(mp, "_lock_worker_event", lock_worker_event)
+        patch_worker(mp, "_ingestion_enabled", enabled)
+        patch_worker(mp, "_capture_worker_claim", lambda work: CLAIM)
+        patch_worker(mp, "_commit_ingestion_change", commit)
+        patch_worker(mp, "_lock_normalization_retry_event", retry_lock)
         mp.setattr(worker.ingestion_api, "mark_event_delivered", delivered)
         mp.setattr(worker.ingestion_api, "publish_event", publish)
         mp.setattr(worker.documents, "upsert_normalized_document_in_uow", upsert)
         mp.setattr(worker.sources, "record_processing_result_in_uow", processing_result)
         mp.setattr(worker.connectors, "is_native_provider", lambda provider: native)
         mp.setattr(worker.connectors, "get_current_provider_scope", provider_scope)
-        mp.setattr(
-            worker,
+        patch_worker(
+            mp,
             "count",
             lambda name, value, **labels: env.counts_logged.append(
                 (name, value, labels["outcome"])
@@ -319,7 +322,7 @@ async def test_missing_work_or_disabled_module_returns_without_effects(monkeypat
     async def none(*_a, **_k):
         return None
 
-    monkeypatch.setattr(worker, "_lock_worker_event", none)
+    patch_worker(monkeypatch, "_lock_worker_event", none)
     await env.run_event()
     assert env.events == [] and env.counts_logged == []
 
@@ -428,15 +431,15 @@ async def test_lost_retry_admission_and_database_errors_are_swallowed(monkeypatc
     assert env.events[-1][0] == "retry_lock"
 
     async def lost(*_a, **_k):
-        raise worker.HTTPException(status_code=409, detail="x")
+        raise HTTPException(status_code=409, detail="x")
 
-    monkeypatch.setattr(worker, "_lock_normalization_retry_event", lost)
+    patch_worker(monkeypatch, "_lock_normalization_retry_event", lost)
     await env.run_event()
 
     async def broken(*_a, **_k):
         raise OperationalError("stmt", {}, Exception("db"))
 
-    monkeypatch.setattr(worker, "_lock_normalization_retry_event", broken)
+    patch_worker(monkeypatch, "_lock_normalization_retry_event", broken)
     await env.run_event()
 
 
@@ -448,7 +451,7 @@ async def test_error_before_any_claim_is_retried_by_the_queue(monkeypatch):
     async def boom(*_a, **_k):
         raise OperationalError("stmt", {}, Exception("db"))
 
-    monkeypatch.setattr(worker, "_lock_worker_event", boom)
+    patch_worker(monkeypatch, "_lock_worker_event", boom)
     with pytest.raises(Retry) as exc:
         await env.run_event()
     assert 7500 <= exc.value.defer_score <= 15000

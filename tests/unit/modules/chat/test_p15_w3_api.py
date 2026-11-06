@@ -21,6 +21,7 @@ from modules.chat.schemas import (
     WebCitation,
 )
 from modules.chat.stream import format_sse_event
+from tests.unit.chat_public_patching import patch_chat_public
 
 NOW = datetime(2026, 10, 7, tzinfo=UTC)
 WEB = {
@@ -317,10 +318,10 @@ async def test_export_emits_web_citations_with_query_stripped(
         async def stream(self, _stmt: Any, *_a: Any, **_k: Any) -> _Stream:
             return _Stream([row])
 
-    monkeypatch.setattr(chat_public, "_require_chat_export_owner", ok)
-    monkeypatch.setattr(chat_public, "_chat_export_privacy", privacy)
-    monkeypatch.setattr(chat_public, "_chat_export_count", count)
-    monkeypatch.setattr(chat_public, "_chat_export_evidence_fences", no_evidence)
+    patch_chat_public(monkeypatch, "_require_chat_export_owner", ok)
+    patch_chat_public(monkeypatch, "_chat_export_privacy", privacy)
+    patch_chat_public(monkeypatch, "_chat_export_count", count)
+    patch_chat_public(monkeypatch, "_chat_export_evidence_fences", no_evidence)
     page = await chat_public.export_page(
         _Session(),
         owner_id=1,
