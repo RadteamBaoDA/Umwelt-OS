@@ -518,6 +518,49 @@ async def _infer(
     return response_content(response)
 
 
+async def _published_timeline_changes(
+    session: AsyncSession, work_id: UUID, *, scope: Any
+) -> list[Any]:
+    """Build the replay changes for events published by one extraction work item.
+
+    Reads the work's stored proposals result and each event's current revision (after the publish
+    flush, so revisions are final) and returns one deduplicated change per surviving event, ordered
+    by event id. Read-only; the caller commits them with the extraction result.
+    """
+    from modules.timeline.models import TimelineExtractionResult
+
+    result = await session.scalar(
+        select(TimelineExtractionResult)
+        .join(
+            TimelineExtractionWork,
+            TimelineExtractionWork.id == TimelineExtractionResult.work_id,
+        )
+        .where(
+            TimelineExtractionWork.workspace_id == scope.workspace_id,
+            TimelineExtractionResult.work_id == work_id,
+        )
+    )
+    event_ids = [UUID(str(item["event_id"])) for item in result.proposals_json] if result else []
+    event_revisions = (
+        dict(
+            (
+                await session.execute(
+                    select(Event.id, Event.revision).where(
+                        Event.workspace_id == scope.workspace_id, Event.id.in_(event_ids)
+                    )
+                )
+            ).all()
+        )
+        if event_ids
+        else {}
+    )
+    return [
+        make_timeline_change(event_id, event_revisions[event_id], scope=scope)
+        for event_id in sorted(set(event_ids), key=str)
+        if event_id in event_revisions
+    ]
+
+
 async def _publish_extraction(
     run: _Run,
     lease: _Lease,
@@ -589,40 +632,10 @@ async def _publish_extraction(
     ):
         await session.rollback()
         return
-    from modules.timeline.models import TimelineExtractionResult
-
-    result = await session.scalar(
-        select(TimelineExtractionResult)
-        .join(
-            TimelineExtractionWork,
-            TimelineExtractionWork.id == TimelineExtractionResult.work_id,
-        )
-        .where(
-            TimelineExtractionWork.workspace_id == scope.workspace_id,
-            TimelineExtractionResult.work_id == run.work_id,
-        )
-    )
-    event_ids = [UUID(str(item["event_id"])) for item in result.proposals_json] if result else []
-    event_revisions = (
-        dict(
-            (
-                await session.execute(
-                    select(Event.id, Event.revision).where(
-                        Event.workspace_id == scope.workspace_id, Event.id.in_(event_ids)
-                    )
-                )
-            ).all()
-        )
-        if event_ids
-        else {}
-    )
+    changes = await _published_timeline_changes(session, run.work_id, scope=scope)
     await commit_with_replay(
         session,
-        [
-            make_timeline_change(event_id, event_revisions[event_id], scope=scope)
-            for event_id in sorted(set(event_ids), key=str)
-            if event_id in event_revisions
-        ],
+        changes,
         scope=scope,
         multi_workspace_enabled=flag,
         access_fence=cap.access_fence,
@@ -882,6 +895,63 @@ async def _schedule_ready_ref(
         await session.commit()
 
 
+async def _lockable_blocked_source(
+    session: AsyncSession,
+    version_id: UUID,
+    captured_generation: int,
+    access_fence: Any,
+    *,
+    scope: InternalJobScope,
+    flag: bool,
+) -> Any | None:
+    """Lock and return the source of a blocked item if it is still active and unchanged, else ``None``.
+
+    Requires the ready document version to exist, the source to be active, non-local-only and still
+    at the captured generation, and the version to still belong to the same document and source.
+    Takes the source row lock; the caller defers the recheck on ``None``.
+    """
+    ready = await documents.get_ready_version_ref(
+        session,
+        version_id,
+        scope=scope,
+        multi_workspace_enabled=flag,
+    )
+    source = (
+        await sources.lock_source(
+            session,
+            ready.source_id,
+            scope=scope,
+            multi_workspace_enabled=flag,
+            expected_access_fence=access_fence,
+        )
+        if ready is not None
+        else None
+    )
+    current = (
+        await documents.get_ready_version_ref(
+            session,
+            version_id,
+            scope=scope,
+            multi_workspace_enabled=flag,
+        )
+        if ready is not None
+        else None
+    )
+    if (
+        ready is None
+        or source is None
+        or source.status != "active"
+        or source.local_only
+        or source.generation != captured_generation
+        or current is None
+        or current.document_id != ready.document_id
+        or current.source_id != source.id
+        or current.source_generation != captured_generation
+    ):
+        return None
+    return source
+
+
 async def _recheck_blocked_item(
     factory: async_sessionmaker[AsyncSession],
     redis: ArqRedis,
@@ -903,44 +973,10 @@ async def _recheck_blocked_item(
             scope=scope,
             multi_workspace_enabled=flag,
         )
-        ready = await documents.get_ready_version_ref(
-            session,
-            version_id,
-            scope=scope,
-            multi_workspace_enabled=flag,
+        source = await _lockable_blocked_source(
+            session, version_id, captured_generation, access_fence, scope=scope, flag=flag
         )
-        source = (
-            await sources.lock_source(
-                session,
-                ready.source_id,
-                scope=scope,
-                multi_workspace_enabled=flag,
-                expected_access_fence=access_fence,
-            )
-            if ready is not None
-            else None
-        )
-        current = (
-            await documents.get_ready_version_ref(
-                session,
-                version_id,
-                scope=scope,
-                multi_workspace_enabled=flag,
-            )
-            if ready is not None
-            else None
-        )
-        if (
-            ready is None
-            or source is None
-            or source.status != "active"
-            or source.local_only
-            or source.generation != captured_generation
-            or current is None
-            or current.document_id != ready.document_id
-            or current.source_id != source.id
-            or current.source_generation != captured_generation
-        ):
+        if source is None:
             await timeline.defer_blocked_extraction_recheck(
                 session,
                 blocked_id,

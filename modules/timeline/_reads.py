@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import desc, false, or_, select, tuple_
+from sqlalchemy import Select, desc, false, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.workspaces import public as workspaces  # noqa: F401  (patch target for fence tests)
@@ -229,6 +229,24 @@ async def lock_brief_events(
     return set(locked)
 
 
+def _unavailable_brief_support(event_id: UUID, expected_title: str | None) -> BriefEventSupport:
+    """Build the incomplete, non-independent, evidence-free ``BriefEventSupport`` placeholder.
+
+    Callers return it (optionally with ``origin`` copied from the real event) whenever the event is
+    missing, renamed, or its evidence cannot be proven exact. Pure; no I/O.
+    """
+    return BriefEventSupport(
+        event_id=event_id,
+        title=expected_title or "",
+        event_type="",
+        origin="manual",
+        source_ids=[],
+        evidence=[],
+        complete=False,
+        independent=False,
+    )
+
+
 async def brief_event_support(
     session: AsyncSession,
     event_id: UUID,
@@ -254,16 +272,7 @@ async def brief_event_support(
     if lock_fact:
         statement = statement.with_for_update(read=True, of=Event)
     event = await session.scalar(statement.execution_options(populate_existing=True))
-    unavailable = BriefEventSupport(
-        event_id=event_id,
-        title=expected_title or "",
-        event_type="",
-        origin="manual",
-        source_ids=[],
-        evidence=[],
-        complete=False,
-        independent=False,
-    )
+    unavailable = _unavailable_brief_support(event_id, expected_title)
     if event is None or (expected_title is not None and event.title != expected_title):
         return unavailable
     evidence_rows = list(
@@ -335,24 +344,19 @@ async def brief_event_support(
     )
 
 
-async def list_correlation_signals(
-    session: AsyncSession,
-    *,
+def _validate_correlation_scope(
     domain: str,
     from_at: datetime,
     to_at: datetime,
     regions: list[str],
     source_ids: list[UUID],
-    limit: int = 100,
-    scope: Scope,
-    multi_workspace_enabled: bool,
-) -> CorrelationSignalPage:
-    """Project a bounded timed event slice into detached IDs after exact evidence checks.
+    limit: int,
+) -> None:
+    """Reject unbounded or malformed correlation projection scopes.
 
-    Region values must already be recorded under event metadata ``region``. Events
-    without a live document-version/chunk reference are excluded. Military and
-    escalation labels also require a recorded participant entity. No event title,
-    summary, excerpt, or coordinate is returned to the correlation owner.
+    Requires timezone-aware ordered bounds, a known domain, ``limit`` in 1..100 and 1..32 unique,
+    stripped, non-empty regions (<=80 chars) and unique sources. Pure; raises ``ValueError``
+    before any admission or database work.
     """
     if (
         from_at.tzinfo is None
@@ -369,10 +373,23 @@ async def list_correlation_signals(
         or any(not region or len(region) > 80 or region != region.strip() for region in regions)
     ):
         raise ValueError("Invalid bounded correlation projection scope")
-    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
-    selected_sources = set(source_ids)
-    start, end = from_at.astimezone(UTC), to_at.astimezone(UTC)
-    statement = (
+
+
+def _correlation_statement(
+    scope: Scope,
+    domain: str,
+    start: datetime,
+    end: datetime,
+    regions: list[str],
+    selected_sources: set[UUID],
+) -> Select[tuple[Event]]:
+    """Build the bounded candidate query for correlation signals (limit 1001 to sense truncation).
+
+    Only timed, live events of ``domain`` inside ``[start, end)`` whose recorded region is listed and
+    that have at least one document-version/chunk evidence row qualify; source admission here is
+    coarse and the live Document refs checked per event make the final decision.
+    """
+    return (
         select(Event)
         .where(
             Event.workspace_id == scope.workspace_id,
@@ -408,90 +425,135 @@ async def list_correlation_signals(
         .order_by(Event.started_at, Event.id)
         .limit(1_001)
     )
+
+
+async def _correlation_signal(
+    session: AsyncSession,
+    event: Event,
+    selected_sources: set[UUID],
+    regions: list[str],
+    *,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> CorrelationSignalRead | None:
+    """Project one candidate event into a detached signal, or ``None`` when exact evidence fails.
+
+    Re-reads the event through ``_event_read`` so only live, readable document-version/chunk refs
+    from the selected sources count; military and escalation events also need a participant. IDs are
+    capped at 100 per list with the omitted counts reported.
+    """
+    current = await _event_read(
+        session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+    )
+    if not current.evidence or (
+        event.type in {"military", "escalation"} and not current.participants
+    ):
+        return None
+    live_evidence = {
+        (item["document_version_id"], item["chunk_id"]): item
+        for item in current.evidence
+        if item["source_id"] in selected_sources
+    }
+    evidence_rows = (
+        await session.scalars(
+            select(EventEvidence)
+            .where(
+                EventEvidence.workspace_id == scope.workspace_id,
+                EventEvidence.event_id == event.id,
+            )
+            .order_by(EventEvidence.id)
+        )
+    ).all()
+    exact_rows = [
+        item
+        for item in evidence_rows
+        if item.source_id in selected_sources
+        and (item.document_version_id, item.chunk_id) in live_evidence
+    ]
+    if not exact_rows:
+        return None
+    exact_refs = [live_evidence[(item.document_version_id, item.chunk_id)] for item in exact_rows]
+    event_evidence_ids = [item.id for item in exact_rows]
+    document_ids = sorted(
+        {item["document_id"] for item in exact_refs if item["document_id"]}, key=str
+    )
+    document_version_ids = sorted(
+        {item["document_version_id"] for item in exact_refs if item["document_version_id"]},
+        key=str,
+    )
+    region = event.metadata_json.get("region")
+    if not isinstance(region, str) or region not in regions:
+        return None
+    return CorrelationSignalRead(
+        signal_id=event.id,
+        event_id=event.id,
+        event_type=event.type,
+        region=region,
+        observed_at=event.started_at,
+        source_id=event.source_id,
+        event_evidence_ids=event_evidence_ids[:100],
+        document_ids=document_ids[:100],
+        document_version_ids=document_version_ids[:100],
+        chunk_ids=sorted({item.chunk_id for item in exact_rows if item.chunk_id}, key=str)[:100],
+        omitted_event_evidence_ids=max(0, len(event_evidence_ids) - 100),
+        omitted_document_ids=max(0, len(document_ids) - 100),
+        omitted_document_version_ids=max(0, len(document_version_ids) - 100),
+    )
+
+
+async def list_correlation_signals(
+    session: AsyncSession,
+    *,
+    domain: str,
+    from_at: datetime,
+    to_at: datetime,
+    regions: list[str],
+    source_ids: list[UUID],
+    limit: int = 100,
+    scope: Scope,
+    multi_workspace_enabled: bool,
+) -> CorrelationSignalPage:
+    """Project a bounded timed event slice into detached IDs after exact evidence checks.
+
+    Region values must already be recorded under event metadata ``region``. Events
+    without a live document-version/chunk reference are excluded. Military and
+    escalation labels also require a recorded participant entity. No event title,
+    summary, excerpt, or coordinate is returned to the correlation owner.
+    """
+    _validate_correlation_scope(domain, from_at, to_at, regions, source_ids, limit)
+    await _admit(session, scope=scope, multi_workspace_enabled=multi_workspace_enabled)
+    selected_sources = set(source_ids)
+    start, end = from_at.astimezone(UTC), to_at.astimezone(UTC)
+    statement = _correlation_statement(scope, domain, start, end, regions, selected_sources)
     rows = list((await session.scalars(statement)).all())
     signals: list[CorrelationSignalRead] = []
     for event in rows:
         if event.source_id is not None and event.source_id not in selected_sources:
             continue
-        current = await _event_read(
-            session, event, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+        signal = await _correlation_signal(
+            session,
+            event,
+            selected_sources,
+            regions,
+            scope=scope,
+            multi_workspace_enabled=multi_workspace_enabled,
         )
-        if not current.evidence or (
-            event.type in {"military", "escalation"} and not current.participants
-        ):
+        if signal is None:
             continue
-        live_evidence = {
-            (item["document_version_id"], item["chunk_id"]): item
-            for item in current.evidence
-            if item["source_id"] in selected_sources
-        }
-        evidence_rows = (
-            await session.scalars(
-                select(EventEvidence)
-                .where(
-                    EventEvidence.workspace_id == scope.workspace_id,
-                    EventEvidence.event_id == event.id,
-                )
-                .order_by(EventEvidence.id)
-            )
-        ).all()
-        exact_rows = [
-            item
-            for item in evidence_rows
-            if item.source_id in selected_sources
-            and (item.document_version_id, item.chunk_id) in live_evidence
-        ]
-        if not exact_rows:
-            continue
-        exact_refs = [
-            live_evidence[(item.document_version_id, item.chunk_id)] for item in exact_rows
-        ]
-        event_evidence_ids = [item.id for item in exact_rows]
-        document_ids = sorted(
-            {item["document_id"] for item in exact_refs if item["document_id"]}, key=str
-        )
-        document_version_ids = sorted(
-            {item["document_version_id"] for item in exact_refs if item["document_version_id"]},
-            key=str,
-        )
-        region = event.metadata_json.get("region")
-        if not isinstance(region, str) or region not in regions:
-            continue
-        signals.append(
-            CorrelationSignalRead(
-                signal_id=event.id,
-                event_id=event.id,
-                event_type=event.type,
-                region=region,
-                observed_at=event.started_at,
-                source_id=event.source_id,
-                event_evidence_ids=event_evidence_ids[:100],
-                document_ids=document_ids[:100],
-                document_version_ids=document_version_ids[:100],
-                chunk_ids=sorted({item.chunk_id for item in exact_rows if item.chunk_id}, key=str)[
-                    :100
-                ],
-                omitted_event_evidence_ids=max(0, len(event_evidence_ids) - 100),
-                omitted_document_ids=max(0, len(document_ids) - 100),
-                omitted_document_version_ids=max(0, len(document_version_ids) - 100),
-            )
-        )
+        signals.append(signal)
         if len(signals) > limit:
             break
     truncated = len(signals) > limit or len(rows) > 1_000
     return CorrelationSignalPage(items=signals[:limit], truncated=truncated)
 
 
-async def _list_partition(  # noqa: C901, PLR0912
-    session: AsyncSession,
-    query: TimelineQuery,
-    partition: int,
-    key: Any,
-    limit: int,
-    *,
-    scope: Scope,
-) -> list[Event]:
-    """Read a stable occurrence partition with shared visibility and type filters applied."""
+def _partition_base_statement(query: TimelineQuery, scope: Scope) -> Select[tuple[Event]]:
+    """Return the partition-independent timeline query: live, evidence-or-manual events plus filters.
+
+    Applies workspace scope, the manual-or-evidenced visibility rule, and the optional source,
+    type (LIKE metacharacters escaped so the value stays a literal substring) and text filters.
+    Pure query building; the caller adds precision, date, entity and cursor predicates.
+    """
     statement = (
         select(Event)
         .where(Event.workspace_id == scope.workspace_id, Event.deleted_at.is_(None))
@@ -522,6 +584,20 @@ async def _list_partition(  # noqa: C901, PLR0912
                 Event.summary.ilike(f"%{q_pattern}%", escape="\\"),
             )
         )
+    return statement
+
+
+async def _list_partition(
+    session: AsyncSession,
+    query: TimelineQuery,
+    partition: int,
+    key: Any,
+    limit: int,
+    *,
+    scope: Scope,
+) -> list[Event]:
+    """Read a stable occurrence partition with shared visibility and type filters applied."""
+    statement = _partition_base_statement(query, scope)
     if partition == 0:
         statement = statement.where(Event.date_precision == "timed")
         if query.date_from is not None:
