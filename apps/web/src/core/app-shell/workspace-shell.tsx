@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { createContext, type ComponentProps, type RefObject, useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { type ComponentProps, type RefObject, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import { UmweltLogo, UmweltMark } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
@@ -14,7 +14,8 @@ import { useChatController } from '@/core/app-shell/chat-controller';
 import { ShellNav } from '@/core/app-shell/shell-nav';
 import { activeNavigationId, computeShellRedirects, visibleMainNavigationFor } from '@/core/app-shell/shell-redirects';
 import { SettingsPanel, SourcesSubNav } from '@/core/app-shell/settings-nav';
-import { useShellSession, type Session } from '@/core/app-shell/use-shell-session';
+import { useShellSession } from '@/core/app-shell/use-shell-session';
+import { SessionContext, useWorkspaceSession } from '@/core/app-shell/workspace-session';
 import { WorkspaceSwitcher } from '@/core/app-shell/workspace-switcher';
 import { useWorkspace } from '@/core/workspace-context';
 import { destinationEnabled, destinationForRole, mainNavigation, settingsExtraLinks, settingsGroups } from '@/core/module-registry';
@@ -28,7 +29,14 @@ import { NotificationBell } from '@/modules/notifications';
 /** Browser connectivity (navigator.onLine); assumed online during server render. */
 function useBrowserOnline() {
   return useSyncExternalStore(
-    (notify) => { window.addEventListener('online', notify); window.addEventListener('offline', notify); return () => { window.removeEventListener('online', notify); window.removeEventListener('offline', notify); }; },
+    (notify) => {
+      window.addEventListener('online', notify);
+      window.addEventListener('offline', notify);
+      return () => {
+        window.removeEventListener('online', notify);
+        window.removeEventListener('offline', notify);
+      };
+    },
     () => navigator.onLine,
     () => true,
   );
@@ -45,24 +53,36 @@ const NAV_EXPANDED_EVENT = 'umwelt:nav-expanded';
  */
 function useNavExpanded(): [boolean, () => void] {
   const expanded = useSyncExternalStore(
-    (notify) => { window.addEventListener(NAV_EXPANDED_EVENT, notify); window.addEventListener('storage', notify); return () => { window.removeEventListener(NAV_EXPANDED_EVENT, notify); window.removeEventListener('storage', notify); }; },
-    () => { try { return localStorage.getItem(NAV_EXPANDED_KEY) === '1'; } catch { return false; } },
+    (notify) => {
+      window.addEventListener(NAV_EXPANDED_EVENT, notify);
+      window.addEventListener('storage', notify);
+      return () => {
+        window.removeEventListener(NAV_EXPANDED_EVENT, notify);
+        window.removeEventListener('storage', notify);
+      };
+    },
+    () => {
+      try {
+        return localStorage.getItem(NAV_EXPANDED_KEY) === '1';
+      } catch {
+        return false;
+      }
+    },
     () => false,
   );
   const toggle = useCallback(() => {
-    try { if (expanded) localStorage.removeItem(NAV_EXPANDED_KEY); else localStorage.setItem(NAV_EXPANDED_KEY, '1'); } catch { /* storage blocked: keep current state */ }
+    try {
+      if (expanded) localStorage.removeItem(NAV_EXPANDED_KEY);
+      else localStorage.setItem(NAV_EXPANDED_KEY, '1');
+    } catch {
+      /* storage blocked: keep current state */
+    }
     window.dispatchEvent(new Event(NAV_EXPANDED_EVENT));
   }, [expanded]);
   return [expanded, toggle];
 }
-const SessionContext = createContext<Session | null>(null);
-
-/** Returns the authenticated workspace session, including its CSRF token; throws when used outside the session provider. */
-export function useWorkspaceSession() {
-  const session = useContext(SessionContext);
-  if (!session) throw new Error('Workspace session is unavailable');
-  return session;
-}
+// Re-exported so existing importers of the shell keep working; the context itself lives in the light module.
+export { useWorkspaceSession };
 
 /**
  * Registers the Cmd+J / Ctrl+J shortcut that toggles the quick-chat Sheet drawer. Renders nothing: the header
@@ -102,35 +122,75 @@ function apiStatusOf(online: boolean, health: ApiHealth) {
 }
 
 /** Minimal shell frame used while the session loads or is unavailable: brand, connection status and main content. */
-function ShellFrame({ apiStatus, health, children }: {
+function ShellFrame({
+  apiStatus,
+  health,
+  children,
+}: {
   apiStatus: Parameters<typeof ConnectionFooter>[0]['apiStatus'];
   health: ApiHealth;
   children: ReactNode;
 }) {
   const realtime = useRealtime();
-  return <div className="shell">
-    <header className="topbar"><Link href="/login" className="brand-name" aria-label="Umwelt-OS"><UmweltLogo /></Link><ConnectionFooter apiStatus={apiStatus} realtimeStatus={realtime.status} onRetry={() => health.refetch()} retrying={health.isFetching} /></header>
-    {children}
-  </div>;
+  return (
+    <div className="shell">
+      <header className="topbar">
+        <Link href="/login" className="brand-name" aria-label="Umwelt-OS">
+          <UmweltLogo />
+        </Link>
+        <ConnectionFooter
+          apiStatus={apiStatus}
+          realtimeStatus={realtime.status}
+          onRetry={() => health.refetch()}
+          retrying={health.isFetching}
+        />
+      </header>
+      {children}
+    </div>
+  );
 }
 
 /** Full-page error state shown when the session cannot be read; a 401 reads as an expired session. */
-function SessionUnavailable({ error, online, health, onRetry }: {
-  error: unknown; online: boolean; health: ApiHealth; onRetry: () => void;
+function SessionUnavailable({
+  error,
+  online,
+  health,
+  onRetry,
+}: {
+  error: unknown;
+  online: boolean;
+  health: ApiHealth;
+  onRetry: () => void;
 }) {
   const t = useTranslations('shell');
   const expired = error instanceof ApiError && error.status === 401;
-  return <ShellFrame apiStatus={expired ? 'expired' : online ? 'unavailable' : 'clientOffline'} health={health}>
-    <main id="main-content" tabIndex={-1} className="page"><section className="status-panel">
-    <h1>{expired ? t('expiredTitle') : t('workspaceUnavailable')}</h1>
-    <p className="text-muted-foreground">{expired ? t('expiredHelp') : t('workspaceUnavailableHelp')}</p>
-    <Button variant="outline" onClick={onRetry}>{t('retry')}</Button>
-    </section></main>
-  </ShellFrame>;
+  return (
+    <ShellFrame apiStatus={expired ? 'expired' : online ? 'unavailable' : 'clientOffline'} health={health}>
+      <main id="main-content" tabIndex={-1} className="page">
+        <section className="status-panel">
+          <h1>{expired ? t('expiredTitle') : t('workspaceUnavailable')}</h1>
+          <p className="text-muted-foreground">{expired ? t('expiredHelp') : t('workspaceUnavailableHelp')}</p>
+          <Button variant="outline" onClick={onRetry}>
+            {t('retry')}
+          </Button>
+        </section>
+      </main>
+    </ShellFrame>
+  );
 }
 
 /** Top bar: brand mark (phones), connection status and the action cluster (search, notifications, workspace, user menu). */
-function ShellTopbar({ apiStatus, health, quickChat, menuTriggerRef, onOpenPreferences, onOpenAccount, onOpenChangePassword, onSignOut, signOutPending }: {
+function ShellTopbar({
+  apiStatus,
+  health,
+  quickChat,
+  menuTriggerRef,
+  onOpenPreferences,
+  onOpenAccount,
+  onOpenChangePassword,
+  onSignOut,
+  signOutPending,
+}: {
   apiStatus: Parameters<typeof ConnectionFooter>[0]['apiStatus'];
   health: ApiHealth;
   /** Registers the Ctrl/Cmd+J drawer shortcut (dashboard detail routes when chat is available). */
@@ -143,23 +203,38 @@ function ShellTopbar({ apiStatus, health, quickChat, menuTriggerRef, onOpenPrefe
   signOutPending: boolean;
 }) {
   const realtime = useRealtime();
-  return <header className="topbar">
-    <Link href="/dashboard" className="brand-name sm:hidden" aria-label="Umwelt-OS"><UmweltMark /></Link>
-    <ConnectionFooter
-      apiStatus={apiStatus}
-      realtimeStatus={realtime.status}
-      onRetry={() => health.refetch()}
-      retrying={health.isFetching}
-    />
-    <div className="top-actions">
-      {quickChat && <QuickChatShortcut />}
-      <CommandPalette />
-      {/* Phones (<640px) get these inside the avatar menu to keep the header to logo, search and avatar. */}
-      <div className="hidden sm:contents"><NotificationBell /></div>
-      <div className="hidden sm:contents"><WorkspaceSwitcher /></div>
-      <UserMenu triggerRef={menuTriggerRef} onOpenPreferences={onOpenPreferences} onOpenAccount={onOpenAccount} onOpenChangePassword={onOpenChangePassword} onSignOut={onSignOut} signOutPending={signOutPending} />
-    </div>
-  </header>;
+  return (
+    <header className="topbar">
+      <Link href="/dashboard" className="brand-name sm:hidden" aria-label="Umwelt-OS">
+        <UmweltMark />
+      </Link>
+      <ConnectionFooter
+        apiStatus={apiStatus}
+        realtimeStatus={realtime.status}
+        onRetry={() => health.refetch()}
+        retrying={health.isFetching}
+      />
+      <div className="top-actions">
+        {quickChat && <QuickChatShortcut />}
+        <CommandPalette />
+        {/* Phones (<640px) get these inside the avatar menu to keep the header to logo, search and avatar. */}
+        <div className="hidden sm:contents">
+          <NotificationBell />
+        </div>
+        <div className="hidden sm:contents">
+          <WorkspaceSwitcher />
+        </div>
+        <UserMenu
+          triggerRef={menuTriggerRef}
+          onOpenPreferences={onOpenPreferences}
+          onOpenAccount={onOpenAccount}
+          onOpenChangePassword={onOpenChangePassword}
+          onSignOut={onSignOut}
+          signOutPending={signOutPending}
+        />
+      </div>
+    </header>
+  );
 }
 
 /** Replaces the current route with `target` once it is defined (role-based confinement); no-op otherwise. */
@@ -170,16 +245,49 @@ function useReplaceRoute(target: string | undefined): void {
   }, [router, target]);
 }
 
+/**
+ * Computes the settings groups visible to `role` and applies the role-based route confinement (replaces the route when one applies).
+ * @returns The visible groups plus the member/admin-viewer settings redirects the shell uses to hide flashes of content.
+ */
+function useShellRedirects(
+  role: Parameters<typeof destinationForRole>[1],
+  pathname: string,
+  availability: Parameters<typeof destinationEnabled>[1],
+  isInstanceAdmin: boolean | undefined,
+) {
+  const visibleSettingsGroups = settingsGroups.filter((item) => destinationEnabled(item, availability) && destinationForRole(item, role));
+  const { memberSettingsRedirect, adminViewerSettingsRedirect, adminViewerPrivateRedirect } = computeShellRedirects(
+    role,
+    pathname,
+    visibleSettingsGroups,
+    isInstanceAdmin,
+  );
+  useReplaceRoute(memberSettingsRedirect ?? adminViewerSettingsRedirect ?? adminViewerPrivateRedirect);
+  return { visibleSettingsGroups, memberSettingsRedirect, adminViewerSettingsRedirect };
+}
+
 /** Settings page body: the sources sub-navigation (only under /settings/sources) followed by the route content. */
 function SettingsBody({ pathname, children }: { pathname: string; children: ReactNode }) {
-  return <>{pathname.startsWith('/settings/sources') && <SourcesSubNav pathname={pathname} />}{children}</>;
+  return (
+    <>
+      {pathname.startsWith('/settings/sources') && <SourcesSubNav pathname={pathname} />}
+      {children}
+    </>
+  );
 }
 
 /**
  * Scrolling main region. Renders nothing while a role redirect is pending (avoids flashing a forbidden page),
  * wraps /settings routes in the settings panel (extra links filtered by admin/role) and passes other routes through.
  */
-function ShellMain({ role, pathname, redirecting, settingsGroups: groups, isInstanceAdmin, children }: {
+function ShellMain({
+  role,
+  pathname,
+  redirecting,
+  settingsGroups: groups,
+  isInstanceAdmin,
+  children,
+}: {
   role: Parameters<typeof destinationForRole>[1];
   pathname: string;
   redirecting: boolean;
@@ -190,10 +298,18 @@ function ShellMain({ role, pathname, redirecting, settingsGroups: groups, isInst
   let content = children;
   if (redirecting) content = null;
   else if (pathname.startsWith('/settings')) {
-    const extra = settingsExtraLinks.filter((item) => item.adminOnly ? isInstanceAdmin : destinationForRole(item, role));
-    content = <SettingsPanel links={[...groups, ...extra]} pathname={pathname}><SettingsBody pathname={pathname}>{children}</SettingsBody></SettingsPanel>;
+    const extra = settingsExtraLinks.filter((item) => (item.adminOnly ? isInstanceAdmin : destinationForRole(item, role)));
+    content = (
+      <SettingsPanel links={[...groups, ...extra]} pathname={pathname}>
+        <SettingsBody pathname={pathname}>{children}</SettingsBody>
+      </SettingsPanel>
+    );
   }
-  return <main id="main-content" tabIndex={-1} className="workspace-main" data-workspace-readonly={role === 'admin_viewer' || undefined}>{content}</main>;
+  return (
+    <main id="main-content" tabIndex={-1} className="workspace-main" data-workspace-readonly={role === 'admin_viewer' || undefined}>
+      {content}
+    </main>
+  );
 }
 
 type ShellPreferencesProps = {
@@ -213,34 +329,103 @@ type ShellPreferencesProps = {
  */
 function ShellPreferences({ open, onOpenChange, query, onRetry, csrfToken, authGeneration, onCloseAutoFocus }: ShellPreferencesProps) {
   const display = useDisplayPreferences();
-  return <PreferencesDialog
-    open={open}
-    onOpenChange={onOpenChange}
-    preferences={query.data ?? display.confirmedPreferences ?? null}
-    loading={query.isPending && !query.data}
-    loadError={query.isError && !query.data}
-    retrying={query.isFetching}
-    onRetry={onRetry}
-    csrfToken={csrfToken}
-    savingDisabled={!query.data}
-    authGeneration={authGeneration}
-    onCloseAutoFocus={onCloseAutoFocus}
-  />;
+  return (
+    <PreferencesDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      preferences={query.data ?? display.confirmedPreferences ?? null}
+      loading={query.isPending && !query.data}
+      loadError={query.isError && !query.data}
+      retrying={query.isFetching}
+      onRetry={onRetry}
+      csrfToken={csrfToken}
+      savingDisabled={!query.data}
+      authGeneration={authGeneration}
+      onCloseAutoFocus={onCloseAutoFocus}
+    />
+  );
 }
 
 /** Account-settings dialog: Google link, account deletion and legal links. */
-function AccountDialog({ open, onOpenChange, csrfToken, onCloseAutoFocus }: {
-  open: boolean; onOpenChange: (open: boolean) => void; csrfToken: string; onCloseAutoFocus: (event: Event) => void;
+function AccountDialog({
+  open,
+  onOpenChange,
+  csrfToken,
+  onCloseAutoFocus,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  csrfToken: string;
+  onCloseAutoFocus: (event: Event) => void;
 }) {
   const t = useTranslations('shell');
-  return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent closeLabel={t('close')} onCloseAutoFocus={onCloseAutoFocus}>
-      <DialogHeader><DialogTitle>{t('accountSettings')}</DialogTitle><DialogDescription>{t('googleAccountDescription')}</DialogDescription></DialogHeader>
-      <GoogleLink />
-      <AccountDeletionSection csrfToken={csrfToken} />
-      <LegalLinks />
-    </DialogContent>
-  </Dialog>;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent closeLabel={t('close')} onCloseAutoFocus={onCloseAutoFocus}>
+        <DialogHeader>
+          <DialogTitle>{t('accountSettings')}</DialogTitle>
+          <DialogDescription>{t('googleAccountDescription')}</DialogDescription>
+        </DialogHeader>
+        <GoogleLink />
+        <AccountDeletionSection csrfToken={csrfToken} />
+        <LegalLinks />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Preferences, account and change-password dialogs owned by the shell; open state stays in the shell so it can reset on sign-out. */
+function ShellDialogs({
+  signOutFailed,
+  csrfToken,
+  open,
+  setOpen,
+  preferences,
+  onRetry,
+  authGeneration,
+  onCloseAutoFocus,
+}: {
+  signOutFailed: boolean;
+  csrfToken: string;
+  open: { preferencesOpen: boolean; accountOpen: boolean; passwordOpen: boolean };
+  setOpen: { setPreferencesOpen: (v: boolean) => void; setAccountOpen: (v: boolean) => void; setPasswordOpen: (v: boolean) => void };
+  preferences: ComponentProps<typeof ShellPreferences>['query'];
+  onRetry: ComponentProps<typeof ShellPreferences>['onRetry'];
+  authGeneration: number;
+  onCloseAutoFocus: (event: Event) => void;
+}) {
+  const t = useTranslations('shell');
+  return (
+    <>
+      {signOutFailed && (
+        <p className="error" role="alert">
+          {t('signOutFailed')}
+        </p>
+      )}
+      <ShellPreferences
+        open={open.preferencesOpen}
+        onOpenChange={setOpen.setPreferencesOpen}
+        query={preferences}
+        onRetry={onRetry}
+        csrfToken={csrfToken}
+        authGeneration={authGeneration}
+        onCloseAutoFocus={onCloseAutoFocus}
+      />
+      <AccountDialog
+        open={open.accountOpen}
+        onOpenChange={setOpen.setAccountOpen}
+        csrfToken={csrfToken}
+        onCloseAutoFocus={onCloseAutoFocus}
+      />
+      <ChangePasswordDialog
+        open={open.passwordOpen}
+        onOpenChange={setOpen.setPasswordOpen}
+        csrfToken={csrfToken}
+        closeLabel={t('close')}
+        onCloseAutoFocus={onCloseAutoFocus}
+      />
+    </>
+  );
 }
 
 /**
@@ -262,25 +447,38 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   /** Closes the dialogs owned by the shell when the session ends (setters are stable). */
-  const resetOverlays = useCallback(() => { setPreferencesOpen(false); setAccountOpen(false); }, []);
+  const resetOverlays = useCallback(() => {
+    setPreferencesOpen(false);
+    setAccountOpen(false);
+  }, []);
   const { session, moduleAvailability, preferences, apiHealth, logout, reloadPreferences, generation } = useShellSession(resetOverlays);
 
-  const visibleSettingsGroups = settingsGroups.filter((item) => destinationEnabled(item, moduleAvailability.data) && destinationForRole(item, role));
-  const { memberSettingsRedirect, adminViewerSettingsRedirect, adminViewerPrivateRedirect } = computeShellRedirects(
-    role, pathname, visibleSettingsGroups, session.data?.isInstanceAdmin,
+  const { visibleSettingsGroups, memberSettingsRedirect, adminViewerSettingsRedirect } = useShellRedirects(
+    role,
+    pathname,
+    moduleAvailability.data,
+    session.data?.isInstanceAdmin,
   );
-  useReplaceRoute(memberSettingsRedirect ?? adminViewerSettingsRedirect ?? adminViewerPrivateRedirect);
 
-  if (session.isPending) return <ShellFrame apiStatus="connecting" health={apiHealth}>
-    <main id="main-content" tabIndex={-1} className="page"><div className="status-panel skeleton" aria-label={t('loadingWorkspace')} /></main>
-  </ShellFrame>;
+  if (session.isPending)
+    return (
+      <ShellFrame apiStatus="connecting" health={apiHealth}>
+        <main id="main-content" tabIndex={-1} className="page">
+          <div className="status-panel skeleton" aria-label={t('loadingWorkspace')} />
+        </main>
+      </ShellFrame>
+    );
   if (session.isError || !session.data) {
     return <SessionUnavailable error={session.error} online={online} health={apiHealth} onRetry={() => session.refetch()} />;
   }
 
   // Members see only the read-only translation settings group; their Settings entry opens it directly.
   const visibleMainNavigation = visibleMainNavigationFor(
-    mainNavigation, moduleAvailability.data, role, visibleSettingsGroups.length, session.data.isInstanceAdmin,
+    mainNavigation,
+    moduleAvailability.data,
+    role,
+    visibleSettingsGroups.length,
+    session.data.isInstanceAdmin,
   );
   const active = activeNavigationId(visibleMainNavigation, pathname);
   /** Returns focus to the triggering menu control after a dialog closes. */
@@ -289,9 +487,12 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
     menuTriggerRef.current?.focus();
   };
 
-  return <SessionContext.Provider value={session.data}>
+  return (
+    <SessionContext.Provider value={session.data}>
       <div className="shell">
-        <a href="#main-content" className="skip-link">{t('skipToContent')}</a>
+        <a href="#main-content" className="skip-link">
+          {t('skipToContent')}
+        </a>
         <div className="workspace">
           <ShellNav
             items={visibleMainNavigation}
@@ -303,39 +504,40 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
             onToggle={toggleNav}
           />
           <div className="workspace-column">
-          <ShellTopbar
-            apiStatus={apiStatusOf(online, apiHealth)}
-            health={apiHealth}
-            quickChat={pathname.startsWith('/dashboard/') && visibleMainNavigation.some((item) => item.id === 'chat')}
-            menuTriggerRef={menuTriggerRef}
-            onOpenPreferences={() => setPreferencesOpen(true)}
-            onOpenAccount={() => setAccountOpen(true)}
-            onOpenChangePassword={() => setPasswordOpen(true)}
-            onSignOut={() => logout.mutate()}
-            signOutPending={logout.isPending}
-          />
-          <ShellMain
-            role={role}
-            pathname={pathname}
-            redirecting={Boolean(memberSettingsRedirect || adminViewerSettingsRedirect)}
-            settingsGroups={visibleSettingsGroups}
-            isInstanceAdmin={session.data.isInstanceAdmin}
-          >{children}</ShellMain>
+            <ShellTopbar
+              apiStatus={apiStatusOf(online, apiHealth)}
+              health={apiHealth}
+              quickChat={pathname.startsWith('/dashboard/') && visibleMainNavigation.some((item) => item.id === 'chat')}
+              menuTriggerRef={menuTriggerRef}
+              onOpenPreferences={() => setPreferencesOpen(true)}
+              onOpenAccount={() => setAccountOpen(true)}
+              onOpenChangePassword={() => setPasswordOpen(true)}
+              onSignOut={() => logout.mutate()}
+              signOutPending={logout.isPending}
+            />
+            <ShellMain
+              role={role}
+              pathname={pathname}
+              redirecting={Boolean(memberSettingsRedirect || adminViewerSettingsRedirect)}
+              settingsGroups={visibleSettingsGroups}
+              isInstanceAdmin={session.data.isInstanceAdmin}
+            >
+              {children}
+            </ShellMain>
           </div>
         </div>
-        {logout.error && <p className="error" role="alert">{t('signOutFailed')}</p>}
-        <ShellPreferences
-          open={preferencesOpen}
-          onOpenChange={setPreferencesOpen}
-          query={preferences}
-          onRetry={reloadPreferences}
+        <ShellDialogs
+          signOutFailed={Boolean(logout.error)}
           csrfToken={session.data.csrfToken}
+          open={{ preferencesOpen, accountOpen, passwordOpen }}
+          setOpen={{ setPreferencesOpen, setAccountOpen, setPasswordOpen }}
+          preferences={preferences}
+          onRetry={reloadPreferences}
           authGeneration={generation}
           onCloseAutoFocus={restoreMenuFocus}
         />
-        <AccountDialog open={accountOpen} onOpenChange={setAccountOpen} csrfToken={session.data.csrfToken} onCloseAutoFocus={restoreMenuFocus} />
-        <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} csrfToken={session.data.csrfToken} closeLabel={t('close')} onCloseAutoFocus={restoreMenuFocus} />
         {role !== 'admin_viewer' && <ChatDrawer />}
       </div>
-  </SessionContext.Provider>;
+    </SessionContext.Provider>
+  );
 }
