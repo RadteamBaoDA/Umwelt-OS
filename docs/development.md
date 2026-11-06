@@ -96,3 +96,7 @@ Ratchet procedure: when a change raises a measured value by 2 or more points, ra
 | Total client JS | 1965.4 KB | 2165 KB |
 
 `--measure` prints the numbers without failing. To raise a budget, run a local build, measure, and edit `bundle-budget.json` to about measured + 10% in the same PR with the reason (a new dependency or feature); prefer lazy-loading (`next/dynamic`) over raising it. A per-route override can be added as `"routes": {"/(public)/login/page": 600}`.
+
+## Lighthouse CI
+
+`lighthouserc.json` drives the nightly/manual `lighthouse` CI job (`npx @lhci/cli@0.16.0 autorun` against `next start`). It audits `/login`, `/terms` and `/privacy` only, because every other route needs the API; no backend is started, so authenticated pages are not covered. Accessibility below 0.9 fails; performance below 0.8 warns. Local run: build, `npm run start --workspace apps/web -- --port 3000`, then `npx @lhci/cli@0.16.0 autorun` with `CHROME_PATH` set. Reports go to `test-results/lighthouse`.

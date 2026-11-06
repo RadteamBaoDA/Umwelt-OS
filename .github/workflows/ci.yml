@@ -187,6 +187,32 @@ jobs:
           name: k6-smoke
           path: test-results/load
 
+  # Nightly (and manual) Lighthouse CI against a production `next start`. Only routes that render without the API
+  # (/login, /terms, /privacy) are audited, so no backend is started; authenticated routes are not covered.
+  # Accessibility < 0.9 fails the job; performance < 0.8 only warns (assertions in lighthouserc.json).
+  lighthouse:
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.20.0
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Start production server
+        run: |
+          npm run start --workspace apps/web -- --port 3000 &
+          npx --yes wait-on@8 http://localhost:3000/login --timeout 60000
+      - run: npx --yes @lhci/cli@0.16.0 autorun
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: lighthouse
+          path: test-results/lighthouse
+
   gitleaks:
     runs-on: ubuntu-latest
     steps:
