@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -139,6 +140,8 @@ async def test_cleanup_orphans_keeps_referenced_and_recent(backend: StorageBacke
     for key in (kept, orphan):
         await backend.put_stream(key, _chunks(b"a"), 10, workspace_id=WORKSPACE)
     assert await backend.cleanup_orphans({kept}, 3600) == 0  # inside grace window
+    # Windows clock granularity can leave a fresh mtime ahead of ``now``; step past it so grace=0 is deterministic.
+    await asyncio.sleep(0.1)
     assert await backend.cleanup_orphans({kept}, 0) == 1
     assert await backend.exists(kept)
     assert not await backend.exists(orphan)
