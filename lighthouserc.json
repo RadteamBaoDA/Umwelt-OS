@@ -1,7 +1,7 @@
 {
   "ci": {
     "collect": {
-      "url": ["http://localhost:3300/login", "http://localhost:3300/terms", "http://localhost:3300/privacy", "http://localhost:3300/"],
+      "url": ["http://localhost:3300/login", "http://localhost:3300/terms", "http://localhost:3300/privacy", "http://localhost:3300/", "http://localhost:3300/dashboard"],
       "numberOfRuns": 1,
       "puppeteerScript": "scripts/lighthouse-auth.cjs",
       "puppeteerLaunchOptions": { "args": ["--no-sandbox"] },

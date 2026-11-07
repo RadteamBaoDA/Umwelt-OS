@@ -227,10 +227,10 @@ async def test_login_inactive_account_rolls_back_to_error(monkeypatch: pytest.Mo
 async def test_login_success_issues_session_without_reauthentication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Success commits a new AuthSession with reauthenticated_at=None and redirects to /app."""
+    """Success commits a new AuthSession with reauthenticated_at=None and redirects to /dashboard."""
     h = _login(monkeypatch, _owner(), SimpleNamespace(owner_id=5))
     response = await h.run()
-    assert response.headers["location"] == "/app"
+    assert response.headers["location"] == "/dashboard"
     assert h.calls == ["add:AuthSession", "commit"]
     created = h.session.add.call_args.args[0]
     assert created.owner_id == 5 and created.reauthenticated_at is None

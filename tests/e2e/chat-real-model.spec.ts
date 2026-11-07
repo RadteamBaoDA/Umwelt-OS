@@ -40,7 +40,7 @@ async function expectNoKeyLeak(page: Page) {
 
 /** Configures the real provider through the settings API (key stays in the request body only) and probes it. */
 async function configureRealModel(page: Page) {
-  await page.goto('/');
+  await page.goto('/dashboard');
   const headers = await writeHeaders(page);
   const current = await (await page.request.get('/api/v1/settings/ai')).json();
   const common = {
@@ -71,7 +71,7 @@ async function configureRealModel(page: Page) {
 
 /** Removes the provider: system.spec.ts asserts a fresh stack has no configured model gateway. */
 async function removeProvider(page: Page) {
-  await page.goto('/');
+  await page.goto('/dashboard');
   const headers = await writeHeaders(page);
   const current = await (await page.request.get('/api/v1/settings/ai')).json();
   const res = await page.request.put('/api/v1/settings/ai', { headers, data: { providers: [], defaults: {}, privacy: { allow_remote_reasoning: false, reasoning_destinations: [], allow_remote_embeddings: false, embedding_destinations: [] }, request_timeout_seconds: 30, expected_revision: current.configuration_revision } });

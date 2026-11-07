@@ -1,3 +1,21 @@
+## 2026-11-07 - Public source catalog overview
+
+- Added an offline-readable, bilingual landing-page overview of source groups, including accounts, feeds, public providers and clearly identified manual imports. The action links to sign-in or source settings according to session state; catalog labels are a curated copy that must track `docs/connectors/provider-catalog.md`.
+- GitNexus did not resolve the new `LandingPage` symbol; source search identified `LandingEntry` as its caller. The web production build and `git diff --check` passed. Chrome DevTools showed 11 groups on Vietnamese desktop and English dark-mode 390 px, with no horizontal overflow and the expected signed-out localized login link. Signed-in navigation, automated tests and live provider activation were not checked.
+
+## 2026-11-07 - Landing preview visual revision
+
+- Fixed the selected source button's foreground/background mismatch and moved the controls below the 3D scene. Reorganized the preview into separate source and answer areas, exposed the central wireframe, and added two static orbit rings with resource disposal.
+- GitNexus did not resolve the new `LandingDemo` or `SourceCanvas` symbols; source search confirmed the preview and canvas call sites. `npm.cmd run build --workspace apps/web` passed. Chrome DevTools inspection covered the desktop preview and 390 px dark-mode Vietnamese layout, including source deselection and citation removal; no horizontal overflow was observed at that mobile width. Automated tests and physical-device checks were not run.
+
+## 2026-11-07 - Public product landing and Google policy disclosures
+
+- Replaced the root auth/setup redirect screen with a bilingual public landing and an illustrative local-data demo. `/dashboard` and dashboard detail routes remain in place; password and Google login return to `/dashboard`, and first-run login routes to `/setup`. Updated public route/language handling, Lighthouse targets, stale E2E workspace paths, and the Google callback expectation; added a landing preview interaction scenario.
+- Added one disposable Three.js canvas paired with HTML source/question controls, source-specific English/Vietnamese sample details and citations, empty/compare states, reduced-motion behavior, a static fallback, visibility-gated rendering and cleanup. The preview does not call AI or provider APIs.
+- Updated English/Vietnamese Terms and Privacy and the service inventory for RADTeam, contact@baoda.io.vn, Vietnam and the supplied domain. Google identity login (`openid email profile`) is distinct from the separate read-only Gmail, Calendar and Drive connectors; the disclosures now describe their selected scopes and collected content.
+- GitNexus file/function impact responses were `UNKNOWN` and its index was three commits behind; source search confirmed route entry and auth paths. No HIGH/CRITICAL result was returned. `git diff --check` passed. `./scripts/dev.ps1 build` passed, including the Next.js production build/type compilation and all seven Compose images.
+- No tests were executed, and no lint, browser/device checks, live Google OAuth verification, legal review, deployment, migrations or runtime acceptance were performed. Next: run the deferred UI/auth scenarios and responsive/WebGL validation; operator/legal and Google consent-screen verification remain separate.
+
 ## 2026-10-24 - Datasource completeness implementation checkpoint
 
 - User approved the full native-first datasource plan in this checkout (`feature/fix-ui`, base `0da1e5b5a58899122a4d77a4f4871e770cd2fcb2`). Preserve all pre-existing dirty work; do not reset, commit, push, merge, run migrations or call live providers. Follow the repository code/build stage and defer tests, lint and standalone typecheck until production implementation is complete.

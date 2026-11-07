@@ -5,7 +5,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { AlertTriangleIcon, UserIcon } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
@@ -18,6 +18,7 @@ import { PasswordInput } from '@/components/ui/password-input';
 import { Label } from '@/components/ui/label';
 import { LegalLinks } from '@/modules/legal';
 import { AppearanceControl } from '@/modules/account';
+import { useDisplayPreferences } from '@/core/query-provider';
 
 const loginSchema = z.object({ password: z.string().min(1).max(128), identifier: z.string().max(320).optional() });
 type LoginForm = z.infer<typeof loginSchema>;
@@ -148,16 +149,29 @@ function GoogleSignIn({ vm }: { vm: LoginPageVm }) {
 /** Reads the query string flags and the email-mode toggle and creates the sign-in form. */
 function useLoginState() {
   const router = useRouter();
+  const display = useDisplayPreferences();
   const t = useTranslations('login');
   const search = new URLSearchParams(useSearch());
+  const requestedLocale = search.get('lang');
   const googleError = search.get('google') === 'error';
   const expired = search.get('reason') === 'expired';
   const presetIdentifier = search.get('identifier');
+  const setup = useQuery({ queryKey: ['setup-status'], queryFn: () => apiRequest<{ setupRequired: boolean }>('/api/v1/auth/setup-status') });
   const [emailToggled, setEmailToggled] = useState<boolean | null>(null);
   // The query string is empty during hydration, so the preset is derived on every render, not stored.
   const emailMode = emailToggled ?? presetIdentifier !== null;
   const form = useForm<LoginForm>({ resolver: zodResolver(loginSchema) });
   const googleStatus = useQuery({ queryKey: ['auth-google-status'], queryFn: () => apiRequest<{ configured: boolean; linked: boolean }>('/api/v1/auth/google/status') });
+
+  useEffect(() => {
+    if (setup.data?.setupRequired) router.replace('/setup');
+  }, [router, setup.data?.setupRequired]);
+
+  useEffect(() => {
+    const locale = requestedLocale;
+    if (locale !== 'en-us' && locale !== 'vi-vi') return;
+    display.setPreview({ theme: 'system', locale, timezone: display.timezone }, display.authGeneration);
+  }, [display.authGeneration, display.setPreview, display.timezone, requestedLocale]);
 
   return { router, t, search, googleError, expired, presetIdentifier, emailMode, form, googleStatus, emailToggled, setEmailToggled };
 }

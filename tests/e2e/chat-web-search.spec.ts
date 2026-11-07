@@ -39,7 +39,7 @@ async function openChat(page: Page) {
 test.describe('web search toggle', () => {
   test('is absent in the quick-chat drawer', async ({ page }) => {
     await mockChat(page, { configured: true });
-    await page.goto('/');
+    await page.goto('/dashboard');
     // The quick-chat shortcut (QuickChatShortcut in workspace-shell) only renders on /dashboard/<id>; the command palette opens the drawer from anywhere.
     await page.getByRole('button', { name: 'Search or run a command' }).click();
     await page.getByText('Quick chat', { exact: true }).first().click();

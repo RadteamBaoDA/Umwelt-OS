@@ -7,6 +7,9 @@ test('owner can set up, log in, and log out', async ({ page }) => {
   if (!setupToken) throw new Error('E2E_SETUP_TOKEN must be set for the disposable test app');
 
   await page.goto('/');
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByRole('heading', { name: /Connect your data|Kết nối dữ liệu/ })).toBeVisible();
+  await page.goto('/setup');
   await page.getByLabel('Setup token').fill(setupToken);
   await page.getByLabel('Password', { exact: true }).fill('test-owner-password-42');
   await page.getByLabel('Confirm password').fill('test-owner-password-42');

@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { usePathname } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import { ApiError, apiRequest } from '@/core/api';
@@ -105,6 +106,8 @@ export function useDocumentUpdateQueue(
 /** Owns the authenticated event stream, cursor replay, domain query invalidation, and bounded document refresh queue for descendants. */
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const client = useQueryClient();
+  const pathname = usePathname();
+  const isPublicPage = pathname === '/' || ['/login', '/setup', '/invite', '/invitations/accept', '/pick', '/privacy', '/terms', '/refunds', '/account-deletion'].includes(pathname);
   const { authGeneration, isCurrentGeneration: isCurrentAuthGeneration } = useDisplayPreferences();
   const t = useTranslations('shell');
   const session = useQuery({
@@ -123,6 +126,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const generation = authGeneration;
+    if (isPublicPage) {
+      setBarrierGeneration(generation);
+      setStatus('unavailable');
+      return;
+    }
     const sessionState = isAuthenticated
       ? 'authenticated'
       : sessionExpired ? 'expired' : 'unavailable';
@@ -151,14 +159,14 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       connection.dispose();
       window.removeEventListener('bbd:auth-ending', connection.authEnding);
     };
-  }, [client, authGeneration, isCurrentAuthGeneration, isAuthenticated, queueDocumentUpdate, resetDocumentState, sessionExpired]);
+  }, [client, authGeneration, isCurrentAuthGeneration, isAuthenticated, isPublicPage, queueDocumentUpdate, resetDocumentState, sessionExpired]);
 
   // Memoize context value so consumers do not re-render when internal barrier state ticks without changing exposed values.
   const context = useMemo(
     () => ({ status, newDocumentCount, documentRefreshRequired, documentRefreshFailed, consumeDocumentUpdates }),
     [status, newDocumentCount, documentRefreshRequired, documentRefreshFailed, consumeDocumentUpdates],
   );
-  const waitingForBarrier = isAuthenticated && barrierGeneration !== authGeneration;
+  const waitingForBarrier = !isPublicPage && isAuthenticated && barrierGeneration !== authGeneration;
   return <RealtimeContext.Provider value={context}>
     {waitingForBarrier
       ? <main className="shell"><div className="status-panel skeleton" aria-label={t('loadingWorkspace')} /></main>

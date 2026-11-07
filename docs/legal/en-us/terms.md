@@ -1,6 +1,6 @@
 # Terms of use
 
-Draft dated 19 October 2026. Operator: **[LEGAL NAME]**. Contact: **[CONTACT EMAIL]**. Jurisdiction: **[JURISDICTION]**. Operator/legal review and completed identity details are required before offering this deployment to others.
+Updated 7 November 2026. Operator: **RADTeam**. Contact: **[contact@baoda.io.vn](mailto:contact@baoda.io.vn)**. Website: [umwelt.baoda.io.vn](https://umwelt.baoda.io.vn). Intended operating jurisdiction: Vietnam. The operator must confirm its legal identity and review the applicable terms before making this instance available to additional users.
 
 ## Self-hosted service and responsibilities
 
@@ -24,4 +24,4 @@ The privacy notice explains data flows and erasure limits. Export available data
 
 ## Applicable rights
 
-Governing law and dispute arrangements must be supplied for **[JURISDICTION]** by the operator after legal review. This draft does not exclude non-waivable consumer rights, impose an unreviewed liability cap or create an arbitration agreement. Contact **[CONTACT EMAIL]** for questions and applicable complaints.
+The operator must confirm the governing law and any dispute process applicable to Vietnam before publication. These terms do not exclude non-waivable consumer rights, impose an unreviewed liability cap or create an arbitration agreement. Contact **[contact@baoda.io.vn](mailto:contact@baoda.io.vn)** with questions or complaints.

@@ -12,7 +12,7 @@
  * @param {{url: string}} context URL about to be audited.
  * @returns {Promise<void>}
  */
-const PUBLIC_PATHS = new Set(['/login', '/terms', '/privacy']);
+const PUBLIC_PATHS = new Set(['/', '/login', '/terms', '/privacy']);
 
 module.exports = async (browser, context) => {
   const target = new URL(context.url);
@@ -24,8 +24,9 @@ module.exports = async (browser, context) => {
 
   const page = await browser.newPage();
   try {
-    await page.goto(`${base}/`, { waitUntil: 'networkidle0' });
-    // Fresh disposable stack: "/" renders the setup form until an owner exists.
+    await page.goto(`${base}/login`, { waitUntil: 'networkidle0' });
+    await page.waitForFunction(() => document.querySelector('#setupToken') || document.querySelector('#password'));
+    // First-run setup now lives at /setup; login redirects here after reading setup status.
     if (await page.$('#setupToken')) {
       await page.type('#setupToken', token);
       await page.type('#password', password);
@@ -33,12 +34,11 @@ module.exports = async (browser, context) => {
       await page.click('button[type=submit]');
       await page.waitForFunction(() => location.pathname.startsWith('/login'));
     }
-    if (!(await page.$('#password'))) await page.goto(`${base}/login`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('#password');
     await page.type('#password', password);
     await page.click('button[type=submit]');
     // Client-side router push, so there is no document navigation to wait for.
-    await page.waitForFunction(() => !location.pathname.startsWith('/login'));
+    await page.waitForFunction(() => location.pathname === '/dashboard' || location.pathname.startsWith('/dashboard/'));
   } finally {
     await page.close();
   }

@@ -1,6 +1,6 @@
 # Điều khoản sử dụng
 
-Bản nháp ngày 19 tháng 10 năm 2026. Đơn vị vận hành: **[LEGAL NAME]**. Liên hệ: **[CONTACT EMAIL]**. Khu vực pháp lý: **[JURISDICTION]**. Cần hoàn thiện và rà soát pháp lý trước khi cung cấp bản triển khai cho người khác.
+Cập nhật ngày 7 tháng 11 năm 2026. Đơn vị vận hành: **RADTeam**. Liên hệ: **[contact@baoda.io.vn](mailto:contact@baoda.io.vn)**. Website: [umwelt.baoda.io.vn](https://umwelt.baoda.io.vn). Khu vực hoạt động dự kiến: Việt Nam. Đơn vị vận hành cần xác nhận tư cách pháp lý và rà soát điều khoản áp dụng trước khi cung cấp bản triển khai này cho người dùng khác.
 
 ## Dịch vụ tự lưu trữ và trách nhiệm
 
@@ -24,4 +24,4 @@ Thông báo quyền riêng tư giải thích luồng dữ liệu và giới hạ
 
 ## Quyền bắt buộc
 
-Đơn vị vận hành phải xác định luật áp dụng và cách giải quyết tranh chấp cho **[JURISDICTION]** sau rà soát pháp lý. Bản nháp không loại trừ quyền người tiêu dùng không thể từ bỏ, áp đặt giới hạn trách nhiệm chưa được rà soát hoặc tạo thỏa thuận trọng tài. Liên hệ **[CONTACT EMAIL]** khi có câu hỏi hoặc khiếu nại theo luật.
+Đơn vị vận hành cần xác nhận luật áp dụng và quy trình giải quyết tranh chấp tại Việt Nam trước khi công bố. Điều khoản này không loại trừ quyền người tiêu dùng không thể từ bỏ, áp đặt giới hạn trách nhiệm chưa được rà soát hoặc tạo thỏa thuận trọng tài. Liên hệ **[contact@baoda.io.vn](mailto:contact@baoda.io.vn)** khi có câu hỏi hoặc khiếu nại.

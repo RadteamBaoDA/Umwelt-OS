@@ -3,7 +3,7 @@ import { test, expect } from './fixtures';
 type TopicItem = { id: string; entity_ids: string[]; is_active: boolean; revision: number };
 
 test('owner follows an entity and sees the topic', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/dashboard');
   const session = await (await page.request.get('/api/v1/auth/session')).json();
   // Playwright's request context sends no Origin (browsers do); owner writes require it.
   const headers = { 'X-CSRF-Token': session.csrfToken, Origin: new URL(page.url()).origin };

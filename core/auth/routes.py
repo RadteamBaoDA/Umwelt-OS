@@ -892,7 +892,7 @@ async def _google_login_branch(
     """Resolve a linked Google identity to its locked owner for login.
 
     Lock order: unlocked owner-id lookup, then owner lock, then identity lock. Returns
-    ``(owner, None)`` after setting the ``/app`` redirect, or ``None`` (session rolled back) when
+    ``(owner, None)`` after setting the ``/dashboard`` redirect, or ``None`` (session rolled back) when
     the identity is unlinked, the account inactive, or the identity changed owner.
     """
     # Resolve linked account IDs without locks, then account -> identity reload.
@@ -918,7 +918,7 @@ async def _google_login_branch(
     if identity is None or identity.owner_id != owner.id:
         await session.rollback()
         return None
-    response.headers["location"] = "/app"
+    response.headers["location"] = "/dashboard"
     return owner, None
 
 

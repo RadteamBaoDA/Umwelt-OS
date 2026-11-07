@@ -19,7 +19,7 @@ async function writeHeaders(page: Page) {
 
 /** Points the owner's chat role at the fake model through the real settings API (idempotent) and probes it. */
 async function configureFakeModel(page: Page) {
-  await page.goto('/');
+  await page.goto('/dashboard');
   const headers = await writeHeaders(page);
   const get = async () => (await page.request.get('/api/v1/settings/ai')).json();
   const current = await get();
@@ -60,7 +60,7 @@ async function configureFakeModel(page: Page) {
 test.afterAll(async ({ browser }, testInfo) => {
   const context = await browser.newContext({ storageState: testInfo.project.use.storageState as string, baseURL: testInfo.project.use.baseURL });
   const page = await context.newPage();
-  await page.goto('/');
+  await page.goto('/dashboard');
   const headers = await writeHeaders(page);
   const current = await (await page.request.get('/api/v1/settings/ai')).json();
   const res = await page.request.put('/api/v1/settings/ai', { headers, data: { providers: [], defaults: {}, privacy: { allow_remote_reasoning: false, reasoning_destinations: [], allow_remote_embeddings: false, embedding_destinations: [] }, request_timeout_seconds: 30, expected_revision: current.configuration_revision } });
@@ -296,7 +296,7 @@ test.describe('chat mobile 375x812', () => {
     await page.screenshot({ path: `${SHOTS}/mobile-375x812-chat.png` });
 
     // Quick-chat drawer (opened from the command palette, available on any page).
-    await page.goto('/');
+    await page.goto('/dashboard');
     await page.getByRole('button', { name: 'Search or run a command' }).click();
     await page.getByText('Quick chat', { exact: true }).first().click();
     const drawer = page.getByRole('dialog');

@@ -1,31 +1,33 @@
-'use client';
+import type { Metadata } from 'next';
+import { headers } from 'next/headers';
+import { NextIntlClientProvider } from 'next-intl';
+import { messages } from '@/core/messages';
+import type { AppLocaleId } from '@/core/i18n';
+import { LandingEntry } from '@/modules/landing';
 
-import { useQuery } from '@tanstack/react-query';
-import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { useTranslations } from 'next-intl';
-import { apiRequest } from '@/core/api';
+const localeIds: AppLocaleId[] = ['en-us', 'vi-vi'];
 
-type SetupStatus = { setupRequired: boolean };
-type Session = { authenticated: true; csrfToken: string };
+/** Render the public landing in the requested locale without checking auth or touching workspace data. */
+export default async function HomePage({ searchParams }: { searchParams: Promise<{ lang?: string }> }) {
+  const { lang } = await searchParams;
+  const acceptLanguage = (await headers()).get('accept-language')?.toLowerCase() ?? '';
+  const locale = localeIds.includes(lang as AppLocaleId)
+    ? lang as AppLocaleId
+    : acceptLanguage.startsWith('vi') ? 'vi-vi' : 'en-us';
+  const nextLocale = locale === 'vi-vi' ? 'vi-VN' : 'en-US';
 
-/** Routes the initial visit to setup, the dashboard, or sign-in from live status checks. */
-export default function HomePage() {
-  const ts = useTranslations('uiSweep');
-  const router = useRouter();
-  const setup = useQuery({ queryKey: ['setup-status'], queryFn: () => apiRequest<SetupStatus>('/api/v1/auth/setup-status') });
-  const session = useQuery({
-    queryKey: ['session'],
-    queryFn: () => apiRequest<Session>('/api/v1/auth/session'),
-    enabled: setup.data?.setupRequired === false,
-  });
+  return (
+    <NextIntlClientProvider locale={nextLocale} messages={messages[locale]}>
+      <LandingEntry />
+    </NextIntlClientProvider>
+  );
+}
 
-  useEffect(() => {
-    if (setup.data?.setupRequired) router.replace('/setup');
-    else if (setup.data && session.data?.authenticated) router.replace('/dashboard');
-    else if (setup.data && session.isError) router.replace('/login');
-  }, [router, setup.data, session.data, session.isError]);
-
-  if (setup.isError) return <main className="page"><section className="auth-panel"><h1>{ts('apiUnreachable')}</h1><p className="text-muted-foreground">{ts('apiUnreachableHint')}</p></section></main>;
-  return <main className="page"><div className="skeleton" style={{ width: 'min(100%, 480px)' }} aria-label={ts('loading')} /></main>;
+/** Supply language-aware metadata for the public Google OAuth homepage. */
+export async function generateMetadata({ searchParams }: { searchParams: Promise<{ lang?: string }> }): Promise<Metadata> {
+  const { lang } = await searchParams;
+  const acceptLanguage = (await headers()).get('accept-language')?.toLowerCase() ?? '';
+  return (lang === 'vi-vi' || (lang !== 'en-us' && acceptLanguage.startsWith('vi')))
+    ? { title: 'Umwelt-OS — Kết nối nguồn dữ liệu, tương tác với AI', description: 'Tập hợp dữ liệu từ các nguồn của bạn và hỏi AI với câu trả lời có dẫn nguồn.' }
+    : { title: 'Umwelt-OS — Connect your data and work with AI', description: 'Bring your sources together and ask AI questions with answers grounded in references.' };
 }

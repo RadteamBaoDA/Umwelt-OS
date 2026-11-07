@@ -41,6 +41,7 @@ import { uiSweepMessages } from './messages/ui-sweep';
 import { routeErrorsMessages } from './messages/route-errors';
 import { errorCodesMessages } from './messages/error-codes';
 import { globalSettingsMessages } from './messages/global-settings';
+import { landingMessages } from './messages/landing';
 
 /**
  * Compose every locale from per-area fragments in ./messages/<area>.ts.
@@ -49,6 +50,7 @@ import { globalSettingsMessages } from './messages/global-settings';
 export const messages = {
   'en-us': {
     shell: shellMessages['en-us'],
+    landing: landingMessages['en-us'],
     onboarding: onboardingMessages['en-us'],
     setup: setupMessages['en-us'],
     topics: topicsMessages['en-us'],
@@ -94,6 +96,7 @@ export const messages = {
   },
   'vi-vi': {
     shell: shellMessages['vi-vi'],
+    landing: landingMessages['vi-vi'],
     onboarding: onboardingMessages['vi-vi'],
     setup: setupMessages['vi-vi'],
     topics: topicsMessages['vi-vi'],

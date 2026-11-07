@@ -4,7 +4,7 @@ type Onboarding = { configuration_revision: number; current_step: string; comple
 type TopicItem = { name: string; is_active: boolean };
 
 test('onboarding topic chips toggle idempotently', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/dashboard');
   const session = await (await page.request.get('/api/v1/auth/session')).json();
   // Playwright's request context sends no Origin (browsers do); owner writes require it.
   const headers = { 'X-CSRF-Token': session.csrfToken, Origin: new URL(page.url()).origin };
