@@ -213,6 +213,8 @@ def route_visualization(
 # router can never map a category to a renderer the internal router would not use.
 CATEGORY_ROUTES: dict[str, tuple[str, str | None]] = {
     "text": ("text", None),
+    # Web-evidence answer rendered by render_answer; the internal router never picks it (no local rule).
+    "rich_answer": ("a2ui", "answer"),
     **{
         name: (renderer, kind)
         for name, renderer, kind, _ in _LOCAL_RULES

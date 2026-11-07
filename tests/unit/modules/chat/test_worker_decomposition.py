@@ -12,7 +12,7 @@ from modules.chat import worker
 from modules.chat.generative_ui.tools.form import _resolve_slots, build_meeting_time_picker_payload
 from modules.chat.generative_ui.tools.plan import _first_provenance
 from modules.chat.generative_ui.tools.query import query_records
-from modules.chat.schemas import AnswerContext, AnswerContextRequest
+from modules.chat.schemas import MAX_QUOTE_LENGTH, AnswerContext, AnswerContextRequest
 from tests.unit.modules.chat._worker_patch import patch_worker
 from tests.unit.typing_regressions.test_none_handling_regressions import _evidence
 
@@ -78,6 +78,19 @@ def test_validate_citations_web_only_answer_gets_web_citation() -> None:
         and cited.valid_citations[0]["url"] == "https://example.test/a"
     )
     assert cited.number_map == {1: 1}
+
+
+def test_validate_citations_truncates_long_web_snippet_to_quote_limit() -> None:
+    """Page-text providers return snippets up to SNIPPET_MAX (4000); the stored quote is capped, not rejected."""
+    hit = SimpleNamespace(url="https://example.test/a", title="A", snippet="x" * 1500)
+    web_run = worker._WebSearchRun({"status": "used"}, (hit,), "searxng")  # type: ignore[arg-type]
+    context = AnswerContext(query="q", evidence=[])
+    cited = worker._validate_citations(
+        "Per the web [1].", context, AnswerContextRequest(query="q"), web_run, []
+    )
+    assert len(cited.valid_citations) == 1
+    assert len(cited.valid_citations[0]["quote"]) == MAX_QUOTE_LENGTH
+    assert cited.final_answer == "Per the web [1]."
 
 
 class _Session:

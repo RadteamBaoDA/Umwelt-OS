@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl';
 import React from 'react';
 import { BareButton } from '@/components/bare-button';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatDateTime, formatTimeZoneLabel } from '@/core/i18n';
 import type { AppLocaleId } from '@/core/i18n';
 import type { Source } from '@/modules/sources';
@@ -14,23 +14,27 @@ import type { DashboardGroup } from './api';
 import { TodayHeader } from './today-header';
 import type { LayoutEditOrigin } from './layout-geometry';
 
-/** Group filter tabs; rendered by the page only when the dashboard has more than one group. */
-export function GroupTabs({ groups, activeGroupId, onChange }: {
+/** Persistent panel tab list inside the page's Tabs root; Add stays outside the keyboard roving set. */
+export function GroupTabs({ groups, onAdd, canAdd }: {
   groups: DashboardGroup[];
-  activeGroupId: string;
-  onChange: (id: string) => void;
+  onAdd: () => void;
+  canAdd: boolean;
 }) {
   const t = useTranslations('dashboard');
   return (
-    <div className="flex flex-wrap items-center gap-3 border-b border-border pb-2">
-      <Tabs value={activeGroupId} onValueChange={onChange} className="h-8">
-        <TabsList className="h-8 p-0.5 bg-muted/30">
-          <TabsTrigger value="all" className="text-xs px-2.5 h-7">{t('allGroups')}</TabsTrigger>
-          {groups.map((group) => (
-            <TabsTrigger key={group.id} value={group.id} className="text-xs px-2.5 h-7">{group.name}</TabsTrigger>
+    <div className="flex shrink-0 items-center gap-3 border-b border-border pb-2">
+      <div className="min-w-0 flex-1 overflow-x-auto">
+        <TabsList className="h-9 min-w-max bg-muted/30 p-0.5">
+          {[...groups].sort((a, b) => Number(b.is_overview) - Number(a.is_overview) || a.position - b.position).map((group) => (
+            <TabsTrigger key={group.id} value={group.id} className="h-8 px-3 text-xs">
+              {group.is_overview ? t('overviewTab') : group.name}
+            </TabsTrigger>
           ))}
         </TabsList>
-      </Tabs>
+      </div>
+      {canAdd && <Button type="button" size="sm" variant="outline" onClick={onAdd} className="shrink-0">
+        <Plus className="size-4" aria-hidden="true" />{t('addPanel')}
+      </Button>}
     </div>
   );
 }

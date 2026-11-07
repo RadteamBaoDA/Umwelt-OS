@@ -7,6 +7,7 @@ import type { Citation } from './api';
 import { safeHttpUrl } from '@/core/safe-url';
 import type { AppLocaleId } from '@/core/i18n';
 import { genUiCopy } from './generative-ui/copy';
+import { webHost } from './citation-panel';
 import './chat-gaps.css';
 
 // The markdown-it renderer and safe link/code boundaries adapt AnythingLLM's
@@ -97,10 +98,10 @@ function linkCitations(html: string, citations?: Citation[]): string {
       if (!citation) return marker;
       if (citation.sourceType === 'web') {
         const href = safeHttpUrl(citation.url);
-        return href ? `<a class="cite" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer nofollow">${num}</a>` : marker;
+        return href ? `<a class="cite" data-cite="${num}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer nofollow">${num}</a>` : marker;
       }
       const query = new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId });
-      return `<a class="cite" href="${escapeHtml(`/knowledge/documents/${encodeURIComponent(citation.documentId)}?${query}#cited-chunk`)}">${num}</a>`;
+      return `<a class="cite" data-cite="${num}" href="${escapeHtml(`/knowledge/documents/${encodeURIComponent(citation.documentId)}?${query}#cited-chunk`)}">${num}</a>`;
     });
   }).join('');
 }
@@ -131,7 +132,7 @@ export function ChatMarkdown({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sanitizer needs the live window, so state is set after mount
     setSafeHtml(purifier.sanitize(rendered, {
       ALLOWED_TAGS: MARKDOWN_TAGS,
-      ALLOWED_ATTR: ['class', 'href', 'rel', 'target'],
+      ALLOWED_ATTR: ['class', 'href', 'rel', 'target', 'data-cite'],
       ALLOW_DATA_ATTR: false,
       ALLOW_ARIA_ATTR: false,
       FORBID_TAGS: ['img', 'iframe', 'object', 'script', 'style', 'svg', 'math'],
@@ -168,11 +169,93 @@ export function ChatMarkdown({
     });
   }, [safeHtml, locale]);
 
+  const tip = useCitationTooltip(containerRef, citations);
+
   return (
+    <>
     <div
       ref={containerRef}
       className="chat-markdown min-w-0 break-words text-sm leading-relaxed text-foreground [&_p]:my-1.5 [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-semibold [&_a]:text-primary [&_a:not(.cite)]:underline [&_table]:my-2 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:text-sm [&_td]:border-b [&_td]:border-border [&_td]:px-2.5 [&_td]:py-1.5 [&_tr:last-child_td]:border-b-0 [&_th]:border-b [&_th]:border-border [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-muted-foreground"
       dangerouslySetInnerHTML={{ __html: safeHtml }}
     />
+    {tip && <CitationTooltip tip={tip} />}
+    </>
+  );
+}
+
+/** Anchor-relative position and source of the open inline-citation tooltip. */
+interface CitationTip {
+  citation: Citation;
+  index: number;
+  left: number;
+  top: number;
+}
+
+/**
+ * Opens an overview tooltip when an inline `.cite` chip is hovered or keyboard-focused. Uses event delegation on the
+ * rendered markdown container because the chips are injected as sanitized HTML.
+ *
+ * @param containerRef - Markdown container holding the `.cite` links.
+ * @param citations - 1-indexed citations the chips refer to.
+ * @returns The tooltip to render, or null when none is open.
+ */
+function useCitationTooltip(containerRef: React.RefObject<HTMLDivElement | null>, citations?: Citation[]): CitationTip | null {
+  const [tip, setTip] = React.useState<CitationTip | null>(null);
+  React.useEffect(() => {
+    const root = containerRef.current;
+    if (!root || !citations?.length) return;
+    /** Resolves the chip under an event target and opens its tooltip below the chip. */
+    const open = (event: Event) => {
+      const chip = (event.target as Element | null)?.closest?.('a.cite[data-cite]');
+      if (!chip || !root.contains(chip)) return;
+      const index = Number(chip.getAttribute('data-cite'));
+      const citation = citations[index - 1];
+      if (!citation) return;
+      const rect = chip.getBoundingClientRect();
+      const left = Math.max(8, Math.min(rect.left + rect.width / 2 - 140, window.innerWidth - 288));
+      setTip({ citation, index, left, top: rect.bottom + 6 });
+    };
+    /** Closes the tooltip when the pointer or focus leaves a chip. */
+    const close = (event: Event) => {
+      if ((event.target as Element | null)?.closest?.('a.cite')) setTip(null);
+    };
+    const dismiss = () => setTip(null);
+    root.addEventListener('mouseover', open);
+    root.addEventListener('focusin', open);
+    root.addEventListener('mouseout', close);
+    root.addEventListener('focusout', close);
+    // Fixed positioning would drift from the chip while scrolling.
+    window.addEventListener('scroll', dismiss, true);
+    return () => {
+      root.removeEventListener('mouseover', open);
+      root.removeEventListener('focusin', open);
+      root.removeEventListener('mouseout', close);
+      root.removeEventListener('focusout', close);
+      window.removeEventListener('scroll', dismiss, true);
+    };
+  }, [containerRef, citations]);
+  return tip;
+}
+
+/**
+ * Overview card for one citation: title, origin and a clamped quote, all rendered as plain text because titles and
+ * quotes can come from untrusted web pages.
+ *
+ * @param props - The open tooltip descriptor.
+ */
+function CitationTooltip({ tip }: { tip: CitationTip }) {
+  const { citation, index, left, top } = tip;
+  const origin = citation.sourceType === 'web' ? webHost(citation.url) : (citation.url ? webHost(citation.url) : '');
+  return (
+    <div
+      role="tooltip"
+      data-testid="citation-tooltip"
+      style={{ position: 'fixed', left, top, width: 280 }}
+      className="pointer-events-none z-50 rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-md"
+    >
+      <p className="font-semibold">[{index}] {citation.title}</p>
+      {origin && <p className="mt-0.5 text-muted-foreground">{origin}</p>}
+      {citation.quote && <p className="mt-1.5 line-clamp-4 text-muted-foreground">{citation.quote}</p>}
+    </div>
   );
 }

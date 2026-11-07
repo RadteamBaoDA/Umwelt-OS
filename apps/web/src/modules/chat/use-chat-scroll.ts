@@ -13,8 +13,6 @@ interface ChatScrollOptions {
   lastMessageId: string | undefined;
   lastMessageRole: 'user' | 'assistant' | 'system' | undefined;
   isStreaming: boolean;
-  /** Reader mode: submitting scrolls the new question to the top and streaming never auto-scrolls. */
-  reader?: boolean;
 }
 
 /** Tracks the `prefers-reduced-motion: reduce` media query. */
@@ -80,21 +78,27 @@ function useScrollCommands({ containerRef, followRef }: FollowState, prefersRedu
     if (pinFrameRef.current !== null) cancelAnimationFrame(pinFrameRef.current);
   }, []);
 
-  return { scrollToBottom, pinToBottom };
+  /** Smooth-scrolls the newest answer (streaming bubble, else the question) to the top of the viewport, once. */
+  const scrollToLatestAnswer = React.useCallback((messageId?: string) => {
+    const element = containerRef.current;
+    if (!element) return;
+    const target = element.querySelector('[data-streaming-answer]') ?? (messageId ? element.querySelector(`[data-message-id=""]`) : null);
+    (target as HTMLElement | null)?.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+  }, [containerRef, prefersReducedMotion]);
+
+  return { scrollToBottom, pinToBottom, scrollToLatestAnswer };
 }
 
 /**
- * Follows new messages: a new conversation starts at its latest message; reader mode parks the newest user question at
- * the top; otherwise a new user message re-engages follow and the latest message is pinned.
+ * Follows new messages: a new conversation starts at its latest message; a new user message re-engages follow
+ * and the stream loop eases the view to the bottom.
  */
 function useFollowNewMessages(
-  { containerRef, followRef }: FollowState,
-  opts: Pick<ChatScrollOptions, 'conversationId' | 'messageCount' | 'lastMessageId' | 'lastMessageRole'> & { reader: boolean },
+  opts: Pick<ChatScrollOptions, 'conversationId' | 'messageCount' | 'lastMessageId' | 'lastMessageRole'>,
   commands: ReturnType<typeof useScrollCommands>,
-  prefersReducedMotion: boolean,
   loadedRef: React.MutableRefObject<boolean>,
 ) {
-  const { conversationId, messageCount, lastMessageId, lastMessageRole, reader } = opts;
+  const { conversationId, messageCount, lastMessageId, lastMessageRole } = opts;
   const { scrollToBottom, pinToBottom } = commands;
   React.useLayoutEffect(() => {
     if (messageCount === 0) {
@@ -107,50 +111,7 @@ function useFollowNewMessages(
       pinToBottom();
       return;
     }
-    if (reader) {
-      // Reader mode: park the newest user question at the top so the answer streams below it.
-      if (lastMessageRole === 'user' && lastMessageId) {
-        const target = containerRef.current?.querySelector(`[data-message-id="${lastMessageId}"]`);
-        (target as HTMLElement | null)?.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion ? 'auto' : 'smooth' });
-      }
-      return;
-    }
-    if (lastMessageRole === 'user') followRef.current = true;
-    if (lastMessageId && followRef.current) {
-      scrollToBottom();
-      pinToBottom();
-    }
-  }, [conversationId, messageCount, lastMessageId, lastMessageRole, prefersReducedMotion, scrollToBottom, pinToBottom, reader, containerRef, followRef, loadedRef]);
-}
-
-/** While streaming (non-reader), pins the transcript to the bottom on animation frames only when scrollHeight changes. */
-function useStreamPinning({ containerRef, followRef }: FollowState, isStreaming: boolean, reader: boolean, conversationId: string | null | undefined) {
-  const streamFrameRef = React.useRef<number | null>(null);
-  React.useEffect(() => {
-    if (!isStreaming || reader) return;
-    let lastScrollHeight = -1;
-    /** Pins transcript to bottom on animation frames only when streaming deltas change scrollHeight. */
-    const tick = () => {
-      const element = containerRef.current;
-      if (element && followRef.current) {
-        const currentHeight = element.scrollHeight;
-        if (currentHeight !== lastScrollHeight) {
-          lastScrollHeight = currentHeight;
-          element.scrollTop = currentHeight;
-        }
-      }
-      streamFrameRef.current = requestAnimationFrame(tick);
-    };
-    streamFrameRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (streamFrameRef.current !== null) cancelAnimationFrame(streamFrameRef.current);
-      streamFrameRef.current = null;
-    };
-  }, [isStreaming, conversationId, reader, containerRef, followRef]);
-
-  React.useEffect(() => () => {
-    if (streamFrameRef.current !== null) cancelAnimationFrame(streamFrameRef.current);
-  }, []);
+  }, [conversationId, messageCount, lastMessageId, lastMessageRole, scrollToBottom, pinToBottom, loadedRef]);
 }
 
 /**
@@ -206,7 +167,6 @@ export function useChatScroll({
   lastMessageId,
   lastMessageRole,
   isStreaming,
-  reader = false,
 }: ChatScrollOptions) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const followRef = React.useRef(true);
@@ -225,8 +185,13 @@ export function useChatScroll({
     lastScrollTopRef.current = 0;
   }, [conversationId]);
 
-  useFollowNewMessages(state, { conversationId, messageCount, lastMessageId, lastMessageRole, reader }, commands, prefersReducedMotion, loadedRef);
-  useStreamPinning(state, isStreaming, reader, conversationId);
+  useFollowNewMessages({ conversationId, messageCount, lastMessageId, lastMessageRole }, commands, loadedRef);
+  // Enter: when a run starts, bring the newest answer area into view once; the stream is never chased afterwards.
+  const { scrollToLatestAnswer } = commands;
+  React.useLayoutEffect(() => {
+    if (isStreaming) scrollToLatestAnswer(lastMessageId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires only on the busy rising edge
+  }, [isStreaming]);
   const scrollHandlers = useScrollGestures(state, setIsAtBottom, lastScrollTopRef);
 
   /** Explicit "jump to latest": re-engages follow and scrolls to the end. */

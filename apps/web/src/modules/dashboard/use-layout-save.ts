@@ -77,7 +77,7 @@ interface DirtyResolutionDeps {
 function useDirtyModalResolution(session: LayoutSession, deps: DirtyResolutionDeps) {
   const { captureLayoutSaveRequest, saveLayoutMutation, navigateToDashboard } = deps;
   const guardedNavigation = useGuardedNavigation();
-  const { savedPlacements, saveOperationPendingRef, membershipOperationCountRef, pendingExitEditRef, pendingDashboardSwitchRef, pendingRouteNavigationRef, pendingBreakpointRef, dismissedBreakpointRef } = session;
+  const { savedPlacements, saveOperationPendingRef, membershipOperationCountRef, pendingExitEditRef, pendingDashboardSwitchRef, pendingGroupSwitchRef, pendingRouteNavigationRef, pendingBreakpointRef, dismissedBreakpointRef } = session;
   const { setDirtyModalOpen, setIsEditMode, setEditOrigin, setActiveGroupId, setIsDirty, setDraftPlacements, setHistory, setHistoryIndex } = session;
 
   /**
@@ -87,6 +87,7 @@ function useDirtyModalResolution(session: LayoutSession, deps: DirtyResolutionDe
   const releasePendingIntents = useCallback((routeIntent: GuardedNavigationIntent | null) => {
     if (routeIntent) {
       pendingDashboardSwitchRef.current = null;
+      pendingGroupSwitchRef.current = null;
       pendingExitEditRef.current = false;
       guardedNavigation.continueNavigation(routeIntent);
       return;
@@ -94,22 +95,27 @@ function useDirtyModalResolution(session: LayoutSession, deps: DirtyResolutionDe
     if (pendingDashboardSwitchRef.current) {
       navigateToDashboard(pendingDashboardSwitchRef.current);
       pendingDashboardSwitchRef.current = null;
-      setActiveGroupId('all');
+      setActiveGroupId('');
+    }
+    if (pendingGroupSwitchRef.current) {
+      setActiveGroupId(pendingGroupSwitchRef.current);
+      pendingGroupSwitchRef.current = null;
     }
     if (pendingExitEditRef.current) {
       setIsEditMode(false);
       pendingExitEditRef.current = false;
     }
-  }, [guardedNavigation, navigateToDashboard, pendingDashboardSwitchRef, pendingExitEditRef, setActiveGroupId, setIsEditMode]);
+  }, [guardedNavigation, navigateToDashboard, pendingDashboardSwitchRef, pendingGroupSwitchRef, pendingExitEditRef, setActiveGroupId, setIsEditMode]);
 
   /** Drops every pending intent and remembers the breakpoint the owner chose to stay on. */
   const stayOnDraft = useCallback(() => {
     pendingDashboardSwitchRef.current = null;
+    pendingGroupSwitchRef.current = null;
     pendingExitEditRef.current = false;
     pendingRouteNavigationRef.current = null;
     dismissedBreakpointRef.current = pendingBreakpointRef.current;
     pendingBreakpointRef.current = null;
-  }, [dismissedBreakpointRef, pendingBreakpointRef, pendingDashboardSwitchRef, pendingExitEditRef, pendingRouteNavigationRef]);
+  }, [dismissedBreakpointRef, pendingBreakpointRef, pendingDashboardSwitchRef, pendingGroupSwitchRef, pendingExitEditRef, pendingRouteNavigationRef]);
 
   /** Discards the draft back to the saved layout, then releases pending intents. */
   const discardDraft = useCallback(() => {
@@ -144,12 +150,13 @@ function useDirtyModalResolution(session: LayoutSession, deps: DirtyResolutionDe
       if (pendingRouteNavigationRef.current) setDirtyModalOpen(true);
       else {
         pendingDashboardSwitchRef.current = null;
+        pendingGroupSwitchRef.current = null;
         pendingExitEditRef.current = false;
       }
     } finally {
       saveOperationPendingRef.current = false;
     }
-  }, [captureLayoutSaveRequest, membershipOperationCountRef, pendingDashboardSwitchRef, pendingExitEditRef, pendingRouteNavigationRef, releasePendingIntents, saveLayoutMutation, saveOperationPendingRef, setDirtyModalOpen]);
+  }, [captureLayoutSaveRequest, membershipOperationCountRef, pendingDashboardSwitchRef, pendingGroupSwitchRef, pendingExitEditRef, pendingRouteNavigationRef, releasePendingIntents, saveLayoutMutation, saveOperationPendingRef, setDirtyModalOpen]);
 
   /** Resolves the dirty modal selection: save, discard, or stay. */
   return useCallback(async (action: DirtyResolution) => {
@@ -178,8 +185,8 @@ export function useLayoutSave(
 ) {
   const t = useTranslations('dashboard');
   const saveLayoutMutation = useSaveLayoutMutation(session);
-  const { activeDashboard, editOrigin, currentBreakpoint, layoutColumns, savedPlacements, draftPlacements, mobileProjectionUnavailable, isDirty, membershipMutationsPending } = session;
-  const { saveOperationPendingRef, membershipOperationCountRef, pendingExitEditRef, pendingDashboardSwitchRef } = session;
+  const { activeDashboard, activeGroupId, editOrigin, currentBreakpoint, layoutColumns, savedPlacements, draftPlacements, mobileProjectionUnavailable, isDirty, membershipMutationsPending } = session;
+  const { saveOperationPendingRef, membershipOperationCountRef, pendingExitEditRef, pendingDashboardSwitchRef, pendingGroupSwitchRef } = session;
   const { setSaveError, setDirtyModalOpen, setIsEditMode, setEditOrigin, setActiveGroupId } = session;
   const layoutOperationPending = saveLayoutMutation.isPending || membershipMutationsPending > 0;
 
@@ -191,12 +198,13 @@ export function useLayoutSave(
     }
     const origin = editOrigin ?? {
       dashboardId: activeDashboard.id,
+      groupId: activeGroupId,
       breakpoint: currentBreakpoint,
       columns: layoutColumns,
       baseRevision: activeDashboard.revision,
       savedSnapshot: savedPlacements.map((placement) => ({ ...placement })),
     };
-    if (origin.dashboardId !== activeDashboard.id
+    if (origin.dashboardId !== activeDashboard.id || origin.groupId !== activeGroupId
       || !isValidLayoutSnapshot(draftPlacements, activeDashboard.instances, origin.columns)) {
       setSaveError(t('layoutActionUnavailable'));
       return null;
@@ -206,7 +214,7 @@ export function useLayoutSave(
       savedSnapshot: origin.savedSnapshot.map((placement) => ({ ...placement })),
       items: draftPlacements.map((placement) => ({ ...placement })),
     };
-  }, [activeDashboard, currentBreakpoint, draftPlacements, editOrigin, layoutColumns, mobileProjectionUnavailable, savedPlacements, setSaveError, t]);
+  }, [activeDashboard, activeGroupId, currentBreakpoint, draftPlacements, editOrigin, layoutColumns, mobileProjectionUnavailable, savedPlacements, setSaveError, t]);
 
   /** Triggered by Save button; the mutation never rereads viewport-derived identity. */
   const handleSave = useCallback(() => {
@@ -241,13 +249,25 @@ export function useLayoutSave(
       setDirtyModalOpen(true);
     } else {
       navigateToDashboard(newId);
-      setActiveGroupId('all');
+      setActiveGroupId('');
     }
   }, [isDirty, layoutOperationPending, membershipOperationCountRef, navigateToDashboard, pendingDashboardSwitchRef, selectedDashboardId, setActiveGroupId, setDirtyModalOpen]);
+
+  /** Switches the active panel only after the current panel's dirty draft is saved or discarded. */
+  const requestSwitchGroup = useCallback((groupId: string) => {
+    if (!activeDashboard?.groups.some((group) => group.id === groupId) || groupId === activeGroupId
+      || layoutOperationPending || membershipOperationCountRef.current > 0) return;
+    if (isDirty) {
+      pendingGroupSwitchRef.current = groupId;
+      setDirtyModalOpen(true);
+    } else {
+      setActiveGroupId(groupId);
+    }
+  }, [activeDashboard, activeGroupId, isDirty, layoutOperationPending, membershipOperationCountRef, pendingGroupSwitchRef, setActiveGroupId, setDirtyModalOpen]);
 
   const handleDirtyModalResolution = useDirtyModalResolution(session, {
     captureLayoutSaveRequest, saveLayoutMutation, navigateToDashboard,
   });
 
-  return { layoutOperationPending, handleSave, requestExitEdit, requestSwitchDashboard, handleDirtyModalResolution };
+  return { layoutOperationPending, handleSave, requestExitEdit, requestSwitchDashboard, requestSwitchGroup, handleDirtyModalResolution };
 }

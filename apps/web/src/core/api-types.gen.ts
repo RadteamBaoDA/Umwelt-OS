@@ -1517,16 +1517,13 @@ export interface paths {
          * Fetch Native Provider
          * @description Collect one bounded native page under bearer, source, revision, and durable lease fences.
          *
-         *     Shared provider cooldowns return before reserving a lease. A provider retry
-         *     deadline releases the active reservation and returns rate_limited without
-         *     publishing ingestion receipt, cursor, or success health. Telegram pagination
-         *     updates active_lease after each accepted page so failures and cancellation can
-         *     release the current reservation rather than an already-consumed token. GitHub's
-         *     single 60-second segment deadline starts before connector fencing and covers
-         *     cooldown, admission, reservation, one selected GET, and receipt acceptance. A due durable
-         *     hint may select one current-object GET; only its proof and exact claim can acknowledge it.
-         *     GitHub requests decrypt only a source/revision-bound grant, hold one cluster-shared
-         *     network permit, and revalidate raw proof in Ingestion before durable acceptance.
+         *     This route only authenticates the collector bearer, loads the Source and checks the
+         *     Ingestion module gate (404 when disabled); orchestration, provider selection, cooldowns,
+         *     leases and error translation live in ``native_fetch.run_provider_fetch`` and the
+         *     ``ProviderCollector`` registry. Shared provider cooldowns return before reserving a lease;
+         *     a provider retry deadline releases the reservation and returns rate_limited without a
+         *     receipt, cursor or success health. GitHub's single 60-second segment deadline covers
+         *     cooldown, admission, reservation, one selected GET and receipt acceptance.
          *
          *     All owner reads/writes receive an explicit admitted workspace/job scope and the
          *     actual rollout flag; members have no Source/configuration/credential access. Service bearer capability remains distinct from principal scope.
@@ -5153,7 +5150,7 @@ export interface paths {
          *         StreamingResponse with text/event-stream media type.
          *
          *     Raises:
-         *         HTTPException: 401 if unauthenticated, 404 if run not found.
+         *         HTTPException: 401 if unauthenticated, 404 if run not found, 503 at the stream cap.
          */
         get: operations["get_response_events_api_v1_responses__response_id__events_get"];
         put?: never;
@@ -7087,6 +7084,63 @@ export interface components {
              * @default owner_alias
              */
             reason: string;
+        };
+        /**
+         * AnswerUIPayload
+         * @description Rich web-evidence answer (`render_answer`); `answer` = {title, blocks[]} with resolved images.
+         */
+        AnswerUIPayload: {
+            /** Answer */
+            answer: {
+                [key: string]: unknown;
+            };
+            /** Chart */
+            chart?: {
+                [key: string]: unknown;
+            } | null;
+            /** Form */
+            form?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "answer";
+            /**
+             * Local Only
+             * @default false
+             */
+            local_only: boolean;
+            /** Part Id */
+            part_id?: string | null;
+            /** Plan */
+            plan?: {
+                [key: string]: unknown;
+            } | null;
+            /** Renderer */
+            renderer?: string | null;
+            /** Sandbox */
+            sandbox?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Status
+             * @default completed
+             * @enum {string}
+             */
+            status: "streaming" | "completed";
+            /** Table */
+            table?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /** Visualization */
+            visualization?: string | null;
         };
         /**
          * ApprovalDecisionRead
@@ -9142,7 +9196,7 @@ export interface components {
         };
         /**
          * DashboardGroupRead
-         * @description Expose one dashboard-owned group and its ordering fields.
+         * @description Expose one dashboard panel, including its immutable Overview identity.
          */
         DashboardGroupRead: {
             /**
@@ -9155,6 +9209,8 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Is Overview */
+            is_overview: boolean;
             /** Name */
             name: string;
             /** Position */
@@ -12724,9 +12780,9 @@ export interface components {
              */
             created_at: string;
             /** Generative Ui */
-            generative_ui?: (components["schemas"]["SandboxedUIPayload"] | components["schemas"]["TableUIPayload"] | components["schemas"]["ChartUIPayload"] | components["schemas"]["PlanUIPayload"] | components["schemas"]["TimePickerUIPayload"] | components["schemas"]["FormUIPayload"]) | null;
+            generative_ui?: (components["schemas"]["SandboxedUIPayload"] | components["schemas"]["TableUIPayload"] | components["schemas"]["ChartUIPayload"] | components["schemas"]["PlanUIPayload"] | components["schemas"]["TimePickerUIPayload"] | components["schemas"]["FormUIPayload"] | components["schemas"]["AnswerUIPayload"]) | null;
             /** Generative Ui Parts */
-            generative_ui_parts?: (components["schemas"]["SandboxedUIPayload"] | components["schemas"]["TableUIPayload"] | components["schemas"]["ChartUIPayload"] | components["schemas"]["PlanUIPayload"] | components["schemas"]["TimePickerUIPayload"] | components["schemas"]["FormUIPayload"])[];
+            generative_ui_parts?: (components["schemas"]["SandboxedUIPayload"] | components["schemas"]["TableUIPayload"] | components["schemas"]["ChartUIPayload"] | components["schemas"]["PlanUIPayload"] | components["schemas"]["TimePickerUIPayload"] | components["schemas"]["FormUIPayload"] | components["schemas"]["AnswerUIPayload"])[];
             /**
              * Id
              * Format: uuid
@@ -16747,6 +16803,10 @@ export interface components {
          * @description Truthful, URL-free outcome of an opted-in web search, shared by MessageRead and the SSE event.
          */
         WebSearchOutcomeRead: {
+            /** Fallback */
+            fallback?: boolean | null;
+            /** Provider */
+            provider?: string | null;
             /** Query */
             query?: string | null;
             /** Reason */

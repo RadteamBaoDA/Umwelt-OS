@@ -1,4 +1,4 @@
-"""Opt-in external visualization router: classify a conversation into one of 13 categories.
+"""Opt-in external visualization router: classify a conversation into one of 14 categories.
 
 Two adapters, both server-validated and both failing closed: any invalid, timed-out or rejected answer raises
 ``VisualizationRouterError`` for the turn to surface as a retryable error. There is deliberately no guess and no
@@ -29,6 +29,7 @@ from core.model_gateway.client import (
 from core.model_gateway.schemas import ModelMapping, RequestPolicy
 from core.model_gateway.transport import EndpointNetworkPolicyError
 from modules.chat.generative_ui.tool_specs import (
+    TOOL_ANSWER,
     TOOL_CHART,
     TOOL_FORM,
     TOOL_PLAN,
@@ -63,6 +64,10 @@ INSTRUCTIONS = (
 )
 CRITERIA: dict[str, str] = {
     "text": "Plain prose answer, explanation, conversation or short fact; no visual needed.",
+    "rich_answer": (
+        "Researched answer about an entity, event, product, place or person from web search results: a layout "
+        "with title, images, key fact, stats, table and sections."
+    ),
     "table": "Side-by-side comparison of several items across attributes, or a list of records.",
     "bar_chart": "Comparing or ranking magnitudes across categories.",
     "line_chart": "A trend or time series of one or more values over time.",
@@ -82,7 +87,7 @@ CRITERIA: dict[str, str] = {
 _CHART_CATEGORIES = frozenset(
     {"bar_chart", "line_chart", "scatter_plot", "distribution", "part_to_whole"}
 )
-_PRESENTATION_TOOLS = frozenset({TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART})
+_PRESENTATION_TOOLS = frozenset({TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART, TOOL_ANSWER})
 # Routing never removes these. Interaction tools collect input from the user rather than present an answer
 # (documented deviation: upstream only removes render tools; forms are kept for the same reason). The plan
 # card stays too because upstream's filter list does not include ``plan_visualization`` either, and no router
@@ -131,7 +136,7 @@ def bounded_window(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 def _valid(category: Any) -> str:
-    """Return ``category`` if it is one of the 13 enum values, otherwise raise ``invalid_category``."""
+    """Return ``category`` if it is one of the 14 enum values, otherwise raise ``invalid_category``."""
     if not isinstance(category, str) or category not in CATEGORY_ROUTES:
         raise VisualizationRouterError("invalid_category")
     return category
@@ -163,6 +168,11 @@ def error_from_gateway(exc: Exception) -> VisualizationRouterError:
     return VisualizationRouterError("provider_error")
 
 
+# Reasoning models spend output budget on reasoning before the answer; a tiny cap yields empty content.
+# No temperature is sent: some current models reject it as deprecated.
+ROUTER_MAX_TOKENS = 1024
+
+
 async def classify_llm(
     gateway: ModelGateway,
     mapping: ModelMapping,
@@ -178,7 +188,7 @@ async def classify_llm(
     """Adapter 1: classify through the configured model gateway with an enum-constrained answer.
 
     ``mode`` is ``json_schema`` (response_format) or ``forced_tool`` (forced tool_choice with an enum parameter).
-    The answer is validated against the 13 categories server-side; anything else raises, nothing is guessed.
+    The answer is validated against the 14 categories server-side; anything else raises, nothing is guessed.
     ``probe`` skips the cached-capability check (used by Test routing, which then records the result).
 
     Raises:
@@ -208,9 +218,11 @@ async def classify_llm(
                 messages,
                 [tool],
                 probe,
-                max_tokens=64,
+                max_tokens=ROUTER_MAX_TOKENS,
                 before_send=before_send,
-                tool_choice={"type": "function", "function": {"name": _TOOL_NAME}},
+                # Only one tool is offered, so "required" == forced; the named-function shape is
+                # mistranslated by some OpenAI-compatible gateways ("tool not found").
+                tool_choice="required",
                 extra_body=extra,
             )
         elif mode == "json_schema":
@@ -221,8 +233,7 @@ async def classify_llm(
                 messages,
                 {"name": "visualization_route", "strict": True, "schema": schema},
                 probe,
-                max_tokens=64,
-                temperature=0,
+                max_tokens=ROUTER_MAX_TOKENS,
                 before_send=before_send,
                 extra_body=extra,
             )
@@ -243,12 +254,15 @@ async def classify_llm(
 
 
 def decision_questions() -> dict[str, Any]:
-    """The single OpenRouter ``choice`` question: criteria keys are the 13 categories (values null), prompt is the LLM's."""
+    """The single OpenRouter ``choice`` question: criteria keys are the 14 categories, prompt is the LLM's.
+
+    Each criterion carries its descriptive text: the Decisions API rejects a question with null/empty criteria.
+    """
     return {
         DECISION_QUESTION: {
             "type": "choice",
             "instructions": INSTRUCTIONS + " Categories: " + json.dumps(CRITERIA),
-            "criteria": dict.fromkeys(CATEGORIES),
+            "criteria": dict(CRITERIA),
         }
     }
 
@@ -266,7 +280,7 @@ async def classify_decisions(
     """Adapter 3: OpenRouter Decisions API (alpha) ``choice`` question over the bounded window as one text item.
 
     State is the window as ``role: text`` lines cut to the newest ``DECISION_STATE_CHARS`` characters. The answer
-    must be a ``choice`` answer naming one of the 13 categories; anything else raises ``invalid_category`` (no guess,
+    must be a ``choice`` answer naming one of the 14 categories; anything else raises ``invalid_category`` (no guess,
     no fallback). Transport, consent fences and key handling are the gateway's, same as ``classify_llm``.
 
     Raises:
@@ -390,11 +404,14 @@ async def classify_typesafe(
 
 
 def allowed_presentation_tools(category: str) -> frozenset[str]:
-    """Presentation tool names a decision allows: text none, table render_table, charts render_chart, rest sandbox."""
+    """Presentation tool names a decision allows: text none, table render_table, rich_answer render_answer, charts
+    render_chart, rest sandbox."""
     if category == "text":
         return frozenset()
     if category == "table":
         return frozenset({TOOL_TABLE})
+    if category == "rich_answer":
+        return frozenset({TOOL_ANSWER})
     if category in _CHART_CATEGORIES:
         return frozenset({TOOL_CHART})
     return frozenset({TOOL_SANDBOXED_UI})
@@ -430,6 +447,11 @@ def decision_note(decision: dict[str, Any], *, remote_media: bool) -> str:
         note += (
             "\nCall render_table with title, columns (keys and labels) and rows (arrays of strings, same width as "
             "columns). Only exact values from the evidence or the user; no HTML or scripts."
+        )
+    elif category == "rich_answer":
+        note += (
+            "\nIf web search results are present, give a short lead in text then call render_answer; otherwise "
+            "answer in plain text."
         )
     elif category in _CHART_CATEGORIES:
         note += "\nCall render_chart with the true chart type; label axes and units and state assumptions."

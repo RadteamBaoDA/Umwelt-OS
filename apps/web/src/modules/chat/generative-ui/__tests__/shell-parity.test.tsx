@@ -176,28 +176,27 @@ describe('useRevealBlocks', () => {
   });
 });
 
-describe('useChatScroll reader mode', () => {
-  /** Renders the hook against a container with one user message and returns its scroll spy. */
-  const run = (reader: boolean, isStreaming: boolean) => {
-    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
-    // jsdom has no element.scrollTo; the hook calls it for the initial bottom scroll.
+describe('useChatScroll on submit', () => {
+  /** Renders a transcript that starts streaming and returns the scrollIntoView spy of the streaming answer. */
+  const run = (reduced: boolean) => {
+    vi.stubGlobal('matchMedia', () => ({ matches: reduced, addEventListener() {}, removeEventListener() {} }));
     HTMLElement.prototype.scrollTo = vi.fn() as never;
-    const scrollIntoView = vi.fn();
-    const Host = ({ id }: { id: string }) => {
-      const { containerRef } = useChatScroll({ conversationId: 'c', messageCount: id === 'u1' ? 1 : 2, lastMessageId: id, lastMessageRole: 'user', isStreaming, reader });
-      return <div ref={containerRef}><div data-message-id="u1" ref={(el) => { if (el) el.scrollIntoView = scrollIntoView; }} /><div data-message-id="u2" ref={(el) => { if (el) el.scrollIntoView = scrollIntoView; }} /></div>;
+    const spy = vi.fn();
+    const Host = ({ busy }: { busy: boolean }) => {
+      const { containerRef } = useChatScroll({ conversationId: 'c', messageCount: 1, lastMessageId: 'u1', lastMessageRole: 'user', isStreaming: busy });
+      return <div ref={containerRef}>{busy && <div data-streaming-answer ref={(el) => { if (el) el.scrollIntoView = spy; }} />}</div>;
     };
-    const view = render(<Host id="u1" />);
-    view.rerender(<Host id="u2" />);
-    return scrollIntoView;
+    const view = render(<Host busy={false} />);
+    view.rerender(<Host busy />);
+    return spy;
   };
 
-  it('scrolls the submitted question to the top in reader mode', () => {
-    expect(run(true, true)).toHaveBeenCalledWith(expect.objectContaining({ block: 'start' }));
+  it('smooth-scrolls the answer area into view once and never chases the bottom', () => {
+    expect(run(false)).toHaveBeenCalledWith(expect.objectContaining({ block: 'start', behavior: 'smooth' }));
   });
 
-  it('does not use scrollIntoView in default follow mode', () => {
-    expect(run(false, false)).not.toHaveBeenCalled();
+  it('uses instant scroll under reduced motion', () => {
+    expect(run(true)).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' }));
   });
 });
 

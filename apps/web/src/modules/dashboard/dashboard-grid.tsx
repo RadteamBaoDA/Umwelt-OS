@@ -90,9 +90,9 @@ function describeGesture(
   return { overlapCount, gestureNotice, liveText };
 }
 
-/** Highest row to render adequate grid background in edit mode and view projection (at least 12, plus 4 spare rows when editing). */
+/** Highest occupied row in reading mode; edit mode reserves 12 guide rows and four spare rows. */
 function computeMaxRow(displayPlacements: DashboardPlacement[], isEditMode: boolean): number {
-  let max = 12;
+  let max = isEditMode ? 12 : 0;
   for (const p of displayPlacements) {
     if (p.y + p.h > max) max = p.y + p.h;
   }

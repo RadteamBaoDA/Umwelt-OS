@@ -102,6 +102,8 @@ def test_message_read_web_search_shape() -> None:
         "reason": "timeout",
         "result_count": 0,
         "query": None,
+        "provider": None,
+        "fallback": None,
     }
     with pytest.raises(ValidationError):
         MessageRead(**common, web_search={"status": "bogus", "reason": None, "result_count": 0})

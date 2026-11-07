@@ -231,7 +231,7 @@ async def _dashboard_read(
                     DashboardGroup.dashboard_id == dashboard.id,
                     Dashboard.workspace_id == scope.workspace_id,
                 )
-                .order_by(DashboardGroup.position, DashboardGroup.id)
+                .order_by(DashboardGroup.is_overview.desc(), DashboardGroup.position, DashboardGroup.id)
             )
         ).all()
     )
@@ -289,6 +289,7 @@ async def _dashboard_read(
                     "dashboard_id": dashboard.id,
                     "name": row.name,
                     "position": row.position,
+                    "is_overview": row.is_overview,
                 }
                 for row in groups
             ],

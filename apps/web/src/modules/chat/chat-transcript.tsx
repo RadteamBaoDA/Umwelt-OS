@@ -2,15 +2,13 @@
 
 import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
-import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { AlertCircleIcon, ArrowDownIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
 import type { ChatMessage, Citation, ToolStatus, WebSearchOutcome } from './api';
 import { Button } from '@/components/ui/button';
-import { CitationPanel, webHost } from './citation-panel';
-import { safeHttpUrl } from '@/core/safe-url';
 import { ChatMarkdown } from './chat-markdown';
 import { useChatScroll } from './use-chat-scroll';
+import { useSmoothedText } from './use-smoothed-text';
 import { ChatReasoning } from './chat-reasoning';
 import { useCopyMessage } from './use-copy-message';
 import { useTopicNames } from './use-topic-names';
@@ -37,6 +35,21 @@ function RevealMarkdown(props: React.ComponentProps<typeof ChatMarkdown>) {
   return <div ref={ref}><ChatMarkdown {...props} /></div>;
 }
 
+/** Display names for the web-search provider ids reported in the search outcome. */
+const PROVIDER_NAMES: Record<string, string> = { omniroute: 'OmniRoute', searxng: 'SearXNG', tavily: 'Tavily', brave: 'Brave' };
+
+/**
+ * " · via {Provider}" (+ " (fallback)") suffix of the search line; renders nothing when the provider is unknown/absent.
+ *
+ * @param props - Provider id and whether it was not the first configured target.
+ * @returns Inline text or null.
+ */
+function WebSearchProvider({ provider, fallback }: { provider?: string | null; fallback?: boolean }) {
+  const t = useTranslations('chat');
+  if (!provider) return null;
+  return <>{t('webSearchedVia', { provider: PROVIDER_NAMES[provider] ?? provider })}{fallback ? t('webSearchedFallback') : null}</>;
+}
+
 /**
  * Announced notice for a requested web search: the searched query with its result count when used (older rows
  * without a count fall back to the query alone), or why it was skipped/unavailable. Never shows URLs.
@@ -53,6 +66,7 @@ function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
         {count > 0
           ? t('webSearchedQueryCount', { query: outcome.query, count })
           : t('webSearchedQuery', { query: outcome.query })}
+        <WebSearchProvider provider={outcome.provider} fallback={outcome.fallback} />
       </p>
     );
   }
@@ -114,54 +128,6 @@ function EmptyIntro({ onSendPrompt, locale }: { onSendPrompt: (prompt: string) =
           ))}
       </div>
     </div>
-  );
-}
-
-/**
- * Compact numbered source links for the quick-chat drawer, where the full citation panel is not shown.
- * Encodes document path parameters and validates external web URLs before rendering navigation links.
- *
- * @param props - Ordered citations attached to the assistant response.
- * @returns Ordered list of citation chips.
- */
-function CitationChips({ citations }: { citations: Citation[] }) {
-  const t = useTranslations('chat');
-  return (
-    <ol aria-label={t('sourceLinks')} className="mt-1 flex flex-wrap gap-2 border-t border-border pt-2 text-xs">
-      {citations.map((citation, index) => {
-        const chipClass = 'inline-flex min-h-9 pointer-coarse:min-h-11 max-w-[14rem] items-center gap-1 rounded-md border border-border px-2 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
-        if (citation.sourceType === 'web') {
-          const href = safeHttpUrl(citation.url);
-          return (
-            <li key={`web-${index}`}>
-              {href ? (
-                <a href={href} target="_blank" rel="noopener noreferrer nofollow" title={`${citation.title} (${webHost(citation.url)})`} className={chipClass}>
-                  <sup className="font-semibold text-foreground">{index + 1}</sup>
-                  <span className="truncate">{webHost(citation.url)}</span>
-                </a>
-              ) : (
-                <span className={chipClass.replace('hover:text-foreground', '')}>
-                  <sup className="font-semibold text-foreground">{index + 1}</sup>
-                  <span className="truncate">{webHost(citation.url)}</span>
-                </span>
-              )}
-            </li>
-          );
-        }
-        return (
-        <li key={`${citation.chunkId}-${index}`}>
-          <Link
-            href={`/knowledge/documents/${encodeURIComponent(citation.documentId)}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`}
-            title={`${citation.title} (${t('viewCitation')})`}
-            className={chipClass}
-          >
-            <sup className="font-semibold text-foreground">{index + 1}</sup>
-            <span className="truncate">{citation.title}</span>
-          </Link>
-        </li>
-        );
-      })}
-    </ol>
   );
 }
 
@@ -269,7 +235,7 @@ function MessageBody({ msg, mode, locale, relationshipLabel }: MessageViewProps 
  *
  * @param props - The raw part, test id, prompt handler, host mode, locale and CSRF token.
  */
-function WidgetPart({ part, testId, onSendPrompt, mode, locale, csrfToken, allowSave }: {
+function WidgetPart({ part, testId, onSendPrompt, mode, locale, csrfToken, allowSave, citations }: {
   part: UiPart;
   testId: string;
   onSendPrompt?: (prompt: string) => void | Promise<unknown>;
@@ -277,6 +243,8 @@ function WidgetPart({ part, testId, onSendPrompt, mode, locale, csrfToken, allow
   locale: AppLocaleId;
   csrfToken?: string;
   allowSave: boolean;
+  /** Grounded citations of the owning message, used by rich answers for source chips. */
+  citations?: Citation[];
 }) {
   const sandbox = (part as { sandbox?: Record<string, unknown> }).sandbox;
   const canSave = allowSave && mode === 'full' && (part as { kind?: string }).kind === 'sandboxed_ui' && sandbox;
@@ -286,6 +254,7 @@ function WidgetPart({ part, testId, onSendPrompt, mode, locale, csrfToken, allow
         payload={part as unknown as GenerativeUIPayload}
         onSendPrompt={onSendPrompt}
         locale={locale}
+        citations={citations}
       />
       {canSave && (
         <SaveTemplateButton
@@ -355,16 +324,6 @@ function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, c
   );
 }
 
-/**
- * Citations under a message or streaming bubble: the inline panel in full Chat, compact chips in the drawer.
- *
- * @param props - Citations (may be empty/undefined, which renders nothing) and host mode.
- */
-function CitationsFooter({ citations, mode }: { citations?: Citation[] | null; mode: 'drawer' | 'full' }) {
-  if (!citations || citations.length === 0) return null;
-  return mode === 'full' ? <CitationPanel citations={citations} variant="inline" /> : <CitationChips citations={citations} />;
-}
-
 /** Model line (drawer only) under an assistant message. */
 function DrawerModelLine({ msg }: { msg: ChatMessage }) {
   const t = useTranslations('chat');
@@ -420,13 +379,13 @@ function TranscriptMessage(props: TranscriptMessageProps) {
           locale={locale}
           csrfToken={csrfToken}
           allowSave
+          citations={msg.citations}
         />
       ))}
 
       <MessageActions {...props} canEdit={canEdit} canRegenerate={canRegenerate} />
 
       {mode === 'drawer' && !isUser && <DrawerModelLine msg={msg} />}
-      {!isUser && <CitationsFooter citations={msg.citations} mode={mode} />}
     </div>
   );
 }
@@ -467,11 +426,12 @@ function StreamingStatus({ activeTool, label }: { activeTool: ToolStatus['tool']
 function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
   const { mode, locale, csrfToken, streamingText, streamingReasoning, streamingCitations, streamingWebSearch, activeTool, streamingUi, isStreaming, widgetPromptHandler } = props;
   const t = useTranslations('chat');
+  const smoothText = useSmoothedText(streamingText || '');
   const label = activeTool
     ? t(activeTool === 'web_search' ? 'toolSearchingWeb' : 'toolQueryingData')
     : (isStreaming || streamingText || streamingReasoning ? t('streaming') : t('thinking'));
   return (
-    <div className="mr-auto flex w-full flex-col gap-2.5">
+    <div data-streaming-answer className="mr-auto flex w-full scroll-mt-4 flex-col gap-2.5">
       <div className="text-sm text-foreground">
         {/* Live region stays mounted so tool-status changes are announced politely. */}
         <StreamingStatus activeTool={activeTool} label={label} />
@@ -480,7 +440,7 @@ function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
 
         <ChatReasoning text={streamingReasoning} streaming answerStarted={Boolean(streamingText) || streamingUi.length > 0} />
 
-        <ChatMarkdown content={streamingText || ''} citations={streamingCitations} locale={locale} />
+        <ChatMarkdown content={smoothText} citations={streamingCitations} locale={locale} />
       </div>
       {streamingUi.map((part, index) => (
         <WidgetPart
@@ -492,9 +452,9 @@ function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
           locale={locale}
           csrfToken={csrfToken}
           allowSave={false}
+          citations={streamingCitations}
         />
       ))}
-      <CitationsFooter citations={streamingCitations} mode={mode} />
     </div>
   );
 }
@@ -567,10 +527,9 @@ function transcriptVisibility(props: ChatTranscriptProps, d: ReturnType<typeof w
  * View model of the transcript: display preferences, scroll behaviour, copy state and revision lookups.
  *
  * @param props - Transcript props.
- * @param mode - Resolved host mode (reader mode on the full page).
  * @param busy - True while pending or streaming (drives scroll following).
  */
-function useTranscriptModel(props: ChatTranscriptProps, mode: 'drawer' | 'full', busy: boolean) {
+function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
   const { conversationId, messages, onSendPrompt, onWidgetSendPrompt } = props;
   const display = useDisplayPreferences();
   const timezone = display.confirmedPreferences?.timezone || 'UTC';
@@ -582,8 +541,6 @@ function useTranscriptModel(props: ChatTranscriptProps, mode: 'drawer' | 'full',
     lastMessageId: last?.id,
     lastMessageRole: last?.role,
     isStreaming: busy,
-    // Reader mode on the full page: the new question is parked at the top, never chased while streaming.
-    reader: mode === 'full',
   });
   const copy = useCopyMessage(conversationId);
   const messageById = React.useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
@@ -611,7 +568,7 @@ export function ChatTranscript(props: ChatTranscriptProps) {
   const { csrfToken, messages, streamingText, streamingCitations, streamingWebSearch, onRetry, onEditMessage, onRegenerateMessage, onSendPrompt } = props;
   const { mode, streamingReasoning, cancelled, activeTool, streamingUi, isStreaming, isPending, error } = withTranscriptDefaults(props);
   const t = useTranslations('chat');
-  const m = useTranscriptModel(props, mode, isStreaming || isPending);
+  const m = useTranscriptModel(props, isStreaming || isPending);
   const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, jumpToLatest, widgetPromptHandler } = m;
   const { showStarter, showStreaming } = transcriptVisibility(props, withTranscriptDefaults(props));
 

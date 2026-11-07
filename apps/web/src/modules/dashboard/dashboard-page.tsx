@@ -1,12 +1,15 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import React, { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useWorkspace } from '@/core/workspace-context';
 import { useDisplayPreferences } from '@/core/query-provider';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
 import type { GadgetInstance } from './api';
 import { DashboardCanvas, LayoutEditorBar } from './dashboard-canvas';
+import { DashboardOverview } from './dashboard-overview';
+import { DashboardPanel } from './dashboard-panel';
 import { DashboardCrudDialogs, ManagementDialog, useDashboardCrud } from './dashboard-dialogs';
 import { DashboardHeader, formatRelativeAge } from './dashboard-header';
 import { GroupTabs, LayoutNotices, StaleSourcesPanel, TimezoneFooter, TodayHeaderGate } from './dashboard-panels';
@@ -133,7 +136,7 @@ function ConnectedPresetPicker({ open, onOpenChange, data, session }: {
       currentDashboardName={activeDashboard?.name}
       onPresetApplied={(applied) => {
         data.navigateToDashboard(applied.id, true);
-        session.setActiveGroupId('all');
+        session.setActiveGroupId('');
         session.setIsDirty(false);
         session.setIsEditMode(false);
       }}
@@ -141,11 +144,10 @@ function ConnectedPresetPicker({ open, onOpenChange, data, session }: {
   );
 }
 
-/** Instances of the active dashboard that belong to the selected group tab ("all" shows everything). */
+/** Instances belonging only to the selected panel. */
 function useVisibleInstances(activeDashboard: PageData['activeDashboard'], activeGroupId: string): GadgetInstance[] {
   return useMemo(() => {
     if (!activeDashboard) return [];
-    if (activeGroupId === 'all') return activeDashboard.instances;
     return activeDashboard.instances.filter((inst) => inst.group_id === activeGroupId);
   }, [activeDashboard, activeGroupId]);
 }
@@ -176,10 +178,9 @@ function StaleAndFooter({ activeDashboard, staleSources, open, onToggle }: {
 }
 
 /**
- * Main dashboard container view for BBD-OS, keeping dashboard controls visible while its content scrolls.
- * Supports owner-scoped desktop/mobile drafts and administrator read-only views, plus mobile reading,
- * geometry history, dashboard switching, and dirty navigation guarding. The route parameter selects
- * the dashboard; `/dashboard` resolves to the first available dashboard.
+ * Main Umwelt-OS dashboard view with a fixed header, persistent panel tabs, and panel-owned scrolling.
+ * Overview owns the map split while other tabs fill the viewport. Layout history and guarded switching
+ * remain dashboard-scoped but edits are confined to the selected group and breakpoint.
  *
  * Composition only: data loading lives in `useDashboardData`, the editing session in `useLayoutSession`,
  * `useLayoutSave` and `useGadgetMembership`, dialogs in `useDashboardCrud`.
@@ -198,6 +199,8 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   // Stale-source detail list stays collapsed until the owner asks for it.
   const [staleDetailsOpen, setStaleDetailsOpen] = useState(false);
   const [mobileNoticeDismissed, dismissMobileNotice] = useMobileNoticeDismissal();
+  const [openAddInitially, setOpenAddInitially] = useState(false);
+  const scrollPositions = useRef(new Map<string, number>());
 
   const data = useDashboardData(dashboardId);
   const { dashboards, selectedDashboardId, activeDashboard, management, sources, showFirstRun } = data;
@@ -209,24 +212,35 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   });
   const ops = { session, save, membership };
   const { layoutOperationPending } = save;
+  const activeGroup = activeDashboard?.groups.find((group) => group.id === session.activeGroupId);
+
+  useEffect(() => {
+    const created = crud.groupMutation.data;
+    if (created && activeDashboard?.groups.some((group) => group.id === created.id)) {
+      session.setActiveGroupId(created.id);
+      crud.groupMutation.reset();
+    }
+  }, [activeDashboard, crud.groupMutation, session.setActiveGroupId]);
+  useEffect(() => { if (!session.editMode) setOpenAddInitially(false); }, [session.editMode]);
+  useEffect(() => { scrollPositions.current.clear(); }, [selectedDashboardId]);
 
   const visibleInstances = useVisibleInstances(activeDashboard, session.activeGroupId);
   const showMobileHint = shouldShowMobileHint(session, Boolean(activeDashboard), mobileNoticeDismissed);
 
   return (
-    <section className="flex w-full flex-col gap-6" data-dashboard-ready={data.dashboardRouteReady}>
+    <section className="dashboard-page flex h-full min-h-0 w-full flex-1 flex-col gap-3 overflow-hidden" data-dashboard-ready={data.dashboardRouteReady}>
       <ConnectedHeader
         data={data} ops={ops} crud={crud}
         onOpenPresets={() => setPresetPickerOpen(true)} onOpenManagement={() => management.setOpen(true)}
       />
-      <TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} />
-      <FreshnessStrip sources={sources.dashboardSources} locale={display.locale} />
-      {/* Group tabs: rendered only when the dashboard has groups */}
-      {activeDashboard && activeDashboard.groups.length > 1 && (
-        <GroupTabs groups={activeDashboard.groups} activeGroupId={session.activeGroupId} onChange={session.setActiveGroupId} />
-      )}
+      <Tabs value={session.activeGroupId} onValueChange={save.requestSwitchGroup}
+        className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
+        {activeDashboard && activeDashboard.groups.length > 0 && (
+          <GroupTabs groups={activeDashboard.groups} onAdd={() => crud.setGroupOpen(true)}
+            canAdd={isOwner && !layoutOperationPending && !session.isDirty} />
+        )}
 
-      <div className="flex flex-col gap-6">
+      <TabsContent value={session.activeGroupId} className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
         <LayoutNotices
           editOrigin={session.editOrigin} selectedDashboardId={selectedDashboardId}
           requestedBreakpoint={session.requestedBreakpoint} mobileProjectionUnavailable={session.mobileProjectionUnavailable}
@@ -235,23 +249,37 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         {/* Layout Editor Toolbar (visible in Edit Mode) */}
         {session.editMode && (
           <LayoutEditorBar
+            key={session.activeGroupId}
             ops={ops} activeDashboard={activeDashboard}
-            onOpenPresets={() => setPresetPickerOpen(true)} onAddGroup={() => crud.setGroupOpen(true)}
+            openAddInitially={openAddInitially}
+            onOpenPresets={() => setPresetPickerOpen(true)} onAddGroup={session.isDirty ? undefined : () => crud.setGroupOpen(true)}
           />
         )}
-        {/* Main Grid Canvas or Empty State */}
-        <DashboardCanvas
-          ops={ops} activeDashboard={activeDashboard} visibleInstances={visibleInstances} showFirstRun={showFirstRun}
-          csrfToken={workspaceSession.csrfToken} isTablet={isTablet} isAdminViewer={isAdminViewer}
-          onPickTopics={() => { management.setTab('topics'); management.setOpen(true); }}
-          onOpenPresets={() => setPresetPickerOpen(true)} onCreateDashboard={() => crud.setCreateOpen(true)}
-          onConfigureInstance={(inst) => { setConfiguringInstance(inst); setGadgetSettingsOpen(true); }}
-        />
-        <StaleAndFooter
-          activeDashboard={activeDashboard} staleSources={sources.staleSources}
-          open={staleDetailsOpen} onToggle={() => setStaleDetailsOpen((open) => !open)}
-        />
-      </div>
+        {(() => {
+          const content = <div className="flex flex-col gap-4 pb-4">
+            {activeGroup?.is_overview && <>
+              <TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} />
+              <FreshnessStrip sources={sources.dashboardSources} locale={display.locale} />
+            </>}
+            <DashboardCanvas
+              ops={ops} activeDashboard={activeDashboard} visibleInstances={visibleInstances} showFirstRun={showFirstRun && Boolean(activeGroup?.is_overview)}
+              csrfToken={workspaceSession.csrfToken} isTablet={isTablet} isAdminViewer={isAdminViewer}
+              onPickTopics={() => { management.setTab('topics'); management.setOpen(true); }}
+              onOpenPresets={() => setPresetPickerOpen(true)} onCreateDashboard={() => crud.setCreateOpen(true)}
+              onConfigureInstance={(inst) => { setConfiguringInstance(inst); setGadgetSettingsOpen(true); }}
+            />
+            {activeGroup?.is_overview && <StaleAndFooter activeDashboard={activeDashboard} staleSources={sources.staleSources}
+              open={staleDetailsOpen} onToggle={() => setStaleDetailsOpen((open) => !open)} />}
+          </div>;
+          const empty = Boolean(activeGroup && !activeGroup.is_overview && visibleInstances.length === 0 && !session.editMode);
+          const panelProps = { panelId: activeGroup?.id ?? 'none', empty, canAdd: isOwner && session.canEditLayout,
+            onAdd: () => { setOpenAddInitially(true); session.setIsEditMode(true); }, scrollPositions: scrollPositions.current };
+          return activeGroup?.is_overview
+            ? <DashboardOverview {...panelProps} editMode={session.editMode} compact={isMobile || isTablet}>{content}</DashboardOverview>
+            : <DashboardPanel {...panelProps}>{content}</DashboardPanel>;
+        })()}
+      </TabsContent>
+      </Tabs>
 
       {/* Preset Picker Modal */}
       <ConnectedPresetPicker

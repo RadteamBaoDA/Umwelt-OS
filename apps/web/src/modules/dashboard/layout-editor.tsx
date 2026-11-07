@@ -28,14 +28,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { deleteGadgetDefinition, type DashboardGroup, type GadgetDefinition } from './api';
 import { GadgetEditor } from './gadget-editor';
@@ -75,6 +67,8 @@ export interface LayoutEditorProps {
   canUseReadableMobileSizes?: boolean;
   /** Opens the Add group dialog owned by the dashboard page; the button is hidden when omitted. */
   onAddGroup?: () => void;
+  /** Opens the picker immediately when an empty panel enters Edit mode through Add gadget. */
+  openAddInitially?: boolean;
   /** Callback fired when user opens the preset picker dialog. */
   onOpenPresetPicker: () => void;
   /** Adds a definition as a gadget instance; resolves true only on success (false or a throw means failure). */
@@ -105,7 +99,7 @@ export interface LayoutEditorProps {
 }
 
 /** Add-flow inputs taken from the editor props. */
-type AddFlowProps = Pick<LayoutEditorProps, 'groups' | 'activeGroupId' | 'onAddGadgetInstance' | 'onBeginAddGadgetInstance' | 'onCancelPendingAdd'>;
+type AddFlowProps = Pick<LayoutEditorProps, 'activeGroupId' | 'onAddGadgetInstance' | 'onBeginAddGadgetInstance' | 'onCancelPendingAdd' | 'openAddInitially'>;
 
 /**
  * State and behaviour of the Add gadget dialog: target group, error text and the definition-to-instance placement.
@@ -113,12 +107,11 @@ type AddFlowProps = Pick<LayoutEditorProps, 'groups' | 'activeGroupId' | 'onAddG
  * Placement is single-flight: while one add runs, a second definition created for a concurrent call is deleted
  * again (never left orphaned) and the dialog cannot be closed. Failures leave the dialog open with a localized error.
  */
-function useAddGadgetFlow({ groups, activeGroupId, onAddGadgetInstance, onBeginAddGadgetInstance, onCancelPendingAdd }: AddFlowProps) {
+function useAddGadgetFlow({ activeGroupId, onAddGadgetInstance, onBeginAddGadgetInstance, onCancelPendingAdd, openAddInitially }: AddFlowProps) {
   const session = useWorkspaceSession();
   const tg = useTranslations('gadgetSettings');
-  const [addDialogOpen, setAddDialogOpen] = useState<boolean>(false);
+  const [addDialogOpen, setAddDialogOpen] = useState<boolean>(Boolean(openAddInitially));
   const isAddingRef = useRef(false);
-  const [targetGroupId, setTargetGroupId] = useState<string>(activeGroupId || groups[0]?.id || '');
   const [addError, setAddError] = useState<string | null>(null);
 
   /**
@@ -126,8 +119,8 @@ function useAddGadgetFlow({ groups, activeGroupId, onAddGadgetInstance, onBeginA
    * Never throws; failures leave the add dialog open with a localized error.
    */
   const addDefinition = useCallback(async (definition: Pick<GadgetDefinition, 'id' | 'renderer' | 'revision'>) => {
-    // Empty means "let the server pick or create the default group".
-    const finalGroupId = targetGroupId || groups[0]?.id || undefined;
+    // The reservation and the selected panel must name the same group.
+    const finalGroupId = activeGroupId;
     /** Rolls back partially applied layout changes after a failed save. */
     const compensate = async () => {
       try {
@@ -166,13 +159,13 @@ function useAddGadgetFlow({ groups, activeGroupId, onAddGadgetInstance, onBeginA
     } finally {
       isAddingRef.current = false;
     }
-  }, [groups, onAddGadgetInstance, onBeginAddGadgetInstance, onCancelPendingAdd, session.csrfToken, targetGroupId, tg]);
+  }, [activeGroupId, onAddGadgetInstance, onBeginAddGadgetInstance, onCancelPendingAdd, session.csrfToken, tg]);
 
   /** Opens the dialog with a cleared error. */
   const openAddDialog = useCallback(() => { setAddError(null); setAddDialogOpen(true); }, []);
   /** Applies a dialog open-state change unless an add is running (the dialog cannot close mid-flight). */
   const setOpenUnlessAdding = useCallback((open: boolean) => { if (!isAddingRef.current) setAddDialogOpen(open); }, []);
-  return { addDialogOpen, openAddDialog, setOpenUnlessAdding, targetGroupId, setTargetGroupId, addError, addDefinition };
+  return { addDialogOpen, openAddDialog, setOpenUnlessAdding, addError, addDefinition };
 }
 
 /** Top edit toolbar (DashboardEdit artboard): title + edit state left, explicit Cancel / Save right. */
@@ -301,11 +294,10 @@ function DirtyModal({ open, description, isSaving, onResolve }: {
   );
 }
 
-/** Add gadget dialog: target group select plus the shared gadget editor. */
-function AddGadgetDialog({ flow, groups }: { flow: ReturnType<typeof useAddGadgetFlow>; groups: DashboardGroup[] }) {
+/** Add gadget dialog for the currently selected panel, using the shared gadget editor. */
+function AddGadgetDialog({ flow }: { flow: ReturnType<typeof useAddGadgetFlow> }) {
   const t = useTranslations('dashboard');
   const tg = useTranslations('gadgetSettings');
-  const { targetGroupId } = flow;
   return (
     <Dialog open={flow.addDialogOpen} onOpenChange={flow.setOpenUnlessAdding}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
@@ -317,27 +309,6 @@ function AddGadgetDialog({ flow, groups }: { flow: ReturnType<typeof useAddGadge
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          {/* Target Group */}
-          {groups.length > 0 && (
-            <div className="space-y-1">
-              <Label htmlFor="inst-group" className="text-xs">
-                {t('selectGroup')}
-              </Label>
-              <Select value={targetGroupId || groups[0]?.id} onValueChange={flow.setTargetGroupId}>
-                <SelectTrigger id="inst-group" className="h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {groups.map((group) => (
-                    <SelectItem key={group.id} value={group.id} className="text-xs">
-                      {group.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
           {/* Save creates the definition, then places its instance; failure removes the unused new definition. */}
           <GadgetEditor
             onSaved={flow.addDefinition}
@@ -375,7 +346,7 @@ export function LayoutEditor(props: LayoutEditorProps) {
       <DirtyModal open={props.dirtyModalOpen} description={props.dirtyDescription} isSaving={props.isSaving} onResolve={props.onDirtyModalResolution} />
 
       {/* Add Gadget Dialog */}
-      <AddGadgetDialog flow={flow} groups={props.groups} />
+      <AddGadgetDialog flow={flow} />
     </>
   );
 }

@@ -515,11 +515,7 @@ async def _place_applied_instances(
     *,
     append: bool,
 ) -> None:
-    """Insert desktop and mobile placements for the instances a preset created (flush-free ``add_all``).
-
-    Appended blocks keep the target's column count and start below its lowest placement, so nothing
-    overlaps; create/replace start from an empty layout at offset 0 with 20 columns.
-    """
+    """Insert preset placements in its own panel, using the target's breakpoint columns."""
     minimums = {
         instance.id: (descriptor.minimum_width, descriptor.minimum_height)
         for instance, _, descriptor in created_instances
@@ -528,19 +524,9 @@ async def _place_applied_instances(
         instance.id: gadgets.preset_slot_size(preset_slot)
         for (instance, _, _), preset_slot in zip(created_instances, preset_slots, strict=True)
     }
-    offsets = {"desktop": 0, "mobile": 0}
     columns = {"desktop": 20, "mobile": 20}
     if append:
-        for breakpoint in offsets:
-            offsets[breakpoint] = (
-                await session.scalar(
-                    select(func.max(GadgetPlacement.y + GadgetPlacement.h)).where(
-                        GadgetPlacement.dashboard_id == dashboard.id,
-                        GadgetPlacement.breakpoint == breakpoint,
-                    )
-                )
-                or 0
-            )
+        for breakpoint in columns:
             columns[breakpoint] = (
                 await session.scalar(
                     select(DashboardLayout.columns).where(
@@ -567,7 +553,7 @@ async def _place_applied_instances(
                     breakpoint=breakpoint,
                     instance_id=item.instance_id,
                     x=item.x,
-                    y=item.y + offsets[breakpoint],
+                    y=item.y,
                     w=item.w,
                     h=item.h,
                 )
@@ -587,7 +573,7 @@ async def apply_preset(
     """Recompute and fingerprint preset state under ordered source/dashboard locks before atomic apply.
 
     ``create`` makes a new dashboard; ``replace`` clears the target's groups and layouts first; ``append``
-    keeps everything on the target and adds the preset as one new group placed below the existing gadgets
+    keeps everything on the target and adds the preset as one independent panel
     (subject to the per-dashboard instance and group limits). Replace and append both check the revision.
     """
     fence = await _admit(
@@ -702,7 +688,10 @@ async def apply_preset(
         raise RuntimeError("invariant violated: dashboard must not be None")
     # Append puts the preset in its own group after the existing ones; create/replace start from an empty dashboard.
     group_position = max(group_positions, default=-1) + 1 if payload.mode == "append" else 0
-    group = DashboardGroup(dashboard_id=dashboard.id, name=current["name"], position=group_position)
+    group = DashboardGroup(
+        dashboard_id=dashboard.id, name=current["name"], position=group_position,
+        is_overview=payload.mode != "append",
+    )
     session.add(group)
     await session.flush()
     created_instances: list[tuple[GadgetInstance, GadgetDefinition, Any]] = []

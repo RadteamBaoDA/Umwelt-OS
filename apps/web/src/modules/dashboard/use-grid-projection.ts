@@ -5,6 +5,23 @@ import type { DashboardPlacement, GadgetInstance } from './api';
 import { getGridUnitMetrics, type ActiveGesture } from './grid-geometry';
 import { projectReadableMobilePlacements, projectTabletPlacements, TABLET_GRID_COLUMNS } from './widget-registry';
 
+/** Full-width reading flow for a panel too narrow to hold two readable gadget columns. */
+function projectSingleColumnPlacements(placements: DashboardPlacement[], instances: GadgetInstance[],
+  desktopCellSize: number, singleCellSize: number, frameHeaderHeight: number): DashboardPlacement[] | null {
+  if (!(desktopCellSize > 0) || !(singleCellSize > 0)) return null;
+  let y = 0;
+  const ordered = [...placements].sort((a, b) => a.y - b.y || a.x - b.x || a.instance_id.localeCompare(b.instance_id));
+  const flowed = ordered.map((source) => {
+    const height = Math.max(2, Math.ceil((source.h * (desktopCellSize + 12)) / (singleCellSize + 12)));
+    const next = { ...source, x: 0, y, w: TABLET_GRID_COLUMNS, h: height };
+    y += height;
+    return next;
+  });
+  const readable = projectReadableMobilePlacements(flowed, instances, TABLET_GRID_COLUMNS, singleCellSize, frameHeaderHeight);
+  const byId = new Map(readable?.map((placement) => [placement.instance_id, placement]));
+  return readable ? placements.map((placement) => byId.get(placement.instance_id)!) : null;
+}
+
 /** Inputs of {@link useGridProjection}. */
 export interface GridProjectionInputs {
   gridWidth: number;
@@ -35,9 +52,11 @@ function useTabletProjection(inputs: GridProjectionInputs, gridMetrics: ReturnTy
   );
   const tabletProjection = useMemo(
     () => (tabletActive && tabletMetrics && gridMetrics && frameHeaderHeight > 0
-      ? projectTabletPlacements(placements, instances, gridMetrics.cellSize, tabletMetrics.cellSize, frameHeaderHeight)
+      ? gridWidth >= 680
+        ? projectTabletPlacements(placements, instances, gridMetrics.cellSize, tabletMetrics.cellSize, frameHeaderHeight)
+        : projectSingleColumnPlacements(placements, instances, gridMetrics.cellSize, tabletMetrics.cellSize, frameHeaderHeight)
       : null),
-    [frameHeaderHeight, gridMetrics, instances, placements, tabletActive, tabletMetrics],
+    [frameHeaderHeight, gridMetrics, gridWidth, instances, placements, tabletActive, tabletMetrics],
   );
   const rendering = tabletActive && tabletProjection !== null && tabletMetrics !== null;
   return { rendering, tabletProjection, tabletMetrics };

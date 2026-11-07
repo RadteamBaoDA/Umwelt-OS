@@ -6,7 +6,7 @@ identifiers (UUIDs) ever reach persisted payloads.
 """
 
 import copy
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -30,6 +30,9 @@ TOOL_TABLE = "render_table"
 TOOL_CHART = "render_chart"
 TOOL_PLAN = "render_plan"
 TOOL_TIME_PICKER = "render_time_picker"
+TOOL_ANSWER = (
+    "render_answer"  # rich web-evidence answer; offered only when web search returned results
+)
 TOOL_FORM = "render_form"
 TOOL_READ_SKILL = "read_skill"
 TOOL_MANAGE_TODOS = (
@@ -60,7 +63,7 @@ TOOL_TRIP_IMAGES = (
 )
 
 TERMINAL_UI_TOOLS: frozenset[str] = frozenset(
-    {TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART, TOOL_PLAN, TOOL_TIME_PICKER, TOOL_FORM}
+    {TOOL_SANDBOXED_UI, TOOL_TABLE, TOOL_CHART, TOOL_PLAN, TOOL_TIME_PICKER, TOOL_FORM, TOOL_ANSWER}
 )
 
 
@@ -118,6 +121,124 @@ class ChartToolArgs(BaseModel):
         if self.is_sample and "source" not in self.model_fields_set:
             self.source = SAMPLE_SOURCE
         return self
+
+
+def _image_ids(min_length: int, max_length: int) -> Any:
+    """Field for web-image ids (``img1``..``img12``) from the turn's image list; unknown ids are dropped later."""
+    return Field(
+        default_factory=list,
+        min_length=min_length,
+        max_length=max_length,
+        description="Ids such as img1 from the 'Web images' list of this turn. Never invent ids or URLs.",
+    )
+
+
+class _AnswerBlock(BaseModel):
+    """Base of every ``render_answer`` block: strict, no unknown keys."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class AnswerGalleryBlock(_AnswerBlock):
+    """A strip of up to 8 listed web images."""
+
+    type: Literal["gallery"]
+    image_ids: list[str] = _image_ids(1, 8)
+
+
+class AnswerStatusBlock(_AnswerBlock):
+    """A status badge (e.g. a confirmed release date) with an optional ``YYYY-MM-DD`` update date."""
+
+    type: Literal["status"]
+    label: str = Field(min_length=1, max_length=60)
+    tone: Literal["positive", "neutral", "warning", "negative"] = "neutral"
+    updated_at: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class AnswerKeyValueBlock(_AnswerBlock):
+    """The single key fact, shown large, with a short markdown caption."""
+
+    type: Literal["key_value"]
+    value: str = Field(min_length=1, max_length=80)
+    caption: str = Field(default="", max_length=600)
+    citations: list[int] = _citation_numbers()
+
+
+class AnswerStatItem(BaseModel):
+    """One stat card."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=60)
+    value: str = Field(min_length=1, max_length=40)
+    citations: list[int] = _citation_numbers()
+
+
+class AnswerStatsBlock(_AnswerBlock):
+    """Two to four stat cards."""
+
+    type: Literal["stats"]
+    items: list[AnswerStatItem] = Field(min_length=2, max_length=4)
+
+
+class AnswerTableBlock(_AnswerBlock):
+    """A comparison table; rows are padded/trimmed to the column count by ``normalize_rows``."""
+
+    type: Literal["table"]
+    columns: list[Annotated[str, Field(min_length=1, max_length=60)]] = Field(
+        min_length=1, max_length=8
+    )
+    rows: list[list[Annotated[str, Field(max_length=200)]]] = Field(min_length=1, max_length=30)
+    citations: list[int] = _citation_numbers()
+
+    @model_validator(mode="after")
+    def normalize_rows(self) -> "AnswerTableBlock":
+        """Pad short rows with empty cells and trim long ones so every row matches ``columns``."""
+        width = len(self.columns)
+        self.rows = [(row + [""] * width)[:width] for row in self.rows]
+        return self
+
+
+class AnswerSectionBlock(_AnswerBlock):
+    """A headed markdown section with optional images."""
+
+    type: Literal["section"]
+    heading: str = Field(min_length=1, max_length=120)
+    markdown: str = Field(min_length=1, max_length=4000)
+    image_ids: list[str] = _image_ids(0, 6)
+    citations: list[int] = _citation_numbers()
+
+
+class AnswerNoteBlock(_AnswerBlock):
+    """A short markdown note (caveat, uncertainty)."""
+
+    type: Literal["note"]
+    markdown: str = Field(min_length=1, max_length=1000)
+
+
+AnswerBlock = Annotated[
+    AnswerGalleryBlock
+    | AnswerStatusBlock
+    | AnswerKeyValueBlock
+    | AnswerStatsBlock
+    | AnswerTableBlock
+    | AnswerSectionBlock
+    | AnswerNoteBlock,
+    Field(discriminator="type"),
+]
+
+
+class RenderAnswerArgs(BaseModel):
+    """Model-facing rich answer: a title plus 1-12 typed blocks (no free HTML).
+
+    Evidence is cited by number and images by listed id only; the server resolves both and drops
+    anything unknown, so the model can never introduce a URL or identifier.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=160)
+    blocks: list[AnswerBlock] = Field(min_length=1, max_length=12)
 
 
 class PlanStepToolArgs(BaseModel):
@@ -239,6 +360,13 @@ _UI_MODELS: dict[str, tuple[type[BaseModel], str]] = {
         FormPayload,
         "Render an input form to collect details needed to proceed (never credentials). Terminal.",
     ),
+    TOOL_ANSWER: (
+        RenderAnswerArgs,
+        (
+            "Render a rich answer (title, image gallery, status badge, key fact, stats, table, sections) from web "
+            "evidence. Cite with [n] numbers and refer to images by listed id. Terminal."
+        ),
+    ),
 }
 
 
@@ -301,6 +429,7 @@ def build_chat_tool_specs(
     include_templates: bool = False,
     include_theme: bool = False,
     include_db_query: bool = False,
+    include_answer: bool = False,
 ) -> list[dict[str, Any]]:
     """Build the OpenAI-format `tools` list for a generative-UI chat turn.
 
@@ -312,12 +441,15 @@ def build_chat_tool_specs(
         include_templates: Whether to expose the three non-terminal template tools (list, apply, clear pending).
         include_theme: Whether to expose the non-terminal `set_theme` tool.
         include_db_query: Whether to expose the non-terminal `query_collected_data` database query tool.
+        include_answer: Whether to expose the terminal `render_answer` tool (only when web search returned results).
 
     Returns:
         Fresh (caller-mutable) list of function specs whose parameters come from the pydantic models.
     """
     specs: list[dict[str, Any]] = []
     for name, (model, description) in _UI_MODELS.items():
+        if name == TOOL_ANSWER and not include_answer:
+            continue
         schema = _sandbox_schema() if model is SandboxedUiArgs else model.model_json_schema()
         specs.append(_function_spec(name, description, schema))
     if include_read_skill:

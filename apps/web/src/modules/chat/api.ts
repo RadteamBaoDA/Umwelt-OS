@@ -51,6 +51,10 @@ export interface WebSearchOutcome {
   result_count?: number;
   /** The query actually sent to the search provider (may be an LLM rewrite of the prompt). */
   query?: string | null;
+  /** Provider that answered (`omniroute|searxng|tavily|brave`); absent on older rows. */
+  provider?: string | null;
+  /** True when the answering provider was not the first configured target. */
+  fallback?: boolean;
 }
 
 /** Progress of a server-side tool (`tool.status` SSE event). */

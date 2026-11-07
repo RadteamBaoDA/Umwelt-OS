@@ -14,11 +14,13 @@ def validate_layout(
     items: Sequence[LayoutItem],
     columns: int,
     minimum_sizes: Mapping[UUID, tuple[int, int]],
+    group_ids: Mapping[UUID, UUID] | None = None,
 ) -> None:
-    """Reject invalid, undersized, overlapping, or non-owned rectangles without rewriting them.
+    """Reject invalid or non-owned rectangles and overlaps within each stored panel.
 
     `minimum_sizes` must contain exactly the current dashboard instance IDs; callers separately
     compare that membership to the persisted instance set before invoking this pure validator.
+    When supplied, `group_ids` must cover the same IDs so different panels can reuse coordinates.
     """
     if type(columns) is not int or not 1 <= columns <= MAX_COLUMNS:
         raise ValueError("columns must be an integer from 1 through 20")
@@ -29,6 +31,8 @@ def validate_layout(
         raise ValueError("each instance may appear only once")
     if set(identifiers) != set(minimum_sizes):
         raise ValueError("layout instances must exactly match the dashboard instances")
+    if group_ids is not None and set(group_ids) != set(minimum_sizes):
+        raise ValueError("layout groups must exactly match the dashboard instances")
 
     for item in items:
         if item.x + item.w > columns:
@@ -43,6 +47,8 @@ def validate_layout(
     # check simple and predictable. ponytail: pairwise scan, spatial index only if the 100-item ceiling changes.
     for index, left in enumerate(items):
         for right in items[index + 1 :]:
+            if group_ids is not None and group_ids[left.instance_id] != group_ids[right.instance_id]:
+                continue
             overlaps = (
                 left.x < right.x + right.w
                 and right.x < left.x + left.w

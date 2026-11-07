@@ -246,6 +246,8 @@ async def test_end_to_end_search_sends_only_literal_query_and_persists_cited_res
                 "reason": None,
                 "result_count": 2,
                 "query": message,
+                "provider": "tavily",
+                "fallback": False,
             }
             answer = await session.get(Message, run.assistant_message_id)
             assert answer is not None and answer.content == "News [1]"

@@ -68,7 +68,7 @@ async def _llm(gateway: FakeGateway, **kw: Any) -> str:
 
 
 def test_thirteen_categories_map_to_renderers() -> None:
-    assert len(viz.CATEGORIES) == 13 and set(viz.CRITERIA) == set(CATEGORY_ROUTES)
+    assert len(viz.CATEGORIES) == 14 and set(viz.CRITERIA) == set(CATEGORY_ROUTES)
     assert viz.decision_for("part_to_whole", "external:llm")["kind"] == "pie_chart"
     assert viz.decision_for("text", "external:llm")["renderer"] == "text"
     with pytest.raises(viz.VisualizationRouterError):
@@ -108,6 +108,8 @@ async def test_llm_json_schema_valid_and_openrouter_flag() -> None:
     plain = FakeGateway(_content("map"))
     await _llm(plain, base_url="https://api.openai.com/v1")
     assert plain.calls[0][2]["extra_body"] is None
+    # reasoning models reject temperature and need a token budget beyond their reasoning
+    assert "temperature" not in kwargs and kwargs["max_tokens"] >= 1024
 
 
 @pytest.mark.asyncio
@@ -115,7 +117,8 @@ async def test_llm_forced_tool_sends_tool_choice() -> None:
     gateway = FakeGateway(_tool("flowchart"))
     assert await _llm(gateway, mode="forced_tool") == "flowchart"
     assert gateway.calls[0][0] == "tools"
-    assert gateway.calls[0][2]["tool_choice"]["function"]["name"] == "select_visualization"
+    assert gateway.calls[0][2]["tool_choice"] == "required"
+    assert gateway.calls[0][2]["max_tokens"] >= 1024
 
 
 @pytest.mark.asyncio

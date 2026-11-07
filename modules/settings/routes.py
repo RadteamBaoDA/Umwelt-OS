@@ -732,6 +732,10 @@ async def test_viz_router(
                 )
         except viz.VisualizationRouterError as exc:
             error = exc.code
+            # Cause text is already secret-redacted by the gateway; never log keys, URLs or bodies.
+            logging.getLogger(__name__).warning(
+                "Visualization router test failed (mode=%s, %s: %s)", mode, exc.code, exc.__cause__
+            )
             if exc.code in {"mode_unsupported", "invalid_category"}:
                 continue  # this endpoint may support the other constrained-output mode
             return VizRouterTestResult(ok=False, error=exc.code)
@@ -769,9 +773,9 @@ async def discover_viz_decision_models(
     redis = request.app.state.redis
     key = body.api_key or ""
     if not key:
-        saved = await public.resolve_viz_router(session, settings, scope=_owner)
-        # Only the saved OpenRouter key may go to openrouter.ai; another kind's key is never reused for this host.
-        key = saved.api_key if saved.kind == "openrouter" else ""
+        # Only the stored OpenRouter key may go to openrouter.ai (even while another kind is selected);
+        # another kind's key is never reused for this host.
+        key = await public.saved_openrouter_key(session, settings, scope=_owner)
     if not key:
         return VizDecisionModelsResult(ok=False, error="credential_required")
     base = await public.get_ai_execution_config(session, settings, redis, scope=_owner)

@@ -87,7 +87,7 @@ async def get_dashboard(
 async def create_dashboard(
     session: AsyncSession, payload: DashboardCreate, *, scope: Scope, multi_workspace_enabled: bool
 ) -> DashboardDetail:
-    """Create a dashboard with empty desktop/mobile layouts and publish revision one atomically."""
+    """Create a dashboard with empty layouts and one permanent Overview panel atomically."""
     fence = await _admit(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
     )
@@ -111,6 +111,9 @@ async def create_dashboard(
             DashboardLayout(dashboard_id=dashboard.id, breakpoint=key, columns=20)
             for key in ("desktop", "mobile")
         ]
+    )
+    session.add(
+        DashboardGroup(dashboard_id=dashboard.id, name="Overview", position=0, is_overview=True)
     )
     await commit_with_replay(
         session,
@@ -200,11 +203,12 @@ async def list_groups(
             DashboardGroup.dashboard_id == dashboard_id,
             Dashboard.workspace_id == scope.workspace_id,
         )
-        .order_by(DashboardGroup.position, DashboardGroup.id)
+        .order_by(DashboardGroup.is_overview.desc(), DashboardGroup.position, DashboardGroup.id)
     )
     return [
         DashboardGroupRead(
-            id=row.id, dashboard_id=row.dashboard_id, name=row.name, position=row.position
+            id=row.id, dashboard_id=row.dashboard_id, name=row.name, position=row.position,
+            is_overview=row.is_overview,
         )
         for row in rows.all()
     ]
@@ -238,7 +242,9 @@ async def create_group(
     )
     if count >= MAX_GROUPS_PER_DASHBOARD:
         raise DashboardConflict("group_limit", "Group limit reached", dashboard.revision)
-    group = DashboardGroup(dashboard_id=dashboard_id, name=payload.name, position=payload.position)
+    group = DashboardGroup(
+        dashboard_id=dashboard_id, name=payload.name, position=payload.position, is_overview=False
+    )
     session.add(group)
     revision = _bump(dashboard)
     await session.flush()
@@ -250,7 +256,8 @@ async def create_group(
         access_fence=fence,
     )
     return DashboardGroupRead(
-        id=group.id, dashboard_id=dashboard_id, name=group.name, position=group.position
+        id=group.id, dashboard_id=dashboard_id, name=group.name,
+        position=group.position, is_overview=False,
     )
 
 
@@ -286,6 +293,8 @@ async def patch_group(
     if "name" in payload.model_fields_set:
         if payload.name is None:
             raise ValueError("name cannot be cleared")
+        if group.is_overview:
+            raise DashboardConflict("overview_immutable", "Overview cannot be renamed", dashboard.revision)
         group.name = payload.name
     if "position" in payload.model_fields_set:
         if payload.position is None:
@@ -300,7 +309,8 @@ async def patch_group(
         access_fence=fence,
     )
     return DashboardGroupRead(
-        id=group.id, dashboard_id=dashboard_id, name=group.name, position=group.position
+        id=group.id, dashboard_id=dashboard_id, name=group.name,
+        position=group.position, is_overview=group.is_overview,
     )
 
 
@@ -331,6 +341,8 @@ async def delete_group(
     )
     if group is None:
         raise DashboardMissing
+    if group.is_overview:
+        raise DashboardConflict("overview_immutable", "Overview cannot be deleted", dashboard.revision)
     if (
         await session.scalar(
             select(GadgetInstance.id)
@@ -644,9 +656,8 @@ async def _resolve_instance_group(
     """Return the target group for a new instance under the caller's dashboard lock.
 
     An explicit ``group_id`` must belong to the dashboard (else ``DashboardMissing``). When it is
-    ``None`` the lowest-position group (id as tiebreak) is used; a dashboard with no groups gets a
-    "General" group at position 0 added to the session. The caller owns the single revision bump
-    and commit, so creating the group here adds no extra revision.
+    ``None`` Overview is used; a dashboard with no groups gets one under the caller's lock.
+    The caller owns the revision bump and commit, so creating the group adds no extra revision.
     """
     query = (
         select(DashboardGroup)
@@ -662,10 +673,10 @@ async def _resolve_instance_group(
             raise DashboardMissing
         return group
     group = await session.scalar(
-        query.order_by(DashboardGroup.position, DashboardGroup.id).limit(1)
+        query.order_by(DashboardGroup.is_overview.desc(), DashboardGroup.position, DashboardGroup.id).limit(1)
     )
     if group is None:
-        group = DashboardGroup(dashboard_id=dashboard.id, name="General", position=0)
+        group = DashboardGroup(dashboard_id=dashboard.id, name="Overview", position=0, is_overview=True)
         session.add(group)
         await session.flush()
     return group
@@ -681,7 +692,7 @@ async def create_instance(
 ) -> DashboardDetail:
     """Create a cross-checked instance and both default placements under definition-before-dashboard locks.
 
-    An omitted ``group_id`` falls back to the dashboard's first group, creating "General" if none exists.
+    An omitted ``group_id`` falls back to the permanent Overview group.
     """
     fence = await _admit(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
@@ -721,6 +732,7 @@ async def create_instance(
         (
             await session.scalars(
                 select(GadgetPlacement)
+                .join(GadgetInstance, GadgetInstance.id == GadgetPlacement.instance_id)
                 .join(
                     Dashboard,
                     Dashboard.id == GadgetPlacement.dashboard_id,
@@ -728,6 +740,7 @@ async def create_instance(
                 .where(
                     GadgetPlacement.dashboard_id == dashboard_id,
                     Dashboard.workspace_id == scope.workspace_id,
+                    GadgetInstance.group_id == group.id,
                 )
             )
         ).all()
@@ -813,7 +826,7 @@ async def patch_instance(
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> DashboardDetail:
-    """Edit local title/group/order under the dashboard revision while preserving layout geometry."""
+    """Edit title/order or move an instance into another panel without overlapping its gadgets."""
     fence = await _admit(
         session, scope=scope, multi_workspace_enabled=multi_workspace_enabled, lock=True
     )
@@ -869,7 +882,44 @@ async def patch_instance(
             is None
         ):
             raise DashboardMissing
-        instance.group_id = payload.group_id
+        if instance.group_id != payload.group_id:
+            # Each panel owns its own origin. Re-home both saved rectangles before changing membership.
+            placements = list(
+                (await session.scalars(
+                    select(GadgetPlacement).where(
+                        GadgetPlacement.dashboard_id == dashboard_id,
+                        GadgetPlacement.instance_id == instance_id,
+                    )
+                )).all()
+            )
+            for placement in placements:
+                layout_columns = await session.scalar(
+                    select(DashboardLayout.columns).where(
+                        DashboardLayout.dashboard_id == dashboard_id,
+                        DashboardLayout.breakpoint == placement.breakpoint,
+                    )
+                )
+                occupied = list(
+                    (await session.scalars(
+                        select(GadgetPlacement)
+                        .join(GadgetInstance, GadgetInstance.id == GadgetPlacement.instance_id)
+                        .where(
+                            GadgetPlacement.dashboard_id == dashboard_id,
+                            GadgetPlacement.breakpoint == placement.breakpoint,
+                            GadgetInstance.group_id == payload.group_id,
+                        )
+                    )).all()
+                )
+                position = layouts.find_free_position(
+                    [(item.x, item.y, item.w, item.h) for item in occupied],
+                    layout_columns or 20,
+                    placement.w,
+                    placement.h,
+                )
+                if position is None:
+                    raise ValueError("No free layout position remains in the destination panel")
+                placement.x, placement.y = position
+            instance.group_id = payload.group_id
     if "position" in payload.model_fields_set:
         if payload.position is None:
             raise ValueError("position cannot be cleared")
@@ -968,11 +1018,14 @@ async def replace_layout(
     )
     dashboard = await _lock_dashboard(session, dashboard_id, scope=scope)
     _check_revision(dashboard, payload.expected_revision)
-    _instances, minimums, _ = await _instance_minima(session, dashboard_id, scope=scope)
+    instances, minimums, _ = await _instance_minima(session, dashboard_id, scope=scope)
     item_ids = {item.instance_id for item in payload.items}
     if item_ids != set(minimums):
         raise ValueError("Layout must include every dashboard instance exactly once")
-    layouts.validate_layout(payload.items, payload.columns, minimums)
+    layouts.validate_layout(
+        payload.items, payload.columns, minimums,
+        group_ids={instance.id: instance.group_id for instance in instances},
+    )
     layout_row = await session.scalar(
         select(DashboardLayout)
         .join(

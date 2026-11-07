@@ -90,7 +90,9 @@ async def test_request_shape_and_valid_choice(monkeypatch: pytest.MonkeyPatch) -
     assert body["state"] == ["user: plot revenue over time"]
     question = body["questions"]["visualization"]
     assert question["type"] == "choice" and question["instructions"].startswith(viz.INSTRUCTIONS)
-    assert question["criteria"] == dict.fromkeys(viz.CATEGORIES)
+    criteria = question["criteria"]
+    assert set(criteria) == set(viz.CATEGORIES)
+    assert all(isinstance(v, str) and v for v in criteria.values())
 
 
 @pytest.mark.asyncio

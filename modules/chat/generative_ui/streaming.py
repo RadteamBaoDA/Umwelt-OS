@@ -18,15 +18,20 @@ from modules.chat.generative_ui.prompt import CANONICAL_SANDBOX_PARAM_ORDER, San
 from modules.chat.generative_ui.skill_backend import load_skill
 from modules.chat.generative_ui.tool_specs import (
     TERMINAL_UI_TOOLS,
+    TOOL_ANSWER,
     TOOL_CHART,
     TOOL_FORM,
     TOOL_PLAN,
     TOOL_SANDBOXED_UI,
     TOOL_TABLE,
     TOOL_TIME_PICKER,
+    AnswerGalleryBlock,
+    AnswerSectionBlock,
+    AnswerStatsBlock,
     ChartToolArgs,
     PlanToolArgs,
     ReadSkillArgs,
+    RenderAnswerArgs,
     TableToolArgs,
     TimePickerToolArgs,
     parse_ui_tool_args,
@@ -59,6 +64,7 @@ _FALLBACK_TITLES = {"en-US": "Interactive view", "vi-VN": "Chế độ xem tươ
 
 # tool name -> (payload slot, renderer id kept for the persisted contract)
 _SLOT = {
+    TOOL_ANSWER: ("answer", "a2ui"),
     TOOL_SANDBOXED_UI: ("sandbox", "open_generative_ui"),
     TOOL_TABLE: ("table", "a2ui"),
     TOOL_CHART: ("chart", "open_generative_ui"),
@@ -169,12 +175,42 @@ def streaming_snapshot(name: str, raw_args: str) -> dict[str, Any] | None:
                 if isinstance(s, dict)
             ]
     title = obj.get("title")
+    if name == TOOL_ANSWER:
+        # Images are resolved only at finalize; a streaming block shows no image yet and no citation numbers.
+        raw_blocks = body.get("blocks")
+        views = (
+            [_snapshot_block(x) for x in raw_blocks if isinstance(x, dict)]
+            if isinstance(raw_blocks, list)
+            else []
+        )
+        body["blocks"] = [v for v in views if v is not None]
+        kind = "answer"
     return {
         "kind": kind,
         "status": "streaming",
         "title": title if isinstance(title, str) else "",
         slot: body,
     }
+
+
+def _snapshot_block(block: dict[str, Any]) -> dict[str, Any] | None:
+    """Streaming view of one partial ``render_answer`` block: model-side ``citations``/``image_ids`` removed.
+
+    Gallery and section blocks get ``images: []`` (ids resolve to proxy URLs only at finalize). Blocks without a
+    string ``type`` are dropped.
+    """
+    if not isinstance(block.get("type"), str):
+        return None
+    view = {k: v for k, v in block.items() if k not in ("citations", "image_ids")}
+    if view["type"] in ("gallery", "section"):
+        view["images"] = []
+    if view["type"] == "stats" and isinstance(view.get("items"), list):
+        view["items"] = [
+            {k: v for k, v in i.items() if k != "citations"}
+            for i in view["items"]
+            if isinstance(i, dict)
+        ]
+    return view
 
 
 def _cite_field(c: Mapping[str, Any], camel: str, snake: str) -> Any:
@@ -373,6 +409,70 @@ def _plan_envelope(args: PlanToolArgs, local_only: bool) -> dict[str, Any]:
     )
 
 
+def _final_citations(numbers: Sequence[int], number_map: Mapping[int, int]) -> list[int]:
+    """Map model-written context numbers to the answer's final citation numbers (unmapped dropped, deduped)."""
+    return list(dict.fromkeys(number_map[n] for n in numbers if n in number_map))
+
+
+def _resolve_images(
+    ids: Sequence[str], images: Mapping[str, Mapping[str, str]], limit: int
+) -> list[dict[str, str]]:
+    """Resolve model-written image ids to ``{src, alt, source_host}``; unknown ids are dropped, repeats collapse."""
+    out: list[dict[str, str]] = []
+    for image_id in dict.fromkeys(ids):
+        known = images.get(image_id)
+        if known:
+            out.append(
+                {"src": known["src"], "alt": known["alt"], "source_host": known["source_host"]}
+            )
+    return out[:limit]
+
+
+def _answer_block(
+    block: BaseModel, images: Mapping[str, Mapping[str, str]], number_map: Mapping[int, int]
+) -> dict[str, Any] | None:
+    """Persisted form of one validated ``render_answer`` block; ``None`` for a gallery with no resolvable image."""
+    data = block.model_dump(mode="json")
+    if isinstance(block, AnswerGalleryBlock):
+        resolved = _resolve_images(block.image_ids, images, 8)
+        return {"type": "gallery", "images": resolved} if resolved else None
+    if isinstance(block, AnswerSectionBlock):
+        data["images"] = _resolve_images(block.image_ids, images, 6)
+        del data["image_ids"]
+    if isinstance(block, AnswerStatsBlock):
+        for item, raw in zip(block.items, data["items"], strict=True):
+            raw["citations"] = _final_citations(item.citations, number_map)
+    elif "citations" in data:
+        data["citations"] = _final_citations(getattr(block, "citations", []), number_map)
+    return data
+
+
+def _answer_envelope(
+    args: RenderAnswerArgs,
+    images: Mapping[str, Mapping[str, str]],
+    number_map: Mapping[int, int],
+    local_only: bool,
+) -> dict[str, Any] | None:
+    """Build the persisted ``answer`` envelope: images resolved, citations renumbered, empty galleries dropped.
+
+    ``images`` maps the turn's ``imgN`` ids to ``{src, alt, source_host}`` (src is a signed same-origin proxy
+    path); ``number_map`` maps context citation numbers to the final citation numbers, exactly as the
+    transcript renumbers them. Returns None when no block survives.
+    """
+    blocks = [b for b in (_answer_block(b, images, number_map) for b in args.blocks) if b]
+    if not blocks:
+        return None
+    return _envelope(
+        "answer",
+        "rich_answer",
+        "a2ui",
+        args.title,
+        local_only,
+        "answer",
+        {"title": args.title, "blocks": blocks},
+    )
+
+
 def finalize_generative_ui(
     tool_name: str,
     raw_args: str,
@@ -381,6 +481,8 @@ def finalize_generative_ui(
     *,
     title_hint: str = "",
     locale: str = "en-US",
+    images: Mapping[str, Mapping[str, str]] | None = None,
+    number_map: Mapping[int, int] | None = None,
 ) -> dict[str, Any] | None:
     """Validate a completed terminal tool call and build the persisted `generative_ui` payload.
 
@@ -391,6 +493,8 @@ def finalize_generative_ui(
         local_only: Whether the turn referenced local-only evidence.
         title_hint: Title used for sandbox widgets (their schema has no title).
         locale: Owner locale (`en-US` / `vi-VN`) for the fallback sandbox title when `title_hint` is empty.
+        images: ``render_answer`` only: turn image id -> ``{src, alt, source_host}``.
+        number_map: ``render_answer`` only: context citation number -> final citation number.
 
     Returns:
         JSON-serializable payload (the caller adds ``part_id``), or None (logged) when the arguments are
@@ -421,6 +525,8 @@ def finalize_generative_ui(
             return _chart_envelope(args, citations, local_only)
         if isinstance(args, PlanToolArgs):
             return _plan_envelope(args, local_only)
+        if isinstance(args, RenderAnswerArgs):
+            return _answer_envelope(args, images or {}, number_map or {}, local_only)
         if isinstance(args, FormPayload):
             return _envelope(
                 "form", "form", "a2ui", args.title, local_only, "form", build_form_payload(args)

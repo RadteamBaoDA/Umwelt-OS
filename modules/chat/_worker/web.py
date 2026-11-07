@@ -62,6 +62,10 @@ class _WebSearchRun:
     results: tuple[web.WebSearchResult, ...] = ()
     provider: str = ""
     retrieved_at: datetime | None = None
+    fallback: bool = False  # answered by a permitted target other than #1
+    images: tuple[
+        web.WebImage, ...
+    ] = ()  # image-search hits; used only when media is permitted this turn
 
 
 def _web_search_run(
@@ -78,7 +82,7 @@ def _web_search_run(
     outcome = WebSearchOutcomeRead.model_validate(
         {"status": status, "reason": reason, "result_count": len(found)},
     ).model_dump(
-        exclude={"query"}
+        exclude={"query", "provider", "fallback"}
     )  # ``query`` is added by _rewrite_and_search only when a search ran
     return _WebSearchRun(outcome, found, provider, datetime.now(UTC) if found else None)
 
@@ -253,6 +257,58 @@ async def _send_search(
     return _web_search_run(None, results, provider)
 
 
+async def _search_images_for_run(
+    message: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    redis: Redis,
+    scope: InternalJobScope,
+) -> tuple[web.WebImage, ...]:
+    """Best-effort image search over the same ordered, permitted targets as the text search. Never raises.
+
+    Runs only when the owner allowed remote widget media (the turn's ``local_only`` state is re-checked in
+    setup before any image is used). The settings read is a short transaction released before egress; the
+    daily text-search quota is not charged again for this same-query request. Any failure returns ``()``.
+    """
+    try:
+        async with session_factory() as session:
+            config = await settings_public.get_ai_execution_config(
+                session, settings, redis, scope=scope
+            )
+            await session.rollback()  # no lock held across egress
+        if not config.privacy.allow_widget_remote_media:
+            return ()
+        primary = WebSearchTarget(
+            provider=config.web_search_provider,
+            endpoint=config.web_search_endpoint,
+            api_key=config.web_search_api_key,
+            credential_configured=config.web_search_credential_configured,
+        )
+        targets = [
+            t
+            for t in (primary, *config.web_search_fallbacks)
+            if web.target_permitted(t, config.privacy)
+        ]
+
+        def make_transport(candidate: WebSearchTarget) -> httpx.AsyncBaseTransport:
+            """Pin this endpoint to the approved network policy (same as the text search)."""
+            if candidate.endpoint is None:
+                raise RuntimeError("invariant violated: candidate.endpoint must not be None")
+            return approved_web_search_transport(
+                candidate.endpoint,
+                settings.ai_allowed_endpoint_hosts,
+                settings.web_search_allowed_cidrs,
+                allow_http=candidate.provider == "searxng",
+            )
+
+        return tuple(await web.search_images_with_fallback(targets, message, make_transport))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a missing gallery must never fail the turn
+        logger.info("Web image search skipped (%s)", type(exc).__name__)
+        return ()
+
+
 async def _search_for_run(
     message: str,
     scoped_source_ids: list[UUID],
@@ -301,7 +357,8 @@ async def _search_for_run(
                     target = await _gate_search_attempt(attempt, args, index, progress)
                     if isinstance(target, _WebSearchRun):
                         return target
-                    return await _send_search(attempt, args, deadline, target)
+                    run = await _send_search(attempt, args, deadline, target)
+                    return replace(run, fallback=index > 0)
             except web.WebSearchError as exc:
                 if exc.code not in ("timeout", "provider_error", "network_denied"):
                     return _web_search_run(exc.code)
@@ -570,23 +627,32 @@ async def _rewrite_and_search(
     """Rewrite the prompt into a search query, run ``_search_for_run`` with it and record the query used.
 
     Runs as the concurrent search task, so the rewrite overlaps retrieval. The query is stored on the outcome
-    only when a search actually ran (status ``used``); skipped/unavailable outcomes never sent anything.
+    only when a search actually ran (status ``used``); skipped/unavailable outcomes never sent anything. The
+    outcome also carries ``provider``/``fallback`` when results were found. An image search for the same
+    query runs concurrently with the text search and attaches its hits to the run (``[]`` on any failure).
     """
     query = await _rewrite_web_query(
         session_factory, settings, redis, scope, user_prompt, prior_messages
     )
-    run = await _search_for_run(
-        query,
-        scoped_source_ids,
-        response_id,
-        conversation_id,
-        expected_fence,
-        session_factory,
-        settings,
-        redis,
-        scope=scope,
-        access_fence=access_fence,
+    # Images and text share the query and run concurrently; the image leg swallows its own failures.
+    run, images = await asyncio.gather(
+        _search_for_run(
+            query,
+            scoped_source_ids,
+            response_id,
+            conversation_id,
+            expected_fence,
+            session_factory,
+            settings,
+            redis,
+            scope=scope,
+            access_fence=access_fence,
+        ),
+        _search_images_for_run(query, session_factory, settings, redis, scope),
     )
     if run.outcome.get("status") == "used":
-        run = replace(run, outcome={**run.outcome, "query": query})
+        extra: dict[str, Any] = {"query": query}
+        if run.results:  # which provider answered, and whether it was a fallback target
+            extra |= {"provider": run.provider, "fallback": run.fallback}
+        run = replace(run, outcome={**run.outcome, **extra}, images=images if run.results else ())
     return run

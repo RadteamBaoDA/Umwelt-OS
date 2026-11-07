@@ -160,7 +160,7 @@ html.dark[data-accent='plum'] { --accent: #e07aa5; --chart-1: #e07aa5; --chart-5
   a:not([data-slot='button']) { color: var(--text); }
   a:not([data-slot='button']):hover, a:not([data-slot='button']):focus-visible { text-decoration: underline; }
   h1 { margin: 12px 0 8px; font-size: clamp(22px, 4vw, 24px); font-weight: 600; letter-spacing: -.02em; }
-  /* App shell owns the viewport (.shell is 100dvh); stray body-level siblings or rounding must never add a page scrollbar. Only .workspace-main scrolls. */
+  /* App shell owns the viewport; normal pages scroll in .workspace-main, dashboard panels own their own scroll region. */
   html:has(.shell), html:has(.shell) body { height: 100%; overflow: hidden; }
 }
 @layer components {
@@ -229,6 +229,9 @@ html.dark[data-accent='plum'] { --accent: #e07aa5; --chart-1: #e07aa5; --chart-5
   .workspace-main { flex: 1 1 0; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: 24px; }
   /* Children keep their natural height so overflow scrolls .workspace-main instead of shrinking/clipping them. */
   .workspace-main > * { flex-shrink: 0; }
+  /* Dashboard tabs own scrolling; the workspace shell must give their viewport its remaining height. */
+  .workspace-main:has(> .dashboard-page) { overflow: hidden; }
+  .workspace-main > .dashboard-page { flex-shrink: 1; }
   .settings-panel { display: flex; min-height: 200px; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
   .settings-nav { flex: 0 0 230px; display: flex; flex-direction: column; gap: 4px; padding: 16px; border-right: 1px solid var(--line); }
   .settings-nav hr { width: 100%; margin: 8px 0; border: 0; border-top: 1px solid var(--line); }

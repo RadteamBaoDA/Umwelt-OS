@@ -664,7 +664,9 @@ async def _discover(body: object, resolved: public.VizRouterResolved, gateway: o
     )
     with (
         patch_split_attr(
-            "modules.settings", "resolve_viz_router", AsyncMock(return_value=resolved)
+            "modules.settings",
+            "saved_openrouter_key",
+            AsyncMock(return_value=resolved.api_key if resolved.kind == "openrouter" else ""),
         ),
         patch_split_attr(
             "modules.settings", "get_ai_execution_config", AsyncMock(return_value=config)
@@ -735,3 +737,24 @@ async def test_discovery_failure_returns_short_code() -> None:
         VizDecisionModelsRequest(api_key="k"), public.VizRouterResolved(), gateway
     )
     assert (result.ok, result.error, result.models) == (False, "auth_error", [])  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_saved_openrouter_key_survives_other_kind_and_is_empty_without_ciphertext() -> None:
+    row = _row()
+    await _save_keyed(
+        row,
+        kind="openrouter",
+        model="openrouter/auto",
+        api_key_action="replaced",
+        api_key="or-secret",
+        allow_remote_visualization_routing=True,
+    )
+    row.viz_router = {**row.viz_router, "kind": "llm"}  # owner switched kind; key stays stored
+    with patch_split_attr("modules.settings", "_row", AsyncMock(return_value=row)):
+        assert (
+            await public.saved_openrouter_key(MagicMock(), _keyed_settings(), scope=SCOPE)
+            == "or-secret"
+        )
+        row.viz_router = {"kind": "llm"}
+        assert await public.saved_openrouter_key(MagicMock(), _keyed_settings(), scope=SCOPE) == ""

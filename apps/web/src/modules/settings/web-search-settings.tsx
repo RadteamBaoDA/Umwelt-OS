@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -84,6 +85,10 @@ export function WebSearchSettingsWorkspace() {
         {view.providers.length === 0 ? <p id="web-search-no-providers" className="m-0 text-sm text-muted-foreground">{t('noProviders')}</p> : null}
         {/* eslint-disable-next-line complexity -- JSX presentational markup: the score counts every conditional-render branch (&&, ?:, ??) of this row; it holds no branching business logic, so splitting would only relocate the same render conditions */}
         {view.providers.map((entry, index) => <div key={index} className="flex flex-col gap-3 rounded-lg border p-4">
+          <div className="flex flex-wrap items-center gap-2" data-testid="web-search-priority">
+            <Badge variant={index === 0 ? 'default' : 'secondary'}>{index === 0 ? t('priorityDefault') : t('priorityFallback', { number: index })}</Badge>
+            {entry.provider === 'searxng' || entry.provider === 'tavily' ? <Badge variant="outline">{t('imageSupport')}</Badge> : null}
+          </div>
           <FieldGrid>
             <label className="field"><span className="label">{t('provider')}</span><Select disabled={save.isPending} value={entry.provider} onValueChange={(provider) => changeEntry(index, { provider: provider as Provider })}><SelectTrigger aria-label={t('providerAt', { number: index + 1 })}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="tavily">Tavily</SelectItem><SelectItem value="brave">Brave</SelectItem><SelectItem value="searxng">SearXNG</SelectItem><SelectItem value="omniroute">OmniRoute</SelectItem></SelectContent></Select></label>
             <label className="field"><span className="label">{t('endpoint')}</span><Input type="url" disabled={save.isPending} value={entry.endpoint ?? ''} placeholder={entry.provider === 'omniroute' ? 'https://<host>/v1' : undefined} onChange={(event) => changeEntry(index, { endpoint: event.target.value || null })} /></label>

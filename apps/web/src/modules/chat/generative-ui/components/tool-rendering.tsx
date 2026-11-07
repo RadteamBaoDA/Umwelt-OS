@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import * as React from 'react';
 import type { ChartSeries } from '@/core/charts/chart-format';
 import type { AppLocaleId } from '@/core/i18n';
+import type { Citation } from '../../api';
 import { OpenGenerativeUIRenderer } from '../sandbox';
 import type { GenerativeUIPayload } from '../sandbox/schema';
 import type { GenerativeBarDatum } from './charts/bar-chart';
@@ -12,6 +13,7 @@ import { InputForm } from './input-form';
 import { MeetingTimePicker, type MeetingTimeSlot } from './meeting-time-picker';
 import { genUiCopy, resolveWidgetLocale } from '../copy';
 import { PlanCard, type PlanStep } from './plan-card';
+import { RichAnswer } from './rich-answer';
 import {
   chartPayloadSchema,
   formPayloadSchema,
@@ -31,6 +33,8 @@ export interface ToolRenderingProps {
   onSendPrompt?: (prompt: string) => void | Promise<unknown>;
   /** Application locale ('en-us' | 'vi-vi'). */
   locale?: AppLocaleId;
+  /** Citations of the owning message (rich answers link their source chips to these). */
+  citations?: Citation[];
 }
 
 /** Everything a kind renderer needs (resolved once per render by the dispatcher). */
@@ -41,6 +45,7 @@ interface RenderContext {
   locale: AppLocaleId;
   catalog: ReturnType<typeof genUiCopy>;
   onSendPrompt?: (prompt: string) => void | Promise<unknown>;
+  citations?: Citation[];
 }
 
 type SafeParser = { safeParse: (v: unknown) => { success: boolean } };
@@ -242,6 +247,11 @@ function renderForm({ payload, raw, catalog, locale, onSendPrompt }: RenderConte
   );
 }
 
+/** Rich answer (`render_answer`); partial payloads are expected while streaming and tolerated by the component. */
+function renderAnswer({ payload, locale, citations }: RenderContext): React.ReactNode {
+  return <RichAnswer answer={payload.answer} citations={citations} locale={locale} />;
+}
+
 /**
  * Renderer registry keyed by `payload.kind`. Add a new native widget by registering one entry here; unregistered kinds
  * fall back to a collapsed tool-call summary.
@@ -254,6 +264,7 @@ const KIND_RENDERERS: Record<string, (ctx: RenderContext) => React.ReactNode> = 
   pie_chart: renderPieChart,
   meeting_time_picker: renderMeetingPicker,
   form: renderForm,
+  answer: renderAnswer,
 };
 
 /**
@@ -268,7 +279,7 @@ const KIND_RENDERERS: Record<string, (ctx: RenderContext) => React.ReactNode> = 
  * @param props - ToolRenderingProps containing payload, prompt callback, and locale.
  * @returns Rendered Generative UI widget, or null if payload is absent/unrecognized.
  */
-export function ToolRendering({ payload, onSendPrompt, locale }: ToolRenderingProps) {
+export function ToolRendering({ payload, onSendPrompt, locale, citations }: ToolRenderingProps) {
   const resolvedLocale = resolveWidgetLocale(locale);
   const catalog = genUiCopy(resolvedLocale);
 
@@ -278,7 +289,7 @@ export function ToolRendering({ payload, onSendPrompt, locale }: ToolRenderingPr
 
   const raw = payload as unknown as Record<string, unknown>;
   const render = Object.hasOwn(KIND_RENDERERS, payload.kind) ? KIND_RENDERERS[payload.kind] : undefined;
-  if (render) return <>{render({ payload, raw, locale: resolvedLocale, catalog, onSendPrompt })}</>;
+  if (render) return <>{render({ payload, raw, locale: resolvedLocale, catalog, onSendPrompt, citations })}</>;
   // No dedicated widget for this kind: show a collapsed, inspectable tool-call summary.
   return <ToolReasoning name={String((payload as { kind?: unknown }).kind ?? 'tool')} data={raw} locale={resolvedLocale} />;
 }

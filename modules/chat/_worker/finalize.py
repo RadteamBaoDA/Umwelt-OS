@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select, update
 
+from modules.chat import media
 from modules.chat._worker.base import (
     _next_event_seq,
 )
@@ -35,12 +36,14 @@ from modules.chat.generative_ui import (
     fallback_generative_ui,
     finalize_generative_ui,
 )
+from modules.chat.generative_ui.tool_specs import TOOL_ANSWER
 from modules.chat.models import (
     Conversation,
     Message,
     ResponseRun,
 )
 from modules.chat.schemas import (
+    MAX_QUOTE_LENGTH,
     AnswerContext,
     AnswerContextRequest,
     Citation,
@@ -136,6 +139,7 @@ def _web_citations_for(
     Owner ruling (review P2-5): a web-only answer is kept only when no document marker was dropped as invalid
     and no marker is out of range; otherwise the insufficient-evidence answer stands. Mutates ``number_map``
     and returns ``(answer_text, web_citations)``; one citation per URL (duplicate hits reuse its number).
+    Each quote is the snippet truncated to ``MAX_QUOTE_LENGTH`` (snippets may be longer for the prompt).
     """
     answer_text = validated.answer
     web_citations: list[dict[str, Any]] = []
@@ -159,7 +163,9 @@ def _web_citations_for(
                 WebCitation(
                     url=hit.url,
                     title=hit.title,
-                    quote=hit.snippet,
+                    # Prompt snippets run to SNIPPET_MAX (4000); the stored quote is a display excerpt
+                    # capped by the schema, so cut it here instead of failing the whole run.
+                    quote=hit.snippet[:MAX_QUOTE_LENGTH],
                     provider=web_run.provider,
                     retrievedAt=web_run.retrieved_at or datetime.now(UTC),
                 ).model_dump(mode="json")
@@ -185,7 +191,16 @@ def _validate_citations(
     total_count = evidence_count + len(web_results)
     cited_numbers = parse_citation_markers(text, total_count)
     doc_numbers = [n for n in cited_numbers if n <= evidence_count]
-    web_numbers = [n for n in cited_numbers if n > evidence_count]
+    # A rich answer may cite web results only inside its blocks; those count like inline markers.
+    widget_web = [
+        n
+        for _, call in ui_parts
+        if call["name"] == TOOL_ANSWER
+        for n in _tool_citation_numbers(call, total_count, lowest=evidence_count + 1)
+    ]
+    web_numbers = list(
+        dict.fromkeys([*(n for n in cited_numbers if n > evidence_count), *widget_web])
+    )
     validated, number_map = _validate_document_citations(
         text,
         answer_context,
@@ -216,6 +231,28 @@ def _validate_citations(
     return _CitedAnswer(final_answer, valid_citations, number_map)
 
 
+def _answer_images(env: _ToolEnv) -> dict[str, dict[str, str]]:
+    """Map the turn's ``imgN`` ids to ``{src, alt, source_host}`` with owner-bound signed proxy paths.
+
+    Tokens are bound to ``workspace:actor`` and expire (``media.TOKEN_TTL_SECONDS``); an image that cannot be
+    signed (missing secret, URL off the allowlist) is simply absent, so ``render_answer`` drops it.
+    """
+    secret = env.c.settings.csrf_signing_secret.get_secret_value()
+    subject = f"{env.claimed.workspace_id}:{env.claimed.actor_id}"
+    out: dict[str, dict[str, str]] = {}
+    for n, image in enumerate(env.setup.web_images, 1):
+        try:
+            token = media.sign_media_url(secret, image.url, subject=subject)
+        except media.MediaError:
+            continue
+        out[f"img{n}"] = {
+            "src": f"{media.PROXY_PATH}?token={token}",
+            "alt": image.description,
+            "source_host": image.source_host,
+        }
+    return out
+
+
 def _finalize_widgets(
     env: _ToolEnv,
     final_answer: str,
@@ -244,6 +281,8 @@ def _finalize_widgets(
                 setup.local_only_turn,
                 title_hint=" ".join(turn.user_prompt.split()),
                 locale=setup.ui_locale,
+                images=_answer_images(env) if call["name"] == TOOL_ANSWER else None,
+                number_map=cited.number_map,
             )
             if part is not None:
                 generative_uis.append({**part, "part_id": part_id})
@@ -378,11 +417,31 @@ async def _persist_final(
         await session.commit()
 
 
-def _tool_citation_numbers(ui_call: dict[str, str] | None, evidence_count: int) -> list[int]:
-    """Return the in-range evidence numbers a presentation tool call cites in ``args.citations``.
+def _cited_lists(args: Any) -> list[Any]:
+    """Every ``citations`` value of a tool call: the top-level one plus, for ``render_answer``, each block's
+    and each stat item's."""
+    if not isinstance(args, dict):
+        return []
+    found = [args.get("citations")]
+    blocks = args.get("blocks")
+    for block in blocks if isinstance(blocks, list) else []:
+        if not isinstance(block, dict):
+            continue
+        found.append(block.get("citations"))
+        items = block.get("items")
+        if isinstance(items, list):
+            found.extend(i.get("citations") for i in items if isinstance(i, dict))
+    return found
 
-    Malformed JSON, non-list values, bools, non-ints and out-of-range numbers are dropped; the caller
-    still validates every returned number against the retrieved evidence like a text marker.
+
+def _tool_citation_numbers(
+    ui_call: dict[str, str] | None, evidence_count: int, *, lowest: int = 1
+) -> list[int]:
+    """Return the in-range numbers (``lowest..evidence_count``) a presentation tool call cites.
+
+    Reads ``args.citations`` and, for ``render_answer``, every block's/stat's ``citations``. Malformed JSON,
+    non-list values, bools, non-ints and out-of-range numbers are dropped; the caller still validates every
+    returned number against the retrieved evidence like a text marker.
     """
     if ui_call is None:
         return []
@@ -390,7 +449,10 @@ def _tool_citation_numbers(ui_call: dict[str, str] | None, evidence_count: int) 
         args = json.loads(ui_call.get("arguments") or "{}")
     except ValueError:
         return []
-    raw = args.get("citations") if isinstance(args, dict) else None
-    if not isinstance(raw, list):
-        return []
-    return [n for n in raw if type(n) is int and 1 <= n <= evidence_count]
+    return [
+        n
+        for raw in _cited_lists(args)
+        if isinstance(raw, list)
+        for n in raw
+        if type(n) is int and lowest <= n <= evidence_count
+    ]

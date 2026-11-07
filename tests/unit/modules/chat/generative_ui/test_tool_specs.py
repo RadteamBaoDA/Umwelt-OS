@@ -15,15 +15,16 @@ from modules.chat.generative_ui.tool_specs import (
 
 def test_specs_names_and_valid_schemas() -> None:
     """All tools are present and every parameter schema is a valid JSON schema."""
-    specs = build_chat_tool_specs(include_read_skill=True)
+    specs = build_chat_tool_specs(include_read_skill=True, include_answer=True)
     names = {s["function"]["name"] for s in specs}
     assert names == TERMINAL_UI_TOOLS | {"read_skill"}
     for spec in specs:
         assert spec["type"] == "function"
         Draft202012Validator.check_schema(spec["function"]["parameters"])
         json.dumps(spec)
+    # render_answer is offered only on request (web results this turn)
     assert {s["function"]["name"] for s in build_chat_tool_specs(include_read_skill=False)} == set(
-        TERMINAL_UI_TOOLS
+        TERMINAL_UI_TOOLS - {"render_answer"}
     )
 
 
@@ -112,10 +113,12 @@ def test_advertised_schema_agrees_with_pydantic_model_for_every_ui_tool() -> Non
         "render_chart": {"title": "T", "series": [{"key": "v", "label": "V"}]},
         "render_plan": {"title": "T", "approach": "x", "steps": [{"title": "s"}]},
         "render_time_picker": None,
+        "render_answer": {"title": "T", "blocks": [{"type": "note", "markdown": "m"}]},
         "render_form": {"title": "F", "fields": [{"id": "c", "label": "C", "type": "text"}]},
     }
     specs = {
-        s["function"]["name"]: s["function"]["parameters"] for s in build(include_read_skill=False)
+        s["function"]["name"]: s["function"]["parameters"]
+        for s in build(include_read_skill=False, include_answer=True)
     }
     assert set(specs) == set(_UI_MODELS)
     for name, sample in samples.items():

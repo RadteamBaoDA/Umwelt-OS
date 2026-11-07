@@ -1,8 +1,8 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import React from 'react';
-import type { Dashboard, GadgetInstance } from './api';
+import React, { useCallback, useMemo } from 'react';
+import type { Dashboard, DashboardPlacement, GadgetInstance } from './api';
 import { DashboardGrid } from './dashboard-grid';
 import { DashboardEmptyState } from './dashboard-panels';
 import { FirstRunSetup } from './first-run-setup';
@@ -19,11 +19,12 @@ export interface CanvasOperations {
 }
 
 /** Layout editor toolbar (edit mode only): maps session, save and membership operations to its props. */
-export function LayoutEditorBar({ ops, activeDashboard, onOpenPresets, onAddGroup }: {
+export function LayoutEditorBar({ ops, activeDashboard, onOpenPresets, onAddGroup, openAddInitially }: {
   ops: CanvasOperations;
   activeDashboard: Dashboard | null;
   onOpenPresets: () => void;
-  onAddGroup: () => void;
+  onAddGroup?: () => void;
+  openAddInitially?: boolean;
 }) {
   const t = useTranslations('dashboard');
   const { session, save, membership } = ops;
@@ -50,11 +51,12 @@ export function LayoutEditorBar({ ops, activeDashboard, onOpenPresets, onAddGrou
       canUseReadableMobileSizes={currentBreakpoint === 'mobile' && readablePlacements !== null}
       onOpenPresetPicker={onOpenPresets}
       onAddGroup={onAddGroup}
+      openAddInitially={openAddInitially}
       onAddGadgetInstance={membership.handleAddGadgetInstance}
       onBeginAddGadgetInstance={membership.beginAddGadgetInstance}
       onCancelPendingAdd={membership.releaseAddReservation}
-      groups={activeDashboard?.groups ?? []}
-      activeGroupId={session.activeGroupId === 'all' ? undefined : session.activeGroupId}
+      groups={activeDashboard?.groups.filter((group) => group.id === session.activeGroupId) ?? []}
+      activeGroupId={session.activeGroupId}
       dirtyModalOpen={session.dirtyModalOpen}
       dirtyDescription={editOrigin && requestedBreakpoint !== editOrigin.breakpoint
         ? t('mobileBreakpointDirtyWarning', { breakpoint: layoutLabel(editOrigin.breakpoint) }) : undefined}
@@ -84,6 +86,15 @@ interface CanvasProps {
 export function DashboardCanvas(props: CanvasProps) {
   const { ops, activeDashboard, visibleInstances, showFirstRun, isAdminViewer } = props;
   const { session, save } = ops;
+  const visibleIds = useMemo(() => new Set(visibleInstances.map((instance) => instance.id)), [visibleInstances]);
+  const panelPlacements = useMemo(() => session.draftPlacements.filter((placement) => visibleIds.has(placement.instance_id)),
+    [session.draftPlacements, visibleIds]);
+  /** Merges the measured panel projection with untouched placements from the other panels. */
+  const setPanelProjection = useCallback((next: DashboardPlacement[] | null) => {
+    const byId = new Map(next?.map((placement) => [placement.instance_id, placement]));
+    session.setReadablePlacements(next
+      ? session.draftPlacements.map((placement) => byId.get(placement.instance_id) ?? placement) : null);
+  }, [session.draftPlacements, session.setReadablePlacements]);
   if (showFirstRun && !session.editMode) {
     return <FirstRunSetup sourceCount={0} csrfToken={props.csrfToken} onPickTopics={props.onPickTopics} />;
   }
@@ -101,19 +112,22 @@ export function DashboardCanvas(props: CanvasProps) {
   }
   return (
     <DashboardGrid
-      instances={activeDashboard.instances}
-      placements={session.mobileProjectionUnavailable ? [] : session.draftPlacements}
+      instances={visibleInstances}
+      placements={session.mobileProjectionUnavailable ? [] : panelPlacements}
       visibleInstanceIds={visibleInstances.map((instance) => instance.id)}
       isMobileView={session.currentBreakpoint === 'mobile'}
-      isTabletView={props.isTablet}
-      onReadableProjectionChange={session.setReadablePlacements}
+      isTabletView={true}
+      onReadableProjectionChange={setPanelProjection}
       onGridMetricsChange={session.setGridMetrics}
       columns={session.layoutColumns}
       breakpoint={session.currentBreakpoint}
       requestedBreakpoint={session.requestedBreakpoint}
       interactionPending={save.layoutOperationPending}
       isEditMode={session.editMode && !save.layoutOperationPending}
-      onLayoutChange={session.pushHistory}
+      onLayoutChange={(next) => {
+        const nextById = new Map(next.map((placement) => [placement.instance_id, placement]));
+        session.pushHistory(session.draftPlacements.map((placement) => nextById.get(placement.instance_id) ?? placement));
+      }}
       onRemoveInstance={ops.membership.handleRemoveInstance}
       onConfigureInstance={props.onConfigureInstance}
       readingQueues={session.readingQueues}

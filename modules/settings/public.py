@@ -233,6 +233,9 @@ from modules.settings._settings.viz import (
     save_viz_router as save_viz_router,
 )
 from modules.settings._settings.viz import (
+    saved_openrouter_key as saved_openrouter_key,
+)
+from modules.settings._settings.viz import (
     viz_decision_discovery_config as viz_decision_discovery_config,
 )
 from modules.settings._settings.viz import (

@@ -124,6 +124,18 @@ describe('visualization router card', () => {
     expect(screen.getByRole('combobox', { name: 'Constraint mode' })).toBeTruthy();
   });
 
+  it('enables Load decision models from a saved OpenRouter key while another kind is stored, key field before model', async () => {
+    const llmWithKey = { ...read, kind: 'llm', openrouter_key_configured: true };
+    fetchMock.mockImplementation((url: string) => json(String(url).includes('viz-router') ? llmWithKey : ai));
+    mount();
+    await userEvent.click(await screen.findByRole('combobox', { name: 'Router' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'OpenRouter' }));
+    expect((screen.getByRole('button', { name: 'Load decision models' }) as HTMLButtonElement).disabled).toBe(false);
+    const key = screen.getByLabelText('OpenRouter API key');
+    const model = screen.getByLabelText('Model');
+    expect(key.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('requires a valid Cloudflare account id or an https gateway URL', async () => {
     fetchMock.mockImplementation((url: string) => json(String(url).includes('viz-router') ? { ...read, cloudflare_key_configured: true } : ai));
     mount();

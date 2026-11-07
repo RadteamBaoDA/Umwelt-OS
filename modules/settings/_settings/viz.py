@@ -176,6 +176,21 @@ async def resolve_viz_router(
     )
 
 
+async def saved_openrouter_key(session: AsyncSession, settings: Settings, *, scope: Scope) -> str:
+    """Decrypted OpenRouter key saved for the owner workspace, whichever router kind is currently selected.
+
+    Returns "" when no row/key is stored or the ciphertext cannot be decrypted. Plain read: no lock. The key is
+    kept when the owner switches kind, so model discovery can reuse it before the OpenRouter kind is saved.
+    """
+    ciphertext = _viz_stored(await _row(session, scope=scope)).get("openrouter_key_ciphertext")
+    if not ciphertext:
+        return ""
+    try:
+        return _decrypt(ciphertext, settings)
+    except (DomainError, HTTPException):
+        return ""
+
+
 def viz_decision_discovery_config(
     config: AIExecutionConfig, api_key: str, settings: Settings
 ) -> AIExecutionConfig:

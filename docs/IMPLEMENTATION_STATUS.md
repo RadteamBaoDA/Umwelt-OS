@@ -1,3 +1,11 @@
+<!-- dashboard-panel-status:start -->
+## Dashboard Overview and independent panels - 2026-11-07, code/build complete
+
+- Dashboard groups are persistent tabs: one immutable Overview per dashboard and additional empty panels with their own gadgets. Overview shows a standalone Live World Map beside its gadget panel on desktop; compact screens switch between Map and Gadgets. Other panels use full width and their own scroll position.
+- Migration `0022_dashboard_panels` marks each existing dashboard's first group as Overview, creates one for dashboards without groups, and rebases group placements to local vertical origins. Layout validation and placement now treat collisions within a group, preserving full revision-guarded dashboard snapshots and workspace fences.
+- Web production build passed (Next.js, TypeScript, 39 static pages); Python compile/import and `git diff --check` passed. Migration application, authenticated browser acceptance, provider calls and deferred behavioral tests have not run. The existing default-group test expecting `General` must be updated in the test stage.
+<!-- dashboard-panel-status:end -->
+
 <!-- provider-fixed-endpoints-status:start -->
 ## Fixed hosted provider endpoints and OpenRouter browser - 2026-11-04, branch feature/fix-ui
 

@@ -111,6 +111,10 @@ class WebSearchOutcomeRead(BaseModel):
     result_count: int = Field(default=0, ge=0, le=100)
     # The query actually sent to the provider (LLM-rewritten or literal); absent on outcomes persisted earlier.
     query: str | None = Field(default=None, max_length=200)
+    # Provider that answered (searxng/tavily/brave/omniroute) and whether it was not target #1; set only when
+    # results were found, so older and empty outcomes stay byte-identical.
+    provider: str | None = Field(default=None, max_length=32)
+    fallback: bool | None = None
 
 
 class EvidenceItem(BaseModel):
@@ -342,13 +346,21 @@ class FormUIPayload(_GenerativeUIBase):
     form: dict[str, Any]
 
 
+class AnswerUIPayload(_GenerativeUIBase):
+    """Rich web-evidence answer (`render_answer`); `answer` = {title, blocks[]} with resolved images."""
+
+    kind: Literal["answer"]
+    answer: dict[str, Any]
+
+
 GenerativeUIPayload = Annotated[
     SandboxedUIPayload
     | TableUIPayload
     | ChartUIPayload
     | PlanUIPayload
     | TimePickerUIPayload
-    | FormUIPayload,
+    | FormUIPayload
+    | AnswerUIPayload,
     Field(discriminator="kind"),
 ]
 _GENERATIVE_UI_ADAPTER: TypeAdapter[GenerativeUIPayload] = TypeAdapter(GenerativeUIPayload)

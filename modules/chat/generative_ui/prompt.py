@@ -119,6 +119,27 @@ with an https URL. Do not use standalone MCP postMessage/global helpers here.
 """
 
 
+RICH_ANSWER_PROMPT = """
+
+## Rich answers
+
+When web search results answer a question about an entity, event, product, place or person, give a
+1-2 sentence lead in text, then call `render_answer`. Fields and rules:
+- `title`: the subject. Then `blocks`, in this order, skipping any block you cannot support with evidence:
+- `gallery`: the 3 most relevant images, only ids listed under "Web images" (img1, img2, ...); never
+  invent ids, never write URLs; skip it when none is listed or none clearly matches the subject.
+- `status`: only for a verifiable status (for example a confirmed release date); `tone` positive, neutral,
+  warning or negative; set `updated_at` to today's date (YYYY-MM-DD, from the current date above).
+- `key_value`: the single key fact (short value, markdown caption).
+- `stats`: 2-4 short label/value facts.
+- `table`: only for real comparisons (columns, rows).
+- `section`: 2-5 sections, each with a heading, markdown and relevant image ids.
+Every number or claim in a block carries the bracketed result numbers [n] in `citations` (integers
+from <web_results>), and you also cite the main claims inline in your lead text. Write all text in
+the user's locale. Keep plain text for chit-chat, code and short answers: do not call
+`render_answer` for them."""
+
+
 class SandboxedUiArgs(BaseModel):
     """Canonical arguments for `render_sandboxed_ui` preserving strict stream parameter order."""
 
@@ -174,6 +195,7 @@ def build_generative_ui_system_prompt(
     todos: bool = False,
     templates: bool = False,
     theme: bool = False,
+    rich_answer: bool = False,
 ) -> str:
     """Compose the Generative UI system prompt with locale, skill index and privacy fence.
 
@@ -185,6 +207,7 @@ def build_generative_ui_system_prompt(
         todos: Whether `manage_todos`/`get_todos` are offered this turn (adds todo guidance).
         templates: Whether the template tools are offered this turn (adds template guidance).
         theme: Whether `set_theme` is offered this turn (adds theme guidance).
+        rich_answer: Whether `render_answer` is offered (web search returned results; adds the rich-answer section).
 
     Returns:
         Complete system prompt text.
@@ -204,6 +227,14 @@ def build_generative_ui_system_prompt(
             "it directly: call `await loadImage(image_url)` (also for individual map tiles) and set the returned "
             "`blob:` URL as the <img> src; hide the image if it rejects."
         )
+    if rich_answer:
+        prompt_parts.append(RICH_ANSWER_PROMPT)
+        if remote_media and not local_only:
+            prompt_parts.append(
+                "\nWhen no web images are listed, you may first call `get_trip_stop_images` with the subject's "
+                "English Wikipedia title and use the licensed photo it returns outside render_answer "
+                "(for example in a sandbox view); never put its URL in render_answer."
+            )
     if todos:
         prompt_parts.append(
             "\n\nTODOS: For multi-step work you may keep a task list with `manage_todos` (send the complete list "

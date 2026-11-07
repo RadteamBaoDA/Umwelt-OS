@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text as sa_text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -69,12 +70,16 @@ class Dashboard(Base):
 
 
 class DashboardGroup(Base):
-    """Group instances within one dashboard while exposing a composite target for safe FKs."""
+    """Own a dashboard panel; exactly one group is the permanent Overview panel."""
 
     __tablename__ = "dashboard_groups"
     __table_args__ = (
         CheckConstraint("position >= 0", name="ck_dashboard_groups_position"),
         UniqueConstraint("id", "dashboard_id", name="uq_dashboard_groups_id_dashboard"),
+        Index(
+            "uq_dashboard_groups_one_overview", "dashboard_id", unique=True,
+            postgresql_where=sa_text("is_overview"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid7)
@@ -83,6 +88,7 @@ class DashboardGroup(Base):
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    is_overview: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
 
 class GadgetDefinition(Base):

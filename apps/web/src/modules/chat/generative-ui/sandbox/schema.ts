@@ -40,7 +40,25 @@ export type GenerativeUIKind =
   | 'bar_chart'
   | 'pie_chart'
   | 'meeting_time_picker'
-  | 'form';
+  | 'form'
+  | 'answer';
+
+/** Image resolved server-side to the same-origin signed media proxy (`src` starts with `/`). */
+export interface AnswerImage {
+  src: string;
+  alt: string;
+  source_host: string;
+}
+
+/** Rich-answer block (`render_answer`); `citations` are final numbers matching the message citation list. */
+export type AnswerBlock =
+  | { type: 'gallery'; images: AnswerImage[] }
+  | { type: 'status'; label: string; tone: 'positive' | 'neutral' | 'warning' | 'negative'; updated_at: string | null }
+  | { type: 'key_value'; value: string; caption: string; citations: number[] }
+  | { type: 'stats'; items: Array<{ label: string; value: string; citations: number[] }> }
+  | { type: 'table'; columns: string[]; rows: string[][]; citations: number[] }
+  | { type: 'section'; heading: string; markdown: string; images: AnswerImage[]; citations: number[] }
+  | { type: 'note'; markdown: string };
 
 /**
  * Unified generative UI payload attached to streaming SSE events and persisted chat messages.
@@ -51,6 +69,7 @@ export interface GenerativeUIPayload {
   visualization?: string;
   title?: string;
   sandbox?: SandboxedUiArgs;
+  answer?: { title: string; blocks: AnswerBlock[] };
   plan?: {
     title?: string;
     description?: string;

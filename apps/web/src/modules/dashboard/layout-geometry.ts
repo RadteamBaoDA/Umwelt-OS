@@ -10,6 +10,7 @@ export type MobileProjection = { placements: DashboardPlacement[]; unavailable: 
 /** Immutable identity and baseline owned by one dirty dashboard layout session. */
 export interface LayoutEditOrigin {
   dashboardId: string;
+  groupId: string;
   breakpoint: 'desktop' | 'mobile';
   columns: number;
   baseRevision: number;
@@ -24,6 +25,7 @@ export interface LayoutSaveRequest extends LayoutEditOrigin {
 /** Identity reserved across quick definition creation and dashboard instance creation. */
 export interface AddReservation {
   dashboardId: string;
+  groupId: string;
   breakpoint: 'desktop' | 'mobile';
   columns: number;
   baseRevision: number;
@@ -137,7 +139,8 @@ export function isValidLayoutSnapshot(
     if (!instance) return false;
     const minimum = RENDERER_MIN_SIZES[instance.definition.renderer] ?? FALLBACK_MINIMUM;
     return rectWithinBounds(placement, minimum, columns)
-      && !placements.slice(index + 1).some((other) => doPlacementsOverlap(placement, other));
+      && !placements.slice(index + 1).some((other) =>
+        instancesById.get(other.instance_id)?.group_id === instance.group_id && doPlacementsOverlap(placement, other));
   });
 }
 
@@ -235,13 +238,17 @@ export function projectMobilePlacements(
     const minimum = minimumSizes.get(placement.instance_id);
     return minimum !== undefined && rectWithinBounds(placement, minimum, columns);
   };
+  const groupsById = new Map(instances.map((instance) => [instance.id, instance.group_id]));
   const noOverlap = placements.every((placement, index) =>
-    placements.slice(index + 1).every((other) => !doPlacementsOverlap(placement, other)),
+    placements.slice(index + 1).every((other) => groupsById.get(other.instance_id) !== groupsById.get(placement.instance_id)
+      || !doPlacementsOverlap(placement, other)),
   );
   if (placements.every(validGeometry) && noOverlap) return { placements, unavailable: false };
 
-  const repaired = repairAll(placements, minimumSizes, columns);
-  if (!repaired) return unavailable();
+  // Each panel owns its own coordinate plane; repair only collisions inside that panel.
+  const repaired = [...new Set(instances.map((instance) => instance.group_id))].flatMap((groupId) =>
+    repairAll(placements.filter((placement) => groupsById.get(placement.instance_id) === groupId), minimumSizes, columns) ?? []);
+  if (repaired.length !== placements.length) return unavailable();
   return {
     placements: placements.map((placement) => repaired.find((item) => item.instance_id === placement.instance_id)!),
     unavailable: false,

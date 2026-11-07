@@ -12,6 +12,8 @@ const runStatusKeys: Record<string, 'agentRunQueued' | 'agentRunRunning' | 'agen
   succeeded: 'agentRunSucceeded', failed: 'agentRunFailed', cancelled: 'agentRunCancelled',
 };
 
+const ACTIVE_RUN_STATUSES = ['queued', 'running', 'waiting_approval'];
+
 /** Props of {@link AgentPanels}. */
 export interface AgentPanelsProps {
   conversationId?: string | null;
@@ -41,7 +43,11 @@ export function AgentPanels(props: AgentPanelsProps) {
           {tAgents(profileTitleKeys[pendingProfileRun.profileId] ?? 'agentProfileKnowledge')} · {tAgents('agentPendingProfileRevision', { revision: pendingProfileRun.profileRevision })}
         </div>
       ) : null}
-      <ConversationAgentActivity conversationId={conversationId} csrfToken={csrfToken} />
+      <ConversationAgentActivity
+        conversationId={conversationId}
+        csrfToken={csrfToken}
+        watch={Boolean(pendingProfileRun) || Boolean(runs?.items.some((run) => ACTIVE_RUN_STATUSES.includes(run.status)))}
+      />
       {agentMode && activeRun && (
         <div className="shrink-0 border-b border-border p-3">
           <AgentRunDetail run={activeRun} onCancel={onCancelRun} cancelling={cancelling} />

@@ -116,6 +116,7 @@ function VizRouterOwnEndpointFields({ vm }: { vm: VizRouterCardVm }) {
   const { t, view, save, loadModels, key, setKey, removed, setRemoved, decisions, modelOptions, canLoadModels, keyConfigured, accountId, gatewayUrl, set, errorText } = vm;
   return (
       view.kind === 'openrouter' || view.kind === 'cloudflare' ? <>
+        <SecretField id="viz-router-own-key" label={view.kind === 'openrouter' ? t('openrouterKey') : t('cloudflareToken')} value={key} onValue={(value) => { setKey(value); if (value) setRemoved(false); }} removed={removed} onRemoved={(next) => { setRemoved(next); if (next) setKey(''); }} configured={keyConfigured} disabled={save.isPending} placeholder={t('keepSaved')} removeLabel={t('removeKey')} status={<>{t('keyStatus')} {keyConfigured ? t('configured') : t('notConfigured')}. {t('keyNeverShown')}</>} />
         <FieldGrid>
           {view.kind === 'cloudflare' ? <>
             <label className="field"><span className="label">{t('accountId')}</span><Input disabled={save.isPending} value={accountId} placeholder="0123456789abcdef0123456789abcdef" aria-invalid={accountId.trim() !== '' && !CLOUDFLARE_ACCOUNT.test(accountId.trim())} onChange={(event) => set({ account_id: event.target.value })} /></label>
@@ -131,7 +132,6 @@ function VizRouterOwnEndpointFields({ vm }: { vm: VizRouterCardVm }) {
           {loadModels.data && !loadModels.data.ok ? <p className="error m-0" role="status">{errorText(loadModels.data.error)}</p> : null}
           {loadModels.isError ? <p className="error m-0" role="alert">{t(apiFailureKey(loadModels.error) ?? 'requestFailed')}</p> : null}
         </div> : null}
-        <SecretField id="viz-router-own-key" label={view.kind === 'openrouter' ? t('openrouterKey') : t('cloudflareToken')} value={key} onValue={(value) => { setKey(value); if (value) setRemoved(false); }} removed={removed} onRemoved={(next) => { setRemoved(next); if (next) setKey(''); }} configured={keyConfigured} disabled={save.isPending} placeholder={t('keepSaved')} removeLabel={t('removeKey')} status={<>{t('keyStatus')} {keyConfigured ? t('configured') : t('notConfigured')}. {t('keyNeverShown')}</>} />
         <p className="m-0 text-xs text-muted-foreground">{decisions ? t('decisionsNote') : view.kind === 'openrouter' ? t('openrouterNote') : t('cloudflareNote')}</p>
       </> : null
   );
@@ -220,10 +220,10 @@ function buildVizRouterView(p: ReturnType<typeof useVizRouterState>, saved: NonN
   // Decision models first (the intended type); legacy chat models stay selectable for back-compat.
   const models = [...(provider?.models ?? []).filter((item) => item.type === 'decision'), ...(provider?.models ?? []).filter((item) => item.type === 'llm')].map((item) => item.id);
   const ownEndpoint = view.kind === 'openrouter' || view.kind === 'cloudflare';
-  // Decisions API (alpha) is OpenRouter-only and has no constraint modes; discovery needs a typed key or the saved OpenRouter key.
+  // Decisions API (alpha) is OpenRouter-only and has no constraint modes; discovery needs a typed key or a saved OpenRouter key (kept even while another router kind is selected).
   const decisions = view.kind === 'openrouter' && view.api === 'decisions';
   const modelOptions = view.kind === 'cloudflare' ? MODEL_PRESETS.cloudflare : decisions ? [...new Set([...DECISION_PRESETS, ...decisionModels])] : MODEL_PRESETS.openrouter;
-  const canLoadModels = key !== '' || (saved.kind === 'openrouter' && saved.openrouter_key_configured && !removed);
+  const canLoadModels = key !== '' || (saved.openrouter_key_configured && !removed);
   const needsConsent = view.kind === 'typesafe' || ownEndpoint || (view.kind === 'llm' && !provider?.local);
   const keyConfigured = savedKeyConfigured(saved, view.kind);
   const keyOk = key !== '' || (keyConfigured && !removed);

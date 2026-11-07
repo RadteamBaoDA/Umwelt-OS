@@ -378,12 +378,13 @@ class DashboardHighlightRead(StrictConfiguration):
 
 
 class DashboardGroupRead(StrictConfiguration):
-    """Expose one dashboard-owned group and its ordering fields."""
+    """Expose one dashboard panel, including its immutable Overview identity."""
 
     id: UUID
     name: str
     position: int
     dashboard_id: UUID
+    is_overview: bool
 
 
 class GadgetDefinitionRead(StrictConfiguration):

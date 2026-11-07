@@ -32,6 +32,12 @@ from core.pagination import b64url_encode
 USER_AGENT = "Umwelt-OS"
 PROXY_PATH = "/api/v1/media/proxy"
 PROXY_HOSTS = frozenset({"upload.wikimedia.org", "basemap.nationalmap.gov"})
+# Search-engine thumbnail CDNs (SearXNG image results): Bing ``ts1.mm.bing.net``/``tse2.mm.bing.net``, Brave and
+# Wikimedia thumbnails. Fixed shapes only: never an arbitrary host. Bing URLs carry a query string, which the
+# signed token preserves because it binds the whole URL.
+SEARCH_THUMB_HOST = re.compile(
+    r"(?:tse?\d{1,3}\.mm\.bing\.net|imgs\.search\.brave\.com|thumb\.wikimedia\.org)"
+)
 TILE_HOST = "basemap.nationalmap.gov"
 TILE_PATH = "/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}"
 TILE_ATTRIBUTION = "Tiles courtesy of the U.S. Geological Survey (USGS), The National Map"
@@ -86,7 +92,8 @@ def _key(secret: str) -> bytes:
 
 
 def check_upstream_url(url: str) -> str:
-    """Return ``url`` if it is https on an allowlisted host with no userinfo/port/fragment, else raise MediaError."""
+    """Return ``url`` if it is https on an allowlisted host (``PROXY_HOSTS`` or a search-thumbnail CDN) with no
+    userinfo/port/fragment, else raise MediaError."""
     try:
         parts = urlsplit(url)
         port = parts.port
@@ -94,7 +101,8 @@ def check_upstream_url(url: str) -> str:
         raise MediaError("host_denied") from None
     if (
         parts.scheme != "https"
-        or parts.hostname not in PROXY_HOSTS
+        or not parts.hostname
+        or (parts.hostname not in PROXY_HOSTS and not SEARCH_THUMB_HOST.fullmatch(parts.hostname))
         or parts.username
         or parts.password
         or port not in (None, 443)

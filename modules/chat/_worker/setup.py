@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -385,6 +386,8 @@ class _ModelSetup:
     ui_tools: list[dict[str, Any]] | None
     user_prompt: str
     prior_messages: list[dict[str, str]]
+    # Image-search hits listed to the model as img1..imgN (empty unless remote media is permitted this turn).
+    web_images: tuple[web.WebImage, ...] = ()
 
     def base_messages(self, with_ui_prompt: bool) -> list[dict[str, Any]]:
         """Initial chat messages; the Generative UI prompt is included only while tools are offered."""
@@ -474,8 +477,14 @@ def _build_gateway(
     )
 
 
-def _web_prompt_suffix(web_run: _WebSearchRun | None, evidence_count: int) -> str:
-    """System-prompt addendum describing the web search outcome ("" when no search was requested) (pure)."""
+def _web_prompt_suffix(
+    web_run: _WebSearchRun | None, evidence_count: int, images: Sequence[web.WebImage] = ()
+) -> str:
+    """System-prompt addendum describing the web search outcome ("" when no search was requested) (pure).
+
+    ``images`` (already gated on remote-media permission) are appended as an id | title | host list; their URLs
+    never enter the prompt.
+    """
     if web_run is None:
         return ""
     web_results = list(web_run.results)
@@ -489,6 +498,7 @@ def _web_prompt_suffix(web_run: _WebSearchRun | None, evidence_count: int) -> st
             "figures. If the results only partly cover the question, answer what they support and say "
             "what is missing; say nothing was found only when neither source contains the answer.\n\n"
             + web.format_web_results(web_results, evidence_count + 1)
+            + ("\n\n" + web.format_web_images(images) if images else "")
         )
     return "\n\n" + (
         WEB_SEARCH_NO_RESULTS_PROMPT
@@ -498,9 +508,12 @@ def _web_prompt_suffix(web_run: _WebSearchRun | None, evidence_count: int) -> st
 
 
 def _compose_system_text(
-    turn: _TurnInputs, answer_context: AnswerContext, ai_config: AIExecutionConfig
+    turn: _TurnInputs,
+    answer_context: AnswerContext,
+    ai_config: AIExecutionConfig,
+    images: Sequence[web.WebImage] = (),
 ) -> str:
-    """Assemble the grounded system prompt: instructions, date, day scope, evidence and web results (pure)."""
+    """Assemble the grounded system prompt: instructions, date, day scope, evidence, web results and images (pure)."""
     day_scope = turn.day_scope
     system_text = (
         resolve_prompt(ai_config.system_prompts, "chat") + " "
@@ -525,7 +538,7 @@ def _compose_system_text(
         )
         + format_grounded_context(answer_context)
     )
-    return system_text + _web_prompt_suffix(turn.web_run, len(answer_context.evidence))
+    return system_text + _web_prompt_suffix(turn.web_run, len(answer_context.evidence), images)
 
 
 def _gadget_note(req_params: dict[str, Any], db_query_on: bool) -> str:
@@ -564,13 +577,17 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
         )
         send_fence = _SendAttemptFence(c, ai_config, _CHAT_ROLE, fence_mapping)
         gateway = _build_gateway(c, ai_config, send_fence)
-        system_text = _compose_system_text(turn, answer_context, ai_config)
         local_only_turn = not ai_config.privacy.allow_remote_reasoning or any(
             getattr(item, "local_only", False) for item in answer_context.evidence
         )
         skill_names = list_skills()
         # Trip images are offered only when the owner allowed remote widget media and the turn is not local-only.
         trip_images_on = media.media_permitted(ai_config, local_only=local_only_turn)
+        # Search images follow the same gate; the rich answer is offered only with web results on a non-local turn.
+        web_run = turn.web_run
+        has_web_results = web_run is not None and bool(web_run.results) and not local_only_turn
+        web_images = web_run.images if web_run is not None and trip_images_on else ()
+        system_text = _compose_system_text(turn, answer_context, ai_config, web_images)
         db_query_on = should_auto_enable_db_query(turn.user_prompt, turn.req_params)
         ui_tools: list[dict[str, Any]] | None = build_chat_tool_specs(
             include_read_skill=bool(skill_names),
@@ -580,6 +597,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
             include_templates=True,
             include_theme=True,
             include_db_query=db_query_on,
+            include_answer=has_web_results,
         )
         ui_locale = await _owner_locale(session, c.scope)
     ui_system_text = (
@@ -594,6 +612,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
             todos=True,
             templates=True,
             theme=True,
+            rich_answer=has_web_results,
         )
     )
     return _ModelSetup(
@@ -612,6 +631,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
         ui_tools=ui_tools,
         user_prompt=turn.user_prompt,
         prior_messages=turn.prior_messages,
+        web_images=web_images,
     )
 
 
@@ -622,7 +642,7 @@ async def _route_visualization(
 
     Runs outside the locked block so no lock spans provider egress; tool continuation rounds reuse the
     returned decision. A router failure (consent, key, endpoint, timeout, bad answer) falls back to the
-    internal local rules, which never leave the host; only the safe error code is logged. None (no external
+    internal local rules, which never leave the host; only the safe error code and the redacted upstream reason are logged. None (no external
     router) leaves the request byte-identical; otherwise ``setup`` tools and prompt gain the decision.
     """
     try:
@@ -637,9 +657,10 @@ async def _route_visualization(
         )
     except viz.VisualizationRouterError as exc:
         logger.warning(
-            "Visualization router failed for run %s (%s); using internal routing",
+            "Visualization router failed for run %s (%s: %s); using internal routing",
             c.response_id,
             exc.code,
+            exc.__cause__,
         )
         route_decision = None
     if route_decision is not None:

@@ -52,6 +52,18 @@ describe('web search settings', () => {
     ]);
   });
 
+  it('labels default and fallback priority and flags image-capable providers', async () => {
+    fetchMock.mockImplementation(() => json({ ...read, providers: [
+      { provider: 'brave', endpoint: 'https://a.example/', credential_configured: true, destination_id: 'a' },
+      { provider: 'searxng', endpoint: 'https://b.example/', credential_configured: false, destination_id: 'b' },
+    ] }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<NextIntlClientProvider locale="en-US" messages={messages['en-us']}><QueryClientProvider client={client}><WebSearchSettingsWorkspace /></QueryClientProvider></NextIntlClientProvider>);
+    expect(await screen.findByText('Default')).toBeTruthy();
+    expect(screen.getByText('Fallback 1')).toBeTruthy();
+    expect(screen.getAllByText('Images')).toHaveLength(1);
+  });
+
   it('uses the stored key for a test and discards a pending result after reorder', async () => {
     let finishTest!: (value: Response) => void;
     const configured = { ...read, providers: [
