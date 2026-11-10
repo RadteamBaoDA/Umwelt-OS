@@ -1,7 +1,7 @@
 """Shared router, dependency aliases, request/response schemas and owner-fence helpers for the connector provisioning routes."""
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -296,6 +296,14 @@ class DraftValidationRead(BaseModel):
     ]
     verified_bot_id: str | None = Field(default=None, max_length=20)
     scope_verified: bool | None = None
+
+
+class RestSampleRead(BaseModel):
+    """Bounded JSON sample from a custom REST draft: status and pruned body only, never headers or URL."""
+
+    status_code: int
+    truncated: bool
+    sample: Any
 
 
 async def _source(

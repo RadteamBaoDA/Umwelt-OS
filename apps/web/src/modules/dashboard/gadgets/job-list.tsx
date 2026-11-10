@@ -70,7 +70,7 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
   const dash = '–';
   return (
     <section className="flex h-full flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
-      {sourceIds.length === 0 ? <GadgetNotice kind="setup" className="p-0" message={t('gadgetDataEmpty')} />
+      {sourceIds.length === 0 ? <GadgetNotice kind="setup" className="p-0" message={t('gadgetDataEmpty')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} />
         : query.isPending ? <GadgetSkeleton variant="table" className="p-0" label={t('gadgetDataLoading')} />
           : query.isError ? <GadgetNotice kind="error" className="p-0" message={t('gadgetDataLoadFailed')} />
             : postings.length === 0 ? <GadgetNotice kind="empty" className="p-0" message={t('gadgetDataEmpty')} />

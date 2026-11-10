@@ -1,8 +1,11 @@
 'use client';
 
+import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import React from 'react';
+import React, { useMemo } from 'react';
 import type { DashboardPlacement, GadgetInstance } from './api';
+import { listSources, sourceKeys } from '@/modules/sources';
+import { computeFreshnessTick, type FreshnessTick } from './freshness-strip';
 import { GadgetFrame } from './gadget-frame';
 import type { ActiveGesture } from './grid-geometry';
 import { isGadgetRendererRegistered, RegisteredGadget } from './widget-registry';
@@ -91,12 +94,33 @@ function gestureOutline(isTarget: boolean, overlapCount: number): string {
 }
 
 /**
+ * Freshness ticks of the active sources an instance reads. Shares the dashboard's `[...sourceKeys.list,'dashboard-stale']`
+ * cache entry, so it adds no request beyond the one `useDashboardData` already makes; disabled for instances without sources.
+ *
+ * @param instance Gadget instance whose `definition.source_ids` are looked up.
+ * @returns Ticks for the bound, active sources; empty while loading or unbound.
+ */
+function useSourceHealth(instance: GadgetInstance): FreshnessTick[] {
+  const ids = instance.definition.source_ids ?? [];
+  const query = useQuery({ queryKey: [...sourceKeys.list, 'dashboard-stale'], queryFn: () => listSources(), enabled: ids.length > 0 });
+  const items = query.data?.items;
+  const idKey = ids.join(',');
+  // Freshness is a wall-clock judgement, so it is recomputed whenever the source rows refresh (dataUpdatedAt), not on a timer.
+  const asOf = query.dataUpdatedAt;
+  return useMemo(
+    () => (items ?? []).filter((s) => idKey.split(',').includes(s.id) && s.status === 'active').map((s) => computeFreshnessTick(s, asOf)),
+    [items, idKey, asOf],
+  );
+}
+
+/**
  * One gadget cell positioned on the grid: frame with the resolved renderer, edit-mode resize handles and the
  * gesture tooltip. Pure presentation; all geometry and handlers come from the grid.
  */
 export function GridCell(props: GridCellProps) {
   const { placement, instance, isEditMode, gesture, overlapCount, projectionPending } = props;
   const isGestureTarget = gesture !== null;
+  const sourceHealth = useSourceHealth(instance);
   return (
     <div
       onKeyDown={props.onKeyDown}
@@ -115,6 +139,7 @@ export function GridCell(props: GridCellProps) {
         isResizing={isGestureTarget && gesture.type === 'resize'}
         isSelected={props.isSelected}
         unreadCount={0}
+        sourceHealth={sourceHealth}
         readingQueueCount={props.readingQueueCount}
         onApplyReadingQueue={props.onApplyReadingQueue}
         onSelect={props.onSelect}

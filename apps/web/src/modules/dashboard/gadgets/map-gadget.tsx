@@ -175,7 +175,7 @@ function MapNotices({ showPlot, mapEmpty, emptyMessage, needsSource, loadFailed 
   return <>
     {/* Location-sharing / empty notice sits above the map in flow so it never covers the basemap. */}
     {showPlot && mapEmpty && empty}
-    {needsSource && <GadgetNotice kind="setup" message={t('mapSourceRequired')} className="shrink-0 px-0 py-1 text-xs" />}
+    {needsSource && <GadgetNotice kind="setup" message={t('mapSourceRequired')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="shrink-0 px-0 py-1 text-xs" />}
     {loadFailed && <GadgetNotice kind="error" message={t('observationLoadFailed')} className="shrink-0 px-0 py-1 text-xs" />}
     {/* On-demand phone state with no points: the notice renders in normal flow (an absolute notice in a collapsed plot is clipped). */}
     {!showPlot && empty}

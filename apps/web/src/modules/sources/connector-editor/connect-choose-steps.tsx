@@ -12,6 +12,7 @@ import { McpCollectionEditor } from '../mcp-collection-editor';
 import { connectorKeys } from '../api';
 import { CONNECT_SECTIONS, connectFamily, SCOPE_SECTIONS, scopeFamily } from '../connector-section-registry';
 import { isPreset, isNativeEntry } from '../connector-editor-model';
+import { RestSamplePreview } from '../rest-sample-preview';
 
 /** MCP sources edit their calls and schedule in the dedicated collection editor. */
 export function McpSection({ m }: { m: ConnectorEditorModel }) {
@@ -177,6 +178,9 @@ export function RestFields({ m }: { m: ConnectorEditorModel }) {
               onChange={(event) => changeConfiguration('updated_field', event.target.value)}
             />
             <ScopeHint field="updated_field" />
+          </div>
+          <div className="field col-span-full">
+            <RestSamplePreview m={m} />
           </div>
         </FieldGrid>
       )}

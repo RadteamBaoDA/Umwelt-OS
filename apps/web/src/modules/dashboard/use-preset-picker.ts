@@ -287,19 +287,33 @@ function usePresetActions(draft: Draft, catalog: Catalog, mutations: Mutations, 
  * @param onOpenChange Open-state callback, called with false on close.
  * @param target Active dashboard identity/revision for append / replace.
  * @param onPresetApplied Called with the dashboard created or updated by a successful apply.
+ * @param initialPresetId Preset to select automatically once per open (after the catalog loads); the owner can still pick another.
  */
 export function usePresetPicker(
   open: boolean,
   onOpenChange: (open: boolean) => void,
   target: PresetTarget,
   onPresetApplied: (dashboard: Dashboard) => void,
+  initialPresetId?: string,
 ) {
   const draft = usePresetDraft();
   const catalog = usePresetCatalog(open);
   const mutations = usePresetMutations(draft, target, onPresetApplied, onOpenChange);
-  const presets = catalog.presetsQuery.data ?? [];
+  const presetData = catalog.presetsQuery.data;
+  const presets = useMemo(() => presetData ?? [], [presetData]);
   const selectedPreset = presets.find((preset) => preset.id === draft.selectedPresetId) ?? null;
   const actions = usePresetActions(draft, catalog, mutations, selectedPreset);
+  const autoSelected = useRef(false);
+  const { handleSelectPreset } = actions;
+  // One-shot per open: re-arms on close so a later "build dashboard" preselects again; never overrides an owner's choice.
+  useEffect(() => {
+    if (!open) { autoSelected.current = false; return; }
+    if (!initialPresetId || autoSelected.current) return;
+    const preset = presets.find((candidate) => candidate.id === initialPresetId);
+    if (!preset) return;
+    autoSelected.current = true;
+    handleSelectPreset(preset);
+  }, [open, initialPresetId, presets, handleSelectPreset]);
   return { draft, catalog, mutations, presets, selectedPreset, actions };
 }
 

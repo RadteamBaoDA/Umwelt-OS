@@ -30,6 +30,8 @@ export interface PresetPickerProps {
   currentDashboardName?: string | null;
   /** Callback invoked when a preset has been successfully applied to create or update a dashboard. */
   onPresetApplied: (dashboard: Dashboard) => void;
+  /** Preset id to preselect (and preview) when the dialog opens, e.g. "monitor" after a starter pack run. */
+  initialPresetId?: string;
 }
 
 /** Display name of a slot: the preset's own label ("Live news"), else the renderer's template name. */
@@ -312,11 +314,12 @@ export function PresetPicker({
   currentDashboardId,
   currentDashboardRevision,
   onPresetApplied,
+  initialPresetId,
 }: PresetPickerProps) {
   const t = useTranslations('dashboard');
   const catalogHeadingId = useId();
   const layoutHeadingId = useId();
-  const model = usePresetPicker(open, onOpenChange, { currentDashboardId, currentDashboardRevision }, onPresetApplied);
+  const model = usePresetPicker(open, onOpenChange, { currentDashboardId, currentDashboardRevision }, onPresetApplied, initialPresetId);
   const { applyError, setApplyError } = model.draft;
 
   return (

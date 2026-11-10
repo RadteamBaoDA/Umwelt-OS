@@ -37,8 +37,11 @@ function Step({ n, done, title, desc, children }: { n: number; done: boolean; ti
  * @param sourceCount Number of sources already connected (0 while this panel is visible).
  * @param csrfToken Trusted session token for brief generation.
  * @param onPickTopics Opens the existing Topics dialog.
+ * @param onOpenStarterPacks Opens the starter-pack wizard in place of navigating to the sources page.
  */
-export function FirstRunSetup({ sourceCount, csrfToken, onPickTopics }: { sourceCount: number; csrfToken: string; onPickTopics: () => void }) {
+export function FirstRunSetup({ sourceCount, csrfToken, onPickTopics, onOpenStarterPacks }: {
+  sourceCount: number; csrfToken: string; onPickTopics: () => void; onOpenStarterPacks: () => void;
+}) {
   const t = useTranslations('dashboard');
   const client = useQueryClient();
   const { timezone } = useDisplayPreferences();
@@ -59,8 +62,7 @@ export function FirstRunSetup({ sourceCount, csrfToken, onPickTopics }: { source
       </div>
       <ol className="m-0 flex list-none flex-col gap-2 p-0">
         <Step n={1} done={sourceCount > 0} title={t('setupStepSource')} desc={t('setupStepSourceDesc')}>
-          {/* ponytail: wizard has no provider param, so link to the sources page; preselect later if it grows one. */}
-          <Button asChild><Link href="/settings/sources">{t('setupConnect')}</Link></Button>
+          <Button type="button" onClick={onOpenStarterPacks}>{t('setupConnect')}</Button>
         </Step>
         <Step n={2} done={(topics.data?.items.length ?? 0) > 0} title={t('setupStepTopics')} desc={t('setupStepTopicsDesc')}>
           <Button type="button" variant="outline" onClick={onPickTopics}>{t('setupPickTopics')}</Button>

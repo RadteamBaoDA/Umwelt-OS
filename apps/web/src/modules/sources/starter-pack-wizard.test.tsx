@@ -17,9 +17,9 @@ const row = (id: string, over: Partial<BuiltinSource> = {}): BuiltinSource => ({
   id, label: `Label ${id}`, category: 'news', eligibility: 'open', terms_url: 'https://e.org', terms_checked_on: '2026-11-04', attribution: 'x',
   execution: 'supported', source_id: null, enabled: false, data_shapes: ['news'], ...over,
 });
-const wrap = (onAddConnector?: () => void) => render(
+const wrap = (onAddConnector?: () => void, onBuildDashboard?: () => void) => render(
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}><StarterPackWizard onClose={() => undefined} onChanged={() => undefined} onAddConnector={onAddConnector} /></NextIntlClientProvider>
+    <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}><StarterPackWizard onClose={() => undefined} onChanged={() => undefined} onAddConnector={onAddConnector} onBuildDashboard={onBuildDashboard} /></NextIntlClientProvider>
   </QueryClientProvider>);
 const checkbox = (name: string) => screen.findByRole('checkbox', { name: `Add ${name}` });
 /** Unchecks every row except the given built-in ids, so a run touches a known, ordered subset. */
@@ -43,6 +43,28 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('StarterPackWizard', () => {
+  it('shows Build my dashboard after a successful run only when the prop is given', async () => {
+    const build = vi.fn();
+    wrap(undefined, build);
+    await keepOnly(['hn_top']);
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Build my dashboard' }));
+    expect(build).toHaveBeenCalledTimes(1);
+    cleanup();
+    wrap();
+    await keepOnly(['hn_top']);
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByTestId('starter-row-hn_top');
+    await waitFor(() => expect(within(screen.getByTestId('starter-row-hn_top')).getByText('Done')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Build my dashboard' })).toBeNull();
+  });
+
+  it('notes when the provider floor raises a starter interval', async () => {
+    api.getConnectorCatalog.mockResolvedValue([{ provider_id: 'arxiv', min_interval_minutes: 720 }]);
+    wrap();
+    expect(await screen.findByText('Raised to every 1440 min to respect the provider limit.')).toBeTruthy();
+  });
+
   it('preselects available rows, unchecks already added ones and hides builtins the server lacks', async () => {
     wrap();
     expect((await checkbox('Label hn_top')).getAttribute('aria-checked')).toBe('true');

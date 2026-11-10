@@ -1,12 +1,14 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useWorkspace } from '@/core/workspace-context';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
-import type { GadgetInstance } from './api';
+import { sourceKeys, StarterPackWizard } from '@/modules/sources';
+import { dashboardKeys, type GadgetInstance } from './api';
 import { DashboardCanvas, LayoutEditorBar } from './dashboard-canvas';
 import { DashboardOverview } from './dashboard-overview';
 import { DashboardPanel } from './dashboard-panel';
@@ -17,6 +19,7 @@ import { FreshnessStrip } from './freshness-strip';
 import { GadgetSettings } from './gadget-settings';
 import { PresetPicker } from './preset-picker';
 import { useDashboardData } from './use-dashboard-data';
+import { useDashboardDeepLink } from './use-dashboard-deep-link';
 import { useGadgetMembership } from './use-gadget-membership';
 import { useLayoutSave } from './use-layout-save';
 import { useLayoutSession } from './use-layout-session';
@@ -120,17 +123,19 @@ function ConnectedHeader({ data, ops, crud, onOpenPresets, onOpenManagement }: {
 }
 
 /** Preset picker wired to navigation: applying a preset opens it, leaves edit mode and clears the dirty flag. */
-function ConnectedPresetPicker({ open, onOpenChange, data, session }: {
+function ConnectedPresetPicker({ open, onOpenChange, data, session, initialPresetId }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   data: PageData;
   session: PageOps['session'];
+  initialPresetId?: string;
 }) {
   const { activeDashboard } = data;
   return (
     <PresetPicker
       open={open}
       onOpenChange={onOpenChange}
+      initialPresetId={initialPresetId}
       currentDashboardId={data.selectedDashboardId}
       currentDashboardRevision={activeDashboard?.revision}
       currentDashboardName={activeDashboard?.name}
@@ -200,6 +205,12 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   const [staleDetailsOpen, setStaleDetailsOpen] = useState(false);
   const [mobileNoticeDismissed, dismissMobileNotice] = useMobileNoticeDismissal();
   const [openAddInitially, setOpenAddInitially] = useState(false);
+  const [starterOpen, setStarterOpen] = useState(false);
+  // Template/source from an `addTemplate` deep link; handed to the Add gadget editor, cleared when edit mode ends.
+  const [addDeepLink, setAddDeepLink] = useState<{ templateId: string; sourceId?: string } | undefined>(undefined);
+  // Set only when the picker is opened from a starter-pack run, so header/empty-state opens keep the plain catalog.
+  const [presetInitialId, setPresetInitialId] = useState<string | undefined>(undefined);
+  const queryClient = useQueryClient();
   const scrollPositions = useRef(new Map<string, number>());
 
   const data = useDashboardData(dashboardId);
@@ -221,7 +232,16 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
       crud.groupMutation.reset();
     }
   }, [activeDashboard, crud.groupMutation, session.setActiveGroupId]);
-  useEffect(() => { if (!session.editMode) setOpenAddInitially(false); }, [session.editMode]);
+  useEffect(() => { if (!session.editMode) { setOpenAddInitially(false); setAddDeepLink(undefined); } }, [session.editMode]);
+  useDashboardDeepLink({
+    ready: Boolean(activeDashboard),
+    onPreset: (id) => { setPresetInitialId(id); setPresetPickerOpen(true); },
+    // Owners on an editable layout enter edit mode with Add gadget open; otherwise the add intent is dropped.
+    onAddTemplate: (target) => {
+      if (!isOwner || !session.canEditLayout) return;
+      setAddDeepLink(target); setOpenAddInitially(true); session.setIsEditMode(true);
+    },
+  });
   useEffect(() => { scrollPositions.current.clear(); }, [selectedDashboardId]);
 
   const visibleInstances = useVisibleInstances(activeDashboard, session.activeGroupId);
@@ -251,7 +271,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           <LayoutEditorBar
             key={session.activeGroupId}
             ops={ops} activeDashboard={activeDashboard}
-            openAddInitially={openAddInitially}
+            openAddInitially={openAddInitially} initialTemplateId={addDeepLink?.templateId} initialSourceId={addDeepLink?.sourceId}
             onOpenPresets={() => setPresetPickerOpen(true)} onAddGroup={session.isDirty ? undefined : () => crud.setGroupOpen(true)}
           />
         )}
@@ -265,6 +285,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
               ops={ops} activeDashboard={activeDashboard} visibleInstances={visibleInstances} showFirstRun={showFirstRun && Boolean(activeGroup?.is_overview)}
               csrfToken={workspaceSession.csrfToken} isTablet={isTablet} isAdminViewer={isAdminViewer}
               onPickTopics={() => { management.setTab('topics'); management.setOpen(true); }}
+              onOpenStarterPacks={() => setStarterOpen(true)}
               onOpenPresets={() => setPresetPickerOpen(true)} onCreateDashboard={() => crud.setCreateOpen(true)}
               onConfigureInstance={(inst) => { setConfiguringInstance(inst); setGadgetSettingsOpen(true); }}
             />
@@ -283,8 +304,17 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
 
       {/* Preset Picker Modal */}
       <ConnectedPresetPicker
-        open={presetPickerOpen} onOpenChange={setPresetPickerOpen} data={data} session={session}
+        open={presetPickerOpen} initialPresetId={presetInitialId} data={data} session={session}
+        onOpenChange={(next) => { setPresetPickerOpen(next); if (!next) setPresetInitialId(undefined); }}
       />
+      {starterOpen && (
+        <StarterPackWizard
+          onClose={() => setStarterOpen(false)}
+          // Starter runs create sources: refresh every source-backed query so first-run state and gadgets update.
+          onChanged={() => { void queryClient.invalidateQueries({ queryKey: sourceKeys.list }); void queryClient.invalidateQueries({ queryKey: dashboardKeys.sources }); }}
+          onBuildDashboard={() => { setStarterOpen(false); setPresetInitialId('monitor'); setPresetPickerOpen(true); }}
+        />
+      )}
       <DashboardCrudDialogs crud={crud} activeDashboardName={activeDashboard?.name ?? ''} layoutOperationPending={layoutOperationPending} />
       {/* Gadget Instance & Definition Settings Modal */}
       <GadgetSettings

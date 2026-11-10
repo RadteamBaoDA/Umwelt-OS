@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -78,9 +79,11 @@ describe('DashboardGrid interactions', () => {
   const renderGrid = (onLayoutChange = vi.fn()) => {
     const placements = [rect('a', 0, 0), rect('b', 4, 0)];
     render(
-      <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
-        <DashboardGrid instances={[instance('a'), instance('b')]} placements={placements} visibleInstanceIds={['a', 'b']} breakpoint="desktop" isEditMode onLayoutChange={onLayoutChange} />
-      </NextIntlClientProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
+          <DashboardGrid instances={[instance('a'), instance('b')]} placements={placements} visibleInstanceIds={['a', 'b']} breakpoint="desktop" isEditMode onLayoutChange={onLayoutChange} />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
     );
     return onLayoutChange;
   };

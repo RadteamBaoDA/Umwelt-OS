@@ -16,6 +16,10 @@ import { createPortal } from 'react-dom';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { useQueryClient } from '@tanstack/react-query';
+import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
+import { collectAndWait, collectErrorKey, sourceKeys } from '@/modules/sources';
+import type { FreshnessTick } from './freshness-strip';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { templateName } from '@/core/renderer-labels';
@@ -48,6 +52,8 @@ export interface GadgetRuleMatch {
 
 /** Configuration and interactive handlers for an individual gadget container. */
 export interface GadgetFrameProps {
+  /** Freshness ticks of the sources this gadget reads; a stale or failing one shows a badge with a Collect now action. */
+  sourceHealth?: readonly FreshnessTick[];
   /** The gadget instance configuration and definition projection. */
   instance: GadgetInstance;
   /** Whether the parent dashboard grid is currently in layout edit mode. */
@@ -199,8 +205,49 @@ function SeverityBadge({ severity }: { severity: 'info' | 'warning' | 'critical'
   );
 }
 
+/**
+ * Stale/failing badge for the gadget's bound sources plus a "Collect now" action for the worst one (failing first).
+ * A failing source shows its plain-language reason (`collectErrorKey`, raw code as fallback) as the badge title.
+ * Collect now triggers one collection with the owner CSRF token, waits for the terminal state and then refreshes
+ * every source query; failures are announced, never thrown. Renders nothing while every source is fresh.
+ *
+ * @param sourceHealth Freshness ticks of the bound sources.
+ */
+function SourceHealthBadge({ sourceHealth }: { sourceHealth: readonly FreshnessTick[] }) {
+  const t = useTranslations('dashboard');
+  const ts = useTranslations('sources');
+  const { csrfToken } = useWorkspaceSession();
+  const client = useQueryClient();
+  const [state, setState] = useState<'idle' | 'running' | 'failed'>('idle');
+  const worst = sourceHealth.find((tick) => tick.status === 'failing') ?? sourceHealth.find((tick) => tick.status === 'stale');
+  if (!worst) return null;
+  const failing = worst.status === 'failing';
+  const key = failing ? collectErrorKey(worst.errorCode) : null;
+  const reason = failing ? (key ? ts(key) : worst.errorCode ?? '') : t('sourceStaleTitle');
+  /** Runs one collection for the worst source and refreshes the freshness data once it settles. */
+  const collect = async () => {
+    setState('running');
+    try {
+      const result = await collectAndWait(worst.id, csrfToken, { signal: new AbortController().signal });
+      setState(result && result.status !== 'succeeded' && result.status !== 'no_changes' ? 'failed' : 'idle');
+    } catch { setState('failed'); }
+    await client.invalidateQueries({ queryKey: sourceKeys.list });
+  };
+  return (
+    <>
+      <Badge variant={failing ? 'destructive' : 'secondary'} className="shrink-0 gap-1 text-[11px]" title={reason}>
+        <AlertTriangle className="w-3 h-3" aria-hidden /><span>{t(failing ? 'sourceFailingBadge' : 'sourceStaleBadge')}</span>
+      </Badge>
+      <Button type="button" size="sm" variant="ghost" className="h-6 shrink-0 px-1.5 text-[11px]" disabled={state === 'running'} onClick={() => void collect()}>
+        {state === 'running' ? ts('collecting') : ts('collectNow')}
+      </Button>
+      {state === 'failed' && <span role="alert" className="shrink-0 text-[11px] text-destructive">{t('sourceCollectFailed')}</span>}
+    </>
+  );
+}
+
 /** Status badges that share the header row; overflow is clipped so streaming counts never change grid height. */
-function StatusBadges({ instance, unreadCount, ruleMatch }: Pick<GadgetFrameProps, 'instance' | 'unreadCount' | 'ruleMatch'>) {
+function StatusBadges({ instance, unreadCount, ruleMatch, sourceHealth }: Pick<GadgetFrameProps, 'instance' | 'unreadCount' | 'ruleMatch' | 'sourceHealth'>) {
   const t = useTranslations('dashboard');
   const ts = useTranslations('uiSweep');
   const definition = instance.definition;
@@ -211,6 +258,7 @@ function StatusBadges({ instance, unreadCount, ruleMatch }: Pick<GadgetFrameProp
     <div className="hidden min-w-0 shrink items-center gap-1.5 overflow-hidden whitespace-nowrap @[22rem]:flex">
       {unread > 0 && <Badge className="shrink-0 px-1.5 text-[11px]" title={ts('frameUnread', { count: unread })}>{t('unreadBadge', { count: unread })}</Badge>}
       {ruleMatch?.matched && <Badge variant="outline" className="shrink-0 gap-1 border-primary/30 bg-primary/10 text-[11px] text-foreground" title={ruleMatch.reason || t('ruleMatchFallback')}><AlertTriangle className="w-3 h-3" /><span>{t('ruleMatchBadge')}</span></Badge>}
+      {sourceHealth && sourceHealth.length > 0 && <SourceHealthBadge sourceHealth={sourceHealth} />}
       {effectiveSeverity && <SeverityBadge severity={effectiveSeverity} />}
       {definition.warnings && definition.warnings.length > 0 && <Badge variant="secondary" className="shrink-0 gap-0.5 text-xs" title={ts('frameSetupTitle')}><Info className="w-3 h-3" /><span>{t('setupRequired')}</span></Badge>}
     </div>
@@ -439,6 +487,7 @@ export function GadgetFrame({
   isResizing = false,
   isSelected = false,
   unreadCount = 0,
+  sourceHealth,
   ruleMatch,
   readingQueueCount = 0,
   onApplyReadingQueue,
@@ -491,7 +540,7 @@ export function GadgetFrame({
               {displayTitle}
             </h3>
           </div>
-          <StatusBadges instance={instance} unreadCount={unreadCount} ruleMatch={ruleMatch} />
+          <StatusBadges instance={instance} unreadCount={unreadCount} ruleMatch={ruleMatch} sourceHealth={sourceHealth} />
           <HeaderActions
             isEditMode={isEditMode} onAsk={handleAskWithUmwelt} onExpand={toggleExpanded} expandRef={expandTriggerRef}
             onConfigure={onConfigure} onRemove={onRemove}

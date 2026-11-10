@@ -169,7 +169,7 @@ export function TablePanel({ instance }: TablePanelProps) {
       {staleSelections.length > 0 && (
         <p role="status" className="text-xs text-muted-foreground">{t('selectionChanged', { count: staleSelections.length })}</p>
       )}
-      {sourceIds.length === 0 ? <GadgetNotice kind="setup" className="p-0" message={t('gadgetDataEmpty')} />
+      {sourceIds.length === 0 ? <GadgetNotice kind="setup" className="p-0" message={t('gadgetDataEmpty')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} />
         : query.isPending ? <GadgetSkeleton variant="table" className="p-0" label={t('gadgetDataLoading')} />
           : query.isError ? <GadgetNotice kind="error" className="p-0" message={t('gadgetDataLoadFailed')} />
             : records.length === 0 ? <GadgetNotice kind="empty" className="p-0" message={t('gadgetDataEmpty')} />

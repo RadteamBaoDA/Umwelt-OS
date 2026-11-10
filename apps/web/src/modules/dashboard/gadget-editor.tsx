@@ -44,6 +44,10 @@ export interface GadgetEditorProps {
   saveLabel?: string;
   /** Extra fields rendered right after the gadget Name field (for example the per-dashboard title). */
   afterName?: ReactNode;
+  /** New gadgets only: template id to preselect once templates load (unknown ids are ignored). */
+  initialTemplateId?: string;
+  /** With `initialTemplateId`: source to bind once sources load (unknown ids are ignored). */
+  initialSourceId?: string;
 }
 
 /**
@@ -246,7 +250,7 @@ type EditorModel = ReturnType<typeof useGadgetEditor>;
  *
  * @param props Editor props (definition and save callback).
  */
-function useGadgetEditor({ definition = null, onSaved }: Pick<GadgetEditorProps, 'definition' | 'onSaved'>) {
+function useGadgetEditor({ definition = null, onSaved, initialTemplateId, initialSourceId }: Pick<GadgetEditorProps, 'definition' | 'onSaved' | 'initialTemplateId' | 'initialSourceId'>) {
   const t = useTranslations('gadgetSettings');
   const nameId = useId();
   const limitId = useId();
@@ -270,6 +274,18 @@ function useGadgetEditor({ definition = null, onSaved }: Pick<GadgetEditorProps,
     const picked = queries.templates.data?.find((item) => item.renderer === nextRenderer);
     patch(draftPatchForTemplate(picked, nextRenderer, templateName(nextRenderer, t)));
   };
+  // One-shot deep-link preselect: runs once templates (and, when a source is requested, source rows) have loaded.
+  const sourcesQuery = useSourceRows().query;
+  const preselected = useRef(false);
+  useEffect(() => {
+    if (preselected.current || definition || !initialTemplateId || queries.templates.isPending) return;
+    if (initialSourceId && sourcesQuery.isPending) return;
+    preselected.current = true;
+    const picked = queries.templates.data?.find((item) => item.id === initialTemplateId);
+    if (!picked) return;
+    const known = initialSourceId !== undefined && facts.sourceRows.some((row) => row.id === initialSourceId);
+    patch({ ...draftPatchForTemplate(picked, picked.renderer, templateName(picked.renderer, t)), ...(known ? { sourceIds: [initialSourceId] } : {}) });
+  }, [definition, initialTemplateId, initialSourceId, queries.templates.isPending, queries.templates.data, sourcesQuery.isPending, facts.sourceRows, patch, t]);
   /** Applies a datasource selection (see {@link planSourceChange}). */
   const changeSources = (next: string[]) => patch(planSourceChange({
     next, draft, fields, catalog: facts.catalog,

@@ -9,7 +9,7 @@ const api = vi.hoisted(() => ({ getOnboardingState: vi.fn(), saveOnboardingStep:
 vi.mock('./onboarding-api', () => ({ getOnboardingState: api.getOnboardingState, saveOnboardingStep: api.saveOnboardingStep }));
 vi.mock('@/core/api', async (original) => ({ ...(await original<typeof import('@/core/api')>()), apiRequest: api.apiRequest }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 't' }) }));
-vi.mock('@/modules/sources/api', () => ({ listSources: vi.fn().mockResolvedValue({ items: [] }) }));
+vi.mock('@/modules/sources', () => ({ listSources: vi.fn().mockResolvedValue({ items: [] }), StarterPackWizard: () => <div data-testid="starter-wizard" /> }));
 vi.mock('@/modules/search/api', () => ({ getSearchIndexStatus: vi.fn().mockResolvedValue({ status: 'unavailable', indexed_items: 0, failed_items: 0, model_id: null }) }));
 vi.mock('./onboarding-topics', () => ({ OnboardingTopics: () => null }));
 vi.mock('./ai-settings', () => ({ AISettingsWorkspace: () => <div data-testid="models-workspace" /> }));
@@ -51,5 +51,17 @@ describe('OnboardingPage AI step', () => {
     await screen.findByRole('button', { name: 'Skip: use local only' });
     expect(screen.queryByText('Upcoming')).toBeNull();
     expect(screen.getAllByText('Current step').length).toBeGreaterThan(0);
+  });
+
+  it('sources step opens starter packs in place; sample step has no dev seed command', async () => {
+    api.getOnboardingState.mockResolvedValue({ ...state, current_step: 'sources' });
+    mount();
+    await userEvent.click(await screen.findByRole('button', { name: 'Starter packs' }));
+    expect(screen.getByTestId('starter-wizard')).toBeTruthy();
+    cleanup();
+    api.getOnboardingState.mockResolvedValue({ ...state, current_step: 'sample_or_import' });
+    mount();
+    await screen.findAllByRole('button', { name: /sample/i });
+    expect(screen.queryByText(/dev\.ps1/)).toBeNull();
   });
 });

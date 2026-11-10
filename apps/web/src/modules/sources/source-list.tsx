@@ -5,6 +5,9 @@ import { useTranslations } from 'next-intl';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Upload } from '../ingestion/upload';
+import { CompatibleChips } from './compatible-chips';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useGuardedNavigation } from '@/core/guarded-navigation';
@@ -39,7 +42,7 @@ function ShapeFilterBanner({ renderer, onClear }: { renderer: string | null; onC
 }
 
 /** Which add/edit dialog is open on the sources page; null when only the table is shown. */
-type DialogState = { kind: 'builtin' } | { kind: 'starter' } | { kind: 'connector' } | { kind: 'edit'; source: Source } | null;
+type DialogState = { kind: 'builtin' } | { kind: 'starter' } | { kind: 'upload' } | { kind: 'connector' } | { kind: 'edit'; source: Source } | null;
 
 /**
  * Dialog open state with the dirty-draft guard. `transition` opens, switches or closes the dialog, first confirming that
@@ -120,8 +123,8 @@ function useConnectorDetails(connectors: Source[]) {
   };
 }
 
-/** Add menu: starter packs button plus the Add datasource dropdown (built-in / connector). */
-function AddDatasourceMenu({ empty, allBuiltinsAdded, onSelect }: { empty: boolean; allBuiltinsAdded: boolean; onSelect: (kind: 'starter' | 'builtin' | 'connector') => void }) {
+/** Add menu: starter packs button plus the Add datasource dropdown (built-in / connector / file upload). */
+function AddDatasourceMenu({ empty, allBuiltinsAdded, onSelect }: { empty: boolean; allBuiltinsAdded: boolean; onSelect: (kind: 'starter' | 'builtin' | 'connector' | 'upload') => void }) {
   const t = useTranslations('sources');
   return <div className="flex flex-wrap items-center justify-end gap-2 max-[1023px]:justify-start" role="group" aria-label={t('tableToolbar')}>
     <Button size="sm" variant={empty ? 'default' : 'outline'} onClick={() => onSelect('starter')}>{t('starterPacks')}</Button>
@@ -134,21 +137,44 @@ function AddDatasourceMenu({ empty, allBuiltinsAdded, onSelect }: { empty: boole
         <DropdownMenuItem onSelect={() => onSelect('connector')}>
           <span className="flex flex-col"><span>{t('menuConnector')}</span><span className="text-xs text-muted-foreground">{t('menuConnectorHint')}</span></span>
         </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onSelect('upload')}>
+          <span className="flex max-w-72 flex-col"><span>{t('menuUpload')}</span><span className="text-xs text-muted-foreground">{t('menuUploadHint')}</span></span>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   </div>;
 }
 
+/** Dialog wrapping the document upload form; refreshes the source list on close because a first upload creates the default Uploads source. */
+function UploadDialog({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
+  const t = useTranslations('sources');
+  return <Dialog open onOpenChange={(open) => { if (!open) { onChanged(); onClose(); } }}>
+    <DialogContent>
+      <DialogHeader><DialogTitle>{t('uploadDialogTitle')}</DialogTitle><DialogDescription>{t('menuUploadHint')}</DialogDescription></DialogHeader>
+      <Upload />
+    </DialogContent>
+  </Dialog>;
+}
+
+/** Banner shown once the just-created source (`sourceId`) is in the loaded list, listing the gadget templates it can power. */
+function CreatedSourceNote({ items, sourceId }: { items: Source[]; sourceId: string | null }) {
+  const source = sourceId ? items.find((item) => item.id === sourceId) : undefined;
+  if (!source) return null;
+  return <div role="status" className="rounded-md border border-border bg-muted p-3"><CompatibleChips source={source} /></div>;
+}
+
 /** The single open add/edit dialog, if any; closing goes through the draft-guarded transition. */
-function SourceDialogs({ dialog, editSession, shapeFilter, onClearFilter, transition, registerTransitionGuard, refresh }: {
+function SourceDialogs({ dialog, editSession, shapeFilter, onClearFilter, transition, registerTransitionGuard, refresh, onCreated, onBuildDashboard }: {
   dialog: DialogState; editSession: number; shapeFilter: ReturnType<typeof parseShapeFilter>['shapes'] | undefined; onClearFilter: () => void;
   transition: (next: DialogState) => void; registerTransitionGuard: (guard: (() => boolean) | null) => void; refresh: () => void;
+  onCreated: (sourceId: string) => void; onBuildDashboard: () => void;
 }) {
   const closeDialog = () => transition(null);
   if (dialog?.kind === 'builtin') return <BuiltinWizard key={editSession} shapeFilter={shapeFilter} onClearFilter={onClearFilter} onAddConnector={() => transition({ kind: 'connector' })} onClose={closeDialog} onChanged={refresh} />;
-  if (dialog?.kind === 'starter') return <StarterPackWizard key={editSession} onAddConnector={() => transition({ kind: 'connector' })} onClose={closeDialog} onChanged={refresh} />;
+  if (dialog?.kind === 'starter') return <StarterPackWizard key={editSession} onBuildDashboard={onBuildDashboard} onAddConnector={() => transition({ kind: 'connector' })} onClose={closeDialog} onChanged={refresh} />;
+  if (dialog?.kind === 'upload') return <UploadDialog onClose={closeDialog} onChanged={refresh} />;
   if (!dialog) return null;
-  return <SourceWizard key={editSession} request={dialog} shapeFilter={shapeFilter} onClearFilter={onClearFilter} registerTransitionGuard={registerTransitionGuard} onChanged={refresh} onClose={closeDialog} />;
+  return <SourceWizard key={editSession} request={dialog} shapeFilter={shapeFilter} onClearFilter={onClearFilter} registerTransitionGuard={registerTransitionGuard} onChanged={refresh} onClose={closeDialog} onCreated={onCreated} />;
 }
 
 /**
@@ -183,6 +209,7 @@ export function SourceList() {
   /** Drops both filter params from the URL. */
   const clearFilter = useCallback(() => router.replace('/settings/sources'), [router]);
   const { dialog, editSession, transition, registerTransitionGuard } = useDialogTransition();
+  const [createdId, setCreatedId] = useState<string | null>(null);
   const sources = useInfiniteQuery({
     queryKey: sourceKeys.list,
     initialPageParam: undefined as string | undefined,
@@ -214,7 +241,8 @@ export function SourceList() {
     </header>
     {shapeFilter && <ShapeFilterBanner renderer={renderer} onClear={clearFilter} />}
     <BuiltinResumeList onChanged={refresh} />
-    <SourceDialogs dialog={dialog} editSession={editSession} shapeFilter={shapeFilter} onClearFilter={clearFilter} transition={transition} registerTransitionGuard={registerTransitionGuard} refresh={refresh} />
+    <SourceDialogs dialog={dialog} editSession={editSession} shapeFilter={shapeFilter} onClearFilter={clearFilter} transition={transition} registerTransitionGuard={registerTransitionGuard} refresh={refresh} onCreated={setCreatedId} onBuildDashboard={() => router.push('/dashboard?preset=monitor')} />
+    <CreatedSourceNote items={items} sourceId={createdId} />
     {sources.isPending && <div className="skeleton" aria-label={t('loading')} />}
     {sources.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => sources.refetch()}>{t('retry')}</Button></p>}
     {sources.isSuccess && items.length === 0 && <p className="empty-state">{t('empty')} {t('starterEmptyHint')}</p>}

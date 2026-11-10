@@ -139,6 +139,8 @@ type ConnectorWizardProps = {
   registerTransitionGuard: (guard: (() => boolean) | null) => void;
   shapeFilter?: DataShape[];
   onClearFilter?: () => void;
+  /** Add mode only: called with the new source id when the owner finishes after a successful verify. */
+  onCreated?: (sourceId: string) => void;
 };
 
 /**
@@ -148,7 +150,7 @@ type ConnectorWizardProps = {
  * MCP collapses connect/choose/schedule into a single configure step. A source created here and not yet
  * verified is archived if the owner discards it; verified or edited sources are never archived by closing.
  */
-function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard, shapeFilter, onClearFilter }: ConnectorWizardProps) {
+function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard, shapeFilter, onClearFilter, onCreated }: ConnectorWizardProps) {
   const t = useTranslations('sources');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
@@ -185,7 +187,9 @@ function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard, 
 
   return <WizardShell title={edit ? t('wizardTitleEdit') : t('wizardTitleConnector')} mode={edit ? 'edit' : 'add'} steps={steps} stepIndex={Math.min(index, ids.length - 1)}
     onStepChange={setIndex} busy={snapshot.busy} onNext={onNext} onRequestClose={onClose}
-    final={{ label: t('done'), disabled: !edit && !verified, onClick: onClose }}
+    final={{ label: t('done'), disabled: !edit && !verified,
+      // Report the id before closing so the host can select it; only a verified add reports (discard never does).
+      onClick: () => { if (!edit && verified && createdId) onCreated?.(createdId); onClose(); } }}
     discard={createdId ? { needed: !verified, onConfirm: discard } : undefined}>
     {snapshot.provider === 'github' && <GitHubWebhookStatus />}
     <ConnectorEditor source={source} shapeFilter={shapeFilter} onClearFilter={onClearFilter} step={step} actionsRef={actionsRef} onSnapshot={setSnapshot} registerTransitionGuard={registerTransitionGuard} onChanged={onChanged} onClose={onClose} />
@@ -196,13 +200,15 @@ function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard, 
 export type SourceWizardRequest = { kind: 'connector' } | { kind: 'edit'; source: Source };
 
 /** Opens the full-screen add/edit dialog for the requested connector flow. */
-export function SourceWizard({ request, onClose, onChanged, registerTransitionGuard, shapeFilter, onClearFilter }: {
+export function SourceWizard({ request, onClose, onChanged, registerTransitionGuard, shapeFilter, onClearFilter, onCreated }: {
   request: SourceWizardRequest;
   onClose: () => void;
   onChanged: () => void;
   registerTransitionGuard: (guard: (() => boolean) | null) => void;
   shapeFilter?: DataShape[];
   onClearFilter?: () => void;
+  /** Called with the new source id when an add flow finishes verified (not on edit or discard). */
+  onCreated?: (sourceId: string) => void;
 }) {
-  return <ConnectorWizard source={request.kind === 'edit' ? request.source : null} onClose={onClose} onChanged={onChanged} registerTransitionGuard={registerTransitionGuard} shapeFilter={shapeFilter} onClearFilter={onClearFilter} />;
+  return <ConnectorWizard source={request.kind === 'edit' ? request.source : null} onClose={onClose} onChanged={onChanged} registerTransitionGuard={registerTransitionGuard} shapeFilter={shapeFilter} onClearFilter={onClearFilter} onCreated={onCreated} />;
 }

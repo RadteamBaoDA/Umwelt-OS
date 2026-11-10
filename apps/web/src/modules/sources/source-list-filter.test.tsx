@@ -11,6 +11,7 @@ vi.mock('next/navigation', () => ({ useSearchParams: () => nav.params, useRouter
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 't' }) }));
 vi.mock('@/core/guarded-navigation', () => ({ useGuardedNavigation: () => ({ ensureSourcesDocument: () => true }) }));
+vi.mock('../ingestion/upload', () => ({ Upload: () => <div>upload form</div> }));
 vi.mock('./connector-editor', () => ({ ConnectorEditor: () => <div /> }));
 const builtin = (id: string, label: string, shapes: string[]) => ({
   id, label, category: 'news', eligibility: 'open', terms_url: 'https://x.org', terms_checked_on: '2026-10-07', attribution: 'a',
@@ -54,6 +55,15 @@ describe('Sources shape filter', () => {
     expect(await screen.findByText('Existing row')).toBeTruthy();
   });
 
+  it('offers an Upload file entry that opens the upload dialog and says it feeds list gadgets only', async () => {
+    wrap('');
+    await userEvent.click(await screen.findByRole('button', { name: 'Add datasource' }));
+    const item = await screen.findByRole('menuitem', { name: /Upload a file/ });
+    expect(item.textContent).toMatch(/not charts or KPIs/);
+    await userEvent.click(item);
+    expect(await screen.findByText('upload form')).toBeTruthy();
+  });
+
   it('builtin wizard lists only measurement built-ins', async () => {
     wrap('shapes=measurement&for=finance_chart');
     await userEvent.click(await screen.findByRole('button', { name: 'Add datasource' }));
@@ -68,7 +78,7 @@ describe('Sources shape filter', () => {
     expect(screen.queryByRole('button', { name: /New manual source|Import Notes|Import Personal Finance/ })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Add datasource' }));
     expect((await screen.findAllByRole('menuitem')).map((item) => item.textContent)).toEqual([
-      expect.stringContaining('Built-in feed'), expect.stringContaining('Connect an API'),
+      expect.stringContaining('Built-in feed'), expect.stringContaining('Connect an API'), expect.stringContaining('Upload a file'),
     ]);
     await userEvent.click(screen.getByRole('menuitem', { name: /Connect an API/ }));
     expect(await screen.findByRole('dialog')).toBeTruthy();

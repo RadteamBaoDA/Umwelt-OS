@@ -8,7 +8,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { ApiError, apiRequest } from '@/core/api';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { listSources } from '@/modules/sources';
+import { listSources, StarterPackWizard } from '@/modules/sources';
 import { getSearchIndexStatus } from '@/modules/search';
 import { AISettingsWorkspace } from './ai-settings';
 import { OnboardingTopics } from './onboarding-topics';
@@ -43,6 +43,7 @@ export function OnboardingPage() {
   const { csrfToken } = useWorkspaceSession();
   const client = useQueryClient();
   const [providerOpen, setProviderOpen] = useState(false);
+  const [starterOpen, setStarterOpen] = useState(false);
   const progress = useQuery({ queryKey: ['onboarding-progress'], queryFn: ({ signal }) => getOnboardingState(signal) });
   const ai = useQuery({ queryKey: ['ai-settings'], queryFn: () => apiRequest<ReadinessAI>('/api/v1/settings/ai') });
   const sources = useQuery({ queryKey: ['onboarding-sources'], queryFn: () => listSources() });
@@ -104,9 +105,9 @@ export function OnboardingPage() {
     : currentStep.id === 'capability'
       ? <><h2>{t('capabilityTitle')}</h2><p>{t('capabilityText')}</p><p role="status">{status(chatCapability && chatDefault?.destination === 'remote', aiUnresolved)} · {ai.isError && networkUnavailable(ai.error) ? t('offline') : aiUnresolved ? t('unknown') : chatCapability ? t('capabilityReady') : t('capabilityNeedsProbe')}</p><Button asChild variant="outline"><Link href="/settings/models">{t('openAiSettings')}</Link></Button></>
       : currentStep.id === 'sources'
-        ? <><h2>{t('sourcesTitle')}</h2><p>{t('sourcesText')}</p><p role="status">{sources.isPending ? t('unknown') : sources.isError && networkUnavailable(sources.error) ? t('offline') : sources.isError ? t('sourceUnknown') : activeSources ? t('sourceCount', { count: activeSources }) : t('sourceNone')}</p><Button asChild variant="outline"><Link href="/sources">{t('openSources')}</Link></Button><OnboardingTopics /></>
+        ? <><h2>{t('sourcesTitle')}</h2><p>{t('sourcesText')}</p><p role="status">{sources.isPending ? t('unknown') : sources.isError && networkUnavailable(sources.error) ? t('offline') : sources.isError ? t('sourceUnknown') : activeSources ? t('sourceCount', { count: activeSources }) : t('sourceNone')}</p><div className="form-actions"><Button type="button" onClick={() => setStarterOpen(true)}>{t('starterPacks')}</Button><Button asChild variant="outline"><Link href="/sources">{t('openSources')}</Link></Button></div><OnboardingTopics /></>
         : currentStep.id === 'sample_or_import'
-          ? <><h2>{t('samplesTitle')}</h2><p>{t('samplesText')}</p><p><code>{t('seedCommand')}</code></p><div className="form-actions"><Button type="button" aria-pressed={progress.data.data_choice === 'sample'} className={progress.data.data_choice === 'sample' ? '' : 'secondary'} disabled={save.isPending} onClick={() => move('sample_or_import', 'sample')}>{t(progress.data.data_choice === 'sample' ? 'sampleSelected' : 'chooseSample')}</Button><Button type="button" aria-pressed={progress.data.data_choice === 'personal_import'} className={progress.data.data_choice === 'personal_import' ? '' : 'secondary'} disabled={save.isPending} onClick={() => move('sample_or_import', 'personal_import')}>{t(progress.data.data_choice === 'personal_import' ? 'importSelected' : 'choosePersonalImport')}</Button><Button asChild variant="outline"><Link href="/sources">{t('openSources')}</Link></Button></div></>
+          ? <><h2>{t('samplesTitle')}</h2><p>{t('samplesText')}</p><div className="form-actions"><Button type="button" aria-pressed={progress.data.data_choice === 'sample'} className={progress.data.data_choice === 'sample' ? '' : 'secondary'} disabled={save.isPending} onClick={() => move('sample_or_import', 'sample')}>{t(progress.data.data_choice === 'sample' ? 'sampleSelected' : 'chooseSample')}</Button><Button type="button" aria-pressed={progress.data.data_choice === 'personal_import'} className={progress.data.data_choice === 'personal_import' ? '' : 'secondary'} disabled={save.isPending} onClick={() => move('sample_or_import', 'personal_import')}>{t(progress.data.data_choice === 'personal_import' ? 'importSelected' : 'choosePersonalImport')}</Button><Button asChild variant="outline"><Link href="/sources">{t('openSources')}</Link></Button></div></>
           : currentStep.id === 'indexing'
             ? <><h2>{t('indexingTitle')}</h2><p>{t('indexingText')}</p><p role="status">{indexUnresolved ? index.isError && networkUnavailable(index.error) ? t('offline') : t('unknown') : `${indexState(index.data?.status ?? 'unavailable')} · ${t('indexCount', { count: index.data?.indexed_items ?? 0 })} · ${t('indexFailures', { count: index.data?.failed_items ?? 0 })}`}</p><p role="status">{aiUnresolved || indexUnresolved ? t('unknown') : semanticUnavailable ? t('semanticUnavailable') : t('semanticCompatibilityUnknown')}</p>{!aiUnresolved && !indexUnresolved && !semanticUnavailable ? <p>{t('semanticCompatibilityHelp')}</p> : null}<p role="status">{t('lexicalIndependent')}</p><div className="form-actions"><Button asChild variant="outline"><Link href="/search">{t('openSearch')}</Link></Button><Button asChild variant="outline"><Link href="/sources">{t('openSources')}</Link></Button></div></>
             : <><h2>{t('completeTitle')}</h2><p>{t('completeText')}</p><p role="status">{t('finished')}</p><Button asChild><Link href="/dashboard">{t('openDashboard')}</Link></Button></>;
@@ -135,6 +136,7 @@ export function OnboardingPage() {
         <header><h1 id="onboarding-title" className="mt-0 mb-1 text-2xl font-semibold leading-tight">{t('title')}</h1><p className="text-muted-foreground m-0">{t('description')}</p><p role="status" aria-live="polite" className="mt-2 mb-0 text-sm font-semibold">{save.isPending ? t('saving') : done ? t('finished') : t('progress', { current: currentIndex + 1, total: steps.length })}</p></header>
         <div className="grid justify-items-start gap-4 [&>h2]:m-0 [&>h2]:text-lg [&>h2]:font-semibold" aria-live="polite">{stepContent}</div>
         {save.error && <p className="error" role="alert">{t('saveFailed')}</p>}
+        {starterOpen && <StarterPackWizard onClose={() => setStarterOpen(false)} onChanged={() => { void client.invalidateQueries({ queryKey: ['onboarding-sources'] }); }} />}
         {!done && <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-5">
           {currentIndex > 0 && <Button type="button" variant="outline" disabled={save.isPending} onClick={() => move(steps[currentIndex - 1].id)}>{t('previous')}</Button>}
           <Button type="button" disabled={save.isPending || (currentStep.id === 'sample_or_import' && progress.data.data_choice === null)} onClick={() => move(steps[Math.min(steps.length - 1, currentIndex + 1)].id)}>

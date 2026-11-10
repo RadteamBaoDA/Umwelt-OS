@@ -17,6 +17,7 @@ import {
 } from './api';
 import { clearOutcome, failureCodeOf, publishFailure, type EditorContext } from './connector-editor-context';
 import { errorText, genericProviderIds } from './connector-editor-model';
+import { collectErrorKey } from './builtin-sources';
 import { collectAndWait } from './use-source-actions';
 import type { RequestToken } from './use-connector-requests';
 
@@ -90,7 +91,8 @@ export async function collectNow(ctx: EditorContext): Promise<CollectionRequest 
     outcome = final;
     if (final.status === 'failed' || final.status === 'cancelled') {
       draft.setError('actionFailed');
-      draft.setNotice(t('collectFailedCode', { code: final.error_code ?? final.status }));
+      const friendly = collectErrorKey(final.error_code);
+      draft.setNotice(friendly ? t(friendly) : t('collectFailedCode', { code: final.error_code ?? final.status }));
     }
     await queryClient.invalidateQueries({ queryKey: connectorKeys.ingestion(id) });
     await queryClient.invalidateQueries({ queryKey: sourceKeys.all });

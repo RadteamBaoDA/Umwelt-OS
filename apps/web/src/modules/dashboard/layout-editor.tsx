@@ -69,6 +69,10 @@ export interface LayoutEditorProps {
   onAddGroup?: () => void;
   /** Opens the picker immediately when an empty panel enters Edit mode through Add gadget. */
   openAddInitially?: boolean;
+  /** Template id (from an add-gadget deep link) preselected in the Add dialog; ignored when unknown. */
+  initialTemplateId?: string;
+  /** Source id preselected with the template; ignored when not among the loaded sources. */
+  initialSourceId?: string;
   /** Callback fired when user opens the preset picker dialog. */
   onOpenPresetPicker: () => void;
   /** Adds a definition as a gadget instance; resolves true only on success (false or a throw means failure). */
@@ -295,7 +299,7 @@ function DirtyModal({ open, description, isSaving, onResolve }: {
 }
 
 /** Add gadget dialog for the currently selected panel, using the shared gadget editor. */
-function AddGadgetDialog({ flow }: { flow: ReturnType<typeof useAddGadgetFlow> }) {
+function AddGadgetDialog({ flow, initialTemplateId, initialSourceId }: { flow: ReturnType<typeof useAddGadgetFlow>; initialTemplateId?: string; initialSourceId?: string }) {
   const t = useTranslations('dashboard');
   const tg = useTranslations('gadgetSettings');
   return (
@@ -314,6 +318,8 @@ function AddGadgetDialog({ flow }: { flow: ReturnType<typeof useAddGadgetFlow> }
             onSaved={flow.addDefinition}
             onCancel={() => flow.setOpenUnlessAdding(false)}
             saveLabel={t('addGadget')}
+            initialTemplateId={initialTemplateId}
+            initialSourceId={initialSourceId}
           />
           {flow.addError && <p role="alert" className="text-xs text-destructive">{flow.addError}</p>}
         </div>
@@ -346,7 +352,7 @@ export function LayoutEditor(props: LayoutEditorProps) {
       <DirtyModal open={props.dirtyModalOpen} description={props.dirtyDescription} isSaving={props.isSaving} onResolve={props.onDirtyModalResolution} />
 
       {/* Add Gadget Dialog */}
-      <AddGadgetDialog flow={flow} />
+      <AddGadgetDialog flow={flow} initialTemplateId={props.initialTemplateId} initialSourceId={props.initialSourceId} />
     </>
   );
 }

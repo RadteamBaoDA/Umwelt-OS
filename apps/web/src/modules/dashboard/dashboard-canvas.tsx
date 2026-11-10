@@ -19,12 +19,14 @@ export interface CanvasOperations {
 }
 
 /** Layout editor toolbar (edit mode only): maps session, save and membership operations to its props. */
-export function LayoutEditorBar({ ops, activeDashboard, onOpenPresets, onAddGroup, openAddInitially }: {
+export function LayoutEditorBar({ ops, activeDashboard, onOpenPresets, onAddGroup, openAddInitially, initialTemplateId, initialSourceId }: {
   ops: CanvasOperations;
   activeDashboard: Dashboard | null;
   onOpenPresets: () => void;
   onAddGroup?: () => void;
   openAddInitially?: boolean;
+  initialTemplateId?: string;
+  initialSourceId?: string;
 }) {
   const t = useTranslations('dashboard');
   const { session, save, membership } = ops;
@@ -52,6 +54,8 @@ export function LayoutEditorBar({ ops, activeDashboard, onOpenPresets, onAddGrou
       onOpenPresetPicker={onOpenPresets}
       onAddGroup={onAddGroup}
       openAddInitially={openAddInitially}
+      initialTemplateId={initialTemplateId}
+      initialSourceId={initialSourceId}
       onAddGadgetInstance={membership.handleAddGadgetInstance}
       onBeginAddGadgetInstance={membership.beginAddGadgetInstance}
       onCancelPendingAdd={membership.releaseAddReservation}
@@ -78,6 +82,8 @@ interface CanvasProps {
   isAdminViewer: boolean;
   onPickTopics: () => void;
   onOpenPresets: () => void;
+  /** Opens the starter-pack wizard in place (first-run source step). */
+  onOpenStarterPacks: () => void;
   onCreateDashboard: () => void;
   onConfigureInstance: (instance: GadgetInstance) => void;
 }
@@ -96,7 +102,7 @@ export function DashboardCanvas(props: CanvasProps) {
       ? session.draftPlacements.map((placement) => byId.get(placement.instance_id) ?? placement) : null);
   }, [session.draftPlacements, session.setReadablePlacements]);
   if (showFirstRun && !session.editMode) {
-    return <FirstRunSetup sourceCount={0} csrfToken={props.csrfToken} onPickTopics={props.onPickTopics} />;
+    return <FirstRunSetup sourceCount={0} csrfToken={props.csrfToken} onPickTopics={props.onPickTopics} onOpenStarterPacks={props.onOpenStarterPacks} />;
   }
   if (!activeDashboard || visibleInstances.length === 0) {
     return (

@@ -1,13 +1,18 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dashboardMessages } from '@/core/messages/dashboard';
 import { gadgetSettingsMessages } from '@/core/messages/gadget-settings';
+import { sourcesMessages } from '@/core/messages/sources';
 import { uiSweepMessages } from '@/core/messages/ui-sweep';
 import type { GadgetInstance } from './api';
 
 const chat = vi.hoisted(() => ({ openDrawer: vi.fn() }));
+const collect = vi.hoisted(() => ({ collectAndWait: vi.fn() }));
+vi.mock('@/modules/sources/use-source-actions', () => ({ collectAndWait: collect.collectAndWait }));
+vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => chat }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 
@@ -27,12 +32,16 @@ function Reporter() {
 }
 
 const renderFrame = (props: Partial<GadgetFrameProps> = {}, children: React.ReactNode = <p>body-content</p>) => render(
-  <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'], uiSweep: uiSweepMessages['en-us'], gadgetSettings: gadgetSettingsMessages['en-us'] }}>
-    <GadgetFrame instance={instance()} isEditMode={false} {...props}>{children}</GadgetFrame>
-  </NextIntlClientProvider>,
+  <QueryClientProvider client={new QueryClient()}>
+    <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'], uiSweep: uiSweepMessages['en-us'], gadgetSettings: gadgetSettingsMessages['en-us'], sources: sourcesMessages['en-us'] }}>
+      <GadgetFrame instance={instance()} isEditMode={false} {...props}>{children}</GadgetFrame>
+    </NextIntlClientProvider>
+  </QueryClientProvider>,
 );
 
-beforeEach(() => { chat.openDrawer.mockReset(); });
+beforeEach(() => { chat.openDrawer.mockReset(); collect.collectAndWait.mockReset(); });
+
+const tick = (status: 'fresh' | 'stale' | 'failing', errorCode: string | null = null) => ({ id: 's1', name: 'Src', position: 50, status, clamped: false, lastSuccessMs: null, errorCode });
 
 describe('GadgetFrame', () => {
   it('shows the instance title in a labelled region and portals the body into the inline host', async () => {
@@ -94,5 +103,24 @@ describe('GadgetFrame', () => {
     const base = instance();
     renderFrame({ instance: { ...base, definition: { ...base.definition, highlight_rules: [{ id: 'r', keywords: ['k'], severity: 'critical', notify: false }] } } });
     expect(screen.getByText(dashboardMessages['en-us'].severityCritical)).toBeInTheDocument();
+  });
+
+  it('shows no source badge while every bound source is fresh', () => {
+    renderFrame({ sourceHealth: [tick('fresh')] });
+    expect(screen.queryByText(dashboardMessages['en-us'].sourceStaleBadge)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Collect now' })).toBeNull();
+  });
+
+  it('shows a stale badge, and a failing badge with its plain-language reason, and collects on demand', async () => {
+    const user = userEvent.setup();
+    collect.collectAndWait.mockResolvedValue({ status: 'succeeded' });
+    const view = renderFrame({ sourceHealth: [tick('stale')] });
+    expect(screen.getByText(dashboardMessages['en-us'].sourceStaleBadge)).toBeInTheDocument();
+    view.unmount();
+    renderFrame({ sourceHealth: [tick('stale'), tick('failing', 'provider_rate_limited')] });
+    const badge = screen.getByText(dashboardMessages['en-us'].sourceFailingBadge).closest('[title]');
+    expect(badge?.getAttribute('title')).toBe(sourcesMessages['en-us'].collectError_provider_rate_limited);
+    await user.click(screen.getByRole('button', { name: 'Collect now' }));
+    expect(collect.collectAndWait).toHaveBeenCalledWith('s1', 'csrf', expect.objectContaining({ signal: expect.anything() }));
   });
 });

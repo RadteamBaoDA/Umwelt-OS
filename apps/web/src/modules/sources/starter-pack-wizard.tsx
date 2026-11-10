@@ -9,7 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
-import { connectorKeys, createScopedSource, enableBuiltinSource, getConnectorCatalog, intervalBelowMinimum, listBuiltinSources, listSources, sourceKeys, type BuiltinSource, type ConnectorCatalogEntry } from './api';
+import { clampInterval, connectorKeys, createScopedSource, enableBuiltinSource, getConnectorCatalog, intervalBelowMinimum, listBuiltinSources, listSources, sourceKeys, type BuiltinSource, type ConnectorCatalogEntry } from './api';
 import { builtinEnableErrorKey } from './builtin-sources';
 import { WizardShell } from './source-wizard';
 import { builtinOptionsFor, defaultEditText, editTextValid, scopedSpecFor, STARTER_PACKS, type PackItem } from './starter-packs';
@@ -54,9 +54,9 @@ async function createStarterItem(item: PackItem, { csrfToken, builtinById, catal
   await createScopedSource(scopedSpecFor(item, text, name, entry), csrfToken);
 }
 
-/** One selectable starter row: checkbox, editable name and (when not yet added) the in-row value editor with validation. */
-function StarterItemRow({ item, added, name, checked, text, defaultName, locationError, onToggle, onName, onText, onUseLocation }: {
-  item: PackItem; added: boolean; name: string; checked: boolean; text: string; defaultName: string; locationError: boolean;
+/** One selectable starter row: checkbox, editable name, (when not yet added) the in-row value editor with validation, and a note when the provider floor raised the interval (`raisedTo`). */
+function StarterItemRow({ item, added, name, checked, text, defaultName, locationError, raisedTo, onToggle, onName, onText, onUseLocation }: {
+  item: PackItem; added: boolean; raisedTo: number | null; name: string; checked: boolean; text: string; defaultName: string; locationError: boolean;
   onToggle: (next: boolean) => void; onName: (value: string) => void; onText: (value: string) => void; onUseLocation: () => void;
 }) {
   const t = useTranslations('sources');
@@ -68,6 +68,7 @@ function StarterItemRow({ item, added, name, checked, text, defaultName, locatio
         onChange={(event) => onName(event.target.value)} />
       {added && <Badge variant="secondary">{t('starterAlreadyAdded')}</Badge>}
     </div>
+    {raisedTo !== null && !added && <small className="text-muted-foreground" role="note">{t('starterIntervalRaised', { minutes: raisedTo })}</small>}
     {item.edit && !added && <div className="field">
       <Label htmlFor={`starter-${item.id}-value`}>{t(FIELD_LABEL[item.edit])}</Label>
       <div className="flex flex-wrap items-center gap-2">
@@ -91,9 +92,9 @@ function LinkedinGuide({ onAddConnector }: { onAddConnector?: () => void }) {
   </div>;
 }
 
-/** Step 2: running/summary line, one status row per frozen item and a retry button for failed rows. */
-function StarterProgressStep({ running, runItems, statuses, nameOf, onRetry }: {
-  running: boolean; runItems: PackItem[]; statuses: Record<string, RowStatus>; nameOf: (item: PackItem) => string; onRetry: (items: PackItem[]) => void;
+/** Step 2: running/summary line (plus the optional Build-my-dashboard action once something exists), one status row per frozen item and a retry button for failed rows. */
+function StarterProgressStep({ running, runItems, statuses, nameOf, onRetry, onBuildDashboard }: {
+  running: boolean; runItems: PackItem[]; statuses: Record<string, RowStatus>; nameOf: (item: PackItem) => string; onRetry: (items: PackItem[]) => void; onBuildDashboard?: () => void;
 }) {
   const t = useTranslations('sources');
   const failed = runItems.filter((item) => statuses[item.id]?.state === 'failed');
@@ -113,8 +114,17 @@ function StarterProgressStep({ running, runItems, statuses, nameOf, onRetry }: {
         </li>;
       })}
     </ul>
+    {!running && onBuildDashboard && doneCount > 0 && <div><Button type="button" onClick={onBuildDashboard}>{t('buildDashboard')}</Button></div>}
     {!running && failed.length > 0 && <div><Button type="button" variant="outline" onClick={() => onRetry(failed)}>{t('starterRetryFailed')}</Button></div>}
   </section>;
+}
+
+/** Provider-floor interval when it exceeds the pack's preferred interval, else null (built-ins have no pack interval). */
+function raisedInterval(item: PackItem, catalog: ConnectorCatalogEntry[] | undefined): number | null {
+  if (item.kind !== 'scoped') return null;
+  const entry = catalog?.find((candidate) => candidate.provider_id === item.provider);
+  const effective = clampInterval(item.intervalMinutes, entry);
+  return effective > item.intervalMinutes ? effective : null;
 }
 
 /** Owner edits to the choose step, keyed by item id: unchecked set, custom names and custom edit texts. */
@@ -134,9 +144,10 @@ function useStarterEdits() {
  * failure; failed rows can be retried without touching rows that succeeded. Built-ins use the idempotent enable route
  * (409 already-added counts as present); scoped sources go through `createScopedSource`, which archives a half-made source.
  * Terms are accepted as personal use for all rows with the single note shown above the list.
- * `onAddConnector` opens the generic connector wizard for the LinkedIn-via-Gmail guide card.
+ * `onAddConnector` opens the generic connector wizard for the LinkedIn-via-Gmail guide card. `onBuildDashboard`, when given,
+ * adds a primary "Build my dashboard" action to the finished run (at least one source created or present).
  */
-export function StarterPackWizard({ onClose, onChanged, onAddConnector }: { onClose: () => void; onChanged: () => void; onAddConnector?: () => void }) {
+export function StarterPackWizard({ onClose, onChanged, onAddConnector, onBuildDashboard }: { onClose: () => void; onChanged: () => void; onAddConnector?: () => void; onBuildDashboard?: () => void }) {
   const t = useTranslations('sources');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
@@ -222,14 +233,15 @@ export function StarterPackWizard({ onClose, onChanged, onAddConnector }: { onCl
         <h3 className="m-0 text-sm font-semibold text-muted-foreground">{t(pack.labelKey)}</h3>
         {pack.items.map((item) => {
           const added = isAdded(item);
+          const raised = raisedInterval(item, catalog.data);
           return <StarterItemRow key={item.id} item={item} added={added} name={nameOf(item)} checked={!added && !edits.unchecked.has(item.id)} text={textOf(item)}
-            defaultName={defaultName(item)} locationError={locationError} onToggle={(on) => edits.toggle(item.id, on)}
+            defaultName={defaultName(item)} locationError={locationError} raisedTo={raised} onToggle={(on) => edits.toggle(item.id, on)}
             onName={(value) => edits.setName(item.id, value)} onText={(value) => edits.setText(item.id, value)} onUseLocation={() => fillMyLocation(item)} />;
         })}
         {pack.guide === 'linkedin' && <LinkedinGuide onAddConnector={onAddConnector} />}
       </div>)}
       {loaded && !ready && picked.length === 0 && <p className="m-0 text-sm text-muted-foreground" role="status">{t('starterNothing')}</p>}
     </section>}
-    {index === 1 && <StarterProgressStep running={running} runItems={runItems} statuses={statuses} nameOf={nameOf} onRetry={(items) => void run(items)} />}
+    {index === 1 && <StarterProgressStep running={running} runItems={runItems} statuses={statuses} nameOf={nameOf} onRetry={(items) => void run(items)} onBuildDashboard={onBuildDashboard} />}
   </WizardShell>;
 }

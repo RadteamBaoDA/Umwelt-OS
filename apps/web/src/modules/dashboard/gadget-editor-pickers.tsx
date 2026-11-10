@@ -1,6 +1,6 @@
 'use client';
 
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, Plus, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
@@ -19,7 +19,7 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { TEMPLATE_KIND_BY_RENDERER } from '@/core/renderer-labels';
 import { uuid7 } from '@/core/uuid7';
-import type { CoinGeckoCoin } from '@/modules/sources';
+import { SourceWizard, type CoinGeckoCoin } from '@/modules/sources';
 import { dashboardKeys, listGadgetSources, type HighlightRule, type ProviderMetrics } from './api';
 import { MAX_SOURCES, splitList } from './gadget-editor-model';
 
@@ -49,6 +49,9 @@ export function useSourceRows(enabled = true) {
   return { query, rows };
 }
 
+/** The inline wizard has no surrounding transition router, so there is no guard to register. */
+const noopGuard = () => {};
+
 /**
  * Selects only active, workspace-configured sources accepted by this renderer. Previously saved inactive or
  * incompatible IDs remain visible so owners can remove them; adding a gadget never creates or activates a source.
@@ -72,6 +75,9 @@ export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invali
   max?: number;
 }) {
   const t = useTranslations('gadgetSettings');
+  const td = useTranslations('dashboard');
+  const queryClient = useQueryClient();
+  const [wizardOpen, setWizardOpen] = useState(false);
   const legendId = useId();
   const ts = useTranslations('sources');
   const display = useDisplayPreferences();
@@ -139,6 +145,13 @@ export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invali
       })}
     </div>;
 
+  /** Refreshes the shared editor source pages, then selects the just-created source (single replaces, multi adds up to the ceiling). */
+  const handleCreated = (sourceId: string) => {
+    void queryClient.invalidateQueries({ queryKey: [...dashboardKeys.sources, 'editor-paged'] });
+    if (mode === 'single') onChange([sourceId]);
+    else if (!value.includes(sourceId) && value.length < max) onChange([...value, sourceId]);
+  };
+
   return <div className="space-y-2">
     <div id={legendId} className="text-sm font-semibold">{t('pickDatasource')}</div>
     {mode === 'multi' && <p className="text-xs text-muted-foreground">{t('datasourceLimit')}</p>}
@@ -149,7 +162,16 @@ export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invali
       {sources.hasNextPage && <Button type="button" size="sm" variant="outline" disabled={sources.isFetchingNextPage} onClick={() => void sources.fetchNextPage()}>{t('datasourceLoadMore')}</Button>}
       {sources.isSuccess && options.length === 0 && !sources.hasNextPage && <p className="text-xs text-muted-foreground">{t('datasourceNoneAddInSources')}</p>}
     </div>
-    <Link href={sourcesHref} className="text-xs underline">{t('openSources')}</Link>
+    <div className="flex flex-wrap items-center gap-3">
+      <Button type="button" size="sm" variant="outline" onClick={() => setWizardOpen(true)}><Plus className="size-3.5" aria-hidden />{td('addSourceInline')}</Button>
+      <Link href={sourcesHref} className="text-xs underline">{t('openSources')}</Link>
+    </div>
+    {wizardOpen && (
+      // Stacked Radix dialog: it traps focus above the editor dialog and restores it here on close.
+      <SourceWizard request={{ kind: 'connector' }} shapeFilter={acceptedShapes ? [...acceptedShapes] : undefined}
+        registerTransitionGuard={noopGuard} onChanged={() => { void queryClient.invalidateQueries({ queryKey: [...dashboardKeys.sources, 'editor-paged'] }); }}
+        onClose={() => setWizardOpen(false)} onCreated={handleCreated} />
+    )}
   </div>;
 }
 

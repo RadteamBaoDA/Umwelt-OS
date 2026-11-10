@@ -13,11 +13,11 @@ vi.mock('./daily-api', () => ({ dailyKeys: { context: (d: string, z: string) => 
 import { FirstRunSetup } from './first-run-setup';
 
 /** Renders the panel with English messages and a fresh query cache. */
-function renderPanel(sourceCount: number) {
+function renderPanel(sourceCount: number, onOpenStarterPacks: () => void = () => {}) {
   return render(
     <QueryClientProvider client={new QueryClient()}>
       <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-        <FirstRunSetup sourceCount={sourceCount} csrfToken="t" onPickTopics={() => {}} />
+        <FirstRunSetup sourceCount={sourceCount} csrfToken="t" onPickTopics={() => {}} onOpenStarterPacks={onOpenStarterPacks} />
       </NextIntlClientProvider>
     </QueryClientProvider>,
   );
@@ -32,9 +32,17 @@ describe('FirstRunSetup', () => {
   it('shows the three steps with real state: models link when no provider', async () => {
     renderPanel(0);
     expect(screen.getByText('Set up your first brief')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Connect a source' }).getAttribute('href')).toBe('/settings/sources');
     expect(await screen.findByRole('link', { name: 'Add a model first' })).toBeTruthy();
     expect(screen.queryByText('Done')).toBeNull();
+  });
+  it('opens the starter-pack wizard in place instead of linking away', async () => {
+    const onOpen = vi.fn();
+    renderPanel(0, onOpen);
+    const button = screen.getByRole('button', { name: 'Connect a source' });
+    button.click();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('link', { name: 'Connect a source' })).toBeNull();
+    await screen.findByRole('link', { name: 'Add a model first' });
   });
   it('marks steps done from topics, source count and brief', async () => {
     mocks.fetchTopics.mockResolvedValue({ items: [{ id: 't' }], next_cursor: null });

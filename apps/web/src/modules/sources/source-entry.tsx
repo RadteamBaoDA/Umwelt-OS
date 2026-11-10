@@ -28,6 +28,7 @@ import {
 import { DisconnectDialog } from './disconnect-dialog';
 import { useSourceActions } from './use-source-actions';
 import { RenameSource } from './source-rename';
+import { CompatibleChips } from './compatible-chips';
 import { SourceRowState, sourceRowState } from './source-table';
 import { SyncHistory } from './sync-history';
 
@@ -202,7 +203,7 @@ function useRemovedFocusHandoff(onRemoved: () => void) {
   return { nameCellRef, markConfirmed, restoreFocus };
 }
 
-/** Name cell: rename control, realtime badge, provider label and the latest collection/processing error line. */
+/** Name cell: rename control, realtime badge, provider label, compatible-gadget chips and the latest collection/processing error line. */
 function SourceNameCell({ source, cellRef, mode, catalogLabel, onChanged }: { source: Source; cellRef: React.RefObject<HTMLTableCellElement | null>; mode: RealtimeMode | null; catalogLabel?: string; onChanged: () => void }) {
   const t = useTranslations('sources');
   const errorLabel = useErrorCodeLabel();
@@ -219,6 +220,7 @@ function SourceNameCell({ source, cellRef, mode, catalogLabel, onChanged }: { so
       )}
     </div>
     <p className="m-0 text-sm text-muted-foreground">{providerLabel(source.provider, t, catalogLabel) ?? source.type}</p>
+    {source.status === 'active' && <CompatibleChips source={source} />}
     {(source.collection_error_code || source.processing_error_code) && <p className="m-0 text-sm text-negative">{source.collection_error_code
       ? t('errorLine', { kind: t('collectionError'), reason: errorLabel(source.collection_error_code) })
       : t('errorLine', { kind: t('processingError'), reason: errorLabel(source.processing_error_code ?? '') })}</p>}

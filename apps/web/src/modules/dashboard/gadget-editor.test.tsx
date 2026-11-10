@@ -16,6 +16,11 @@ const api = vi.hoisted(() => ({
   listGadgetSources: vi.fn(), listCompatibleSourceCounts: vi.fn(), listGadgetRenderers: vi.fn(), listGadgetTemplates: vi.fn(), createGadgetDefinition: vi.fn(), patchGadgetDefinition: vi.fn(), getMetricCatalog: vi.fn(),
 }));
 vi.mock('./api', async (original) => ({ ...(await original<typeof import('./api')>()), ...api }));
+vi.mock('@/modules/sources/source-wizard', () => ({
+  SourceWizard: ({ onCreated, onClose }: { onCreated?: (id: string) => void; onClose: () => void }) => (
+    <button type="button" onClick={() => { onCreated?.('b2'); onClose(); }}>finish-wizard</button>
+  ),
+}));
 const sourceApi = vi.hoisted(() => ({ getConnectorConfiguration: vi.fn() }));
 vi.mock('@/modules/sources/api', async (original) => ({ ...(await original<typeof import('@/modules/sources/api')>()), ...sourceApi }));
 
@@ -113,6 +118,20 @@ describe('GadgetEditor', () => {
     expect(screen.queryByText('My GitHub')).toBeNull();
     expect(screen.getByText(/Binance prices/)).toBeTruthy();
     expect(screen.getByText(/Oct 28, 2026/)).toBeTruthy();
+  });
+
+  it('selects the source created in the inline wizard after refreshing the list', async () => {
+    wrap();
+    await userEvent.click(await screen.findByRole('button', { name: /Metric/ }));
+    await screen.findByText('Binance spot');
+    api.listGadgetSources.mockResolvedValue({ items: [
+      source('b1', 'Binance spot', 'binance', ['measurement'], '2026-10-28T08:30:00Z'),
+      source('b2', 'Fresh Binance', 'binance', ['measurement']),
+    ], next_cursor: null });
+    await userEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await userEvent.click(await screen.findByText('finish-wizard'));
+    const created = await screen.findByLabelText(/Fresh Binance/);
+    await waitFor(() => expect(created.getAttribute('aria-checked') === 'true' || (created as HTMLInputElement).checked).toBe(true));
   });
 
   it('says never updated when a source has no success yet', async () => {

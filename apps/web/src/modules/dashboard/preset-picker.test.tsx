@@ -41,10 +41,10 @@ const financePreview = (chartWarnings: string[], fingerprint = FINGERPRINT) => (
 });
 
 /** Renders the picker open with query and intl providers. */
-const wrap = (target?: { id: string; revision: number }) => render(
+const wrap = (target?: { id: string; revision: number }, initialPresetId?: string) => render(
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
     <NextIntlClientProvider locale="en-US" messages={messages}>
-      <PresetPicker open onOpenChange={() => {}} onPresetApplied={() => {}} currentDashboardId={target?.id} currentDashboardRevision={target?.revision} />
+      <PresetPicker open initialPresetId={initialPresetId} onOpenChange={() => {}} onPresetApplied={() => {}} currentDashboardId={target?.id} currentDashboardRevision={target?.revision} />
     </NextIntlClientProvider>
   </QueryClientProvider>);
 
@@ -66,6 +66,17 @@ beforeEach(async () => {
 afterEach(() => cleanup());
 
 describe('PresetPicker', () => {
+  it('preselects and previews initialPresetId without a click', async () => {
+    wrap(undefined, 'finance');
+    await waitFor(() => expect(api.previewDashboardPreset).toHaveBeenCalled());
+    expect(api.previewDashboardPreset.mock.calls[0][0]).toBe('finance');
+    expect(await screen.findByText('Chart')).toBeTruthy();
+  });
+  it('selects nothing automatically without initialPresetId', async () => {
+    wrap();
+    await screen.findByText(/Chart, Feed/);
+    expect(api.previewDashboardPreset).not.toHaveBeenCalled();
+  });
   it('slots show localized names', async () => {
     wrap();
     expect(await screen.findByText(/Chart, Feed/)).toBeTruthy();

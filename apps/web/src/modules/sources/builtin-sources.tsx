@@ -84,6 +84,19 @@ export function builtinEnableErrorKey(cause: unknown): 'builtinErrorOperator' | 
   return 'builtinErrorGeneric';
 }
 
+const COLLECT_ERROR_CODES = ['provider_rate_limited', 'provider_collection_failed', 'retry_exhausted', 'transient_failure', 'collection_unsupported', 'admission_expired', 'executor_error', 'invalid_normalization_record', 'record_exceeds_normalization_limit', 'cancelled', 'source_generation_changed', 'required_credential_binding_unresolved', 'provider_revoked', 'provider_timeout', 'provider_unavailable', 'provider_response_invalid', 'schema_changed', 'invalid_credential', 'credential_missing', 'collection_incomplete', 'destination_blocked'] as const;
+
+/** Message key (in the `sources` namespace) of a plain-language collection-run error. */
+export type MessageKey = `collectError_${(typeof COLLECT_ERROR_CODES)[number]}`;
+
+/**
+ * Maps a collection run's `error_code` to its `collectError_<code>` message (sentence plus suggested action).
+ * Pure; unknown, empty or missing codes return null so the caller keeps its raw-code fallback text.
+ */
+export function collectErrorKey(code: string | null | undefined): MessageKey | null {
+  return (COLLECT_ERROR_CODES as readonly string[]).includes(code ?? '') ? `collectError_${code as (typeof COLLECT_ERROR_CODES)[number]}` : null;
+}
+
 /**
  * Terms, declared-use, and data-tracking mode step for enabling one built-in: attribution, terms link,
  * operator-review note, deployment-use select, and realtime vs near-realtime tracking mode select.

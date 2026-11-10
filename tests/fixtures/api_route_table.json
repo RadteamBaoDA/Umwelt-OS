@@ -1045,6 +1045,14 @@
 ],
 [
 "APIRoute",
+"/api/v1/connectors/{source_id}/rest-sample",
+[
+"POST"
+],
+"fetch_rest_sample"
+],
+[
+"APIRoute",
 "/api/v1/connectors/{source_id}/coingecko/coins",
 [
 "GET"

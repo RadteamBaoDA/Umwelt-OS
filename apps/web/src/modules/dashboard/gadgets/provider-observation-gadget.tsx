@@ -308,7 +308,7 @@ export function ProviderObservationGadget({ instance }: { instance: GadgetInstan
   const t = useTranslations('dashboard');
   const { sourceIds, sourceId, query, items, history, sources, sourceQuery } = useProviderObservations(instance);
 
-  if (!sourceId) return <GadgetNotice kind="setup" message={t('providerObsSourceRequired')} />;
+  if (!sourceId) return <GadgetNotice kind="setup" message={t('providerObsSourceRequired')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} />;
   if (query.isPending) return <GadgetSkeleton variant="metric" label={t('observationLoading')} />;
   // No last good value to fall back on: plain error.
   if (!items.length && query.isError) return <GadgetNotice kind="error" message={t('observationLoadFailed')} />;

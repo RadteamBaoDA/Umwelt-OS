@@ -1,5 +1,6 @@
 """Connector configuration, draft validation, catalog and n8n workflow routes (registered on the shared router)."""
 
+import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -45,6 +46,7 @@ from modules.connectors.provisioning._routes.common import (
     DraftValidationRequest,
     OwnerRead,
     OwnerWrite,
+    RestSampleRead,
     Session,
     _activation_read,
     _invalid_detail,
@@ -233,6 +235,138 @@ async def validate_draft_configuration(
         verified_bot_id=bot_id,
         scope_verified=scope_verified,
     )
+
+
+_SAMPLE_MAX_BYTES = 256 * 1024
+_SAMPLE_TIMEOUT_SECONDS = 10.0
+_SAMPLE_MAX_DEPTH = 6
+_SAMPLE_MAX_ITEMS = 20
+_SAMPLE_MAX_STRING = 300
+
+
+def _prune_sample(value: Any, depth: int = 0) -> tuple[Any, bool]:
+    """Bound parsed JSON for display and return ``(pruned, truncated)``.
+
+    Containers deeper than six levels become ``None``, arrays keep their first 20 items and strings
+    keep 300 characters. Pure; never mutates the input. ``truncated`` is true if anything was cut.
+    """
+    if isinstance(value, str):
+        return value[:_SAMPLE_MAX_STRING], len(value) > _SAMPLE_MAX_STRING
+    if not isinstance(value, dict | list):
+        return value, False
+    if depth >= _SAMPLE_MAX_DEPTH:
+        return None, True
+    if isinstance(value, list):
+        items = [_prune_sample(item, depth + 1) for item in value[:_SAMPLE_MAX_ITEMS]]
+        return [item for item, _ in items], len(value) > _SAMPLE_MAX_ITEMS or any(
+            cut for _, cut in items
+        )
+    pairs = {key: _prune_sample(item, depth + 1) for key, item in value.items()}
+    return {key: item for key, (item, _) in pairs.items()}, any(cut for _, cut in pairs.values())
+
+
+async def _fetch_sample_json(url: str, before_send: Callable[[], Awaitable[None]]) -> Any:
+    """GET ``url`` through the pinned public destination (256 KiB, 10 s) and parse it as JSON.
+
+    Maps every transport, policy, size and parse failure to a stable HTTPException code; the
+    URL and response headers never appear in any detail.
+    """
+    try:
+        fetched = await rest.fetch_bounded(
+            url,
+            headers={"Accept": "application/json"},
+            before_send=before_send,
+            max_bytes=_SAMPLE_MAX_BYTES,
+            timeout=_SAMPLE_TIMEOUT_SECONDS,
+        )
+    except ProviderRateLimited as exc:
+        raise HTTPException(status_code=429, detail="rest_sample_rate_limited") from exc
+    except rest.CollectionIncomplete as exc:
+        raise HTTPException(status_code=422, detail="rest_sample_too_large") from exc
+    except rest.UnsafeDestination as exc:
+        raise HTTPException(status_code=422, detail="rest_sample_url_refused") from exc
+    except rest.ProviderHttpError as exc:
+        raise HTTPException(status_code=502, detail="rest_sample_upstream_error") from exc
+    except (ValueError, TimeoutError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=502, detail="rest_sample_unreachable") from exc
+    try:
+        return json.loads(fetched.body or b"")
+    except ValueError as exc:  # JSONDecodeError and invalid UTF-8 both subclass ValueError.
+        raise HTTPException(status_code=422, detail="rest_sample_not_json") from exc
+
+
+@router.post("/{source_id}/rest-sample", response_model=RestSampleRead)
+async def fetch_rest_sample(
+    source_id: UUID,
+    payload: DraftValidationRequest,
+    session: Session,
+    request: Request,
+    _owner: OwnerRead,
+) -> RestSampleRead:
+    """Fetch one bounded, pruned JSON sample from an unauthenticated custom REST draft (owner only).
+
+    Applies the validate-draft prechecks (active source, generation, revision, auth mode, registry and
+    public-URL policy), then one GET through ``rest.fetch_bounded`` (pinned public IP, no redirects,
+    256 KiB, 10 s). Header-authenticated drafts are refused so no secret is ever sent. The response
+    carries only the status code and pruned body: never headers, URL or request data. Stable 422/502
+    detail codes: ``rest_sample_auth_unsupported``, ``rest_sample_url_refused``, ``rest_sample_too_large``,
+    ``rest_sample_not_json``, ``rest_sample_upstream_error``, ``rest_sample_unreachable``.
+    """
+    scope = _owner
+    multi = request.app.state.settings.multi_workspace_enabled
+    access_fence = await _owner_access(session, request, scope)
+    source = await _source(session, source_id, multi_workspace_enabled=multi, scope=scope)
+    if source.status != "active" or source.type != "api" or source.provider is not None:
+        raise HTTPException(status_code=409, detail="Active custom REST source required")
+    if payload.expected_source_generation != source.generation:
+        raise HTTPException(
+            status_code=409, detail="Source generation changed; reload before sampling"
+        )
+    row = await provisioning.activation_status(
+        session, source_id, multi_workspace_enabled=multi, scope=scope
+    )
+    if payload.expected_revision != (row.desired_revision if row is not None else 0):
+        raise HTTPException(
+            status_code=409,
+            detail="Connector configuration revision changed; reload before sampling",
+        )
+    if payload.auth_method != "none":
+        raise HTTPException(status_code=422, detail="rest_sample_auth_unsupported")
+    _check_draft_auth_mode(source, payload)
+    try:
+        source_configuration = serialize_source_configuration(source, payload.configuration)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail=_invalid_detail("Draft provider configuration is invalid", exc)
+        ) from exc
+    candidate = source.model_copy(update={"configuration": source_configuration})
+    try:
+        data = registry.validate(candidate)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422, detail=_invalid_detail("Draft connector configuration is invalid", exc)
+        ) from exc
+    try:
+        await session.rollback()  # Release the owner read transaction before DNS or HTTP I/O.
+        url = data["url"]
+        await validate_public_url(url)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="rest_sample_url_refused") from exc
+    generation = source.generation
+
+    async def before_send() -> None:
+        """Recheck the original owner access fence and source generation immediately before the wire send."""
+        try:
+            await _owner_access(session, request, scope, expected=access_fence)
+            current = await _source(session, source_id, multi_workspace_enabled=multi, scope=scope)
+            if current.status != "active" or current.generation != generation:
+                raise HTTPException(status_code=409, detail="Source changed; sample again")
+        finally:
+            await session.rollback()
+
+    parsed = await _fetch_sample_json(url, before_send)
+    sample, truncated = _prune_sample(parsed)
+    return RestSampleRead(status_code=200, truncated=truncated, sample=sample)
 
 
 def _check_draft_auth_mode(source: ConnectorSource, payload: DraftValidationRequest) -> None:
