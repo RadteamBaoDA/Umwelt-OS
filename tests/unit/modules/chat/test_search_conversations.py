@@ -94,3 +94,28 @@ async def test_count_source_conversations_binds_workspace_in_both_branches() -> 
     sql = str(session.scalar.await_args.args[0].compile(dialect=postgresql.dialect()))
     assert sql.count("workspace_id =") == 2
     assert sql.index("workspace_id =") < sql.index("LIMIT")
+
+
+@pytest.mark.asyncio
+async def test_message_search_is_opt_in_exists_subquery_with_same_filters() -> None:
+    session = _session()
+    with patch(
+        "modules.chat._public.export._chat_export_privacy",
+        AsyncMock(return_value=(True, True, None)),
+    ):
+        await search_conversations(session, "plan", limit=5, offset=0, archived=False, **KW)
+        title_only, _ = _sql(session)
+        await search_conversations(
+            session, f"50%{BS}", limit=5, offset=0, archived=False, include_messages=True, **KW
+        )
+    sql, params = _sql(session)
+    assert "chat_messages" not in title_only
+    assert "EXISTS (SELECT chat_messages.id" in sql
+    assert "chat_messages.content ILIKE" in sql and "ESCAPE" in sql
+    assert f"%50{BS}%{BS}{BS}%" in params.values()
+    # Owner scope and retention filters still apply to the outer conversation query.
+    assert (
+        "chat_conversations.actor_user_id =" in sql
+        and "chat_conversations.ephemeral IS false" in sql
+    )
+    assert "DISTINCT" not in sql  # EXISTS keeps rows unique without a join

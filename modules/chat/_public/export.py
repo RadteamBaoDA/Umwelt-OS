@@ -314,8 +314,13 @@ async def search_conversations(
     limit: int,
     offset: int,
     archived: bool,
+    include_messages: bool = False,
 ) -> list[Conversation]:
-    """Search retained conversation titles by literal substring, newest first.
+    """Search retained conversation titles (optionally message text) by literal substring.
+
+    Results are pinned first, then newest first. With ``include_messages`` a conversation also
+    matches when any of its messages contains the text; an EXISTS subquery lists each
+    conversation once and inherits every owner and retention filter of the outer query.
 
     Search shows nothing when history storage is off, and never ephemeral,
     expired or automation threads. Deleted rows are gone, so they never match.
@@ -331,14 +336,26 @@ async def search_conversations(
     except ValueError:  # inconsistent privacy marker: fail closed rather than 500
         return []
     escaped = q.strip().replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
-    # ponytail: ILIKE scan over the owner's own titles; add a pg_trgm index if title volume grows.
+    pattern = f"%{escaped}%"
+    matches: ColumnElement[bool] = Conversation.title.ilike(pattern, escape="\\")
+    if include_messages:
+        matches = _or(
+            matches,
+            _select(Message.id)
+            .where(
+                Message.conversation_id == Conversation.id,
+                Message.content.ilike(pattern, escape="\\"),
+            )
+            .exists(),
+        )
+    # ponytail: ILIKE scan over the owner's own titles/messages; add a pg_trgm index if volume grows.
     statement = (
         _select(Conversation)
         .where(
             Conversation.workspace_id == scope.workspace_id,
             Conversation.actor_user_id == scope.user_id,
             Conversation.archived == archived,
-            Conversation.title.ilike(f"%{escaped}%", escape="\\"),
+            matches,
         )
         .where(*_chat_export_scope_retained(_datetime.now(_UTC)))
         .order_by(

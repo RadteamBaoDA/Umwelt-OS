@@ -230,7 +230,8 @@ async def list_conversations(
         limit: Maximum number of conversations to return (1-100).
         offset: Offset for pagination.
         archived: Filter to archived or active conversations.
-        q: Optional literal title substring; uses the retained-history search path.
+        q: Optional literal substring matched against titles and message text; uses the
+            retained-history search path.
 
     Returns:
         List of ConversationRead schemas.
