@@ -13,6 +13,8 @@ interface ChatScrollOptions {
   lastMessageId: string | undefined;
   lastMessageRole: 'user' | 'assistant' | 'system' | undefined;
   isStreaming: boolean;
+  /** Changes whenever content below the viewport changes (new message, streamed text); drives the unread dot. */
+  contentSignal?: string;
 }
 
 /** Tracks the `prefers-reduced-motion: reduce` media query. */
@@ -82,7 +84,9 @@ function useScrollCommands({ containerRef, followRef }: FollowState, prefersRedu
   const scrollToLatestAnswer = React.useCallback((messageId?: string) => {
     const element = containerRef.current;
     if (!element) return;
-    const target = element.querySelector('[data-streaming-answer]') ?? (messageId ? element.querySelector(`[data-message-id=""]`) : null);
+    // Compare attribute values instead of interpolating the id into a selector: ids are server-supplied strings.
+    const byId = messageId ? Array.from(element.querySelectorAll('[data-message-id]')).find((node) => node.getAttribute('data-message-id') === messageId) : null;
+    const target = element.querySelector('[data-streaming-answer]') ?? byId ?? null;
     (target as HTMLElement | null)?.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion ? 'auto' : 'smooth' });
   }, [containerRef, prefersReducedMotion]);
 
@@ -159,7 +163,7 @@ function useScrollGestures({ containerRef, followRef }: FollowState, setIsAtBott
  * in place until they return to the bottom or a new user message starts another turn.
  *
  * @param options - See {@link ChatScrollOptions}.
- * @returns The container ref, bottom flag, `jumpToLatest` and the scroll/wheel/touch handlers to spread on the container.
+ * @returns The container ref, bottom flag, unread flag, `jumpToLatest` and the scroll/wheel/touch handlers to spread on the container.
  */
 export function useChatScroll({
   conversationId,
@@ -167,12 +171,18 @@ export function useChatScroll({
   lastMessageId,
   lastMessageRole,
   isStreaming,
+  contentSignal = '',
 }: ChatScrollOptions) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const followRef = React.useRef(true);
   const loadedRef = React.useRef(false);
   const lastScrollTopRef = React.useRef(0);
   const [isAtBottom, setIsAtBottom] = React.useState(true);
+  // Unread dot: content changed while the reader is above the bottom. `seenSignal` follows the signal whenever the
+  // reader is at the bottom (render-phase sync of this component's own state), so only later changes count.
+  const [seenSignal, setSeenSignal] = React.useState(contentSignal);
+  if (isAtBottom && seenSignal !== contentSignal) setSeenSignal(contentSignal);
+  const hasUnread = !isAtBottom && seenSignal !== contentSignal;
   const prefersReducedMotion = usePrefersReducedMotion();
   const state: FollowState = { containerRef, followRef };
   const commands = useScrollCommands(state, prefersReducedMotion);
@@ -201,5 +211,5 @@ export function useChatScroll({
     scrollToBottom(true);
   }, [scrollToBottom]);
 
-  return { containerRef, isAtBottom, jumpToLatest, scrollHandlers };
+  return { containerRef, isAtBottom, hasUnread, jumpToLatest, scrollHandlers };
 }

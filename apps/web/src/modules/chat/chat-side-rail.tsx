@@ -55,7 +55,7 @@ export function ChatSideRail({ citations, context }: { citations: Citation[]; co
 }
 
 /**
- * Below-lg entry point to the evidence rail: a 44px trigger opening the same Sources, Activity, and Context tabs in a right-side Sheet.
+ * Below-lg entry point to the evidence rail: a 44px trigger opening the same Sources and Context tabs in a right-side Sheet.
  *
  * @param props - Citations and context to display.
  * @returns Trigger plus sheet; the trigger is hidden at lg where the rail is inline.

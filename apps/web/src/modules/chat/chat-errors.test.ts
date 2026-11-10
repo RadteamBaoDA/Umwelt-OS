@@ -9,6 +9,7 @@ describe('chatFailureKey', () => {
     expect(chatFailureKey(new ApiError(422, 'm', { code: 'selection_too_large' }), 'errorSending')).toBe('contextSelectionTooLarge');
     expect(chatFailureKey(new ApiError(401, 'm'), 'errorSending')).toBe('sessionExpired');
     expect(chatFailureKey(new ApiError(409, 'm'), 'errorSending')).toBe('errorConflict');
+    expect(chatFailureKey(new ApiError(429, 'm'), 'errorSending')).toBe('errorRateLimited');
     expect(chatFailureKey(new ApiError(503, 'm'), 'errorSending')).toBe('errorService');
     expect(chatFailureKey(new ApiError(400, 'm'), 'errorSending')).toBe('errorSending');
   });

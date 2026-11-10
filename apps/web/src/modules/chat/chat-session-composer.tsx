@@ -128,6 +128,7 @@ export function SessionComposer({ data, mode, onSend, onStop }: SessionComposerP
       sendBlockedBy={fullExtras?.sendBlockedBy ?? null}
       webSearch={webSearch}
       dbQuery={dbQueryToggle(data)}
+      autoFocusKey={full ? (data.chatCtrl.activeConversationId ?? '') : undefined}
     />
   );
 }

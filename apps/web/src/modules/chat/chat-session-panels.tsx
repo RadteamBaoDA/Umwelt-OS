@@ -57,7 +57,7 @@ export function AgentPanels(props: AgentPanelsProps) {
         <details className="shrink-0 border-b border-border px-4 py-2">
           <summary className="cursor-pointer text-xs font-medium text-muted-foreground">{tAgents('agentHistory')} ({runs.items.length})</summary>
           <div className="mt-2 flex flex-wrap gap-2">
-            {runs.items.map((run) => <Button key={run.id} type="button" className="secondary h-auto rounded-md px-2 py-1 text-xs font-normal" onClick={() => onOpenRun(run.id)}>{run.agent_id === 'assistant' ? tAgents('agentAssistant') : tAgents(profileTitleKeys[run.agent_id] ?? 'agentProfileKnowledge')}: {tAgents(runStatusKeys[run.status] ?? 'agentRunFailed')}</Button>)}
+            {runs.items.map((run) => <Button key={run.id} type="button" variant="outline" className="h-auto rounded-md px-2 py-1 text-xs font-normal" onClick={() => onOpenRun(run.id)}>{run.agent_id === 'assistant' ? tAgents('agentAssistant') : tAgents(profileTitleKeys[run.agent_id] ?? 'agentProfileKnowledge')}: {tAgents(runStatusKeys[run.status] ?? 'agentRunFailed')}</Button>)}
           </div>
         </details>
       ) : null}
@@ -87,7 +87,7 @@ export function RevisionBanners({ mode, pendingMessageMutation, effectiveEditing
       {mode === 'full' && pendingMessageMutation && (
         <div role="status" className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
           <span className="text-muted-foreground">{t('revisionUnacknowledged')}</span>
-          <Button type="button" className="secondary h-8 px-2 text-xs" disabled={busy} onClick={onRetryRevision}>
+          <Button type="button" variant="outline" className="h-8 px-2 text-xs" disabled={busy} onClick={onRetryRevision}>
             {t('retryRevision')}
           </Button>
         </div>
@@ -95,7 +95,7 @@ export function RevisionBanners({ mode, pendingMessageMutation, effectiveEditing
       {mode === 'full' && effectiveEditingMessageId && !pendingMessageMutation && (
         <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
           <span className="text-muted-foreground">{t('editingPrompt')}</span>
-          <Button type="button" className="secondary h-8 px-2 text-xs" onClick={onCancelEdit}>
+          <Button type="button" variant="outline" className="h-8 px-2 text-xs" onClick={onCancelEdit}>
             {t('cancelEdit')}
           </Button>
         </div>

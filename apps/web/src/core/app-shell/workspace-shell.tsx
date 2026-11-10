@@ -128,6 +128,33 @@ function QuickChatShortcut() {
   return null;
 }
 
+/**
+ * Registers Ctrl/Cmd+Shift+O on the full Chat page to start a new chat. Renders nothing; elsewhere the key keeps its
+ * browser meaning. The composer focuses itself when the conversation resets.
+ *
+ * @returns null.
+ */
+export function NewChatShortcut() {
+  const { resetConversation } = useChatController();
+  const pathname = usePathname();
+  const onChatPage = pathname === '/chat' || pathname.startsWith('/chat/');
+
+  useEffect(() => {
+    if (!onChatPage) return;
+    /** Starts a clean conversation on Ctrl/Cmd+Shift+O (Alt excluded so AltGr layouts are untouched). */
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        resetConversation();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onChatPage, resetConversation]);
+
+  return null;
+}
+
 type ApiHealth = { isFetching: boolean; isError: boolean; isPending: boolean; refetch: () => unknown };
 
 /** Maps the health query and browser connectivity to the top-bar API status. */
@@ -233,6 +260,7 @@ function ShellTopbar({
       />
       <div className="top-actions">
         {quickChat && <QuickChatShortcut />}
+        <NewChatShortcut />
         <CommandPalette />
         {/* Phones (<640px) get these inside the avatar menu to keep the header to logo, search and avatar. */}
         <div className="hidden sm:contents">

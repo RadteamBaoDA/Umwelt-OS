@@ -42,3 +42,24 @@ describe('ChatComposer web search toggle', () => {
     expect(screen.getByTestId('chat-web-search-badge')).toBeTruthy();
   });
 });
+
+describe('ChatComposer auto-focus', () => {
+  /** Renders the composer with an auto-focus key and a pointer-type stub. */
+  function renderWith(key: string | undefined, fine: boolean) {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: fine && q.includes('fine'), media: q, addEventListener() {}, removeEventListener() {} }));
+    return render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <ChatComposer mode="full" value="" onChange={vi.fn()} onSend={vi.fn()} isStreaming={false} autoFocusKey={key} />
+      </NextIntlClientProvider>,
+    );
+  }
+
+  it('focuses the textarea on fine pointers and skips touch devices', () => {
+    const fineView = renderWith('c1', true);
+    expect(document.activeElement).toBe(screen.getByRole('textbox'));
+    fineView.unmount();
+    (document.activeElement as HTMLElement | null)?.blur();
+    renderWith('c1', false);
+    expect(document.activeElement).not.toBe(screen.getByRole('textbox'));
+  });
+});

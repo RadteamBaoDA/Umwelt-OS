@@ -301,7 +301,8 @@ function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, c
       {canEdit && (
         <Button
           type="button"
-          className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
+          variant="ghost"
+          className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => onEditMessage?.(msg)}
           aria-label={t('editPrompt')}
         >
@@ -312,7 +313,8 @@ function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, c
       {canRegenerate && (
         <Button
           type="button"
-          className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
+          variant="ghost"
+          className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => onRegenerateMessage?.(msg)}
           aria-label={t('regenerateAnswer')}
         >
@@ -541,6 +543,7 @@ function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
     lastMessageId: last?.id,
     lastMessageRole: last?.role,
     isStreaming: busy,
+    contentSignal: `${messages.length}:${last?.id ?? ''}:${props.streamingText?.length ?? 0}:${props.streamingUi?.length ?? 0}`,
   });
   const copy = useCopyMessage(conversationId);
   const messageById = React.useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
@@ -569,7 +572,7 @@ export function ChatTranscript(props: ChatTranscriptProps) {
   const { mode, streamingReasoning, cancelled, activeTool, streamingUi, isStreaming, isPending, error } = withTranscriptDefaults(props);
   const t = useTranslations('chat');
   const m = useTranscriptModel(props, isStreaming || isPending);
-  const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, jumpToLatest, widgetPromptHandler } = m;
+  const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, hasUnread, jumpToLatest, widgetPromptHandler } = m;
   const { showStarter, showStreaming } = transcriptVisibility(props, withTranscriptDefaults(props));
 
   return (
@@ -642,6 +645,12 @@ export function ChatTranscript(props: ChatTranscriptProps) {
         >
           <ArrowDownIcon className="size-3.5" aria-hidden="true" />
           {t('jumpToLatest')}
+          {hasUnread && (
+            <>
+              <span data-testid="jump-unread-dot" aria-hidden="true" className="size-2 rounded-full bg-data" />
+              <span className="sr-only">{t('jumpToLatestUnread')}</span>
+            </>
+          )}
         </Button>
       )}
     </div>
