@@ -24,6 +24,8 @@ export interface ChatSessionHeaderProps {
   headerTrailing?: React.ReactNode;
   onRenameConversation?: () => void;
   onDeleteConversation?: () => void;
+  /** Downloads the loaded transcript as Markdown (full mode); omitted when there is nothing to export. */
+  onExportConversation?: () => void;
   onSendPrompt: (prompt: string) => void;
   onNewChat: () => void;
   /** Profile id currently shown in the picker (a pending retry pins its own profile). */
@@ -34,17 +36,18 @@ export interface ChatSessionHeaderProps {
 }
 
 /**
- * Rename/delete controls: inline buttons from `sm` up, one "More" menu below so the header never overflows at 375px.
+ * Rename/export/delete controls: inline buttons from `sm` up, one "More" menu below so the header never overflows at 375px.
  *
- * @param props - Rename/delete callbacks (either may be omitted).
+ * @param props - Rename/export/delete callbacks (each may be omitted).
  */
-function ConversationControls({ onRenameConversation, onDeleteConversation }: Pick<ChatSessionHeaderProps, 'onRenameConversation' | 'onDeleteConversation'>) {
+function ConversationControls({ onRenameConversation, onExportConversation, onDeleteConversation }: Pick<ChatSessionHeaderProps, 'onRenameConversation' | 'onExportConversation' | 'onDeleteConversation'>) {
   const t = useTranslations('chat');
   return (
     <>
       {/* sm and up: inline buttons. Below sm they collapse into one "More" menu so the header never overflows at 375px. */}
       <div className="hidden items-center gap-2 sm:flex">
         {onRenameConversation && <Button type="button" variant="outline" onClick={onRenameConversation}>{t('renameConversation')}</Button>}
+        {onExportConversation && <Button type="button" variant="outline" onClick={onExportConversation}>{t('exportMarkdown')}</Button>}
         {onDeleteConversation && <Button type="button" variant="outline" className="text-destructive" onClick={onDeleteConversation}>{t('delete')}</Button>}
       </div>
       <div className="sm:hidden">
@@ -56,6 +59,7 @@ function ConversationControls({ onRenameConversation, onDeleteConversation }: Pi
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {onRenameConversation && <DropdownMenuItem onSelect={onRenameConversation}>{t('renameConversation')}</DropdownMenuItem>}
+            {onExportConversation && <DropdownMenuItem onSelect={onExportConversation}>{t('exportMarkdown')}</DropdownMenuItem>}
             {onDeleteConversation && <DropdownMenuItem className="text-destructive" onSelect={onDeleteConversation}>{t('delete')}</DropdownMenuItem>}
           </DropdownMenuContent>
         </DropdownMenu>
@@ -93,7 +97,7 @@ function ProfilePicker({ profileValue, profilePickerDisabled, onProfileChange, p
  * @returns The header row (drawer mode reserves room for the sheet close button).
  */
 export function ChatSessionHeader(props: ChatSessionHeaderProps) {
-  const { mode, title, csrfToken, headerLeading, headerTrailing, onRenameConversation, onDeleteConversation, onSendPrompt, onNewChat } = props;
+  const { mode, title, csrfToken, headerLeading, headerTrailing, onRenameConversation, onExportConversation, onDeleteConversation, onSendPrompt, onNewChat } = props;
   const t = useTranslations('chat');
   const full = mode === 'full';
   return (
@@ -102,8 +106,8 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
       {full ? <h1 className="min-w-32 flex-1 truncate text-lg font-semibold text-foreground">{title || t('title')}</h1> : null}
       <div className={`flex shrink-0 items-center gap-2 ${mode === 'drawer' ? 'order-first' : ''}`}>
         {full && <PickQrButton csrfToken={csrfToken} onPrompt={onSendPrompt} />}
-        {full && (onRenameConversation || onDeleteConversation) && (
-          <ConversationControls onRenameConversation={onRenameConversation} onDeleteConversation={onDeleteConversation} />
+        {full && (onRenameConversation || onExportConversation || onDeleteConversation) && (
+          <ConversationControls onRenameConversation={onRenameConversation} onExportConversation={onExportConversation} onDeleteConversation={onDeleteConversation} />
         )}
         {full && <ProfilePicker {...props} />}
         <Button

@@ -14,6 +14,8 @@ import { SessionTranscript } from './chat-session-transcript';
 import { AgentPanels, RevisionBanners } from './chat-session-panels';
 import { useChatAgentRuns } from './use-chat-agent-runs';
 import { useStopOnEscape } from './use-chat-shortcuts';
+import { ChatDropZone } from './chat-drop-zone';
+import { useConversationExport } from './conversation-export';
 import { useChatSessionCommands, useChatSessionData, useWidgetPromptHandlers } from './use-chat-session';
 
 export { MAX_RESUME_ATTEMPTS, RESUME_BACKOFF_MS } from './use-chat-stream';
@@ -75,6 +77,8 @@ export function ChatSession({
   const setError = React.useCallback((message: string) => actions.patch({ error: message }), [actions]);
   const widget = useWidgetPromptHandlers({ chatCtrl, busy: d.busy, handleSend: cmd.handleSend, setError });
   const rootRef = React.useRef<HTMLDivElement>(null);
+  const title = d.detail.data?.title ?? '';
+  const handleExport = useConversationExport(title, d.messages, mode === 'full');
   // Esc stops an in-flight generation on the full page (same action as the Stop button).
   useStopOnEscape(rootRef, { enabled: mode === 'full', isStreaming: live.isStreaming, onStop: cmd.handleStop });
 
@@ -89,15 +93,16 @@ export function ChatSession({
         cancel: t('genUiLinkConfirmCancel'),
       }}
     >
-      <div ref={rootRef} className="flex flex-col h-full bg-background relative overflow-hidden">
+      <ChatDropZone rootRef={rootRef} enabled={mode === 'full'} accepting={d.canAttachFiles} onFiles={d.attachments.add} className="flex flex-col h-full bg-background relative overflow-hidden">
         <ChatSessionHeader
           mode={mode}
-          title={d.detail.data?.title ?? ''}
+          title={title}
           csrfToken={session.csrfToken}
           headerLeading={headerLeading}
           headerTrailing={headerTrailing}
           onRenameConversation={onRenameConversation}
           onDeleteConversation={onDeleteConversation}
+          onExportConversation={handleExport}
           onSendPrompt={widget.onTranscriptSendPrompt}
           onNewChat={cmd.handleNewChat}
           profileValue={pendingProfileRun?.profileId ?? composer.selectedProfileId}
@@ -153,7 +158,7 @@ export function ChatSession({
 
         {/* Bottom composer */}
         <SessionComposer data={d} mode={mode} onSend={cmd.handleSend} onStop={cmd.handleStop} />
-      </div>
+      </ChatDropZone>
     </PromptBridgeProvider>
   );
 }

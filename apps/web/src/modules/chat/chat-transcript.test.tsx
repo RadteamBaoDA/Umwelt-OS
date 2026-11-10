@@ -114,3 +114,35 @@ describe('ChatTranscript sources and model line', () => {
     expect(screen.getByTestId('message-model').textContent).toBe('Model: model-x · 1 sources');
   });
 });
+
+describe('ChatTranscript capability chips', () => {
+  beforeEach(() => { topicsMock.fetchTopics.mockReset(); topicsMock.fetchTopics.mockRejectedValue(new Error('offline')); });
+
+  it('toggles composer options and opens the picker without sending a message', async () => {
+    const onSendPrompt = vi.fn();
+    const web = { pressed: false, onActivate: vi.fn() };
+    const data = { pressed: true, onActivate: vi.fn() };
+    const attach = { onActivate: vi.fn() };
+    renderTranscript({ onSendPrompt, capabilities: { webSearch: web, dbQuery: data, attach } });
+    expect(screen.getByTestId('capability-web').getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByTestId('capability-data').getAttribute('aria-pressed')).toBe('true');
+    await userEvent.click(screen.getByTestId('capability-web'));
+    await userEvent.click(screen.getByTestId('capability-data'));
+    await userEvent.click(screen.getByTestId('capability-attach'));
+    expect(web.onActivate).toHaveBeenCalledTimes(1);
+    expect(data.onActivate).toHaveBeenCalledTimes(1);
+    expect(attach.onActivate).toHaveBeenCalledTimes(1);
+    expect(onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('disables a chip with its reason', async () => {
+    const web = { pressed: false, disabledReason: 'Not set up — Settings › AI', onActivate: vi.fn() };
+    renderTranscript({ onSendPrompt: vi.fn(), capabilities: { webSearch: web } });
+    const chip = screen.getByTestId('capability-web') as HTMLButtonElement;
+    expect(chip.disabled).toBe(true);
+    expect(chip.title).toBe('Not set up — Settings › AI');
+    await userEvent.click(chip);
+    expect(web.onActivate).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('capability-attach')).toBeNull();
+  });
+});

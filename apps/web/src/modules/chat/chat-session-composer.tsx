@@ -22,7 +22,7 @@ export interface SessionComposerProps {
  *
  * @returns The toggle props, or undefined when the control must not render.
  */
-function useWebSearchToggle(data: ChatSessionData, full: boolean) {
+export function useWebSearchToggle(data: ChatSessionData, full: boolean) {
   const t = useTranslations('chat');
   if (!full || !WEB_SEARCH_SEND_ENABLED) return undefined;
   return {
@@ -84,7 +84,7 @@ function modelBinding({ latestAssistant, modelPicker }: ChatSessionData) {
 }
 
 /** Database-query toggle; specialist profiles never carry `db_query`, so it is hidden for them. */
-function dbQueryToggle(data: ChatSessionData) {
+export function dbQueryToggle(data: ChatSessionData) {
   return data.profileBlocked ? undefined : { enabled: data.dbQueryEffective, onChange: data.composer.setDbQueryOn };
 }
 

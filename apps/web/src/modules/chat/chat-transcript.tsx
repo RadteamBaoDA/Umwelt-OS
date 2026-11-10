@@ -3,7 +3,7 @@
 import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { AlertCircleIcon, ArrowDownIcon, BookOpenIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
+import { AlertCircleIcon, ArrowDownIcon, BookOpenIcon, CheckIcon, CopyIcon, DatabaseIcon, GlobeIcon, Loader2Icon, PaperclipIcon, PencilIcon, RefreshCwIcon } from 'lucide-react';
 import type { ChatMessage, Citation, ToolStatus, WebSearchOutcome } from './api';
 import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
@@ -97,14 +97,78 @@ const STARTER_PROMPTS = [
   { title: 'starterBtcTitle', prompt: 'starterBtcPrompt' },
 ] as const;
 
+/** One capability chip of the empty state: toggles a composer option or opens the file picker. */
+export interface CapabilityChip {
+  /** Current on/off state for toggles; omit for one-shot actions (attach). */
+  pressed?: boolean;
+  /** Localized reason the chip is unavailable (shown on hover and announced); presence disables the chip. */
+  disabledReason?: string;
+  /** True when disabled without an explanation (busy or limit reached). */
+  disabled?: boolean;
+  onActivate: () => void;
+}
+
+/** Capability chips shown in the empty state; each key is omitted when the control does not exist for this chat. */
+export interface EmptyCapabilities {
+  webSearch?: CapabilityChip;
+  dbQuery?: CapabilityChip;
+  attach?: CapabilityChip;
+}
+
+/**
+ * One outline chip. Toggles expose `aria-pressed`; a disabled chip names its reason for assistive tech and as a title.
+ *
+ * @param props - Icon, label and the chip model.
+ */
+function CapabilityChipButton({ icon, label, chip, testId }: { icon: React.ReactNode; label: string; chip: CapabilityChip; testId: string }) {
+  const toggle = chip.pressed !== undefined;
+  const disabled = Boolean(chip.disabledReason) || Boolean(chip.disabled);
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      data-testid={testId}
+      aria-pressed={toggle ? chip.pressed : undefined}
+      disabled={disabled}
+      title={chip.disabledReason}
+      onClick={chip.onActivate}
+      className="h-auto gap-1.5 px-3 py-1.5 text-xs aria-pressed:border-data aria-pressed:bg-active"
+    >
+      {icon}
+      {label}
+      {chip.disabledReason && <span className="sr-only"> ({chip.disabledReason})</span>}
+    </Button>
+  );
+}
+
+/**
+ * Three capability chips (web search, collected data, attach). They flip the same composer options as the + menu or open
+ * the file picker; they never send a message.
+ *
+ * @param props - The chip models for this chat.
+ * @returns A labelled group, or null when no capability exists.
+ */
+function CapabilityChips({ capabilities }: { capabilities: EmptyCapabilities }) {
+  const t = useTranslations('chat');
+  const { webSearch, dbQuery, attach } = capabilities;
+  if (!webSearch && !dbQuery && !attach) return null;
+  return (
+    <div data-testid="capability-chips" role="group" aria-label={t('capabilitiesLabel')} className="flex flex-wrap gap-2">
+      {webSearch && <CapabilityChipButton testId="capability-web" icon={<GlobeIcon className="size-3.5" aria-hidden="true" />} label={t('capabilityWebSearch')} chip={webSearch} />}
+      {dbQuery && <CapabilityChipButton testId="capability-data" icon={<DatabaseIcon className="size-3.5" aria-hidden="true" />} label={t('capabilityData')} chip={dbQuery} />}
+      {attach && <CapabilityChipButton testId="capability-attach" icon={<PaperclipIcon className="size-3.5" aria-hidden="true" />} label={t('capabilityAttach')} chip={attach} />}
+    </div>
+  );
+}
+
 /**
  * Composer-first empty state: one sentence about what Chat can do with this workspace plus starter prompts
  * (the owner's top topics, else three fixed ones) as plain outline buttons. Prompts are workspace-relevant message keys; selecting one sends it like a typed message.
  *
- * @param props - Send callback and active locale.
- * @returns Left-aligned intro block with a labelled prompt group.
+ * @param props - Send callback, active locale and the optional capability chips (full Chat).
+ * @returns Left-aligned intro block with a labelled prompt group and the capability chips.
  */
-function EmptyIntro({ onSendPrompt, locale }: { onSendPrompt: (prompt: string) => void; locale?: AppLocaleId }) {
+function EmptyIntro({ onSendPrompt, locale, capabilities }: { onSendPrompt: (prompt: string) => void; locale?: AppLocaleId; capabilities?: EmptyCapabilities }) {
   const t = useTranslations('chat');
   const copy = genUiCopy(resolveWidgetLocale(locale));
   // Real topics replace the fixed chips; empty/failed load keeps the fixed ones.
@@ -128,6 +192,7 @@ function EmptyIntro({ onSendPrompt, locale }: { onSendPrompt: (prompt: string) =
             </Button>
           ))}
       </div>
+      {capabilities && <CapabilityChips capabilities={capabilities} />}
     </div>
   );
 }
@@ -169,6 +234,8 @@ export interface ChatTranscriptProps {
   onRegenerateMessage?: (message: ChatMessage) => void;
   /** Optional callback when user clicks an inline citation chip; defaults to opening the evidence rail in full Chat. */
   onSelectCitation?: (citation: Citation) => void;
+  /** Capability chips for the empty state (full Chat); each toggles the matching composer option or opens the file picker. */
+  capabilities?: EmptyCapabilities;
   /** Optional callback invoked when an interactive widget or starter template dispatches a prompt. */
   onSendPrompt?: (prompt: string) => void;
   /**
@@ -514,9 +581,9 @@ function TranscriptError({ error, onRetry }: { error: string; onRetry?: () => vo
 }
 
 /** Starter gallery (or plain empty copy) for a brand-new view. */
-function EmptyState({ onSendPrompt, locale }: { onSendPrompt?: (prompt: string) => void; locale: AppLocaleId }) {
+function EmptyState({ onSendPrompt, locale, capabilities }: { onSendPrompt?: (prompt: string) => void; locale: AppLocaleId; capabilities?: EmptyCapabilities }) {
   const t = useTranslations('chat');
-  if (onSendPrompt) return <EmptyIntro onSendPrompt={onSendPrompt} locale={locale} />;
+  if (onSendPrompt) return <EmptyIntro onSendPrompt={onSendPrompt} locale={locale} capabilities={capabilities} />;
   return (
     <div className="my-auto flex flex-col gap-1 py-8">
       <h2 className="text-base font-semibold text-foreground">{t('emptyStateTitle')}</h2>
@@ -628,7 +695,7 @@ export function ChatTranscript(props: ChatTranscriptProps) {
       <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-4">
 
       {/* Starter gallery is only for a brand-new view: once a conversation exists it never reappears between turns. */}
-      {showStarter && <EmptyState onSendPrompt={onSendPrompt} locale={locale} />}
+      {showStarter && <EmptyState onSendPrompt={onSendPrompt} locale={locale} capabilities={props.capabilities} />}
 
       {messages.map((msg) => (
         <TranscriptMessage
