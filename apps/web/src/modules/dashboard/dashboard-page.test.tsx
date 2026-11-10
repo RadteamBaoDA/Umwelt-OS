@@ -69,7 +69,7 @@ const rect = (id: string, x: number, y: number): DashboardPlacement => ({ instan
 /** Builds a two-gadget dashboard fixture. */
 const dashboard = (): Dashboard => ({
   id: 'd1', name: 'Overview', revision: 3,
-  groups: [{ id: 'g', dashboard_id: 'd1', name: 'G', position: 0 }],
+  groups: [{ id: 'g', dashboard_id: 'd1', name: 'Overview', position: 0, is_overview: true }],
   instances: [instance('a'), instance('b')],
   layouts: {
     desktop: { columns: 20, items: [rect('a', 0, 0), rect('b', 4, 0)] },

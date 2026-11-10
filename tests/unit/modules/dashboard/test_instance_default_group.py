@@ -42,7 +42,7 @@ async def test_default_group_created_when_dashboard_has_none() -> None:
     group = await public._resolve_instance_group(
         session, SimpleNamespace(id=uuid4()), None, scope=_SCOPE
     )  # type: ignore[arg-type]
-    assert (group.name, group.position) == ("General", 0)
+    assert (group.name, group.position, group.is_overview) == ("Overview", 0, True)
     assert session.added == [group]
 
 

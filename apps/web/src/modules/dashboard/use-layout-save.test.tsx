@@ -39,6 +39,7 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     membershipOperationCountRef: { current: 0 },
     pendingExitEditRef: { current: false },
     pendingDashboardSwitchRef: { current: null as string | null },
+    pendingGroupSwitchRef: { current: null as string | null },
     pendingRouteNavigationRef: { current: null as unknown },
     pendingBreakpointRef: { current: 'mobile' as string | null },
     dismissedBreakpointRef: { current: null as string | null },
@@ -153,7 +154,7 @@ describe('useLayoutSave', () => {
     expect(cleanHook.navigate).not.toHaveBeenCalled();
     act(() => cleanHook.result.current.requestSwitchDashboard('d2'));
     expect(cleanHook.navigate).toHaveBeenCalledWith('d2');
-    expect(clean.setActiveGroupId).toHaveBeenCalledWith('all');
+    expect(clean.setActiveGroupId).toHaveBeenCalledWith('');
     const dirty = makeSession();
     const dirtyHook = setup(dirty);
     act(() => dirtyHook.result.current.requestSwitchDashboard('d2'));
@@ -196,7 +197,7 @@ describe('useLayoutSave', () => {
       expect(session.setDraftPlacements).toHaveBeenCalledWith(session.savedPlacements);
       expect(session.setIsDirty).toHaveBeenCalledWith(false);
       expect(navigate).toHaveBeenCalledWith('d2');
-      expect(session.setActiveGroupId).toHaveBeenCalledWith('all');
+      expect(session.setActiveGroupId).toHaveBeenCalledWith('');
       expect(mocks.replaceDashboardLayout).not.toHaveBeenCalled();
     });
 
