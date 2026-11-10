@@ -4,10 +4,11 @@ Runs only after the assistant answer is committed (``message.done``), never fail
 the answer: every error (including timeout) is logged without content and swallowed. The call reuses the
 answer's provider/model/policy; no new client is created. It is skipped for ephemeral conversations.
 
-The step writes after the run is already ``completed``. A live SSE stream normally closes once the terminal
-backlog is drained, so the ``conversation.title`` / ``message.suggestions`` events are best-effort for live
-clients (and replayed to reconnecting ones); the persisted ``Conversation.title`` and
-``Message.metadata_json["suggestions"]`` are authoritative and returned by the REST reads.
+The step writes after the run is already ``completed``. The SSE route keeps a completed run's stream open
+until the ``message.followup.done`` marker (always appended last, success, skip or failure) or a short grace
+cap, so ``conversation.title`` / ``message.suggestions`` reach live clients; they are also replayed to
+reconnecting ones. The persisted ``Conversation.title`` and ``Message.metadata_json["suggestions"]`` stay
+authoritative and are returned by the REST reads.
 """
 
 import asyncio
@@ -26,6 +27,9 @@ from modules.chat.models import Conversation, Message, ResponseRun
 from modules.chat.schemas import SUGGESTIONS_KEY, TITLE_SOURCE_KEY
 
 FOLLOWUP_TIMEOUT_SECONDS = 8.0
+FOLLOWUP_DONE_EVENT = (
+    "message.followup.done"  # additive terminal marker; old clients ignore unknown events
+)
 TITLE_MAX_CHARS = 60
 SUGGESTION_MAX_CHARS = 120
 MAX_SUGGESTIONS = 3
@@ -204,23 +208,51 @@ async def _persist_followup(
         await session.commit()
 
 
+async def _emit_followup_done(env: _ToolEnv) -> None:
+    """Append the ``message.followup.done`` marker so a live SSE stream can close.
+
+    Locks the run row (sequence allocation) and writes only while the run is still ``completed``; a
+    cancelled/failed run needs no marker (its stream closes on the terminal status). Never raises: if this
+    fails the stream's grace cap closes the connection instead.
+    """
+    c = env.c
+    try:
+        async with c.session_factory() as session:
+            run = await session.scalar(
+                select(ResponseRun).where(ResponseRun.id == c.response_id).with_for_update()
+            )
+            if run is None or run.status != "completed":
+                return
+            c.seq = await _next_event_seq(session, c.response_id, c.seq)
+            _add_event(session, c, c.seq, FOLLOWUP_DONE_EVENT, {})
+            await session.commit()
+    except Exception as exc:  # noqa: BLE001  # boundary: the marker is an optimisation, the cap is the backstop
+        logger.warning(
+            "Follow-up done marker skipped for run %s (%s)", c.response_id, type(exc).__name__
+        )
+
+
 async def generate_followup(env: _ToolEnv, message_id: UUID, final_answer: str) -> None:
     """Generate and persist the auto title and follow-up suggestions for a just-completed answer.
 
     Best effort: skipped for ephemeral conversations and empty answers; timeout-bounded; every error is
     logged by type only (no content) and swallowed so the answer is never affected. Task cancellation
-    (worker shutdown) is not swallowed.
+    (worker shutdown) is not swallowed. The ``message.followup.done`` marker is appended in a ``finally``
+    (after any title/suggestion events, also when skipped or failed) so live streams never wait needlessly.
     """
-    if env.claimed.ephemeral or not final_answer.strip():
-        return
     try:
-        want_title, _ = await _read_turn_texts(env)
-        title, suggestions = await _ask_model(env, final_answer, want_title)
-        if title or suggestions:
-            await _persist_followup(env, message_id, final_answer, title, suggestions)
-    except Exception as exc:  # noqa: BLE001  # boundary: a cosmetic step must never fail or delay the answer
-        logger.warning(
-            "Post-answer title/suggestions skipped for run %s (%s)",
-            env.c.response_id,
-            type(exc).__name__,
-        )
+        if env.claimed.ephemeral or not final_answer.strip():
+            return
+        try:
+            want_title, _ = await _read_turn_texts(env)
+            title, suggestions = await _ask_model(env, final_answer, want_title)
+            if title or suggestions:
+                await _persist_followup(env, message_id, final_answer, title, suggestions)
+        except Exception as exc:  # noqa: BLE001  # boundary: a cosmetic step must never fail or delay the answer
+            logger.warning(
+                "Post-answer title/suggestions skipped for run %s (%s)",
+                env.c.response_id,
+                type(exc).__name__,
+            )
+    finally:
+        await _emit_followup_done(env)

@@ -2,6 +2,7 @@
 conversation citations are filtered in one batch."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
 from uuid import UUID, uuid4
@@ -14,6 +15,7 @@ from starlette.requests import ClientDisconnect
 from core.config import Settings
 from modules.chat import public as chat_public
 from modules.chat import routes
+from modules.chat._routes import stream as stream_routes
 from modules.chat.models import Conversation, ResponseRun, StreamEvent
 from tests.unit.modules.chat._routes_patch import patch_routes
 
@@ -39,6 +41,8 @@ class _Store:
         self.log: list[str] = []
         self.seq_floors: list[int] = []
         self.probe_says_work = True
+        self.completed_at: Any = None  # follow-up grace window anchor (None = never wait)
+        self.marker_seq: int | None = None  # seq of message.followup.done, when appended
 
 
 class _Session:
@@ -57,8 +61,11 @@ class _Session:
         entity = stmt.column_descriptions[0]["entity"]
         if entity is Conversation:
             return SimpleNamespace(id=CID, ephemeral=False, expires_at=None)
+        if entity is StreamEvent:  # follow-up marker lookup
+            return self.store.marker_seq
         if entity is ResponseRun:
             return SimpleNamespace(
+                completed_at=self.store.completed_at,
                 id=RID,
                 conversation_id=CID,
                 status=self.store.status,
@@ -600,3 +607,91 @@ async def test_pure_asgi_stack_passes_empty_drain_chunk_and_writes_before_genera
         "send:b'data: x\\n\\n'",
         "after-batch-yield",
     ]
+
+
+def _marker(seq: int) -> Any:
+    return SimpleNamespace(
+        seq=seq, event_type="message.followup.done", event_id=f"{RID}:{seq}", data={}
+    )
+
+
+async def test_completed_run_stays_open_until_followup_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _Store([_event(1)], status="completed")
+    store.completed_at = datetime.now(UTC)
+    _install(monkeypatch, store)
+    sleeps: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        if len(sleeps) == 2:  # the worker appends title/suggestions and the marker
+            store.events = [_event(1), _event(2), _marker(3)]
+            store.marker_seq = 3
+        await real_sleep(0)
+
+    monkeypatch.setattr(routes.asyncio, "sleep", fake_sleep)
+    response = await _open(store)
+    chunks = [chunk async for chunk in response.body_iterator]  # type: ignore[attr-defined]
+    assert len(sleeps) == 2  # waited (did not close after message.done), then closed at the marker
+    assert "message.followup.done" in "".join(chunks)
+    assert sum("message.delta" in c for c in chunks) == 2
+
+
+async def test_completed_run_closes_at_grace_cap_without_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _Store([_event(1)], status="completed")
+    store.completed_at = datetime.now(UTC)
+    _install(monkeypatch, store)
+    real_sleep = asyncio.sleep
+    sleeps = 0
+
+    async def fake_sleep(_delay: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps == 3:
+            store.completed_at = datetime.now(UTC) - timedelta(
+                seconds=stream_routes.FOLLOWUP_GRACE_SECONDS + 1
+            )
+        await real_sleep(0)
+
+    monkeypatch.setattr(routes.asyncio, "sleep", fake_sleep)
+    response = await _open(store)
+    chunks = [chunk async for chunk in response.body_iterator]  # type: ignore[attr-defined]
+    assert sleeps == 3 and sum("message.delta" in c for c in chunks) == 1
+
+
+@pytest.mark.parametrize("status", ["cancelled", "failed"])
+async def test_non_completed_terminal_runs_never_wait(
+    monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
+    store = _Store([_event(1)], status=status)
+    store.completed_at = datetime.now(UTC)
+    _install(monkeypatch, store)
+
+    async def no_sleep(_delay: float) -> None:
+        raise AssertionError("must close immediately")
+
+    monkeypatch.setattr(routes.asyncio, "sleep", no_sleep)
+    response = await _open(store)
+    chunks = [chunk async for chunk in response.body_iterator]  # type: ignore[attr-defined]
+    assert sum("message.delta" in c for c in chunks) == 1
+
+
+@pytest.mark.parametrize("age", [stream_routes.FOLLOWUP_GRACE_SECONDS + 5, None])
+async def test_old_or_unstamped_completed_run_replays_and_closes_immediately(
+    monkeypatch: pytest.MonkeyPatch, age: float | None
+) -> None:
+    store = _Store([_event(1)], status="completed")
+    store.completed_at = None if age is None else datetime.now(UTC) - timedelta(seconds=age)
+    _install(monkeypatch, store)
+
+    async def no_sleep(_delay: float) -> None:
+        raise AssertionError("must close immediately")
+
+    monkeypatch.setattr(routes.asyncio, "sleep", no_sleep)
+    response = await _open(store)
+    chunks = [chunk async for chunk in response.body_iterator]  # type: ignore[attr-defined]
+    assert sum("message.delta" in c for c in chunks) == 1

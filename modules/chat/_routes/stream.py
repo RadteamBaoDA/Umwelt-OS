@@ -48,6 +48,10 @@ HEARTBEAT_INTERVAL = 15.0
 
 
 _TERMINAL_RUN_STATUSES = ("completed", "cancelled", "failed")
+# A completed run's stream stays open this long after ``completed_at`` for the post-answer follow-up step
+# (8 s model timeout + persist) to append ``message.followup.done``; older runs replay and close at once.
+FOLLOWUP_GRACE_SECONDS = 12.0
+FOLLOWUP_DONE_EVENT = "message.followup.done"
 
 
 @dataclass
@@ -150,6 +154,32 @@ async def _frames_for_batch(
     return "".join(frames)
 
 
+async def _followup_pending(session: AsyncSession, run: ResponseRun, delivered_seq: int) -> bool:
+    """True while a completed run is inside its follow-up grace window and its done marker is not yet delivered.
+
+    ``delivered_seq`` is the last sequence sent to this client: a marker committed after this poll's event
+    read has a higher ``seq`` and still counts as pending, so no title/suggestion event is dropped by a race.
+
+    Cancelled/failed runs, runs without ``completed_at`` and runs completed longer ago than
+    ``FOLLOWUP_GRACE_SECONDS`` (replays, pre-marker history) never wait. The marker lookup only runs inside
+    the window, so settled replays cost no extra query.
+    """
+    completed_at = getattr(run, "completed_at", None)
+    if run.status != "completed" or completed_at is None:
+        return False
+    if (datetime.now(UTC) - completed_at).total_seconds() >= FOLLOWUP_GRACE_SECONDS:
+        return False
+    marker = await session.scalar(
+        select(StreamEvent.seq)
+        .where(
+            StreamEvent.response_id == run.id,
+            StreamEvent.event_type == FOLLOWUP_DONE_EVENT,
+        )
+        .limit(1)
+    )
+    return marker is None or marker > delivered_seq
+
+
 async def _publish_locked_events(
     session: AsyncSession,
     current_run: ResponseRun,
@@ -163,7 +193,7 @@ async def _publish_locked_events(
     follows a revocation. The joined chunk is yielded BEFORE the caller commits: the ASGI send
     then finds the transport drained and the bytes are written while every lock is still held.
     Sets ``state`` flags (``auth_expired``, ``batch_sent``, ``terminal_without_event``, and ``stop``
-    when the delivered batch drained a terminal run).
+    when the delivered batch drained a terminal run that is not still awaiting its follow-up marker).
     """
     account_id = await _auth_row_current(session, token_hash)
     if account_id is None or current_run.actor_user_id != account_id:
@@ -191,9 +221,16 @@ async def _publish_locked_events(
         # A terminal run whose backlog fit in this batch has nothing left to send: end now instead of
         # idling one more fallback interval holding the permit and pub/sub. The loop reads ``stop``
         # only after the poll commits, so locks are released first.
-        state.stop = not state.batch_full and current_run.status in _TERMINAL_RUN_STATUSES
+        state.stop = (
+            not state.batch_full
+            and current_run.status in _TERMINAL_RUN_STATUSES
+            and not await _followup_pending(session, current_run, state.current_seq)
+        )
     else:
-        state.terminal_without_event = current_run.status in _TERMINAL_RUN_STATUSES
+        state.terminal_without_event = (
+            current_run.status in _TERMINAL_RUN_STATUSES
+            and not await _followup_pending(session, current_run, state.current_seq)
+        )
 
 
 async def _locked_poll(

@@ -16,6 +16,7 @@ vi.mock('@/core/api', async (importOriginal) => ({ ...(await importOriginal<type
 
 import { ChatSessionRuntime } from './chat-session-refs';
 import { useChatStream } from './use-chat-stream';
+import { chatKeys } from './api';
 
 function setup() {
   const refs = new ChatSessionRuntime({ conversationId: 'c1', generation: 1 });
@@ -24,7 +25,7 @@ function setup() {
   const client = new QueryClient();
   const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
   const hook = renderHook(() => useChatStream(refs, live, vi.fn()), { wrapper });
-  return { refs, live, run: hook.result.current };
+  return { refs, live, client, run: hook.result.current };
 }
 
 describe('useChatStream terminal statuses', () => {
@@ -87,5 +88,28 @@ describe('useChatStream terminal statuses', () => {
     await act(async () => { await run('r1', 'c1', () => true); });
     await new Promise((r) => setTimeout(r, 20));
     expect(streamRun).not.toHaveBeenCalled();
+  });
+
+  it('settles the UI at message.done while the open stream still applies live title and suggestions', async () => {
+    let release: () => void = () => undefined;
+    const open = new Promise<void>((resolve) => { release = resolve; });
+    h.streamResponseEvents.mockImplementation(async (_id: string, o: StreamEventsOptions) => {
+      o.onDone?.({ text: 'a', citations: [], model: 'm', status: 'completed' } as never);
+      await open; // connection stays open for the post-answer follow-up step
+      o.onConversationTitle?.('Trip to Hue');
+      o.onSuggestions?.({ message_id: 'm1', suggestions: ['a?', 'b?'] });
+    });
+    const { run, live, client } = setup();
+    client.setQueryData(chatKeys.conversation('c1'), { id: 'c1', title: 'x', messages: [{ id: 'm1', role: 'assistant' }] });
+    h.getConversation.mockResolvedValue({ id: 'c1', title: 'x', active_response_id: null, messages: [{ id: 'm1', role: 'assistant' }] });
+    let finished = false;
+    const done = act(async () => { await run('r1', 'c1', () => true); finished = true; });
+    await waitFor(() => expect(live.patch).toHaveBeenCalledWith(expect.objectContaining({ isStreaming: false, activeResponseId: null })));
+    expect(finished).toBe(false); // still connected, yet the live state is already settled
+    release();
+    await done;
+    const detail = client.getQueryData<{ title: string; messages: { suggestions?: string[] }[] }>(chatKeys.conversation('c1'));
+    expect(detail?.title).toBe('Trip to Hue');
+    expect(detail?.messages[0].suggestions).toEqual(['a?', 'b?']);
   });
 });

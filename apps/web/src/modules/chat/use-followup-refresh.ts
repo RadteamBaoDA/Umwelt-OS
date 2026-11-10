@@ -17,9 +17,9 @@ export interface FollowupRefreshParams {
 }
 
 /**
- * The title and follow-up suggestions are written by a model call that runs after `message.done`, and the SSE
- * stream normally closes before they exist, so persisted values are authoritative. This hook refetches once after ~4s
- * and again after ~10s while the latest, freshly created assistant answer still has no suggestions.
+ * The title and follow-up suggestions are written by a model call that runs after `message.done`; the SSE stream now
+ * delivers them live, so this hook is only a fallback (dropped connection, grace cap hit); persisted values stay
+ * authoritative. It refetches once after ~4s and again after ~10s while the latest, freshly created assistant answer still has no suggestions.
  *
  * Timers are tied to the effect: switching conversation, a new message, suggestions arriving, a new send or unmounting
  * cancels them.

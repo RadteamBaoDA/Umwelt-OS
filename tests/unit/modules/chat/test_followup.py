@@ -318,3 +318,67 @@ async def test_patch_conversation_marks_title_as_user_renamed() -> None:
         await routes.patch_conversation(conv.id, ConversationPatch(title="Renamed"), session, owner)  # type: ignore[arg-type]
     assert conv.title == "Renamed"
     assert conv.metadata_json == {"date": "2026-01-01", TITLE_SOURCE_KEY: "user"}
+
+
+def _marker_env(
+    status: str = "completed",
+) -> tuple[SimpleNamespace, MagicMock, list[tuple[str, dict]]]:
+    env = _env()
+    run = SimpleNamespace(status=status)
+    session = MagicMock()
+    session.scalar = AsyncMock(return_value=run)
+    session.commit = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    env.c.session_factory = lambda: session
+    return env, session, []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode", ["success", "failure", "skipped_empty", "skipped_ephemeral", "cancelled_run"]
+)
+async def test_followup_done_marker_is_always_emitted_last(mode: str) -> None:
+    env, session, events = _marker_env("cancelled" if mode == "cancelled_run" else "completed")
+    if mode == "skipped_ephemeral":
+        env.claimed.ephemeral = True
+    ask = AsyncMock(
+        side_effect=RuntimeError("boom") if mode == "failure" else None,
+        return_value=("T", ["a?", "b?"]),
+    )
+    persist = AsyncMock(side_effect=lambda *a: events.append(("persist", {})))
+    with (
+        patch.object(followup, "_read_turn_texts", AsyncMock(return_value=(True, "hi"))),
+        patch.object(followup, "_ask_model", ask),
+        patch.object(followup, "_persist_followup", persist),
+        patch.object(followup, "_next_event_seq", AsyncMock(return_value=9)),
+        patch.object(
+            followup, "_add_event", lambda s, c, seq, kind, data: events.append((kind, data))
+        ),
+    ):
+        await generate_followup(env, uuid4(), "  " if mode == "skipped_empty" else "answer")  # type: ignore[arg-type]
+    if mode == "cancelled_run":
+        assert (
+            "message.followup.done",
+            {},
+        ) not in events  # no marker once the run is not completed
+        return
+    assert events[-1] == ("message.followup.done", {})
+    assert [k for k, _ in events].count("message.followup.done") == 1
+    assert ("persist" in [k for k, _ in events]) == (mode == "success")
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_followup_done_marker_emitted_when_model_times_out() -> None:
+    env, _session, events = _marker_env()
+    with (
+        patch.object(followup, "_read_turn_texts", AsyncMock(return_value=(True, "hi"))),
+        patch.object(followup, "_ask_model", AsyncMock(side_effect=TimeoutError())),
+        patch.object(followup, "_next_event_seq", AsyncMock(return_value=9)),
+        patch.object(
+            followup, "_add_event", lambda s, c, seq, kind, data: events.append((kind, data))
+        ),
+    ):
+        await generate_followup(env, uuid4(), "answer")  # type: ignore[arg-type]
+    assert events == [("message.followup.done", {})]

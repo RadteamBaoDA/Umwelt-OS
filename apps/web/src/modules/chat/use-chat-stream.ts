@@ -277,7 +277,7 @@ export function useChatStream(
     const streamOptions: StreamEventsOptions = {
       signal: abortCtrl.signal,
       ...buildContentHandlers(live, isCurrentView, setThemeRequest),
-      // Live title/suggestions (rare: the stream usually closes first) go straight into the cache; persisted values win later.
+      // Live title/suggestions arrive after message.done (the stream stays open until message.followup.done); they go straight into the cache and persisted values win later.
       onConversationTitle: (title) => applyLiveTitle(queryClient, responseConversationId, title),
       onSuggestions: (payload) => applyLiveSuggestions(queryClient, responseConversationId, payload),
       onDone: () => handleDone(ctx),
