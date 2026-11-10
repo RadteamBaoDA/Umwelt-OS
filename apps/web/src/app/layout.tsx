@@ -4,6 +4,7 @@ import { headers } from 'next/headers';
 import { NextIntlClientProvider } from 'next-intl';
 import type { ReactNode } from 'react';
 import { ACCENT_INIT_SCRIPT } from '@/core/accent';
+import { DENSITY_INIT_SCRIPT } from '@/core/density';
 import { NONCE_HEADER } from '@/core/csp';
 import { getPublicOrigin } from '@/core/public-origin';
 import { messages } from '@/core/messages';
@@ -33,6 +34,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     <html lang="en-US" className={inter.variable} suppressHydrationWarning>
       <head>
         <script nonce={nonce} dangerouslySetInnerHTML={{ __html: ACCENT_INIT_SCRIPT }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: DENSITY_INIT_SCRIPT }} />
       </head>
       <body>
         <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>

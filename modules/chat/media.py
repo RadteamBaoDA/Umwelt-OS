@@ -11,12 +11,8 @@ map widget must show ``TILE_ATTRIBUTION``. Images: ``GET /api/v1/media/proxy?tok
 """
 
 import asyncio
-import base64
-import hashlib
-import hmac
 import json
 import re
-import time
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
@@ -24,26 +20,27 @@ from urllib.parse import quote, unquote, urlsplit
 import httpx
 from pydantic import BaseModel
 
-from core.auth.dependencies import derive_key
+from core.media_proxy import (  # noqa: F401 - re-exported: the proxy helpers moved to core
+    _CTRL,
+    PROXY_HOSTS,
+    PROXY_PATH,
+    SEARCH_THUMB_HOST,
+    TOKEN_TTL_SECONDS,
+    MediaError,
+    check_upstream_url,
+    media_permitted,
+    sign_media_url,
+    verify_media_token,
+)
 from core.model_gateway.schemas import AIExecutionConfig
 from core.model_gateway.transport import EndpointNetworkPolicyError, approved_transport
-from core.pagination import b64url_encode
 
 USER_AGENT = "Umwelt-OS"
-PROXY_PATH = "/api/v1/media/proxy"
-PROXY_HOSTS = frozenset({"upload.wikimedia.org", "basemap.nationalmap.gov"})
-# Search-engine thumbnail CDNs (SearXNG image results): Bing ``ts1.mm.bing.net``/``tse2.mm.bing.net``, Brave and
-# Wikimedia thumbnails. Fixed shapes only: never an arbitrary host. Bing URLs carry a query string, which the
-# signed token preserves because it binds the whole URL.
-SEARCH_THUMB_HOST = re.compile(
-    r"(?:tse?\d{1,3}\.mm\.bing\.net|imgs\.search\.brave\.com|thumb\.wikimedia\.org)"
-)
 TILE_HOST = "basemap.nationalmap.gov"
 TILE_PATH = "/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}"
 TILE_ATTRIBUTION = "Tiles courtesy of the U.S. Geological Survey (USGS), The National Map"
 MAX_MEDIA_BYTES = 5 * 1024 * 1024
 MAX_JSON_BYTES = 1024 * 1024
-TOKEN_TTL_SECONDS = 3600
 LOOKUP_TIMEOUT_SECONDS = 12.0
 LOOKUP_WORKERS = 4
 MAX_TITLES = 8
@@ -56,16 +53,6 @@ TransportFactory = Callable[[str], httpx.AsyncBaseTransport]
 _LICENSE_OK = re.compile(r"^(cc0|cc[ -]by([ -]sa)?\b|public domain|pd\b)", re.IGNORECASE)
 _LICENSE_BAD = re.compile(r"\b(nc|nd)\b|non-?commercial|no[ -]?deriv", re.IGNORECASE)
 _TAGS = re.compile(r"<[^>]*>")
-_CTRL = re.compile(r"[\x00-\x1f\x7f]")
-
-
-class MediaError(Exception):
-    """Media fetch/token failure; ``code`` is a short non-sensitive reason (never a URL or token)."""
-
-    def __init__(self, code: str) -> None:
-        """Store the machine-readable reason code."""
-        super().__init__(code)
-        self.code = code
 
 
 class TripStopImagesArgs(BaseModel):
@@ -77,77 +64,6 @@ class TripStopImagesArgs(BaseModel):
 def default_transport_factory(host: str) -> httpx.AsyncBaseTransport:
     """Approved-endpoint transport pinned to ``https://<host>``: public addresses only, no proxy, no retry."""
     return approved_transport(f"https://{host}", (), allow_global=True)
-
-
-def media_permitted(config: AIExecutionConfig, *, local_only: bool) -> bool:
-    """Whether remote widget media may be fetched this turn: owner flag on and the turn not local-only."""
-    return config.privacy.allow_widget_remote_media and not local_only
-
-
-def _key(secret: str) -> bytes:
-    """Purpose-bound HMAC key; an unset secret fails closed (no unsigned tokens)."""
-    if not secret:
-        raise MediaError("not_configured")
-    return derive_key(secret, "media-proxy-hmac")
-
-
-def check_upstream_url(url: str) -> str:
-    """Return ``url`` if it is https on an allowlisted host (``PROXY_HOSTS`` or a search-thumbnail CDN) with no
-    userinfo/port/fragment, else raise MediaError."""
-    try:
-        parts = urlsplit(url)
-        port = parts.port
-    except ValueError:
-        raise MediaError("host_denied") from None
-    if (
-        parts.scheme != "https"
-        or not parts.hostname
-        or (parts.hostname not in PROXY_HOSTS and not SEARCH_THUMB_HOST.fullmatch(parts.hostname))
-        or parts.username
-        or parts.password
-        or port not in (None, 443)
-        or parts.fragment
-        or _CTRL.search(url)
-    ):
-        raise MediaError("host_denied")
-    return url
-
-
-def sign_media_url(secret: str, url: str, *, now: float | None = None, subject: str = "") -> str:
-    """Issue a short-lived token binding exactly ``url`` (allowlist checked at signing and again at verify).
-
-    ``subject`` (``"<workspace_id>:<user_id>"``) binds the token to the actor it was issued for, so a leaked
-    token cannot be replayed by another account.
-    """
-    check_upstream_url(url)
-    body = json.dumps(
-        {"u": url, "e": int((now or time.time()) + TOKEN_TTL_SECONDS), "s": subject},
-        separators=(",", ":"),
-    )
-    payload = b64url_encode(body.encode())
-    sig = hmac.new(_key(secret), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}.{sig}"
-
-
-def verify_media_token(
-    secret: str, token: str, *, now: float | None = None, subject: str = ""
-) -> str:
-    """Return the bound upstream URL for a valid, unexpired token issued for ``subject``; raise MediaError otherwise."""
-    payload, _, sig = token.partition(".")
-    if not hmac.compare_digest(
-        hmac.new(_key(secret), payload.encode(), hashlib.sha256).hexdigest(), sig
-    ):
-        raise MediaError("bad_token")
-    try:
-        data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-        url, expires, bound = data["u"], int(data["e"]), data.get("s", "")
-    except (ValueError, KeyError, TypeError, AttributeError):
-        raise MediaError("bad_token") from None
-    if not isinstance(bound, str) or not hmac.compare_digest(bound.encode(), subject.encode()):
-        raise MediaError("bad_token")
-    if (now or time.time()) > expires:
-        raise MediaError("expired")
-    return check_upstream_url(str(url))
 
 
 def tile_url(z: int, x: int, y: int) -> str:

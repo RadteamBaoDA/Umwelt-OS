@@ -1,7 +1,7 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
-import React from 'react';
+import React, { useState } from 'react';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
@@ -13,6 +13,18 @@ import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge
 export interface VideoPanelProps {
   /** Gadget instance configuration projection. */
   instance: GadgetInstance;
+}
+
+/** Decorative 16:9 thumbnail; renders nothing without a URL or after a load error (no empty placeholder). */
+function VideoThumb({ src }: { src: string | null }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) return null;
+  return (
+    <div className="aspect-video w-28 shrink-0 overflow-hidden rounded-md bg-muted">
+      {/* eslint-disable-next-line @next/next/no-img-element -- same-origin signed proxy path */}
+      <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} className="size-full object-cover" />
+    </div>
+  );
 }
 
 /**
@@ -46,6 +58,7 @@ export function VideoPanel({ instance }: VideoPanelProps) {
           title: typeof fields.title === 'string' ? fields.title : item.title,
           channel: typeof fields.author === 'string' ? fields.author : '',
           videoUrl: safeUrl,
+          imageUrl: item.image_url ?? null,
         }];
       });
     },
@@ -62,12 +75,15 @@ export function VideoPanel({ instance }: VideoPanelProps) {
       {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && <GadgetNotice kind="empty" className="p-0" message={dashboard('videoRecordsEmpty')} action={{ href: '/settings/sources', label: dashboard('gadgetConfigureAction') }} />}
       <ul className="divide-y divide-border">
         {items.map((video) => (
-          <li key={video.id} className="py-2">
+          <li key={video.id} className="flex items-start gap-3 py-2">
+            <VideoThumb src={video.imageUrl} />
+            <div className="min-w-0 flex-1">
             {/* Ink title, underline only on hover; the link still opens YouTube in a new tab. */}
             <a href={video.videoUrl} target="_blank" rel="noopener noreferrer" title={dashboard('videoOpen')} className="line-clamp-2 text-sm font-semibold text-foreground hover:underline underline-offset-4">
               {video.title}
             </a>
             {video.channel && <p className="mt-0.5 text-xs text-muted-foreground">{video.channel}</p>}
+            </div>
           </li>
         ))}
       </ul>

@@ -95,7 +95,7 @@ async def _feed(rows: list[DocumentInteraction], versions: list, **kwargs):  # t
         ),
         patch_documents(
             "_as_gadget_document_projection",
-            lambda item, interaction=None: item.document_version_id,
+            lambda item, interaction=None, signer=None: item.document_version_id,
         ),
         patch_documents("_admit_document_scope", AsyncMock(return_value=FENCE)),
         patch_documents("GadgetDocumentProjectionList", lambda **kw: SimpleNamespace(**kw)),
@@ -175,10 +175,21 @@ async def test_dashboard_projection_route_forwards_include_dismissed() -> None:
     forward = AsyncMock(return_value="page")
     request = SimpleNamespace(
         app=SimpleNamespace(
-            state=SimpleNamespace(settings=SimpleNamespace(multi_workspace_enabled=False))
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    multi_workspace_enabled=False,
+                    csrf_signing_secret=SimpleNamespace(get_secret_value=lambda: "s"),
+                ),
+                redis=None,
+            )
         )
     )
-    with patch.object(routes.public, "list_gadget_document_projections", forward):
+    with (
+        patch.object(routes.public, "list_gadget_document_projections", forward),
+        patch.object(
+            routes.settings_public, "get_ai_execution_config", AsyncMock(return_value=None)
+        ),
+    ):
         for flag in (False, True):
             await routes.list_dashboard_projections(
                 session=AsyncMock(),

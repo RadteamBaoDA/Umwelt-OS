@@ -176,6 +176,7 @@ _FEED_FIELDS = {
     "published_at",
     "provider_updated_at",
     "publisher",
+    "image_url",
 }
 
 
@@ -307,7 +308,15 @@ class ProviderTelegramMetadata(BaseModel):
 # Per-provider allowlist of retained source keys: the trust boundary for provider-controlled
 # metadata. Adding a provider requires an explicit bounded field contract here.
 _PROVIDER_SOURCE_FIELD_ALLOWLIST: dict[str, set[str]] = {
-    "youtube": {"author", "summary", "title", "tags", "published_at", "provider_updated_at"},
+    "youtube": {
+        "author",
+        "summary",
+        "title",
+        "tags",
+        "published_at",
+        "provider_updated_at",
+        "image_url",
+    },
     "arxiv": {
         "author",
         "authors",
@@ -571,7 +580,7 @@ def _validate_source_field(key: str, value: Any) -> None:
         _validate_bool_field(key, value)
     elif key in {"time", "id", "cited_by_count"}:
         _validate_nonnegative_int(key, value)
-    elif key in {"canonical_url", "url", "web_view_link", "html_link"}:
+    elif key in {"canonical_url", "url", "web_view_link", "html_link", "image_url"}:
         _validate_https_link(key, value)
     elif key == "html_url":
         _validate_release_url(key, value)
@@ -985,6 +994,9 @@ class GadgetDocumentProjectionRead(BaseModel):
     read_at: datetime | None
     bookmarked_at: datetime | None
     dismissed_at: datetime | None = None
+    # Same-origin signed media-proxy path for the record's feed thumbnail; null when remote media is not permitted,
+    # the host is not allowlisted or the record has no image.
+    image_url: str | None = None
 
 
 class GadgetDocumentSelectionFence(BaseModel):

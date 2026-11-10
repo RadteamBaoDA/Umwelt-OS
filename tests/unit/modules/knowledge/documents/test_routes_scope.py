@@ -22,10 +22,26 @@ OWNER = SimpleNamespace(owner_id=1)
 @pytest.mark.asyncio
 async def test_dashboard_projections_route_passes_scope_not_owner_id() -> None:
     owner_call = AsyncMock(return_value="ok")
-    with patch.object(routes.public, "list_gadget_document_projections", owner_call):
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    multi_workspace_enabled=False,
+                    csrf_signing_secret=SimpleNamespace(get_secret_value=lambda: "s"),
+                ),
+                redis=None,
+            )
+        )
+    )
+    with (
+        patch.object(routes.public, "list_gadget_document_projections", owner_call),
+        patch.object(
+            routes.settings_public, "get_ai_execution_config", AsyncMock(return_value=None)
+        ),
+    ):
         await routes.list_dashboard_projections(
             session=object(),
-            request=REQUEST,
+            request=request,
             workspace=SCOPE,
             source_ids=[uuid4()],
         )

@@ -22,6 +22,8 @@ export interface FeedStreamItem {
   media?: { kind: string; caption: string | null; count: number }[];
   read?: boolean;
   bookmarked?: boolean;
+  /** Same-origin signed proxy path for the item image; null/absent when none or remote media is off. */
+  imageUrl?: string | null;
 }
 
 /** Identity of one Telegram record version, used for selection, hiding and bulk actions. */
@@ -98,6 +100,7 @@ function documentToItem(doc: FeedDocument, isTelegram: boolean, sourceType: Feed
     collectedAt: doc.observed_at,
     editedAt: telegram?.edited_at ?? null,
     media: telegram?.media ?? [],
+    imageUrl: doc.image_url ?? null,
     url: safeFeedUrl(doc.canonical_url, isTelegram),
     read: !!doc.read_at,
     bookmarked: !!doc.bookmarked_at,

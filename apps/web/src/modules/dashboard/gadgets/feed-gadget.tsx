@@ -17,8 +17,9 @@ import {
   type FeedStreamItem, type SelectedTelegramIdentity,
 } from './feed-model';
 import {
-  FeedBulkBar, FeedFilterPopover, FeedItems, FeedToolbar, FeedUndoBar, type FeedRowContext,
+  FEED_VIEWS, FeedBulkBar, FeedFilterPopover, FeedItems, FeedToolbar, FeedUndoBar, type FeedRowContext, type FeedView,
 } from './feed-parts';
+import { useLocalPref } from '@/core/use-local-pref';
 import { useAutoFetchWhenEmpty, useFeedFilters, useFeedModeration, useFeedQueries } from './use-feed-state';
 
 export type { FeedStreamItem } from './feed-model';
@@ -197,6 +198,8 @@ function FeedStream({
   const sourceIds = [...new Set(definition.source_ids)].slice(0, 32);
   const channelIds = isTelegram ? (definition.scope.channel_ids ?? []).slice(0, 32) : [];
   const filters = useFeedFilters();
+  // Layout choice is per gadget instance and survives reloads (unlike the transient filters).
+  const [view, setView] = useLocalPref<FeedView>(`umwelt.dashboard.feedView.${instance.id}`, 'list', FEED_VIEWS);
   const { onlyUnread, selectMode, searchText, sourceFilter, language, timeWindow } = filters;
   const [selectedTelegram, setSelectedTelegram] = useState<Record<string, SelectedTelegramIdentity>>({});
   const { docsQuery, sourcesQuery } = useFeedQueries({ sourceIds, channelIds, language, windowSince: filters.windowSince });
@@ -225,13 +228,13 @@ function FeedStream({
 
   const askAbout: FeedRowContext['onAskAbout'] = (items) => openDrawer({ context: { kind: 'selection', items } });
   const rowContext: FeedRowContext = {
-    isTelegram, selectMode, selected: selectedTelegram, setSelected: setSelectedTelegram,
+    view, isTelegram, selectMode, selected: selectedTelegram, setSelected: setSelectedTelegram,
     interactionPending: interactionMutation.isPending, onInteract: (change) => interactionMutation.mutate(change), onAskAbout: askAbout,
   };
   const staleCount = staleSelections(selectedTelegramItems, feedItems).length;
 
   return (
-    <div ref={rootRef} tabIndex={-1} className="flex h-full flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card px-3 pb-3 pt-2 text-card-foreground focus:outline-none">
+    <div ref={rootRef} tabIndex={-1} className="flex h-full flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card px-[var(--gadget-pad)] pb-[var(--gadget-pad)] pt-2 text-card-foreground focus:outline-none">
       <FeedToolbar
         onlyUnread={onlyUnread} toggleUnread={() => filters.setOnlyUnread((prev) => !prev)} unreadCount={unreadCount}
         volume={volume.length >= 2 && (
@@ -248,6 +251,7 @@ function FeedStream({
         canSelect={feedItems.some((item) => item.documentVersionId && item.sourceId)} selectMode={selectMode}
         toggleSelectMode={() => { filters.setSelectMode((prev) => !prev); setSelectedTelegram({}); }}
         refreshing={docsQuery.isFetching} onRefresh={() => docsQuery.refetch()}
+        view={view} setView={setView}
       />
       <FeedBulkBar
         items={selectedTelegramItems} interactionPending={interactionMutation.isPending} onAskAbout={askAbout}

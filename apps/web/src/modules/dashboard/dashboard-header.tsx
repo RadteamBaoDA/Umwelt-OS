@@ -1,8 +1,9 @@
 'use client';
 
-import { ChevronDown, Edit3, Eye, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { AlignJustify, ChevronDown, Edit3, Eye, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import React from 'react';
+import React, { useState } from 'react';
+import { applyDensity, readDensity, type DensityId } from '@/core/density';
 import { BareButton } from '@/components/bare-button';
 import { Button } from '@/components/ui/button';
 import {
@@ -108,6 +109,29 @@ export function DashboardSwitcher(props: SwitcherProps) {
   );
 }
 
+/**
+ * Comfortable/Compact density toggle. The pre-paint script already set `data-density`; state is read from <html>
+ * lazily (this header only renders after the session loads, client-side) and changes are applied and persisted through `applyDensity`.
+ */
+export function DensityToggle() {
+  const t = useTranslations('dashboard');
+  const [density, setDensity] = useState<DensityId>(() => (typeof document === 'undefined' ? 'comfortable' : readDensity()));
+  const compact = density === 'compact';
+  return (
+    <Button
+      type="button"
+      variant={compact ? 'default' : 'outline'}
+      aria-pressed={compact}
+      aria-label={`${t('densityLabel')}: ${compact ? t('densityCompact') : t('densityComfortable')}`}
+      title={t('densityLabel')}
+      onClick={() => { const next = compact ? 'comfortable' : 'compact'; applyDensity(next); setDensity(next); }}
+    >
+      <AlignJustify className="w-4 h-4" aria-hidden="true" />
+      <span>{compact ? t('densityCompact') : t('densityComfortable')}</span>
+    </Button>
+  );
+}
+
 /** Props of the header summary and action row. */
 interface HeaderProps extends SwitcherProps {
   /** Pre-joined "updated · stale" summary, or null when there is nothing to say. */
@@ -133,6 +157,7 @@ export function DashboardHeader(props: HeaderProps) {
         </h1>
         {summary && <p className="m-0 text-sm text-muted-foreground">{summary}</p>}
       </div>
+      <DensityToggle />
       {!isAdminViewer && <Button
         type="button"
         variant={isEditMode ? 'default' : 'outline'}

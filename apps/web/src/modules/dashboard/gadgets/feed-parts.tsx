@@ -1,9 +1,9 @@
 'use client';
 
-import { Bookmark, ExternalLink, ListFilter, RotateCw } from 'lucide-react';
+import { Bookmark, ExternalLink, LayoutGrid, List, ListFilter, RotateCw } from 'lucide-react';
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
-import React from 'react';
+import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -15,8 +15,14 @@ import { safeHttpUrl } from '@/core/safe-url';
 import { FEED_LANGUAGES, languageLabel, type FeedStreamItem, type SelectedTelegramIdentity } from './feed-model';
 import { formatRelativeTime } from './relative-time';
 
+/** Item stream layouts offered by the toolbar toggle. */
+export const FEED_VIEWS = ['list', 'cards'] as const;
+export type FeedView = (typeof FEED_VIEWS)[number];
+
 /** Per-render facts every feed row needs. */
 export interface FeedRowContext {
+  /** Layout of the item stream; defaults to the list view. */
+  view?: FeedView;
   isTelegram: boolean;
   selectMode: boolean;
   selected: Record<string, SelectedTelegramIdentity>;
@@ -146,6 +152,21 @@ function MediaList({ item, isTelegram }: { item: FeedStreamItem; isTelegram: boo
   ) : null;
 }
 
+/**
+ * Decorative item image in a fixed 16:9 box so the layout does not jump while it loads.
+ * Renders nothing without a URL or after a load error (no empty placeholder).
+ */
+function FeedImage({ src, className = '' }: { src?: string | null; className?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) return null;
+  return (
+    <div className={`aspect-video w-full overflow-hidden rounded-md bg-muted ${className}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- same-origin signed proxy path; next/image optimisation not wanted */}
+      <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} className="size-full object-cover" />
+    </div>
+  );
+}
+
 /** The first item: a compact row that becomes a large lead on wide gadgets (container query). */
 function FeedLead({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
   const display = useDisplayPreferences();
@@ -154,10 +175,11 @@ function FeedLead({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) 
   return (
     <article
       data-testid="feed-lead"
-      className="group/item relative flex min-w-0 items-baseline gap-2 py-1.5 @[40rem]/gadget:block @[40rem]/gadget:py-0 @[40rem]/gadget:pr-2"
+      className="group/item relative flex min-w-0 items-baseline gap-2 py-[var(--gadget-row-y)] @[40rem]/gadget:block @[40rem]/gadget:py-0 @[40rem]/gadget:pr-2"
     >
       <FeedCheckbox item={item} ctx={ctx} />
       <div className="flex min-w-0 flex-1 items-baseline gap-2 @[40rem]/gadget:block">
+        <FeedImage src={item.imageUrl} className="mb-2 hidden @[40rem]/gadget:block" />
         <h3 className={`flex min-w-0 flex-1 items-baseline gap-1.5 text-sm leading-snug @[40rem]/gadget:text-xl ${item.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}>
           <UnreadDot item={item} />
           <Link href={`/knowledge/documents/${item.id}`} className="min-w-0 truncate hover:underline @[40rem]/gadget:line-clamp-2 @[40rem]/gadget:whitespace-normal">{item.title}</Link>
@@ -180,13 +202,13 @@ function FeedRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
   const metaParts = useMetaParts(ctx.isTelegram);
   const timeTitle = useTimeTitle(ctx.isTelegram);
   return (
-    <li className="group/item relative flex flex-wrap items-baseline gap-2 py-1.5">
+    <li className="group/item relative flex flex-wrap items-baseline gap-2 py-[var(--gadget-row-y)]">
       <FeedCheckbox item={item} ctx={ctx} />
       <UnreadDot item={item} />
       <div className="min-w-0 flex-1">
         <Link
           href={`/knowledge/documents/${item.id}`}
-          className={`block truncate text-sm leading-snug hover:underline ${item.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}
+          className={`block truncate text-[length:var(--gadget-font)] leading-snug hover:underline ${item.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}
         >{item.title}</Link>
         {ctx.isTelegram && metaParts(item) && <p className="truncate text-xs text-muted-foreground">{metaParts(item)}</p>}
         <MediaList item={item} isTelegram={ctx.isTelegram} />
@@ -197,10 +219,41 @@ function FeedRow({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
   );
 }
 
-/** Lead + list: one DOM per item; the container query turns the first item into a lead on wide gadgets. */
+/** One card of the Cards view: optional image, title, excerpt and meta. */
+function FeedCard({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
+  const display = useDisplayPreferences();
+  const metaParts = useMetaParts(ctx.isTelegram);
+  const timeTitle = useTimeTitle(ctx.isTelegram);
+  return (
+    <li className="group/item relative flex min-w-0 flex-col gap-2 rounded-lg border border-border p-[var(--gadget-pad)]">
+      <FeedCheckbox item={item} ctx={ctx} />
+      <FeedImage src={item.imageUrl} />
+      <h3 className={`flex min-w-0 items-baseline gap-1.5 text-[length:var(--gadget-font)] leading-snug ${item.read ? 'font-normal text-muted-foreground' : 'font-semibold text-foreground'}`}>
+        <UnreadDot item={item} />
+        <Link href={`/knowledge/documents/${item.id}`} className="min-w-0 line-clamp-2 hover:underline">{item.title}</Link>
+      </h3>
+      {item.excerpt && <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{item.excerpt}</p>}
+      <p className="text-xs text-muted-foreground">
+        {metaParts(item) ? `${metaParts(item)} · ` : ''}
+        <time className="tabular-nums" dateTime={item.timestamp} title={timeTitle(item)}>{formatRelativeTime(item.timestamp, display.locale)}</time>
+      </p>
+      <MediaList item={item} isTelegram={ctx.isTelegram} />
+      <FeedItemActions item={item} ctx={ctx} />
+    </li>
+  );
+}
+
+/** Lead + list (or a responsive card grid): one DOM per item; the container query turns the first item into a lead on wide gadgets. */
 export function FeedItems({ items, ctx }: { items: FeedStreamItem[]; ctx: FeedRowContext }) {
   const [lead, ...rest] = items;
   if (!lead) return null;
+  if (ctx.view === 'cards') {
+    return (
+      <ul data-testid="feed-cards" className="grid min-h-0 grid-cols-1 gap-3 @[28rem]/gadget:grid-cols-2 @[56rem]/gadget:grid-cols-3">
+        {items.map((item) => <FeedCard key={item.id} item={item} ctx={ctx} />)}
+      </ul>
+    );
+  }
   return (
     <div className="grid min-h-0 gap-x-6 gap-y-1 @[40rem]/gadget:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
       <FeedLead item={lead} ctx={ctx} />
@@ -296,6 +349,9 @@ export interface FeedToolbarProps {
   toggleSelectMode: () => void;
   refreshing: boolean;
   onRefresh: () => void;
+  /** Current item layout and its setter (List | Cards toggle). */
+  view: FeedView;
+  setView: (view: FeedView) => void;
 }
 
 /** One quiet toolbar: unread toggle, volume spark, Filter popover, selection mode, refresh. */
@@ -318,6 +374,20 @@ export function FeedToolbar(props: FeedToolbarProps) {
       <div className="flex min-w-0 items-center gap-1">
         {props.volume}
         {props.filters}
+        <div role="group" aria-label={t('feedViewLabel')} className="flex items-center">
+          {FEED_VIEWS.map((mode) => (
+            <Button
+              key={mode}
+              type="button"
+              variant={props.view === mode ? 'default' : 'ghost'}
+              size="icon"
+              className="size-8"
+              aria-pressed={props.view === mode}
+              aria-label={mode === 'list' ? t('feedViewList') : t('feedViewCards')}
+              onClick={() => props.setView(mode)}
+            >{mode === 'list' ? <List className="h-3.5 w-3.5" aria-hidden="true" /> : <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />}</Button>
+          ))}
+        </div>
         {props.canSelect && (
           <Button
             type="button"

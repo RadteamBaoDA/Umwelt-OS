@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -663,6 +664,9 @@ async def list_news_document_projections(
     return projections, next_cursor
 
 
+# (raw upstream image URL, record local_only) -> signed same-origin proxy path or None.
+ImageSigner = Callable[[str, bool], str | None]
+
 FEED_MAX_WINDOW = timedelta(days=366)
 
 
@@ -676,10 +680,14 @@ async def list_gadget_document_projections(
     language: str | None = None,
     since: datetime | None = None,
     include_dismissed: bool = False,
+    image_signer: ImageSigner | None = None,
     scope: Scope,
     multi_workspace_enabled: bool,
 ) -> GadgetDocumentProjectionList:
     """Return active, current, ready source records as a small dashboard projection page.
+
+    ``image_signer`` (caller-supplied, owns the privacy flag and signing secret) turns a record's raw feed image
+    URL into a signed proxy path or ``None``; without it ``image_url`` is always null.
 
     Interaction state is read for the admitted actor. Documents retains source-generation and
     provider-scope validation; only short excerpts and typed provider fields leave this boundary.
@@ -722,7 +730,9 @@ async def list_gadget_document_projections(
     interactions = {row.document_version_id: row for row in interaction_rows}
     # Hide-only: filtered after the privacy-fenced projection page, so a page may be short (the cursor still advances).
     items = [
-        _as_gadget_document_projection(item, interactions.get(item.document_version_id))
+        _as_gadget_document_projection(
+            item, interactions.get(item.document_version_id), image_signer
+        )
         for item in projections
         if include_dismissed
         or not (
@@ -736,8 +746,18 @@ async def list_gadget_document_projections(
 def _as_gadget_document_projection(
     item: NewsDocumentProjection,
     interaction: DocumentInteraction | None = None,
+    image_signer: ImageSigner | None = None,
 ) -> GadgetDocumentProjectionRead:
-    """Project typed current source fields while omitting provider secrets and raw media handles."""
+    """Project typed current source fields while omitting provider secrets and raw media handles.
+
+    ``image_url`` is the signer's result for ``source_fields["image_url"]`` (given the record's ``local_only``);
+    the raw upstream URL is never the way a client loads an image.
+    """
+    image_url: str | None = None
+    if image_signer is not None and item.provider_metadata is not None:
+        raw_image = item.provider_metadata.source_fields.get("image_url")
+        if isinstance(raw_image, str):
+            image_url = image_signer(raw_image, item.local_only)
     provider_metadata = item.provider_metadata
     safe_provider_metadata = None
     if provider_metadata is not None:
@@ -783,6 +803,7 @@ def _as_gadget_document_projection(
         read_at=interaction.read_at if interaction else None,
         bookmarked_at=interaction.bookmarked_at if interaction else None,
         dismissed_at=interaction.dismissed_at if interaction else None,
+        image_url=image_url,
     )
 
 

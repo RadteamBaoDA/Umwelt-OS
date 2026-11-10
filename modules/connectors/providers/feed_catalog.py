@@ -363,6 +363,9 @@ def _timestamp_basis(modified: datetime | None, published: datetime | None) -> s
     return "provider_modified" if modified else "provider_published" if published else "collection"
 
 
+_YT_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+
+
 def _youtube_entry(
     entry: ElementTree.Element,
     scope: str | None,
@@ -398,6 +401,8 @@ def _youtube_entry(
     }
     if author:
         source_fields["author"] = author[:1000]
+    if _YT_VIDEO_ID.fullmatch(video_id):
+        source_fields["image_url"] = f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
     if published_raw is not None:
         source_fields["published_at"] = published_raw[:64]
     if modified_raw is not None:

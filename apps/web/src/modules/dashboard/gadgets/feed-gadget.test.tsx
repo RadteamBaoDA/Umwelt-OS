@@ -1,8 +1,8 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dashboardMessages } from '@/core/messages/dashboard';
 import { FeedGadget, type FeedStreamItem } from './feed-gadget';
 
@@ -22,13 +22,13 @@ const items: FeedStreamItem[] = [
   { id: 'c', title: 'Third headline', sourceType: 'news', timestamp: new Date(Date.now() - 55 * hour).toISOString(), read: true },
 ];
 
-function view() {
+function view(feed: FeedStreamItem[] = items) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const instance = { id: 'g1', title: '', definition: { renderer: 'feed', source_ids: ['s1'], scope: {} } } as never;
   return render(
     <QueryClientProvider client={client}>
       <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
-        <FeedGadget instance={instance} initialItems={items} />
+        <FeedGadget instance={instance} initialItems={feed} />
       </NextIntlClientProvider>
     </QueryClientProvider>,
   );
@@ -51,5 +51,38 @@ describe('FeedGadget lead + list', () => {
     expect(screen.queryByRole('searchbox')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Filter' }));
     expect(await screen.findByRole('searchbox')).toBeTruthy();
+  });
+});
+
+describe('FeedGadget view toggle and images', () => {
+  beforeEach(() => localStorage.clear());
+  const withImage = [{ ...items[0]!, imageUrl: '/api/v1/media/proxy?x=1' }, items[1]!, { ...items[2]!, imageUrl: '/api/v1/media/proxy?x=2' }];
+
+  it('shows the lead image in List mode (rows stay text-only) and hides it on load error', () => {
+    view(withImage);
+    const imgs = document.querySelectorAll('img');
+    expect(imgs).toHaveLength(1);
+    expect(imgs[0]!.getAttribute('alt')).toBe('');
+    expect(imgs[0]!.getAttribute('loading')).toBe('lazy');
+    fireEvent.error(imgs[0]!);
+    expect(document.querySelectorAll('img')).toHaveLength(0);
+  });
+
+  it('renders no image box for items without an image', () => {
+    view();
+    expect(document.querySelector('img')).toBeNull();
+  });
+
+  it('switches to Cards, persists per instance and restores it', async () => {
+    const { unmount } = view(withImage);
+    expect(screen.queryByTestId('feed-cards')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Cards' }));
+    expect(screen.getByTestId('feed-cards').querySelectorAll('li')).toHaveLength(3);
+    // Cards show an image only for items that have one.
+    expect(document.querySelectorAll('img')).toHaveLength(2);
+    expect(localStorage.getItem('umwelt.dashboard.feedView.g1')).toBe('cards');
+    unmount();
+    view(withImage);
+    expect(await screen.findByTestId('feed-cards')).toBeTruthy();
   });
 });

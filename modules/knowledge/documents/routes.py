@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
+from core.media_proxy import make_image_signer
 from core.publication import require_publication_gate
 from core.storage import get_storage_backend
 from core.workspaces.dependencies import (
@@ -41,6 +42,7 @@ from modules.knowledge.documents.schemas import (
     VersionList,
     VersionRead,
 )
+from modules.settings import public as settings_public
 from modules.settings.public import module_dependency
 
 router = APIRouter(
@@ -258,6 +260,16 @@ async def list_dashboard_projections(
 ) -> GadgetDocumentProjectionList:
     """Return current source-scoped records through the Documents owner projection."""
     _require_document_route_owner(workspace)
+    app_settings = request.app.state.settings
+    config = await settings_public.get_ai_execution_config(
+        session, app_settings, request.app.state.redis, scope=workspace
+    )
+    image_signer = make_image_signer(
+        config,
+        app_settings.csrf_signing_secret.get_secret_value(),
+        f"{workspace.workspace_id}:{workspace.user_id}",
+    )
+
     try:
         return await public.list_gadget_document_projections(
             session,
@@ -268,6 +280,7 @@ async def list_dashboard_projections(
             language=language,
             since=since,
             include_dismissed=include_dismissed,
+            image_signer=image_signer,
             scope=workspace,
             multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
         )

@@ -25,6 +25,7 @@ from html.parser import HTMLParser
 from typing import Any, Literal
 from urllib.parse import quote, urlencode, urlsplit
 
+from core.media_proxy import clean_image_url
 from modules.connectors.provider_specs import get_provider_spec
 from modules.connectors.providers.macro import (
     ProviderPayloadError,
@@ -358,6 +359,29 @@ def _scan_items(root: ET.Element) -> list[ET.Element]:
     return items
 
 
+def _item_image(item: ET.Element) -> str | None:
+    """First valid https image URL of a feed item: ``media:thumbnail``, image ``media:content``, image ``enclosure``.
+
+    Reads only the feed's own markup (no article fetch, no og:image); an invalid candidate is skipped silently.
+    """
+    candidates: list[str | None] = []
+    for tag in ("thumbnail", "content", "enclosure"):
+        for node in item.iter():
+            if _local(node.tag) != tag or node is item:
+                continue
+            if tag == "thumbnail":
+                candidates.append(node.attrib.get("url"))
+                continue
+            kind = (node.attrib.get("type") or "").lower()
+            if tag == "enclosure" and kind.startswith("image/"):
+                candidates.append(node.attrib.get("url"))
+            elif tag == "content" and (
+                node.attrib.get("medium", "").lower() == "image" or kind.startswith("image/")
+            ):
+                candidates.append(node.attrib.get("url"))
+    return next((url for url in map(clean_image_url, candidates) if url), None)
+
+
 def map_feed(provider: str, body: bytes, collected_at: datetime) -> list[IngestionRecord]:
     """Map one RSS 2.0 / Atom body for a fixed preset to up to ``MAX_FEED_ITEMS_SCANNED`` deduped records, newest first.
 
@@ -403,6 +427,9 @@ def map_feed(provider: str, body: bytes, collected_at: datetime) -> list[Ingesti
             fields["summary"] = summary
         if link:
             fields["canonical_url"] = link
+        image_url = _item_image(item)
+        if image_url:
+            fields["image_url"] = image_url
         if pub_iso:
             fields["published_at"] = pub_iso
         if upd_iso:

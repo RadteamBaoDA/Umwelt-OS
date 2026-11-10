@@ -45,6 +45,8 @@ export type GadgetDocumentProjection = {
   document_id: string; document_version_id: string; version_number: number; source_id: string;
   title: string; canonical_url: string | null; published_at: string | null; observed_at: string;
   excerpt: string; metadata_is_version_snapshot: boolean;
+  /** Same-origin signed media proxy path, or null (remote media off / no image). */
+  image_url?: string | null;
   read_at: string | null; bookmarked_at: string | null; dismissed_at: string | null;
   provider_metadata: {
     provider: string;

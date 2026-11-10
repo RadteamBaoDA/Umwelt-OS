@@ -58,6 +58,10 @@ A private personal-intelligence workspace: calm, dense, honest about what it kno
 - `light` and `dark`, plus a `system` preference (default). The root `.dark` class is the single authority (next-themes `attribute="class"`); set `color-scheme` so native controls match.
 - Preview changes live in the User settings dialog; Save persists theme and language together; Cancel restores both.
 
+### Density
+- comfortable (default, no attribute) and compact (html[data-density="compact"]), toggled from the dashboard header and stored per device in localStorage key umwelt-density; an inline head script applies it before paint.
+- Gadgets read --gadget-pad (0.75rem / 0.5rem), --gadget-row-y (0.375rem / 0.125rem) and --gadget-font (0.875rem / 0.8125rem) from globals.css; never hard-code row padding in feed code.
+
 ## Components
 
 All UI composes the repository's own shadcn/ui (new-york, Radix) primitives in `apps/web/src/components/ui`. No MUI, Ant, Chakra or hand-rolled parallel buttons/dialogs. Map product needs to primitives:
