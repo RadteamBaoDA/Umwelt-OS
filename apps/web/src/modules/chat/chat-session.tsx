@@ -31,6 +31,10 @@ export interface ChatSessionProps {
   onRenameConversation?: () => void;
   /** Opens the delete confirmation for the open conversation (full mode header). */
   onDeleteConversation?: () => void;
+  /** Pins/unpins the open conversation (full mode header menu); omitted when there is no saved conversation. */
+  onSetPinned?: (pinned: boolean) => void;
+  /** Archives/restores the open conversation (full mode header menu). */
+  onSetArchived?: (archived: boolean) => void;
   /** Full-mode header slot before the title (e.g. the mobile History switch), so the page needs no second header row. */
   headerLeading?: React.ReactNode;
   /** Full-mode header slot after the controls (e.g. the Sources sheet trigger on narrow viewports). */
@@ -62,8 +66,7 @@ export function ChatSession({
   conversationId,
   onConversationCreated,
   mode = 'drawer',
-  onRenameConversation,
-  onDeleteConversation,
+  onRenameConversation, onDeleteConversation, onSetPinned, onSetArchived,
   headerLeading,
   headerTrailing,
 }: ChatSessionProps) {
@@ -102,6 +105,7 @@ export function ChatSession({
           headerTrailing={headerTrailing}
           onRenameConversation={onRenameConversation}
           onDeleteConversation={onDeleteConversation}
+          pinned={d.detail.data?.pinned} archived={d.detail.data?.archived} onSetPinned={onSetPinned} onSetArchived={onSetArchived}
           onExportConversation={handleExport}
           onSendPrompt={widget.onTranscriptSendPrompt}
           onNewChat={cmd.handleNewChat}

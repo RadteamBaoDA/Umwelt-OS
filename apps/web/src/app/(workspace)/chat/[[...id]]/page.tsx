@@ -130,6 +130,12 @@ function ChatSessionPanel({ vm }: { vm: ChatPageContentVm }) {
             onDeleteConversation={chatCtrl.activeConversationId
               ? () => conversationActions.remove(chatCtrl.activeConversationId!)
               : undefined}
+            onSetPinned={chatCtrl.activeConversationId
+              ? (pinned) => conversationActions.setPinned(chatCtrl.activeConversationId!, pinned)
+              : undefined}
+            onSetArchived={chatCtrl.activeConversationId
+              ? (archived) => conversationActions.setArchived(chatCtrl.activeConversationId!, archived)
+              : undefined}
           />
   );
 }

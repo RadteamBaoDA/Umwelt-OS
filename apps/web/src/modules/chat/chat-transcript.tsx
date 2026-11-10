@@ -3,7 +3,7 @@
 import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { AlertCircleIcon, ArrowDownIcon, BookOpenIcon, CheckIcon, CopyIcon, DatabaseIcon, GlobeIcon, Loader2Icon, PaperclipIcon, PencilIcon, RefreshCwIcon } from 'lucide-react';
+import { AlertCircleIcon, ArrowDownIcon, BookOpenIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, DatabaseIcon, GlobeIcon, Loader2Icon, PaperclipIcon, PencilIcon, RefreshCwIcon } from 'lucide-react';
 import type { ChatMessage, Citation, ToolStatus, ToolStep, WebSearchOutcome } from './api';
 import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
@@ -12,6 +12,7 @@ import { useChatScroll } from './use-chat-scroll';
 import { useSmoothedText } from './use-smoothed-text';
 import { ChatReasoning } from './chat-reasoning';
 import { ChatStepList } from './chat-steps';
+import { buildRenderEntries, type RenderEntry, type VersionNav } from './chat-versions';
 import { useCopyMessage } from './use-copy-message';
 import { useTopicNames } from './use-topic-names';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -339,9 +340,34 @@ function WidgetPart({ part, testId, onSendPrompt, mode, locale, csrfToken, allow
   );
 }
 
-/** Copy, edit and regenerate buttons under a message. */
-function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, copy, onEditMessage, onRegenerateMessage }: MessageViewProps & {
+/**
+ * `‹ 2/3 ›` control that switches the shown version of an edited/regenerated message.
+ *
+ * @param props - The chain position and the selection callback (chain id, chosen user-message id).
+ * @returns A labelled group with previous/next buttons (disabled at the ends) and the position text.
+ */
+function VersionNavControl({ nav, onSelect }: { nav: VersionNav; onSelect: (nav: VersionNav, versionId: string) => void }) {
+  const t = useTranslations('chat');
+  const position = { index: nav.index + 1, count: nav.count };
+  const buttonClass = 'size-8 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  return (
+    <div data-testid="version-nav" role="group" aria-label={t('versionGroup')} className="inline-flex items-center">
+      <Button type="button" variant="ghost" size="icon" className={buttonClass} aria-label={t('versionPrev')} disabled={nav.index === 0} onClick={() => onSelect(nav, nav.versionIds[nav.index - 1])}>
+        <ChevronLeftIcon className="size-3.5" aria-hidden="true" />
+      </Button>
+      <span className="min-w-8 text-center text-xs tabular-nums text-muted-foreground" aria-label={t('versionPositionLabel', position)}>{t('versionPosition', position)}</span>
+      <Button type="button" variant="ghost" size="icon" className={buttonClass} aria-label={t('versionNext')} disabled={nav.index === nav.count - 1} onClick={() => onSelect(nav, nav.versionIds[nav.index + 1])}>
+        <ChevronRightIcon className="size-3.5" aria-hidden="true" />
+      </Button>
+    </div>
+  );
+}
+
+/** Copy, edit and regenerate buttons under a message, preceded by the version control when the message has revisions. */
+function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, copy, onEditMessage, onRegenerateMessage, nav, onSelectVersion }: MessageViewProps & {
   timezone: string;
+  nav?: VersionNav;
+  onSelectVersion?: (nav: VersionNav, versionId: string) => void;
   canEdit: boolean;
   canRegenerate: boolean;
   copy: ReturnType<typeof useCopyMessage>;
@@ -354,6 +380,7 @@ function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, c
   const formattedDate = msg.created_at ? formatDateTime(msg.created_at, locale, timezone) : null;
   return (
     <div className="flex flex-wrap items-center gap-2">
+      {nav && onSelectVersion && <VersionNavControl nav={nav} onSelect={onSelectVersion} />}
       {formattedDate && <span className="text-xs text-muted-foreground">{formattedDate}</span>}
       {/* Expose one-click copy for all full-page messages and completed assistant messages in the drawer. */}
       {(mode === 'full' || (!isUser && Boolean(msg.content))) && <Button
@@ -441,6 +468,11 @@ interface TranscriptMessageProps extends MessageViewProps {
   csrfToken?: string;
   revised?: ChatMessage;
   isRevised: boolean;
+  /** Newest version of its revision chain; edit/regenerate on an older version is hidden (the backend appends to the newest). */
+  latest: boolean;
+  /** Version control hosted by this message, when it belongs to a multi-version chain. */
+  nav?: VersionNav;
+  onSelectVersion?: (nav: VersionNav, versionId: string) => void;
   copy: ReturnType<typeof useCopyMessage>;
   widgetPromptHandler: (part: unknown) => ((prompt: string) => void | Promise<unknown>) | undefined;
   onEditMessage?: (message: ChatMessage) => void;
@@ -458,12 +490,12 @@ interface TranscriptMessageProps extends MessageViewProps {
  * @param props - See {@link TranscriptMessageProps}.
  */
 function TranscriptMessage(props: TranscriptMessageProps) {
-  const { msg, mode, locale, csrfToken, revised, isRevised, widgetPromptHandler, onEditMessage, onRegenerateMessage, onSelectCitation, onOpenSources } = props;
+  const { msg, mode, locale, csrfToken, revised, isRevised, latest, widgetPromptHandler, onEditMessage, onRegenerateMessage, onSelectCitation, onOpenSources } = props;
   const t = useTranslations('chat');
   const isUser = msg.role === 'user';
-  const canEdit = mode === 'full' && isUser && Boolean(msg.response_id) && !isRevised && Boolean(onEditMessage);
+  const canEdit = mode === 'full' && isUser && Boolean(msg.response_id) && !isRevised && latest && Boolean(onEditMessage);
   const canRegenerate = mode === 'full' && !isUser && msg.role === 'assistant'
-    && Boolean(msg.response_id) && !isRevised && Boolean(onRegenerateMessage);
+    && Boolean(msg.response_id) && !isRevised && latest && Boolean(onRegenerateMessage);
   return (
     <div
       data-role={msg.role}
@@ -519,16 +551,16 @@ function FollowupSuggestions({ suggestions, onSend }: { suggestions: string[]; o
 /**
  * What follows the latest assistant answer once the run settled: the collapsed step summary, then the follow-up chips.
  *
- * @param props - Committed messages, the settled run's steps and the send handler (chips need it).
+ * @param props - The last rendered entry, the settled run's steps and the send handler (chips need it).
  * @returns Nothing unless the thread ends with an assistant answer.
  */
-function SettledRunExtras({ messages, steps, onSendPrompt }: { messages: ChatMessage[]; steps: ToolStep[]; onSendPrompt?: (prompt: string) => void }) {
-  const last = messages[messages.length - 1];
-  if (last?.role !== 'assistant') return null;
+function SettledRunExtras({ last, steps, onSendPrompt }: { last?: RenderEntry; steps: ToolStep[]; onSendPrompt?: (prompt: string) => void }) {
+  // An older version selected through the version control never gets chips or the step summary of the newest run.
+  if (last?.msg.role !== 'assistant' || !last.latest) return null;
   return (
     <>
       <ChatStepList steps={steps} streaming={false} />
-      {onSendPrompt && last.suggestions?.length ? <FollowupSuggestions suggestions={last.suggestions} onSend={onSendPrompt} /> : null}
+      {onSendPrompt && last.msg.suggestions?.length ? <FollowupSuggestions suggestions={last.msg.suggestions} onSend={onSendPrompt} /> : null}
     </>
   );
 }
@@ -696,16 +728,29 @@ function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
     () => new Set(messages.flatMap((message) => message.revision_of_message_id ? [message.revision_of_message_id] : [])),
     [messages],
   );
+  // Chosen older version per revision chain; absent means "newest" so a new revision is followed automatically.
+  const [selectedVersions, setSelectedVersions] = React.useState<Record<string, string>>({});
+  const entries = React.useMemo(() => buildRenderEntries(messages, selectedVersions), [messages, selectedVersions]);
+  /** Shows another version of a chain; choosing the newest one clears the override so later revisions are followed. */
+  const selectVersion = React.useCallback((nav: VersionNav, versionId: string) => {
+    setSelectedVersions((prev) => {
+      const next = { ...prev };
+      if (versionId === nav.versionIds[nav.versionIds.length - 1]) delete next[nav.chainId];
+      else next[nav.chainId] = versionId;
+      return next;
+    });
+  }, []);
   /** The message that `msg` revises, when loaded. */
   const revisedOf = (msg: ChatMessage) => (msg.revision_of_message_id ? messageById.get(msg.revision_of_message_id) : undefined);
   /** Form widgets get the rejecting handler (retryable errors); every other widget keeps the plain one. */
   const widgetPromptHandler = (part: unknown) =>
     (part as { kind?: string }).kind === 'form' && onWidgetSendPrompt ? onWidgetSendPrompt : onSendPrompt;
-  return { locale, timezone, copy, revisedOf, revisedMessageIds, widgetPromptHandler, ...scroll };
+  return { locale, timezone, copy, revisedOf, revisedMessageIds, widgetPromptHandler, entries, selectVersion, ...scroll };
 }
 
 /**
- * Conversation transcript rendering ordered messages, append-only revision relationships,
+ * Conversation transcript rendering ordered messages, append-only revision chains collapsed to one version with a
+ * `‹ n/m ›` switcher, append-only revision relationships,
  * full-page copy/edit/regenerate actions, full-page grounded citations, streaming deltas,
  * Generative UI widgets (Sandboxed UI and Native Structured Widgets), and error states.
  *
@@ -713,7 +758,7 @@ function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
  * @returns Accessible conversation transcript viewport.
  */
 export function ChatTranscript(props: ChatTranscriptProps) {
-  const { csrfToken, messages, streamingText, streamingCitations, streamingWebSearch, onRetry, onEditMessage, onRegenerateMessage, onSendPrompt } = props;
+  const { csrfToken, streamingText, streamingCitations, streamingWebSearch, onRetry, onEditMessage, onRegenerateMessage, onSendPrompt } = props;
   const { mode, streamingReasoning, cancelled, activeTool, streamingUi, isStreaming, isPending, error, steps } = withTranscriptDefaults(props);
   const t = useTranslations('chat');
   const m = useTranscriptModel(props, isStreaming || isPending);
@@ -741,10 +786,13 @@ export function ChatTranscript(props: ChatTranscriptProps) {
       {/* Starter gallery is only for a brand-new view: once a conversation exists it never reappears between turns. */}
       {showStarter && <EmptyState onSendPrompt={onSendPrompt} locale={locale} capabilities={props.capabilities} />}
 
-      {messages.map((msg) => (
+      {m.entries.map(({ msg, latest, nav }) => (
         <TranscriptMessage
           key={msg.id}
           msg={msg}
+          latest={latest}
+          nav={nav}
+          onSelectVersion={m.selectVersion}
           mode={mode}
           locale={locale}
           timezone={timezone}
@@ -760,7 +808,7 @@ export function ChatTranscript(props: ChatTranscriptProps) {
         />
       ))}
 
-      {!showStreaming && <SettledRunExtras messages={messages} steps={steps} onSendPrompt={onSendPrompt} />}
+      {!showStreaming && <SettledRunExtras last={m.entries[m.entries.length - 1]} steps={steps} onSendPrompt={onSendPrompt} />}
 
       {showStreaming && (
         <StreamingBubble

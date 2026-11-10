@@ -8,6 +8,13 @@ import type { ToolStep } from './api';
 
 type Translator = ReturnType<typeof useTranslations<'chat'>>;
 
+/** Message keys (running, finished) of the tools whose copy needs no placeholder. */
+const STEP_KEYS: Record<string, readonly ['stepRetrievalRunning' | 'stepWebRunning' | 'stepDataRunning', 'stepRetrievalDoneNoCount' | 'stepWebDone' | 'stepDataDone']> = {
+  retrieval: ['stepRetrievalRunning', 'stepRetrievalDoneNoCount'],
+  web_search: ['stepWebRunning', 'stepWebDone'],
+  query_collected_data: ['stepDataRunning', 'stepDataDone'],
+};
+
 /**
  * Localized text of one step. Known tools (retrieval, web search, collected data, skills) get specific copy; unknown
  * tools fall back to generic copy that names the optional `label` instead of the raw tool id.
@@ -18,21 +25,18 @@ type Translator = ReturnType<typeof useTranslations<'chat'>>;
  */
 export function stepText(t: Translator, step: ToolStep): string {
   const running = step.state === 'running';
-  switch (step.tool) {
-    case 'retrieval':
-      if (running) return t('stepRetrievalRunning');
-      return typeof step.detail?.documents === 'number' ? t('stepRetrievalDone', { count: step.detail.documents }) : t('stepRetrievalDoneNoCount');
-    case 'web_search':
-      return t(running ? 'stepWebRunning' : 'stepWebDone');
-    case 'query_collected_data':
-      return t(running ? 'stepDataRunning' : 'stepDataDone');
-    case 'read_skill':
-      if (step.label) return t(running ? 'stepSkillRunning' : 'stepSkillDone', { label: step.label });
-      return t(running ? 'stepSkillRunningNoLabel' : 'stepSkillDoneNoLabel');
-    default:
-      if (step.label) return t(running ? 'stepGenericRunningLabel' : 'stepGenericDoneLabel', { label: step.label });
-      return t(running ? 'stepGenericRunning' : 'stepGenericDone');
+  const { tool, label, detail } = step;
+  if (tool === 'retrieval' && !running) {
+    return typeof detail?.documents === 'number' ? t('stepRetrievalDone', { count: detail.documents }) : t('stepRetrievalDoneNoCount');
   }
+  // Tools whose copy has no placeholder: running key / finished key.
+  const plain = STEP_KEYS[tool];
+  if (plain) return t(running ? plain[0] : plain[1]);
+  // Skills and unknown tools take the optional label as a subject.
+  const family = tool === 'read_skill' ? 'stepSkill' : 'stepGeneric';
+  const state = running ? 'Running' : 'Done';
+  if (label) return t(`${family}${state}${family === 'stepSkill' ? '' : 'Label'}` as 'stepSkillRunning', { label });
+  return t(`${family}${state}${family === 'stepSkill' ? 'NoLabel' : ''}` as 'stepGenericRunning');
 }
 
 /**
