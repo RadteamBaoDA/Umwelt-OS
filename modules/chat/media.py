@@ -22,14 +22,17 @@ from pydantic import BaseModel
 
 from core.media_proxy import (  # noqa: F401 - re-exported: the proxy helpers moved to core
     _CTRL,
+    FEED_KIND,
     PROXY_HOSTS,
     PROXY_PATH,
     SEARCH_THUMB_HOST,
     TOKEN_TTL_SECONDS,
     MediaError,
+    check_feed_image_url,
     check_upstream_url,
     media_permitted,
     sign_media_url,
+    verify_media_claims,
     verify_media_token,
 )
 from core.model_gateway.schemas import AIExecutionConfig
@@ -112,11 +115,16 @@ async def _stream(url: str, factory: TransportFactory, limit: int, kind: str) ->
 
 
 async def fetch_media(
-    url: str, factory: TransportFactory = default_transport_factory
+    url: str, factory: TransportFactory = default_transport_factory, *, kind: str = ""
 ) -> tuple[bytes, str]:
-    """Fetch an allowlisted image (<= 5 MB, non-SVG ``image/*``, no redirects); returns (bytes, content-type)."""
+    """Fetch an image (<= 5 MB, non-SVG ``image/*``, no redirects); returns (bytes, content-type).
+
+    The URL is validated here under the policy of ``kind``: the host allowlist by default (chat/tiles) and
+    ``check_feed_image_url`` only for ``"feed"``, so omitting the kind can never bypass the allowlist.
+    """
+    check = check_feed_image_url if kind == FEED_KIND else check_upstream_url
     try:
-        return await _stream(check_upstream_url(url), factory, MAX_MEDIA_BYTES, "image")
+        return await _stream(check(url), factory, MAX_MEDIA_BYTES, "image")
     except (httpx.HTTPError, EndpointNetworkPolicyError):
         raise MediaError("upstream_error") from None
 

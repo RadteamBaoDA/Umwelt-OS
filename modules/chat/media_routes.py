@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_session
+from core.media_proxy import MediaError, verify_media_claims
 from core.rate_limit import require_budget
 from core.workspaces.dependencies import require_workspace_read
 from core.workspaces.schemas import WorkspaceContext
@@ -46,8 +47,9 @@ async def _serve(
     session: AsyncSession,
     scope: WorkspaceContext,
     extra: dict[str, str] | None = None,
+    kind: str = "",
 ) -> Response:
-    """Check the owner flag, fetch the already-validated ``url`` and return it with hardened cache headers.
+    """Check the owner flag, fetch ``url`` (re-validated under the policy of token ``kind``) and return it with hardened cache headers.
 
     Raises:
         HTTPException: 403 when the privacy flag is off; 502 when the upstream is rejected or fails.
@@ -58,8 +60,8 @@ async def _serve(
     if not config.privacy.allow_widget_remote_media:
         raise HTTPException(status_code=403, detail="Remote widget media is disabled")
     try:
-        body, content_type = await media.fetch_media(url)
-    except media.MediaError:
+        body, content_type = await media.fetch_media(url, kind=kind)
+    except MediaError:
         raise HTTPException(status_code=502, detail="Media unavailable") from None
     return Response(body, media_type=content_type, headers={**_HEADERS, **(extra or {})})
 
@@ -74,14 +76,14 @@ async def proxy_media(
     """Serve one image bound to a signed, unexpired token; allowlisted host, image/* only, 5 MB cap, no redirects."""
     secret = request.app.state.settings.csrf_signing_secret.get_secret_value()
     try:
-        url = media.verify_media_token(
+        url, kind = verify_media_claims(
             secret, token, subject=f"{owner.workspace_id}:{owner.user_id}"
         )
-    except media.MediaError as exc:
+    except MediaError as exc:
         raise HTTPException(
             status_code=_ERRORS.get(exc.code, 403), detail="Invalid media token"
         ) from None
-    return await _serve(url, request=request, session=session, scope=owner)
+    return await _serve(url, request=request, session=session, scope=owner, kind=kind)
 
 
 @router.get("/tile/{z}/{x}/{y}")
@@ -91,7 +93,7 @@ async def proxy_tile(
     """Serve a USGS Topo tile; the response carries ``X-Attribution`` which map UIs must display."""
     try:
         url = media.tile_url(z, x, y)
-    except media.MediaError:
+    except MediaError:
         raise HTTPException(status_code=404, detail="Tile out of range") from None
     return await _serve(
         url,
