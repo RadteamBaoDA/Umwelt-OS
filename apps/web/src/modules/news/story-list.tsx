@@ -6,7 +6,12 @@ import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { ArrowUpRight, RefreshCw } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { FeedImage } from '@/components/feed-image';
+import { FeedSourceTabs } from '@/components/feed-source-tabs';
+import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-view-toggle';
+import { ShowMoreButton, useShowMore } from '@/components/show-more';
 import { Button } from '@/components/ui/button';
+import { useLocalPref } from '@/core/use-local-pref';
 import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { fetchNewsTrends, fetchStories } from './story-api';
@@ -32,6 +37,10 @@ export type StoryListProps = {
   actionsHost?: HTMLElement | null;
   /** True when the owner has no active sources: the empty state then points to source setup instead of a refresh. */
   noSources?: boolean;
+  /** Dashboard gadget instance id: scopes the persisted List/Cards preference (embedded mode). */
+  instanceId?: string;
+  /** Resolved names of `sourceIds` for the source tabs (embedded mode, 2-6 sources). */
+  sourceNames?: { id: string; name: string }[];
   onSelectStory: (storyId: string, trigger: HTMLButtonElement) => void;
 };
 
@@ -67,12 +76,16 @@ export function StoryList(props: StoryListProps) {
     >
       <StoryListChrome vm={vm} />
 
+      {embedded ? <FeedSourceTabs sourceIds={vm.sourceIds} sourceNames={vm.sourceNames} value={vm.sourceTab} onChange={vm.setSourceTab} /> : null}
+
       <StoryTrends vm={vm} />
 
       <StoryListStatus vm={vm} />
 
       <StoryListBody vm={vm} />
-      {!storiesQuery.isError && storiesQuery.hasNextPage ? (
+      {embedded ? <ShowMoreButton state={vm.more} /> : null}
+      {/* Embedded lists page in more stories only once the in-place "show more" has revealed everything loaded. */}
+      {!storiesQuery.isError && storiesQuery.hasNextPage && (!embedded || vm.more.hiddenCount === 0) ? (
         <Button
           variant="outline"
           className="mt-1 shrink-0"
@@ -90,15 +103,17 @@ export function StoryList(props: StoryListProps) {
 
 /** One compact story row: title, excerpt, count/time meta and publisher attribution. */
 function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; story: Story }) {
-  const { t, display, incompleteLabel, onSelectStory, translation, shown, relevanceVaries, relativeTime } = vm;
+  const { onSelectStory, translation, shown } = vm;
   const excerpt = cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt);
+  const card = vm.embedded && vm.view === 'cards';
   return (
-    <li>
+    <li data-testid={card ? 'news-card' : undefined} className={card ? 'min-w-0 rounded-md border border-border p-2' : undefined}>
+      {card ? <FeedImage src={story.image_url} className="mb-2" /> : null}
       <Button
         type="button"
         variant="ghost"
         onClick={(event) => onSelectStory(story.id, event.currentTarget)}
-        className={`h-auto w-full flex-col items-stretch justify-start whitespace-normal text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-none px-0 py-3`}
+        className={`h-auto w-full flex-col items-stretch justify-start whitespace-normal text-left text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-none px-0 ${card ? 'py-1' : 'py-3'}`}
       >
         <span className="flex items-start justify-between gap-2">
           <span className="font-medium leading-snug">{shown(story)?.title ?? story.title}</span>
@@ -106,27 +121,37 @@ function StoryRow({ vm, story }: { vm: ReturnType<typeof buildStoryRenderers>; s
         </span>
         {excerpt ? <span className="mt-1 line-clamp-3 text-sm text-muted-foreground">{excerpt}</span> : null}
         {!translation.results.has(story.id) && <TranslationNote issue={translation.issues.get(story.id)} />}
-        <span
-          className="mt-2 block text-xs text-muted-foreground"
-          title={formatDateTime(story.observed_at, display.locale, display.timezone)}
-        >
-          {[
-            // A lone source with a lone item carries no information, so only larger counts are shown.
-            ...(story.source_count === 1 && story.evidence_count === 1
-              ? []
-              : [t('sources', { count: story.source_count }), t('evidence', { count: story.evidence_count })]),
-            relativeTime(story.observed_at),
-          ].join(' · ')}
-          {story.relevance !== null && relevanceVaries ? ` · ${t('relevance')} ${Math.round(story.relevance * 100)}%` : null}
-        </span>
-        {story.incomplete_reasons.map((reason) => (
-          <span key={reason} className="mt-1 block text-xs text-muted-foreground">
-            {incompleteLabel(reason)}
-          </span>
-        ))}
+        <StoryRowMeta vm={vm} story={story} />
       </Button>
       <Attribution story={story} />
     </li>
+  );
+}
+
+/** Count/time/relevance meta line and partial-data reasons under a story row. */
+function StoryRowMeta({ vm, story }: { vm: StoryListVm; story: Story }) {
+  const { t, display, incompleteLabel, relevanceVaries, relativeTime } = vm;
+  return (
+    <>
+      <span
+        className="mt-2 block text-xs text-muted-foreground"
+        title={formatDateTime(story.observed_at, display.locale, display.timezone)}
+      >
+        {[
+          // A lone source with a lone item carries no information, so only larger counts are shown.
+          ...(story.source_count === 1 && story.evidence_count === 1
+            ? []
+            : [t('sources', { count: story.source_count }), t('evidence', { count: story.evidence_count })]),
+          relativeTime(story.observed_at),
+        ].join(' · ')}
+        {story.relevance !== null && relevanceVaries ? ` · ${t('relevance')} ${Math.round(story.relevance * 100)}%` : null}
+      </span>
+      {story.incomplete_reasons.map((reason) => (
+        <span key={reason} className="mt-1 block text-xs text-muted-foreground">
+          {incompleteLabel(reason)}
+        </span>
+      ))}
+    </>
   );
 }
 
@@ -167,6 +192,7 @@ function StoryListChrome({ vm }: { vm: StoryListVm }) {
       <div className="min-w-0 truncate">{incompleteNotice}</div>
       <div className="flex items-center gap-1">
         {translation.results.size ? <TranslatedBadge showOriginal={showOriginal} onToggle={() => setShowOriginal((v) => !v)} /> : null}
+        <FeedViewToggle view={vm.view} setView={vm.setView} />
         {refreshButton}
       </div>
     </div>
@@ -281,52 +307,66 @@ function StoryListStatus({ vm }: { vm: StoryListVm }) {
   );
 }
 
+/** Hero treatment of the lead story: image, large title, excerpt, source count and attribution. */
+function StoryLead({ vm, story }: { vm: StoryListVm; story: Story }) {
+  const { t, display, onSelectStory, shown, relativeTime } = vm;
+  return (
+    <div data-testid="news-lead" className="min-w-0">
+      <FeedImage src={story.image_url} className="mb-2" />
+      <Button
+        type="button"
+        variant="ghost"
+        onClick={(event) => onSelectStory(story.id, event.currentTarget)}
+        className="h-auto w-full flex-col items-stretch justify-start whitespace-normal rounded-none px-0 py-2 text-left font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="text-xl font-semibold leading-snug">{shown(story)?.title ?? story.title}</span>
+        {cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt) ? (
+          <span className="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">
+            {cleanExcerpt(shown(story)?.title ?? story.title, shown(story)?.excerpt ?? story.excerpt)}
+          </span>
+        ) : null}
+        <span className="mt-3 flex items-baseline gap-1.5 text-xs text-muted-foreground">
+          {/* A single source is not a headline figure: show it as plain meta text instead. */}
+          {story.source_count >= 2 ? (
+            <>
+              <span className="text-figure-sm text-foreground">{story.source_count}</span>
+              <span>{t('sourcesLabel', { count: story.source_count })}</span>
+            </>
+          ) : (
+            <span>{t('sources', { count: story.source_count })}</span>
+          )}
+          <span aria-hidden="true">·</span>
+          <span className="tabular-nums" title={formatDateTime(story.observed_at, display.locale, display.timezone)}>
+            {relativeTime(story.observed_at)}
+          </span>
+        </span>
+      </Button>
+      <Attribution story={story} />
+    </div>
+  );
+}
+
 /** Lead story beside the list when embedded, otherwise the plain story list. */
 function StoryListBody({ vm }: { vm: StoryListVm }) {
-  const { t, display, onSelectStory, shown, leadStory, listStories, relativeTime } = vm;
+  const { leadStory, more, view, embedded } = vm;
+  const rows = more.visible;
   return leadStory ? (
     // Wide gadgets put the lead left and the list right; narrow ones stack them.
     <div className="grid shrink-0 gap-x-6 gap-y-2 @[40rem]/gadget:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-      <div data-testid="news-lead" className="min-w-0">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={(event) => onSelectStory(leadStory.id, event.currentTarget)}
-          className="h-auto w-full flex-col items-stretch justify-start whitespace-normal rounded-none px-0 py-2 text-left font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <span className="text-xl font-semibold leading-snug">{shown(leadStory)?.title ?? leadStory.title}</span>
-          {cleanExcerpt(shown(leadStory)?.title ?? leadStory.title, shown(leadStory)?.excerpt ?? leadStory.excerpt) ? (
-            <span className="mt-2 line-clamp-3 text-sm leading-relaxed text-muted-foreground">
-              {cleanExcerpt(shown(leadStory)?.title ?? leadStory.title, shown(leadStory)?.excerpt ?? leadStory.excerpt)}
-            </span>
-          ) : null}
-          <span className="mt-3 flex items-baseline gap-1.5 text-xs text-muted-foreground">
-            {/* A single source is not a headline figure: show it as plain meta text instead. */}
-            {leadStory.source_count >= 2 ? (
-              <>
-                <span className="text-figure-sm text-foreground">{leadStory.source_count}</span>
-                <span>{t('sourcesLabel', { count: leadStory.source_count })}</span>
-              </>
-            ) : (
-              <span>{t('sources', { count: leadStory.source_count })}</span>
-            )}
-            <span aria-hidden="true">·</span>
-            <span className="tabular-nums" title={formatDateTime(leadStory.observed_at, display.locale, display.timezone)}>
-              {relativeTime(leadStory.observed_at)}
-            </span>
-          </span>
-        </Button>
-        <Attribution story={leadStory} />
-      </div>
+      <StoryLead vm={vm} story={leadStory} />
       <ol className="min-w-0 divide-y divide-border">
-        {listStories.map((story) => (
+        {rows.map((story) => (
           <StoryRow key={story.id} vm={vm} story={story} />
         ))}
       </ol>
     </div>
   ) : (
-    <ol className="shrink-0 divide-y divide-border">
-      {listStories.map((story) => (
+    <ol
+      className={
+        embedded && view === 'cards' ? 'grid shrink-0 gap-3 @[40rem]/gadget:grid-cols-2' : 'shrink-0 divide-y divide-border'
+      }
+    >
+      {rows.map((story) => (
         <StoryRow key={story.id} vm={vm} story={story} />
       ))}
     </ol>
@@ -336,6 +376,19 @@ function StoryListBody({ vm }: { vm: StoryListVm }) {
 /** Flattens the loaded pages of an infinite query with the given per-page selector; empty before the first page. */
 function flattenPages<P, T>(data: { pages: P[] } | undefined, pick: (page: P) => T[]): T[] {
   return data?.pages.flatMap(pick) ?? [];
+}
+
+/**
+ * Embedded view state: the List/Cards layout (per gadget instance, persisted like the Feed gadget's) and the source tab.
+ * The tab is the server-side source scope of the stories (trends keep the full selection); a tab whose source left the
+ * selection falls back to All.
+ */
+function useStoryViewScope(instanceId: string | undefined, sourceIds: string[], embedded: boolean) {
+  const [view, setView] = useLocalPref<FeedView>(`umwelt.dashboard.feedView.${instanceId ?? 'news'}`, 'list', FEED_VIEWS);
+  const [pickedTab, setSourceTab] = useState('all');
+  const sourceTab = pickedTab !== 'all' && sourceIds.includes(pickedTab) ? pickedTab : 'all';
+  const storySourceIds = embedded && sourceTab !== 'all' ? [sourceTab] : sourceIds;
+  return { view, setView, sourceTab, setSourceTab, storySourceIds };
 }
 
 /** Loads the paged stories and trends for the fixed source selection and derives the loaded items and incomplete reasons. */
@@ -349,14 +402,17 @@ function useStoryListData(props: StoryListProps) {
     embedded = false,
     actionsHost,
     noSources = false,
+    instanceId,
+    sourceNames,
     onSelectStory,
   } = props;
   const t = useTranslations('news');
+  const { view, setView, sourceTab, setSourceTab, storySourceIds } = useStoryViewScope(instanceId, sourceIds, embedded);
   const display = useDisplayPreferences();
   const incompleteLabel = useNewsIncompleteLabel();
   const storiesQuery = useInfiniteQuery({
-    queryKey: ['news-stories', sourceIds, topicId, query, limit],
-    queryFn: ({ pageParam }) => fetchStories(sourceIds, { cursor: pageParam, topicId, q: query, limit }),
+    queryKey: ['news-stories', storySourceIds, topicId, query, limit],
+    queryFn: ({ pageParam }) => fetchStories(storySourceIds, { cursor: pageParam, topicId, q: query, limit }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.next_cursor ?? undefined,
   });
@@ -391,6 +447,11 @@ function useStoryListData(props: StoryListProps) {
     embedded,
     actionsHost,
     noSources,
+    view,
+    setView,
+    sourceTab,
+    setSourceTab,
+    sourceNames,
     onSelectStory,
   };
 }
@@ -423,7 +484,10 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     embedded && stories.length > 0
       ? stories.reduce((best, story) => (story.source_count > best.source_count ? story : best), stories[0])
       : null;
-  const listStories = leadStory ? stories.filter((story) => story.id !== leadStory.id) : stories;
+  // Cards mode drops the lead hero: every story is a card. Embedded lists collapse to the lead + 4 rows or 6 cards.
+  const heroStory = p.view === 'cards' ? null : leadStory;
+  const listStories = heroStory ? stories.filter((story) => story.id !== heroStory.id) : stories;
+  const more = useShowMore(listStories, !embedded ? listStories.length : p.view === 'cards' ? 6 : 4, `${p.sourceTab}|${p.view}`);
 
   return {
     ...p,
@@ -433,8 +497,9 @@ function useStoryListPresentation(p: ReturnType<typeof useStoryListData>) {
     incompleteNotice,
     scores,
     relevanceVaries,
-    leadStory,
+    leadStory: heroStory,
     listStories,
+    more,
     showOriginal,
     setShowOriginal,
   };

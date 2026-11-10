@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, cast
 from uuid import UUID
@@ -237,6 +237,15 @@ async def _ranked_support_rows(
     )
 
 
+def _signed_image(current: Any, signer: Callable[[str, bool], str | None] | None) -> str | None:
+    """Sign the record's raw feed ``image_url`` with the caller's signer (honours ``local_only``); ``None`` without one."""
+    metadata = current.provider_metadata
+    if signer is None or metadata is None:
+        return None
+    raw = metadata.source_fields.get("image_url")
+    return signer(raw, current.local_only) if isinstance(raw, str) else None
+
+
 async def _group_live_supports(
     session: AsyncSession,
     rows: list[tuple[NewsStory, NewsObservation, int]],
@@ -247,6 +256,7 @@ async def _group_live_supports(
     multi_workspace_enabled: bool,
     support_limit: int,
     projection_cache: dict[UUID, Any] | None,
+    image_signer: Callable[[str, bool], str | None] | None = None,
 ) -> tuple[
     dict[UUID, tuple[NewsStory, list[NewsObservation], list[StoryEvidence]]],
     tuple[UUID, UUID, UUID] | None,
@@ -307,6 +317,7 @@ async def _group_live_supports(
             excerpt=_plain_excerpt(current.title, chunk.content),
             observed_at=current.observed_at,
             published_at=current.published_at,
+            image_url=_signed_image(current, image_signer),
             **_attribution(current.provider_metadata),
         )
         existing = grouped.setdefault(story.id, (story, [], []))
@@ -328,6 +339,7 @@ async def _live_story_rows(
     support_limit: int = 100,
     candidate_limit: int = 50,
     projection_cache: dict[UUID, Any] | None = None,
+    image_signer: Callable[[str, bool], str | None] | None = None,
 ) -> LiveStoryRows:
     """Keyset-page durable story candidates, then reproject a bounded support window.
 
@@ -385,6 +397,7 @@ async def _live_story_rows(
         multi_workspace_enabled=multi_workspace_enabled,
         support_limit=support_limit,
         projection_cache=projection_cache,
+        image_signer=image_signer,
     )
     next_candidate = None
     if has_more and candidate_rows and story_id is None:

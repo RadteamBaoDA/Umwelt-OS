@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.auth.public import authenticated_session_ref
 from core.database import get_session
 from core.http_cache import set_private_no_store as _no_store
+from core.media_proxy import make_image_signer
 from core.publication import require_publication_gate
 from core.workspaces import public as workspaces
 from core.workspaces.dependencies import require_workspace_observer_read
@@ -35,6 +36,7 @@ from modules.news.schemas import (
 )
 from modules.news.stories import get_story, list_stories
 from modules.news.trends import list_trends
+from modules.settings import public as settings_public
 from modules.settings.public import module_dependency
 
 router = APIRouter(
@@ -113,11 +115,21 @@ async def list_stories_route(
             limit=limit,
             cursor=cursor,
         )
+        app_settings = request.app.state.settings
+        # Same owner flag + signing subject as the Documents dashboard projections so images load identically.
+        config = await settings_public.get_ai_execution_config(
+            session, app_settings, request.app.state.redis, scope=scope
+        )
         page = await list_stories(
             session,
             filters,
             scope=scope,
-            multi_workspace_enabled=request.app.state.settings.multi_workspace_enabled,
+            multi_workspace_enabled=app_settings.multi_workspace_enabled,
+            image_signer=make_image_signer(
+                config,
+                app_settings.csrf_signing_secret.get_secret_value(),
+                f"{scope.workspace_id}:{scope.user_id}",
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid story filter") from exc

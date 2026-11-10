@@ -54,6 +54,8 @@ class StoryEvidence(BaseModel):
     published_at: datetime | None
     publisher: str | None = None
     license_label: str | None = None
+    # Signed same-origin proxy path for the record's feed image; null when absent, local_only or unpermitted.
+    image_url: str | None = None
 
 
 class StoryRead(BaseModel):
@@ -79,6 +81,8 @@ class StoryRead(BaseModel):
     relevance_as_of: datetime | None = None
     relevance_state: Literal["available", "partial", "unavailable"] = "unavailable"
     translation_revision: str = Field(default="", max_length=32)
+    # First available evidence image (representative first), already signed; null when none.
+    image_url: str | None = None
 
 
 class StoryPage(BaseModel):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -48,6 +49,7 @@ async def list_stories(
     *,
     scope: Scope,
     multi_workspace_enabled: bool,
+    image_signer: Callable[[str, bool], str | None] | None = None,
 ) -> StoryPage:
     """Return a bounded keyset page whose titles and counts use live authorized supports only.
 
@@ -87,6 +89,7 @@ async def list_stories(
         multi_workspace_enabled=multi_workspace_enabled,
         after=after,
         projection_cache=projection_cache,
+        image_signer=image_signer,
     )
     filtered = []
     page_incomplete_reasons = set(live.incomplete_reasons)
@@ -129,6 +132,9 @@ async def list_stories(
             source_count=len({ev.source_id for ev in evidence}),
             evidence_count=len(evidence),
             evidence=evidence[:100],
+            image_url=next(
+                (ev.image_url for ev in [representative, *evidence] if ev.image_url), None
+            ),
             relevance_state="unavailable",
             translation_revision=_translation_revision(story.id, representative),
             incomplete_reasons=sorted(story_reasons),

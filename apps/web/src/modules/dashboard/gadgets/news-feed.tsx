@@ -1,11 +1,22 @@
 'use client';
 
+import { useQuery } from '@tanstack/react-query';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { DetailDialog, type DetailTarget } from '@/modules/detail';
 import { StoryList } from '@/modules/news';
-import type { GadgetInstance } from '../api';
+import { dashboardKeys, listGadgetSources, type GadgetInstance } from '../api';
 import { GadgetNotice } from './gadget-notice';
+
+/** Source names for the story source tabs; only fetched when tabs can appear (2-6 sources). Shares the Feed filter's cache entry. */
+function useNewsSourceNames(sourceIds: string[]) {
+  const sourcesQuery = useQuery({
+    queryKey: [...dashboardKeys.sources, 'feed-filter'],
+    queryFn: ({ signal }) => listGadgetSources(100, undefined, signal),
+    enabled: sourceIds.length > 1 && sourceIds.length <= 6,
+  });
+  return sourcesQuery.data?.items;
+}
 
 /** Props for the source-scoped News story gadget. */
 export interface NewsFeedProps {
@@ -51,6 +62,7 @@ export function NewsFeed({ instance }: NewsFeedProps) {
     ...(keywordQuery ? [t('trendsFilterUnavailable')] : []),
   ];
   const showTrends = unsupportedNotices.length === 0;
+  const sourceNames = useNewsSourceNames(sourceIds);
 
   // Returned bare (no wrapper) so the gadget frame's `has-[>[data-gadget-notice]]` rule can shrink the empty card.
   if (sourceIds.length === 0) {
@@ -70,6 +82,8 @@ export function NewsFeed({ instance }: NewsFeedProps) {
           limit={filters.limit ?? 25}
           showTrends={showTrends}
           embedded
+          instanceId={instance.id}
+          sourceNames={sourceNames}
           onSelectStory={(storyId, trigger) => {
             returnFocusRef.current = trigger;
             setSelected({ kind: 'story', id: storyId, sourceGadget: instance.id, sourceIds: [...sourceIds] });

@@ -15,6 +15,8 @@ export type StoryEvidence = {
   /** Feed publisher and license text when the server supplies them; shown beside the story as attribution. */
   publisher?: string | null;
   license_label?: string | null;
+  /** Signed same-origin proxy path of this record's feed image (same contract as `Story.image_url`). */
+  image_url?: string | null;
 };
 
 /** Story summary and evidence use only currently visible supporting versions. */
@@ -38,6 +40,8 @@ export type Story = {
   relevance_profile_revisions: Array<{ kind: string; id: string; revision: number }>;
   relevance_as_of: string | null;
   relevance_state: 'available' | 'partial' | 'unavailable';
+  /** Signed same-origin proxy path of the story's first feed image; null/absent when none or not permitted. */
+  image_url?: string | null;
 };
 
 /** Bounded story page with a cursor scoped to the current source/filter snapshot. */

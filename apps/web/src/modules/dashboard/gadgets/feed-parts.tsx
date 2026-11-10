@@ -1,24 +1,25 @@
 'use client';
 
-import { Bookmark, ExternalLink, LayoutGrid, List, ListFilter, RotateCw } from 'lucide-react';
+import { Bookmark, ExternalLink, ListFilter, RotateCw } from 'lucide-react';
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
-import React, { useState } from 'react';
+import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { FeedImage } from '@/components/feed-image';
+import { FeedSourceTabs } from '@/components/feed-source-tabs';
+import { FEED_VIEWS, FeedViewToggle, type FeedView } from '@/components/feed-view-toggle';
 import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { safeHttpUrl } from '@/core/safe-url';
 import { FEED_LANGUAGES, languageLabel, type FeedStreamItem, type SelectedTelegramIdentity } from './feed-model';
 import { formatRelativeTime } from './relative-time';
 
-/** Item stream layouts offered by the toolbar toggle. */
-export const FEED_VIEWS = ['list', 'cards'] as const;
-export type FeedView = (typeof FEED_VIEWS)[number];
+export { FEED_VIEWS, type FeedView };
+export { FeedSourceTabs };
 
 /** Per-render facts every feed row needs. */
 export interface FeedRowContext {
@@ -153,21 +154,6 @@ function MediaList({ item, isTelegram }: { item: FeedStreamItem; isTelegram: boo
   ) : null;
 }
 
-/**
- * Decorative item image in a fixed 16:9 box so the layout does not jump while it loads.
- * Renders nothing without a URL or after a load error (no empty placeholder).
- */
-function FeedImage({ src, className = '' }: { src?: string | null; className?: string }) {
-  const [failed, setFailed] = useState(false);
-  if (!src || failed) return null;
-  return (
-    <div className={`aspect-video w-full overflow-hidden rounded-md bg-muted ${className}`}>
-      {/* eslint-disable-next-line @next/next/no-img-element -- same-origin signed proxy path; next/image optimisation not wanted */}
-      <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} className="size-full object-cover" />
-    </div>
-  );
-}
-
 /** The first item: a compact row that becomes a large lead on wide gadgets (container query). */
 function FeedLead({ item, ctx }: { item: FeedStreamItem; ctx: FeedRowContext }) {
   const display = useDisplayPreferences();
@@ -262,35 +248,6 @@ export function FeedItems({ items, ctx }: { items: FeedStreamItem[]; ctx: FeedRo
         {rest.map((item) => <FeedRow key={item.id} item={item} ctx={ctx} />)}
       </ul>
     </div>
-  );
-}
-
-/**
- * One tab per bound source (plus All) driving the existing source filter. Shown only for 2-6
- * sources (it renders nothing otherwise); Radix Tabs supplies arrow-key navigation. Selecting a tab filters the loaded items client-side.
- *
- * @param props Bound source ids, resolved names, current filter value and change handler.
- */
-export function FeedSourceTabs({ sourceIds, sourceNames, value, onChange }: {
-  sourceIds: string[];
-  sourceNames: { id: string; name: string }[] | undefined;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const t = useTranslations('dashboard');
-  // More than 6 sources keep the filter dropdown only; a single source needs no tabs.
-  if (sourceIds.length < 2 || sourceIds.length > 6) return null;
-  const trigger = 'min-h-8 pointer-coarse:min-h-11 max-w-40 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none';
-  return (
-    <Tabs value={value} onValueChange={onChange}>
-      <TabsList aria-label={t('feedSourceTabs')} className="h-auto max-w-full flex-wrap gap-1 p-0">
-        <TabsTrigger value="all" className={trigger}>{t('feedSourceAll')}</TabsTrigger>
-        {sourceIds.map((id) => {
-          const name = sourceNames?.find((source) => source.id === id)?.name ?? t('feedSourceUnknown');
-          return <TabsTrigger key={id} value={id} title={name} className={trigger}><span className="truncate">{name}</span></TabsTrigger>;
-        })}
-      </TabsList>
-    </Tabs>
   );
 }
 
@@ -404,20 +361,7 @@ export function FeedToolbar(props: FeedToolbarProps) {
       <div className="flex min-w-0 items-center gap-1">
         {props.volume}
         {props.filters}
-        <div role="group" aria-label={t('feedViewLabel')} className="flex items-center">
-          {FEED_VIEWS.map((mode) => (
-            <Button
-              key={mode}
-              type="button"
-              variant={props.view === mode ? 'default' : 'ghost'}
-              size="icon"
-              className="size-8"
-              aria-pressed={props.view === mode}
-              aria-label={mode === 'list' ? t('feedViewList') : t('feedViewCards')}
-              onClick={() => props.setView(mode)}
-            >{mode === 'list' ? <List className="h-3.5 w-3.5" aria-hidden="true" /> : <LayoutGrid className="h-3.5 w-3.5" aria-hidden="true" />}</Button>
-          ))}
-        </div>
+        <FeedViewToggle view={props.view} setView={props.setView} />
         {props.canSelect && (
           <Button
             type="button"
