@@ -173,8 +173,24 @@ describe('latestPerSeries', () => {
       { ...base, id: `r-${query.sourceIds[0]}`, source_id: query.sourceIds[0], provider: 'noaa_kp', metric: 'kp_index', value: 3, observed_at: '2026-10-09T00:00:00Z' },
     ] }));
     view({ id: 'g5', title: '', definition: { source_ids: ['s1', 's2'], scope: { metrics: [] } } } as never);
-    expect(await screen.findByText(/^Kp A · /)).toBeTruthy();
-    expect(screen.getByText(/^Kp B · /)).toBeTruthy();
+    expect((await screen.findAllByText(/^Kp A · /))[0]).toBeTruthy();
+    expect(screen.getAllByText(/^Kp B · /).length).toBeGreaterThan(0);
     expect(screen.getAllByTestId('observation-row')).toHaveLength(2);
+  });
+
+  it('renders a KPI strip (CSS-gated to wide containers) plus the list for 2-8 series, list only for more', async () => {
+    const row = (id: string, symbol: string) => ({ ...base, id, provider: 'binance', metric: 'price', symbol, value: 10, unit: 'USD', observed_at: '2026-10-02T00:00:00Z' });
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: ['A', 'B', 'C'].map((s) => row(s, s)) });
+    const first = view();
+    const strip = await screen.findByTestId('observation-kpi-strip');
+    expect(strip.className).toContain('@[48rem]/gadget:grid');
+    expect(strip.className).toContain('hidden');
+    expect(screen.getAllByTestId('observation-kpi')).toHaveLength(3);
+    expect(screen.getAllByTestId('observation-row')[0]!.closest('ul')!.className).toContain('@[48rem]/gadget:hidden');
+    first.unmount();
+    api.listWorldObservationWindow.mockResolvedValue({ truncated: false, items: 'ABCDEFGHI'.split('').map((s) => row(s, s)) });
+    view();
+    await screen.findAllByTestId('observation-row');
+    expect(screen.queryByTestId('observation-kpi-strip')).toBeNull();
   });
 });

@@ -218,7 +218,7 @@ function ObservationNotes({ items }: { items: WorldObservation[] }) {
   );
 }
 
-/** One reading as a KPI (single series) or a list of SeriesRows (several), with observed/published/collected tooltips. */
+/** One reading as a KPI (single series), a KPI strip on wide gadgets (2-8 readings; CSS container query shows one of two markups) or a list of SeriesRows, with observed/published/collected tooltips. */
 function ObservationRows({
   instance,
   items,
@@ -254,6 +254,7 @@ function ObservationRows({
   /** Unit text shown beside the figure: bounded-index suffix, else the plain unit (bare "index" adds nothing). */
   const unitOf = (item: WorldObservation) => boundedIndexSuffix(item) ?? (item.unit === 'index' ? undefined : item.unit);
   const single = items.length === 1 ? items[0] : null;
+  const kpiStrip = items.length >= 2 && items.length <= 8; // wide gadgets show these as one KPI row
   if (single) {
     return (
       <div
@@ -275,8 +276,8 @@ function ObservationRows({
       </div>
     );
   }
-  return (
-    <ul className="divide-y divide-border" aria-label={instance.title || t('providerObsTitle')}>
+  const list = (
+    <ul className={`divide-y divide-border ${kpiStrip ? '@[48rem]/gadget:hidden' : ''}`} aria-label={instance.title || t('providerObsTitle')}>
       {items.map((item) => (
         <li key={item.id} title={timesTitle(item)} data-testid="observation-row">
           <SeriesRow
@@ -292,6 +293,34 @@ function ObservationRows({
         </li>
       ))}
     </ul>
+  );
+  if (!kpiStrip) return list;
+  return (
+    <>
+      <ul
+        data-testid="observation-kpi-strip"
+        aria-label={instance.title || t('providerObsTitle')}
+        className="hidden gap-x-6 @[48rem]/gadget:grid"
+        style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
+      >
+        {items.map((item) => (
+          <li key={item.id} title={timesTitle(item)} data-testid="observation-kpi">
+            <GadgetKpi
+              size="sm" sparkHeight={24}
+              label={labelOf(item)}
+              value={item.value}
+              currency={item.currency ?? undefined}
+              unit={unitOf(item)}
+              format={(v) => formatObservationValue(item, v, display.locale)}
+              deltaPercent={deltaVsPrevious(history.get(seriesKey(item)))}
+              better={metricBetterDirection(item.metric)}
+              series={history.get(seriesKey(item))}
+            />
+          </li>
+        ))}
+      </ul>
+      {list}
+    </>
   );
 }
 

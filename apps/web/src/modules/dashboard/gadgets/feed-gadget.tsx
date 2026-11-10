@@ -17,8 +17,9 @@ import {
   type FeedStreamItem, type SelectedTelegramIdentity,
 } from './feed-model';
 import {
-  FEED_VIEWS, FeedBulkBar, FeedFilterPopover, FeedItems, FeedToolbar, FeedUndoBar, type FeedRowContext, type FeedView,
+  FEED_VIEWS, FeedBulkBar, FeedFilterPopover, FeedItems, FeedSourceTabs, FeedToolbar, FeedUndoBar, type FeedRowContext, type FeedView,
 } from './feed-parts';
+import { ShowMoreButton, useShowMore } from './show-more';
 import { useLocalPref } from '@/core/use-local-pref';
 import { useAutoFetchWhenEmpty, useFeedFilters, useFeedModeration, useFeedQueries } from './use-feed-state';
 
@@ -130,10 +131,12 @@ function FeedStatus(props: {
 }
 
 /** Pagination footer: load-more error, load-more button or the end-of-list marker. */
-function FeedFooter({ docsQuery, hasInitialItems, feedItemCount }: {
+function FeedFooter({ docsQuery, hasInitialItems, feedItemCount, listExpanded }: {
   docsQuery: ReturnType<typeof useFeedQueries>['docsQuery'];
   hasInitialItems: boolean;
   feedItemCount: number;
+  /** False while the local "Show more" list still hides loaded items; server paging waits until it is fully shown. */
+  listExpanded: boolean;
 }) {
   const t = useTranslations('dashboard');
   if (hasInitialItems) return null;
@@ -142,7 +145,7 @@ function FeedFooter({ docsQuery, hasInitialItems, feedItemCount }: {
       {docsQuery.isFetchNextPageError && (
         <p role="alert" className="text-xs text-destructive">{t('feedLoadMoreError')}</p>
       )}
-      {docsQuery.hasNextPage && (
+      {docsQuery.hasNextPage && listExpanded && (
         <Button
           type="button"
           variant="outline"
@@ -152,7 +155,7 @@ function FeedFooter({ docsQuery, hasInitialItems, feedItemCount }: {
           onClick={() => docsQuery.fetchNextPage()}
         >{docsQuery.isFetchingNextPage ? t('feedLoadingMore') : t('feedLoadMore')}</Button>
       )}
-      {!docsQuery.hasNextPage && !docsQuery.isError && feedItemCount > 0 && (
+      {!docsQuery.hasNextPage && !docsQuery.isError && feedItemCount > 0 && listExpanded && (
         <p className="text-center text-xs text-muted-foreground">{t('feedEndOfList')}</p>
       )}
     </>
@@ -183,6 +186,11 @@ function describeFilters(filters: ReturnType<typeof useFeedFilters>) {
     activeFilterCount: Number(needle !== '') + Number(sourceFilter !== 'all') + Number(language !== 'any') + Number(timeWindow !== 'any'),
     serverFiltered: language !== 'any' || timeWindow !== 'any',
   };
+}
+
+/** Collapsed list size: lead + 4 rows, or 6 cards; any filter/view change (`filterKey`) collapses it again. */
+function useFeedShowMore(items: FeedStreamItem[], view: FeedView, filterKey: string) {
+  return useShowMore(items, view === 'cards' ? 6 : 5, `${filterKey}|${view}`);
 }
 
 /** Renders the scrollable feed item stream with selection and Ask AI affordances. */
@@ -220,6 +228,7 @@ function FeedStream({
   const selectedTelegramItems = Object.values(selectedTelegram);
   const { needle, filtering, activeFilterCount, serverFiltered } = describeFilters(filters);
   const displayedItems = filterFeedItems(feedItems, { hiddenIds: moderation.hiddenIds, onlyUnread, sourceFilter, needle });
+  const more = useFeedShowMore(displayedItems, view, `${sourceFilter}|${needle}|${onlyUnread}|${language}|${timeWindow}`);
   // Search/language/time controls are noise on a settled empty feed with nothing active to clear.
   const showFilters = docsQuery.isLoading || feedItems.length > 0 || filtering || serverFiltered;
   React.useEffect(() => onUnreadCountChange?.(unreadCount), [onUnreadCountChange, unreadCount]);
@@ -253,6 +262,7 @@ function FeedStream({
         refreshing={docsQuery.isFetching} onRefresh={() => docsQuery.refetch()}
         view={view} setView={setView}
       />
+      <FeedSourceTabs sourceIds={sourceIds} sourceNames={sourcesQuery.data?.items} value={sourceFilter} onChange={filters.setSourceFilter} />
       <FeedBulkBar
         items={selectedTelegramItems} interactionPending={interactionMutation.isPending} onAskAbout={askAbout}
         onInteract={(change) => interactionMutation.mutate(change)}
@@ -270,8 +280,9 @@ function FeedStream({
         docsQuery={docsQuery} feedItemCount={feedItems.length} displayedCount={displayedItems.length} filtering={filtering}
         needle={needle} sourceFilter={sourceFilter} serverFiltered={serverFiltered} onlyUnread={onlyUnread}
       />
-      <FeedItems items={displayedItems} ctx={rowContext} />
-      <FeedFooter docsQuery={docsQuery} hasInitialItems={Boolean(initialItems?.length)} feedItemCount={feedItems.length} />
+      <FeedItems items={more.visible} ctx={rowContext} />
+      <ShowMoreButton state={more} />
+      <FeedFooter docsQuery={docsQuery} hasInitialItems={Boolean(initialItems?.length)} feedItemCount={feedItems.length} listExpanded={more.hiddenCount === 0} />
     </div>
   );
 }

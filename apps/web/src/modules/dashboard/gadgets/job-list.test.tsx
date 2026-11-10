@@ -34,4 +34,17 @@ describe('JobListGadget', () => {
     fireEvent.change(screen.getByLabelText('Filter jobs'), { target: { value: 'acme' } });
     expect(screen.getAllByRole('link').map((l) => l.textContent)).toEqual(['Go Developer']);
   });
+
+  it('shows 5 postings, then expands in place', async () => {
+    api.list.mockResolvedValue({ next_cursor: null, items: Array.from({ length: 8 }, (_, i) => job(`${i}`, `Role ${i}`, `https://j/${i}`, 'Acme', `2026-10-0${i + 1}T00:00:00Z`)) });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}>
+      <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'], common: commonMessages['en-us'] }}>
+        <JobListGadget instance={{ id: 'g1', title: '', definition: { source_ids: ['s1'] } } as never} />
+      </NextIntlClientProvider></QueryClientProvider>);
+    await screen.findByText('Role 7');
+    expect(screen.getAllByRole('link')).toHaveLength(5);
+    fireEvent.click(screen.getByRole('button', { name: 'Show 3 more' }));
+    expect(screen.getAllByRole('link')).toHaveLength(8);
+  });
 });

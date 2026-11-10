@@ -22,9 +22,9 @@ const items: FeedStreamItem[] = [
   { id: 'c', title: 'Third headline', sourceType: 'news', timestamp: new Date(Date.now() - 55 * hour).toISOString(), read: true },
 ];
 
-function view(feed: FeedStreamItem[] = items) {
+function view(feed: FeedStreamItem[] = items, sourceIds: string[] = ['s1']) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const instance = { id: 'g1', title: '', definition: { renderer: 'feed', source_ids: ['s1'], scope: {} } } as never;
+  const instance = { id: 'g1', title: '', definition: { renderer: 'feed', source_ids: sourceIds, scope: {} } } as never;
   return render(
     <QueryClientProvider client={client}>
       <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
@@ -84,5 +84,45 @@ describe('FeedGadget view toggle and images', () => {
     unmount();
     view(withImage);
     expect(await screen.findByTestId('feed-cards')).toBeTruthy();
+  });
+});
+
+describe('FeedGadget show more and source tabs', () => {
+  beforeEach(() => localStorage.clear());
+  const many: FeedStreamItem[] = Array.from({ length: 8 }, (_, i) => ({
+    id: `m${i}`, title: `Story ${i}`, sourceType: 'news', sourceId: i % 2 ? 's2' : 's1', timestamp: new Date(Date.now() - i * hour).toISOString(), read: true,
+  }));
+
+  it('collapses to a lead plus 4 rows and expands in place', async () => {
+    view(many);
+    expect(screen.queryByText('Story 5')).toBeNull();
+    expect(screen.getByText('Story 4')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Show 3 more' }));
+    expect(screen.getByText('Story 7')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('shows 6 cards in Cards mode', async () => {
+    view(many);
+    await userEvent.click(screen.getByRole('button', { name: /cards/i }));
+    expect(within(screen.getByTestId('feed-cards')).getAllByRole('listitem')).toHaveLength(6);
+    expect(screen.getByRole('button', { name: 'Show 2 more' })).toBeTruthy();
+  });
+
+  it('shows source tabs for 2-6 sources and filters loaded items', async () => {
+    view(many, ['s1', 's2']);
+    const tabs = within(screen.getByRole('tablist', { name: 'Filter by source' })).getAllByRole('tab');
+    expect(tabs).toHaveLength(3);
+    await userEvent.click(tabs[1]!);
+    expect(screen.getByText('Story 0')).toBeTruthy();
+    expect(screen.queryByText('Story 1')).toBeNull();
+  });
+
+  it('hides source tabs for one source and for more than six', () => {
+    const { unmount } = view(many, ['s1']);
+    expect(screen.queryByRole('tablist', { name: 'Filter by source' })).toBeNull();
+    unmount();
+    view(many, ['a', 'b', 'c', 'd', 'e', 'f', 'g']);
+    expect(screen.queryByRole('tablist', { name: 'Filter by source' })).toBeNull();
   });
 });

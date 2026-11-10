@@ -5,6 +5,7 @@ import React, { useState } from 'react';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import type { GadgetInstance } from '../api';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
+import { ShowMoreButton, useShowMore } from './show-more';
 import { useQuery } from '@tanstack/react-query';
 import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge';
 
@@ -64,6 +65,7 @@ export function VideoPanel({ instance }: VideoPanelProps) {
     },
   });
   const items = query.data ?? [];
+  const more = useShowMore(items, 5);
   // The record count belongs in the frame footer, not an inner header row.
   useReportGadgetFreshness(null, items.length > 0 ? daily('streamCount', { count: items.length }) : null);
 
@@ -74,7 +76,7 @@ export function VideoPanel({ instance }: VideoPanelProps) {
       {query.isError && <GadgetNotice kind="error" className="p-0" message={dashboard('gadgetDataLoadFailed')} />}
       {sourceIds.length > 0 && !query.isPending && !query.isError && items.length === 0 && <GadgetNotice kind="empty" className="p-0" message={dashboard('videoRecordsEmpty')} action={{ href: '/settings/sources', label: dashboard('gadgetConfigureAction') }} />}
       <ul className="divide-y divide-border">
-        {items.map((video) => (
+        {more.visible.map((video) => (
           <li key={video.id} className="flex items-start gap-3 py-2">
             <VideoThumb src={video.imageUrl} />
             <div className="min-w-0 flex-1">
@@ -87,6 +89,7 @@ export function VideoPanel({ instance }: VideoPanelProps) {
           </li>
         ))}
       </ul>
+      <ShowMoreButton state={more} />
     </div>
   );
 }

@@ -12,6 +12,7 @@ import { documentKeys, listGadgetDocumentProjections } from '@/modules/knowledge
 import type { GadgetInstance } from '../api';
 import { useReportGadgetFreshness } from '../gadget-freshness';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
+import { ShowMoreButton, useShowMore } from './show-more';
 import { parseJobPosting, type JobPosting, type JobPostingInput } from './job-posting';
 
 /** Props for the job postings gadget. */
@@ -61,6 +62,8 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
       : postings;
   }, [postings, filter]);
   const pager = usePagination(visible, 20);
+  // First 5 rows of the current page; expanding happens inside the scroll area, and filter/page changes collapse it.
+  const more = useShowMore(pager.pageItems, 5, `${filter}|${pager.page}|${pager.pageSize}`);
 
   useReportGadgetFreshness(
     items.reduce<string | null>((max, r) => (r.observed_at && (!max || r.observed_at > max) ? r.observed_at : max), null),
@@ -97,7 +100,7 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {pager.pageItems.map((p, index) => (
+                          {more.visible.map((p, index) => (
                             <TableRow key={`${p.url ?? p.title}-${index}`}>
                               <TableCell className="max-w-64 whitespace-normal font-medium">
                                 {p.url
@@ -115,6 +118,7 @@ export function JobListGadget({ instance }: JobListGadgetProps) {
                           ))}
                         </TableBody>
                       </Table>
+                      <div className="flex justify-center py-1"><ShowMoreButton state={more} /></div>
                     </div>
                   )}
                   <TablePagination {...pager} />

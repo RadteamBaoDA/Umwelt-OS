@@ -11,7 +11,7 @@ const item = (id: string, image_url?: string | null) => ({
 });
 vi.mock('@/modules/knowledge', () => ({
   documentKeys: { all: ['documents'] },
-  listGadgetDocumentProjections: vi.fn(async () => ({ items: [item('a', '/api/v1/media/proxy?x=1'), item('b', null)], next_cursor: null })),
+  listGadgetDocumentProjections: vi.fn(async () => ({ items: [item('a', '/api/v1/media/proxy?x=1'), item('b', null), ...['c', 'd', 'e', 'f', 'g'].map((id) => item(id, null))], next_cursor: null })),
 }));
 vi.mock('../gadget-freshness', () => ({ useReportGadgetFreshness: () => undefined }));
 
@@ -30,5 +30,20 @@ describe('VideoPanel thumbnails', () => {
     expect(imgs).toHaveLength(1);
     fireEvent.error(imgs[0]!);
     expect(document.querySelector('img')).toBeNull();
+  });
+
+  it('shows 5 videos and expands in place', async () => {
+    const instance = { id: 'v', definition: { renderer: 'video_panel', source_ids: ['s'], scope: {} } } as never;
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'], daily: { streamCount: '{count}' } }}>
+          <VideoPanel instance={instance} />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findByText('Video b');
+    expect(screen.queryByText('Video g')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show 2 more' }));
+    expect(screen.getByText('Video g')).toBeTruthy();
   });
 });
