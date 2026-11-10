@@ -266,14 +266,16 @@ export const chatKeys = {
 /**
  * Lists persistent owner conversations ordered by most recent update.
  *
- * @param params - Optional pagination and archive filters.
- * @returns Array of conversation header records.
+ * @param params - Optional pagination, archive and title/content search (`q`) filters plus an abort signal.
+ * @returns Array of conversation header records, pinned first.
  */
 export async function listConversations(params?: {
   limit?: number;
   offset?: number;
   archived?: boolean;
   q?: string;
+  /** Aborts the request (TanStack Query passes its signal so stale searches are cancelled). */
+  signal?: AbortSignal;
 }): Promise<Conversation[]> {
   const query = new URLSearchParams();
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
@@ -282,7 +284,7 @@ export async function listConversations(params?: {
   if (params?.q?.trim()) query.set('q', params.q.trim().slice(0, 200));
   const queryString = query.toString();
   const path = `/api/v1/conversations${queryString ? `?${queryString}` : ''}`;
-  return apiRequest<Conversation[]>(path);
+  return apiRequest<Conversation[]>(path, params?.signal ? { signal: params.signal } : {});
 }
 
 /**

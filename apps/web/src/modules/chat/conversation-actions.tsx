@@ -26,12 +26,16 @@ export interface ConversationActions {
   rename: (conversation: { id: string; title: string }) => void;
   /** Opens the delete confirmation for a conversation id. */
   remove: (id: string) => void;
+  /** Pins or unpins a conversation (pinned ones are listed first by the server). */
+  setPinned: (id: string, pinned: boolean) => void;
+  /** Archives or restores a conversation; archived ones leave the default list. */
+  setArchived: (id: string, archived: boolean) => void;
   /** Rename and delete dialogs; mounted by the owner so they work whether or not the history list is mounted. */
   dialogs: React.ReactNode;
 }
 
 /**
- * Owns the rename and delete dialogs plus their mutations for conversations.
+ * Owns the rename and delete dialogs plus their mutations, and the one-click pin/archive toggles, for conversations.
  * Lifted out of ChatHistory so the conversation header can use them while the history sidebar is collapsed.
  * Deleting the active conversation starts a new one; deleting always unbinds a day-conversation target.
  *
@@ -69,6 +73,18 @@ export function useConversationActions(
       setPendingRename(null);
     },
   });
+  // Pin/archive are one-click toggles with no dialog; the list and the open transcript header are refetched on success.
+  const flagMutation = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: { pinned?: boolean; archived?: boolean } }) =>
+      patchConversation(id, patch, session.csrfToken),
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+      void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(updated.id) });
+    },
+  });
+  const flagMutate = flagMutation.mutate;
+  const setPinned = React.useCallback((id: string, pinned: boolean) => flagMutate({ id, patch: { pinned } }), [flagMutate]);
+  const setArchived = React.useCallback((id: string, archived: boolean) => flagMutate({ id, patch: { archived } }), [flagMutate]);
   const resetDelete = deleteMutation.reset;
   const resetRename = renameMutation.reset;
 
@@ -124,7 +140,7 @@ export function useConversationActions(
             <Input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} aria-label={t('renameLabel')} maxLength={200} />
             {renameMutation.isError && <p role="alert" className="text-xs text-destructive">{t('renameFailed')}</p>}
             <DialogFooter>
-              <Button type="button" className="secondary" onClick={() => setPendingRename(null)}>{t('cancel')}</Button>
+              <Button type="button" variant="outline" onClick={() => setPendingRename(null)}>{t('cancel')}</Button>
               <Button type="submit" disabled={!renameValue.trim() || renameMutation.isPending}>{t('renameSave')}</Button>
             </DialogFooter>
           </form>
@@ -133,5 +149,5 @@ export function useConversationActions(
     </>
   );
 
-  return { rename, remove, dialogs };
+  return { rename, remove, setPinned, setArchived, dialogs };
 }

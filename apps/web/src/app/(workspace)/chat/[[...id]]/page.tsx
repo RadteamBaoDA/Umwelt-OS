@@ -13,6 +13,9 @@ import { chatKeys, getConversation, type Citation } from '@/modules/chat';
 import { useQuery } from '@tanstack/react-query';
 import { usePathname } from 'next/navigation';
 
+/** localStorage key remembering that the conversation-history sidebar is collapsed. */
+const HISTORY_COLLAPSED_KEY = 'umwelt.chat.historyCollapsed';
+
 /**
  * Inner Chat page content consuming ChatController and filling the WorkspaceShell's scrollable main region.
  *
@@ -136,7 +139,17 @@ function useChatPageState() {
   const t = useTranslations('chat');
   const chatCtrl = useChatController();
   const [mobileView, setMobileView] = React.useState<'history' | 'chat'>('chat');
-  const [historyCollapsed, setHistoryCollapsed] = React.useState(false); // 280px history region is open by default on desktop
+  const [historyCollapsed, setHistoryCollapsedState] = React.useState(false); // 280px history region is open by default on desktop
+  // Restore the saved choice after mount (not in the initializer) so server and first client render agree.
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time post-hydration read of an external store
+    try { if (localStorage.getItem(HISTORY_COLLAPSED_KEY) === '1') setHistoryCollapsedState(true); } catch { /* storage blocked: default open */ }
+  }, []);
+  /** Updates the collapsed flag and persists it per device; storage failures only lose persistence. */
+  const setHistoryCollapsed = React.useCallback((collapsed: boolean) => {
+    setHistoryCollapsedState(collapsed);
+    try { localStorage.setItem(HISTORY_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch { /* storage blocked */ }
+  }, []);
   // Read from the pathname (not useParams): native history.replaceState updates usePathname but not route params.
   const pathname = usePathname();
   const urlConversationId = React.useMemo(() => {
