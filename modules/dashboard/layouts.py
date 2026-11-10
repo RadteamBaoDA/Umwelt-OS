@@ -47,7 +47,10 @@ def validate_layout(
     # check simple and predictable. ponytail: pairwise scan, spatial index only if the 100-item ceiling changes.
     for index, left in enumerate(items):
         for right in items[index + 1 :]:
-            if group_ids is not None and group_ids[left.instance_id] != group_ids[right.instance_id]:
+            if (
+                group_ids is not None
+                and group_ids[left.instance_id] != group_ids[right.instance_id]
+            ):
                 continue
             overlaps = (
                 left.x < right.x + right.w

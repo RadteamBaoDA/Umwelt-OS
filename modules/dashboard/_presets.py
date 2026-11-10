@@ -689,7 +689,9 @@ async def apply_preset(
     # Append puts the preset in its own group after the existing ones; create/replace start from an empty dashboard.
     group_position = max(group_positions, default=-1) + 1 if payload.mode == "append" else 0
     group = DashboardGroup(
-        dashboard_id=dashboard.id, name=current["name"], position=group_position,
+        dashboard_id=dashboard.id,
+        name=current["name"],
+        position=group_position,
         is_overview=payload.mode != "append",
     )
     session.add(group)

@@ -207,7 +207,10 @@ async def list_groups(
     )
     return [
         DashboardGroupRead(
-            id=row.id, dashboard_id=row.dashboard_id, name=row.name, position=row.position,
+            id=row.id,
+            dashboard_id=row.dashboard_id,
+            name=row.name,
+            position=row.position,
             is_overview=row.is_overview,
         )
         for row in rows.all()
@@ -256,8 +259,11 @@ async def create_group(
         access_fence=fence,
     )
     return DashboardGroupRead(
-        id=group.id, dashboard_id=dashboard_id, name=group.name,
-        position=group.position, is_overview=False,
+        id=group.id,
+        dashboard_id=dashboard_id,
+        name=group.name,
+        position=group.position,
+        is_overview=False,
     )
 
 
@@ -294,7 +300,9 @@ async def patch_group(
         if payload.name is None:
             raise ValueError("name cannot be cleared")
         if group.is_overview:
-            raise DashboardConflict("overview_immutable", "Overview cannot be renamed", dashboard.revision)
+            raise DashboardConflict(
+                "overview_immutable", "Overview cannot be renamed", dashboard.revision
+            )
         group.name = payload.name
     if "position" in payload.model_fields_set:
         if payload.position is None:
@@ -309,8 +317,11 @@ async def patch_group(
         access_fence=fence,
     )
     return DashboardGroupRead(
-        id=group.id, dashboard_id=dashboard_id, name=group.name,
-        position=group.position, is_overview=group.is_overview,
+        id=group.id,
+        dashboard_id=dashboard_id,
+        name=group.name,
+        position=group.position,
+        is_overview=group.is_overview,
     )
 
 
@@ -342,7 +353,9 @@ async def delete_group(
     if group is None:
         raise DashboardMissing
     if group.is_overview:
-        raise DashboardConflict("overview_immutable", "Overview cannot be deleted", dashboard.revision)
+        raise DashboardConflict(
+            "overview_immutable", "Overview cannot be deleted", dashboard.revision
+        )
     if (
         await session.scalar(
             select(GadgetInstance.id)
@@ -673,10 +686,14 @@ async def _resolve_instance_group(
             raise DashboardMissing
         return group
     group = await session.scalar(
-        query.order_by(DashboardGroup.is_overview.desc(), DashboardGroup.position, DashboardGroup.id).limit(1)
+        query.order_by(
+            DashboardGroup.is_overview.desc(), DashboardGroup.position, DashboardGroup.id
+        ).limit(1)
     )
     if group is None:
-        group = DashboardGroup(dashboard_id=dashboard.id, name="Overview", position=0, is_overview=True)
+        group = DashboardGroup(
+            dashboard_id=dashboard.id, name="Overview", position=0, is_overview=True
+        )
         session.add(group)
         await session.flush()
     return group
@@ -885,12 +902,14 @@ async def patch_instance(
         if instance.group_id != payload.group_id:
             # Each panel owns its own origin. Re-home both saved rectangles before changing membership.
             placements = list(
-                (await session.scalars(
-                    select(GadgetPlacement).where(
-                        GadgetPlacement.dashboard_id == dashboard_id,
-                        GadgetPlacement.instance_id == instance_id,
+                (
+                    await session.scalars(
+                        select(GadgetPlacement).where(
+                            GadgetPlacement.dashboard_id == dashboard_id,
+                            GadgetPlacement.instance_id == instance_id,
+                        )
                     )
-                )).all()
+                ).all()
             )
             for placement in placements:
                 layout_columns = await session.scalar(
@@ -900,15 +919,17 @@ async def patch_instance(
                     )
                 )
                 occupied = list(
-                    (await session.scalars(
-                        select(GadgetPlacement)
-                        .join(GadgetInstance, GadgetInstance.id == GadgetPlacement.instance_id)
-                        .where(
-                            GadgetPlacement.dashboard_id == dashboard_id,
-                            GadgetPlacement.breakpoint == placement.breakpoint,
-                            GadgetInstance.group_id == payload.group_id,
+                    (
+                        await session.scalars(
+                            select(GadgetPlacement)
+                            .join(GadgetInstance, GadgetInstance.id == GadgetPlacement.instance_id)
+                            .where(
+                                GadgetPlacement.dashboard_id == dashboard_id,
+                                GadgetPlacement.breakpoint == placement.breakpoint,
+                                GadgetInstance.group_id == payload.group_id,
+                            )
                         )
-                    )).all()
+                    ).all()
                 )
                 position = layouts.find_free_position(
                     [(item.x, item.y, item.w, item.h) for item in occupied],
@@ -1023,7 +1044,9 @@ async def replace_layout(
     if item_ids != set(minimums):
         raise ValueError("Layout must include every dashboard instance exactly once")
     layouts.validate_layout(
-        payload.items, payload.columns, minimums,
+        payload.items,
+        payload.columns,
+        minimums,
         group_ids={instance.id: instance.group_id for instance in instances},
     )
     layout_row = await session.scalar(

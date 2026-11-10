@@ -18,6 +18,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+)
+from sqlalchemy import (
     text as sa_text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -77,7 +79,9 @@ class DashboardGroup(Base):
         CheckConstraint("position >= 0", name="ck_dashboard_groups_position"),
         UniqueConstraint("id", "dashboard_id", name="uq_dashboard_groups_id_dashboard"),
         Index(
-            "uq_dashboard_groups_one_overview", "dashboard_id", unique=True,
+            "uq_dashboard_groups_one_overview",
+            "dashboard_id",
+            unique=True,
             postgresql_where=sa_text("is_overview"),
         ),
     )
