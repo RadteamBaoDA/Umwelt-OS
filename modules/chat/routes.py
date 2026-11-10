@@ -157,6 +157,7 @@ from modules.chat.models import (
     ResponseRun,
 )
 from modules.chat.schemas import (
+    TITLE_SOURCE_KEY,
     CancelResponse,
     ConversationCreate,
     ConversationDetailRead,
@@ -481,7 +482,11 @@ async def patch_conversation(
     _reject_expired_conversation(conv)
 
     if payload.title is not None:
-        conv.title = payload.title.strip() or "New conversation"
+        new_title = payload.title.strip() or "New conversation"
+        if new_title != conv.title:
+            # An owner rename is final: the auto-title step never overwrites a title marked "user".
+            conv.metadata_json = {**(conv.metadata_json or {}), TITLE_SOURCE_KEY: "user"}
+        conv.title = new_title
     if payload.pinned is not None:
         conv.pinned = payload.pinned
     if payload.archived is not None:

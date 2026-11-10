@@ -19,6 +19,7 @@ from modules.chat._worker.base import (
     REASONING_MAX_CHARS,
     STREAM_FLUSH_CHARS,
     STREAM_FLUSH_SECONDS,
+    ResponseNoLongerActive,
     is_run_cancelled,
     logger,
 )
@@ -30,6 +31,7 @@ from modules.chat._worker.setup import (
 )
 from modules.chat._worker.state import (
     _parse_sse_chunk,
+    _publish_status,
     _RoundState,
     _RunCtx,
     _RunStopped,
@@ -43,12 +45,18 @@ from modules.chat._worker.tools import (
     _ToolEnv,
     _TurnState,
 )
+from modules.chat.db_query import TOOL_QUERY_COLLECTED_DATA
 from modules.chat.generative_ui import (
     TERMINAL_UI_TOOLS,
     ToolCallAccumulator,
     streaming_snapshot,
     ui_call_error,
 )
+from modules.chat.generative_ui.tool_specs import TOOL_READ_SKILL, TOOL_REQUEST_USER_INPUT
+
+# Tools that already publish their own progress (query_collected_data) or park the run behind their own
+# input UI (request_user_input); every other handled data tool gets a generic running/done step.
+_SELF_REPORTING_TOOLS = frozenset({TOOL_QUERY_COLLECTED_DATA, TOOL_REQUEST_USER_INPUT})
 
 
 def _round_terminals(
@@ -295,6 +303,33 @@ def _bounded_continue(ts: _TurnState, rc: _RoundCalls, run_id: UUID) -> bool:
     return True
 
 
+async def _run_data_tool(env: _ToolEnv, call: dict[str, str]) -> str:
+    """Run a handled data tool and publish ``tool.status`` running/done around it for the step list.
+
+    ``read_skill`` carries the skill name as ``label``. ``done`` is published even when the tool raises so a
+    client never keeps a stale step; a run that ended meanwhile has nothing left to tell. Handlers in
+    ``_SELF_REPORTING_TOOLS`` publish their own progress. Handler errors (``_RunStopped``) propagate unchanged.
+    """
+    name = call["name"]
+    handler = _TOOL_HANDLERS[name]
+    if name in _SELF_REPORTING_TOOLS:
+        return await handler.run(env, call)
+    label: str | None = None
+    if name == TOOL_READ_SKILL:
+        try:
+            parsed = json.loads(call["arguments"] or "{}")
+        except ValueError:
+            parsed = None
+        skill = parsed.get("name") if isinstance(parsed, dict) else None
+        label = skill if isinstance(skill, str) and skill else None
+    await _publish_status(env.c, name, "running", label=label)
+    try:
+        return await handler.run(env, call)
+    finally:
+        with contextlib.suppress(ResponseNoLongerActive):
+            await _publish_status(env.c, name, "done", label=label)
+
+
 async def _answer_tool_calls(
     env: _ToolEnv, st: _StreamState, rs: _RoundState, rc: _RoundCalls
 ) -> None:
@@ -328,7 +363,7 @@ async def _answer_tool_calls(
             # The payload is already on screen; echoing it back would only cost tokens.
             content = json.dumps({"status": "rendered", "part_id": rc.part_of[id(call)]})
         else:
-            content = await _TOOL_HANDLERS[call["name"]].run(env, call)
+            content = await _run_data_tool(env, call)
         ts.messages_payload.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
 
 

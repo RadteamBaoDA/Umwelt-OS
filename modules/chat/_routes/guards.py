@@ -28,6 +28,7 @@ from modules.chat.schemas import (
     DB_QUERY_KEY,
     GADGET_SCOPE_KEY,
     MODEL_OVERRIDE_KEY,
+    SUGGESTIONS_KEY,
     WEB_SEARCH_KEY,
     MessageMutationRequest,
     SendMessageRequest,
@@ -241,6 +242,14 @@ def _message_reasoning(metadata: Any) -> str | None:
     """Return the stored model reasoning text from a message's metadata, or None when absent or malformed."""
     value = metadata.get("reasoning") if isinstance(metadata, dict) else None
     return value if isinstance(value, str) and value else None
+
+
+def _message_suggestions(metadata: Any) -> list[str]:
+    """Return the stored follow-up suggestions from a message's metadata; malformed values yield ``[]``."""
+    value = metadata.get(SUGGESTIONS_KEY) if isinstance(metadata, dict) else None
+    if not isinstance(value, list):
+        return []
+    return [s for s in value if isinstance(s, str) and s][:3]
 
 
 def _message_mutation_digest(

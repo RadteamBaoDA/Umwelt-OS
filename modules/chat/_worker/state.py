@@ -320,8 +320,18 @@ def _add_event(
     )
 
 
-async def _publish_status(c: _RunCtx, tool: str, state: str) -> None:
-    """Publish a ``tool.status`` event through ``_publish_tool_status`` and advance ``c.seq``."""
+async def _publish_status(
+    c: _RunCtx,
+    tool: str,
+    state: str,
+    *,
+    label: str | None = None,
+    detail: dict[str, int] | None = None,
+) -> None:
+    """Publish a ``tool.status`` event through ``_publish_tool_status`` and advance ``c.seq``.
+
+    ``label`` and ``detail`` are the optional additive progress fields (see ``_publish_tool_status``).
+    """
     c.seq = await _publish_tool_status(
         c.session_factory,
         c.response_id,
@@ -332,6 +342,8 @@ async def _publish_status(c: _RunCtx, tool: str, state: str) -> None:
         state,
         scope=c.scope,
         access_fence=c.access,
+        label=label,
+        detail=detail,
     )
 
 

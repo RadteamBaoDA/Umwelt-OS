@@ -90,6 +90,7 @@ from modules.chat._worker.finalize import (  # noqa: F401
     _validate_document_citations,
     _web_citations_for,
 )
+from modules.chat._worker.followup import generate_followup
 from modules.chat._worker.purge import (  # noqa: F401
     _purge_expired_activity_links,
     _purge_expired_conversations,
@@ -257,7 +258,11 @@ async def _generate(c: _RunCtx, claimed: _ClaimedRun) -> None:
         ts.ui_parts,
     )
     generative_uis = _finalize_widgets(env, cited.final_answer, cited)
-    await _persist_final(env, st, cited.final_answer, cited.valid_citations, generative_uis)
+    message_id = await _persist_final(
+        env, st, cited.final_answer, cited.valid_citations, generative_uis
+    )
+    # 6. Best-effort title and follow-up suggestions after message.done; never fails or alters the answer.
+    await generate_followup(env, message_id, cited.final_answer)
 
 
 async def run_response_generation(

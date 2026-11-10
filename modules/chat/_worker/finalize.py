@@ -349,12 +349,15 @@ async def _persist_final(
     final_answer: str,
     valid_citations: list[dict[str, Any]],
     generative_uis: list[dict[str, Any]],
-) -> None:
+) -> UUID:
     """Persist the completed assistant message, mark the run completed and publish the terminal events.
 
     One locked transaction (privacy -> conversation -> run -> evidence): a Stop or drifted evidence persists
     the cancelled/redacted state instead and raises ``_RunStopped``. Events are appended in order:
     ``message.citations``, one ``message.ui.done`` per part, then ``message.done``; committing releases every lock.
+
+    Returns:
+        The id of the persisted assistant message (for the post-answer title/suggestions step).
     """
     c, turn, setup = env.c, env.turn, env.setup
     async with c.session_factory() as session:
@@ -414,7 +417,9 @@ async def _persist_final(
             done_payload["generative_ui_parts"] = generative_uis
         c.seq = await _next_event_seq(session, c.response_id, c.seq)
         _add_event(session, c, c.seq, "message.done", done_payload)
+        message_id = assistant_msg.id  # read before commit expires the instance
         await session.commit()
+    return message_id
 
 
 def _cited_lists(args: Any) -> list[Any]:

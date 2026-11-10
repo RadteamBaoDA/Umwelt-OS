@@ -435,10 +435,14 @@ async def _publish_tool_status(
     *,
     scope: InternalJobScope,
     access_fence: AccessFence,
+    label: str | None = None,
+    detail: dict[str, int] | None = None,
 ) -> int:
     """Publish one ``tool.status`` progress event (``tool`` running/done) under the live-run lock.
 
-    The event is cosmetic: it carries no user data. Uses the same lock order and sequence allocation as
+    The payload is ``{tool, state}`` plus the additive optional ``label`` (short display subject such as a
+    skill name) and ``detail`` (counts only, e.g. ``{"documents": 3}``); old clients ignore both. The event
+    is cosmetic: it carries no user content beyond those bounded fields. Uses the same lock order and sequence allocation as
     ``_publish_web_search``; the lock is released on commit, so callers never hold it across egress or tool
     execution. Raises ``ResponseNoLongerActive`` when the run is no longer live.
 
@@ -461,7 +465,12 @@ async def _publish_tool_status(
                 seq=seq,
                 event_type="tool.status",
                 event_id=make_event_id(response_id, seq),
-                data={"tool": tool, "state": state},
+                data={
+                    "tool": tool,
+                    "state": state,
+                    **({"label": label[:80]} if label else {}),
+                    **({"detail": detail} if detail else {}),
+                },
             )
         )
         await session.commit()

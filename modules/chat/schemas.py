@@ -32,6 +32,10 @@ DB_QUERY_KEY = "_db_query"
 GADGET_SCOPE_KEY = "_gadget_scope"
 # Per-send chat model override {"provider_id", "model"}; written by the route after validation, read by the worker.
 MODEL_OVERRIDE_KEY = "_model_override"
+# Conversation.metadata_json key: "user" once the owner renamed the conversation, "auto" once the worker titled it.
+TITLE_SOURCE_KEY = "title_source"
+# Message.metadata_json key holding the 2-3 follow-up question suggestions of an assistant answer.
+SUGGESTIONS_KEY = "suggestions"
 
 
 class SelectedEvidenceRef(BaseModel):
@@ -416,6 +420,8 @@ class MessageRead(BaseModel):
     generative_ui: GenerativeUIPayload | None = None  # first part, kept for older clients
     generative_ui_parts: list[GenerativeUIPayload] = Field(default_factory=list)
     reasoning: str | None = None  # model "thinking" text kept from the stream, capped at write time
+    # Follow-up question suggestions written by the post-answer step; empty until (or unless) generated.
+    suggestions: list[str] = Field(default_factory=list)
 
 
 class ChatExportCitation(BaseModel):

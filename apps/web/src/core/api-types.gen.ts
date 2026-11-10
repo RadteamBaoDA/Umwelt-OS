@@ -2221,6 +2221,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/connectors/{source_id}/rest-sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch Rest Sample
+         * @description Fetch one bounded, pruned JSON sample from an unauthenticated custom REST draft (owner only).
+         *
+         *     Applies the validate-draft prechecks (active source, generation, revision, auth mode, registry and
+         *     public-URL policy), then one GET through ``rest.fetch_bounded`` (pinned public IP, no redirects,
+         *     256 KiB, 10 s). Header-authenticated drafts are refused so no secret is ever sent. The response
+         *     carries only the status code and pruned body: never headers, URL or request data. Stable 422/502
+         *     detail codes: ``rest_sample_auth_unsupported``, ``rest_sample_url_refused``, ``rest_sample_too_large``,
+         *     ``rest_sample_not_json``, ``rest_sample_upstream_error``, ``rest_sample_unreachable``.
+         */
+        post: operations["fetch_rest_sample_api_v1_connectors__source_id__rest_sample_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/connectors/{source_id}/validate": {
         parameters: {
             query?: never;
@@ -2330,7 +2357,8 @@ export interface paths {
          *         limit: Maximum number of conversations to return (1-100).
          *         offset: Offset for pagination.
          *         archived: Filter to archived or active conversations.
-         *         q: Optional literal title substring; uses the retained-history search path.
+         *         q: Optional literal substring matched against titles and message text; uses the
+         *             retained-history search path.
          *
          *     Returns:
          *         List of ConversationRead schemas.
@@ -10884,6 +10912,8 @@ export interface components {
             document_version_id: string;
             /** Excerpt */
             excerpt: string;
+            /** Image Url */
+            image_url?: string | null;
             /** Metadata Is Version Snapshot */
             metadata_is_version_snapshot: boolean;
             /**
@@ -12798,6 +12828,8 @@ export interface components {
             revision_of_message_id?: string | null;
             /** Role */
             role: string;
+            /** Suggestions */
+            suggestions?: string[];
             web_search?: components["schemas"]["WebSearchOutcomeRead"] | null;
         };
         /**
@@ -14852,6 +14884,18 @@ export interface components {
             expected_scope_sha256: string;
             /** Expected Source Generation */
             expected_source_generation: number;
+        };
+        /**
+         * RestSampleRead
+         * @description Bounded JSON sample from a custom REST draft: status and pruned body only, never headers or URL.
+         */
+        RestSampleRead: {
+            /** Sample */
+            sample: unknown;
+            /** Status Code */
+            status_code: number;
+            /** Truncated */
+            truncated: boolean;
         };
         /**
          * RetentionSettingsRead
@@ -20838,6 +20882,43 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_rest_sample_api_v1_connectors__source_id__rest_sample_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
+            path: {
+                source_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftValidationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestSampleRead"];
                 };
             };
             /** @description Validation Error */
