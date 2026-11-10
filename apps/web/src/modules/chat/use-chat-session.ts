@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
@@ -16,6 +16,7 @@ import { useChatSend } from './use-chat-send';
 import { useChatStream } from './use-chat-stream';
 import { useChatWebSearch } from './use-chat-web-search';
 import { useConversationSelection } from './use-conversation-selection';
+import { useFollowupRefresh } from './use-followup-refresh';
 
 /** Inputs of the session hooks (the data-bearing subset of ChatSessionProps). */
 export interface ChatSessionOptions {
@@ -65,18 +66,35 @@ export function useChatSessionData({ conversationId, mode }: ChatSessionOptions)
   // Specialist-agent sends (non-assistant profile or a pending profile retry) do not carry web_search or attachments.
   const profileBlocked = composer.selectedProfileId !== 'assistant' || Boolean(pendingProfileRun);
   const attachmentsUnavailable = areAttachmentsUnavailable(profileBlocked, effectiveEditingMessageId, chatCtrl.context);
+  const attachments = useChatAttachments(session.csrfToken, attachmentsUnavailable);
+  const busy = live.isPending || live.isStreaming;
+  const queryClient = useQueryClient();
+  const { refetch: refetchDetail } = detail;
+  /** Picks up the auto title and suggestions written after the stream closed (see useFollowupRefresh). */
+  const refreshFollowup = React.useCallback(() => {
+    void refetchDetail();
+    void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+  }, [refetchDetail, queryClient]);
+  useFollowupRefresh({ conversationId, messages, busy, refresh: refreshFollowup });
   return {
     session, chatCtrl, live, actions, refs, composer, detail, messages, latestAssistant,
     pendingProfileRun, pendingMessageMutation, effectiveEditingMessageId, profileBlocked, attachmentsUnavailable,
-    busy: live.isPending || live.isStreaming,
+    busy,
+    /** True while files may be added (drop zone and attach controls share the rule). */
+    canAttachFiles: canAddFiles(busy, attachmentsUnavailable, attachments.full),
     // Plain Q&A (Assistant, no run pending) shows no agent or task chrome; only a specialist selection does.
     agentMode: mode === 'full' && profileBlocked,
     dbQueryEffective: composer.dbQueryOn || chatCtrl.context?.kind === 'gadget',
     modelPicker: useChatModelPicker(),
     providerReady: useChatProviderReady(),
     webSearch: useChatWebSearch(mode, profileBlocked),
-    attachments: useChatAttachments(session.csrfToken, attachmentsUnavailable),
+    attachments,
   };
+}
+
+/** Whether files may be added: not mid-turn, attachments available for this send, and below the per-message limit. */
+function canAddFiles(busy: boolean, unavailable: boolean, full: boolean): boolean {
+  return !busy && !unavailable && !full;
 }
 
 /** Return type of {@link useChatSessionData}. */

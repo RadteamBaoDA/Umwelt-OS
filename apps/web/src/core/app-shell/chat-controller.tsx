@@ -1,8 +1,10 @@
 'use client';
 
-import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ChatContext } from '@/modules/chat';
 import { uuid7 } from '@/core/uuid7';
+import { clearAllDrafts, readDraft, writeDraft } from './chat-draft-storage';
+import { useResetOnChange } from '@/modules/shared';
 
 /** Immutable request identity retained until the server acknowledges a message revision. */
 export interface PendingMessageMutation {
@@ -60,7 +62,7 @@ export interface ChatControllerContextValue {
   activeConversationGeneration: number;
   /** Bounded grounding context associated with the active session. */
   context: ChatContext | null;
-  /** Ephemeral in-memory composer draft retained across drawer closures. */
+  /** Composer draft: kept in memory across drawer closures and mirrored per conversation to sessionStorage (reload-safe). */
   draft: string;
   /** Unacknowledged specialist starts keyed by their original conversation ID. */
   pendingSpecialistRuns: Readonly<Record<string, PendingSpecialistRun>>;
@@ -210,7 +212,32 @@ function useConversationSelection(
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [activeConversationGeneration, setActiveConversationGeneration] = useState(0);
   const [context, setContext] = useState<ChatContext | null>(null);
-  const [draft, setDraft] = useState<string>('');
+  const [draft, setDraftState] = useState<string>('');
+  // Key of the conversation whose draft the composer currently shows; updated after commit so a write always targets
+  // the visible conversation.
+  const draftKeyRef = useRef<string | null>(null);
+  useLayoutEffect(() => { draftKeyRef.current = activeConversationId; });
+  // Switching (or reloading into) a conversation shows that conversation's saved draft; pure read plus own setter.
+  useResetOnChange([activeConversationId], () => { setDraftState(readDraft(activeConversationId)); });
+  // Logout/session end: drop persisted and visible drafts before the next account can see them.
+  useEffect(() => {
+    /** Clears every stored draft and the visible one when the shell announces the session is ending. */
+    const authEnding = () => { clearAllDrafts(); setDraftState(''); };
+    window.addEventListener('bbd:auth-ending', authEnding);
+    return () => window.removeEventListener('bbd:auth-ending', authEnding);
+  }, []);
+
+  /** Updates the visible draft and mirrors it to sessionStorage under the active conversation. */
+  const setDraft = useCallback((value: string) => {
+    setDraftState(value);
+    writeDraft(draftKeyRef.current, value);
+  }, []);
+
+  /** Clears the draft for a fresh thread: the new-chat slot is emptied directly because the key still points at the old chat. */
+  const clearNewChatDraft = useCallback(() => {
+    setDraftState('');
+    writeDraft(null, '');
+  }, []);
 
   /**
    * Selects a conversation and advances its generation even when the same ID is selected again.
@@ -253,7 +280,7 @@ function useConversationSelection(
   }, [selectConversationRaw]);
 
   return {
-    activeConversationId, activeConversationGeneration, context, draft, setContext, setDraft,
+    activeConversationId, activeConversationGeneration, context, draft, setContext, setDraft, clearNewChatDraft,
     selectConversationRaw, bindDayConversation, selectDay, unbindConversation, selectHistoryConversation,
   };
 }
@@ -262,7 +289,7 @@ function useConversationSelection(
 function useChatDrawer(
   selectConversationRaw: (id: string | null) => void,
   setContext: (context: ChatContext | null) => void,
-  setDraft: (draft: string) => void,
+  clearNewChatDraft: () => void,
 ) {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
@@ -294,12 +321,13 @@ function useChatDrawer(
   }, []);
 
   /**
-   * Clears the active conversation ID and composer draft while preserving thread-keyed retry envelopes.
+   * Clears the active conversation ID and the new-chat draft while preserving thread-keyed retry envelopes and the
+   * previous conversation's saved draft.
    */
   const resetConversation = useCallback(() => {
     selectConversationRaw(null);
-    setDraft('');
-  }, [selectConversationRaw, setDraft]);
+    clearNewChatDraft();
+  }, [selectConversationRaw, clearNewChatDraft]);
 
   return { isDrawerOpen, openDrawer, closeDrawer, toggleDrawer, resetConversation };
 }
@@ -317,10 +345,10 @@ export function ChatControllerProvider({ children }: { children: ReactNode }) {
   const { pendingMessageMutations, pendingMessageMutationsRef, getOrCreatePendingMessageMutation, clearPendingMessageMutation } = usePendingMessageMutations();
   const { pendingSpecialistRuns, setPendingSpecialistRun, clearPendingSpecialistRun } = usePendingSpecialistRuns();
   const {
-    activeConversationId, activeConversationGeneration, context, draft, setContext, setDraft,
+    activeConversationId, activeConversationGeneration, context, draft, setContext, setDraft, clearNewChatDraft,
     selectConversationRaw, bindDayConversation, selectDay, unbindConversation, selectHistoryConversation,
   } = useConversationSelection(pendingMessageMutationsRef, clearPendingMessageMutation);
-  const { isDrawerOpen, openDrawer, closeDrawer, toggleDrawer, resetConversation } = useChatDrawer(selectConversationRaw, setContext, setDraft);
+  const { isDrawerOpen, openDrawer, closeDrawer, toggleDrawer, resetConversation } = useChatDrawer(selectConversationRaw, setContext, clearNewChatDraft);
 
   // Memoize the context value so consumers only re-render when chat state or stable callbacks change.
   const value = useMemo<ChatControllerContextValue>(() => ({

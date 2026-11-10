@@ -64,6 +64,8 @@ export interface ChatComposerProps {
   menu?: ComposerMenuProps;
   /** Per-chat model dropdown (full and drawer); omitted while no chat model is configured. */
   modelPicker?: ChatModelPicker;
+  /** When defined, the textarea takes focus each time this value changes (opening/switching a conversation), on fine pointers only. */
+  autoFocusKey?: string;
 }
 
 /** Pieces of composer state shared by the drawer and full layouts. */
@@ -365,6 +367,12 @@ export function ChatComposer(props: ChatComposerProps) {
   const t = useTranslations('chat');
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const { handleSend, handleKeyDown, handlePaste, handleChange, canSend } = useComposerHandlers(props, textareaRef);
+  const { autoFocusKey } = props;
+  React.useEffect(() => {
+    // Touch devices would pop the on-screen keyboard over the transcript, so only fine pointers auto-focus.
+    if (autoFocusKey === undefined || !window.matchMedia?.('(pointer: fine)')?.matches) return;
+    textareaRef.current?.focus({ preventScroll: true });
+  }, [autoFocusKey]);
   const textarea = (
     <Textarea
       ref={textareaRef}

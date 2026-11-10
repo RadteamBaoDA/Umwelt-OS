@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BookOpenIcon, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { CitationPanel } from './citation-panel';
 import { useContextLabel } from './chat-context-bar';
+import { onCitationFocus, useCitationFocus } from './chat-citation-focus';
 
 /**
  * Sources and Context tabs built from loaded conversation data; shared by the desktop rail and mobile sheet.
@@ -19,14 +20,18 @@ import { useContextLabel } from './chat-context-bar';
 function RailTabs({ citations, context }: { citations: Citation[]; context: ChatContext | null }) {
   const t = useTranslations('chat');
   const contextLabel = useContextLabel(context);
+  const focus = useCitationFocus();
+  const [tab, setTab] = React.useState('sources');
+  // A citation click always lands on the Sources tab, even if the reader was looking at Context.
+  React.useEffect(() => onCitationFocus(() => setTab('sources')), []);
   return (
-    <Tabs defaultValue="sources">
+    <Tabs value={tab} onValueChange={setTab}>
       <TabsList aria-label={t('railLabel')}>
         <TabsTrigger value="sources">{t('railSources')}{citations.length > 0 ? ` (${citations.length})` : ''}</TabsTrigger>
         <TabsTrigger value="context">{t('railContext')}</TabsTrigger>
       </TabsList>
       <TabsContent value="sources">
-        {citations.length ? <CitationPanel citations={citations} variant="card" /> : <p className="mt-3 text-xs text-muted-foreground">{t('railSourcesEmpty')}</p>}
+        {citations.length ? <CitationPanel citations={citations} variant="card" highlightedKeys={focus.keys} focusNonce={focus.nonce} /> : <p className="mt-3 text-xs text-muted-foreground">{t('railSourcesEmpty')}</p>}
       </TabsContent>
       <TabsContent value="context"><p className="mt-3 text-xs text-muted-foreground">{contextLabel ?? t('railContextEmpty')}</p></TabsContent>
     </Tabs>
@@ -42,6 +47,8 @@ function RailTabs({ citations, context }: { citations: Citation[]; context: Chat
 export function ChatSideRail({ citations, context }: { citations: Citation[]; context: ChatContext | null }) {
   const t = useTranslations('chat');
   const [collapsed, setCollapsed] = React.useState(false);
+  // A citation click re-opens a tucked-away rail so the highlighted source is visible.
+  React.useEffect(() => onCitationFocus(() => setCollapsed(false)), []);
   // No rail data (nothing cited, no attached context): the region collapses away entirely instead of showing an empty panel.
   if (citations.length === 0 && !context) return null;
   return (
@@ -55,17 +62,22 @@ export function ChatSideRail({ citations, context }: { citations: Citation[]; co
 }
 
 /**
- * Below-lg entry point to the evidence rail: a 44px trigger opening the same Sources, Activity, and Context tabs in a right-side Sheet.
+ * Below-lg entry point to the evidence rail: a 44px trigger opening the same Sources and Context tabs in a right-side Sheet.
  *
  * @param props - Citations and context to display.
  * @returns Trigger plus sheet; the trigger is hidden at lg where the rail is inline.
  */
 export function ChatSourcesSheet({ citations, context }: { citations: Citation[]; context: ChatContext | null }) {
   const t = useTranslations('chat');
+  const [open, setOpen] = React.useState(false);
+  // Below 1100px the rail is hidden, so a citation click opens this sheet instead.
+  React.useEffect(() => onCitationFocus(() => {
+    if (!window.matchMedia?.('(min-width: 1100px)')?.matches) setOpen(true);
+  }), []);
   // Mirror the inline rail: nothing to show yet, so no trigger that would open an empty sheet.
   if (citations.length === 0 && !context) return null;
   return (
-    <Sheet>
+    <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
         <Button type="button" variant="outline" className="gap-2 px-3 text-xs min-[1100px]:hidden" aria-label={t('railOpen')}>
           <BookOpenIcon className="size-4" aria-hidden="true" />

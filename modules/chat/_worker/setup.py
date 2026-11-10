@@ -222,6 +222,8 @@ async def _retrieve_with_web(
     if web_requested:
         await _publish_status(c, "web_search", "running")
     request = turn.answer_request
+    # Progress for the step list: counts only (no titles or text), so the event stays content-free.
+    await _publish_status(c, "retrieval", "running")
     search_task = (
         asyncio.create_task(
             _rewrite_and_search(
@@ -253,6 +255,12 @@ async def _retrieve_with_web(
         await (
             session.commit()
         )  # release retrieval snapshot / selected-only Source FOR SHARE before awaiting web search
+        await _publish_status(
+            c,
+            "retrieval",
+            "done",
+            detail={"documents": len({e.document_id for e in answer_context.evidence})},
+        )
         web_run = await search_task if search_task is not None else None
     except BaseException:
         if search_task is not None:
@@ -362,6 +370,24 @@ class _SendAttemptFence:
             await self.release()
             raise
 
+    async def config_only_before_send(self) -> None:
+        """Re-check only that the AI configuration (consent, provider, model) is unchanged.
+
+        For best-effort calls made after the run completed (title/suggestions): there is no live run or
+        evidence left to fence, but a changed privacy/provider configuration must still stop the request.
+        Raises whatever ``ensure_ai_config_unchanged`` raises on drift; takes no locks.
+        """
+        c = self._c
+        await ensure_ai_config_unchanged(
+            c.session_factory,
+            c.settings,
+            c.redis,
+            c.job_scope,
+            self._ai_config,
+            self._role,
+            self._fence_mapping,
+        )
+
     async def after_send(self) -> None:
         """Release all send-attempt locks after request opening or failure."""
         await self.release()
@@ -459,9 +485,16 @@ async def _resolve_ai_setup(
 
 
 def _build_gateway(
-    c: _RunCtx, ai_config: AIExecutionConfig, send_fence: _SendAttemptFence
+    c: _RunCtx,
+    ai_config: AIExecutionConfig,
+    send_fence: _SendAttemptFence,
+    *,
+    config_only: bool = False,
 ) -> ModelGateway:
-    """Construct the ``ModelGateway`` whose ``before_send`` is the per-attempt fence (lazy; no I/O)."""
+    """Construct the ``ModelGateway`` whose ``before_send`` is the per-attempt fence (lazy; no I/O).
+
+    ``config_only`` swaps in the configuration-drift-only check for calls made after the run completed.
+    """
     return ModelGatewayFactory.for_settings(
         c.session_factory,
         c.redis,
@@ -472,7 +505,7 @@ def _build_gateway(
     ).create(
         ai_config,
         timeout_seconds=float(ai_config.request_timeout_seconds),
-        before_send=send_fence.before_send,
+        before_send=send_fence.config_only_before_send if config_only else send_fence.before_send,
         destination_id=ai_config.endpoint_destination_id or "remote",
     )
 

@@ -133,3 +133,43 @@ describe('streamResponseEvents reasoning events', () => {
     expect(order).toEqual(['r:think ', 'r:more', 'd:Answer']);
   });
 });
+
+describe('streamResponseEvents progress, title and suggestion events', () => {
+  it('keeps onToolStatus for legacy tools only and sends every tool to onToolStep with label/detail', async () => {
+    mockSse(
+      [
+        `event: tool.status\ndata: ${JSON.stringify({ tool: 'web_search', state: 'running' })}\n\n`,
+        `event: tool.status\ndata: ${JSON.stringify({ tool: 'retrieval', state: 'done', detail: { documents: 3, bad: 'x' } })}\n\n`,
+        `event: tool.status\ndata: ${JSON.stringify({ tool: 'read_skill', state: 'running', label: 'tables' })}\n\n`,
+        `event: tool.status\ndata: {}\n\n`,
+        `event: message.done\ndata: ${JSON.stringify({ text: 'ok' })}\n\n`,
+      ].join(''),
+    );
+    const onToolStatus = vi.fn();
+    const onToolStep = vi.fn();
+    await streamResponseEvents('r1', { onToolStatus, onToolStep, onDone: vi.fn() });
+    expect(onToolStatus.mock.calls.map((c) => c[0])).toEqual([{ tool: 'web_search', state: 'running' }]);
+    expect(onToolStep.mock.calls.map((c) => c[0])).toEqual([
+      { tool: 'web_search', state: 'running' },
+      { tool: 'retrieval', state: 'done', detail: { documents: 3 } },
+      { tool: 'read_skill', state: 'running', label: 'tables' },
+    ]);
+  });
+
+  it('parses conversation.title and message.suggestions and ignores malformed payloads', async () => {
+    mockSse(
+      [
+        `event: conversation.title\ndata: ${JSON.stringify({ title: 'Trip to Hue' })}\n\n`,
+        `event: conversation.title\ndata: {}\n\n`,
+        `event: message.suggestions\ndata: ${JSON.stringify({ message_id: 'm1', suggestions: ['a?', '', 7, 'b?'] })}\n\n`,
+        `event: message.suggestions\ndata: ${JSON.stringify({ suggestions: ['a?'] })}\n\n`,
+        `event: message.done\ndata: ${JSON.stringify({ text: 'ok' })}\n\n`,
+      ].join(''),
+    );
+    const onConversationTitle = vi.fn();
+    const onSuggestions = vi.fn();
+    await streamResponseEvents('r1', { onConversationTitle, onSuggestions, onDone: vi.fn() });
+    expect(onConversationTitle.mock.calls).toEqual([['Trip to Hue']]);
+    expect(onSuggestions.mock.calls).toEqual([[{ message_id: 'm1', suggestions: ['a?', 'b?'] }]]);
+  });
+});

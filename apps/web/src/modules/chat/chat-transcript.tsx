@@ -3,13 +3,16 @@
 import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { AlertCircleIcon, ArrowDownIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
-import type { ChatMessage, Citation, ToolStatus, WebSearchOutcome } from './api';
+import { AlertCircleIcon, ArrowDownIcon, BookOpenIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, DatabaseIcon, GlobeIcon, Loader2Icon, PaperclipIcon, PencilIcon, RefreshCwIcon } from 'lucide-react';
+import type { ChatMessage, Citation, ToolStatus, ToolStep, WebSearchOutcome } from './api';
 import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
+import { focusCitations } from './chat-citation-focus';
 import { useChatScroll } from './use-chat-scroll';
 import { useSmoothedText } from './use-smoothed-text';
 import { ChatReasoning } from './chat-reasoning';
+import { ChatStepList } from './chat-steps';
+import { buildRenderEntries, type RenderEntry, type VersionNav } from './chat-versions';
 import { useCopyMessage } from './use-copy-message';
 import { useTopicNames } from './use-topic-names';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -96,14 +99,78 @@ const STARTER_PROMPTS = [
   { title: 'starterBtcTitle', prompt: 'starterBtcPrompt' },
 ] as const;
 
+/** One capability chip of the empty state: toggles a composer option or opens the file picker. */
+export interface CapabilityChip {
+  /** Current on/off state for toggles; omit for one-shot actions (attach). */
+  pressed?: boolean;
+  /** Localized reason the chip is unavailable (shown on hover and announced); presence disables the chip. */
+  disabledReason?: string;
+  /** True when disabled without an explanation (busy or limit reached). */
+  disabled?: boolean;
+  onActivate: () => void;
+}
+
+/** Capability chips shown in the empty state; each key is omitted when the control does not exist for this chat. */
+export interface EmptyCapabilities {
+  webSearch?: CapabilityChip;
+  dbQuery?: CapabilityChip;
+  attach?: CapabilityChip;
+}
+
+/**
+ * One outline chip. Toggles expose `aria-pressed`; a disabled chip names its reason for assistive tech and as a title.
+ *
+ * @param props - Icon, label and the chip model.
+ */
+function CapabilityChipButton({ icon, label, chip, testId }: { icon: React.ReactNode; label: string; chip: CapabilityChip; testId: string }) {
+  const toggle = chip.pressed !== undefined;
+  const disabled = Boolean(chip.disabledReason) || Boolean(chip.disabled);
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      data-testid={testId}
+      aria-pressed={toggle ? chip.pressed : undefined}
+      disabled={disabled}
+      title={chip.disabledReason}
+      onClick={chip.onActivate}
+      className="h-auto gap-1.5 px-3 py-1.5 text-xs aria-pressed:border-data aria-pressed:bg-active"
+    >
+      {icon}
+      {label}
+      {chip.disabledReason && <span className="sr-only"> ({chip.disabledReason})</span>}
+    </Button>
+  );
+}
+
+/**
+ * Three capability chips (web search, collected data, attach). They flip the same composer options as the + menu or open
+ * the file picker; they never send a message.
+ *
+ * @param props - The chip models for this chat.
+ * @returns A labelled group, or null when no capability exists.
+ */
+function CapabilityChips({ capabilities }: { capabilities: EmptyCapabilities }) {
+  const t = useTranslations('chat');
+  const { webSearch, dbQuery, attach } = capabilities;
+  if (!webSearch && !dbQuery && !attach) return null;
+  return (
+    <div data-testid="capability-chips" role="group" aria-label={t('capabilitiesLabel')} className="flex flex-wrap gap-2">
+      {webSearch && <CapabilityChipButton testId="capability-web" icon={<GlobeIcon className="size-3.5" aria-hidden="true" />} label={t('capabilityWebSearch')} chip={webSearch} />}
+      {dbQuery && <CapabilityChipButton testId="capability-data" icon={<DatabaseIcon className="size-3.5" aria-hidden="true" />} label={t('capabilityData')} chip={dbQuery} />}
+      {attach && <CapabilityChipButton testId="capability-attach" icon={<PaperclipIcon className="size-3.5" aria-hidden="true" />} label={t('capabilityAttach')} chip={attach} />}
+    </div>
+  );
+}
+
 /**
  * Composer-first empty state: one sentence about what Chat can do with this workspace plus starter prompts
  * (the owner's top topics, else three fixed ones) as plain outline buttons. Prompts are workspace-relevant message keys; selecting one sends it like a typed message.
  *
- * @param props - Send callback and active locale.
- * @returns Left-aligned intro block with a labelled prompt group.
+ * @param props - Send callback, active locale and the optional capability chips (full Chat).
+ * @returns Left-aligned intro block with a labelled prompt group and the capability chips.
  */
-function EmptyIntro({ onSendPrompt, locale }: { onSendPrompt: (prompt: string) => void; locale?: AppLocaleId }) {
+function EmptyIntro({ onSendPrompt, locale, capabilities }: { onSendPrompt: (prompt: string) => void; locale?: AppLocaleId; capabilities?: EmptyCapabilities }) {
   const t = useTranslations('chat');
   const copy = genUiCopy(resolveWidgetLocale(locale));
   // Real topics replace the fixed chips; empty/failed load keeps the fixed ones.
@@ -127,6 +194,7 @@ function EmptyIntro({ onSendPrompt, locale }: { onSendPrompt: (prompt: string) =
             </Button>
           ))}
       </div>
+      {capabilities && <CapabilityChips capabilities={capabilities} />}
     </div>
   );
 }
@@ -152,6 +220,8 @@ export interface ChatTranscriptProps {
   streamingWebSearch?: WebSearchOutcome | null;
   /** Server tool currently running for the active run; shown as a spinner status line. */
   activeTool?: ToolStatus['tool'] | null;
+  /** Processing steps of the active run (retrieval, web, data, skills); collapse to a summary once the answer settled. */
+  steps?: ToolStep[];
   /** Active streaming Generative UI widget parts in arrival order (one per `part_id`). */
   streamingUi?: UiPart[];
   /** Whether response generation is actively streaming tokens. */
@@ -166,8 +236,10 @@ export interface ChatTranscriptProps {
   onEditMessage?: (message: ChatMessage) => void;
   /** Starts an append-only regeneration from an assistant answer in full Chat. */
   onRegenerateMessage?: (message: ChatMessage) => void;
-  /** Optional callback when user clicks a citation badge. */
+  /** Optional callback when user clicks an inline citation chip; defaults to opening the evidence rail in full Chat. */
   onSelectCitation?: (citation: Citation) => void;
+  /** Capability chips for the empty state (full Chat); each toggles the matching composer option or opens the file picker. */
+  capabilities?: EmptyCapabilities;
   /** Optional callback invoked when an interactive widget or starter template dispatches a prompt. */
   onSendPrompt?: (prompt: string) => void;
   /**
@@ -201,9 +273,9 @@ function relationshipLabelFor(msg: ChatMessage, revised: ChatMessage | undefined
 /**
  * Text part of a message: speaker label, revision relationship, web search notice, reasoning and the markdown body.
  *
- * @param props - Message, host mode, locale and the optional relationship label.
+ * @param props - Message, host mode, locale, the optional relationship label and the inline-citation click handler.
  */
-function MessageBody({ msg, mode, locale, relationshipLabel }: MessageViewProps & { relationshipLabel: string | null }) {
+function MessageBody({ msg, mode, locale, relationshipLabel, onSelectCitation }: MessageViewProps & { relationshipLabel: string | null; onSelectCitation?: (citation: Citation) => void }) {
   const t = useTranslations('chat');
   const isUser = msg.role === 'user';
   return (
@@ -225,7 +297,7 @@ function MessageBody({ msg, mode, locale, relationshipLabel }: MessageViewProps 
 
       {isUser
         ? <ChatMarkdown content={msg.content} locale={locale} />
-        : <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} />}
+        : <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} onSelectCitation={onSelectCitation} />}
     </div>
   );
 }
@@ -268,9 +340,34 @@ function WidgetPart({ part, testId, onSendPrompt, mode, locale, csrfToken, allow
   );
 }
 
-/** Copy, edit and regenerate buttons under a message. */
-function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, copy, onEditMessage, onRegenerateMessage }: MessageViewProps & {
+/**
+ * `‹ 2/3 ›` control that switches the shown version of an edited/regenerated message.
+ *
+ * @param props - The chain position and the selection callback (chain id, chosen user-message id).
+ * @returns A labelled group with previous/next buttons (disabled at the ends) and the position text.
+ */
+function VersionNavControl({ nav, onSelect }: { nav: VersionNav; onSelect: (nav: VersionNav, versionId: string) => void }) {
+  const t = useTranslations('chat');
+  const position = { index: nav.index + 1, count: nav.count };
+  const buttonClass = 'size-8 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  return (
+    <div data-testid="version-nav" role="group" aria-label={t('versionGroup')} className="inline-flex items-center">
+      <Button type="button" variant="ghost" size="icon" className={buttonClass} aria-label={t('versionPrev')} disabled={nav.index === 0} onClick={() => onSelect(nav, nav.versionIds[nav.index - 1])}>
+        <ChevronLeftIcon className="size-3.5" aria-hidden="true" />
+      </Button>
+      <span className="min-w-8 text-center text-xs tabular-nums text-muted-foreground" aria-label={t('versionPositionLabel', position)}>{t('versionPosition', position)}</span>
+      <Button type="button" variant="ghost" size="icon" className={buttonClass} aria-label={t('versionNext')} disabled={nav.index === nav.count - 1} onClick={() => onSelect(nav, nav.versionIds[nav.index + 1])}>
+        <ChevronRightIcon className="size-3.5" aria-hidden="true" />
+      </Button>
+    </div>
+  );
+}
+
+/** Copy, edit and regenerate buttons under a message, preceded by the version control when the message has revisions. */
+function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, copy, onEditMessage, onRegenerateMessage, nav, onSelectVersion }: MessageViewProps & {
   timezone: string;
+  nav?: VersionNav;
+  onSelectVersion?: (nav: VersionNav, versionId: string) => void;
   canEdit: boolean;
   canRegenerate: boolean;
   copy: ReturnType<typeof useCopyMessage>;
@@ -283,6 +380,7 @@ function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, c
   const formattedDate = msg.created_at ? formatDateTime(msg.created_at, locale, timezone) : null;
   return (
     <div className="flex flex-wrap items-center gap-2">
+      {nav && onSelectVersion && <VersionNavControl nav={nav} onSelect={onSelectVersion} />}
       {formattedDate && <span className="text-xs text-muted-foreground">{formattedDate}</span>}
       {/* Expose one-click copy for all full-page messages and completed assistant messages in the drawer. */}
       {(mode === 'full' || (!isUser && Boolean(msg.content))) && <Button
@@ -301,7 +399,8 @@ function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, c
       {canEdit && (
         <Button
           type="button"
-          className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
+          variant="ghost"
+          className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => onEditMessage?.(msg)}
           aria-label={t('editPrompt')}
         >
@@ -312,7 +411,8 @@ function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, c
       {canRegenerate && (
         <Button
           type="button"
-          className="secondary inline-flex min-h-8 items-center gap-1 px-2 text-xs"
+          variant="ghost"
+          className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={() => onRegenerateMessage?.(msg)}
           aria-label={t('regenerateAnswer')}
         >
@@ -324,14 +424,41 @@ function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, c
   );
 }
 
-/** Model line (drawer only) under an assistant message. */
-function DrawerModelLine({ msg }: { msg: ChatMessage }) {
+/**
+ * Model line under an assistant message. The drawer also shows the source count here; the full page shows sources as
+ * the clickable {@link SourcesStrip} instead, so only the model name remains.
+ */
+function ModelLine({ msg, mode }: { msg: ChatMessage; mode: 'drawer' | 'full' }) {
   const t = useTranslations('chat');
-  if (!msg.model_identity) return null;
+  if (msg.role !== 'assistant' || !msg.model_identity) return null;
   return (
-    <span className="text-xs text-muted-foreground">
-      {t('modelLine', { model: msg.model_identity })}{msg.citations?.length ? ` · ${t('sourcesCount', { count: msg.citations.length })}` : ''}
+    <span data-testid="message-model" className="text-xs text-muted-foreground">
+      {t('modelLine', { model: msg.model_identity })}{mode === 'drawer' && msg.citations?.length ? ` · ${t('sourcesCount', { count: msg.citations.length })}` : ''}
     </span>
+  );
+}
+
+/**
+ * Compact "N sources" button under a grounded assistant answer; opens the evidence rail on that answer's sources.
+ *
+ * @param props - The message, host mode and the open handler (absent outside full Chat).
+ * @returns The strip, or null for user turns, the drawer and answers that cite nothing.
+ */
+function SourcesStrip({ msg, mode, onOpen }: { msg: ChatMessage; mode: 'drawer' | 'full'; onOpen?: (citations: Citation[]) => void }) {
+  const t = useTranslations('chat');
+  const citations = msg.citations;
+  if (mode !== 'full' || msg.role !== 'assistant' || !citations?.length || !onOpen) return null;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      data-testid="sources-strip"
+      onClick={() => onOpen(citations)}
+      className="min-h-8 w-fit gap-1.5 px-2.5 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <BookOpenIcon className="size-3.5" aria-hidden="true" />
+      {t('sourcesCount', { count: citations.length })}
+    </Button>
   );
 }
 
@@ -341,10 +468,19 @@ interface TranscriptMessageProps extends MessageViewProps {
   csrfToken?: string;
   revised?: ChatMessage;
   isRevised: boolean;
+  /** Newest version of its revision chain; edit/regenerate on an older version is hidden (the backend appends to the newest). */
+  latest: boolean;
+  /** Version control hosted by this message, when it belongs to a multi-version chain. */
+  nav?: VersionNav;
+  onSelectVersion?: (nav: VersionNav, versionId: string) => void;
   copy: ReturnType<typeof useCopyMessage>;
   widgetPromptHandler: (part: unknown) => ((prompt: string) => void | Promise<unknown>) | undefined;
   onEditMessage?: (message: ChatMessage) => void;
   onRegenerateMessage?: (message: ChatMessage) => void;
+  /** Inline citation chip click (full Chat); undefined leaves chips as plain links. */
+  onSelectCitation?: (citation: Citation) => void;
+  /** "N sources" strip click (full Chat); the strip is hidden without it. */
+  onOpenSources?: (citations: Citation[]) => void;
 }
 
 /**
@@ -354,19 +490,19 @@ interface TranscriptMessageProps extends MessageViewProps {
  * @param props - See {@link TranscriptMessageProps}.
  */
 function TranscriptMessage(props: TranscriptMessageProps) {
-  const { msg, mode, locale, csrfToken, revised, isRevised, widgetPromptHandler, onEditMessage, onRegenerateMessage } = props;
+  const { msg, mode, locale, csrfToken, revised, isRevised, latest, widgetPromptHandler, onEditMessage, onRegenerateMessage, onSelectCitation, onOpenSources } = props;
   const t = useTranslations('chat');
   const isUser = msg.role === 'user';
-  const canEdit = mode === 'full' && isUser && Boolean(msg.response_id) && !isRevised && Boolean(onEditMessage);
+  const canEdit = mode === 'full' && isUser && Boolean(msg.response_id) && !isRevised && latest && Boolean(onEditMessage);
   const canRegenerate = mode === 'full' && !isUser && msg.role === 'assistant'
-    && Boolean(msg.response_id) && !isRevised && Boolean(onRegenerateMessage);
+    && Boolean(msg.response_id) && !isRevised && latest && Boolean(onRegenerateMessage);
   return (
     <div
       data-role={msg.role}
       data-message-id={msg.id}
       className={`flex flex-col gap-2.5 ${isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto w-full'}`}
     >
-      <MessageBody msg={msg} mode={mode} locale={locale} relationshipLabel={relationshipLabelFor(msg, revised, t)} />
+      <MessageBody msg={msg} mode={mode} locale={locale} relationshipLabel={relationshipLabelFor(msg, revised, t)} onSelectCitation={onSelectCitation} />
 
       {/* Widget parts render in order after the text; older rows carry only `generative_ui`. */}
       {!isUser && messageUiParts(msg).map((part, index) => (
@@ -383,15 +519,55 @@ function TranscriptMessage(props: TranscriptMessageProps) {
         />
       ))}
 
+      <SourcesStrip msg={msg} mode={mode} onOpen={onOpenSources} />
+
       <MessageActions {...props} canEdit={canEdit} canRegenerate={canRegenerate} />
 
-      {mode === 'drawer' && !isUser && <DrawerModelLine msg={msg} />}
+      <ModelLine msg={msg} mode={mode} />
     </div>
+  );
+}
+
+/**
+ * Follow-up question chips under the latest assistant answer. Selecting one sends it like a typed message, so the
+ * host's provider gate and busy handling apply.
+ *
+ * @param props - The suggestions (2-3 short questions) and the send handler.
+ * @returns A labelled group of outline buttons (keyboard-reachable in DOM order).
+ */
+function FollowupSuggestions({ suggestions, onSend }: { suggestions: string[]; onSend: (prompt: string) => void }) {
+  const t = useTranslations('chat');
+  return (
+    <div data-testid="followup-suggestions" role="group" aria-label={t('suggestionsLabel')} className="flex flex-wrap gap-2">
+      {suggestions.map((suggestion) => (
+        <Button key={suggestion} type="button" variant="outline" className="h-auto whitespace-normal text-left text-xs" onClick={() => onSend(suggestion)}>
+          {suggestion}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * What follows the latest assistant answer once the run settled: the collapsed step summary, then the follow-up chips.
+ *
+ * @param props - The last rendered entry, the settled run's steps and the send handler (chips need it).
+ * @returns Nothing unless the thread ends with an assistant answer.
+ */
+function SettledRunExtras({ last, steps, onSendPrompt }: { last?: RenderEntry; steps: ToolStep[]; onSendPrompt?: (prompt: string) => void }) {
+  // An older version selected through the version control never gets chips or the step summary of the newest run.
+  if (last?.msg.role !== 'assistant' || !last.latest) return null;
+  return (
+    <>
+      <ChatStepList steps={steps} streaming={false} />
+      {onSendPrompt && last.msg.suggestions?.length ? <FollowupSuggestions suggestions={last.msg.suggestions} onSend={onSendPrompt} /> : null}
+    </>
   );
 }
 
 /** Props of {@link StreamingBubble}. */
 interface StreamingBubbleProps {
+  steps: ToolStep[];
   mode: 'drawer' | 'full';
   locale: AppLocaleId;
   csrfToken?: string;
@@ -424,7 +600,7 @@ function StreamingStatus({ activeTool, label }: { activeTool: ToolStatus['tool']
  * @param props - See {@link StreamingBubbleProps}.
  */
 function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
-  const { mode, locale, csrfToken, streamingText, streamingReasoning, streamingCitations, streamingWebSearch, activeTool, streamingUi, isStreaming, widgetPromptHandler } = props;
+  const { mode, locale, csrfToken, streamingText, streamingReasoning, streamingCitations, streamingWebSearch, activeTool, streamingUi, isStreaming, widgetPromptHandler, steps } = props;
   const t = useTranslations('chat');
   const smoothText = useSmoothedText(streamingText || '');
   const label = activeTool
@@ -434,7 +610,9 @@ function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
     <div data-streaming-answer className="mr-auto flex w-full scroll-mt-4 flex-col gap-2.5">
       <div className="text-sm text-foreground">
         {/* Live region stays mounted so tool-status changes are announced politely. */}
-        <StreamingStatus activeTool={activeTool} label={label} />
+        {/* A running step already shows its own spinner row, so the single status line would only repeat it. */}
+        {!steps.some((step) => step.state === 'running') && <StreamingStatus activeTool={activeTool} label={label} />}
+        <ChatStepList steps={steps} streaming />
 
         {mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}
 
@@ -478,9 +656,9 @@ function TranscriptError({ error, onRetry }: { error: string; onRetry?: () => vo
 }
 
 /** Starter gallery (or plain empty copy) for a brand-new view. */
-function EmptyState({ onSendPrompt, locale }: { onSendPrompt?: (prompt: string) => void; locale: AppLocaleId }) {
+function EmptyState({ onSendPrompt, locale, capabilities }: { onSendPrompt?: (prompt: string) => void; locale: AppLocaleId; capabilities?: EmptyCapabilities }) {
   const t = useTranslations('chat');
-  if (onSendPrompt) return <EmptyIntro onSendPrompt={onSendPrompt} locale={locale} />;
+  if (onSendPrompt) return <EmptyIntro onSendPrompt={onSendPrompt} locale={locale} capabilities={capabilities} />;
   return (
     <div className="my-auto flex flex-col gap-1 py-8">
       <h2 className="text-base font-semibold text-foreground">{t('emptyStateTitle')}</h2>
@@ -502,6 +680,7 @@ function withTranscriptDefaults(props: ChatTranscriptProps) {
     cancelled: props.cancelled ?? false,
     activeTool: props.activeTool ?? null,
     streamingUi: props.streamingUi ?? [],
+    steps: props.steps ?? [],
     isStreaming: props.isStreaming ?? false,
     isPending: props.isPending ?? false,
     error: props.error ?? null,
@@ -541,6 +720,7 @@ function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
     lastMessageId: last?.id,
     lastMessageRole: last?.role,
     isStreaming: busy,
+    contentSignal: `${messages.length}:${last?.id ?? ''}:${props.streamingText?.length ?? 0}:${props.streamingUi?.length ?? 0}`,
   });
   const copy = useCopyMessage(conversationId);
   const messageById = React.useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
@@ -548,16 +728,29 @@ function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
     () => new Set(messages.flatMap((message) => message.revision_of_message_id ? [message.revision_of_message_id] : [])),
     [messages],
   );
+  // Chosen older version per revision chain; absent means "newest" so a new revision is followed automatically.
+  const [selectedVersions, setSelectedVersions] = React.useState<Record<string, string>>({});
+  const entries = React.useMemo(() => buildRenderEntries(messages, selectedVersions), [messages, selectedVersions]);
+  /** Shows another version of a chain; choosing the newest one clears the override so later revisions are followed. */
+  const selectVersion = React.useCallback((nav: VersionNav, versionId: string) => {
+    setSelectedVersions((prev) => {
+      const next = { ...prev };
+      if (versionId === nav.versionIds[nav.versionIds.length - 1]) delete next[nav.chainId];
+      else next[nav.chainId] = versionId;
+      return next;
+    });
+  }, []);
   /** The message that `msg` revises, when loaded. */
   const revisedOf = (msg: ChatMessage) => (msg.revision_of_message_id ? messageById.get(msg.revision_of_message_id) : undefined);
   /** Form widgets get the rejecting handler (retryable errors); every other widget keeps the plain one. */
   const widgetPromptHandler = (part: unknown) =>
     (part as { kind?: string }).kind === 'form' && onWidgetSendPrompt ? onWidgetSendPrompt : onSendPrompt;
-  return { locale, timezone, copy, revisedOf, revisedMessageIds, widgetPromptHandler, ...scroll };
+  return { locale, timezone, copy, revisedOf, revisedMessageIds, widgetPromptHandler, entries, selectVersion, ...scroll };
 }
 
 /**
- * Conversation transcript rendering ordered messages, append-only revision relationships,
+ * Conversation transcript rendering ordered messages, append-only revision chains collapsed to one version with a
+ * `‹ n/m ›` switcher, append-only revision relationships,
  * full-page copy/edit/regenerate actions, full-page grounded citations, streaming deltas,
  * Generative UI widgets (Sandboxed UI and Native Structured Widgets), and error states.
  *
@@ -565,12 +758,15 @@ function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
  * @returns Accessible conversation transcript viewport.
  */
 export function ChatTranscript(props: ChatTranscriptProps) {
-  const { csrfToken, messages, streamingText, streamingCitations, streamingWebSearch, onRetry, onEditMessage, onRegenerateMessage, onSendPrompt } = props;
-  const { mode, streamingReasoning, cancelled, activeTool, streamingUi, isStreaming, isPending, error } = withTranscriptDefaults(props);
+  const { csrfToken, streamingText, streamingCitations, streamingWebSearch, onRetry, onEditMessage, onRegenerateMessage, onSendPrompt } = props;
+  const { mode, streamingReasoning, cancelled, activeTool, streamingUi, isStreaming, isPending, error, steps } = withTranscriptDefaults(props);
   const t = useTranslations('chat');
   const m = useTranscriptModel(props, isStreaming || isPending);
-  const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, jumpToLatest, widgetPromptHandler } = m;
+  const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, hasUnread, jumpToLatest, widgetPromptHandler } = m;
   const { showStarter, showStreaming } = transcriptVisibility(props, withTranscriptDefaults(props));
+  // Full Chat shows the evidence rail, so chip and strip clicks open it; the drawer has no rail and keeps plain links.
+  const onOpenSources = mode === 'full' ? focusCitations : undefined;
+  const onSelectCitation = props.onSelectCitation ?? (onOpenSources ? (citation: Citation) => onOpenSources([citation]) : undefined);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -588,12 +784,15 @@ export function ChatTranscript(props: ChatTranscriptProps) {
       <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-4">
 
       {/* Starter gallery is only for a brand-new view: once a conversation exists it never reappears between turns. */}
-      {showStarter && <EmptyState onSendPrompt={onSendPrompt} locale={locale} />}
+      {showStarter && <EmptyState onSendPrompt={onSendPrompt} locale={locale} capabilities={props.capabilities} />}
 
-      {messages.map((msg) => (
+      {m.entries.map(({ msg, latest, nav }) => (
         <TranscriptMessage
           key={msg.id}
           msg={msg}
+          latest={latest}
+          nav={nav}
+          onSelectVersion={m.selectVersion}
           mode={mode}
           locale={locale}
           timezone={timezone}
@@ -604,11 +803,16 @@ export function ChatTranscript(props: ChatTranscriptProps) {
           widgetPromptHandler={widgetPromptHandler}
           onEditMessage={onEditMessage}
           onRegenerateMessage={onRegenerateMessage}
+          onSelectCitation={onSelectCitation}
+          onOpenSources={onOpenSources}
         />
       ))}
 
+      {!showStreaming && <SettledRunExtras last={m.entries[m.entries.length - 1]} steps={steps} onSendPrompt={onSendPrompt} />}
+
       {showStreaming && (
         <StreamingBubble
+          steps={steps}
           mode={mode}
           locale={locale}
           csrfToken={csrfToken}
@@ -642,6 +846,12 @@ export function ChatTranscript(props: ChatTranscriptProps) {
         >
           <ArrowDownIcon className="size-3.5" aria-hidden="true" />
           {t('jumpToLatest')}
+          {hasUnread && (
+            <>
+              <span data-testid="jump-unread-dot" aria-hidden="true" className="size-2 rounded-full bg-data" />
+              <span className="sr-only">{t('jumpToLatestUnread')}</span>
+            </>
+          )}
         </Button>
       )}
     </div>

@@ -15,6 +15,16 @@ export function webHost(url: string): string {
   try { return new URL(url).hostname; } catch { return ''; }
 }
 
+/**
+ * Stable identity of a citation across messages: the URL for web results, version plus chunk for documents.
+ * The Chat page de-duplicates the rail list with the same rule, so a chip click can find its card.
+ *
+ * @param citation - Any grounded citation.
+ */
+export function citationIdentity(citation: Citation): string {
+  return citation.sourceType === 'web' ? citation.url : `${citation.documentVersionId}:${citation.chunkId}`;
+}
+
 export interface CitationPanelProps {
   /** List of citations to render. */
   citations: Citation[];
@@ -24,6 +34,10 @@ export interface CitationPanelProps {
   onClose?: () => void;
   /** Whether the panel is rendered as a standalone overlay/card or an inline list. */
   variant?: 'inline' | 'card' | 'standalone';
+  /** Rail cards (variant `card`) to emphasize, by {@link citationIdentity}; the first one is scrolled into view. */
+  highlightedKeys?: readonly string[];
+  /** Changes on each focus request so the same card scrolls into view again. */
+  focusNonce?: number;
 }
 
 /** Shared formatting context of the citation renderers. */
@@ -32,18 +46,33 @@ interface CitationViewProps {
   index: number;
   locale: AppLocaleId;
   timezone: string;
+  /** Rail card emphasis requested by a citation click. */
+  highlighted?: boolean;
+  /** True for the single card that should scroll into view. */
+  scrollTarget?: boolean;
+  focusNonce?: number;
 }
 
 /** Sources rail entry (Chat.dc.html): numbered chip, title, meta, then the exact-item link. */
-function CardCitation({ citation, index, locale, timezone }: CitationViewProps) {
+function CardCitation({ citation, index, locale, timezone, highlighted = false, scrollTarget = false, focusNonce = 0 }: CitationViewProps) {
   const t = useTranslations('chat');
+  const cardRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (scrollTarget) cardRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [scrollTarget, focusNonce]);
   const href = citation.sourceType === 'web'
     ? safeHttpUrl(citation.url)
     : `/knowledge/documents/${encodeURIComponent(citation.documentId)}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`;
   const when = citation.sourceType !== 'web' && citation.observedAt ? formatDateTime(citation.observedAt, locale, timezone) : null;
   const linkClass = 'inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-1 text-[13px] font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
   return (
-    <div data-testid="rail-source" className="flex flex-col gap-1 rounded-md border-b border-rule px-2 py-2 text-xs hover:bg-active focus-within:bg-active">
+    <div
+      ref={cardRef}
+      data-testid="rail-source"
+      data-citation-key={citationIdentity(citation)}
+      aria-current={highlighted ? 'true' : undefined}
+      className={`flex flex-col gap-1 rounded-md border-b border-rule px-2 py-2 text-xs hover:bg-active focus-within:bg-active ${highlighted ? 'bg-active ring-2 ring-data' : ''}`}
+    >
       <span className="flex items-center gap-2">
         <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-sm bg-raised px-[5px] text-xs font-semibold text-foreground">{index + 1}</span>
         <strong className="line-clamp-2 text-sm font-semibold text-foreground">{citation.title}</strong>
@@ -173,6 +202,8 @@ export function CitationPanel({
   selectedCitation,
   onClose,
   variant = 'inline',
+  highlightedKeys,
+  focusNonce,
 }: CitationPanelProps) {
   const t = useTranslations('chat');
   const display = useDisplayPreferences();
@@ -201,7 +232,17 @@ export function CitationPanel({
 
       <div className="flex flex-col gap-2.5">
         {itemsToRender.map((citation, idx) => (
-          <CitationEntry key={citationKey(citation, variant, idx)} variant={variant} citation={citation} index={idx} locale={locale} timezone={timezone} />
+          <CitationEntry
+            key={citationKey(citation, variant, idx)}
+            variant={variant}
+            citation={citation}
+            index={idx}
+            locale={locale}
+            timezone={timezone}
+            highlighted={highlightedKeys?.includes(citationIdentity(citation))}
+            scrollTarget={highlightedKeys?.[0] === citationIdentity(citation)}
+            focusNonce={focusNonce}
+          />
         ))}
       </div>
     </div>

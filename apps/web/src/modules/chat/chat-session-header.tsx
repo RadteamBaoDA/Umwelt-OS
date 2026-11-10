@@ -24,6 +24,13 @@ export interface ChatSessionHeaderProps {
   headerTrailing?: React.ReactNode;
   onRenameConversation?: () => void;
   onDeleteConversation?: () => void;
+  /** Downloads the loaded transcript as Markdown (full mode); omitted when there is nothing to export. */
+  onExportConversation?: () => void;
+  /** Current pin/archive state of the open conversation; with the setters below they add Pin and Archive to the More menu. */
+  pinned?: boolean;
+  archived?: boolean;
+  onSetPinned?: (pinned: boolean) => void;
+  onSetArchived?: (archived: boolean) => void;
   onSendPrompt: (prompt: string) => void;
   onNewChat: () => void;
   /** Profile id currently shown in the picker (a pending retry pins its own profile). */
@@ -33,33 +40,53 @@ export interface ChatSessionHeaderProps {
   profiles: AgentProfile[] | undefined;
 }
 
+type ControlProps = Pick<ChatSessionHeaderProps, 'onRenameConversation' | 'onExportConversation' | 'onDeleteConversation' | 'pinned' | 'archived' | 'onSetPinned' | 'onSetArchived'>;
+
 /**
- * Rename/delete controls: inline buttons from `sm` up, one "More" menu below so the header never overflows at 375px.
+ * "More" menu: pin/archive at every width, plus rename/export/delete below `sm` where the inline buttons are hidden.
  *
- * @param props - Rename/delete callbacks (either may be omitted).
+ * @param props - Callbacks and the pin/archive state; an absent callback hides its item.
  */
-function ConversationControls({ onRenameConversation, onDeleteConversation }: Pick<ChatSessionHeaderProps, 'onRenameConversation' | 'onDeleteConversation'>) {
+function MoreMenu({ onRenameConversation, onExportConversation, onDeleteConversation, pinned, archived, onSetPinned, onSetArchived }: ControlProps) {
   const t = useTranslations('chat');
   return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button type="button" variant="outline" size="icon" aria-label={t('moreActions')}>
+          <MoreHorizontalIcon className="size-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {onSetPinned && <DropdownMenuItem onSelect={() => onSetPinned(!pinned)}>{t(pinned ? 'unpinConversation' : 'pinConversation')}</DropdownMenuItem>}
+        {onSetArchived && <DropdownMenuItem onSelect={() => onSetArchived(!archived)}>{t(archived ? 'unarchiveConversation' : 'archiveConversation')}</DropdownMenuItem>}
+        {onRenameConversation && <DropdownMenuItem className="sm:hidden" onSelect={onRenameConversation}>{t('renameConversation')}</DropdownMenuItem>}
+        {onExportConversation && <DropdownMenuItem className="sm:hidden" onSelect={onExportConversation}>{t('exportMarkdown')}</DropdownMenuItem>}
+        {onDeleteConversation && <DropdownMenuItem className="text-destructive sm:hidden" onSelect={onDeleteConversation}>{t('delete')}</DropdownMenuItem>}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Rename/export/delete controls plus pin/archive. From `sm` up rename, export and delete are inline buttons; below `sm`
+ * they collapse into the "More" menu so the header never overflows at 375px. Pin and archive live only in that menu
+ * (visible at every width) to keep the inline row short.
+ *
+ * @param props - Callbacks and pin/archive state (each may be omitted).
+ * @returns The controls, or null when no callback was given (new, unsaved chat).
+ */
+function ConversationControls(props: ControlProps) {
+  const t = useTranslations('chat');
+  const { onRenameConversation, onExportConversation, onDeleteConversation, onSetPinned, onSetArchived } = props;
+  if (![onRenameConversation, onExportConversation, onDeleteConversation, onSetPinned, onSetArchived].some(Boolean)) return null;
+  return (
     <>
-      {/* sm and up: inline buttons. Below sm they collapse into one "More" menu so the header never overflows at 375px. */}
       <div className="hidden items-center gap-2 sm:flex">
         {onRenameConversation && <Button type="button" variant="outline" onClick={onRenameConversation}>{t('renameConversation')}</Button>}
+        {onExportConversation && <Button type="button" variant="outline" onClick={onExportConversation}>{t('exportMarkdown')}</Button>}
         {onDeleteConversation && <Button type="button" variant="outline" className="text-destructive" onClick={onDeleteConversation}>{t('delete')}</Button>}
       </div>
-      <div className="sm:hidden">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button type="button" variant="outline" size="icon" aria-label={t('moreActions')}>
-              <MoreHorizontalIcon className="size-4" aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {onRenameConversation && <DropdownMenuItem onSelect={onRenameConversation}>{t('renameConversation')}</DropdownMenuItem>}
-            {onDeleteConversation && <DropdownMenuItem className="text-destructive" onSelect={onDeleteConversation}>{t('delete')}</DropdownMenuItem>}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+      <div className={onSetPinned || onSetArchived ? '' : 'sm:hidden'}><MoreMenu {...props} /></div>
     </>
   );
 }
@@ -87,13 +114,13 @@ function ProfilePicker({ profileValue, profilePickerDisabled, onProfileChange, p
 }
 
 /**
- * Session header shared by the quick drawer and the /chat route: title, QR pick, rename/delete, agent picker, new chat.
+ * Session header shared by the quick drawer and the /chat route: title, QR pick, rename/delete/pin/archive, agent picker, new chat.
  *
  * @param props - See {@link ChatSessionHeaderProps}.
  * @returns The header row (drawer mode reserves room for the sheet close button).
  */
 export function ChatSessionHeader(props: ChatSessionHeaderProps) {
-  const { mode, title, csrfToken, headerLeading, headerTrailing, onRenameConversation, onDeleteConversation, onSendPrompt, onNewChat } = props;
+  const { mode, title, csrfToken, headerLeading, headerTrailing, onRenameConversation, onExportConversation, onDeleteConversation, pinned, archived, onSetPinned, onSetArchived, onSendPrompt, onNewChat } = props;
   const t = useTranslations('chat');
   const full = mode === 'full';
   return (
@@ -102,8 +129,8 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
       {full ? <h1 className="min-w-32 flex-1 truncate text-lg font-semibold text-foreground">{title || t('title')}</h1> : null}
       <div className={`flex shrink-0 items-center gap-2 ${mode === 'drawer' ? 'order-first' : ''}`}>
         {full && <PickQrButton csrfToken={csrfToken} onPrompt={onSendPrompt} />}
-        {full && (onRenameConversation || onDeleteConversation) && (
-          <ConversationControls onRenameConversation={onRenameConversation} onDeleteConversation={onDeleteConversation} />
+        {full && (
+          <ConversationControls onRenameConversation={onRenameConversation} onExportConversation={onExportConversation} onDeleteConversation={onDeleteConversation} pinned={pinned} archived={archived} onSetPinned={onSetPinned} onSetArchived={onSetArchived} />
         )}
         {full && <ProfilePicker {...props} />}
         <Button

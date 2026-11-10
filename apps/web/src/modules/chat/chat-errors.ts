@@ -25,6 +25,7 @@ export function chatFailureKey(err: unknown, fallback: string): string {
   if (err.code && Object.hasOwn(SELECTION_ERROR_KEYS, err.code)) return SELECTION_ERROR_KEYS[err.code];
   if (err.status === 401) return 'sessionExpired';
   if (err.status === 409) return 'errorConflict';
+  if (err.status === 429) return 'errorRateLimited';
   if (err.status >= 500) return 'errorService';
   return fallback;
 }

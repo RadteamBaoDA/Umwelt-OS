@@ -64,6 +64,24 @@ export interface ToolStatus {
 }
 
 /**
+ * One step of the generic progress list (`tool.status` for every tool and the retrieval phase). The optional
+ * fields are additive: `label` is a short subject such as a skill name, `detail` carries counts only
+ * (retrieval `done`: `{ documents }`). `ToolStatus`/`onToolStatus` keep receiving only the two legacy tools.
+ */
+export interface ToolStep {
+  tool: string;
+  state: 'running' | 'done';
+  label?: string;
+  detail?: Record<string, number>;
+}
+
+/** `message.suggestions` SSE payload: follow-up questions for one assistant message (also stored on the message). */
+export interface MessageSuggestions {
+  message_id: string;
+  suggestions: string[];
+}
+
+/**
  * Bounded client context linking a chat session to specific resources or filters.
  */
 export interface ChatContext {
@@ -111,6 +129,8 @@ export interface ChatMessage {
   generative_ui_parts?: Record<string, unknown>[];
   /** Model "thinking" text persisted with the answer; plain text only, null/absent when none was produced. */
   reasoning?: string | null;
+  /** Follow-up question suggestions written after the answer settled; absent or empty when none. */
+  suggestions?: string[];
   response_id: string | null;
   /** Message whose prompt or assistant response this append-only revision follows. */
   revision_of_message_id: string | null;
@@ -232,6 +252,12 @@ export interface StreamEventsOptions {
   onCitations?: (citations: Citation[]) => void;
   onWebSearch?: (outcome: WebSearchOutcome) => void;
   onToolStatus?: (status: ToolStatus) => void;
+  /** Every `tool.status` event (any tool, retrieval phase) with optional label/detail, for a step list. */
+  onToolStep?: (step: ToolStep) => void;
+  /** `conversation.title`: the server auto-titled the conversation (best effort, may arrive after the stream closed). */
+  onConversationTitle?: (title: string) => void;
+  /** `message.suggestions`: follow-up questions for a message (best effort, same timing as the title). */
+  onSuggestions?: (payload: MessageSuggestions) => void;
   onUiDelta?: (ui: Record<string, unknown>) => void;
   onUiDone?: (ui: Record<string, unknown>) => void;
   /** The server rejected a streamed widget (`message.ui.discard`); drop its partial snapshots. */
@@ -266,14 +292,16 @@ export const chatKeys = {
 /**
  * Lists persistent owner conversations ordered by most recent update.
  *
- * @param params - Optional pagination and archive filters.
- * @returns Array of conversation header records.
+ * @param params - Optional pagination, archive and title/content search (`q`) filters plus an abort signal.
+ * @returns Array of conversation header records, pinned first.
  */
 export async function listConversations(params?: {
   limit?: number;
   offset?: number;
   archived?: boolean;
   q?: string;
+  /** Aborts the request (TanStack Query passes its signal so stale searches are cancelled). */
+  signal?: AbortSignal;
 }): Promise<Conversation[]> {
   const query = new URLSearchParams();
   if (params?.limit !== undefined) query.set('limit', String(params.limit));
@@ -282,7 +310,7 @@ export async function listConversations(params?: {
   if (params?.q?.trim()) query.set('q', params.q.trim().slice(0, 200));
   const queryString = query.toString();
   const path = `/api/v1/conversations${queryString ? `?${queryString}` : ''}`;
-  return apiRequest<Conversation[]>(path);
+  return apiRequest<Conversation[]>(path, params?.signal ? { signal: params.signal } : {});
 }
 
 /**
@@ -482,6 +510,25 @@ function withJsonPayload(label: string, eventData: string, apply: (parsed: any) 
   }
 }
 
+/**
+ * Validates a parsed `tool.status` payload into a {@link ToolStep}; non-numeric `detail` values and a blank `label` are dropped.
+ *
+ * @param parsed - JSON-decoded event data (any shape).
+ * @returns The step, or null for redacted/malformed payloads.
+ */
+function parseToolStep(parsed: any): ToolStep | null { // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (typeof parsed?.tool !== 'string' || !parsed.tool) return null;
+  if (parsed.state !== 'running' && parsed.state !== 'done') return null;
+  const raw = parsed.detail && typeof parsed.detail === 'object' && !Array.isArray(parsed.detail) ? parsed.detail : {};
+  const detail = Object.fromEntries(Object.entries(raw).filter(([, v]) => typeof v === 'number')) as Record<string, number>;
+  return {
+    tool: parsed.tool,
+    state: parsed.state,
+    ...(typeof parsed.label === 'string' && parsed.label ? { label: parsed.label } : {}),
+    ...(Object.keys(detail).length ? { detail } : {}),
+  };
+}
+
 /** Typed SSE event handlers keyed by event name; unknown events are ignored (forward compatible). */
 const SSE_HANDLERS: Record<string, SseHandler> = {
   'message.delta': (eventData, options) => {
@@ -533,11 +580,17 @@ const SSE_HANDLERS: Record<string, SseHandler> = {
     if (parsed && typeof parsed.status === 'string') options.onWebSearch?.(parsed as WebSearchOutcome);
   }),
   'tool.status': (eventData, options) => withJsonPayload('tool.status', eventData, (parsed) => {
-    const known = parsed?.tool === 'web_search' || parsed?.tool === 'query_collected_data';
-    // Redacted/malformed payloads (`{}`) are ignored.
-    if (known && (parsed.state === 'running' || parsed.state === 'done')) {
-      options.onToolStatus?.({ tool: parsed.tool, state: parsed.state });
-    }
+    const step = parseToolStep(parsed);
+    if (!step) return; // redacted/malformed payloads (`{}`) are ignored
+    if (step.tool === 'web_search' || step.tool === 'query_collected_data') options.onToolStatus?.({ tool: step.tool, state: step.state });
+    options.onToolStep?.(step);
+  }),
+  'conversation.title': (eventData, options) => withJsonPayload('conversation.title', eventData, (parsed) => {
+    if (typeof parsed?.title === 'string' && parsed.title.trim()) options.onConversationTitle?.(parsed.title);
+  }),
+  'message.suggestions': (eventData, options) => withJsonPayload('message.suggestions', eventData, (parsed) => {
+    const list = Array.isArray(parsed?.suggestions) ? parsed.suggestions.filter((s: unknown): s is string => typeof s === 'string' && s !== '') : [];
+    if (typeof parsed?.message_id === 'string' && list.length) options.onSuggestions?.({ message_id: parsed.message_id, suggestions: list });
   }),
   status: (eventData, options) => {
     try {

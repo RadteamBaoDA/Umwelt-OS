@@ -53,7 +53,7 @@ export function useConversationSelection(params: ConversationSelectionParams): v
     refs.detachStream();
     onSelectionReset();
     live.clearOutput();
-    live.patch({ isStreaming: false, activeResponseId: null });
+    live.patch({ isStreaming: false, activeResponseId: null, steps: [] });
     const promoted = refs.promotedSelection;
     if (promoted && promoted.sendGeneration === refs.sendGeneration
         && promoted.conversationId === (conversationId ?? null)
@@ -83,7 +83,7 @@ export function useConversationSelection(params: ConversationSelectionParams): v
       && refs.selection.generation === viewGeneration
       && refs.selection.conversationId === conversationId;
     live.clearOutput();
-    live.patch({ activeResponseId: responseId, isPending: false, isStreaming: true, error: null, cancelled: false });
+    live.patch({ activeResponseId: responseId, isPending: false, isStreaming: true, steps: [], error: null, cancelled: false });
     void streamResponseRun(responseId, conversationId, isCurrentView).catch(() => {
       // streamResponseRun reports visible failures through its guarded error path.
     });
