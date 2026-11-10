@@ -8,6 +8,7 @@ import { ApiError, apiRequest } from '@/core/api';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { RealtimeConnection, type RealtimeStatus } from '@/core/realtime-connection';
 import { invalidateOperationalQueries } from '@/core/realtime-events';
+import { useResetOnChange } from '@/modules/shared';
 
 export type { RealtimeStatus };
 
@@ -116,7 +117,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   });
   const isAuthenticated = Boolean(session.data);
   const sessionExpired = !isAuthenticated && session.error instanceof ApiError && session.error.status === 401;
-  const [status, setStatus] = useState<RealtimeStatus>('connecting');
+  const isConnectable = !isPublicPage && isAuthenticated;
+  const [connectedStatus, setStatus] = useState<RealtimeStatus>('connecting');
+  const status: RealtimeStatus = isConnectable ? connectedStatus : isPublicPage ? 'unavailable' : sessionExpired ? 'expired' : 'unavailable';
   const [barrierGeneration, setBarrierGeneration] = useState<number | null>(null);
   const documents = useDocumentUpdateQueue(client, authGeneration, isCurrentAuthGeneration);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -124,22 +127,16 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const { newDocumentCount, documentRefreshRequired, documentRefreshFailed, consumeDocumentUpdates } = documents;
   const { queueDocumentUpdate, resetDocumentState } = documents;
 
+  // A new connection attempt (client, auth generation or connectability change) restarts at the barrier.
+  useResetOnChange([client, authGeneration, isConnectable], () => {
+    setBarrierGeneration(null);
+    setStatus('connecting');
+  });
+
   useEffect(() => {
     const generation = authGeneration;
-    if (isPublicPage) {
-      setBarrierGeneration(generation);
-      setStatus('unavailable');
-      return;
-    }
-    const sessionState = isAuthenticated
-      ? 'authenticated'
-      : sessionExpired ? 'expired' : 'unavailable';
-    if (sessionState !== 'authenticated') {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs state to an external or prop change; reset-on-change is intentional here
-      setBarrierGeneration(generation);
-      setStatus(sessionState);
-      return;
-    }
+    // Public pages and non-authenticated sessions never open a stream; their status is derived below.
+    if (!isConnectable) return;
     const connection = new RealtimeConnection({
       client,
       isCurrentAuthGeneration: () => isCurrentAuthGeneration(generation),
@@ -151,22 +148,20 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       queueDocumentUpdate,
       resetDocumentState,
     });
-    setBarrierGeneration(null);
-    setStatus('connecting');
     connection.start();
     window.addEventListener('bbd:auth-ending', connection.authEnding);
     return () => {
       connection.dispose();
       window.removeEventListener('bbd:auth-ending', connection.authEnding);
     };
-  }, [client, authGeneration, isCurrentAuthGeneration, isAuthenticated, isPublicPage, queueDocumentUpdate, resetDocumentState, sessionExpired]);
+  }, [client, authGeneration, isCurrentAuthGeneration, isConnectable, queueDocumentUpdate, resetDocumentState]);
 
   // Memoize context value so consumers do not re-render when internal barrier state ticks without changing exposed values.
   const context = useMemo(
     () => ({ status, newDocumentCount, documentRefreshRequired, documentRefreshFailed, consumeDocumentUpdates }),
     [status, newDocumentCount, documentRefreshRequired, documentRefreshFailed, consumeDocumentUpdates],
   );
-  const waitingForBarrier = !isPublicPage && isAuthenticated && barrierGeneration !== authGeneration;
+  const waitingForBarrier = isConnectable && barrierGeneration !== authGeneration;
   return <RealtimeContext.Provider value={context}>
     {waitingForBarrier
       ? <main className="shell"><div className="status-panel skeleton" aria-label={t('loadingWorkspace')} /></main>

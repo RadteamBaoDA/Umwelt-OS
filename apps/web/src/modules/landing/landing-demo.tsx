@@ -175,16 +175,19 @@ export function LandingPage({ authenticated }: LandingPageProps) {
   const locale = currentLocale === 'vi-VN' || currentLocale === 'vi-vi' ? 'vi-vi' : 'en-us';
   const router = useRouter();
   const display = useDisplayPreferences();
-  const [language, setLanguage] = useState(locale);
+  const search = useSyncExternalStore(() => () => undefined, () => window.location.search, () => '');
+  const urlLocale = new URLSearchParams(search).get('lang');
+  const initial = urlLocale === 'en-us' || urlLocale === 'vi-vi' ? urlLocale : locale;
+  // A language picked by the visitor wins over the URL/locale default; null until they choose (no state-in-effect sync).
+  const [chosenLanguage, setLanguage] = useState<AppLocaleId | null>(null);
+  const language = chosenLanguage ?? initial;
+  const { authGeneration, confirmedPreferences, locale: displayLocale, preview, setPreview, timezone } = display;
 
   useEffect(() => {
-    const urlLocale = new URLSearchParams(window.location.search).get('lang');
-    const initial = urlLocale === 'en-us' || urlLocale === 'vi-vi' ? urlLocale : locale;
-    setLanguage(initial);
-    if (!authenticated && initial !== display.locale) {
-      display.setPreview({ theme: display.preview?.theme ?? display.confirmedPreferences?.theme ?? 'system', locale: initial, timezone: display.timezone }, display.authGeneration);
+    if (!authenticated && initial !== displayLocale) {
+      setPreview({ theme: preview?.theme ?? confirmedPreferences?.theme ?? 'system', locale: initial, timezone }, authGeneration);
     }
-  }, [locale, authenticated, display.authGeneration, display.confirmedPreferences, display.locale, display.preview, display.setPreview, display.timezone]);
+  }, [initial, authenticated, authGeneration, confirmedPreferences, displayLocale, preview, setPreview, timezone]);
 
   /** Applies the public language preview and preserves it in the login URL. */
   function changeLanguage(next: AppLocaleId): void {

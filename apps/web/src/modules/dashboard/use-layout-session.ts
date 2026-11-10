@@ -77,20 +77,36 @@ interface LayoutInputs {
 }
 
 /**
+ * Pure derivation of the active group, requested/effective breakpoint and column count for the layout session.
+ * A dirty edit origin on the selected dashboard overrides the media-derived breakpoint and columns.
+ */
+function deriveLayoutGeometry(
+  { isDirty, editOrigin, activeGroupId: storedGroupId }: LayoutState,
+  selectedDashboardId: string | null,
+  activeDashboard: Dashboard | null,
+  isMobile: boolean,
+) {
+  const activeGroupId = activeDashboard?.groups.some((group) => group.id === storedGroupId)
+    ? storedGroupId : activeDashboard?.groups.find((group) => group.is_overview)?.id ?? '';
+  const requestedBreakpoint: 'desktop' | 'mobile' = isMobile ? 'mobile' : 'desktop';
+  const currentBreakpoint = isDirty && editOrigin?.dashboardId === selectedDashboardId
+    ? editOrigin.breakpoint : requestedBreakpoint;
+  const layoutColumns = (editOrigin?.dashboardId === selectedDashboardId
+    ? editOrigin.columns : activeDashboard?.layouts[currentBreakpoint].columns) ?? 20;
+  return { activeGroupId, requestedBreakpoint, currentBreakpoint, layoutColumns };
+}
+
+/**
  * Derives the effective breakpoint, columns and saved placements for the layout session, and keeps the
  * live identity/layout refs current (layout effects run before passive effects, as before).
  *
  * A dirty edit session freezes its origin breakpoint/columns so media changes cannot rebind the draft.
  */
 function useLayoutDerived(state: LayoutState, { selectedDashboardId, activeDashboard, isMobile }: LayoutInputs) {
-  const { isDirty, editOrigin, draftPlacements, isEditMode } = state;
-  const activeGroupId = activeDashboard?.groups.some((group) => group.id === state.activeGroupId)
-    ? state.activeGroupId : activeDashboard?.groups.find((group) => group.is_overview)?.id ?? '';
-  const requestedBreakpoint: 'desktop' | 'mobile' = isMobile ? 'mobile' : 'desktop';
-  const currentBreakpoint = isDirty && editOrigin?.dashboardId === selectedDashboardId
-    ? editOrigin.breakpoint : requestedBreakpoint;
-  const layoutColumns = (editOrigin?.dashboardId === selectedDashboardId
-    ? editOrigin.columns : activeDashboard?.layouts[currentBreakpoint].columns) ?? 20;
+  const { draftPlacements, isEditMode } = state;
+  const { activeGroupId, requestedBreakpoint, currentBreakpoint, layoutColumns } = deriveLayoutGeometry(
+    state, selectedDashboardId, activeDashboard, isMobile,
+  );
   const layoutIdentityRef = useRef<LayoutIdentity>({
     dashboardId: selectedDashboardId,
     groupId: activeGroupId,

@@ -2,11 +2,12 @@
 
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useWorkspace } from '@/core/workspace-context';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
+import { useResetOnChange } from '@/modules/shared';
 import { sourceKeys, StarterPackWizard } from '@/modules/sources';
 import { dashboardKeys, type GadgetInstance } from './api';
 import { DashboardCanvas, LayoutEditorBar } from './dashboard-canvas';
@@ -186,6 +187,141 @@ function StaleAndFooter({ activeDashboard, staleSources, open, onToggle }: {
 }
 
 /**
+ * Owns the preset-picker and Add-gadget intents: deep links (`preset`, `addTemplate`) open them, and leaving
+ * edit mode drops any pending Add-gadget intent. Add deep links apply only to owners on an editable layout.
+ */
+function useDashboardIntents(session: PageOps['session'], activeDashboard: PageData['activeDashboard'], isOwner: boolean) {
+  const [presetPickerOpen, setPresetPickerOpen] = useState(false);
+  const [openAddInitially, setOpenAddInitially] = useState(false);
+  // Template/source from an `addTemplate` deep link; handed to the Add gadget editor, cleared when edit mode ends.
+  const [addDeepLink, setAddDeepLink] = useState<{ templateId: string; sourceId?: string } | undefined>(undefined);
+  // Set only when the picker is opened from a starter-pack run, so header/empty-state opens keep the plain catalog.
+  const [presetInitialId, setPresetInitialId] = useState<string | undefined>(undefined);
+  const [presetInitialMode, setPresetInitialMode] = useState<'append' | undefined>(undefined);
+  // Render-phase reset instead of a state-in-effect; only the transition out of edit mode clears the intent.
+  useResetOnChange([session.editMode], () => {
+    if (!session.editMode) { setOpenAddInitially(false); setAddDeepLink(undefined); }
+  });
+  useDashboardDeepLink({
+    ready: Boolean(activeDashboard),
+    onPreset: (id) => { setPresetInitialId(id); setPresetPickerOpen(true); },
+    onAddTemplate: (target) => {
+      if (!isOwner || !session.canEditLayout) return;
+      setAddDeepLink(target); setOpenAddInitially(true); session.setIsEditMode(true);
+    },
+  });
+  return {
+    presetPickerOpen, setPresetPickerOpen, openAddInitially, setOpenAddInitially, addDeepLink,
+    presetInitialId, setPresetInitialId, presetInitialMode, setPresetInitialMode,
+  };
+}
+
+/** Gadget instance and definition settings modal bound to the selected dashboard and its current revision. */
+function ConnectedGadgetSettings({ open, onOpenChange, instance, selectedDashboardId, activeDashboard }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  instance: GadgetInstance | null;
+  selectedDashboardId: string | null;
+  activeDashboard: PageData['activeDashboard'];
+}) {
+  return (
+    <GadgetSettings
+      open={open} onOpenChange={onOpenChange} instance={instance}
+      dashboardId={selectedDashboardId ?? ''} dashboardRevision={activeDashboard?.revision ?? 1}
+    />
+  );
+}
+
+/** After a group is created, selects it once it appears in the active dashboard and clears the mutation result. */
+function useActivateCreatedGroup(
+  crud: ReturnType<typeof useDashboardCrud>,
+  activeDashboard: PageData['activeDashboard'],
+  session: PageOps['session'],
+): void {
+  const { groupMutation } = crud;
+  const { setActiveGroupId } = session;
+  useEffect(() => {
+    const created = groupMutation.data;
+    if (created && activeDashboard?.groups.some((group) => group.id === created.id)) {
+      setActiveGroupId(created.id);
+      groupMutation.reset();
+    }
+  }, [activeDashboard, groupMutation, setActiveGroupId]);
+}
+
+/** Starter-pack wizard whose runs refresh every source-backed query so first-run state and gadgets update. */
+function ConnectedStarterWizard({ onClose, onBuildDashboard }: { onClose: () => void; onBuildDashboard: () => void }) {
+  const queryClient = useQueryClient();
+  return (
+    <StarterPackWizard
+      onClose={onClose}
+      onChanged={() => { void queryClient.invalidateQueries({ queryKey: sourceKeys.list }); void queryClient.invalidateQueries({ queryKey: dashboardKeys.sources }); }}
+      onBuildDashboard={onBuildDashboard}
+    />
+  );
+}
+
+/** Props for {@link DashboardGroupBody}; callbacks are owned by the page so dialog state stays in one place. */
+interface GroupBodyProps {
+  ops: PageOps;
+  data: PageData;
+  activeGroup: NonNullable<PageData['activeDashboard']>['groups'][number] | undefined;
+  visibleInstances: GadgetInstance[];
+  csrfToken: string;
+  isTablet: boolean;
+  isMobile: boolean;
+  scrollPositions: Map<string, number>;
+  staleDetailsOpen: boolean;
+  onToggleStale: () => void;
+  onPickTopics: () => void;
+  onOpenStarterPacks: () => void;
+  onOpenPresets: () => void;
+  onCreateDashboard: () => void;
+  onConfigureInstance: (instance: GadgetInstance) => void;
+  onAdd: () => void;
+}
+
+/** Canvas plus the Overview-only strips (today header, freshness, stale sources, timezone footer) of one group. */
+function DashboardGroupContent(props: GroupBodyProps) {
+  const { ops, data, activeGroup, visibleInstances, isTablet } = props;
+  const { activeDashboard, sources, showFirstRun } = data;
+  const { isAdminViewer, isOwner } = useWorkspace();
+  const display = useDisplayPreferences();
+  return <div className="flex flex-col gap-4 pb-4">
+    {activeGroup?.is_overview && <>
+      <TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} />
+      <FreshnessStrip sources={sources.dashboardSources} locale={display.locale} />
+    </>}
+    <DashboardCanvas
+      ops={ops} activeDashboard={activeDashboard} visibleInstances={visibleInstances} showFirstRun={showFirstRun && Boolean(activeGroup?.is_overview)}
+      csrfToken={props.csrfToken} isTablet={isTablet} isAdminViewer={isAdminViewer}
+      onPickTopics={props.onPickTopics} onOpenStarterPacks={props.onOpenStarterPacks}
+      onOpenPresets={props.onOpenPresets} onCreateDashboard={props.onCreateDashboard}
+      onConfigureInstance={props.onConfigureInstance}
+    />
+    {activeGroup?.is_overview && <StaleAndFooter activeDashboard={activeDashboard} staleSources={sources.staleSources}
+      open={props.staleDetailsOpen} onToggle={props.onToggleStale} />}
+  </div>;
+}
+
+/**
+ * Body of the active group tab: the gadget canvas (plus freshness and stale-source strips on Overview)
+ * inside the Overview map split or the plain scrolling panel. `scrollPositions` is the per-dashboard map
+ * that keeps each panel's scroll offset across tab switches.
+ */
+function DashboardGroupBody(props: GroupBodyProps) {
+  const { ops, activeGroup, visibleInstances, isTablet, isMobile, scrollPositions } = props;
+  const { session } = ops;
+  const { isOwner } = useWorkspace();
+  const content = <DashboardGroupContent {...props} />;
+  const empty = Boolean(activeGroup && !activeGroup.is_overview && visibleInstances.length === 0 && !session.editMode);
+  const panelProps = { panelId: activeGroup?.id ?? 'none', empty, canAdd: isOwner && session.canEditLayout, onAdd: props.onAdd, scrollPositions };
+  return activeGroup?.is_overview
+    ? <DashboardOverview {...panelProps} editMode={session.editMode} compact={isMobile || isTablet}>{content}</DashboardOverview>
+    : <DashboardPanel {...panelProps}>{content}</DashboardPanel>;
+}
+
+/**
  * Main Umwelt-OS dashboard view with a fixed header, persistent panel tabs, and panel-owned scrolling.
  * Overview owns the map split while other tabs fill the viewport. Layout history and guarded switching
  * remain dashboard-scoped but edits are confined to the selected group and breakpoint.
@@ -198,27 +334,20 @@ function StaleAndFooter({ activeDashboard, staleSources, open, onToggle }: {
  */
 export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   const workspaceSession = useWorkspaceSession();
-  const { isAdminViewer, isOwner } = useWorkspace();
-  const display = useDisplayPreferences();
+  const { isOwner } = useWorkspace();
   const { isMobile, isTablet } = useDashboardMedia();
-  const [presetPickerOpen, setPresetPickerOpen] = useState<boolean>(false);
   const [configuringInstance, setConfiguringInstance] = useState<GadgetInstance | null>(null);
   const [gadgetSettingsOpen, setGadgetSettingsOpen] = useState<boolean>(false);
   // Stale-source detail list stays collapsed until the owner asks for it.
   const [staleDetailsOpen, setStaleDetailsOpen] = useState(false);
   const [mobileNoticeDismissed, dismissMobileNotice] = useMobileNoticeDismissal();
-  const [openAddInitially, setOpenAddInitially] = useState(false);
   const [starterOpen, setStarterOpen] = useState(false);
-  // Template/source from an `addTemplate` deep link; handed to the Add gadget editor, cleared when edit mode ends.
-  const [addDeepLink, setAddDeepLink] = useState<{ templateId: string; sourceId?: string } | undefined>(undefined);
-  // Set only when the picker is opened from a starter-pack run, so header/empty-state opens keep the plain catalog.
-  const [presetInitialId, setPresetInitialId] = useState<string | undefined>(undefined);
-  const [presetInitialMode, setPresetInitialMode] = useState<'append' | undefined>(undefined);
-  const queryClient = useQueryClient();
-  const scrollPositions = useRef(new Map<string, number>());
 
   const data = useDashboardData(dashboardId);
-  const { dashboards, selectedDashboardId, activeDashboard, management, sources, showFirstRun } = data;
+  const { dashboards, selectedDashboardId, activeDashboard, management, sources } = data;
+  const [scrollPositions] = useState(() => new Map<string, number>());
+  // Remembered scroll offsets belong to one dashboard; drop them when another is selected.
+  useEffect(() => { scrollPositions.clear(); }, [scrollPositions, selectedDashboardId]);
   const session = useLayoutSession({ selectedDashboardId, activeDashboard, isMobile });
   const save = useLayoutSave(session, data.navigateToDashboard, selectedDashboardId);
   const membership = useGadgetMembership(session, save.layoutOperationPending);
@@ -229,24 +358,10 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   const { layoutOperationPending } = save;
   const activeGroup = activeDashboard?.groups.find((group) => group.id === session.activeGroupId);
 
-  useEffect(() => {
-    const created = crud.groupMutation.data;
-    if (created && activeDashboard?.groups.some((group) => group.id === created.id)) {
-      session.setActiveGroupId(created.id);
-      crud.groupMutation.reset();
-    }
-  }, [activeDashboard, crud.groupMutation, session.setActiveGroupId]);
-  useEffect(() => { if (!session.editMode) { setOpenAddInitially(false); setAddDeepLink(undefined); } }, [session.editMode]);
-  useDashboardDeepLink({
-    ready: Boolean(activeDashboard),
-    onPreset: (id) => { setPresetInitialId(id); setPresetPickerOpen(true); },
-    // Owners on an editable layout enter edit mode with Add gadget open; otherwise the add intent is dropped.
-    onAddTemplate: (target) => {
-      if (!isOwner || !session.canEditLayout) return;
-      setAddDeepLink(target); setOpenAddInitially(true); session.setIsEditMode(true);
-    },
-  });
-  useEffect(() => { scrollPositions.current.clear(); }, [selectedDashboardId]);
+  useActivateCreatedGroup(crud, activeDashboard, session);
+  const intents = useDashboardIntents(session, activeDashboard, isOwner);
+  const { presetPickerOpen, setPresetPickerOpen, openAddInitially, setOpenAddInitially, addDeepLink } = intents;
+  const { presetInitialId, setPresetInitialId, presetInitialMode, setPresetInitialMode } = intents;
 
   const updatedGroupIds = useUpdatedGroups(activeDashboard?.instances, sources.dashboardSources, session.activeGroupId);
   const visibleInstances = useVisibleInstances(activeDashboard, session.activeGroupId);
@@ -280,30 +395,17 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
             onOpenPresets={() => setPresetPickerOpen(true)} onAddGroup={session.isDirty ? undefined : () => crud.setGroupOpen(true)}
           />
         )}
-        {(() => {
-          const content = <div className="flex flex-col gap-4 pb-4">
-            {activeGroup?.is_overview && <>
-              <TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} />
-              <FreshnessStrip sources={sources.dashboardSources} locale={display.locale} />
-            </>}
-            <DashboardCanvas
-              ops={ops} activeDashboard={activeDashboard} visibleInstances={visibleInstances} showFirstRun={showFirstRun && Boolean(activeGroup?.is_overview)}
-              csrfToken={workspaceSession.csrfToken} isTablet={isTablet} isAdminViewer={isAdminViewer}
-              onPickTopics={() => { management.setTab('topics'); management.setOpen(true); }}
-              onOpenStarterPacks={() => setStarterOpen(true)}
-              onOpenPresets={() => setPresetPickerOpen(true)} onCreateDashboard={() => crud.setCreateOpen(true)}
-              onConfigureInstance={(inst) => { setConfiguringInstance(inst); setGadgetSettingsOpen(true); }}
-            />
-            {activeGroup?.is_overview && <StaleAndFooter activeDashboard={activeDashboard} staleSources={sources.staleSources}
-              open={staleDetailsOpen} onToggle={() => setStaleDetailsOpen((open) => !open)} />}
-          </div>;
-          const empty = Boolean(activeGroup && !activeGroup.is_overview && visibleInstances.length === 0 && !session.editMode);
-          const panelProps = { panelId: activeGroup?.id ?? 'none', empty, canAdd: isOwner && session.canEditLayout,
-            onAdd: () => { setOpenAddInitially(true); session.setIsEditMode(true); }, scrollPositions: scrollPositions.current };
-          return activeGroup?.is_overview
-            ? <DashboardOverview {...panelProps} editMode={session.editMode} compact={isMobile || isTablet}>{content}</DashboardOverview>
-            : <DashboardPanel {...panelProps}>{content}</DashboardPanel>;
-        })()}
+        <DashboardGroupBody
+          ops={ops} data={data} activeGroup={activeGroup} visibleInstances={visibleInstances}
+          csrfToken={workspaceSession.csrfToken} isTablet={isTablet} isMobile={isMobile}
+          scrollPositions={scrollPositions} staleDetailsOpen={staleDetailsOpen}
+          onToggleStale={() => setStaleDetailsOpen((open) => !open)}
+          onPickTopics={() => { management.setTab('topics'); management.setOpen(true); }}
+          onOpenStarterPacks={() => setStarterOpen(true)} onOpenPresets={() => setPresetPickerOpen(true)}
+          onCreateDashboard={() => crud.setCreateOpen(true)}
+          onConfigureInstance={(inst) => { setConfiguringInstance(inst); setGadgetSettingsOpen(true); }}
+          onAdd={() => { setOpenAddInitially(true); session.setIsEditMode(true); }}
+        />
       </TabsContent>
       </Tabs>
 
@@ -313,10 +415,8 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         onOpenChange={(next) => { setPresetPickerOpen(next); if (!next) { setPresetInitialId(undefined); setPresetInitialMode(undefined); } }}
       />
       {starterOpen && (
-        <StarterPackWizard
+        <ConnectedStarterWizard
           onClose={() => setStarterOpen(false)}
-          // Starter runs create sources: refresh every source-backed query so first-run state and gadgets update.
-          onChanged={() => { void queryClient.invalidateQueries({ queryKey: sourceKeys.list }); void queryClient.invalidateQueries({ queryKey: dashboardKeys.sources }); }}
           onBuildDashboard={() => { setStarterOpen(false); setPresetInitialId('monitor'); setPresetPickerOpen(true); }}
         />
       )}
@@ -325,13 +425,9 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
         // The template is appended to the active dashboard through the preset picker, not into the new page.
         onFromTemplate={(id) => { crud.setGroupOpen(false); setPresetInitialId(id); setPresetInitialMode('append'); setPresetPickerOpen(true); }}
       />
-      {/* Gadget Instance & Definition Settings Modal */}
-      <GadgetSettings
-        open={gadgetSettingsOpen}
-        onOpenChange={setGadgetSettingsOpen}
-        instance={configuringInstance}
-        dashboardId={selectedDashboardId ?? ''}
-        dashboardRevision={activeDashboard?.revision ?? 1}
+      <ConnectedGadgetSettings
+        open={gadgetSettingsOpen} onOpenChange={setGadgetSettingsOpen} instance={configuringInstance}
+        selectedDashboardId={selectedDashboardId} activeDashboard={activeDashboard}
       />
       <ManagementDialog management={management} />
     </section>
