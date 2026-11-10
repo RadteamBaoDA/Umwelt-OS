@@ -8,6 +8,7 @@ import { safeHttpUrl } from '@/core/safe-url';
 import type { AppLocaleId } from '@/core/i18n';
 import { genUiCopy } from './generative-ui/copy';
 import { webHost } from './citation-panel';
+import { fenceLanguage, highlightFence } from './code-highlight';
 import './chat-gaps.css';
 
 // The markdown-it renderer and safe link/code boundaries adapt AnythingLLM's
@@ -16,7 +17,7 @@ import './chat-gaps.css';
 const SAFE_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const MARKDOWN_TAGS = [
   'a', 'blockquote', 'br', 'code', 'del', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'hr', 'li', 'ol', 'p', 'pre', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul',
+  'hr', 'li', 'ol', 'p', 'pre', 'span', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul',
 ];
 
 /** Accepts web/email and same-origin relative links while rejecting active or ambiguous schemes. */
@@ -36,6 +37,11 @@ function escapeHtml(value: string): string {
   })[character] ?? character);
 }
 
+const CODE_BLOCK_CLASS = 'my-2 max-w-full overflow-x-auto rounded-md border border-border bg-muted p-3 text-xs';
+
+/** Class tokens a `span` may keep: highlight.js scopes (`hljs`, `hljs-*`, `function_`, `class_`, `language_`) and the language label. */
+const SPAN_CLASS_TOKEN = /^(hljs[\w-]*|(function|class|language)_|chat-code-lang)$/;
+
 /** Creates the customized upstream-derived renderer with HTML, active schemes, and remote images disabled. */
 function createMarkdownRenderer(): MarkdownItInstance {
   const markdown = new MarkdownIt({
@@ -53,10 +59,14 @@ function createMarkdownRenderer(): MarkdownItInstance {
   markdown.renderer.rules.image = (tokens, index) => escapeHtml(String(tokens[index].content));
   markdown.renderer.rules.fence = (tokens, index) => {
     const token = tokens[index];
-    return `<pre class="my-2 max-w-full overflow-x-auto rounded-md border border-border bg-muted p-3 text-xs"><code>${escapeHtml(token.content)}</code></pre>`;
+    const language = fenceLanguage(token.info);
+    const highlighted = highlightFence(token.content, language);
+    // The label is a span so the sanitizer's span-class filter (see getPurifier) applies to it too.
+    const label = language ? `<span class="chat-code-lang">${escapeHtml(language)}</span>` : '';
+    return `<pre class="${CODE_BLOCK_CLASS}">${label}<code class="hljs">${highlighted ?? escapeHtml(token.content)}</code></pre>`;
   };
   markdown.renderer.rules.code_block = (tokens, index) =>
-    `<pre class="my-2 max-w-full overflow-x-auto rounded-md border border-border bg-muted p-3 text-xs"><code>${escapeHtml(tokens[index].content)}</code></pre>`;
+    `<pre class="${CODE_BLOCK_CLASS}"><code>${escapeHtml(tokens[index].content)}</code></pre>`;
   markdown.renderer.rules.bullet_list_open = () => '<ul class="my-2 list-disc space-y-1 pl-6">';
   markdown.renderer.rules.ordered_list_open = () => '<ol class="my-2 list-decimal space-y-1 pl-6">';
   markdown.renderer.rules.blockquote_open = () => '<blockquote class="my-2 border-l-2 border-primary pl-3 text-muted-foreground">';
@@ -76,6 +86,13 @@ let cachedPurifier: ReturnType<typeof DOMPurify> | null = null;
 function getPurifier(): ReturnType<typeof DOMPurify> {
   if (!cachedPurifier) {
     cachedPurifier = DOMPurify(window);
+    // Spans exist only for highlight.js output: strip any other class so authored markup cannot style arbitrary UI.
+    cachedPurifier.addHook('uponSanitizeAttribute', (node, data) => {
+      if (data.attrName !== 'class' || node.nodeName !== 'SPAN') return;
+      const kept = data.attrValue.split(/\s+/).filter((token) => SPAN_CLASS_TOKEN.test(token));
+      data.attrValue = kept.join(' ');
+      data.keepAttr = kept.length > 0;
+    });
   }
   return cachedPurifier;
 }
@@ -117,10 +134,13 @@ export function ChatMarkdown({
   content,
   citations,
   locale,
+  onSelectCitation,
 }: {
   content: string;
   citations?: Citation[];
   locale?: AppLocaleId;
+  /** Called when an inline citation chip is plainly clicked; omit to keep the chip as an ordinary link. */
+  onSelectCitation?: (citation: Citation) => void;
 }) {
   const [safeHtml, setSafeHtml] = React.useState('');
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -170,6 +190,7 @@ export function ChatMarkdown({
   }, [safeHtml, locale]);
 
   const tip = useCitationTooltip(containerRef, citations);
+  useCitationClick(containerRef, citations, onSelectCitation);
 
   return (
     <>
@@ -181,6 +202,37 @@ export function ChatMarkdown({
     {tip && <CitationTooltip tip={tip} />}
     </>
   );
+}
+
+/**
+ * Routes a plain left click on an inline `.cite` chip to `onSelectCitation` instead of navigating. Modified clicks
+ * (ctrl/cmd/shift/alt) and middle clicks (which never fire `click`) keep the link's normal open-in-tab behavior.
+ *
+ * @param containerRef - Markdown container holding the chips (delegation target, as the chips are injected HTML).
+ * @param citations - 1-indexed citations the chips refer to.
+ * @param onSelectCitation - Selection callback; the hook is inert without it.
+ */
+function useCitationClick(
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  citations: Citation[] | undefined,
+  onSelectCitation: ((citation: Citation) => void) | undefined,
+): void {
+  React.useEffect(() => {
+    const root = containerRef.current;
+    if (!root || !citations?.length || !onSelectCitation) return;
+    /** Resolves the chip under the click and hands its citation to the callback. */
+    const handleClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      const chip = (event.target as Element | null)?.closest?.('a.cite[data-cite]');
+      if (!chip || !root.contains(chip)) return;
+      const citation = citations[Number(chip.getAttribute('data-cite')) - 1];
+      if (!citation) return;
+      event.preventDefault();
+      onSelectCitation(citation);
+    };
+    root.addEventListener('click', handleClick);
+    return () => root.removeEventListener('click', handleClick);
+  }, [containerRef, citations, onSelectCitation]);
 }
 
 /** Anchor-relative position and source of the open inline-citation tooltip. */

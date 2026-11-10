@@ -3,10 +3,11 @@
 import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { AlertCircleIcon, ArrowDownIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
+import { AlertCircleIcon, ArrowDownIcon, BookOpenIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, RefreshCwIcon } from 'lucide-react';
 import type { ChatMessage, Citation, ToolStatus, WebSearchOutcome } from './api';
 import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
+import { focusCitations } from './chat-citation-focus';
 import { useChatScroll } from './use-chat-scroll';
 import { useSmoothedText } from './use-smoothed-text';
 import { ChatReasoning } from './chat-reasoning';
@@ -166,7 +167,7 @@ export interface ChatTranscriptProps {
   onEditMessage?: (message: ChatMessage) => void;
   /** Starts an append-only regeneration from an assistant answer in full Chat. */
   onRegenerateMessage?: (message: ChatMessage) => void;
-  /** Optional callback when user clicks a citation badge. */
+  /** Optional callback when user clicks an inline citation chip; defaults to opening the evidence rail in full Chat. */
   onSelectCitation?: (citation: Citation) => void;
   /** Optional callback invoked when an interactive widget or starter template dispatches a prompt. */
   onSendPrompt?: (prompt: string) => void;
@@ -201,9 +202,9 @@ function relationshipLabelFor(msg: ChatMessage, revised: ChatMessage | undefined
 /**
  * Text part of a message: speaker label, revision relationship, web search notice, reasoning and the markdown body.
  *
- * @param props - Message, host mode, locale and the optional relationship label.
+ * @param props - Message, host mode, locale, the optional relationship label and the inline-citation click handler.
  */
-function MessageBody({ msg, mode, locale, relationshipLabel }: MessageViewProps & { relationshipLabel: string | null }) {
+function MessageBody({ msg, mode, locale, relationshipLabel, onSelectCitation }: MessageViewProps & { relationshipLabel: string | null; onSelectCitation?: (citation: Citation) => void }) {
   const t = useTranslations('chat');
   const isUser = msg.role === 'user';
   return (
@@ -225,7 +226,7 @@ function MessageBody({ msg, mode, locale, relationshipLabel }: MessageViewProps 
 
       {isUser
         ? <ChatMarkdown content={msg.content} locale={locale} />
-        : <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} />}
+        : <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} onSelectCitation={onSelectCitation} />}
     </div>
   );
 }
@@ -326,14 +327,41 @@ function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, c
   );
 }
 
-/** Model line (drawer only) under an assistant message. */
-function DrawerModelLine({ msg }: { msg: ChatMessage }) {
+/**
+ * Model line under an assistant message. The drawer also shows the source count here; the full page shows sources as
+ * the clickable {@link SourcesStrip} instead, so only the model name remains.
+ */
+function ModelLine({ msg, mode }: { msg: ChatMessage; mode: 'drawer' | 'full' }) {
   const t = useTranslations('chat');
-  if (!msg.model_identity) return null;
+  if (msg.role !== 'assistant' || !msg.model_identity) return null;
   return (
-    <span className="text-xs text-muted-foreground">
-      {t('modelLine', { model: msg.model_identity })}{msg.citations?.length ? ` · ${t('sourcesCount', { count: msg.citations.length })}` : ''}
+    <span data-testid="message-model" className="text-xs text-muted-foreground">
+      {t('modelLine', { model: msg.model_identity })}{mode === 'drawer' && msg.citations?.length ? ` · ${t('sourcesCount', { count: msg.citations.length })}` : ''}
     </span>
+  );
+}
+
+/**
+ * Compact "N sources" button under a grounded assistant answer; opens the evidence rail on that answer's sources.
+ *
+ * @param props - The message, host mode and the open handler (absent outside full Chat).
+ * @returns The strip, or null for user turns, the drawer and answers that cite nothing.
+ */
+function SourcesStrip({ msg, mode, onOpen }: { msg: ChatMessage; mode: 'drawer' | 'full'; onOpen?: (citations: Citation[]) => void }) {
+  const t = useTranslations('chat');
+  const citations = msg.citations;
+  if (mode !== 'full' || msg.role !== 'assistant' || !citations?.length || !onOpen) return null;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      data-testid="sources-strip"
+      onClick={() => onOpen(citations)}
+      className="min-h-8 w-fit gap-1.5 px-2.5 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <BookOpenIcon className="size-3.5" aria-hidden="true" />
+      {t('sourcesCount', { count: citations.length })}
+    </Button>
   );
 }
 
@@ -347,6 +375,10 @@ interface TranscriptMessageProps extends MessageViewProps {
   widgetPromptHandler: (part: unknown) => ((prompt: string) => void | Promise<unknown>) | undefined;
   onEditMessage?: (message: ChatMessage) => void;
   onRegenerateMessage?: (message: ChatMessage) => void;
+  /** Inline citation chip click (full Chat); undefined leaves chips as plain links. */
+  onSelectCitation?: (citation: Citation) => void;
+  /** "N sources" strip click (full Chat); the strip is hidden without it. */
+  onOpenSources?: (citations: Citation[]) => void;
 }
 
 /**
@@ -356,7 +388,7 @@ interface TranscriptMessageProps extends MessageViewProps {
  * @param props - See {@link TranscriptMessageProps}.
  */
 function TranscriptMessage(props: TranscriptMessageProps) {
-  const { msg, mode, locale, csrfToken, revised, isRevised, widgetPromptHandler, onEditMessage, onRegenerateMessage } = props;
+  const { msg, mode, locale, csrfToken, revised, isRevised, widgetPromptHandler, onEditMessage, onRegenerateMessage, onSelectCitation, onOpenSources } = props;
   const t = useTranslations('chat');
   const isUser = msg.role === 'user';
   const canEdit = mode === 'full' && isUser && Boolean(msg.response_id) && !isRevised && Boolean(onEditMessage);
@@ -368,7 +400,7 @@ function TranscriptMessage(props: TranscriptMessageProps) {
       data-message-id={msg.id}
       className={`flex flex-col gap-2.5 ${isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto w-full'}`}
     >
-      <MessageBody msg={msg} mode={mode} locale={locale} relationshipLabel={relationshipLabelFor(msg, revised, t)} />
+      <MessageBody msg={msg} mode={mode} locale={locale} relationshipLabel={relationshipLabelFor(msg, revised, t)} onSelectCitation={onSelectCitation} />
 
       {/* Widget parts render in order after the text; older rows carry only `generative_ui`. */}
       {!isUser && messageUiParts(msg).map((part, index) => (
@@ -385,9 +417,11 @@ function TranscriptMessage(props: TranscriptMessageProps) {
         />
       ))}
 
+      <SourcesStrip msg={msg} mode={mode} onOpen={onOpenSources} />
+
       <MessageActions {...props} canEdit={canEdit} canRegenerate={canRegenerate} />
 
-      {mode === 'drawer' && !isUser && <DrawerModelLine msg={msg} />}
+      <ModelLine msg={msg} mode={mode} />
     </div>
   );
 }
@@ -574,6 +608,9 @@ export function ChatTranscript(props: ChatTranscriptProps) {
   const m = useTranscriptModel(props, isStreaming || isPending);
   const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, hasUnread, jumpToLatest, widgetPromptHandler } = m;
   const { showStarter, showStreaming } = transcriptVisibility(props, withTranscriptDefaults(props));
+  // Full Chat shows the evidence rail, so chip and strip clicks open it; the drawer has no rail and keeps plain links.
+  const onOpenSources = mode === 'full' ? focusCitations : undefined;
+  const onSelectCitation = props.onSelectCitation ?? (onOpenSources ? (citation: Citation) => onOpenSources([citation]) : undefined);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -607,6 +644,8 @@ export function ChatTranscript(props: ChatTranscriptProps) {
           widgetPromptHandler={widgetPromptHandler}
           onEditMessage={onEditMessage}
           onRegenerateMessage={onRegenerateMessage}
+          onSelectCitation={onSelectCitation}
+          onOpenSources={onOpenSources}
         />
       ))}
 

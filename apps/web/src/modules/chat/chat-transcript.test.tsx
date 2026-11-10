@@ -10,6 +10,7 @@ const topicsMock = vi.hoisted(() => ({ fetchTopics: vi.fn() }));
 vi.mock('@/modules/news/api', () => topicsMock);
 
 import { ChatTranscript } from './chat-transcript';
+import { onCitationFocus } from './chat-citation-focus';
 
 vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
 
@@ -76,5 +77,40 @@ describe('ChatTranscript tool status', () => {
       streamingWebSearch: { status: 'used', reason: null, result_count: 2, query: 'vinfast stock price' },
     });
     expect(screen.getByTestId('web-search-query').textContent).toBe('Searched “vinfast stock price” · 2 results');
+  });
+});
+
+describe('ChatTranscript sources and model line', () => {
+  const cited = {
+    id: 'a1', role: 'assistant', content: 'Answer [1].', model_identity: 'model-x',
+    citations: [{ sourceType: 'web', url: 'https://example.com/a', title: 'Example', quote: 'q' }],
+  } as unknown as React.ComponentProps<typeof ChatTranscript>['messages'][number];
+
+  beforeEach(() => { Element.prototype.scrollTo = vi.fn() as unknown as typeof Element.prototype.scrollTo; });
+
+  it('shows the model and a clickable sources strip on the full page', async () => {
+    const onSelectCitation = vi.fn();
+    renderTranscript({ messages: [cited], conversationId: 'c1', onSelectCitation });
+    expect(screen.getByTestId('message-model').textContent).toBe('Model: model-x');
+    const strip = screen.getByTestId('sources-strip');
+    expect(strip.textContent).toBe('1 sources');
+    const received: string[][] = [];
+    const off = onCitationFocus(() => received.push([]));
+    await userEvent.click(strip);
+    off();
+    expect(received).toHaveLength(1);
+    const chip = await waitFor(() => {
+      const found = document.querySelector('a.cite');
+      expect(found).not.toBeNull();
+      return found as Element;
+    });
+    await userEvent.click(chip);
+    expect(onSelectCitation).toHaveBeenCalledWith(cited.citations![0]);
+  });
+
+  it('keeps the drawer free of the strip and appends the count to the model line', () => {
+    renderTranscript({ messages: [cited], mode: 'drawer' });
+    expect(screen.queryByTestId('sources-strip')).toBeNull();
+    expect(screen.getByTestId('message-model').textContent).toBe('Model: model-x · 1 sources');
   });
 });
