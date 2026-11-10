@@ -37,7 +37,9 @@ function subscribeMobileMedia(onChange: () => void): () => void {
   return () => media.removeEventListener('change', onChange);
 }
 /** Reads the current phone-width match. */
-function getMobileMedia(): boolean { return window.matchMedia(MOBILE_QUERY).matches; }
+function getMobileMedia(): boolean {
+  return window.matchMedia(MOBILE_QUERY).matches;
+}
 const TABLET_QUERY = '(min-width: 721px) and (max-width: 1099px)';
 /** Subscribes to the tablet-width media query. */
 function subscribeTabletMedia(onChange: () => void): () => void {
@@ -46,9 +48,13 @@ function subscribeTabletMedia(onChange: () => void): () => void {
   return () => media.removeEventListener('change', onChange);
 }
 /** Reads the current tablet-width match. */
-function getTabletMedia(): boolean { return window.matchMedia(TABLET_QUERY).matches; }
+function getTabletMedia(): boolean {
+  return window.matchMedia(TABLET_QUERY).matches;
+}
 /** Server render assumes desktop. */
-function getServerMobileMedia(): boolean { return false; }
+function getServerMobileMedia(): boolean {
+  return false;
+}
 
 /**
  * Tracks the phone and tablet media queries (server render assumes desktop).
@@ -69,12 +75,20 @@ function useDashboardMedia(): { isMobile: boolean; isTablet: boolean } {
  */
 function useMobileNoticeDismissal(): [boolean, () => void] {
   const [dismissed, setDismissed] = useState(() => {
-    try { return typeof window !== 'undefined' && window.localStorage.getItem(MOBILE_NOTICE_KEY) === '1'; } catch { return false; }
+    try {
+      return typeof window !== 'undefined' && window.localStorage.getItem(MOBILE_NOTICE_KEY) === '1';
+    } catch {
+      return false;
+    }
   });
   /** Persists the dismissal of the mobile reading-sizes notice. */
   const dismiss = useCallback(() => {
     setDismissed(true);
-    try { window.localStorage.setItem(MOBILE_NOTICE_KEY, '1'); } catch { /* storage unavailable: dismissal lasts this session */ }
+    try {
+      window.localStorage.setItem(MOBILE_NOTICE_KEY, '1');
+    } catch {
+      /* storage unavailable: dismissal lasts this session */
+    }
   }, []);
   return [dismissed, dismiss];
 }
@@ -94,10 +108,20 @@ function buildHeaderSummary(
 }
 
 type PageData = ReturnType<typeof useDashboardData>;
-type PageOps = { session: ReturnType<typeof useLayoutSession>; save: ReturnType<typeof useLayoutSave>; membership: ReturnType<typeof useGadgetMembership> };
+type PageOps = {
+  session: ReturnType<typeof useLayoutSession>;
+  save: ReturnType<typeof useLayoutSave>;
+  membership: ReturnType<typeof useGadgetMembership>;
+};
 
 /** Dashboard header wired to the data, layout and CRUD hooks (summary text, edit toggle, switcher actions). */
-function ConnectedHeader({ data, ops, crud, onOpenPresets, onOpenManagement }: {
+function ConnectedHeader({
+  data,
+  ops,
+  crud,
+  onOpenPresets,
+  onOpenManagement,
+}: {
   data: PageData;
   ops: PageOps;
   crud: ReturnType<typeof useDashboardCrud>;
@@ -111,21 +135,41 @@ function ConnectedHeader({ data, ops, crud, onOpenPresets, onOpenManagement }: {
   const { activeDashboard, sources } = data;
   return (
     <DashboardHeader
-      dashboards={data.dashboards} activeDashboard={activeDashboard} selectedDashboardId={data.selectedDashboardId}
-      layoutOperationPending={save.layoutOperationPending} isAdminViewer={isAdminViewer} isOwner={isOwner}
-      isEditMode={session.isEditMode} canEditLayout={session.canEditLayout}
+      dashboards={data.dashboards}
+      activeDashboard={activeDashboard}
+      selectedDashboardId={data.selectedDashboardId}
+      layoutOperationPending={save.layoutOperationPending}
+      isAdminViewer={isAdminViewer}
+      isOwner={isOwner}
+      isEditMode={session.isEditMode}
+      canEditLayout={session.canEditLayout}
       summary={buildHeaderSummary(t, sources.lastUpdatedAt, sources.staleSources.length, display.locale)}
-      onSwitch={save.requestSwitchDashboard} onCreate={() => crud.setCreateOpen(true)}
-      onRename={() => { crud.setRenameValue(activeDashboard!.name); crud.setRenameOpen(true); }}
-      onDelete={() => crud.setDeleteOpen(true)} onOpenPresets={onOpenPresets}
-      onToggleEdit={() => { if (session.isEditMode) save.requestExitEdit(); else session.setIsEditMode(true); }}
+      onSwitch={save.requestSwitchDashboard}
+      onCreate={() => crud.setCreateOpen(true)}
+      onRename={() => {
+        crud.setRenameValue(activeDashboard!.name);
+        crud.setRenameOpen(true);
+      }}
+      onDelete={() => crud.setDeleteOpen(true)}
+      onOpenPresets={onOpenPresets}
+      onToggleEdit={() => {
+        if (session.isEditMode) save.requestExitEdit();
+        else session.setIsEditMode(true);
+      }}
       onOpenManagement={onOpenManagement}
     />
   );
 }
 
 /** Preset picker wired to navigation: applying a preset opens it, leaves edit mode and clears the dirty flag. */
-function ConnectedPresetPicker({ open, onOpenChange, data, session, initialPresetId, initialApplyMode }: {
+function ConnectedPresetPicker({
+  open,
+  onOpenChange,
+  data,
+  session,
+  initialPresetId,
+  initialApplyMode,
+}: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   data: PageData;
@@ -163,12 +207,23 @@ function useVisibleInstances(activeDashboard: PageData['activeDashboard'], activ
 
 /** True when the dismissible mobile reading-projection hint applies (read-only mobile view with a readable projection). */
 function shouldShowMobileHint(session: PageOps['session'], hasDashboard: boolean, dismissed: boolean): boolean {
-  return hasDashboard && session.currentBreakpoint === 'mobile' && !session.editMode
-    && !session.mobileProjectionUnavailable && session.readablePlacements !== null && !dismissed;
+  return (
+    hasDashboard &&
+    session.currentBreakpoint === 'mobile' &&
+    !session.editMode &&
+    !session.mobileProjectionUnavailable &&
+    session.readablePlacements !== null &&
+    !dismissed
+  );
 }
 
 /** Stale-source disclosure (when any source is failing) followed by the timezone footer; both need a loaded dashboard. */
-function StaleAndFooter({ activeDashboard, staleSources, open, onToggle }: {
+function StaleAndFooter({
+  activeDashboard,
+  staleSources,
+  open,
+  onToggle,
+}: {
   activeDashboard: PageData['activeDashboard'];
   staleSources: PageData['sources']['staleSources'];
   open: boolean;
@@ -200,24 +255,45 @@ function useDashboardIntents(session: PageOps['session'], activeDashboard: PageD
   const [presetInitialMode, setPresetInitialMode] = useState<'append' | undefined>(undefined);
   // Render-phase reset instead of a state-in-effect; only the transition out of edit mode clears the intent.
   useResetOnChange([session.editMode], () => {
-    if (!session.editMode) { setOpenAddInitially(false); setAddDeepLink(undefined); }
+    if (!session.editMode) {
+      setOpenAddInitially(false);
+      setAddDeepLink(undefined);
+    }
   });
   useDashboardDeepLink({
     ready: Boolean(activeDashboard),
-    onPreset: (id) => { setPresetInitialId(id); setPresetPickerOpen(true); },
+    onPreset: (id) => {
+      setPresetInitialId(id);
+      setPresetPickerOpen(true);
+    },
     onAddTemplate: (target) => {
       if (!isOwner || !session.canEditLayout) return;
-      setAddDeepLink(target); setOpenAddInitially(true); session.setIsEditMode(true);
+      setAddDeepLink(target);
+      setOpenAddInitially(true);
+      session.setIsEditMode(true);
     },
   });
   return {
-    presetPickerOpen, setPresetPickerOpen, openAddInitially, setOpenAddInitially, addDeepLink,
-    presetInitialId, setPresetInitialId, presetInitialMode, setPresetInitialMode,
+    presetPickerOpen,
+    setPresetPickerOpen,
+    openAddInitially,
+    setOpenAddInitially,
+    addDeepLink,
+    presetInitialId,
+    setPresetInitialId,
+    presetInitialMode,
+    setPresetInitialMode,
   };
 }
 
 /** Gadget instance and definition settings modal bound to the selected dashboard and its current revision. */
-function ConnectedGadgetSettings({ open, onOpenChange, instance, selectedDashboardId, activeDashboard }: {
+function ConnectedGadgetSettings({
+  open,
+  onOpenChange,
+  instance,
+  selectedDashboardId,
+  activeDashboard,
+}: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   instance: GadgetInstance | null;
@@ -226,8 +302,11 @@ function ConnectedGadgetSettings({ open, onOpenChange, instance, selectedDashboa
 }) {
   return (
     <GadgetSettings
-      open={open} onOpenChange={onOpenChange} instance={instance}
-      dashboardId={selectedDashboardId ?? ''} dashboardRevision={activeDashboard?.revision ?? 1}
+      open={open}
+      onOpenChange={onOpenChange}
+      instance={instance}
+      dashboardId={selectedDashboardId ?? ''}
+      dashboardRevision={activeDashboard?.revision ?? 1}
     />
   );
 }
@@ -255,7 +334,10 @@ function ConnectedStarterWizard({ onClose, onBuildDashboard }: { onClose: () => 
   return (
     <StarterPackWizard
       onClose={onClose}
-      onChanged={() => { void queryClient.invalidateQueries({ queryKey: sourceKeys.list }); void queryClient.invalidateQueries({ queryKey: dashboardKeys.sources }); }}
+      onChanged={() => {
+        void queryClient.invalidateQueries({ queryKey: sourceKeys.list });
+        void queryClient.invalidateQueries({ queryKey: dashboardKeys.sources });
+      }}
       onBuildDashboard={onBuildDashboard}
     />
   );
@@ -287,21 +369,38 @@ function DashboardGroupContent(props: GroupBodyProps) {
   const { activeDashboard, sources, showFirstRun } = data;
   const { isAdminViewer, isOwner } = useWorkspace();
   const display = useDisplayPreferences();
-  return <div className="flex flex-col gap-4 pb-4">
-    {activeGroup?.is_overview && <>
-      <TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} />
-      <FreshnessStrip sources={sources.dashboardSources} locale={display.locale} />
-    </>}
-    <DashboardCanvas
-      ops={ops} activeDashboard={activeDashboard} visibleInstances={visibleInstances} showFirstRun={showFirstRun && Boolean(activeGroup?.is_overview)}
-      csrfToken={props.csrfToken} isTablet={isTablet} isAdminViewer={isAdminViewer}
-      onPickTopics={props.onPickTopics} onOpenStarterPacks={props.onOpenStarterPacks}
-      onOpenPresets={props.onOpenPresets} onCreateDashboard={props.onCreateDashboard}
-      onConfigureInstance={props.onConfigureInstance}
-    />
-    {activeGroup?.is_overview && <StaleAndFooter activeDashboard={activeDashboard} staleSources={sources.staleSources}
-      open={props.staleDetailsOpen} onToggle={props.onToggleStale} />}
-  </div>;
+  return (
+    <div className="flex flex-col gap-4 pb-4">
+      {activeGroup?.is_overview && (
+        <>
+          <TodayHeaderGate visible={isOwner && !showFirstRun} sources={sources.allSources.items ?? []} />
+          <FreshnessStrip sources={sources.dashboardSources} locale={display.locale} />
+        </>
+      )}
+      <DashboardCanvas
+        ops={ops}
+        activeDashboard={activeDashboard}
+        visibleInstances={visibleInstances}
+        showFirstRun={showFirstRun && Boolean(activeGroup?.is_overview)}
+        csrfToken={props.csrfToken}
+        isTablet={isTablet}
+        isAdminViewer={isAdminViewer}
+        onPickTopics={props.onPickTopics}
+        onOpenStarterPacks={props.onOpenStarterPacks}
+        onOpenPresets={props.onOpenPresets}
+        onCreateDashboard={props.onCreateDashboard}
+        onConfigureInstance={props.onConfigureInstance}
+      />
+      {activeGroup?.is_overview && (
+        <StaleAndFooter
+          activeDashboard={activeDashboard}
+          staleSources={sources.staleSources}
+          open={props.staleDetailsOpen}
+          onToggle={props.onToggleStale}
+        />
+      )}
+    </div>
+  );
 }
 
 /**
@@ -315,10 +414,210 @@ function DashboardGroupBody(props: GroupBodyProps) {
   const { isOwner } = useWorkspace();
   const content = <DashboardGroupContent {...props} />;
   const empty = Boolean(activeGroup && !activeGroup.is_overview && visibleInstances.length === 0 && !session.editMode);
-  const panelProps = { panelId: activeGroup?.id ?? 'none', empty, canAdd: isOwner && session.canEditLayout, onAdd: props.onAdd, scrollPositions };
-  return activeGroup?.is_overview
-    ? <DashboardOverview {...panelProps} editMode={session.editMode} compact={isMobile || isTablet}>{content}</DashboardOverview>
-    : <DashboardPanel {...panelProps}>{content}</DashboardPanel>;
+  const panelProps = {
+    panelId: activeGroup?.id ?? 'none',
+    empty,
+    canAdd: isOwner && session.canEditLayout,
+    onAdd: props.onAdd,
+    scrollPositions,
+  };
+  return activeGroup?.is_overview ? (
+    <DashboardOverview {...panelProps} editMode={session.editMode} compact={isMobile || isTablet}>
+      {content}
+    </DashboardOverview>
+  ) : (
+    <DashboardPanel {...panelProps}>{content}</DashboardPanel>
+  );
+}
+
+/** Page-local UI state: gadget settings target, stale-source disclosure and the starter-pack wizard. */
+function useDashboardUi() {
+  const [configuringInstance, setConfiguringInstance] = useState<GadgetInstance | null>(null);
+  const [gadgetSettingsOpen, setGadgetSettingsOpen] = useState<boolean>(false);
+  // Stale-source detail list stays collapsed until the owner asks for it.
+  const [staleDetailsOpen, setStaleDetailsOpen] = useState(false);
+  const [starterOpen, setStarterOpen] = useState(false);
+  return {
+    configuringInstance,
+    setConfiguringInstance,
+    gadgetSettingsOpen,
+    setGadgetSettingsOpen,
+    staleDetailsOpen,
+    setStaleDetailsOpen,
+    starterOpen,
+    setStarterOpen,
+  };
+}
+
+type PageCrud = ReturnType<typeof useDashboardCrud>;
+type PageIntents = ReturnType<typeof useDashboardIntents>;
+type PageUi = ReturnType<typeof useDashboardUi>;
+
+/** Props of {@link DashboardTabsArea}. */
+interface TabsAreaProps {
+  data: PageData;
+  ops: PageOps;
+  crud: PageCrud;
+  intents: PageIntents;
+  ui: PageUi;
+  isMobile: boolean;
+  isTablet: boolean;
+}
+
+/**
+ * Group tab strip, layout notices, edit toolbar and the active group's body. Owns the per-dashboard scroll
+ * memory and the dismissible mobile hint so the page component only wires hooks together.
+ */
+function DashboardTabsArea({ data, ops, crud, intents, ui, isMobile, isTablet }: TabsAreaProps) {
+  const workspaceSession = useWorkspaceSession();
+  const { isOwner } = useWorkspace();
+  const { session, save } = ops;
+  const { selectedDashboardId, activeDashboard, management, sources } = data;
+  const [mobileNoticeDismissed, dismissMobileNotice] = useMobileNoticeDismissal();
+  const [scrollPositions] = useState(() => new Map<string, number>());
+  // Remembered scroll offsets belong to one dashboard; drop them when another is selected.
+  useEffect(() => {
+    scrollPositions.clear();
+  }, [scrollPositions, selectedDashboardId]);
+  const activeGroup = activeDashboard?.groups.find((group) => group.id === session.activeGroupId);
+  const updatedGroupIds = useUpdatedGroups(activeDashboard?.instances, sources.dashboardSources, session.activeGroupId);
+  const visibleInstances = useVisibleInstances(activeDashboard, session.activeGroupId);
+  const showMobileHint = shouldShowMobileHint(session, Boolean(activeDashboard), mobileNoticeDismissed);
+  const { setPresetPickerOpen, setOpenAddInitially, openAddInitially, addDeepLink } = intents;
+  const { setStaleDetailsOpen, setStarterOpen, setConfiguringInstance, setGadgetSettingsOpen } = ui;
+  return (
+    <Tabs
+      value={session.activeGroupId}
+      onValueChange={save.requestSwitchGroup}
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden"
+    >
+      {activeDashboard && activeDashboard.groups.length > 0 && (
+        <GroupTabs
+          groups={activeDashboard.groups}
+          updatedGroupIds={updatedGroupIds}
+          onAdd={() => crud.setGroupOpen(true)}
+          canAdd={isOwner && !save.layoutOperationPending && !session.isDirty}
+        />
+      )}
+
+      <TabsContent value={session.activeGroupId} className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
+        <LayoutNotices
+          editOrigin={session.editOrigin}
+          selectedDashboardId={selectedDashboardId}
+          requestedBreakpoint={session.requestedBreakpoint}
+          mobileProjectionUnavailable={session.mobileProjectionUnavailable}
+          showMobileHint={showMobileHint}
+          onDismissMobileHint={dismissMobileNotice}
+        />
+        {/* Layout Editor Toolbar (visible in Edit Mode) */}
+        {session.editMode && (
+          <LayoutEditorBar
+            key={session.activeGroupId}
+            ops={ops}
+            activeDashboard={activeDashboard}
+            openAddInitially={openAddInitially}
+            initialTemplateId={addDeepLink?.templateId}
+            initialSourceId={addDeepLink?.sourceId}
+            onOpenPresets={() => setPresetPickerOpen(true)}
+            onAddGroup={session.isDirty ? undefined : () => crud.setGroupOpen(true)}
+          />
+        )}
+        <DashboardGroupBody
+          ops={ops}
+          data={data}
+          activeGroup={activeGroup}
+          visibleInstances={visibleInstances}
+          csrfToken={workspaceSession.csrfToken}
+          isTablet={isTablet}
+          isMobile={isMobile}
+          scrollPositions={scrollPositions}
+          staleDetailsOpen={ui.staleDetailsOpen}
+          onToggleStale={() => setStaleDetailsOpen((open) => !open)}
+          onPickTopics={() => {
+            management.setTab('topics');
+            management.setOpen(true);
+          }}
+          onOpenStarterPacks={() => setStarterOpen(true)}
+          onOpenPresets={() => setPresetPickerOpen(true)}
+          onCreateDashboard={() => crud.setCreateOpen(true)}
+          onConfigureInstance={(inst) => {
+            setConfiguringInstance(inst);
+            setGadgetSettingsOpen(true);
+          }}
+          onAdd={() => {
+            setOpenAddInitially(true);
+            session.setIsEditMode(true);
+          }}
+        />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+/** Props of {@link DashboardOverlays}. */
+interface OverlaysProps {
+  data: PageData;
+  session: PageOps['session'];
+  crud: PageCrud;
+  intents: PageIntents;
+  ui: PageUi;
+  layoutOperationPending: boolean;
+}
+
+/** Preset picker, starter wizard, CRUD dialogs, gadget settings and the management dialog. */
+function DashboardOverlays({ data, session, crud, intents, ui, layoutOperationPending }: OverlaysProps) {
+  const { selectedDashboardId, activeDashboard, management } = data;
+  const { presetPickerOpen, setPresetPickerOpen, presetInitialId, setPresetInitialId, presetInitialMode, setPresetInitialMode } = intents;
+  const { starterOpen, setStarterOpen, gadgetSettingsOpen, setGadgetSettingsOpen, configuringInstance } = ui;
+  return (
+    <>
+      {/* Preset Picker Modal */}
+      <ConnectedPresetPicker
+        open={presetPickerOpen}
+        initialPresetId={presetInitialId}
+        initialApplyMode={presetInitialMode}
+        data={data}
+        session={session}
+        onOpenChange={(next) => {
+          setPresetPickerOpen(next);
+          if (!next) {
+            setPresetInitialId(undefined);
+            setPresetInitialMode(undefined);
+          }
+        }}
+      />
+      {starterOpen && (
+        <ConnectedStarterWizard
+          onClose={() => setStarterOpen(false)}
+          onBuildDashboard={() => {
+            setStarterOpen(false);
+            setPresetInitialId('monitor');
+            setPresetPickerOpen(true);
+          }}
+        />
+      )}
+      <DashboardCrudDialogs
+        crud={crud}
+        activeDashboardName={activeDashboard?.name ?? ''}
+        layoutOperationPending={layoutOperationPending}
+        // The template is appended to the active dashboard through the preset picker, not into the new page.
+        onFromTemplate={(id) => {
+          crud.setGroupOpen(false);
+          setPresetInitialId(id);
+          setPresetInitialMode('append');
+          setPresetPickerOpen(true);
+        }}
+      />
+      <ConnectedGadgetSettings
+        open={gadgetSettingsOpen}
+        onOpenChange={setGadgetSettingsOpen}
+        instance={configuringInstance}
+        selectedDashboardId={selectedDashboardId}
+        activeDashboard={activeDashboard}
+      />
+      <ManagementDialog management={management} />
+    </>
+  );
 }
 
 /**
@@ -333,103 +632,45 @@ function DashboardGroupBody(props: GroupBodyProps) {
  * @returns Authenticated dashboard view component.
  */
 export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
-  const workspaceSession = useWorkspaceSession();
   const { isOwner } = useWorkspace();
   const { isMobile, isTablet } = useDashboardMedia();
-  const [configuringInstance, setConfiguringInstance] = useState<GadgetInstance | null>(null);
-  const [gadgetSettingsOpen, setGadgetSettingsOpen] = useState<boolean>(false);
-  // Stale-source detail list stays collapsed until the owner asks for it.
-  const [staleDetailsOpen, setStaleDetailsOpen] = useState(false);
-  const [mobileNoticeDismissed, dismissMobileNotice] = useMobileNoticeDismissal();
-  const [starterOpen, setStarterOpen] = useState(false);
-
   const data = useDashboardData(dashboardId);
-  const { dashboards, selectedDashboardId, activeDashboard, management, sources } = data;
-  const [scrollPositions] = useState(() => new Map<string, number>());
-  // Remembered scroll offsets belong to one dashboard; drop them when another is selected.
-  useEffect(() => { scrollPositions.clear(); }, [scrollPositions, selectedDashboardId]);
+  const { dashboards, selectedDashboardId, activeDashboard, management } = data;
   const session = useLayoutSession({ selectedDashboardId, activeDashboard, isMobile });
   const save = useLayoutSave(session, data.navigateToDashboard, selectedDashboardId);
   const membership = useGadgetMembership(session, save.layoutOperationPending);
   const crud = useDashboardCrud({
-    activeDashboard, dashboards, layoutOperationPending: save.layoutOperationPending, navigateToDashboard: data.navigateToDashboard,
+    activeDashboard,
+    dashboards,
+    layoutOperationPending: save.layoutOperationPending,
+    navigateToDashboard: data.navigateToDashboard,
   });
   const ops = { session, save, membership };
-  const { layoutOperationPending } = save;
-  const activeGroup = activeDashboard?.groups.find((group) => group.id === session.activeGroupId);
-
+  const ui = useDashboardUi();
   useActivateCreatedGroup(crud, activeDashboard, session);
   const intents = useDashboardIntents(session, activeDashboard, isOwner);
-  const { presetPickerOpen, setPresetPickerOpen, openAddInitially, setOpenAddInitially, addDeepLink } = intents;
-  const { presetInitialId, setPresetInitialId, presetInitialMode, setPresetInitialMode } = intents;
-
-  const updatedGroupIds = useUpdatedGroups(activeDashboard?.instances, sources.dashboardSources, session.activeGroupId);
-  const visibleInstances = useVisibleInstances(activeDashboard, session.activeGroupId);
-  const showMobileHint = shouldShowMobileHint(session, Boolean(activeDashboard), mobileNoticeDismissed);
 
   return (
-    <section className="dashboard-page flex h-full min-h-0 w-full flex-1 flex-col gap-3 overflow-hidden" data-dashboard-ready={data.dashboardRouteReady}>
+    <section
+      className="dashboard-page flex h-full min-h-0 w-full flex-1 flex-col gap-3 overflow-hidden"
+      data-dashboard-ready={data.dashboardRouteReady}
+    >
       <ConnectedHeader
-        data={data} ops={ops} crud={crud}
-        onOpenPresets={() => setPresetPickerOpen(true)} onOpenManagement={() => management.setOpen(true)}
+        data={data}
+        ops={ops}
+        crud={crud}
+        onOpenPresets={() => intents.setPresetPickerOpen(true)}
+        onOpenManagement={() => management.setOpen(true)}
       />
-      <Tabs value={session.activeGroupId} onValueChange={save.requestSwitchGroup}
-        className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
-        {activeDashboard && activeDashboard.groups.length > 0 && (
-          <GroupTabs groups={activeDashboard.groups} updatedGroupIds={updatedGroupIds} onAdd={() => crud.setGroupOpen(true)}
-            canAdd={isOwner && !layoutOperationPending && !session.isDirty} />
-        )}
-
-      <TabsContent value={session.activeGroupId} className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
-        <LayoutNotices
-          editOrigin={session.editOrigin} selectedDashboardId={selectedDashboardId}
-          requestedBreakpoint={session.requestedBreakpoint} mobileProjectionUnavailable={session.mobileProjectionUnavailable}
-          showMobileHint={showMobileHint} onDismissMobileHint={dismissMobileNotice}
-        />
-        {/* Layout Editor Toolbar (visible in Edit Mode) */}
-        {session.editMode && (
-          <LayoutEditorBar
-            key={session.activeGroupId}
-            ops={ops} activeDashboard={activeDashboard}
-            openAddInitially={openAddInitially} initialTemplateId={addDeepLink?.templateId} initialSourceId={addDeepLink?.sourceId}
-            onOpenPresets={() => setPresetPickerOpen(true)} onAddGroup={session.isDirty ? undefined : () => crud.setGroupOpen(true)}
-          />
-        )}
-        <DashboardGroupBody
-          ops={ops} data={data} activeGroup={activeGroup} visibleInstances={visibleInstances}
-          csrfToken={workspaceSession.csrfToken} isTablet={isTablet} isMobile={isMobile}
-          scrollPositions={scrollPositions} staleDetailsOpen={staleDetailsOpen}
-          onToggleStale={() => setStaleDetailsOpen((open) => !open)}
-          onPickTopics={() => { management.setTab('topics'); management.setOpen(true); }}
-          onOpenStarterPacks={() => setStarterOpen(true)} onOpenPresets={() => setPresetPickerOpen(true)}
-          onCreateDashboard={() => crud.setCreateOpen(true)}
-          onConfigureInstance={(inst) => { setConfiguringInstance(inst); setGadgetSettingsOpen(true); }}
-          onAdd={() => { setOpenAddInitially(true); session.setIsEditMode(true); }}
-        />
-      </TabsContent>
-      </Tabs>
-
-      {/* Preset Picker Modal */}
-      <ConnectedPresetPicker
-        open={presetPickerOpen} initialPresetId={presetInitialId} initialApplyMode={presetInitialMode} data={data} session={session}
-        onOpenChange={(next) => { setPresetPickerOpen(next); if (!next) { setPresetInitialId(undefined); setPresetInitialMode(undefined); } }}
+      <DashboardTabsArea data={data} ops={ops} crud={crud} intents={intents} ui={ui} isMobile={isMobile} isTablet={isTablet} />
+      <DashboardOverlays
+        data={data}
+        session={session}
+        crud={crud}
+        intents={intents}
+        ui={ui}
+        layoutOperationPending={save.layoutOperationPending}
       />
-      {starterOpen && (
-        <ConnectedStarterWizard
-          onClose={() => setStarterOpen(false)}
-          onBuildDashboard={() => { setStarterOpen(false); setPresetInitialId('monitor'); setPresetPickerOpen(true); }}
-        />
-      )}
-      <DashboardCrudDialogs
-        crud={crud} activeDashboardName={activeDashboard?.name ?? ''} layoutOperationPending={layoutOperationPending}
-        // The template is appended to the active dashboard through the preset picker, not into the new page.
-        onFromTemplate={(id) => { crud.setGroupOpen(false); setPresetInitialId(id); setPresetInitialMode('append'); setPresetPickerOpen(true); }}
-      />
-      <ConnectedGadgetSettings
-        open={gadgetSettingsOpen} onOpenChange={setGadgetSettingsOpen} instance={configuringInstance}
-        selectedDashboardId={selectedDashboardId} activeDashboard={activeDashboard}
-      />
-      <ManagementDialog management={management} />
     </section>
   );
 }

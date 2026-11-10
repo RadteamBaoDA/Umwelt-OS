@@ -78,10 +78,7 @@ export function useDocumentUpdateQueue(
     const consumed = new Map(queuedDocuments.current);
     const unknownRevision = unknownChangeRevision.current;
     try {
-      await client.invalidateQueries(
-        { queryKey: ['documents'], exact: true },
-        { throwOnError: true },
-      );
+      await client.invalidateQueries({ queryKey: ['documents'], exact: true }, { throwOnError: true });
       if (!isCurrentAuthGeneration(generation)) return;
       // Remove only revisions included in this snapshot so events queued during the fetch survive.
       for (const [id, revision] of consumed) {
@@ -99,8 +96,12 @@ export function useDocumentUpdateQueue(
   }, [client, authGeneration, isCurrentAuthGeneration]);
 
   return {
-    newDocumentCount, documentRefreshRequired, documentRefreshFailed,
-    queueDocumentUpdate, resetDocumentState, consumeDocumentUpdates,
+    newDocumentCount,
+    documentRefreshRequired,
+    documentRefreshFailed,
+    queueDocumentUpdate,
+    resetDocumentState,
+    consumeDocumentUpdates,
   };
 }
 
@@ -108,7 +109,11 @@ export function useDocumentUpdateQueue(
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const client = useQueryClient();
   const pathname = usePathname();
-  const isPublicPage = pathname === '/' || ['/login', '/setup', '/invite', '/invitations/accept', '/pick', '/privacy', '/terms', '/refunds', '/account-deletion'].includes(pathname);
+  const isPublicPage =
+    pathname === '/' ||
+    ['/login', '/setup', '/invite', '/invitations/accept', '/pick', '/privacy', '/terms', '/refunds', '/account-deletion'].includes(
+      pathname,
+    );
   const { authGeneration, isCurrentGeneration: isCurrentAuthGeneration } = useDisplayPreferences();
   const t = useTranslations('shell');
   const session = useQuery({
@@ -119,7 +124,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const sessionExpired = !isAuthenticated && session.error instanceof ApiError && session.error.status === 401;
   const isConnectable = !isPublicPage && isAuthenticated;
   const [connectedStatus, setStatus] = useState<RealtimeStatus>('connecting');
-  const status: RealtimeStatus = isConnectable ? connectedStatus : isPublicPage ? 'unavailable' : sessionExpired ? 'expired' : 'unavailable';
+  const status: RealtimeStatus = isConnectable
+    ? connectedStatus
+    : isPublicPage
+      ? 'unavailable'
+      : sessionExpired
+        ? 'expired'
+        : 'unavailable';
   const [barrierGeneration, setBarrierGeneration] = useState<number | null>(null);
   const documents = useDocumentUpdateQueue(client, authGeneration, isCurrentAuthGeneration);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -162,9 +173,15 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     [status, newDocumentCount, documentRefreshRequired, documentRefreshFailed, consumeDocumentUpdates],
   );
   const waitingForBarrier = isConnectable && barrierGeneration !== authGeneration;
-  return <RealtimeContext.Provider value={context}>
-    {waitingForBarrier
-      ? <main className="shell"><div className="status-panel skeleton" aria-label={t('loadingWorkspace')} /></main>
-      : children}
-  </RealtimeContext.Provider>;
+  return (
+    <RealtimeContext.Provider value={context}>
+      {waitingForBarrier ? (
+        <main className="shell">
+          <div className="status-panel skeleton" aria-label={t('loadingWorkspace')} />
+        </main>
+      ) : (
+        children
+      )}
+    </RealtimeContext.Provider>
+  );
 }

@@ -57,12 +57,41 @@ function useLayoutState() {
   const pendingBreakpointRef = useRef<'desktop' | 'mobile' | null>(null);
   const dismissedBreakpointRef = useRef<'desktop' | 'mobile' | null>(null);
   return {
-    isEditMode, setIsEditMode, activeGroupId, setActiveGroupId, isDirty, setIsDirty, dirtyModalOpen, setDirtyModalOpen,
-    editOrigin, setEditOrigin, draftPlacements, setDraftPlacements, readablePlacements, setReadablePlacements,
-    gridMetrics, setGridMetrics, history, setHistory, historyIndex, setHistoryIndex, saveError, setSaveError,
-    membershipMutationsPending, setMembershipMutationsPending, readingQueues, setReadingQueues,
-    pendingDashboardSwitchRef, pendingGroupSwitchRef, pendingExitEditRef, pendingRouteNavigationRef, addReservationsRef,
-    addReservationSequenceRef, saveOperationPendingRef, membershipOperationCountRef, pendingBreakpointRef,
+    isEditMode,
+    setIsEditMode,
+    activeGroupId,
+    setActiveGroupId,
+    isDirty,
+    setIsDirty,
+    dirtyModalOpen,
+    setDirtyModalOpen,
+    editOrigin,
+    setEditOrigin,
+    draftPlacements,
+    setDraftPlacements,
+    readablePlacements,
+    setReadablePlacements,
+    gridMetrics,
+    setGridMetrics,
+    history,
+    setHistory,
+    historyIndex,
+    setHistoryIndex,
+    saveError,
+    setSaveError,
+    membershipMutationsPending,
+    setMembershipMutationsPending,
+    readingQueues,
+    setReadingQueues,
+    pendingDashboardSwitchRef,
+    pendingGroupSwitchRef,
+    pendingExitEditRef,
+    pendingRouteNavigationRef,
+    addReservationsRef,
+    addReservationSequenceRef,
+    saveOperationPendingRef,
+    membershipOperationCountRef,
+    pendingBreakpointRef,
     dismissedBreakpointRef,
   };
 }
@@ -87,12 +116,12 @@ function deriveLayoutGeometry(
   isMobile: boolean,
 ) {
   const activeGroupId = activeDashboard?.groups.some((group) => group.id === storedGroupId)
-    ? storedGroupId : activeDashboard?.groups.find((group) => group.is_overview)?.id ?? '';
+    ? storedGroupId
+    : (activeDashboard?.groups.find((group) => group.is_overview)?.id ?? '');
   const requestedBreakpoint: 'desktop' | 'mobile' = isMobile ? 'mobile' : 'desktop';
-  const currentBreakpoint = isDirty && editOrigin?.dashboardId === selectedDashboardId
-    ? editOrigin.breakpoint : requestedBreakpoint;
-  const layoutColumns = (editOrigin?.dashboardId === selectedDashboardId
-    ? editOrigin.columns : activeDashboard?.layouts[currentBreakpoint].columns) ?? 20;
+  const currentBreakpoint = isDirty && editOrigin?.dashboardId === selectedDashboardId ? editOrigin.breakpoint : requestedBreakpoint;
+  const layoutColumns =
+    (editOrigin?.dashboardId === selectedDashboardId ? editOrigin.columns : activeDashboard?.layouts[currentBreakpoint].columns) ?? 20;
   return { activeGroupId, requestedBreakpoint, currentBreakpoint, layoutColumns };
 }
 
@@ -105,7 +134,10 @@ function deriveLayoutGeometry(
 function useLayoutDerived(state: LayoutState, { selectedDashboardId, activeDashboard, isMobile }: LayoutInputs) {
   const { draftPlacements, isEditMode } = state;
   const { activeGroupId, requestedBreakpoint, currentBreakpoint, layoutColumns } = deriveLayoutGeometry(
-    state, selectedDashboardId, activeDashboard, isMobile,
+    state,
+    selectedDashboardId,
+    activeDashboard,
+    isMobile,
   );
   const layoutIdentityRef = useRef<LayoutIdentity>({
     dashboardId: selectedDashboardId,
@@ -124,15 +156,14 @@ function useLayoutDerived(state: LayoutState, { selectedDashboardId, activeDashb
     };
   });
   const liveLayoutRef = useRef({ activeDashboard, draftPlacements });
-  useLayoutEffect(() => { liveLayoutRef.current = { activeDashboard, draftPlacements }; });
+  useLayoutEffect(() => {
+    liveLayoutRef.current = { activeDashboard, draftPlacements };
+  });
   const mobileProjection = useMemo(
-    () => activeDashboard
-      ? projectMobilePlacements(
-          activeDashboard.layouts.mobile.items,
-          activeDashboard.instances,
-          activeDashboard.layouts.mobile.columns,
-        )
-      : { placements: [], unavailable: false },
+    () =>
+      activeDashboard
+        ? projectMobilePlacements(activeDashboard.layouts.mobile.items, activeDashboard.instances, activeDashboard.layouts.mobile.columns)
+        : { placements: [], unavailable: false },
     [activeDashboard],
   );
   const mobileProjectionUnavailable = currentBreakpoint === 'mobile' && mobileProjection.unavailable;
@@ -143,8 +174,16 @@ function useLayoutDerived(state: LayoutState, { selectedDashboardId, activeDashb
     return currentBreakpoint === 'mobile' ? mobileProjection.placements : activeDashboard.layouts.desktop.items;
   }, [activeDashboard, currentBreakpoint, mobileProjection.placements]);
   return {
-    activeGroupId, requestedBreakpoint, currentBreakpoint, layoutColumns, layoutIdentityRef, liveLayoutRef,
-    mobileProjectionUnavailable, canEditLayout, editMode, savedPlacements,
+    activeGroupId,
+    requestedBreakpoint,
+    currentBreakpoint,
+    layoutColumns,
+    layoutIdentityRef,
+    liveLayoutRef,
+    mobileProjectionUnavailable,
+    canEditLayout,
+    editMode,
+    savedPlacements,
   };
 }
 
@@ -173,23 +212,45 @@ function useLayoutSessionEffects(state: LayoutState, derived: LayoutDerived, sel
     if (dismissedBreakpointRef.current !== requestedBreakpoint && !dirtyModalOpen) {
       setDirtyModalOpen(true);
     }
-  }, [dirtyModalOpen, editOrigin, isDirty, requestedBreakpoint, selectedDashboardId, pendingBreakpointRef, dismissedBreakpointRef, setDirtyModalOpen]);
+  }, [
+    dirtyModalOpen,
+    editOrigin,
+    isDirty,
+    requestedBreakpoint,
+    selectedDashboardId,
+    pendingBreakpointRef,
+    dismissedBreakpointRef,
+    setDirtyModalOpen,
+  ]);
 
   // Reset clean history only when its owner or saved baseline actually changes.
   useEffect(() => {
     if (isDirty) return;
-    const originMatches = editOrigin?.dashboardId === selectedDashboardId
-      && editOrigin.breakpoint === requestedBreakpoint
-      && editOrigin.columns === layoutColumns
-      && editOrigin.groupId === activeGroupId
-      && sameLayout(editOrigin.savedSnapshot, savedPlacements);
+    const originMatches =
+      editOrigin?.dashboardId === selectedDashboardId &&
+      editOrigin.breakpoint === requestedBreakpoint &&
+      editOrigin.columns === layoutColumns &&
+      editOrigin.groupId === activeGroupId &&
+      sameLayout(editOrigin.savedSnapshot, savedPlacements);
     if (originMatches) return;
     // Re-baselines the draft when its owner or saved layout changes; derived state cannot hold undo history; the multi-field draft must rebaseline atomically.
     setDraftPlacements(savedPlacements);
     setHistory([savedPlacements.map((placement) => ({ ...placement }))]);
     setHistoryIndex(0);
     if (editOrigin) setEditOrigin(null);
-  }, [activeGroupId, editOrigin, isDirty, layoutColumns, requestedBreakpoint, savedPlacements, selectedDashboardId, setDraftPlacements, setEditOrigin, setHistory, setHistoryIndex]);
+  }, [
+    activeGroupId,
+    editOrigin,
+    isDirty,
+    layoutColumns,
+    requestedBreakpoint,
+    savedPlacements,
+    selectedDashboardId,
+    setDraftPlacements,
+    setEditOrigin,
+    setHistory,
+    setHistoryIndex,
+  ]);
 
   // Register GuardedNavigation leave guard for dirty layout edits
   useEffect(() => {
@@ -210,6 +271,41 @@ function useLayoutSessionEffects(state: LayoutState, derived: LayoutDerived, sel
 }
 
 /**
+ * Undo/redo over the layout history: moves the cursor when the target exists and recomputes the dirty flag
+ * against the edit origin. Ignored while a save or membership operation is in flight.
+ */
+function useHistoryCursor(state: LayoutState) {
+  const { editOrigin, history, historyIndex, setHistoryIndex, setDraftPlacements, setIsDirty } = state;
+  const { saveOperationPendingRef, membershipOperationCountRef } = state;
+  /** Moves the history cursor by `delta` when the target exists and recomputes the dirty flag against the origin. */
+  const moveHistory = useCallback(
+    (delta: -1 | 1) => {
+      if (saveOperationPendingRef.current || membershipOperationCountRef.current > 0) return;
+      const nextIndex = historyIndex + delta;
+      if (nextIndex < 0 || nextIndex > history.length - 1) return;
+      setHistoryIndex(nextIndex);
+      setDraftPlacements(history[nextIndex]);
+      setIsDirty(editOrigin ? !sameLayout(history[nextIndex], editOrigin.savedSnapshot) : true);
+    },
+    [
+      editOrigin,
+      history,
+      historyIndex,
+      saveOperationPendingRef,
+      membershipOperationCountRef,
+      setHistoryIndex,
+      setDraftPlacements,
+      setIsDirty,
+    ],
+  );
+  /** Handles Undo action from layout editor toolbar. */
+  const handleUndo = useCallback(() => moveHistory(-1), [moveHistory]);
+  /** Handles Redo action from layout editor toolbar. */
+  const handleRedo = useCallback(() => moveHistory(1), [moveHistory]);
+  return { handleUndo, handleRedo };
+}
+
+/**
  * Builds the undo/redo/tidy operations over the draft history.
  *
  * All operations are ignored while a save or membership mutation is in flight. `pushHistory` rejects snapshots
@@ -217,62 +313,96 @@ function useLayoutSessionEffects(state: LayoutState, derived: LayoutDerived, sel
  */
 function useLayoutHistory(state: LayoutState, derived: LayoutDerived, activeDashboard: Dashboard | null) {
   const t = useTranslations('dashboard');
-  const { editOrigin, history, historyIndex, draftPlacements, setSaveError, setHistory, setHistoryIndex, setDraftPlacements, setIsDirty, setEditOrigin } = state;
+  const {
+    editOrigin,
+    historyIndex,
+    draftPlacements,
+    setSaveError,
+    setHistory,
+    setHistoryIndex,
+    setDraftPlacements,
+    setIsDirty,
+    setEditOrigin,
+  } = state;
   const { saveOperationPendingRef, membershipOperationCountRef } = state;
   const { activeGroupId, currentBreakpoint, layoutColumns, savedPlacements } = derived;
 
   /** Pushes one complete, validated placements snapshot to the originating undo/redo history. */
-  const pushHistory = useCallback((nextPlacements: DashboardPlacement[]) => {
-    if (saveOperationPendingRef.current || membershipOperationCountRef.current > 0) return;
-    const origin = editOrigin ?? (activeDashboard ? {
-      dashboardId: activeDashboard.id,
-      groupId: activeGroupId,
-      breakpoint: currentBreakpoint,
-      columns: layoutColumns,
-      baseRevision: activeDashboard.revision,
-      savedSnapshot: savedPlacements.map((placement) => ({ ...placement })),
-    } : null);
-    const byId = new Map(activeDashboard?.instances.map((instance) => [instance.id, instance.group_id]));
-    const original = new Map(draftPlacements.map((placement) => [placement.instance_id, placement]));
-    if (!activeDashboard || !origin || origin.dashboardId !== activeDashboard.id || origin.groupId !== activeGroupId
-      || nextPlacements.some((placement) => {
-        if (byId.get(placement.instance_id) === activeGroupId) return false;
-        const prior = original.get(placement.instance_id);
-        return !prior || placement.x !== prior.x || placement.y !== prior.y || placement.w !== prior.w || placement.h !== prior.h;
-      })
-      || !isValidLayoutSnapshot(nextPlacements, activeDashboard.instances, origin.columns)) {
-      setSaveError(t('layoutActionUnavailable'));
-      return;
-    }
-    const dirty = origin ? !sameLayout(nextPlacements, origin.savedSnapshot) : true;
-    setHistory((prev) => {
-      const truncated = prev.slice(0, historyIndex + 1);
-      return [...truncated, nextPlacements];
-    });
-    setHistoryIndex((prev) => prev + 1);
-    setDraftPlacements(nextPlacements);
-    setIsDirty(dirty);
-    setEditOrigin(origin);
-  }, [activeDashboard, activeGroupId, currentBreakpoint, draftPlacements, editOrigin, historyIndex, layoutColumns, savedPlacements, t, saveOperationPendingRef, membershipOperationCountRef, setSaveError, setHistory, setHistoryIndex, setDraftPlacements, setIsDirty, setEditOrigin]);
+  const pushHistory = useCallback(
+    (nextPlacements: DashboardPlacement[]) => {
+      if (saveOperationPendingRef.current || membershipOperationCountRef.current > 0) return;
+      const origin =
+        editOrigin ??
+        (activeDashboard
+          ? {
+              dashboardId: activeDashboard.id,
+              groupId: activeGroupId,
+              breakpoint: currentBreakpoint,
+              columns: layoutColumns,
+              baseRevision: activeDashboard.revision,
+              savedSnapshot: savedPlacements.map((placement) => ({ ...placement })),
+            }
+          : null);
+      const byId = new Map(activeDashboard?.instances.map((instance) => [instance.id, instance.group_id]));
+      const original = new Map(draftPlacements.map((placement) => [placement.instance_id, placement]));
+      if (
+        !activeDashboard ||
+        !origin ||
+        origin.dashboardId !== activeDashboard.id ||
+        origin.groupId !== activeGroupId ||
+        nextPlacements.some((placement) => {
+          if (byId.get(placement.instance_id) === activeGroupId) return false;
+          const prior = original.get(placement.instance_id);
+          return !prior || placement.x !== prior.x || placement.y !== prior.y || placement.w !== prior.w || placement.h !== prior.h;
+        }) ||
+        !isValidLayoutSnapshot(nextPlacements, activeDashboard.instances, origin.columns)
+      ) {
+        setSaveError(t('layoutActionUnavailable'));
+        return;
+      }
+      const dirty = origin ? !sameLayout(nextPlacements, origin.savedSnapshot) : true;
+      setHistory((prev) => {
+        const truncated = prev.slice(0, historyIndex + 1);
+        return [...truncated, nextPlacements];
+      });
+      setHistoryIndex((prev) => prev + 1);
+      setDraftPlacements(nextPlacements);
+      setIsDirty(dirty);
+      setEditOrigin(origin);
+    },
+    [
+      activeDashboard,
+      activeGroupId,
+      currentBreakpoint,
+      draftPlacements,
+      editOrigin,
+      historyIndex,
+      layoutColumns,
+      savedPlacements,
+      t,
+      saveOperationPendingRef,
+      membershipOperationCountRef,
+      setSaveError,
+      setHistory,
+      setHistoryIndex,
+      setDraftPlacements,
+      setIsDirty,
+      setEditOrigin,
+    ],
+  );
 
-  /** Moves the history cursor by `delta` when the target exists and recomputes the dirty flag against the origin. */
-  const moveHistory = useCallback((delta: -1 | 1) => {
-    if (saveOperationPendingRef.current || membershipOperationCountRef.current > 0) return;
-    const nextIndex = historyIndex + delta;
-    if (nextIndex < 0 || nextIndex > history.length - 1) return;
-    setHistoryIndex(nextIndex);
-    setDraftPlacements(history[nextIndex]);
-    setIsDirty(editOrigin ? !sameLayout(history[nextIndex], editOrigin.savedSnapshot) : true);
-  }, [editOrigin, history, historyIndex, saveOperationPendingRef, membershipOperationCountRef, setHistoryIndex, setDraftPlacements, setIsDirty]);
-  /** Handles Undo action from layout editor toolbar. */
-  const handleUndo = useCallback(() => moveHistory(-1), [moveHistory]);
-  /** Handles Redo action from layout editor toolbar. */
-  const handleRedo = useCallback(() => moveHistory(1), [moveHistory]);
+  const { handleUndo, handleRedo } = useHistoryCursor(state);
 
   const tidiedPlacements = useMemo(() => {
-    const ids = new Set(activeDashboard?.instances.filter((instance) => instance.group_id === activeGroupId).map((instance) => instance.id));
-    const packed = new Map(packPlacements(draftPlacements.filter((placement) => ids.has(placement.instance_id)), layoutColumns)
-      .map((placement) => [placement.instance_id, placement]));
+    const ids = new Set(
+      activeDashboard?.instances.filter((instance) => instance.group_id === activeGroupId).map((instance) => instance.id),
+    );
+    const packed = new Map(
+      packPlacements(
+        draftPlacements.filter((placement) => ids.has(placement.instance_id)),
+        layoutColumns,
+      ).map((placement) => [placement.instance_id, placement]),
+    );
     return draftPlacements.map((placement) => packed.get(placement.instance_id) ?? placement);
   }, [activeDashboard, activeGroupId, draftPlacements, layoutColumns]);
   const canTidyLayout = currentBreakpoint === 'desktop' && !sameLayout(tidiedPlacements, draftPlacements);
@@ -301,13 +431,16 @@ export function useLayoutSession(inputs: LayoutInputs) {
   const historyOps = useLayoutHistory(state, derived, inputs.activeDashboard);
   const { setReadingQueues } = state;
   /** Revealing / clearing reading updates for an instance. */
-  const handleApplyReadingQueue = useCallback((instanceId: string) => {
-    setReadingQueues((prev) => {
-      const next = { ...prev };
-      delete next[instanceId];
-      return next;
-    });
-  }, [setReadingQueues]);
+  const handleApplyReadingQueue = useCallback(
+    (instanceId: string) => {
+      setReadingQueues((prev) => {
+        const next = { ...prev };
+        delete next[instanceId];
+        return next;
+      });
+    },
+    [setReadingQueues],
+  );
   return { ...state, ...derived, ...historyOps, handleApplyReadingQueue, activeDashboard: inputs.activeDashboard };
 }
 

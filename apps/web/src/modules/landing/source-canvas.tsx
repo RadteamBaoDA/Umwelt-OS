@@ -50,7 +50,11 @@ function buildScene(palette: ReturnType<typeof getPalette>) {
   const meshes = {} as Record<LandingSourceId, THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>>;
   const routes = {} as Record<LandingSourceId, THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>>;
   const pulses = {} as Record<LandingSourceId, THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>>;
-  const resources: Array<THREE.BufferGeometry | THREE.Material> = [center.geometry, center.material, ...orbits.flatMap((orbit) => [orbit.geometry, orbit.material])];
+  const resources: Array<THREE.BufferGeometry | THREE.Material> = [
+    center.geometry,
+    center.material,
+    ...orbits.flatMap((orbit) => [orbit.geometry, orbit.material]),
+  ];
 
   for (const id of Object.keys(SOURCE_POINTS) as LandingSourceId[]) {
     const route = new THREE.Line(
@@ -61,10 +65,7 @@ function buildScene(palette: ReturnType<typeof getPalette>) {
       new THREE.SphereGeometry(id === 'feed' ? 0.17 : 0.15, 20, 16),
       new THREE.MeshBasicMaterial({ color: palette.muted }),
     );
-    const pulse = new THREE.Mesh(
-      new THREE.SphereGeometry(0.07, 12, 10),
-      new THREE.MeshBasicMaterial({ color: palette.accent }),
-    );
+    const pulse = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 10), new THREE.MeshBasicMaterial({ color: palette.accent }));
     route.position.z = -0.1;
     mesh.position.copy(SOURCE_POINTS[id]);
     pulse.visible = false;
@@ -78,7 +79,11 @@ function buildScene(palette: ReturnType<typeof getPalette>) {
 }
 
 /** Recolors the scene for the current palette and marks the active sources; hides any in-flight pulse markers. */
-function paintScene({ meshes, routes, pulses, center, orbits }: SceneParts, active: Set<LandingSourceId>, palette: ReturnType<typeof getPalette>): void {
+function paintScene(
+  { meshes, routes, pulses, center, orbits }: SceneParts,
+  active: Set<LandingSourceId>,
+  palette: ReturnType<typeof getPalette>,
+): void {
   for (const id of Object.keys(SOURCE_POINTS) as LandingSourceId[]) {
     (meshes[id].material as THREE.MeshBasicMaterial).color.set(active.has(id) ? palette.accent : palette.muted);
     (routes[id].material as THREE.LineBasicMaterial).color.set(active.has(id) ? palette.accent : palette.line);
@@ -167,6 +172,103 @@ function startPulse(
   onFrame(requestAnimationFrame(animate));
 }
 
+/** Mutable handles shared between {@link SourceCanvas} and the mounted WebGL scene. */
+type SceneContext = {
+  propsRef: { current: Pick<SourceCanvasProps, 'activeSources' | 'reducedMotion' | 'onReady' | 'onUnavailable'> };
+  pointerRef: { current: { x: number; y: number } };
+  redrawRef: { current: (() => void) | null };
+  pulseRef: { current: ((id: LandingSourceId) => void) | null };
+  cancelPulseRef: { current: (() => void) | null };
+};
+
+/**
+ * Creates the renderer and scene inside `host`, publishes redraw/pulse/cancel handles on the context refs and
+ * starts the observers. Returns the teardown (disposes GPU resources, detaches the canvas and clears the handles),
+ * or undefined after reporting `onUnavailable` when WebGL cannot start.
+ */
+function mountSourceScene(
+  host: HTMLElement,
+  { propsRef, pointerRef, redrawRef, pulseRef, cancelPulseRef }: SceneContext,
+): (() => void) | undefined {
+  const created = createRenderer(host);
+  if (!created) {
+    propsRef.current.onUnavailable();
+    return undefined;
+  }
+  const renderer: THREE.WebGLRenderer = created;
+  let palette = getPalette();
+  const parts = buildScene(palette);
+  const { scene, camera, pulses, resources } = parts;
+  let animationFrame = 0;
+  let stopPulseAt = 0;
+  let [width, height, visible, didDraw] = [0, 0, false, false];
+
+  /** Resizes the fixed illustration and draws only when visible. */
+  function draw(): void {
+    if (!visible || width <= 0 || height <= 0) return;
+    palette = getPalette();
+    renderer.setSize(width, height, false);
+    aimCamera(camera, width / height, pointerRef.current);
+    paintScene(parts, new Set(propsRef.current.activeSources), palette);
+    renderer.render(scene, camera);
+    if (!didDraw) {
+      didDraw = true;
+      propsRef.current.onReady();
+    }
+  }
+
+  /** Stops the transient pulse and restores the static source map. */
+  function cancelPulse(): void {
+    if (animationFrame) cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
+    for (const marker of Object.values(pulses)) marker.visible = false;
+    draw();
+  }
+
+  /** Runs a brief source-to-workspace pulse after an explicit source selection. */
+  function pulse(id: LandingSourceId): void {
+    if (propsRef.current.reducedMotion || !visible) return;
+    cancelPulse();
+    stopPulseAt = performance.now() + 700;
+    startPulse(parts, renderer, id, stopPulseAt, (frame) => {
+      animationFrame = frame;
+    });
+  }
+
+  redrawRef.current = draw;
+  pulseRef.current = pulse;
+  cancelPulseRef.current = cancelPulse;
+  const stopObserving = observeHost(host, renderer.domElement, {
+    resize: (w, h) => {
+      width = w;
+      height = h;
+      draw();
+    },
+    visible: (isVisible) => {
+      visible = isVisible;
+      draw();
+      if (!visible && animationFrame) {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
+      }
+    },
+    theme: draw,
+    lost: () => propsRef.current.onUnavailable(),
+  });
+  draw();
+
+  return () => {
+    redrawRef.current = null;
+    pulseRef.current = null;
+    cancelPulseRef.current = null;
+    stopObserving();
+    if (animationFrame) cancelAnimationFrame(animationFrame);
+    for (const resource of resources) resource.dispose();
+    renderer.dispose();
+    renderer.domElement.remove();
+  };
+}
+
 /** Draws the source-to-workspace illustration in one disposable WebGL context. */
 export function SourceCanvas({ activeSources, pulseSource, reducedMotion, onReady, onUnavailable }: SourceCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -201,78 +303,7 @@ export function SourceCanvas({ activeSources, pulseSource, reducedMotion, onRead
   useEffect(() => {
     const host = hostRef.current;
     if (!host || typeof window === 'undefined') return;
-
-    const created = createRenderer(host);
-    if (!created) {
-      propsRef.current.onUnavailable();
-      return;
-    }
-    const renderer: THREE.WebGLRenderer = created;
-    let palette = getPalette();
-    const parts = buildScene(palette);
-    const { scene, camera, pulses, resources } = parts;
-    let animationFrame = 0;
-    let stopPulseAt = 0;
-    let [width, height, visible, didDraw] = [0, 0, false, false];
-
-    /** Resizes the fixed illustration and draws only when visible. */
-    function draw(): void {
-      if (!visible || width <= 0 || height <= 0) return;
-      palette = getPalette();
-      renderer.setSize(width, height, false);
-      aimCamera(camera, width / height, pointerRef.current);
-      paintScene(parts, new Set(propsRef.current.activeSources), palette);
-      renderer.render(scene, camera);
-      if (!didDraw) {
-        didDraw = true;
-        propsRef.current.onReady();
-      }
-    }
-
-    /** Stops the transient pulse and restores the static source map. */
-    function cancelPulse(): void {
-      if (animationFrame) cancelAnimationFrame(animationFrame);
-      animationFrame = 0;
-      for (const marker of Object.values(pulses)) marker.visible = false;
-      draw();
-    }
-
-    /** Runs a brief source-to-workspace pulse after an explicit source selection. */
-    function pulse(id: LandingSourceId): void {
-      if (propsRef.current.reducedMotion || !visible) return;
-      cancelPulse();
-      stopPulseAt = performance.now() + 700;
-      startPulse(parts, renderer, id, stopPulseAt, (frame) => { animationFrame = frame; });
-    }
-
-    redrawRef.current = draw;
-    pulseRef.current = pulse;
-    cancelPulseRef.current = cancelPulse;
-    const stopObserving = observeHost(host, renderer.domElement, {
-      resize: (w, h) => { width = w; height = h; draw(); },
-      visible: (isVisible) => {
-        visible = isVisible;
-        draw();
-        if (!visible && animationFrame) {
-          cancelAnimationFrame(animationFrame);
-          animationFrame = 0;
-        }
-      },
-      theme: draw,
-      lost: () => propsRef.current.onUnavailable(),
-    });
-    draw();
-
-    return () => {
-      redrawRef.current = null;
-      pulseRef.current = null;
-      cancelPulseRef.current = null;
-      stopObserving();
-      if (animationFrame) cancelAnimationFrame(animationFrame);
-      for (const resource of resources) resource.dispose();
-      renderer.dispose();
-      renderer.domElement.remove();
-    };
+    return mountSourceScene(host, { propsRef, pointerRef, redrawRef, pulseRef, cancelPulseRef });
   }, []);
 
   useEffect(() => {
@@ -281,7 +312,16 @@ export function SourceCanvas({ activeSources, pulseSource, reducedMotion, onRead
     if (pulseSource) pulseRef.current?.(pulseSource);
   }, [activeSources, pulseSource, reducedMotion]);
 
-  return <div ref={hostRef} onPointerMove={trackPointer} onPointerLeave={resetPointer} className="landing-source-canvas pointer-events-auto absolute inset-0" aria-hidden="true" data-reduced-motion={reducedMotion} />;
+  return (
+    <div
+      ref={hostRef}
+      onPointerMove={trackPointer}
+      onPointerLeave={resetPointer}
+      className="landing-source-canvas pointer-events-auto absolute inset-0"
+      aria-hidden="true"
+      data-reduced-motion={reducedMotion}
+    />
+  );
 }
 
 /** Reads the current interface palette for the one non-semantic canvas illustration. */
