@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useChatController } from '@/core/app-shell/chat-controller';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
@@ -16,6 +16,7 @@ import { useChatSend } from './use-chat-send';
 import { useChatStream } from './use-chat-stream';
 import { useChatWebSearch } from './use-chat-web-search';
 import { useConversationSelection } from './use-conversation-selection';
+import { useFollowupRefresh } from './use-followup-refresh';
 
 /** Inputs of the session hooks (the data-bearing subset of ChatSessionProps). */
 export interface ChatSessionOptions {
@@ -67,6 +68,14 @@ export function useChatSessionData({ conversationId, mode }: ChatSessionOptions)
   const attachmentsUnavailable = areAttachmentsUnavailable(profileBlocked, effectiveEditingMessageId, chatCtrl.context);
   const attachments = useChatAttachments(session.csrfToken, attachmentsUnavailable);
   const busy = live.isPending || live.isStreaming;
+  const queryClient = useQueryClient();
+  const { refetch: refetchDetail } = detail;
+  /** Picks up the auto title and suggestions written after the stream closed (see useFollowupRefresh). */
+  const refreshFollowup = React.useCallback(() => {
+    void refetchDetail();
+    void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+  }, [refetchDetail, queryClient]);
+  useFollowupRefresh({ conversationId, messages, busy, refresh: refreshFollowup });
   return {
     session, chatCtrl, live, actions, refs, composer, detail, messages, latestAssistant,
     pendingProfileRun, pendingMessageMutation, effectiveEditingMessageId, profileBlocked, attachmentsUnavailable,

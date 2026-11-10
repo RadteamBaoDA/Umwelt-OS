@@ -64,6 +64,7 @@ export function SessionTranscript({ data, cmd, widget, conversationId, mode }: S
       streamingWebSearch={live.streamingWebSearch}
       activeTool={live.activeTool}
       streamingUi={live.streamingUi}
+      steps={live.steps}
       isStreaming={live.isStreaming}
       isPending={live.isPending}
       error={live.error}

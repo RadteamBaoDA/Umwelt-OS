@@ -95,7 +95,7 @@ function newClientRequestId(): string {
 /** Puts the live state into "streaming response `responseId`" with all previous output cleared. */
 function beginStreaming(live: ChatLiveActions, responseId: string, clearInput: boolean): void {
   live.clearOutput();
-  live.patch({ activeResponseId: responseId, isPending: false, isStreaming: true, ...(clearInput ? { inputRequest: null } : {}) });
+  live.patch({ activeResponseId: responseId, isPending: false, isStreaming: true, steps: [], ...(clearInput ? { inputRequest: null } : {}) });
 }
 
 /**

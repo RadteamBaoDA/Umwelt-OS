@@ -2,7 +2,7 @@ import * as React from 'react';
 import { apiRequest } from '@/core/api';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { chatKeys, getConversation, streamResponseEvents, type StreamEventsOptions } from './api';
+import { chatKeys, getConversation, streamResponseEvents, type ConversationDetail, type MessageSuggestions, type StreamEventsOptions } from './api';
 import type { ChatLiveActions } from './chat-live-state';
 import { chatFailureKey } from './chat-errors';
 import type { ChatSessionRefs } from './chat-session-refs';
@@ -59,6 +59,7 @@ export function buildContentHandlers(
     onReasoning: (chunk) => { if (isCurrentView()) dispatch({ type: 'appendReasoning', chunk }); },
     onDelta: (chunk) => { if (isCurrentView()) dispatch({ type: 'appendDelta', chunk }); },
     onToolStatus: ({ tool, state }) => { if (isCurrentView()) dispatch({ type: 'toolStatus', tool, state }); },
+    onToolStep: (step) => { if (isCurrentView()) dispatch({ type: 'toolStep', step }); },
     onWebSearch: (outcome) => { if (isCurrentView()) dispatch({ type: 'webSearch', outcome }); },
     onCitations: (cites) => { if (isCurrentView()) live.patch({ streamingCitations: cites }); },
     // One entry per widget part, merged by part_id so parts stream and complete independently.
@@ -78,6 +79,31 @@ export function buildContentHandlers(
 function invalidateConversation(queryClient: QueryClient, conversationId: string): void {
   void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(conversationId) });
   void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+}
+
+/**
+ * Writes a streamed auto title into the cached conversation detail and refreshes the history list.
+ *
+ * @param queryClient - Query client owning the chat caches.
+ * @param conversationId - Conversation the stream belongs to (never the currently selected one by assumption).
+ * @param title - New title from `conversation.title`.
+ */
+function applyLiveTitle(queryClient: QueryClient, conversationId: string, title: string): void {
+  queryClient.setQueryData<ConversationDetail>(chatKeys.conversation(conversationId), (old) => (old ? { ...old, title } : old));
+  void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+}
+
+/**
+ * Writes streamed follow-up suggestions onto the matching message of the cached conversation detail.
+ *
+ * @param queryClient - Query client owning the chat caches.
+ * @param conversationId - Conversation the stream belongs to.
+ * @param payload - `message.suggestions` payload; ignored when the message is not (yet) in the cache.
+ */
+function applyLiveSuggestions(queryClient: QueryClient, conversationId: string, payload: MessageSuggestions): void {
+  queryClient.setQueryData<ConversationDetail>(chatKeys.conversation(conversationId), (old) => (old
+    ? { ...old, messages: old.messages.map((m) => (m.id === payload.message_id ? { ...m, suggestions: payload.suggestions } : m)) }
+    : old));
 }
 
 /**
@@ -251,6 +277,9 @@ export function useChatStream(
     const streamOptions: StreamEventsOptions = {
       signal: abortCtrl.signal,
       ...buildContentHandlers(live, isCurrentView, setThemeRequest),
+      // Live title/suggestions (rare: the stream usually closes first) go straight into the cache; persisted values win later.
+      onConversationTitle: (title) => applyLiveTitle(queryClient, responseConversationId, title),
+      onSuggestions: (payload) => applyLiveSuggestions(queryClient, responseConversationId, payload),
       onDone: () => handleDone(ctx),
       onStatus: (status, payload) => handleStatus(ctx, status, payload),
       // Failures are surfaced once, by the resume loop, after automatic resumes are exhausted.

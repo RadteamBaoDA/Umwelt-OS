@@ -4,13 +4,14 @@ import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import { AlertCircleIcon, ArrowDownIcon, BookOpenIcon, CheckIcon, CopyIcon, DatabaseIcon, GlobeIcon, Loader2Icon, PaperclipIcon, PencilIcon, RefreshCwIcon } from 'lucide-react';
-import type { ChatMessage, Citation, ToolStatus, WebSearchOutcome } from './api';
+import type { ChatMessage, Citation, ToolStatus, ToolStep, WebSearchOutcome } from './api';
 import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
 import { focusCitations } from './chat-citation-focus';
 import { useChatScroll } from './use-chat-scroll';
 import { useSmoothedText } from './use-smoothed-text';
 import { ChatReasoning } from './chat-reasoning';
+import { ChatStepList } from './chat-steps';
 import { useCopyMessage } from './use-copy-message';
 import { useTopicNames } from './use-topic-names';
 import { useDisplayPreferences } from '@/core/query-provider';
@@ -218,6 +219,8 @@ export interface ChatTranscriptProps {
   streamingWebSearch?: WebSearchOutcome | null;
   /** Server tool currently running for the active run; shown as a spinner status line. */
   activeTool?: ToolStatus['tool'] | null;
+  /** Processing steps of the active run (retrieval, web, data, skills); collapse to a summary once the answer settled. */
+  steps?: ToolStep[];
   /** Active streaming Generative UI widget parts in arrival order (one per `part_id`). */
   streamingUi?: UiPart[];
   /** Whether response generation is actively streaming tokens. */
@@ -493,8 +496,46 @@ function TranscriptMessage(props: TranscriptMessageProps) {
   );
 }
 
+/**
+ * Follow-up question chips under the latest assistant answer. Selecting one sends it like a typed message, so the
+ * host's provider gate and busy handling apply.
+ *
+ * @param props - The suggestions (2-3 short questions) and the send handler.
+ * @returns A labelled group of outline buttons (keyboard-reachable in DOM order).
+ */
+function FollowupSuggestions({ suggestions, onSend }: { suggestions: string[]; onSend: (prompt: string) => void }) {
+  const t = useTranslations('chat');
+  return (
+    <div data-testid="followup-suggestions" role="group" aria-label={t('suggestionsLabel')} className="flex flex-wrap gap-2">
+      {suggestions.map((suggestion) => (
+        <Button key={suggestion} type="button" variant="outline" className="h-auto whitespace-normal text-left text-xs" onClick={() => onSend(suggestion)}>
+          {suggestion}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * What follows the latest assistant answer once the run settled: the collapsed step summary, then the follow-up chips.
+ *
+ * @param props - Committed messages, the settled run's steps and the send handler (chips need it).
+ * @returns Nothing unless the thread ends with an assistant answer.
+ */
+function SettledRunExtras({ messages, steps, onSendPrompt }: { messages: ChatMessage[]; steps: ToolStep[]; onSendPrompt?: (prompt: string) => void }) {
+  const last = messages[messages.length - 1];
+  if (last?.role !== 'assistant') return null;
+  return (
+    <>
+      <ChatStepList steps={steps} streaming={false} />
+      {onSendPrompt && last.suggestions?.length ? <FollowupSuggestions suggestions={last.suggestions} onSend={onSendPrompt} /> : null}
+    </>
+  );
+}
+
 /** Props of {@link StreamingBubble}. */
 interface StreamingBubbleProps {
+  steps: ToolStep[];
   mode: 'drawer' | 'full';
   locale: AppLocaleId;
   csrfToken?: string;
@@ -527,7 +568,7 @@ function StreamingStatus({ activeTool, label }: { activeTool: ToolStatus['tool']
  * @param props - See {@link StreamingBubbleProps}.
  */
 function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
-  const { mode, locale, csrfToken, streamingText, streamingReasoning, streamingCitations, streamingWebSearch, activeTool, streamingUi, isStreaming, widgetPromptHandler } = props;
+  const { mode, locale, csrfToken, streamingText, streamingReasoning, streamingCitations, streamingWebSearch, activeTool, streamingUi, isStreaming, widgetPromptHandler, steps } = props;
   const t = useTranslations('chat');
   const smoothText = useSmoothedText(streamingText || '');
   const label = activeTool
@@ -537,7 +578,9 @@ function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
     <div data-streaming-answer className="mr-auto flex w-full scroll-mt-4 flex-col gap-2.5">
       <div className="text-sm text-foreground">
         {/* Live region stays mounted so tool-status changes are announced politely. */}
-        <StreamingStatus activeTool={activeTool} label={label} />
+        {/* A running step already shows its own spinner row, so the single status line would only repeat it. */}
+        {!steps.some((step) => step.state === 'running') && <StreamingStatus activeTool={activeTool} label={label} />}
+        <ChatStepList steps={steps} streaming />
 
         {mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}
 
@@ -605,6 +648,7 @@ function withTranscriptDefaults(props: ChatTranscriptProps) {
     cancelled: props.cancelled ?? false,
     activeTool: props.activeTool ?? null,
     streamingUi: props.streamingUi ?? [],
+    steps: props.steps ?? [],
     isStreaming: props.isStreaming ?? false,
     isPending: props.isPending ?? false,
     error: props.error ?? null,
@@ -670,7 +714,7 @@ function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
  */
 export function ChatTranscript(props: ChatTranscriptProps) {
   const { csrfToken, messages, streamingText, streamingCitations, streamingWebSearch, onRetry, onEditMessage, onRegenerateMessage, onSendPrompt } = props;
-  const { mode, streamingReasoning, cancelled, activeTool, streamingUi, isStreaming, isPending, error } = withTranscriptDefaults(props);
+  const { mode, streamingReasoning, cancelled, activeTool, streamingUi, isStreaming, isPending, error, steps } = withTranscriptDefaults(props);
   const t = useTranslations('chat');
   const m = useTranscriptModel(props, isStreaming || isPending);
   const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, hasUnread, jumpToLatest, widgetPromptHandler } = m;
@@ -716,8 +760,11 @@ export function ChatTranscript(props: ChatTranscriptProps) {
         />
       ))}
 
+      {!showStreaming && <SettledRunExtras messages={messages} steps={steps} onSendPrompt={onSendPrompt} />}
+
       {showStreaming && (
         <StreamingBubble
+          steps={steps}
           mode={mode}
           locale={locale}
           csrfToken={csrfToken}

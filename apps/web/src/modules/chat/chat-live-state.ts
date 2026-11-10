@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { Citation, InputRequest, ToolStatus, WebSearchOutcome } from './api';
+import type { Citation, InputRequest, ToolStatus, ToolStep, WebSearchOutcome } from './api';
 import { removeUiPart, upsertUiPart, type UiPart } from './generative-ui-parts';
 import type { InputRequestState } from './generative-ui/components/user-input-request';
 
@@ -21,6 +21,8 @@ export interface ChatLiveState {
   /** Tool currently running for the active run (`tool.status`); drives the transcript status line. */
   activeTool: ToolStatus['tool'] | null;
   streamingUi: UiPart[];
+  /** Processing steps of the active (or just settled) run, in arrival order; kept after `message.done` for the summary line. */
+  steps: ToolStep[];
   inputRequest: PendingInputRequest | null;
   isStreaming: boolean;
   isPending: boolean;
@@ -37,6 +39,7 @@ export const INITIAL_LIVE_STATE: ChatLiveState = {
   streamingWebSearch: null,
   activeTool: null,
   streamingUi: [],
+  steps: [],
   inputRequest: null,
   isStreaming: false,
   isPending: false,
@@ -50,15 +53,41 @@ export type ChatLiveAction =
   | { type: 'appendReasoning'; chunk: string }
   | { type: 'appendDelta'; chunk: string }
   | { type: 'toolStatus'; tool: ToolStatus['tool']; state: string }
+  | { type: 'toolStep'; step: ToolStep }
   | { type: 'webSearch'; outcome: WebSearchOutcome }
   | { type: 'uiUpsert'; ui: UiPart }
   | { type: 'uiRemove'; partId: string }
   | { type: 'inputResolved'; resolved: { request_id: string; outcome: string; label?: string } }
   | { type: 'cancelPendingInput' }
-  /** Resets text, reasoning, citations, web search, active tool and widget parts. */
+  /** Resets text, reasoning, citations, web search, active tool and widget parts (steps survive until the next send). */
   | { type: 'clearOutput' }
-  /** Resets only the replayable partial output (text, reasoning, citations, widget parts). */
+  /** Resets only the replayable partial output (text, reasoning, citations, widget parts, steps). */
   | { type: 'clearPartial' };
+
+/**
+ * Folds one `tool.status` step into the step list. `running` appends (a duplicate running step of the same tool and
+ * label is ignored, e.g. a replayed event); `done` completes the latest matching running step, or appends a finished
+ * one when its `running` event was never seen.
+ *
+ * @param steps - Current steps.
+ * @param step - Incoming step event.
+ * @returns A new array, or the same reference when the event changes nothing.
+ */
+export function applyToolStep(steps: ToolStep[], step: ToolStep): ToolStep[] {
+  if (step.state === 'running') {
+    return steps.some((s) => s.state === 'running' && s.tool === step.tool && s.label === step.label) ? steps : [...steps, step];
+  }
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    const s = steps[i];
+    // A missing label on either side still matches: only some events carry the subject.
+    if (s.state === 'running' && s.tool === step.tool && (!s.label || !step.label || s.label === step.label)) {
+      const next = [...steps];
+      next[i] = { ...s, state: 'done', label: step.label ?? s.label, detail: step.detail ?? s.detail };
+      return next;
+    }
+  }
+  return [...steps, step];
+}
 
 /**
  * Applies a partial update, returning the same state object when nothing changed so React can bail out of re-rendering
@@ -86,6 +115,10 @@ const HANDLERS: Handlers = {
   toolStatus: (state, action) => {
     const activeTool = action.state === 'running' ? action.tool : state.activeTool === action.tool ? null : state.activeTool;
     return applyPatch(state, { activeTool });
+  },
+  toolStep: (state, action) => {
+    const steps = applyToolStep(state.steps, action.step);
+    return steps === state.steps ? state : { ...state, steps };
   },
   webSearch: (state, action) => ({
     ...state,
@@ -116,7 +149,8 @@ const HANDLERS: Handlers = {
     activeTool: null,
     streamingUi: [],
   }),
-  clearPartial: (state) => ({ ...state, streamingText: '', streamingReasoning: '', streamingCitations: [], streamingUi: [] }),
+  // A replay from the start re-sends the step events too, so partial resets drop the steps as well.
+  clearPartial: (state) => ({ ...state, streamingText: '', streamingReasoning: '', streamingCitations: [], streamingUi: [], steps: [] }),
 };
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chatLiveReducer, INITIAL_LIVE_STATE, type ChatLiveState } from './chat-live-state';
+import { applyToolStep, chatLiveReducer, INITIAL_LIVE_STATE, type ChatLiveState } from './chat-live-state';
 import { ChatSessionRuntime } from './chat-session-refs';
 
 const base = (over: Partial<ChatLiveState> = {}): ChatLiveState => ({ ...INITIAL_LIVE_STATE, ...over });
@@ -39,6 +39,25 @@ describe('chatLiveReducer', () => {
     expect(chatLiveReducer(pending, { type: 'cancelPendingInput' }).inputRequest?.state).toBe('cancelled');
     const answered = chatLiveReducer(pending, { type: 'inputResolved', resolved: { request_id: 'r1', outcome: 'answered', label: 'L' } });
     expect(chatLiveReducer(answered, { type: 'cancelPendingInput' })).toBe(answered);
+  });
+});
+
+describe('tool steps', () => {
+  it('appends running steps, completes the matching one and ignores replayed running events', () => {
+    let steps = applyToolStep([], { tool: 'retrieval', state: 'running' });
+    expect(applyToolStep(steps, { tool: 'retrieval', state: 'running' })).toBe(steps);
+    steps = applyToolStep(steps, { tool: 'retrieval', state: 'done', detail: { documents: 2 } });
+    expect(steps).toEqual([{ tool: 'retrieval', state: 'done', detail: { documents: 2 } }]);
+    steps = applyToolStep(steps, { tool: 'read_skill', state: 'running', label: 'x' });
+    steps = applyToolStep(steps, { tool: 'read_skill', state: 'done', label: 'x' });
+    expect(steps.map((s) => s.state)).toEqual(['done', 'done']);
+  });
+
+  it('records a done step whose running event was never seen; clearPartial drops steps, clearOutput keeps them', () => {
+    const state = chatLiveReducer(base(), { type: 'toolStep', step: { tool: 'web_search', state: 'done' } });
+    expect(state.steps).toHaveLength(1);
+    expect(chatLiveReducer(state, { type: 'clearOutput' }).steps).toHaveLength(1);
+    expect(chatLiveReducer(state, { type: 'clearPartial' }).steps).toHaveLength(0);
   });
 });
 
