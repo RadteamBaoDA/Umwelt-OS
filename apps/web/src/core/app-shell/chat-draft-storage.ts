@@ -1,5 +1,8 @@
-/** Key prefix of persisted composer drafts; one entry per conversation id, plus `new` for an unsaved thread. */
-const PREFIX = 'umwelt.chat.draft.';
+/**
+ * Key prefix of persisted composer drafts; one entry per conversation id, plus `new` for an unsaved thread.
+ * The `umwelt:` namespace is required: `clearAccountBrowserStorage` removes every `umwelt:` key on account erasure.
+ */
+const PREFIX = 'umwelt:chat.draft.';
 
 /** Draft slot of a conversation (`null` is the unsaved new-chat thread). */
 function slot(conversationId: string | null): string {
@@ -33,5 +36,18 @@ export function writeDraft(conversationId: string | null, value: string): void {
     else window.sessionStorage.removeItem(slot(conversationId));
   } catch {
     // Persistence is best-effort; the in-memory draft still works.
+  }
+}
+
+/**
+ * Removes every persisted chat draft in this tab. Called when the session ends so private draft text never
+ * outlives the signed-in session (drafts may quote personal data).
+ */
+export function clearAllDrafts(): void {
+  try {
+    const storage = window.sessionStorage;
+    for (const key of Object.keys(storage)) if (key.startsWith(PREFIX)) storage.removeItem(key);
+  } catch {
+    // Blocked storage holds no drafts to clear.
   }
 }

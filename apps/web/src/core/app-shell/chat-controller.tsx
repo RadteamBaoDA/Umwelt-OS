@@ -1,9 +1,9 @@
 'use client';
 
-import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ChatContext } from '@/modules/chat';
 import { uuid7 } from '@/core/uuid7';
-import { readDraft, writeDraft } from './chat-draft-storage';
+import { clearAllDrafts, readDraft, writeDraft } from './chat-draft-storage';
 import { useResetOnChange } from '@/modules/shared';
 
 /** Immutable request identity retained until the server acknowledges a message revision. */
@@ -219,6 +219,13 @@ function useConversationSelection(
   useLayoutEffect(() => { draftKeyRef.current = activeConversationId; });
   // Switching (or reloading into) a conversation shows that conversation's saved draft; pure read plus own setter.
   useResetOnChange([activeConversationId], () => { setDraftState(readDraft(activeConversationId)); });
+  // Logout/session end: drop persisted and visible drafts before the next account can see them.
+  useEffect(() => {
+    /** Clears every stored draft and the visible one when the shell announces the session is ending. */
+    const authEnding = () => { clearAllDrafts(); setDraftState(''); };
+    window.addEventListener('bbd:auth-ending', authEnding);
+    return () => window.removeEventListener('bbd:auth-ending', authEnding);
+  }, []);
 
   /** Updates the visible draft and mirrors it to sessionStorage under the active conversation. */
   const setDraft = useCallback((value: string) => {
