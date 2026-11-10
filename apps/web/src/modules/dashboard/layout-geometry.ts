@@ -68,6 +68,70 @@ export function findFreeCoordinates(
   return null;
 }
 
+/** Layout frames offered for new custom pages; `free` keeps the legacy first-free-slot placement. */
+export const LAYOUT_FRAMES = ['free', 'three_columns', 'main_rail', 'hero_grid', 'board'] as const;
+
+/** One of {@link LAYOUT_FRAMES}. */
+export type LayoutFrame = (typeof LAYOUT_FRAMES)[number];
+
+/** Fixed row height of every board-frame gadget. */
+export const BOARD_ROW_HEIGHT = 8;
+
+/** Zone widths (summing to the 20-column grid) per frame; `free` has none. */
+const FRAME_ZONE_WIDTHS: Record<LayoutFrame, readonly number[]> = {
+  free: [],
+  three_columns: [7, 7, 6],
+  main_rail: [14, 6],
+  hero_grid: [7, 7, 6],
+  board: [5, 5, 5, 5],
+};
+
+/** A gadget slot chosen inside a frame zone. */
+export interface FrameSpot { x: number; y: number; w: number; h: number }
+
+/**
+ * Picks the slot for a new gadget in a layout frame: the zone with the lowest current bottom (shortest column,
+ * leftmost on ties) whose width fits `minW`, placed at the zone's width. `hero_grid` gives the first gadget the
+ * full width; `board` ignores `h` for a fixed row height. Falls back to the first free slot (width `minW`) when no
+ * zone fits or the zone target collides after free dragging. Pure; desktop 20-column grid only.
+ *
+ * @param existing Placements already in the group.
+ * @param frame Frame chosen for the group.
+ * @param minW Renderer minimum width.
+ * @param h Preferred height.
+ * @param columns Grid columns (frames require 20).
+ * @returns The slot, or null when neither the frame nor the fallback has room.
+ */
+export function findFrameCoordinates(
+  existing: DashboardPlacement[],
+  frame: LayoutFrame,
+  minW: number,
+  h: number,
+  columns = 20,
+): FrameSpot | null {
+  const fallback = (): FrameSpot | null => {
+    const spot = findFreeCoordinates(existing, minW, h, columns);
+    return spot && { ...spot, w: minW, h };
+  };
+  if (frame === 'free' || columns !== 20) return fallback();
+  const height = frame === 'board' ? BOARD_ROW_HEIGHT : h;
+  const fits = (spot: FrameSpot) => spot.y + spot.h <= MAX_LAYOUT_ROWS
+    && !existing.some((p) => doPlacementsOverlap({ instance_id: '', ...spot }, p));
+  if (frame === 'hero_grid' && existing.length === 0) {
+    const hero = { x: 0, y: 0, w: columns, h: height };
+    return fits(hero) ? hero : fallback();
+  }
+  let x = 0;
+  let best: FrameSpot | null = null;
+  let bestBottom = Infinity;
+  for (const w of FRAME_ZONE_WIDTHS[frame]) {
+    const bottom = existing.reduce((max, p) => (p.x < x + w && p.x + p.w > x ? Math.max(max, p.y + p.h) : max), 0);
+    if (w >= minW && bottom < bestBottom) { best = { x, y: bottom, w, h: height }; bestBottom = bottom; }
+    x += w;
+  }
+  return best && fits(best) ? best : fallback();
+}
+
 /**
  * Packs placements top-left without holes in reading order (y, then x), keeping each w/h.
  * Pure: returns a new array in the input's order; a placement that cannot be re-seated keeps its coordinates.

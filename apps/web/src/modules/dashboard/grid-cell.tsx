@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { DashboardPlacement, GadgetInstance } from './api';
 import { listSources, sourceKeys } from '@/modules/sources';
 import { computeFreshnessTick, type FreshnessTick } from './freshness-strip';
@@ -121,6 +121,8 @@ export function GridCell(props: GridCellProps) {
   const { placement, instance, isEditMode, gesture, overlapCount, projectionPending } = props;
   const isGestureTarget = gesture !== null;
   const sourceHealth = useSourceHealth(instance);
+  // Feed gadgets report their unread count up; the frame badge shows it (other renderers stay at 0).
+  const [unreadCount, setUnreadCount] = useState(0);
   return (
     <div
       onKeyDown={props.onKeyDown}
@@ -138,7 +140,7 @@ export function GridCell(props: GridCellProps) {
         isDragging={isGestureTarget && gesture.type === 'move'}
         isResizing={isGestureTarget && gesture.type === 'resize'}
         isSelected={props.isSelected}
-        unreadCount={0}
+        unreadCount={unreadCount}
         sourceHealth={sourceHealth}
         readingQueueCount={props.readingQueueCount}
         onApplyReadingQueue={props.onApplyReadingQueue}
@@ -150,7 +152,7 @@ export function GridCell(props: GridCellProps) {
       >
         {/* null (not an element returning null) for planned renderers, so GadgetFrame shows its planned body. */}
         {isGadgetRendererRegistered(instance.definition.renderer)
-          ? <RegisteredGadget rendererId={instance.definition.renderer} instance={instance} isEditMode={isEditMode} />
+          ? <RegisteredGadget rendererId={instance.definition.renderer} instance={instance} isEditMode={isEditMode} onUnreadCountChange={setUnreadCount} />
           : null}
       </GadgetFrame>
 

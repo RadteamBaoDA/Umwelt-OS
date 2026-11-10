@@ -11,6 +11,8 @@ export interface GadgetRendererProps {
   instance: GadgetInstance;
   /** Whether the parent grid is currently in layout edit mode. */
   isEditMode: boolean;
+  /** Reports the gadget's unread count to its frame badge; forwarded only to gadgets that track unread items. */
+  onUnreadCountChange?: (count: number) => void;
 }
 
 /** Loading placeholder shown while a gadget chunk loads; mirrors the legacy `.skeleton` surface. */
@@ -19,7 +21,7 @@ function GadgetChunkSkeleton(): React.ReactElement {
 }
 
 /** Component type produced by `next/dynamic` for a gadget that accepts an instance (and maybe edit mode). */
-type LazyGadget = React.ComponentType<{ instance: GadgetInstance; isEditMode?: boolean }>;
+type LazyGadget = React.ComponentType<{ instance: GadgetInstance; isEditMode?: boolean; onUnreadCountChange?: (count: number) => void }>;
 
 /**
  * Adapts a `next/dynamic` gadget component to GadgetRendererProps, forwarding only the props the gadget
@@ -27,10 +29,12 @@ type LazyGadget = React.ComponentType<{ instance: GadgetInstance; isEditMode?: b
  *
  * @param Lazy The dynamically imported gadget component.
  * @param forwardEditMode Whether the gadget also receives `isEditMode` (only the map gadget does).
+ * @param forwardUnread Whether the gadget also receives `onUnreadCountChange` (feed gadget).
  * @returns A renderer component matching GadgetRendererProps.
  */
-function adaptGadget(Lazy: LazyGadget, forwardEditMode = false): React.ComponentType<GadgetRendererProps> {
+function adaptGadget(Lazy: LazyGadget, forwardEditMode = false, forwardUnread = false): React.ComponentType<GadgetRendererProps> {
   return function LazyGadgetRenderer(props: GadgetRendererProps) {
+    if (forwardUnread) return <Lazy instance={props.instance} onUnreadCountChange={props.onUnreadCountChange} />;
     return forwardEditMode
       ? <Lazy instance={props.instance} isEditMode={props.isEditMode} />
       : <Lazy instance={props.instance} />;
@@ -51,7 +55,7 @@ const GADGET_REGISTRY: Record<string, React.ComponentType<GadgetRendererProps>> 
   personal_context: adaptGadget(dynamic(() => import('./gadgets/personal-context').then((m) => m.PersonalContext), { loading: GadgetChunkSkeleton })),
   news_feed: adaptGadget(dynamic(() => import('./gadgets/news-feed').then((m) => m.NewsFeed), { loading: GadgetChunkSkeleton })),
   telegram_feed: adaptGadget(dynamic(() => import('./gadgets/telegram-feed').then((m) => m.TelegramFeed), { loading: GadgetChunkSkeleton })),
-  feed: adaptGadget(dynamic(() => import('./gadgets/feed-gadget').then((m) => m.FeedGadget), { loading: GadgetChunkSkeleton })),
+  feed: adaptGadget(dynamic(() => import('./gadgets/feed-gadget').then((m) => m.FeedGadget), { loading: GadgetChunkSkeleton }), false, true),
   text_panel: adaptGadget(dynamic(() => import('./gadgets/text-panel').then((m) => m.TextPanel), { loading: GadgetChunkSkeleton })),
   table_panel: adaptGadget(dynamic(() => import('./gadgets/table-panel').then((m) => m.TablePanel), { loading: GadgetChunkSkeleton })),
   job_list: adaptGadget(dynamic(() => import('./gadgets/job-list').then((m) => m.JobListGadget), { loading: GadgetChunkSkeleton })),
@@ -258,7 +262,7 @@ export function isGadgetRendererRegistered(rendererId: string): boolean {
  * @param instance The gadget instance to render.
  * @param isEditMode Whether the parent grid is in layout edit mode.
  */
-export function RegisteredGadget({ rendererId, instance, isEditMode }: GadgetRendererProps & { rendererId: string }): React.ReactElement | null {
+export function RegisteredGadget({ rendererId, instance, isEditMode, onUnreadCountChange }: GadgetRendererProps & { rendererId: string }): React.ReactElement | null {
   const Component = GADGET_REGISTRY[rendererId];
-  return Component ? <Component instance={instance} isEditMode={isEditMode} /> : null;
+  return Component ? <Component instance={instance} isEditMode={isEditMode} onUnreadCountChange={onUnreadCountChange} /> : null;
 }

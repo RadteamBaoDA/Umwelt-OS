@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { TopicSettings } from '@/modules/news';
@@ -29,6 +30,8 @@ import {
   renameDashboard,
   type Dashboard,
 } from './api';
+import { setGroupFrame } from './group-frame';
+import { LAYOUT_FRAMES, type LayoutFrame } from './layout-geometry';
 import type { ManagementDialogState } from './use-dashboard-data';
 
 /** Props of the single-field name dialog shared by create, rename and add-group. */
@@ -49,6 +52,8 @@ interface NameDialogProps {
   /** Called with the trimmed value. */
   onConfirm: (value: string) => void;
   cancelLabel: string;
+  /** Extra content rendered under the name field (e.g. layout frame choice). */
+  children?: React.ReactNode;
 }
 
 /**
@@ -73,6 +78,7 @@ export function NameDialog(props: NameDialogProps) {
             placeholder={placeholder}
             className="h-8 text-xs"
           />
+          {props.children}
         </div>
         <DialogFooter className="gap-2">
           <Button type="button" className="secondary text-xs" onClick={() => onOpenChange(false)}>
@@ -129,6 +135,53 @@ export function DeleteDashboardDialog({ open, dashboardName, pending, onCancel, 
   );
 }
 
+/** Zone widths (grid units) drawn as bars in each frame's preview; `free` shows a single wide bar. */
+const FRAME_PREVIEW: Record<LayoutFrame, number[]> = {
+  free: [20], three_columns: [7, 7, 6], main_rail: [14, 6], hero_grid: [20, 7, 7, 6], board: [5, 5, 5, 5],
+};
+
+/**
+ * Layout-frame radio group for a new page (with a small column-bar preview per option) plus template shortcuts.
+ * The frame only shapes where gadgets are auto-placed; it never moves existing ones.
+ */
+function GroupFramePicker({ frame, onChange, onFromTemplate }: {
+  frame: LayoutFrame;
+  onChange: (frame: LayoutFrame) => void;
+  onFromTemplate?: (presetId: string) => void;
+}) {
+  const t = useTranslations('dashboard');
+  return (
+    <div className="space-y-3 pt-2">
+      <p className="text-xs font-medium">{t('groupFrameLabel')}</p>
+      <RadioGroup value={frame} onValueChange={(value) => onChange(value as LayoutFrame)} className="grid grid-cols-1 gap-1.5">
+        {LAYOUT_FRAMES.map((id) => (
+          <Label key={id} htmlFor={`group-frame-${id}`} className="flex items-center gap-2 text-xs font-normal">
+            <RadioGroupItem id={`group-frame-${id}`} value={id} />
+            <span aria-hidden="true" className="flex h-5 w-16 shrink-0 flex-wrap content-start">
+              {FRAME_PREVIEW[id].map((w, i) => (
+                <span key={i} style={{ width: `${w * 5}%` }} className="h-2 border border-background bg-muted-foreground/40" />
+              ))}
+            </span>
+            {t(`groupFrame_${id}`)}
+          </Label>
+        ))}
+      </RadioGroup>
+      {onFromTemplate && (
+        <div className="space-y-1.5 border-t border-border pt-2">
+          <p className="text-xs text-muted-foreground">{t('groupFromTemplate')}</p>
+          <div className="flex flex-wrap gap-1.5">
+            {(['news', 'markets', 'work'] as const).map((id) => (
+              <Button key={id} type="button" size="sm" variant="outline" className="text-xs" onClick={() => onFromTemplate(id)}>
+                {t(`groupTemplate_${id}`)}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Topics / highlight-rules management dialog (owner only). */
 export function ManagementDialog({ management }: { management: ManagementDialogState }) {
   const t = useTranslations('dashboard');
@@ -179,6 +232,7 @@ export function useDashboardCrud({ activeDashboard, dashboards, layoutOperationP
   const [deleteOpen, setDeleteOpen] = useState<boolean>(false);
   const [groupOpen, setGroupOpen] = useState<boolean>(false);
   const [groupName, setGroupName] = useState<string>('');
+  const [groupFrame, setGroupFrameChoice] = useState<LayoutFrame>('free');
 
   const createMutation = useMutation({
     mutationFn: async (name: string) => createDashboard(name, workspace.csrfToken),
@@ -225,19 +279,21 @@ export function useDashboardCrud({ activeDashboard, dashboards, layoutOperationP
       if (!activeDashboard) return;
       return createDashboardGroup(activeDashboard.id, name, activeDashboard.revision, workspace.csrfToken, activeDashboard.groups.length);
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       if (activeDashboard) {
         void queryClient.invalidateQueries({ queryKey: dashboardKeys.detail(activeDashboard.id) });
       }
+      if (created) setGroupFrame(created.id, groupFrame);
       setGroupOpen(false);
       setGroupName('');
+      setGroupFrameChoice('free');
     },
   });
   return {
     createOpen, setCreateOpen, createName, setCreateName, createMutation,
     renameOpen, setRenameOpen, renameValue, setRenameValue, renameMutation,
     deleteOpen, setDeleteOpen, deleteMutation,
-    groupOpen, setGroupOpen, groupName, setGroupName, groupMutation,
+    groupOpen, setGroupOpen, groupName, setGroupName, groupMutation, groupFrame, setGroupFrameChoice,
   };
 }
 
@@ -251,8 +307,10 @@ export type DashboardCrud = ReturnType<typeof useDashboardCrud>;
  * @param activeDashboardName Name shown in the delete confirmation.
  * @param layoutOperationPending Blocks add-group while a layout operation is running.
  */
-export function DashboardCrudDialogs({ crud, activeDashboardName, layoutOperationPending }: {
+export function DashboardCrudDialogs({ crud, activeDashboardName, layoutOperationPending, onFromTemplate }: {
   crud: DashboardCrud;
+  /** Opens the preset picker in append mode on the chosen purpose preset; hides the template row when absent. */
+  onFromTemplate?: (presetId: string) => void;
   activeDashboardName: string;
   layoutOperationPending: boolean;
 }) {
@@ -285,7 +343,9 @@ export function DashboardCrudDialogs({ crud, activeDashboardName, layoutOperatio
         confirmLabel={t('create')}
         confirmDisabled={!crud.groupName.trim() || crud.groupMutation.isPending || layoutOperationPending}
         onConfirm={(name) => crud.groupMutation.mutate(name)}
-      />
+      >
+        <GroupFramePicker frame={crud.groupFrame} onChange={crud.setGroupFrameChoice} onFromTemplate={onFromTemplate} />
+      </NameDialog>
     </>
   );
 }

@@ -6,8 +6,11 @@ import { useCallback } from 'react';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { createGadgetInstance, dashboardKeys, deleteGadgetInstance, type Dashboard, type DashboardPlacement } from './api';
 import { RENDERER_DEFAULT_SIZES, RENDERER_MIN_SIZES } from './grid-geometry';
+import { getGroupFrame } from './group-frame';
 import {
+  findFrameCoordinates,
   findFreeCoordinates,
+  type LayoutFrame,
   projectMobilePlacements,
   sameLayout,
   type AddReservation,
@@ -62,6 +65,8 @@ function resolveSizeForRenderer(
     columns: number;
     draft: DashboardPlacement[];
     metrics: { frameHeaderHeight: number; stride: number } | null;
+    /** Layout frame of the target page (desktop only). */
+    frame?: LayoutFrame;
   },
 ): { width: number; height: number } | null {
   const { breakpoint, columns, draft, metrics } = ctx;
@@ -72,6 +77,10 @@ function resolveSizeForRenderer(
   const floorHeight = metrics
     ? Math.max(minimum.minH, Math.ceil((getGadgetReadingBodyFloor(renderer) + metrics.frameHeaderHeight + 2 + 12) / metrics.stride))
     : minimum.minH;
+  // Desktop pages with a layout frame use the zone width/height; anything else keeps the roomy-default/minimum ladder.
+  const framed = breakpoint === 'desktop' && ctx.frame && ctx.frame !== 'free'
+    ? findFrameCoordinates(draft, ctx.frame, minimum.minW, defaultH, columns) : null;
+  if (framed) return { width: framed.w, height: framed.h };
   const candidates = breakpoint === 'mobile'
     ? [{ width: columns, height: Math.max(floorHeight, defaultH) }]
     : [
@@ -79,6 +88,16 @@ function resolveSizeForRenderer(
       { width: Math.min(minimum.minW, columns), height: minimum.minH },
     ];
   return candidates.find((size) => findFreeCoordinates(draft, size.width, size.height, columns)) ?? null;
+}
+
+/**
+ * Final coordinates of a reserved add. Framed desktop pages use the zone (the reserved width already is that
+ * zone's width, or the free fallback); everything else takes the first free slot.
+ */
+function placeReserved(occupied: DashboardPlacement[], r: AddReservation): { x: number; y: number } | null {
+  const frame = r.breakpoint === 'desktop' ? getGroupFrame(r.groupId) : 'free';
+  const framed = frame === 'free' ? null : findFrameCoordinates(occupied, frame, r.width, r.height, r.columns);
+  return framed && framed.w >= r.width ? { x: framed.x, y: framed.y } : findFreeCoordinates(occupied, r.width, r.height, r.columns);
 }
 
 /**
@@ -96,6 +115,7 @@ function useAddReservations(session: LayoutSession, layoutOperationPending: bool
     breakpoint: currentBreakpoint, columns: layoutColumns,
     draft: draftPlacements.filter((placement) => activeDashboard?.instances.some((instance) =>
       instance.id === placement.instance_id && instance.group_id === activeGroupId)), metrics: gridMetrics,
+    frame: getGroupFrame(activeGroupId),
   }), [activeDashboard, activeGroupId, currentBreakpoint, draftPlacements, gridMetrics, layoutColumns]);
 
   /** Checks bounded space before a quick definition or instance can be created. */
@@ -197,7 +217,7 @@ function useAddGadget(session: LayoutSession, releaseAddReservation: (id: string
     // Recheck live occupancy after asynchronous definition creation, immediately before POST.
     const occupied = live.draftPlacements.filter((placement) => live.activeDashboard!.instances.some((instance) =>
       instance.id === placement.instance_id && instance.group_id === reservation.groupId));
-    const coords = findFreeCoordinates(occupied, reservation.width, reservation.height, reservation.columns);
+    const coords = placeReserved(occupied, reservation);
     if (!coords) {
       setSaveError(t('noFreeDashboardSpace'));
       return false;

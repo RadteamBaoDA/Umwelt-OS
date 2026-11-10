@@ -15,8 +15,10 @@ import { TodayHeader } from './today-header';
 import type { LayoutEditOrigin } from './layout-geometry';
 
 /** Persistent panel tab list inside the page's Tabs root; Add stays outside the keyboard roving set. */
-export function GroupTabs({ groups, onAdd, canAdd }: {
+export function GroupTabs({ groups, onAdd, canAdd, updatedGroupIds }: {
   groups: DashboardGroup[];
+  /** Groups whose sources refreshed since the owner last opened them; shown as a dot (no count). */
+  updatedGroupIds?: ReadonlySet<string>;
   onAdd: () => void;
   canAdd: boolean;
 }) {
@@ -28,6 +30,12 @@ export function GroupTabs({ groups, onAdd, canAdd }: {
           {[...groups].sort((a, b) => Number(b.is_overview) - Number(a.is_overview) || a.position - b.position).map((group) => (
             <TabsTrigger key={group.id} value={group.id} className="h-8 px-3 text-xs">
               {group.is_overview ? t('overviewTab') : group.name}
+              {updatedGroupIds?.has(group.id) && (
+                <>
+                  <span aria-hidden="true" className="ml-1.5 inline-block size-1.5 rounded-full bg-primary" />
+                  <span className="sr-only">{t('tabUpdated')}</span>
+                </>
+              )}
             </TabsTrigger>
           ))}
         </TabsList>

@@ -32,6 +32,8 @@ export interface PresetPickerProps {
   onPresetApplied: (dashboard: Dashboard) => void;
   /** Preset id to preselect (and preview) when the dialog opens, e.g. "monitor" after a starter pack run. */
   initialPresetId?: string;
+  /** Apply mode paired with `initialPresetId` (e.g. "append" for "From template" on a new page). */
+  initialApplyMode?: ApplyMode;
 }
 
 /** Display name of a slot: the preset's own label ("Live news"), else the renderer's template name. */
@@ -315,11 +317,12 @@ export function PresetPicker({
   currentDashboardRevision,
   onPresetApplied,
   initialPresetId,
+  initialApplyMode,
 }: PresetPickerProps) {
   const t = useTranslations('dashboard');
   const catalogHeadingId = useId();
   const layoutHeadingId = useId();
-  const model = usePresetPicker(open, onOpenChange, { currentDashboardId, currentDashboardRevision }, onPresetApplied, initialPresetId);
+  const model = usePresetPicker(open, onOpenChange, { currentDashboardId, currentDashboardRevision }, onPresetApplied, initialPresetId, initialApplyMode);
   const { applyError, setApplyError } = model.draft;
 
   return (

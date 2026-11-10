@@ -309,6 +309,75 @@ PRESETS: tuple[DashboardPreset, ...] = (
             ),
         ),
     ),
+    # Topic pages: each tiles to exactly 20 columns per row (see default_desktop_layout) so a page can be
+    # appended to an existing dashboard as its own group.
+    DashboardPreset(
+        "news",
+        "News",
+        "purpose",
+        (
+            PresetSlot("news_map", "map", "World map", (20, 8)),
+            PresetSlot(
+                "news_world",
+                "news_feed",
+                "World",
+                (7, 10),
+                ("bbc_world", "tuoitre_news", "vnexpress_business", "google_news"),
+            ),
+            PresetSlot(
+                "news_tech",
+                "news_feed",
+                "Technology",
+                (7, 10),
+                ("hn_top", "lobsters", "github_trending"),
+            ),
+            PresetSlot("news_security", "news_feed", "Security", (6, 10), ("cisa_kev", "nvd")),
+        ),
+    ),
+    DashboardPreset(
+        "markets",
+        "Markets",
+        "purpose",
+        (
+            PresetSlot(
+                "markets_kpis",
+                "provider_observation",
+                "Key indicators",
+                (20, 3),
+                ("frankfurter", "alternative_me", "world_bank"),
+            ),
+            PresetSlot("markets_vn", "finance_chart", "VN market", (7, 6), ("vn_stock",)),
+            PresetSlot(
+                "markets_crypto", "finance_chart", "Crypto", (7, 6), ("binance", "coinpaprika")
+            ),
+            PresetSlot("markets_macro", "provider_observation", "Macro", (6, 6), ("world_bank",)),
+            PresetSlot(
+                "markets_news",
+                "news_feed",
+                "Business news",
+                (14, 8),
+                ("vnexpress_business", "google_news", "fed_press"),
+            ),
+            PresetSlot("markets_highlights", "highlights", "Highlights", (6, 8)),
+        ),
+    ),
+    DashboardPreset(
+        "work",
+        "Work",
+        "purpose",
+        (
+            PresetSlot("work_tasks", "tasks", "Tasks", (14, 8)),
+            PresetSlot("work_goals", "goals", "Goals", (6, 8)),
+            PresetSlot("work_brief", "daily_brief", "Daily brief", (14, 7)),
+            PresetSlot(
+                "work_jobs",
+                "job_list",
+                "Jobs",
+                (6, 7),
+                ("vietnamworks_jobs", "itviec_jobs", "wwr_jobs"),
+            ),
+        ),
+    ),
 )
 
 # Retired preset ids kept resolvable for old clients; no persisted column stores preset ids.

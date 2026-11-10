@@ -241,7 +241,7 @@ function usePresetActions(draft: Draft, catalog: Catalog, mutations: Mutations, 
   }, [hasNextPage, latePreselectRef, preselect, previewMutate, rendererCatalogLoaded, selectedPreset, setSlotSources, slotSources, sourcesLoaded]);
 
   /** Selects a preset, preselects the only compatible datasource per slot and previews it. */
-  const handleSelectPreset = useCallback((preset: DashboardPreset) => {
+  const handleSelectPreset = useCallback((preset: DashboardPreset, mode: ApplyMode = applyMode) => {
     const initial = preselect(preset, {});
     latePreselectRef.current = hasNextPage || !sourcesLoaded || !rendererCatalogLoaded ? preset.id : null;
     setSelectedPresetId(preset.id);
@@ -249,8 +249,8 @@ function usePresetActions(draft: Draft, catalog: Catalog, mutations: Mutations, 
     setPreviewError(null);
     setApplyError(null);
     setSlotSources(initial);
-    void previewMutation.mutateAsync({ preset, sources: initial });
-  }, [hasNextPage, latePreselectRef, preselect, previewMutation, rendererCatalogLoaded, setApplyError, setNewDashboardName, setPreviewError, setSelectedPresetId, setSlotSources, sourcesLoaded]);
+    void previewMutation.mutateAsync({ preset, sources: initial, mode });
+  }, [applyMode, hasNextPage, latePreselectRef, preselect, previewMutation, rendererCatalogLoaded, setApplyError, setNewDashboardName, setPreviewError, setSelectedPresetId, setSlotSources, sourcesLoaded]);
 
   /** Records a slot's datasource choice and re-previews so readiness and the fingerprint reflect it. */
   const handleSlotSources = useCallback((slotId: string, ids: string[]) => {
@@ -288,6 +288,7 @@ function usePresetActions(draft: Draft, catalog: Catalog, mutations: Mutations, 
  * @param target Active dashboard identity/revision for append / replace.
  * @param onPresetApplied Called with the dashboard created or updated by a successful apply.
  * @param initialPresetId Preset to select automatically once per open (after the catalog loads); the owner can still pick another.
+ * @param initialApplyMode Apply mode used for that automatic selection (e.g. `append` from the new-page dialog); defaults to the current mode.
  */
 export function usePresetPicker(
   open: boolean,
@@ -295,6 +296,7 @@ export function usePresetPicker(
   target: PresetTarget,
   onPresetApplied: (dashboard: Dashboard) => void,
   initialPresetId?: string,
+  initialApplyMode?: ApplyMode,
 ) {
   const draft = usePresetDraft();
   const catalog = usePresetCatalog(open);
@@ -305,6 +307,7 @@ export function usePresetPicker(
   const actions = usePresetActions(draft, catalog, mutations, selectedPreset);
   const autoSelected = useRef(false);
   const { handleSelectPreset } = actions;
+  const { setApplyMode } = draft;
   // One-shot per open: re-arms on close so a later "build dashboard" preselects again; never overrides an owner's choice.
   useEffect(() => {
     if (!open) { autoSelected.current = false; return; }
@@ -312,8 +315,10 @@ export function usePresetPicker(
     const preset = presets.find((candidate) => candidate.id === initialPresetId);
     if (!preset) return;
     autoSelected.current = true;
-    handleSelectPreset(preset);
-  }, [open, initialPresetId, presets, handleSelectPreset]);
+    // The mode is passed explicitly: this render's closure still holds the previous applyMode.
+    if (initialApplyMode) setApplyMode(initialApplyMode);
+    handleSelectPreset(preset, initialApplyMode);
+  }, [open, initialPresetId, initialApplyMode, presets, handleSelectPreset, setApplyMode]);
   return { draft, catalog, mutations, presets, selectedPreset, actions };
 }
 

@@ -17,6 +17,7 @@ import { DashboardHeader, formatRelativeAge } from './dashboard-header';
 import { GroupTabs, LayoutNotices, StaleSourcesPanel, TimezoneFooter, TodayHeaderGate } from './dashboard-panels';
 import { FreshnessStrip } from './freshness-strip';
 import { GadgetSettings } from './gadget-settings';
+import { useUpdatedGroups } from './group-updates';
 import { PresetPicker } from './preset-picker';
 import { useDashboardData } from './use-dashboard-data';
 import { useDashboardDeepLink } from './use-dashboard-deep-link';
@@ -123,12 +124,13 @@ function ConnectedHeader({ data, ops, crud, onOpenPresets, onOpenManagement }: {
 }
 
 /** Preset picker wired to navigation: applying a preset opens it, leaves edit mode and clears the dirty flag. */
-function ConnectedPresetPicker({ open, onOpenChange, data, session, initialPresetId }: {
+function ConnectedPresetPicker({ open, onOpenChange, data, session, initialPresetId, initialApplyMode }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   data: PageData;
   session: PageOps['session'];
   initialPresetId?: string;
+  initialApplyMode?: 'append';
 }) {
   const { activeDashboard } = data;
   return (
@@ -136,6 +138,7 @@ function ConnectedPresetPicker({ open, onOpenChange, data, session, initialPrese
       open={open}
       onOpenChange={onOpenChange}
       initialPresetId={initialPresetId}
+      initialApplyMode={initialApplyMode}
       currentDashboardId={data.selectedDashboardId}
       currentDashboardRevision={activeDashboard?.revision}
       currentDashboardName={activeDashboard?.name}
@@ -210,6 +213,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   const [addDeepLink, setAddDeepLink] = useState<{ templateId: string; sourceId?: string } | undefined>(undefined);
   // Set only when the picker is opened from a starter-pack run, so header/empty-state opens keep the plain catalog.
   const [presetInitialId, setPresetInitialId] = useState<string | undefined>(undefined);
+  const [presetInitialMode, setPresetInitialMode] = useState<'append' | undefined>(undefined);
   const queryClient = useQueryClient();
   const scrollPositions = useRef(new Map<string, number>());
 
@@ -244,6 +248,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
   });
   useEffect(() => { scrollPositions.current.clear(); }, [selectedDashboardId]);
 
+  const updatedGroupIds = useUpdatedGroups(activeDashboard?.instances, sources.dashboardSources, session.activeGroupId);
   const visibleInstances = useVisibleInstances(activeDashboard, session.activeGroupId);
   const showMobileHint = shouldShowMobileHint(session, Boolean(activeDashboard), mobileNoticeDismissed);
 
@@ -256,7 +261,7 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
       <Tabs value={session.activeGroupId} onValueChange={save.requestSwitchGroup}
         className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
         {activeDashboard && activeDashboard.groups.length > 0 && (
-          <GroupTabs groups={activeDashboard.groups} onAdd={() => crud.setGroupOpen(true)}
+          <GroupTabs groups={activeDashboard.groups} updatedGroupIds={updatedGroupIds} onAdd={() => crud.setGroupOpen(true)}
             canAdd={isOwner && !layoutOperationPending && !session.isDirty} />
         )}
 
@@ -304,8 +309,8 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
 
       {/* Preset Picker Modal */}
       <ConnectedPresetPicker
-        open={presetPickerOpen} initialPresetId={presetInitialId} data={data} session={session}
-        onOpenChange={(next) => { setPresetPickerOpen(next); if (!next) setPresetInitialId(undefined); }}
+        open={presetPickerOpen} initialPresetId={presetInitialId} initialApplyMode={presetInitialMode} data={data} session={session}
+        onOpenChange={(next) => { setPresetPickerOpen(next); if (!next) { setPresetInitialId(undefined); setPresetInitialMode(undefined); } }}
       />
       {starterOpen && (
         <StarterPackWizard
@@ -315,7 +320,11 @@ export function DashboardPage({ dashboardId }: { dashboardId?: string }) {
           onBuildDashboard={() => { setStarterOpen(false); setPresetInitialId('monitor'); setPresetPickerOpen(true); }}
         />
       )}
-      <DashboardCrudDialogs crud={crud} activeDashboardName={activeDashboard?.name ?? ''} layoutOperationPending={layoutOperationPending} />
+      <DashboardCrudDialogs
+        crud={crud} activeDashboardName={activeDashboard?.name ?? ''} layoutOperationPending={layoutOperationPending}
+        // The template is appended to the active dashboard through the preset picker, not into the new page.
+        onFromTemplate={(id) => { crud.setGroupOpen(false); setPresetInitialId(id); setPresetInitialMode('append'); setPresetPickerOpen(true); }}
+      />
       {/* Gadget Instance & Definition Settings Modal */}
       <GadgetSettings
         open={gadgetSettingsOpen}

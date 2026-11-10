@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DashboardPlacement, GadgetInstance } from './api';
-import { findFreeCoordinates, isValidLayoutSnapshot, projectMobilePlacements, sameLayout } from './layout-geometry';
+import { findFrameCoordinates, findFreeCoordinates, isValidLayoutSnapshot, projectMobilePlacements, sameLayout } from './layout-geometry';
 
 /** Builds a minimal instance with the given renderer (all renderers fall back to a 4x3 minimum when unknown). */
 function inst(id: string, renderer = 'unknown_renderer'): GadgetInstance {
@@ -62,5 +62,27 @@ describe('layout geometry', () => {
     expect(projectMobilePlacements([], instances, 8).unavailable).toBe(true);
     expect(projectMobilePlacements([rect('a', 0, 0, 4, 3)], instances, 3).unavailable).toBe(true);
     expect(projectMobilePlacements([rect('a', 0, 0, 4, 3)], instances, 0).unavailable).toBe(true);
+  });
+});
+
+describe('findFrameCoordinates', () => {
+  it('places into the shortest zone wide enough, leftmost on ties', () => {
+    expect(findFrameCoordinates([], 'three_columns', 4, 6)).toEqual({ x: 0, y: 0, w: 7, h: 6 });
+    expect(findFrameCoordinates([rect('a', 0, 0, 7, 6)], 'three_columns', 4, 6)).toEqual({ x: 7, y: 0, w: 7, h: 6 });
+    expect(findFrameCoordinates([rect('a', 0, 0, 7, 6), rect('b', 7, 0, 7, 2)], 'three_columns', 4, 6)).toEqual({ x: 14, y: 0, w: 6, h: 6 });
+    expect(findFrameCoordinates([], 'main_rail', 7, 6)).toEqual({ x: 0, y: 0, w: 14, h: 6 });
+    expect(findFrameCoordinates([rect('a', 0, 0, 14, 6)], 'main_rail', 4, 6)).toEqual({ x: 14, y: 0, w: 6, h: 6 });
+  });
+
+  it('gives the hero the full width and the board a fixed height', () => {
+    expect(findFrameCoordinates([], 'hero_grid', 4, 6)).toEqual({ x: 0, y: 0, w: 20, h: 6 });
+    expect(findFrameCoordinates([rect('a', 0, 0, 20, 6)], 'hero_grid', 4, 6)).toEqual({ x: 0, y: 6, w: 7, h: 6 });
+    expect(findFrameCoordinates([], 'board', 4, 3)).toEqual({ x: 0, y: 0, w: 5, h: 8 });
+  });
+
+  it('falls back to free placement when no zone fits or the target collides', () => {
+    expect(findFrameCoordinates([], 'board', 6, 3)).toEqual({ x: 0, y: 0, w: 6, h: 3 });
+    expect(findFrameCoordinates([rect('a', 0, 0, 10, 4)], 'main_rail', 15, 3)).toEqual({ x: 0, y: 4, w: 15, h: 3 });
+    expect(findFrameCoordinates([], 'free', 4, 3)).toEqual({ x: 0, y: 0, w: 4, h: 3 });
   });
 });
