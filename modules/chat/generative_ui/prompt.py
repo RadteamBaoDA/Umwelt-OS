@@ -151,7 +151,6 @@ class SandboxedUiArgs(BaseModel):
     placeholderMessages: list[str] = Field(
         # Empty on purpose: the client then shows its localized catalog phrases instead of English text.
         default_factory=list,
-        min_length=1,
         max_length=8,
     )
     css: str = Field(default="", max_length=64_000)

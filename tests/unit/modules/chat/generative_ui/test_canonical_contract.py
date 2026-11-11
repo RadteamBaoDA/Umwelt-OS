@@ -87,3 +87,8 @@ def test_prompt_describes_draft_only_send_prompt_and_data_urls() -> None:
 def test_sandbox_args_default_placeholders_are_locale_neutral() -> None:
     """No English default text server-side; the client falls back to its localized phrases (G7)."""
     assert SandboxedUiArgs(html="<p>x</p>").placeholderMessages == []
+    # The empty default and an explicit empty list are both valid (no contradictory min_length).
+    assert SandboxedUiArgs(html="<p>x</p>", placeholderMessages=[]).placeholderMessages == []
+    assert (
+        "minItems" not in SandboxedUiArgs.model_json_schema()["properties"]["placeholderMessages"]
+    )

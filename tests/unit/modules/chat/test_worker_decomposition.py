@@ -283,6 +283,70 @@ def test_validate_citations_web_first_then_tool_evidence_numbering() -> None:
     assert set(cited.number_map) == {1, 2}
 
 
+def _shifted_case(tool_rounds: int) -> tuple[Any, AnswerContext, Any]:
+    """Prompt evidence E0 (model [1]), one web hit ([2]) and ``tool_rounds`` DB rows fetched later ([3]...)."""
+    hit = SimpleNamespace(url="https://example.test/a", title="A", snippet="snippet")
+    web_run = worker._WebSearchRun(  # type: ignore[arg-type]
+        {"status": "used"}, (hit,), "searxng", evidence_base=1
+    )
+    items = [_evidence(content="Alpha topic notes.")] + [
+        _evidence(content=f"Quake number {i} near Crete.") for i in range(tool_rounds)
+    ]
+    return web_run, AnswerContext(query="q", evidence=items), items
+
+
+def test_validate_citations_prompt_evidence_web_and_db_row_with_base_above_zero() -> None:
+    """Model [1]=prompt doc, [2]=web, [3]=DB row: each marker resolves to its own source (Q3, base>0)."""
+    web_run, context, items = _shifted_case(1)
+    cited = worker._validate_citations(
+        "Alpha topic notes [1]. Web says A [2]. The quake near Crete [3].",
+        context,
+        AnswerContextRequest(query="q"),
+        web_run,
+        [],
+    )
+    chunk_ids = [str(c.get("chunkId") or c.get("chunk_id")) for c in cited.valid_citations]
+    assert chunk_ids[:2] == [str(items[0].chunk_id), str(items[1].chunk_id)]
+    assert cited.valid_citations[2]["url"] == "https://example.test/a"
+    assert set(cited.number_map) == {1, 2, 3}
+    # Documents keep numbers 1-2, the web hit is numbered after them.
+    assert (
+        "[1]" in cited.final_answer and "[2]" in cited.final_answer and "[3]" in cited.final_answer
+    )
+
+
+def test_validate_citations_two_tool_rounds_keep_numbers_behind_web_block() -> None:
+    """Rows fetched by two tool rounds are [3] and [4]; markers [3][4] cite them, [2] stays the web hit."""
+    web_run, context, items = _shifted_case(2)
+    cited = worker._validate_citations(
+        "Alpha topic notes [1]. Web says A [2]. Quake number 0 near Crete [3]. Quake number 1 near Crete [4].",
+        context,
+        AnswerContextRequest(query="q"),
+        web_run,
+        [],
+    )
+    docs = [
+        c for c in cited.valid_citations if c.get("sourceType", c.get("source_type")) == "document"
+    ]
+    assert [str(c.get("chunkId") or c.get("chunk_id")) for c in docs] == [
+        str(i.chunk_id) for i in items
+    ]
+    assert set(cited.number_map) == {1, 2, 3, 4}
+
+
+def test_validate_citations_widget_numbers_are_remapped_to_evidence() -> None:
+    """A widget citing model number [3] (the DB row, behind the web block) cites evidence[1], not web."""
+    web_run, context, items = _shifted_case(1)
+    call = {"name": "render_table", "arguments": json.dumps({"citations": [3]})}
+    cited = worker._validate_citations(
+        "Here is the table.", context, AnswerContextRequest(query="q"), web_run, [("p1", call)]
+    )
+    assert [str(c.get("chunkId") or c.get("chunk_id")) for c in cited.valid_citations] == [
+        str(items[1].chunk_id)
+    ]
+    assert cited.number_map == {3: 1}
+
+
 def test_citation_number_shifts_only_tool_evidence_behind_web_results() -> None:
     """``_citation_number`` keeps prompt-time evidence numbers and shifts later items past the web block."""
     from modules.chat.db_query import _citation_number

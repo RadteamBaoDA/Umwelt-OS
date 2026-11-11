@@ -278,8 +278,13 @@ class ConversationRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     metadata: dict[str, Any] = Field(default_factory=dict)
-    # True while a response run (pending / streaming / awaiting input) is active; filled by the list route.
-    has_active_run: bool = False
+    has_active_run: bool = Field(
+        default=False,
+        description=(
+            "True while a response run (pending / streaming / awaiting input) is active. Filled by the "
+            "conversation list only; always false on the single-conversation detail."
+        ),
+    )
 
 
 class _GenerativeUIBase(BaseModel):

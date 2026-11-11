@@ -108,7 +108,6 @@ class _Numbering:
 def _validate_document_citations(
     text: str,
     answer_context: AnswerContext,
-    answer_request: AnswerContextRequest,
     doc_numbers: list[int],
     ui_parts: list[tuple[str, dict[str, str]]],
     total_count: int,
@@ -173,8 +172,9 @@ def _web_citations_for(
 ) -> tuple[str, list[dict[str, Any]]]:
     """Map cited web numbers to server-built ``WebCitation`` rows numbered after the kept documents.
 
-    Owner ruling (review P2-5): a web-only answer is kept only when no document marker was dropped as invalid
-    and no marker is out of range; otherwise the insufficient-evidence answer stands. Mutates ``number_map``
+    Owner ruling (review P2-5): a web-only answer (no kept document) is kept as written only when no document
+    marker was dropped as invalid and no marker is out of range; otherwise the validated text stands (an
+    unverified citation is removed, never replaced by a canned sentence). Mutates ``number_map``
     and returns ``(answer_text, web_citations)``; one citation per URL (duplicate hits reuse its number).
     Each quote is the snippet truncated to ``MAX_QUOTE_LENGTH`` (snippets may be longer for the prompt).
     """
@@ -256,7 +256,6 @@ def _validate_citations(
     validated, number_map = _validate_document_citations(
         text,
         answer_context,
-        answer_request,
         doc_numbers,
         ui_parts,
         total_count,
