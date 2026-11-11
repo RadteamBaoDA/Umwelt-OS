@@ -426,9 +426,18 @@ class _ModelSetup:
             {"role": "user", "content": self.user_prompt},
         ]
 
-    def open_stream(self, msgs: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> Any:
-        """Create one gateway stream; request opening is lazy and fenced per attempt by the callbacks."""
-        extra: dict[str, Any] = {"tools": tools, "tool_choice": "auto"} if tools else {}
+    def open_stream(
+        self,
+        msgs: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        tool_choice: str = "auto",
+    ) -> Any:
+        """Create one gateway stream; request opening is lazy and fenced per attempt by the callbacks.
+
+        ``tool_choice="none"`` keeps ``tools`` in the request (the history contains tool calls) but forbids
+        a new call: used for the closing synthesis round after the tool budget is spent.
+        """
+        extra: dict[str, Any] = {"tools": tools, "tool_choice": tool_choice} if tools else {}
         return self.gateway.stream(
             role=self.role,
             mapping=self.mapping,

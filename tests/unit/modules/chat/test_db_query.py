@@ -127,3 +127,91 @@ async def test_notify_realtime_wakeup_wakes_waiter_immediately() -> None:
         timeout=0.5,
     )
     await task
+
+
+class _EmptyObsSession:
+    """Session stub whose every observation SELECT returns no rows."""
+
+    async def execute(self, _stmt: object) -> SimpleNamespace:
+        """Return an empty result for both ``.scalars().all()`` and ``.all()`` shapes."""
+        return SimpleNamespace(all=lambda: [], scalars=lambda: SimpleNamespace(all=lambda: []))
+
+
+@pytest.mark.asyncio
+async def test_structured_event_feed_provider_returns_documents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-measurement provider (emsc_quakes) adds documents even for target='observations'."""
+    import json
+    from datetime import UTC, datetime
+
+    from modules.chat import db_query
+
+    ver_id = uuid4()
+    row = SimpleNamespace(
+        document_id=uuid4(),
+        document_version_id=ver_id,
+        provider="emsc_quakes",
+        source_name="EMSC",
+        title="M4.1 - Crete",
+        url="https://example.test/q",
+        published_at=None,
+        observed_at=datetime(2026, 11, 1, tzinfo=UTC),
+        excerpt="quake",
+    )
+
+    async def fake_select(_s: object, _f: object, _l: int) -> list[object]:
+        return [row]
+
+    async def fake_register(_s: object, _pairs: object, _ev: object, **_kw: object) -> dict:
+        return {ver_id: 1}
+
+    monkeypatch.setattr(db_query, "_select_structured_documents", fake_select)
+    monkeypatch.setattr(db_query, "_register_evidence_for_versions", fake_register)
+    args = db_query.QueryCollectedDataArgs(target="observations", providers=["emsc_quakes"])
+    out = json.loads(
+        await db_query._execute_structured_mode(
+            _EmptyObsSession(),  # type: ignore[arg-type]
+            args,
+            workspace_id=uuid4(),
+            allowed_source_ids=[uuid4()],
+            date_from=None,
+            date_to=None,
+            evidence_list=[],
+            available_providers=["emsc_quakes"],
+        )
+    )
+    assert out["documents"][0]["citation"] == "[1]"
+    assert "available_providers" not in out
+
+
+@pytest.mark.asyncio
+async def test_structured_empty_result_lists_available_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no rows at all the payload names the active providers so the model can retry."""
+    import json
+
+    from modules.chat import db_query
+
+    async def fake_select(_s: object, _f: object, _l: int) -> list[object]:
+        return []
+
+    async def fake_register(_s: object, _pairs: object, _ev: object, **_kw: object) -> dict:
+        return {}
+
+    monkeypatch.setattr(db_query, "_select_structured_documents", fake_select)
+    monkeypatch.setattr(db_query, "_register_evidence_for_versions", fake_register)
+    out = json.loads(
+        await db_query._execute_structured_mode(
+            _EmptyObsSession(),  # type: ignore[arg-type]
+            db_query.QueryCollectedDataArgs(providers=["emsc"]),
+            workspace_id=uuid4(),
+            allowed_source_ids=[uuid4()],
+            date_from=None,
+            date_to=None,
+            evidence_list=[],
+            available_providers=["emsc_quakes", "usgs"],
+        )
+    )
+    assert out["available_providers"] == ["emsc_quakes", "usgs"]

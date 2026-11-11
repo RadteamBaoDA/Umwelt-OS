@@ -239,11 +239,28 @@ async def test_read_skill_loop_is_bounded(monkeypatch: pytest.MonkeyPatch) -> No
     gen = _UIGen(monkeypatch, [skill])
     await gen.run()
     gen.failed.assert_not_awaited()
-    assert len(gen.requests) == 1 + worker.MAX_SKILL_ROUNDS
+    # Initial request + MAX_SKILL_ROUNDS continuations + one closing no-tools synthesis round.
+    assert len(gen.requests) == 2 + worker.MAX_SKILL_ROUNDS
+    assert gen.requests[-1]["tool_choice"] == "none"
     last = gen.requests[-1]["messages"]
-    assert [m["role"] for m in last[-4:]] == ["assistant", "tool", "assistant", "tool"]
-    assert last[-1]["tool_call_id"] == "s" and len(last[-1]["content"]) > 100
+    assert [m["role"] for m in last[-6:]] == ["assistant", "tool"] * 3
+    assert "tool_budget_exhausted" in last[-1]["content"]
+    assert last[-3]["tool_call_id"] == "s" and len(last[-3]["content"]) > 100
     assert gen.events("message.ui.done") == []
+
+
+async def test_tool_budget_exhausted_closes_with_synthesis_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After the data-tool cap one no-tools round runs and its text ends the persisted answer."""
+    call = _call(0, name="read_skill", args='{"name": "master-agent-playbook"}', call_id="s")
+    gen = _UIGen(monkeypatch, [[call], [call], [call], [_text("Final answer.")]])
+    await gen.run()
+    gen.failed.assert_not_awaited()
+    assert len(gen.requests) == 2 + worker.MAX_SKILL_ROUNDS
+    assert gen.requests[-1]["tool_choice"] == "none" and gen.requests[-1]["tools"]
+    message = next(m for m in gen.added if isinstance(m, Message))
+    assert message.content.endswith("Final answer.")
 
 
 async def test_read_skill_then_terminal_tool_renders(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -568,7 +585,7 @@ async def test_trip_images_share_the_extra_round_bound(monkeypatch: pytest.Monke
     )
     monkeypatch.setattr(worker.media, "run_trip_images_tool", AsyncMock(return_value="{}"))
     await loop.run(csrf_signing_secret=SecretStr("sig"))
-    assert len(loop.requests) == 1 + worker.MAX_SKILL_ROUNDS  # same extra-round bound as read_skill
+    assert len(loop.requests) == 2 + worker.MAX_SKILL_ROUNDS  # read_skill bound plus synthesis
 
 
 # ------------------------------------------------------------------ external visualization router

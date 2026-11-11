@@ -172,6 +172,7 @@ class _TurnState:
     ui_rounds: int = 0  # model rounds that produced at least one widget
     skill_rounds: int = 0  # data-tool continuation rounds
     input_requests: int = 0  # request_user_input calls answered or rejected so far this turn
+    synth_done: bool = False  # the closing no-tools synthesis round was already opened this turn
 
 
 @dataclass(frozen=True)

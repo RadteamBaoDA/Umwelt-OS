@@ -330,13 +330,27 @@ async def _run_data_tool(env: _ToolEnv, call: dict[str, str]) -> str:
             await _publish_status(env.c, name, "done", label=label)
 
 
+_TOOL_BUDGET_EXHAUSTED = json.dumps(
+    {
+        "error": "tool_budget_exhausted",
+        "instruction": "Answer now from the evidence already returned; cite its [n] markers.",
+    }
+)
+
+
 async def _answer_tool_calls(
-    env: _ToolEnv, st: _StreamState, rs: _RoundState, rc: _RoundCalls
+    env: _ToolEnv,
+    st: _StreamState,
+    rs: _RoundState,
+    rc: _RoundCalls,
+    *,
+    budget_exhausted: bool = False,
 ) -> None:
     """Append the assistant tool-call message and one tool result per handled call, in model order.
 
     Widget calls get a ``rendered`` stub (the payload is already on screen), invalid ones their validation
-    error, data calls their handler's result (handlers may raise ``_RunStopped``).
+    error, data calls their handler's result (handlers may raise ``_RunStopped``). With ``budget_exhausted``
+    data calls are not run: they get a ``tool_budget_exhausted`` result so the model answers from what it has.
     """
     ts = env.ts
     tool_calls = [
@@ -362,6 +376,8 @@ async def _answer_tool_calls(
         elif id(call) in rc.part_of:
             # The payload is already on screen; echoing it back would only cost tokens.
             content = json.dumps({"status": "rendered", "part_id": rc.part_of[id(call)]})
+        elif budget_exhausted:
+            content = _TOOL_BUDGET_EXHAUSTED
         else:
             content = await _run_data_tool(env, call)
         ts.messages_payload.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
@@ -381,7 +397,16 @@ async def _finish_round(env: _ToolEnv, st: _StreamState, rs: _RoundState) -> boo
     if not rc.handled:
         return False  # a plain text round (or nothing we may act on): the answer is complete
     if not _bounded_continue(ts, rc, c.response_id):
-        return False
+        if rc.round_parts or rc.invalid_of or ts.synth_done:
+            return False  # widget cap, or the synthesis round itself asked for tools again
+        # Data-tool budget spent: close the turn with one no-tools round instead of dropping the calls
+        # (which used to leave only the "let me search" narration as the persisted answer).
+        ts.synth_done = True
+        await _answer_tool_calls(env, st, rs, rc, budget_exhausted=True)
+        ts.stream_iter = env.setup.open_stream(
+            ts.messages_payload, env.setup.ui_tools, tool_choice="none"
+        )
+        return True
     await _answer_tool_calls(env, st, rs, rc)
     ts.stream_iter = env.setup.open_stream(ts.messages_payload, env.setup.ui_tools)
     return True

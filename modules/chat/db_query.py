@@ -25,6 +25,9 @@ from core.workspaces.schemas import AccessFence, Scope
 from modules.chat.schemas import DB_QUERY_KEY, GADGET_SCOPE_KEY, EvidenceItem
 from modules.chat.sql_guard import check_select_policy
 from modules.knowledge.documents.public import (
+    MEASUREMENT_PROVIDER_IDS,
+)
+from modules.knowledge.documents.public import (
     DocumentChunkReadProjection as DocumentChunk,
 )
 from modules.knowledge.documents.public import (
@@ -96,7 +99,11 @@ def build_db_query_tool_spec() -> dict[str, Any]:
                 "observed_at, published_at, quality, is_current, document_id, document_version_id) "
                 "and `scoped_documents` "
                 "(columns: id, source_id, provider, title, canonical_url, published_at, observed_at, "
-                "language, content_excerpt, document_version_id)."
+                "language, content_excerpt, document_version_id). "
+                "Measurement providers (prices, rates, weather, macro series) store numeric rows in "
+                "observations. News and event feeds (earthquake, alert and news providers) store "
+                "documents only, so use target='documents' or 'both' for them; observations are empty "
+                "for those providers."
             ),
             "parameters": {
                 "type": "object",
@@ -109,17 +116,17 @@ def build_db_query_tool_spec() -> dict[str, Any]:
                     "target": {
                         "type": "string",
                         "enum": ["observations", "documents", "both"],
-                        "description": "Which collected tables to query in structured mode.",
+                        "description": "Which collected tables to query in structured mode. Event and news feeds only have documents; documents are added automatically when a requested provider is not a measurement provider.",
                     },
                     "providers": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional provider IDs (e.g. ['binance', 'usgs', 'world_bank', 'vnexpress_business']).",
+                        "description": "Optional provider IDs (e.g. ['binance', 'world_bank', 'emsc_quakes', 'vnexpress_business']).",
                     },
                     "metrics": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional metric names (e.g. ['price', 'magnitude', 'temperature_2m']).",
+                        "description": "Optional metric names for measurement providers (e.g. ['price', 'temperature_2m']).",
                     },
                     "symbols": {
                         "type": "array",
@@ -430,6 +437,7 @@ async def execute_db_query_tool(
                 date_to=date_to,
                 evidence_list=evidence_list,
                 redis=redis,
+                available_providers=sorted({str(p) for _i, p, _n in allowed if p}),
             )
     except ValueError as exc:
         return json.dumps({"error": str(exc), "rows": []})
@@ -891,8 +899,13 @@ async def _execute_structured_mode(
     date_to: datetime | None,
     evidence_list: list[EvidenceItem],
     redis: Any = None,
+    available_providers: list[str] | None = None,
 ) -> str:
     """Execute parameterized SQLAlchemy queries for observations and/or documents.
+
+    Documents are queried too whenever a requested provider is not a measurement provider (event and
+    news feeds store documents only). When neither table returns rows, ``available_providers`` lists the
+    active providers so the model can retry with a valid id.
 
     Query order is fixed: optional observation aggregate, observation rows, document rows, then
     evidence registration (which appends to ``evidence_list``), then the best-effort Redis
@@ -901,7 +914,10 @@ async def _execute_structured_mode(
     out: dict[str, Any] = {"mode": "structured", "aggregation": args.aggregation}
     version_pairs: list[tuple[UUID, UUID]] = []
     want_obs = args.target in ("observations", "both")
-    want_docs = args.target in ("documents", "both")
+    requested = {p.strip().lower() for p in args.providers or [] if p.strip()}
+    want_docs = args.target in ("documents", "both") or bool(
+        requested - set(MEASUREMENT_PROVIDER_IDS)
+    )
 
     obs_rows: list[Any] = []
     if want_obs:
@@ -948,6 +964,9 @@ async def _execute_structured_mode(
         out["observations"] = _serialize_observations(obs_rows, citation_map)
     if want_docs:
         out["documents"] = _serialize_documents(doc_rows_raw, citation_map)
+
+    if not obs_rows and not doc_rows_raw and available_providers:
+        out["available_providers"] = available_providers
 
     if redis is not None and callable(getattr(redis, "get", None)):
         hot_snapshots = await _hot_cache_snapshots(redis, workspace_id, allowed_source_ids)
