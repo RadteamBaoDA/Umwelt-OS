@@ -10,6 +10,7 @@ import {
   SEND_PROMPT_ERROR_TYPE,
   SEND_PROMPT_RESULT_TYPE,
 } from './bridge-constants';
+import { genUiCopy } from '../copy';
 import { blobToDataUrl, fetchImageBlob, resolveMediaUrl } from './image-loader';
 import { sendPromptParameters, validateBridgeMessage } from './sandbox-functions';
 
@@ -173,16 +174,20 @@ export function useSandboxPromptDraft({
       const fail = (message: string) => replyToFrame(replyTo, { type: SEND_PROMPT_ERROR_TYPE, id: requestId, retryable: true, message });
       const draft = onDraftPromptRef.current;
       if (disabledRef.current || !draft) {
+        // The owner sees why the widget action did nothing (the widget alone gets the English wire error).
+        onNotice?.({ kind: 'blocked', message: genUiCopy().genUiPromptBusy });
         fail('Prompt bridge is disabled');
         return;
       }
       const parsed = sendPromptParameters.safeParse({ text: rawPrompt });
       if (!parsed.success) {
+        onNotice?.({ kind: 'blocked', message: genUiCopy().genUiPromptFailed });
         fail('Invalid prompt');
         return;
       }
       const now = Date.now();
       if (isRateLimited(lastAcceptedAtRef.current, now, cooldownMs)) {
+        onNotice?.({ kind: 'blocked', message: genUiCopy().genUiPromptBusy });
         fail('Prompt rate limited');
         return;
       }

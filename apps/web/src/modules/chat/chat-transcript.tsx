@@ -333,6 +333,10 @@ export interface ChatTranscriptProps {
   streamingReasoning?: string;
   /** True after a user- or server-side cancellation; shown as a neutral status line, not an error. */
   cancelled?: boolean;
+  /** Response id of the run the user stopped; lets the transcript tell its stored answer from an older last answer. */
+  stoppedResponseId?: string | null;
+  /** Retries a stopped turn whose answer was never stored (re-sends the user prompt as an edit mutation). */
+  onRetryMessage?: (message: ChatMessage) => void;
   /** Citations retrieved for the active response run, if available. */
   streamingCitations?: Citation[];
   /** Web search outcome streamed for the active run. */
@@ -579,8 +583,9 @@ function MessageFacts({
     );
   }
   if (formattedDate) facts.push(<span key="time">{formattedDate}</span>);
+  // Keyed by the fact's own key so a fact appearing or disappearing never re-mounts its neighbours.
   return facts.map((fact, index) => (
-    <React.Fragment key={index}>
+    <React.Fragment key={React.isValidElement(fact) ? fact.key : index}>
       {index > 0 && <span aria-hidden="true">·</span>}
       {fact}
     </React.Fragment>
@@ -885,30 +890,68 @@ function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
 }
 
 /**
- * Neutral "Generation stopped" line with a Regenerate action when a latest assistant answer can be regenerated.
+ * Neutral "Generation stopped" line with one follow-up action: Regenerate for a persisted stopped answer, or Retry for a
+ * stopped turn whose answer was never stored (the last message is then the user prompt).
  *
- * @param props - Regenerate target (absent when none exists) and the regenerate handler.
+ * @param props - The regenerate target and handler, and the retry target (user prompt) and handler.
  */
-function StoppedNotice({ target, onRegenerate }: { target?: ChatMessage; onRegenerate?: (message: ChatMessage) => void }) {
+function StoppedNotice({
+  target,
+  onRegenerate,
+  retryTarget,
+  onRetryMessage,
+}: {
+  target?: ChatMessage;
+  onRegenerate?: (message: ChatMessage) => void;
+  retryTarget?: ChatMessage;
+  onRetryMessage?: (message: ChatMessage) => void;
+}) {
   const t = useTranslations('chat');
+  const action =
+    target && onRegenerate
+      ? { label: t('regenerateAnswer'), run: () => onRegenerate(target) }
+      : retryTarget && onRetryMessage
+        ? { label: t('retry'), run: () => onRetryMessage(retryTarget) }
+        : null;
   return (
     <div className="flex items-center gap-2">
       <p role="status" data-testid="chat-cancelled" className="text-xs text-muted-foreground">
         {t('cancelled')}
       </p>
-      {target && onRegenerate && (
+      {action && (
         <Button
           type="button"
           variant="ghost"
           className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
-          onClick={() => onRegenerate(target)}
+          onClick={action.run}
         >
           <RefreshCwIcon className="size-3.5" aria-hidden="true" />
-          {t('regenerateAnswer')}
+          {action.label}
         </Button>
       )}
     </div>
   );
+}
+
+/**
+ * Picks the one action a stopped generation offers: Regenerate when the stopped run's answer was stored, Retry when the
+ * turn ends at the user's prompt (full Chat only). An older answer that merely happens to be last gets neither.
+ *
+ * @param stop - Stop classification from `stopState`.
+ * @param mode - Host mode.
+ * @param regenerateTarget - Latest regenerable assistant answer, if any.
+ * @param last - Last committed message.
+ */
+function stoppedTargets(
+  stop: 'none' | 'partial' | 'persisted',
+  mode: 'drawer' | 'full',
+  regenerateTarget: ChatMessage | undefined,
+  last: ChatMessage | undefined,
+): { target?: ChatMessage; retryTarget?: ChatMessage } {
+  return {
+    target: stop === 'persisted' ? regenerateTarget : undefined,
+    retryTarget: mode === 'full' && last?.role === 'user' ? last : undefined,
+  };
 }
 
 /** Error banner with an optional Retry. */
@@ -1015,14 +1058,17 @@ function withTranscriptDefaults(props: ChatTranscriptProps) {
 
 /**
  * Classifies a settled user stop: `partial` while the stopped text is only live output, `persisted` once the stored
- * assistant answer is the last message (the live copy must then disappear, not duplicate it), `none` otherwise.
+ * assistant answer of the stopped run is the last message (the live copy must then disappear, not duplicate it), `none`
+ * otherwise. The server never stores a partial on Stop, so an older answer that is last (stopped regenerate/edit) must
+ * not hide the live partial.
  */
 function stopState(
   d: ReturnType<typeof withTranscriptDefaults>,
-  lastRole: ChatMessage['role'] | undefined,
+  last: ChatMessage | undefined,
+  stoppedResponseId: string | null | undefined,
 ): 'none' | 'partial' | 'persisted' {
   if (!d.cancelled || d.isStreaming || d.isPending) return 'none';
-  return lastRole === 'assistant' ? 'persisted' : 'partial';
+  return last?.role === 'assistant' && stoppedResponseId && last.response_id === stoppedResponseId ? 'persisted' : 'partial';
 }
 
 /**
@@ -1035,10 +1081,11 @@ function stopState(
 function transcriptVisibility(props: ChatTranscriptProps, d: ReturnType<typeof withTranscriptDefaults>) {
   const { conversationId, messages, streamingText } = props;
   // A stopped partial is committed output: once the persisted answer is the last message it replaces the bubble.
-  const stop = stopState(d, messages[messages.length - 1]?.role);
+  const stop = stopState(d, messages[messages.length - 1], props.stoppedResponseId);
   const hasLive = Boolean(streamingText || d.streamingReasoning || d.streamingUi.length > 0);
   const loadingExisting = Boolean(conversationId && props.loading);
   return {
+    stop,
     stopped: stop === 'partial',
     showStarter: messages.length === 0 && !loadingExisting && !hasLive && !d.isPending,
     showStreaming: stop !== 'persisted' && (hasLive || d.isStreaming || d.isPending || Boolean(d.activeTool)),
@@ -1108,7 +1155,7 @@ export function ChatTranscript(props: ChatTranscriptProps) {
   const t = useTranslations('chat');
   const m = useTranscriptModel(props, isStreaming || isPending);
   const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, hasUnread, jumpToLatest, widgetPromptHandler } = m;
-  const { showStarter, showStreaming, stopped } = transcriptVisibility(props, withTranscriptDefaults(props));
+  const { showStarter, showStreaming, stopped, stop } = transcriptVisibility(props, withTranscriptDefaults(props));
   const { regenerateTarget, turnStart } = latestTurnLayout(m.entries, mode, Boolean(onRegenerateMessage));
   const lastEntry = m.entries[m.entries.length - 1];
   /** Renders one committed message with the transcript-wide handlers. */
@@ -1136,7 +1183,10 @@ export function ChatTranscript(props: ChatTranscriptProps) {
     />
   );
   // Full Chat shows the evidence rail, so chip and strip clicks open it; the drawer has no rail and keeps plain links.
-  const onOpenSources = mode === 'full' ? focusCitations : undefined;
+  const onOpenSources =
+    mode === 'full'
+      ? (citations: readonly Citation[], highlighted?: Citation) => focusCitations(citations, highlighted, props.conversationId)
+      : undefined;
   const onSelectCitation = props.onSelectCitation;
 
   return (
@@ -1187,7 +1237,13 @@ export function ChatTranscript(props: ChatTranscriptProps) {
             )}
 
             {/* Cancellation is a neutral outcome chosen by the user (or the server), not a failure: no alert, no Retry. */}
-            {cancelled && !error && <StoppedNotice target={regenerateTarget} onRegenerate={onRegenerateMessage} />}
+            {cancelled && !error && (
+              <StoppedNotice
+                {...stoppedTargets(stop, mode, regenerateTarget, lastEntry?.msg)}
+                onRegenerate={onRegenerateMessage}
+                onRetryMessage={props.onRetryMessage}
+              />
+            )}
 
             {error && <TranscriptError error={error} onRetry={onRetry} />}
           </div>

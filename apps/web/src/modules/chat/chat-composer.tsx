@@ -178,7 +178,7 @@ function StopButton({ onStop }: { onStop?: () => void }) {
       className="border-destructive text-destructive hover:text-destructive"
       data-testid="chat-stop"
       aria-label={t('stopGenerating')}
-      title={`${t('stopGenerating')} (Esc)`}
+      title={t('stopGeneratingShortcut')}
     >
       <SquareIcon className="size-3.5 fill-current" aria-hidden="true" />
     </Button>

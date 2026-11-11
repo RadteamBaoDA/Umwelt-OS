@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl';
 import { AssistantThemeBanner } from './assistant-theme-banner';
 import { TodosPanel } from './todos/todos-panel';
 import { ChatContextBar } from './chat-context-bar';
-import { PromptBridgeProvider } from './generative-ui/bridge';
+import { PromptBridgeNotice, PromptBridgeProvider } from './generative-ui/bridge';
 import { UserInputRequest } from './generative-ui/components/user-input-request';
 import { ProviderGateAlert } from './provider-gate';
 import { ChatSessionHeader } from './chat-session-header';
@@ -35,6 +35,8 @@ export interface ChatSessionProps {
   onSetPinned?: (pinned: boolean) => void;
   /** Archives/restores the open conversation (full mode header menu). */
   onSetArchived?: (archived: boolean) => void;
+  /** Localized failure of the last pin/archive request, shown in the header (the history rail may be collapsed). */
+  actionError?: string | null;
   /** Full-mode header slot before the title (e.g. the mobile History switch), so the page needs no second header row. */
   headerLeading?: React.ReactNode;
   /** Full-mode header slot after the controls (e.g. the Sources sheet trigger on narrow viewports). */
@@ -59,6 +61,7 @@ function SessionInputStack({
   const { live, composer } = d;
   return (
     <>
+      <PromptBridgeNotice />
       {d.agentMode && <TodosPanel conversationId={conversationId} isStreaming={live.isStreaming} />}
       {live.inputRequest && (
         <div className="shrink-0 px-4">
@@ -102,6 +105,7 @@ export function ChatSession({
   onDeleteConversation,
   onSetPinned,
   onSetArchived,
+  actionError,
   headerLeading,
   headerTrailing,
 }: ChatSessionProps) {
@@ -113,8 +117,8 @@ export function ChatSession({
   const agent = useChatAgentRuns({ conversationId, mode, agentMode: d.agentMode, csrfToken: session.csrfToken });
   const cmd = useChatSessionCommands(d, agent, options, setThemeRequest);
   const setError = React.useCallback((message: string) => actions.patch({ error: message }), [actions]);
-  const widget = useWidgetPromptHandlers({ chatCtrl, busy: d.busy, handleSend: cmd.handleSend, setError });
   const rootRef = React.useRef<HTMLDivElement>(null);
+  const widget = useWidgetPromptHandlers({ chatCtrl, busy: d.busy, handleSend: cmd.handleSend, setError, rootRef });
   const title = d.detail.data?.title ?? '';
   const handleExport = useConversationExport(title, d.messages, mode === 'full');
   // Esc stops an in-flight generation on the full page (same action as the Stop button).
@@ -150,6 +154,7 @@ export function ChatSession({
           archived={d.detail.data?.archived}
           onSetPinned={onSetPinned}
           onSetArchived={onSetArchived}
+          actionError={actionError}
           onExportConversation={handleExport}
           onSendPrompt={widget.onTranscriptSendPrompt}
           onNewChat={cmd.handleNewChat}

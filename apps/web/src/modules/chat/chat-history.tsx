@@ -47,7 +47,8 @@ export interface ChatHistoryProps {
   /** Optional callback that collapses the containing conversation-history sidebar. */
   onCollapse?: () => void;
   /** Row-menu openers from useConversationActions; the dialogs are mounted by the owner, not by this list. */
-  actions: Pick<ConversationActions, 'rename' | 'remove' | 'setPinned' | 'setArchived'> & Partial<Pick<ConversationActions, 'flagError'>>;
+  actions: Pick<ConversationActions, 'rename' | 'remove' | 'setPinned' | 'setArchived'> &
+    Partial<Pick<ConversationActions, 'flagError' | 'clearFlagError'>>;
 }
 
 type GroupKey = 'pinned' | 'today' | 'yesterday' | 'last7' | 'last30' | 'older';
@@ -382,7 +383,7 @@ function HistoryToolbar({
         <Button
           type="button"
           onClick={onNewConversation}
-          title={`${t('newChat')} (Ctrl+Shift+O)`}
+          title={t('newChatShortcut')}
           className="flex min-w-0 flex-1 items-center justify-center gap-2 text-sm font-semibold"
         >
           <PlusIcon className="size-4" aria-hidden="true" />
@@ -455,7 +456,11 @@ export function ChatHistory({
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         showArchived={showArchived}
-        onToggleArchived={() => setShowArchived((value) => !value)}
+        onToggleArchived={() => {
+          // The failed pin/archive row may not be listed in the other view; its error would resurface stale.
+          actions.clearFlagError?.();
+          setShowArchived((value) => !value);
+        }}
       />
 
       <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1">

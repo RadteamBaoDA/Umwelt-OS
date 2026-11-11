@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PromptBridgeProvider, usePromptBridge, validateBridgeMessage } from '../bridge';
+import { PromptBridgeNotice, PromptBridgeProvider, usePromptBridge, validateBridgeMessage } from '../bridge';
 
 afterEach(() => {
   cleanup();
@@ -177,6 +177,7 @@ describe('PromptBridgeProvider sandbox hardening (F2.6)', () => {
     render(
       <PromptBridgeProvider onSendPrompt={vi.fn()} cooldownMs={0} {...props}>
         <Registrar />
+        <PromptBridgeNotice />
       </PromptBridgeProvider>,
     );
     return (data: object, source: unknown = frame) =>
@@ -262,6 +263,16 @@ describe('PromptBridgeProvider sandbox hardening (F2.6)', () => {
     });
     post({ type: 'umwelt:send-prompt', prompt: 'again', nonce: NONCE });
     expect(screen.getByTestId('widget-prompt-notice').textContent).toBe('Composer has text');
+  });
+
+  it('keeps one always-mounted live region and tells the owner when the bridge refuses a draft (R4/R5)', () => {
+    const post = mount({ onDraftPrompt: vi.fn(), disabled: true });
+    const region = screen.getByTestId('widget-prompt-notice');
+    expect(region.getAttribute('role')).toBe('status');
+    expect(region.textContent).toBe('');
+    post({ type: 'umwelt:send-prompt', prompt: 'hello', nonce: NONCE });
+    expect(screen.getByTestId('widget-prompt-notice')).toBe(region);
+    expect(region.textContent).toContain('still responding');
   });
 
   it('drops legacy wire message aliases (G8)', () => {

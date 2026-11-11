@@ -262,6 +262,22 @@ describe('useChatSend', () => {
     expect(refs.promotedSelection).toMatchObject({ conversationId: null });
   });
 
+  it.each([
+    ['a network drop', new TypeError('Failed to fetch')],
+    ['a 502 from the proxy', new ApiError(502, 'bad gateway')],
+    ['a 408 timeout', new ApiError(408, 'timeout')],
+  ])('keeps the created conversation and restores the draft on %s (the server may have committed it)', async (_n, err) => {
+    h.createConversation.mockResolvedValue({ id: 'new1' });
+    h.sendMessage.mockRejectedValue(err);
+    const { deps, chatCtrl } = makeDeps({ onConversationCreated: vi.fn() });
+    const { result } = render(deps);
+    await act(async () => {
+      await result.current.handleSend('hello');
+    });
+    expect(h.deleteConversation).not.toHaveBeenCalled();
+    expect(chatCtrl.setDraft).toHaveBeenLastCalledWith('hello');
+  });
+
   it('does not delete a conversation that already existed', async () => {
     h.sendMessage.mockRejectedValue(new ApiError(422, 'bad'));
     const { deps } = makeDeps({ conversationId: 'c1' });
@@ -334,5 +350,26 @@ describe('useChatSend', () => {
     expect(ok).toBe(false);
     expect(h.mutateMessage).toHaveBeenCalledTimes(1);
     expect(h.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('restores the stashed pre-edit draft after a successful edit (R11)', async () => {
+    const { deps, chatCtrl } = makeDeps({ conversationId: 'c1', effectiveEditingMessageId: 'm1' });
+    (deps.clearEditing as ReturnType<typeof vi.fn>).mockReturnValue('half-typed thought');
+    const { result } = render(deps);
+    await act(async () => {
+      await result.current.handleSend('edited');
+    });
+    expect(chatCtrl.setDraft).toHaveBeenLastCalledWith('half-typed thought');
+  });
+
+  it('leaves the composer draft alone for a retry that is not an edit session (R3)', async () => {
+    const { deps, chatCtrl } = makeDeps({ conversationId: 'c1' });
+    const { result } = render(deps);
+    await act(async () => {
+      await result.current.handleMessageMutation('edit', 'm1', 'same text');
+    });
+    expect(h.mutateMessage).toHaveBeenCalledTimes(1);
+    expect(h.mutateMessage.mock.calls[0][2]).toMatchObject({ action: 'edit', content: 'same text' });
+    expect(chatCtrl.setDraft).not.toHaveBeenCalled();
   });
 });

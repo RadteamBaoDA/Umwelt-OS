@@ -82,7 +82,7 @@ export function ChatDropZone({ enabled, accepting, onFiles, rootRef, className, 
       {dragging && (
         <div
           data-testid="chat-drop-overlay"
-          className="pointer-events-none absolute inset-2 z-30 flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-data bg-surface/90 text-sm font-medium text-foreground"
+          className="pointer-events-none absolute inset-2 z-30 flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-data bg-surface text-sm font-medium text-foreground"
         >
           <UploadIcon className="size-4" aria-hidden="true" />
           {t('dropFilesHint')}

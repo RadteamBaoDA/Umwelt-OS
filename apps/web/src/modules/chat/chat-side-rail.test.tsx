@@ -71,6 +71,15 @@ describe('citation focus', () => {
     expect(cards[0].textContent).toContain('Other');
   });
 
+  it('ignores a focus request made in another conversation: full list, no highlight (D1)', () => {
+    render(wrap(<ChatSideRail citations={[web, other]} conversationId="conv-2" />));
+    act(() => focusCitations([other], other, 'conv-1'));
+    const cards = screen.getAllByTestId('rail-source');
+    expect(cards).toHaveLength(2);
+    expect(cards.some((card) => card.getAttribute('aria-current') === 'true')).toBe(false);
+    expect(screen.queryByRole('button', { name: /View all/ })).toBeNull();
+  });
+
   it('"View all" restores every source of the conversation', async () => {
     render(wrap(<ChatSideRail citations={[web, other]} />));
     act(() => focusCitations([other]));

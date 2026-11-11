@@ -48,7 +48,7 @@ function ChatPageContent() {
         </div>
       </div>
 
-      <ChatSideRail citations={citations} />
+      <ChatSideRail citations={citations} conversationId={s2.chatCtrl.activeConversationId} />
       {conversationActions.dialogs}
     </div>
   );
@@ -94,7 +94,7 @@ function ChatHistoryRail({ vm }: { vm: ChatPageContentVm }) {
             className="size-11 shrink-0"
             onClick={handleNewConversation}
             aria-label={t('newChat')}
-            title={`${t('newChat')} (Ctrl+Shift+O)`}
+            title={t('newChatShortcut')}
           >
             <Plus aria-hidden="true" />
           </Button>
@@ -146,7 +146,10 @@ function ChatSessionPanel({ vm }: { vm: ChatPageContentVm }) {
           <span className="hidden min-[480px]:inline">{t('history')}</span>
         </Button>
       }
-      headerTrailing={<ChatSourcesSheet citations={citations} />}
+      actionError={
+        chatCtrl.activeConversationId && conversationActions.flagError === chatCtrl.activeConversationId ? t('historyFlagFailed') : null
+      }
+      headerTrailing={<ChatSourcesSheet citations={citations} conversationId={chatCtrl.activeConversationId} />}
       onRenameConversation={
         chatCtrl.activeConversationId
           ? () => conversationActions.rename({ id: chatCtrl.activeConversationId!, title: detail?.title ?? '' })

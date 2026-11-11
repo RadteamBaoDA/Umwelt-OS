@@ -157,4 +157,27 @@ describe('ChatHistory', () => {
     const row = screen.getByText('Title n1').closest('button')!;
     expect(row.textContent).not.toMatch(/20\d\d/);
   });
+
+  it('clears a stale pin/archive error when the archived view is toggled (D7)', async () => {
+    const clearFlagError = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+          <ChatHistory
+            activeConversationId={null}
+            onSelectConversation={vi.fn()}
+            onNewConversation={vi.fn()}
+            actions={{ ...actions, flagError: 'n1', clearFlagError }}
+          />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Show archived conversations' }));
+    expect(clearFlagError).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts the localized shortcut in the New chat title (D8)', () => {
+    renderHistory();
+    expect(screen.getByRole('button', { name: /New chat/ }).getAttribute('title')).toBe(messages['en-us'].chat.newChatShortcut);
+  });
 });

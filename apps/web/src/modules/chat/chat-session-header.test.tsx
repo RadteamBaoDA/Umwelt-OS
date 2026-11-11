@@ -64,3 +64,16 @@ describe('ChatSessionHeader pin and archive', () => {
     expect(screen.getByRole('menuitem', { name: t.renameConversation })).toBeTruthy();
   });
 });
+
+describe('ChatSessionHeader action failure and menu layout', () => {
+  it('shows the pin/archive failure in the header (rail may be collapsed) (C14)', () => {
+    renderHeader({ actionError: 'Could not update this conversation' });
+    expect(screen.getByRole('alert').textContent).toBe('Could not update this conversation');
+  });
+
+  it('separates Delete from the other menu items (D6)', async () => {
+    renderHeader({ onRenameConversation: vi.fn(), onDeleteConversation: vi.fn() });
+    await userEvent.click(screen.getByRole('button', { name: t.moreActions }));
+    expect(await screen.findByRole('separator')).toBeTruthy();
+  });
+});

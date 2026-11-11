@@ -188,9 +188,12 @@ export function ChatMarkdown({
     // Load highlight.js on the first fenced block; the effect below re-renders once it resolves.
     if (!hasFence || highlighterReady) return;
     let live = true;
-    void loadHighlighter().then(() => {
-      if (live) setHighlighterReady(true);
-    });
+    // A failed chunk load leaves fences as plain text; it must not surface as an unhandled rejection.
+    void loadHighlighter()
+      .then(() => {
+        if (live) setHighlighterReady(true);
+      })
+      .catch(() => undefined);
     return () => {
       live = false;
     };

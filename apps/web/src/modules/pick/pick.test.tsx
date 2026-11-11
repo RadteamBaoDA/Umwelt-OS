@@ -11,6 +11,23 @@ import { PickQrButton } from './pick-qr-modal';
 import { PickPhone } from './pick-phone';
 
 const SID = 'A'.repeat(22);
+const dynamicLoads = vi.hoisted(() => ({ count: 0 }));
+
+// Counts how often the lazy dialog chunk is actually requested (next/dynamic calls the loader when first rendered).
+vi.mock('next/dynamic', async () => {
+  const React = await import('react');
+  return {
+    default: (loader: () => Promise<React.ComponentType<never>>) =>
+      function Lazy(props: Record<string, unknown>) {
+        const [C, setC] = React.useState<React.ComponentType<never> | null>(null);
+        React.useEffect(() => {
+          dynamicLoads.count += 1;
+          void loader().then((c) => setC(() => c));
+        }, []);
+        return C ? React.createElement(C as React.ComponentType<Record<string, unknown>>, props) : null;
+      },
+  };
+});
 
 function json(body: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }));
@@ -50,6 +67,21 @@ describe('PickQrButton', () => {
     wrap(<PickQrButton csrfToken="t" onPrompt={vi.fn()} />);
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('does not request the dialog chunk until the button is first clicked (P8)', async () => {
+    dynamicLoads.count = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.endsWith('/status')) return json({ enabled: true });
+      if (init?.method === 'POST') return json({ session_id: SID, expires_in: 600, lan_ip: null });
+      return json({ state: 'waiting', prompt: null });
+    });
+    wrap(<PickQrButton csrfToken="t" onPrompt={vi.fn()} />);
+    const open = await screen.findByRole('button', { name: messages['en-us'].pick.open });
+    expect(dynamicLoads.count).toBe(0);
+    await userEvent.click(open);
+    await waitFor(() => expect(dynamicLoads.count).toBe(1));
   });
 
   it('shows waiting, then scanned, then delivers the picked prompt once and closes', async () => {

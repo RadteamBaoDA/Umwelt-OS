@@ -32,6 +32,8 @@ export interface ConversationActions {
   setArchived: (id: string, archived: boolean) => void;
   /** Id of the conversation whose last pin/archive request failed (cleared by the next attempt), for an inline row error. */
   flagError: string | null;
+  /** Dismisses `flagError` (e.g. when the history view changes and the failed row is no longer shown). */
+  clearFlagError: () => void;
   /** Rename and delete dialogs; mounted by the owner so they work whether or not the history list is mounted. */
   dialogs: React.ReactNode;
 }
@@ -189,6 +191,7 @@ export function useConversationActions(activeConversationId: string | null, onNe
     },
   });
   const flagMutate = flagMutation.mutate;
+  const clearFlagError = flagMutation.reset;
   const setPinned = React.useCallback((id: string, pinned: boolean) => flagMutate({ id, patch: { pinned } }), [flagMutate]);
   const setArchived = React.useCallback((id: string, archived: boolean) => flagMutate({ id, patch: { archived } }), [flagMutate]);
   const resetDelete = deleteMutation.reset;
@@ -224,5 +227,5 @@ export function useConversationActions(activeConversationId: string | null, onNe
   );
 
   const flagError = flagMutation.isError ? flagMutation.variables.id : null;
-  return { rename, remove, setPinned, setArchived, flagError, dialogs };
+  return { rename, remove, setPinned, setArchived, flagError, clearFlagError, dialogs };
 }

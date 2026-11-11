@@ -74,12 +74,15 @@ export interface PromptBridgeContextValue {
   registerFrame: (frameWindow: unknown, nonce: string, onResize?: (height: number) => void) => () => void;
   /** Whether the bridge is currently disabled (e.g. while a chat response is already streaming). */
   disabled: boolean;
+  /** Current host-side widget prompt status text (drafted / refused), or null; rendered by {@link PromptBridgeNotice}. */
+  notice: string | null;
 }
 
 const defaultBridgeContext: PromptBridgeContextValue = {
   sendPrompt: () => false,
   registerFrame: () => () => undefined,
   disabled: false,
+  notice: null,
 };
 
 /** React context providing `sendPrompt` and `registerFrame` to generative UI widgets. */
@@ -166,22 +169,14 @@ export function PromptBridgeProvider({
       sendPrompt: dispatchValidatedPrompt,
       registerFrame,
       disabled,
+      notice,
     }),
-    [dispatchValidatedPrompt, registerFrame, disabled],
+    [dispatchValidatedPrompt, registerFrame, disabled, notice],
   );
 
   return (
     <PromptBridgeContext.Provider value={contextValue}>
       {children}
-      {notice && (
-        <div
-          role="status"
-          data-testid="widget-prompt-notice"
-          className="fixed bottom-4 left-1/2 z-50 max-w-[min(92vw,32rem)] -translate-x-1/2 rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground shadow-md"
-        >
-          {notice}
-        </div>
-      )}
       <WidgetLinkConfirmDialog url={linkConfirm.pendingLink} labels={linkConfirmLabels} onResolve={linkConfirm.resolve} />
     </PromptBridgeContext.Provider>
   );
@@ -194,4 +189,19 @@ export function PromptBridgeProvider({
  */
 export function usePromptBridge(): PromptBridgeContextValue {
   return React.useContext(PromptBridgeContext);
+}
+
+/**
+ * Inline status line for widget prompt drafts. The live region is always mounted (only its text toggles) so assistive
+ * technology announces the change, and it belongs in the session stack above the composer rather than floating over it.
+ *
+ * @returns A `role="status"` container; visually empty when there is no notice.
+ */
+export function PromptBridgeNotice() {
+  const { notice } = usePromptBridge();
+  return (
+    <div role="status" data-testid="widget-prompt-notice" className={notice ? 'shrink-0 px-4' : 'sr-only'}>
+      {notice && <p className="rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground">{notice}</p>}
+    </div>
+  );
 }

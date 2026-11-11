@@ -69,6 +69,8 @@ export function SessionTranscript({ data, cmd, widget, conversationId, mode }: S
       streamingText={live.streamingText}
       streamingReasoning={live.streamingReasoning}
       cancelled={live.cancelled}
+      stoppedResponseId={live.stoppedResponseId}
+      onRetryMessage={full ? cmd.handleRetryMessage : undefined}
       streamingCitations={live.streamingCitations}
       streamingWebSearch={live.streamingWebSearch}
       activeTool={live.activeTool}

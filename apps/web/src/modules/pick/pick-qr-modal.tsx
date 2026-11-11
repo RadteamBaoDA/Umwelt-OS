@@ -20,6 +20,8 @@ const PickQrDialog = dynamic(() => import('./pick-qr-dialog').then((m) => m.Pick
 export function PickQrButton({ csrfToken, onPrompt }: { csrfToken: string; onPrompt: (prompt: string) => void }) {
   const t = useTranslations('pick');
   const [open, setOpen] = useState(false);
+  // Latch: the dynamic chunk is requested on first open, and stays mounted afterwards so the close animation can play.
+  const [everOpened, setEverOpened] = useState(false);
   const status = useQuery({
     queryKey: ['pick', 'status'],
     queryFn: ({ signal }) => pickEnabled(signal),
@@ -29,10 +31,20 @@ export function PickQrButton({ csrfToken, onPrompt }: { csrfToken: string; onPro
   if (!status.data?.enabled) return null;
   return (
     <>
-      <Button type="button" variant="ghost" size="icon" aria-label={t('open')} title={t('open')} onClick={() => setOpen(true)}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label={t('open')}
+        title={t('open')}
+        onClick={() => {
+          setEverOpened(true);
+          setOpen(true);
+        }}
+      >
         <SmartphoneIcon className="size-4" aria-hidden />
       </Button>
-      <PickQrDialog open={open} onOpenChange={setOpen} csrfToken={csrfToken} onPrompt={onPrompt} />
+      {everOpened && <PickQrDialog open={open} onOpenChange={setOpen} csrfToken={csrfToken} onPrompt={onPrompt} />}
     </>
   );
 }

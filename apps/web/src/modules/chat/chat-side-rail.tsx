@@ -13,12 +13,12 @@ import { onCitationFocus, showAllCitations, useCitationFocus } from './chat-cita
  * Source list shared by the desktop rail and mobile sheet. Opened from an answer it shows only that answer's sources
  * with the numbering of its inline chips, plus a "View all" button; otherwise it lists every source of the conversation.
  *
- * @param props - Every de-duplicated source of the conversation.
+ * @param props - Every de-duplicated source of the conversation and its id (focus requests of other conversations are ignored).
  * @returns The citation list with an optional "View all" action.
  */
-function RailSources({ citations }: { citations: Citation[] }) {
+function RailSources({ citations, conversationId }: { citations: Citation[]; conversationId?: string | null }) {
   const t = useTranslations('chat');
-  const focus = useCitationFocus();
+  const focus = useCitationFocus(conversationId);
   const known = new Set(citations.map(citationIdentity));
   // A scope left over from another conversation no longer matches anything loaded, so it is ignored.
   const scope = focus.scope && focus.scope.every((citation) => known.has(citationIdentity(citation))) ? focus.scope : null;
@@ -37,10 +37,10 @@ function RailSources({ citations }: { citations: Citation[] }) {
 /**
  * Evidence rail (320px) for the full Chat page from 1100px up. It renders only when the conversation has cited sources, and can be tucked into a 48px strip.
  *
- * @param props - Current conversation citations.
+ * @param props - Current conversation citations and id.
  * @returns Collapsible desktop evidence sidebar.
  */
-export function ChatSideRail({ citations }: { citations: Citation[] }) {
+export function ChatSideRail({ citations, conversationId }: { citations: Citation[]; conversationId?: string | null }) {
   const t = useTranslations('chat');
   const [collapsed, setCollapsed] = React.useState(false);
   // A citation click re-opens a tucked-away rail so the highlighted source is visible.
@@ -67,7 +67,7 @@ export function ChatSideRail({ citations }: { citations: Citation[] }) {
       </Button>
       {!collapsed && (
         <div id="chat-evidence-rail-content" className="w-full">
-          <RailSources citations={citations} />
+          <RailSources citations={citations} conversationId={conversationId} />
         </div>
       )}
     </aside>
@@ -77,10 +77,10 @@ export function ChatSideRail({ citations }: { citations: Citation[] }) {
 /**
  * Below-lg entry point to the evidence rail: a 44px trigger opening the same source list in a right-side Sheet.
  *
- * @param props - Citations to display.
+ * @param props - Citations to display and the conversation id they belong to.
  * @returns Trigger plus sheet; the trigger is hidden at lg where the rail is inline.
  */
-export function ChatSourcesSheet({ citations }: { citations: Citation[] }) {
+export function ChatSourcesSheet({ citations, conversationId }: { citations: Citation[]; conversationId?: string | null }) {
   const t = useTranslations('chat');
   const [open, setOpen] = React.useState(false);
   // Below 1100px the rail is hidden, so a citation click opens this sheet instead.
@@ -113,7 +113,7 @@ export function ChatSourcesSheet({ citations }: { citations: Citation[] }) {
           <SheetTitle>{t('railLabel')}</SheetTitle>
           <SheetDescription className="sr-only">{t('railSheetDescription')}</SheetDescription>
         </SheetHeader>
-        <RailSources citations={citations} />
+        <RailSources citations={citations} conversationId={conversationId} />
       </SheetContent>
     </Sheet>
   );
