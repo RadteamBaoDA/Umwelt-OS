@@ -35,9 +35,7 @@ export interface ChatSendDeps {
   openProviderGate: () => void;
   modelChoice: ChatModelPicker['value'] | null;
   webSearchRequested: boolean;
-  dbQueryEffective: boolean;
   /** Restores the per-send tool toggles (web search on, db query off) once the server accepted a send. */
-  resetToggles: () => void;
   effectiveEditingMessageId: string | null;
   /** Leaves edit mode; returns the composer draft stashed when the edit began (null when none was). */
   clearEditing: () => string | null;
@@ -148,12 +146,10 @@ async function runMessageMutation(
         client_request_id: envelope.clientRequestId,
         ...(envelope.content !== undefined ? { content: envelope.content } : {}),
         ...(d.mode === 'full' && d.webSearchRequested ? { web_search: true } : {}),
-        ...(d.dbQueryEffective ? { db_query: true } : {}),
         ...(d.modelChoice ? { provider_id: d.modelChoice.providerId, model: d.modelChoice.model } : {}),
       },
       d.csrfToken,
     );
-    d.resetToggles();
     chatCtrl.clearPendingMessageMutation(targetConversationId, envelope.clientRequestId);
     if (scope.isCurrent()) leaveEditMode(d);
     void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
@@ -331,13 +327,11 @@ async function sendAssistantMessage(
       client_request_id: clientRequestId,
       context: sendContext ?? undefined,
       ...(d.mode === 'full' && d.webSearchRequested ? { web_search: true } : {}),
-      ...(d.dbQueryEffective ? { db_query: true } : {}),
       ...(d.modelChoice ? { provider_id: d.modelChoice.providerId, model: d.modelChoice.model } : {}),
     },
     d.csrfToken,
   );
   attempt.accepted = true;
-  d.resetToggles();
   if (d.attachments.items.length && scope.isCurrent()) d.attachments.clear();
   attempt.selectionStage = false;
   if (!scope.isCurrent()) {
@@ -549,8 +543,6 @@ export function useChatSend(deps: Omit<ChatSendDeps, 'queryClient' | 't' | 'tAge
       deps.openProviderGate,
       deps.modelChoice,
       deps.webSearchRequested,
-      deps.dbQueryEffective,
-      deps.resetToggles,
       deps.effectiveEditingMessageId,
       deps.clearEditing,
       deps.selectedProfileId,

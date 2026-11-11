@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import { ChatTranscript, type EmptyCapabilities } from './chat-transcript';
-import { dbQueryToggle, useWebSearchToggle } from './chat-session-composer';
+import { useWebSearchToggle } from './chat-session-composer';
 import type { ChatSessionData, useChatSessionCommands, useWidgetPromptHandlers } from './use-chat-session';
 
 /** Props of {@link SessionTranscript}. */
@@ -27,7 +27,6 @@ function useEmptyCapabilities(data: ChatSessionData, full: boolean): EmptyCapabi
   const t = useTranslations('chat');
   const web = useWebSearchToggle(data, full);
   if (!full) return undefined;
-  const db = dbQueryToggle(data);
   const attachBlocked = data.busy || data.attachmentsUnavailable || data.attachments.full;
   const webReason = web && !web.available ? t('webSearchNotSetUp') : web?.profileBlocked ? t('webSearchProfileOnly') : undefined;
   return {
@@ -39,7 +38,6 @@ function useEmptyCapabilities(data: ChatSessionData, full: boolean): EmptyCapabi
       disabled: data.busy,
       onActivate: () => web.onChange(!web.enabled),
     },
-    dbQuery: db && { pressed: db.enabled, disabled: data.busy, onActivate: () => db.onChange(!db.enabled) },
     attach: {
       disabledReason: data.attachmentsUnavailable ? t('attachmentUnavailableBlock') : undefined,
       disabled: attachBlocked,

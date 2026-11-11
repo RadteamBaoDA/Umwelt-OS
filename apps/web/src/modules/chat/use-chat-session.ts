@@ -103,7 +103,6 @@ export function useChatSessionData({ conversationId, mode }: ChatSessionOptions)
     canAttachFiles: canAddFiles(busy, attachmentsUnavailable, attachments.full),
     // Plain Q&A (Assistant, no run pending) shows no agent or task chrome; only a specialist selection does.
     agentMode: mode === 'full' && profileBlocked,
-    dbQueryEffective: composer.dbQueryOn || chatCtrl.context?.kind === 'gadget',
     modelPicker: useChatModelPicker(),
     providerReady: useChatProviderReady(),
     webSearch: useChatWebSearch(mode, profileBlocked),
@@ -269,8 +268,6 @@ export function useChatSessionCommands(
     openProviderGate,
     modelChoice: d.modelPicker?.value ?? null,
     webSearchRequested: d.webSearch.usable && composer.webSearchOn,
-    dbQueryEffective: d.dbQueryEffective,
-    resetToggles: composer.resetToggles,
     effectiveEditingMessageId: d.effectiveEditingMessageId,
     clearEditing,
     selectedProfileId: composer.selectedProfileId,

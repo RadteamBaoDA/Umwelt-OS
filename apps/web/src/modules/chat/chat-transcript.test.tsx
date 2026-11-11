@@ -172,16 +172,13 @@ describe('ChatTranscript capability chips', () => {
   it('toggles composer options and opens the picker without sending a message', async () => {
     const onSendPrompt = vi.fn();
     const web = { pressed: false, onActivate: vi.fn() };
-    const data = { pressed: true, onActivate: vi.fn() };
     const attach = { onActivate: vi.fn() };
-    renderTranscript({ onSendPrompt, capabilities: { webSearch: web, dbQuery: data, attach } });
+    renderTranscript({ onSendPrompt, capabilities: { webSearch: web, attach } });
     expect(screen.getByTestId('capability-web').getAttribute('aria-pressed')).toBe('false');
-    expect(screen.getByTestId('capability-data').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByTestId('capability-data')).toBeNull();
     await userEvent.click(screen.getByTestId('capability-web'));
-    await userEvent.click(screen.getByTestId('capability-data'));
     await userEvent.click(screen.getByTestId('capability-attach'));
     expect(web.onActivate).toHaveBeenCalledTimes(1);
-    expect(data.onActivate).toHaveBeenCalledTimes(1);
     expect(attach.onActivate).toHaveBeenCalledTimes(1);
     expect(onSendPrompt).not.toHaveBeenCalled();
   });

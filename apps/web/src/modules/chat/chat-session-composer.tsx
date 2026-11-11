@@ -85,11 +85,6 @@ function modelBinding({ latestAssistant, modelPicker }: ChatSessionData) {
   };
 }
 
-/** Database-query toggle; specialist profiles never carry `db_query`, so it is hidden for them. */
-export function dbQueryToggle(data: ChatSessionData) {
-  return data.profileBlocked ? undefined : { enabled: data.dbQueryEffective, onChange: data.composer.setDbQueryOn };
-}
-
 /** Full-mode only composer slots: context badges, file attachments, the + menu and the send block reason. */
 function buildFullModeExtras(data: ChatSessionData, attachmentsBlocked: boolean) {
   const { attachments, composer } = data;
@@ -130,7 +125,6 @@ export function SessionComposer({ data, mode, onSend, onStop, onCancelEdit }: Se
       menu={fullExtras?.menu}
       sendBlockedBy={fullExtras?.sendBlockedBy ?? null}
       webSearch={webSearch}
-      dbQuery={dbQueryToggle(data)}
       autoFocusKey={full ? (data.chatCtrl.activeConversationId ?? '') : undefined}
     />
   );

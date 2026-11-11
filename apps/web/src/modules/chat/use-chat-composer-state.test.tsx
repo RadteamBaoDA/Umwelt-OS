@@ -3,11 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { useChatComposerState } from './use-chat-composer-state';
 
 describe('useChatComposerState', () => {
-  it('starts with web search on, db query off and the assistant profile selected', () => {
+  it('starts with web search on and the assistant profile selected', () => {
     const { result } = renderHook(() => useChatComposerState());
     expect(result.current).toMatchObject({
       webSearchOn: true,
-      dbQueryOn: false,
       contextPickerOpen: false,
       providerGateOpen: false,
       selectedProfileId: 'assistant',
@@ -33,17 +32,16 @@ describe('useChatComposerState', () => {
     expect(result.current.webSearchOn).toBe(true);
   });
 
-  it('resetToggles restores only the two tool toggles and keeps a stable identity', () => {
+  it('resetToggles restores web search on and the Assistant profile and keeps a stable identity', () => {
     const { result } = renderHook(() => useChatComposerState());
     const reset = result.current.resetToggles;
     act(() => {
       result.current.setWebSearchOn(false);
-      result.current.setDbQueryOn(true);
       result.current.setSelectedProfileId('researcher');
     });
-    expect(result.current).toMatchObject({ webSearchOn: false, dbQueryOn: true });
+    expect(result.current).toMatchObject({ webSearchOn: false, selectedProfileId: 'researcher' });
     act(() => result.current.resetToggles());
-    expect(result.current).toMatchObject({ webSearchOn: true, dbQueryOn: false, selectedProfileId: 'researcher' });
+    expect(result.current).toMatchObject({ webSearchOn: true, selectedProfileId: 'assistant' });
     expect(result.current.resetToggles).toBe(reset);
   });
 });

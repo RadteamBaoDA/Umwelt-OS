@@ -63,8 +63,6 @@ function makeDeps(over: Partial<Deps> = {}, ctrlOver: Record<string, unknown> = 
     openProviderGate: vi.fn(),
     modelChoice: null,
     webSearchRequested: false,
-    dbQueryEffective: false,
-    resetToggles: vi.fn(),
     effectiveEditingMessageId: null,
     clearEditing: vi.fn(),
     selectedProfileId: 'assistant',
@@ -121,7 +119,8 @@ describe('useChatSend', () => {
     expect(refs.selection).toEqual({ conversationId: 'new1', generation: 1 });
     expect(h.sendMessage.mock.calls[0][0]).toBe('new1');
     expect(h.sendMessage.mock.calls[0][1]).toMatchObject({ content: 'hello world' });
-    expect(deps.resetToggles).toHaveBeenCalled();
+    // C6: the web-search toggle is sticky, a send never resets it.
+    expect(h.sendMessage.mock.calls[0][1]).not.toHaveProperty('db_query');
     expect(live.patch).toHaveBeenCalledWith(expect.objectContaining({ activeResponseId: 'r1', isStreaming: true, isPending: false }));
     expect(deps.streamResponseRun).toHaveBeenCalledWith('r1', 'new1', expect.any(Function));
   });

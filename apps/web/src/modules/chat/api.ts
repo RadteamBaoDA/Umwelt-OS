@@ -176,7 +176,6 @@ export interface SendMessagePayload {
   /** Per-message opt-in; omit (never send false-by-default state) unless the user ticked it. */
   web_search?: boolean;
   /** Per-message opt-in for structured/SQL query over collected PostgreSQL datasources. */
-  db_query?: boolean;
   /** Optional per-message chat model override; both are sent together or not at all. */
   provider_id?: string;
   model?: string;
@@ -200,7 +199,6 @@ export interface MessageMutationPayload {
   /** Per-mutation opt-in; not inherited from the original message. */
   web_search?: boolean;
   /** Per-mutation opt-in for structured/SQL query over collected PostgreSQL datasources. */
-  db_query?: boolean;
   /** Optional model choice for the new answer; both fields are sent together or not at all. */
   provider_id?: string;
   model?: string;

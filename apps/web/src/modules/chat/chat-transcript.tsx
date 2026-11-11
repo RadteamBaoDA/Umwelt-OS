@@ -11,7 +11,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
-  DatabaseIcon,
   GlobeIcon,
   Loader2Icon,
   PaperclipIcon,
@@ -166,7 +165,6 @@ export interface CapabilityChip {
 /** Capability chips shown in the empty state; each key is omitted when the control does not exist for this chat. */
 export interface EmptyCapabilities {
   webSearch?: CapabilityChip;
-  dbQuery?: CapabilityChip;
   attach?: CapabilityChip;
 }
 
@@ -222,7 +220,7 @@ function CapabilityChipButton({
 }
 
 /**
- * Three capability chips (web search, collected data, attach). They flip the same composer options as the + menu or open
+ * Two capability chips (web search, attach). They flip the same composer options as the + menu or open
  * the file picker; they never send a message.
  *
  * @param props - The chip models for this chat.
@@ -230,8 +228,8 @@ function CapabilityChipButton({
  */
 function CapabilityChips({ capabilities }: { capabilities: EmptyCapabilities }) {
   const t = useTranslations('chat');
-  const { webSearch, dbQuery, attach } = capabilities;
-  if (!webSearch && !dbQuery && !attach) return null;
+  const { webSearch, attach } = capabilities;
+  if (!webSearch && !attach) return null;
   return (
     <div data-testid="capability-chips" role="group" aria-label={t('capabilitiesLabel')} className="flex flex-wrap gap-2">
       {webSearch && (
@@ -240,14 +238,6 @@ function CapabilityChips({ capabilities }: { capabilities: EmptyCapabilities }) 
           icon={<GlobeIcon className="size-3.5" aria-hidden="true" />}
           label={t('capabilityWebSearch')}
           chip={webSearch}
-        />
-      )}
-      {dbQuery && (
-        <CapabilityChipButton
-          testId="capability-data"
-          icon={<DatabaseIcon className="size-3.5" aria-hidden="true" />}
-          label={t('capabilityData')}
-          chip={dbQuery}
         />
       )}
       {attach && (
