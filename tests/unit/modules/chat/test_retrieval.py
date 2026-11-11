@@ -70,7 +70,7 @@ class TestPromptAssembler:
         assert "<retrieved_evidence>" in prompt
         assert "</retrieved_evidence>" in prompt
         assert "Document: System Arch" in prompt
-        assert str(src_id) in prompt
+        assert str(src_id) not in prompt  # ids stay out of the model-facing source line
         assert "Architecture guidelines for Umwelt OS." in prompt
 
     def test_format_grounded_context_with_entities_and_temporal(self) -> None:

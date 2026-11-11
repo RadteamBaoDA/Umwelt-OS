@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 from redis.asyncio import Redis
@@ -1063,6 +1064,23 @@ def _neutralize_angles(text: str) -> str:
     return text.replace("<", "‹").replace(">", "›")
 
 
+def _evidence_source_line(item: EvidenceItem) -> str:
+    """Model-facing source line of one evidence chunk: title, publish/observe date and source host (pure).
+
+    Internal ids stay out of the prompt (the model cites by ``[n]`` only); the date lets "latest" questions
+    order evidence and the host names the source. Missing parts are omitted.
+    """
+    when = item.published_at or item.observed_at
+    host = urlparse(item.canonical_url).hostname if item.canonical_url else None
+    parts = [f"Document: {_neutralize_angles(item.title)}"]
+    if when:
+        label = "Published" if item.published_at else "Collected"
+        parts.append(f"{label}: {when.date().isoformat()}")
+    if host:
+        parts.append(f"Source: {_neutralize_angles(host)}")
+    return " | ".join(parts)
+
+
 def format_grounded_context(context: AnswerContext) -> str:
     """Format retrieved evidence and contextual summaries into untrusted prompt delimiters.
 
@@ -1083,11 +1101,7 @@ def format_grounded_context(context: AnswerContext) -> str:
     ]
 
     for idx, item in enumerate(context.evidence, 1):
-        provenance = (
-            f"Document: {_neutralize_angles(item.title)} | Source ID: {item.source_id} | "
-            f"Doc ID: {item.document_id} | Version: {item.document_version_id} | Chunk: {item.chunk_id}"
-        )
-        parts.append(f"[{idx}] {provenance}")
+        parts.append(f"[{idx}] {_evidence_source_line(item)}")
         parts.append(_neutralize_angles(item.content.strip()))
         parts.append("")
 
@@ -1096,15 +1110,19 @@ def format_grounded_context(context: AnswerContext) -> str:
     if context.entity_summaries:
         parts.append("<entity_context>")
         for ent in context.entity_summaries:
-            desc = f": {ent.description}" if ent.description else ""
-            parts.append(f"- {ent.canonical_name or ent.name} ({ent.entity_type}){desc}")
+            desc = f": {_neutralize_angles(ent.description)}" if ent.description else ""
+            name = _neutralize_angles(ent.canonical_name or ent.name or "")
+            parts.append(f"- {name} ({_neutralize_angles(ent.entity_type)}){desc}")
         parts.append("</entity_context>")
 
     if context.temporal_summaries:
         parts.append("<temporal_context>")
         for ev in context.temporal_summaries:
             ts = f" at {ev.timestamp.isoformat()}" if ev.timestamp else ""
-            parts.append(f"- {ev.title} ({ev.event_type}){ts}: {ev.summary or ''}")
+            parts.append(
+                f"- {_neutralize_angles(ev.title)} ({_neutralize_angles(ev.event_type or '')}){ts}: "
+                f"{_neutralize_angles(ev.summary or '')}"
+            )
         parts.append("</temporal_context>")
 
     return "\n".join(parts)
