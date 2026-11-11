@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CANONICAL_STREAM_KEYS, clampReportedHeight, getStreamingStage, OpenGenerativeUIRenderer } from '../sandbox';
+import { CANONICAL_STREAM_KEYS, getStreamingStage, OpenGenerativeUIRenderer } from '../sandbox';
 import { PromptBridgeProvider } from '../bridge';
 
 afterEach(() => {
@@ -95,15 +95,18 @@ describe('OpenGenerativeUIRenderer', () => {
   });
 
   it('updates container height on umwelt:resize postMessage and opens fullscreen preview via ExportOverlay', async () => {
+    // Resize reports reach the widget through the provider's single message listener.
     render(
-      <OpenGenerativeUIRenderer
-        status="completed"
-        args={{
-          title: 'Interactive Diagram',
-          initialHeight: 280,
-          html: '<div>Diagram Nodes</div>',
-        }}
-      />,
+      <PromptBridgeProvider onSendPrompt={vi.fn()}>
+        <OpenGenerativeUIRenderer
+          status="completed"
+          args={{
+            title: 'Interactive Diagram',
+            initialHeight: 280,
+            html: '<div>Diagram Nodes</div>',
+          }}
+        />
+      </PromptBridgeProvider>,
     );
 
     const container = screen.getByTestId('sandboxed-ui-container');
@@ -121,9 +124,6 @@ describe('OpenGenerativeUIRenderer', () => {
     });
 
     expect(container.style.height).toBe('540px');
-    expect(clampReportedHeight(99999)).toBe(4000);
-    expect(clampReportedHeight(10)).toBe(50);
-    expect(clampReportedHeight(Number.NaN)).toBeNull();
 
     // Open fullscreen preview modal
     const fullscreenBtn = screen.getByTestId('generative-ui-fullscreen-btn');
@@ -236,5 +236,35 @@ describe('OpenGenerativeUIRenderer', () => {
     expect(screen.getByTestId('sandboxed-ui-container').style.height).toBe('4000px');
     rerender(<OpenGenerativeUIRenderer status="completed" args={{ html: '<p>x</p>', initialHeight: 1 }} />);
     expect(screen.getByTestId('sandboxed-ui-container').style.height).toBe('50px');
+  });
+  it('keeps the badge and streaming chip in the header row, not over the frame (G5)', () => {
+    render(<OpenGenerativeUIRenderer status="streaming" args={{ html: '<p>partial</p>', initialHeight: 280 }} />);
+    const header = screen.getByTestId('generative-ui-header');
+    const container = screen.getByTestId('sandboxed-ui-container');
+    expect(header.contains(screen.getByTestId('sandboxed-ui-badge'))).toBe(true);
+    expect(header.contains(screen.getByTestId('sandboxed-ui-placeholder'))).toBe(true);
+    expect(container.contains(screen.getByTestId('sandboxed-ui-badge'))).toBe(false);
+  });
+
+  it('shows the localized rebuilding status for a discarded widget and localized default phrases (G6/G7)', () => {
+    document.documentElement.lang = 'vi';
+    const { rerender } = render(
+      <OpenGenerativeUIRenderer
+        status="streaming"
+        payload={{ kind: 'sandboxed_ui', status: 'streaming', rebuilding: true, sandbox: { html: '<p>x</p>' } }}
+      />,
+    );
+    expect(screen.getByTestId('sandboxed-ui-placeholder').textContent).toContain('Đang dựng lại');
+    expect(screen.getByTestId('sandboxed-ui-iframe')).toBeTruthy();
+    rerender(<OpenGenerativeUIRenderer status="streaming" args={{ initialHeight: 280 }} />);
+    expect(screen.getByTestId('sandboxed-ui-placeholder').textContent).toContain('Đang phác thảo');
+    document.documentElement.lang = '';
+  });
+
+  it('labels the fullscreen frame from the catalog (G7)', async () => {
+    render(<OpenGenerativeUIRenderer status="completed" args={{ title: 'Chart', html: '<p>x</p>' }} />);
+    await userEvent.click(screen.getByTestId('generative-ui-fullscreen-btn'));
+    const frame = await screen.findByTestId('generative-ui-fullscreen-iframe');
+    expect(frame.getAttribute('title')).toBe('Chart (fullscreen preview)');
   });
 });

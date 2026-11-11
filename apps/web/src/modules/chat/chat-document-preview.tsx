@@ -24,7 +24,11 @@ export interface ChatDocumentPreviewProps {
  *
  * @param props - Document id (absent means unavailable), the preview query state and an optional custom unavailable text.
  */
-function PreviewBody({ documentId, preview, unavailableMessage }: {
+function PreviewBody({
+  documentId,
+  preview,
+  unavailableMessage,
+}: {
   documentId?: string;
   preview: { isFetching: boolean; isError: boolean; isSuccess: boolean; data?: { content: string; matches: boolean } | null };
   unavailableMessage?: string;
@@ -34,11 +38,21 @@ function PreviewBody({ documentId, preview, unavailableMessage }: {
   return (
     <>
       {!documentId && <p className="text-sm text-muted-foreground">{unavailableMessage ?? t('previewUnavailable')}</p>}
-      {documentId && preview.isFetching && <p role="status" className="text-sm text-muted-foreground">{t('previewLoading')}</p>}
-      {documentId && preview.isError && <p role="alert" className="text-sm text-destructive">{t('previewUnavailable')}</p>}
+      {documentId && preview.isFetching && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {t('previewLoading')}
+        </p>
+      )}
+      {documentId && preview.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          {t('previewUnavailable')}
+        </p>
+      )}
       {settled && !preview.data?.matches && <p className="text-sm text-muted-foreground">{t('previewVersionChanged')}</p>}
       {settled && preview.data?.matches && (
-        <pre className="max-h-[60dvh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3 text-sm text-foreground">{preview.data.content}</pre>
+        <pre className="max-h-[60dvh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-3 text-sm text-foreground">
+          {preview.data.content}
+        </pre>
       )}
     </>
   );

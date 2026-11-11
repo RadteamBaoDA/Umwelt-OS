@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PromptBridgeProvider, usePromptBridge } from '../bridge';
 import { IMAGE_RATE_MAX } from '../bridge/prompt-bridge';
 import { resolveMediaUrl } from '../bridge/image-loader';
-import { CSP_META_TAG, SANDBOX_BRIDGE_JS } from '../sandbox/frame-content';
+import { buildCspMetaTag, SANDBOX_BRIDGE_JS } from '../sandbox/frame-content';
 
 const apiRequest = vi.hoisted(() => vi.fn());
 vi.mock('@/core/api', () => ({ apiRequest }));
@@ -44,7 +44,10 @@ function imageResponse(type = 'image/png', size = 10) {
 beforeEach(() => {
   frame.postMessage.mockReset();
   apiRequest.mockReset().mockResolvedValue({ privacy: { allow_widget_remote_media: true } });
-  vi.stubGlobal('fetch', vi.fn(async () => imageResponse()));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => imageResponse()),
+  );
   URL.createObjectURL = vi.fn(() => 'blob:never');
   render(
     <PromptBridgeProvider onSendPrompt={() => undefined}>
@@ -106,17 +109,26 @@ describe('sandbox image loader bridge', () => {
   });
 
   it('rejects non-image and svg responses', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => imageResponse('text/html')));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => imageResponse('text/html')),
+    );
     ask(PROXY);
     await waitFor(() => expect(lastReply()?.type).toBe('umwelt:load-image-error'));
-    vi.stubGlobal('fetch', vi.fn(async () => imageResponse('image/svg+xml')));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => imageResponse('image/svg+xml')),
+    );
     frame.postMessage.mockClear();
     ask(PROXY, {}, 'i2');
     await waitFor(() => expect(lastReply()?.type).toBe('umwelt:load-image-error'));
   });
 
   it('rejects oversize images', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => imageResponse('image/png', 5 * 1024 * 1024 + 1)));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => imageResponse('image/png', 5 * 1024 * 1024 + 1)),
+    );
     ask(PROXY);
     await waitFor(() => expect(lastReply()?.type).toBe('umwelt:load-image-error'));
     expect(URL.createObjectURL).not.toHaveBeenCalled();
@@ -147,9 +159,9 @@ describe('sandbox image loader bridge', () => {
 
 describe('frame content', () => {
   it('keeps the CSP unchanged and exposes loadImage', () => {
-    expect(CSP_META_TAG).toContain("img-src data: blob:;");
-    expect(CSP_META_TAG).toContain("connect-src 'none'");
-    expect(CSP_META_TAG).toContain("default-src 'none'");
+    expect(buildCspMetaTag('')).toContain('img-src data: blob:;');
+    expect(buildCspMetaTag('')).toContain("connect-src 'none'");
+    expect(buildCspMetaTag('')).toContain("default-src 'none'");
     expect(SANDBOX_BRIDGE_JS).toContain('window.loadImage');
     expect(SANDBOX_BRIDGE_JS).toContain('data.dataUrl');
     expect(SANDBOX_BRIDGE_JS).not.toContain("indexOf('blob:')");

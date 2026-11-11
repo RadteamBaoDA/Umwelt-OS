@@ -33,7 +33,9 @@ export interface FrameRegistry {
   framesRef: React.MutableRefObject<Map<unknown, string>>;
   /** Per-frame image request timestamps (rate limit). */
   frameRequestsRef: React.MutableRefObject<Map<unknown, number[]>>;
-  registerFrame: (frameWindow: unknown, nonce: string) => () => void;
+  /** `contentWindow` -> height callback of frames that asked for resize reports (single listener, no per-widget one). */
+  resizeHandlersRef: React.MutableRefObject<Map<unknown, (height: number) => void>>;
+  registerFrame: (frameWindow: unknown, nonce: string, onResize?: (height: number) => void) => () => void;
   replyToFrame: (target: unknown, message: Record<string, unknown>) => void;
   /** Last accepted prompt time shared by host and sandbox prompts (single cooldown). */
   lastAcceptedAtRef: React.MutableRefObject<number | null>;
@@ -50,15 +52,18 @@ export function useFrameRegistry(): FrameRegistry {
   const framesRef = React.useRef<Map<unknown, string>>(new Map());
   const frameRequestsRef = React.useRef<Map<unknown, number[]>>(new Map());
   const lastAcceptedAtRef = React.useRef<number | null>(null);
+  const resizeHandlersRef = React.useRef<Map<unknown, (height: number) => void>>(new Map());
 
-  const registerFrame = React.useCallback((frameWindow: unknown, nonce: string) => {
+  const registerFrame = React.useCallback((frameWindow: unknown, nonce: string, onResize?: (height: number) => void) => {
     if (!frameWindow || !nonce) {
       return () => undefined;
     }
     framesRef.current.set(frameWindow, nonce);
+    if (onResize) resizeHandlersRef.current.set(frameWindow, onResize);
     return () => {
       framesRef.current.delete(frameWindow);
       frameRequestsRef.current.delete(frameWindow);
+      resizeHandlersRef.current.delete(frameWindow);
     };
   }, []);
 
@@ -72,7 +77,7 @@ export function useFrameRegistry(): FrameRegistry {
   }, []);
 
   return React.useMemo(
-    () => ({ framesRef, frameRequestsRef, registerFrame, replyToFrame, lastAcceptedAtRef }),
+    () => ({ framesRef, frameRequestsRef, resizeHandlersRef, registerFrame, replyToFrame, lastAcceptedAtRef }),
     [registerFrame, replyToFrame],
   );
 }
@@ -97,7 +102,12 @@ interface PromptHookOptions {
  *
  * @returns `(rawPrompt, replyTo?, requestId?) => accepted`.
  */
-export function useHostPromptDispatch({ frames, onSendPromptRef, disabledRef, cooldownMs }: PromptHookOptions & {
+export function useHostPromptDispatch({
+  frames,
+  onSendPromptRef,
+  disabledRef,
+  cooldownMs,
+}: PromptHookOptions & {
   onSendPromptRef: React.MutableRefObject<(prompt: string) => void | Promise<void>>;
 }) {
   const { replyToFrame, lastAcceptedAtRef } = frames;
@@ -146,14 +156,21 @@ export function useHostPromptDispatch({ frames, onSendPromptRef, disabledRef, co
  *
  * @returns `(rawPrompt, replyTo, requestId?) => void`.
  */
-export function useSandboxPromptDraft({ frames, onDraftPromptRef, disabledRef, cooldownMs }: PromptHookOptions & {
+export function useSandboxPromptDraft({
+  frames,
+  onDraftPromptRef,
+  disabledRef,
+  cooldownMs,
+  onNotice,
+}: PromptHookOptions & {
   onDraftPromptRef: React.MutableRefObject<((prompt: string) => void) | undefined>;
+  /** Host-side status line: `drafted` after the composer was filled, `blocked` with the refusal text otherwise. */
+  onNotice?: (notice: { kind: 'drafted' | 'blocked'; message?: string }) => void;
 }) {
   const { replyToFrame, lastAcceptedAtRef } = frames;
   return React.useCallback(
     (rawPrompt: string, replyTo: unknown, requestId?: string): void => {
-      const fail = (message: string) =>
-        replyToFrame(replyTo, { type: SEND_PROMPT_ERROR_TYPE, id: requestId, retryable: true, message });
+      const fail = (message: string) => replyToFrame(replyTo, { type: SEND_PROMPT_ERROR_TYPE, id: requestId, retryable: true, message });
       const draft = onDraftPromptRef.current;
       if (disabledRef.current || !draft) {
         fail('Prompt bridge is disabled');
@@ -173,12 +190,16 @@ export function useSandboxPromptDraft({ frames, onDraftPromptRef, disabledRef, c
       replyToFrame(replyTo, { type: SEND_PROMPT_ACK_TYPE, id: requestId });
       try {
         draft(parsed.data.text);
+        onNotice?.({ kind: 'drafted' });
         replyToFrame(replyTo, { type: SEND_PROMPT_RESULT_TYPE, id: requestId, ok: true, drafted: true });
       } catch (err) {
-        fail(err instanceof Error ? err.message : String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        // The widget alone sees the retryable error; the owner needs to know why nothing happened too.
+        onNotice?.({ kind: 'blocked', message });
+        fail(message);
       }
     },
-    [cooldownMs, replyToFrame, lastAcceptedAtRef, disabledRef, onDraftPromptRef],
+    [cooldownMs, replyToFrame, lastAcceptedAtRef, disabledRef, onDraftPromptRef, onNotice],
   );
 }
 
@@ -205,9 +226,9 @@ function admitImageRequest(requests: Map<unknown, number[]>, source: unknown, no
 function readRemoteMediaAllowed(cacheRef: React.MutableRefObject<{ allowed: Promise<boolean>; at: number } | null>): Promise<boolean> {
   let cached = cacheRef.current;
   if (!cached || Date.now() - cached.at > PRIVACY_CACHE_MS) {
-    const allowed = apiRequest<{ privacy?: { allow_widget_remote_media?: boolean } }>(
-      '/api/v1/settings/ai',
-    ).then((settings) => settings.privacy?.allow_widget_remote_media === true);
+    const allowed = apiRequest<{ privacy?: { allow_widget_remote_media?: boolean } }>('/api/v1/settings/ai').then(
+      (settings) => settings.privacy?.allow_widget_remote_media === true,
+    );
     cached = { allowed, at: Date.now() };
     cacheRef.current = cached;
     const entry = cached;
@@ -232,8 +253,7 @@ export function useWidgetImageLoader(frames: FrameRegistry) {
   const privacyCacheRef = React.useRef<{ allowed: Promise<boolean>; at: number } | null>(null);
   return React.useCallback(
     async (source: unknown, id: string, rawUrl: string) => {
-      const fail = (message: string) =>
-        replyToFrame(source, { type: LOAD_IMAGE_ERROR_TYPE, id, message });
+      const fail = (message: string) => replyToFrame(source, { type: LOAD_IMAGE_ERROR_TYPE, id, message });
       const url = resolveMediaUrl(rawUrl, window.location.origin);
       if (!url) {
         fail('Image URL not allowed');
@@ -265,16 +285,20 @@ export function useWidgetImageLoader(frames: FrameRegistry) {
 
 /**
  * Attaches the single window `message` listener owning frame -> host messages (send-prompt, resize, load-image,
- * open-link). Unauthenticated or malformed messages are dropped by `validateBridgeMessage`.
+ * open-link). Resize reports go to the callback the frame registered (already clamped by `validateBridgeMessage`). Unauthenticated or malformed messages are dropped by `validateBridgeMessage`.
  */
-export function useBridgeMessageListener({ frames, onResizeRef, draftSandboxPrompt, handleLoadImage, requestLink }: {
+export function useBridgeMessageListener({
+  frames,
+  draftSandboxPrompt,
+  handleLoadImage,
+  requestLink,
+}: {
   frames: FrameRegistry;
-  onResizeRef: React.MutableRefObject<((height: number, source: unknown) => void) | undefined>;
   draftSandboxPrompt: (rawPrompt: string, replyTo: unknown, requestId?: string) => void;
   handleLoadImage: (source: unknown, id: string, rawUrl: string) => Promise<void>;
   requestLink: (url: string, source: unknown) => void;
 }): void {
-  const { framesRef } = frames;
+  const { framesRef, resizeHandlersRef } = frames;
   React.useEffect(() => {
     const handleWindowMessage = (event: MessageEvent) => {
       const validated = validateBridgeMessage(event, { frames: framesRef.current });
@@ -286,7 +310,7 @@ export function useBridgeMessageListener({ frames, onResizeRef, draftSandboxProm
       if (validated.type === 'send-prompt') {
         draftSandboxPrompt(validated.prompt, event.source, validated.id);
       } else if (validated.type === 'resize') {
-        onResizeRef.current?.(validated.height, event.source);
+        resizeHandlersRef.current.get(event.source)?.(validated.height);
       } else if (validated.type === 'load-image') {
         void handleLoadImage(event.source, validated.id, validated.url);
       } else if (validated.type === 'open-link') {
@@ -299,5 +323,5 @@ export function useBridgeMessageListener({ frames, onResizeRef, draftSandboxProm
     return () => {
       window.removeEventListener('message', handleWindowMessage);
     };
-  }, [draftSandboxPrompt, handleLoadImage, requestLink, framesRef, onResizeRef]);
+  }, [draftSandboxPrompt, handleLoadImage, requestLink, framesRef, resizeHandlersRef]);
 }

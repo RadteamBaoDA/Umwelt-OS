@@ -32,17 +32,17 @@ export type ValidatedBridgeMessage =
       prompt: string;
       /** Optional request id echoed back in the host's result/error reply. */
       id?: string;
-      rawType: 'umwelt:send-prompt' | 'sendPrompt' | 'opengenui:send-prompt';
+      rawType: 'umwelt:send-prompt';
     }
   | {
       type: 'resize';
       height: number;
-      rawType: 'umwelt:resize' | 'resize' | '__ogui_resize';
+      rawType: 'umwelt:resize';
     }
   | {
       type: 'open-link';
       url: string;
-      rawType: 'umwelt:open-link' | 'openLink';
+      rawType: 'umwelt:open-link';
     }
   | {
       type: 'load-image';
@@ -70,10 +70,7 @@ export interface ValidateBridgeMessageOptions {
  * @param allowedOrigins - Optional allowlist of origins.
  * @returns `true` if the URL is safe to open in a new tab.
  */
-export function isAllowedLinkUrl(
-  url: string,
-  allowedOrigins?: readonly string[],
-): boolean {
+export function isAllowedLinkUrl(url: string, allowedOrigins?: readonly string[]): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -94,7 +91,7 @@ export function isAllowedLinkUrl(
  * Fail-closed: requires `event.source` to be a registered sandbox window, `event.origin` to be the
  * opaque `'null'` (sandboxed srcdoc) or the host origin, and `data.nonce` to equal that frame's
  * nonce. Then discriminates the message `type`
- * (`'umwelt:send-prompt' | 'sendPrompt' | 'umwelt:resize' | 'resize'`),
+ * (`umwelt:send-prompt`, `umwelt:resize`, `umwelt:open-link`, `umwelt:load-image`),
  * enforces prompt non-empty & max-length bounds (`1..4000`), and clamps resize heights (`50..4000`).
  *
  * @param event - Incoming `MessageEvent` or `{ data, source }` envelope.
@@ -108,13 +105,13 @@ export function validateBridgeMessage(
   const record = authenticateBridgeEvent(event, options);
   if (!record) return null;
   const rawType = record.type;
-  if (rawType === 'umwelt:send-prompt' || rawType === 'sendPrompt' || rawType === 'opengenui:send-prompt') {
+  if (rawType === 'umwelt:send-prompt') {
     return parseSendPrompt(record, rawType);
   }
-  if (rawType === 'umwelt:resize' || rawType === 'resize' || rawType === '__ogui_resize') {
+  if (rawType === 'umwelt:resize') {
     return parseResize(record, rawType);
   }
-  if (rawType === 'umwelt:open-link' || rawType === 'openLink') {
+  if (rawType === 'umwelt:open-link') {
     return parseOpenLink(record, rawType);
   }
   if (rawType === 'umwelt:load-image') {
@@ -167,12 +164,7 @@ type BridgeRaw<K extends ValidatedBridgeMessage['type']> = Extract<ValidatedBrid
 
 /** Prompt request: text comes from `prompt` or `text` and must satisfy the shared send-prompt schema (1..4000 chars). */
 function parseSendPrompt(record: Record<string, unknown>, rawType: BridgeRaw<'send-prompt'>): ValidatedBridgeMessage | null {
-  const candidate =
-    typeof record.prompt === 'string'
-      ? record.prompt
-      : typeof record.text === 'string'
-        ? record.text
-        : null;
+  const candidate = typeof record.prompt === 'string' ? record.prompt : typeof record.text === 'string' ? record.text : null;
   if (candidate === null) {
     return null;
   }
@@ -194,10 +186,7 @@ function parseResize(record: Record<string, unknown>, rawType: BridgeRaw<'resize
   if (typeof rawHeight !== 'number' || !Number.isFinite(rawHeight) || rawHeight <= 0) {
     return null;
   }
-  const clampedHeight = Math.max(
-    MIN_SANDBOX_HEIGHT,
-    Math.min(MAX_SANDBOX_HEIGHT, Math.ceil(rawHeight)),
-  );
+  const clampedHeight = Math.max(MIN_SANDBOX_HEIGHT, Math.min(MAX_SANDBOX_HEIGHT, Math.ceil(rawHeight)));
   return {
     type: 'resize',
     height: clampedHeight,

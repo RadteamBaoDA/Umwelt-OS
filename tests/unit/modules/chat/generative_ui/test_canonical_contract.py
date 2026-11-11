@@ -71,3 +71,19 @@ def test_sandboxed_ui_args_rejects_inline_style_and_preserves_canonical_order() 
     )
     ordered = args.to_ordered_dict()
     assert tuple(ordered.keys()) == CANONICAL_SANDBOX_PARAM_ORDER
+
+
+def test_prompt_describes_draft_only_send_prompt_and_data_urls() -> None:
+    """sendPrompt only drafts into the composer and loadImage returns `data:` URLs (G2/G7)."""
+    from modules.chat.generative_ui.prompt import build_generative_ui_system_prompt
+
+    assert "only placed in the user's message box" in SYSTEM_PROMPT
+    assert "reason further" not in SYSTEM_PROMPT
+    prompt = build_generative_ui_system_prompt(locale="en-US", remote_media=True)
+    assert "blob:" not in prompt
+    assert "`data:` URL" in prompt
+
+
+def test_sandbox_args_default_placeholders_are_locale_neutral() -> None:
+    """No English default text server-side; the client falls back to its localized phrases (G7)."""
+    assert SandboxedUiArgs(html="<p>x</p>").placeholderMessages == []

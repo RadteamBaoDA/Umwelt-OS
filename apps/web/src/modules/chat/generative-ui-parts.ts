@@ -9,29 +9,35 @@ export type UiPart = Record<string, unknown>;
  * A later snapshot of the same part replaces the earlier one in place; a payload without a
  * `part_id` (older server) is treated as the single part with the empty id.
  *
+ * A part still marked `rebuilding` (see {@link markUiPartRebuilding}) is dropped once any new snapshot arrives: the
+ * replacement round has started, so the placeholder frame has done its job.
+ *
  * @param parts Current ordered parts of the streaming turn.
  * @param next Newly received `message.ui.delta` / `message.ui.done` payload.
  * @returns A new array; the input is never mutated.
  */
 export function upsertUiPart(parts: readonly UiPart[], next: UiPart): UiPart[] {
   const id = typeof next.part_id === 'string' ? next.part_id : '';
-  const at = parts.findIndex((p) => (typeof p.part_id === 'string' ? p.part_id : '') === id);
-  if (at < 0) return [...parts, next];
-  const copy = [...parts];
+  const live = parts.some((p) => p.rebuilding === true) ? parts.filter((p) => p.rebuilding !== true) : parts;
+  const at = live.findIndex((p) => (typeof p.part_id === 'string' ? p.part_id : '') === id);
+  if (at < 0) return [...live, next];
+  const copy = [...live];
   copy[at] = next;
   return copy;
 }
 
 /**
- * Remove a streamed widget part the server reported invalid (`message.ui.discard`).
+ * Keep a streamed widget part the server reported invalid (`message.ui.discard`) visible as "rebuilding" instead of
+ * removing it: the model is asked to call the tool again, and the frame stays (without running its script again) until
+ * a replacement snapshot arrives or the run ends and the live parts are cleared.
  *
  * @param parts Current ordered parts of the streaming turn.
- * @param partId Id of the part to drop; an unknown id leaves the list unchanged.
- * @returns A new array when a part was removed, otherwise the same array.
+ * @param partId Id of the discarded part; an unknown id leaves the list unchanged.
+ * @returns A new array when a part was marked, otherwise the same array.
  */
-export function removeUiPart(parts: readonly UiPart[], partId: string): UiPart[] {
-  const next = parts.filter((p) => p.part_id !== partId);
-  return next.length === parts.length ? (parts as UiPart[]) : next;
+export function markUiPartRebuilding(parts: readonly UiPart[], partId: string): UiPart[] {
+  if (!parts.some((p) => p.part_id === partId)) return parts as UiPart[];
+  return parts.map((p) => (p.part_id === partId ? { ...p, status: 'streaming', rebuilding: true } : p));
 }
 
 /**
@@ -42,10 +48,7 @@ export function removeUiPart(parts: readonly UiPart[], partId: string): UiPart[]
  * @param message Message-like object with the optional widget fields.
  * @returns Parts in render order (possibly empty).
  */
-export function messageUiParts(message: {
-  generative_ui?: UiPart | null;
-  generative_ui_parts?: UiPart[] | null;
-}): UiPart[] {
+export function messageUiParts(message: { generative_ui?: UiPart | null; generative_ui_parts?: UiPart[] | null }): UiPart[] {
   if (Array.isArray(message.generative_ui_parts) && message.generative_ui_parts.length > 0) {
     return message.generative_ui_parts;
   }

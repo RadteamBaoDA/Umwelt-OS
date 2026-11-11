@@ -49,46 +49,61 @@ function useScrollCommands({ containerRef, followRef }: FollowState, prefersRedu
   const pinFrameRef = React.useRef<number | null>(null);
 
   /** Scrolls the transcript container, using the user's motion preference for explicit movement. */
-  const scrollToBottom = React.useCallback((smooth = false) => {
-    const element = containerRef.current;
-    if (!element) return;
-    element.scrollTo({
-      top: element.scrollHeight,
-      behavior: smooth && !prefersReducedMotion ? 'smooth' : 'auto',
-    });
-  }, [prefersReducedMotion, containerRef]);
+  const scrollToBottom = React.useCallback(
+    (smooth = false) => {
+      const element = containerRef.current;
+      if (!element) return;
+      element.scrollTo({
+        top: element.scrollHeight,
+        behavior: smooth && !prefersReducedMotion ? 'smooth' : 'auto',
+      });
+    },
+    [prefersReducedMotion, containerRef],
+  );
 
   /** Pins after layout changes for a bounded number of frames, stopping when the reader opts out. */
-  const pinToBottom = React.useCallback((frames = 30) => {
-    pinFramesRef.current = frames;
-    if (pinFrameRef.current !== null) return;
-    const tick = () => {
-      const element = containerRef.current;
-      if (!element || !followRef.current || pinFramesRef.current <= 0) {
-        pinFrameRef.current = null;
-        pinFramesRef.current = 0;
-        return;
-      }
-      pinFramesRef.current -= 1;
-      element.scrollTop = element.scrollHeight;
+  const pinToBottom = React.useCallback(
+    (frames = 30) => {
+      pinFramesRef.current = frames;
+      if (pinFrameRef.current !== null) return;
+      const tick = () => {
+        const element = containerRef.current;
+        if (!element || !followRef.current || pinFramesRef.current <= 0) {
+          pinFrameRef.current = null;
+          pinFramesRef.current = 0;
+          return;
+        }
+        pinFramesRef.current -= 1;
+        element.scrollTop = element.scrollHeight;
+        pinFrameRef.current = requestAnimationFrame(tick);
+      };
       pinFrameRef.current = requestAnimationFrame(tick);
-    };
-    pinFrameRef.current = requestAnimationFrame(tick);
-  }, [containerRef, followRef]);
+    },
+    [containerRef, followRef],
+  );
 
-  React.useEffect(() => () => {
-    if (pinFrameRef.current !== null) cancelAnimationFrame(pinFrameRef.current);
-  }, []);
+  React.useEffect(
+    () => () => {
+      if (pinFrameRef.current !== null) cancelAnimationFrame(pinFrameRef.current);
+    },
+    [],
+  );
 
   /** Smooth-scrolls the newest answer (streaming bubble, else the question) to the top of the viewport, once. */
-  const scrollToLatestAnswer = React.useCallback((messageId?: string) => {
-    const element = containerRef.current;
-    if (!element) return;
-    // Compare attribute values instead of interpolating the id into a selector: ids are server-supplied strings.
-    const byId = messageId ? Array.from(element.querySelectorAll('[data-message-id]')).find((node) => node.getAttribute('data-message-id') === messageId) : null;
-    const target = element.querySelector('[data-streaming-answer]') ?? byId ?? null;
-    (target as HTMLElement | null)?.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion ? 'auto' : 'smooth' });
-  }, [containerRef, prefersReducedMotion]);
+  const scrollToLatestAnswer = React.useCallback(
+    (messageId?: string) => {
+      const element = containerRef.current;
+      if (!element) return;
+      // Compare attribute values instead of interpolating the id into a selector: ids are server-supplied strings.
+      const byId = messageId
+        ? Array.from(element.querySelectorAll('[data-message-id]')).find((node) => node.getAttribute('data-message-id') === messageId)
+        : null;
+      // Full Chat wraps the newest turn (question + answer) so the question anchors at the top; otherwise the answer does.
+      const target = element.querySelector('[data-latest-turn]') ?? element.querySelector('[data-streaming-answer]') ?? byId ?? null;
+      (target as HTMLElement | null)?.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion ? 'auto' : 'smooth' });
+    },
+    [containerRef, prefersReducedMotion],
+  );
 
   return { scrollToBottom, pinToBottom, scrollToLatestAnswer };
 }
@@ -119,11 +134,34 @@ function useFollowNewMessages(
 }
 
 /**
+ * Keeps "at bottom" honest while content grows or shrinks without a scroll event (streamed answer below the fold).
+ *
+ * @param containerRef - Scroll container; its first child is the content column that resizes.
+ * @param setIsAtBottom - Receives the recomputed flag.
+ */
+function useContentResize(containerRef: React.RefObject<HTMLDivElement | null>, setIsAtBottom: (atBottom: boolean) => void) {
+  React.useEffect(() => {
+    const element = containerRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(() => {
+      setIsAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 40);
+    });
+    observer.observe(element);
+    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    return () => observer.disconnect();
+  }, [containerRef, setIsAtBottom]);
+}
+
+/**
  * User scroll gestures: scrolling down to the bottom zone re-engages follow; wheel-up and touch-toward-history stop it.
  *
  * @returns Bottom flag, the DOM handlers and the shared last scrollTop ref (reset on conversation change).
  */
-function useScrollGestures({ containerRef, followRef }: FollowState, setIsAtBottom: (atBottom: boolean) => void, lastScrollTopRef: React.MutableRefObject<number>) {
+function useScrollGestures(
+  { containerRef, followRef }: FollowState,
+  setIsAtBottom: (atBottom: boolean) => void,
+  lastScrollTopRef: React.MutableRefObject<number>,
+) {
   const touchStartYRef = React.useRef<number | null>(null);
 
   /** Re-engages follow only when downward movement reaches the bottom zone. */
@@ -139,9 +177,12 @@ function useScrollGestures({ containerRef, followRef }: FollowState, setIsAtBott
   }, [containerRef, followRef, lastScrollTopRef, setIsAtBottom]);
 
   /** Stops following immediately when a wheel gesture moves the reader upward. */
-  const handleWheel = React.useCallback((event: React.WheelEvent<HTMLDivElement>) => {
-    if (event.deltaY < 0) followRef.current = false;
-  }, [followRef]);
+  const handleWheel = React.useCallback(
+    (event: React.WheelEvent<HTMLDivElement>) => {
+      if (event.deltaY < 0) followRef.current = false;
+    },
+    [followRef],
+  );
 
   /** Captures a touch gesture's starting point for scroll-direction detection. */
   const handleTouchStart = React.useCallback((event: React.TouchEvent<HTMLDivElement>) => {
@@ -149,10 +190,13 @@ function useScrollGestures({ containerRef, followRef }: FollowState, setIsAtBott
   }, []);
 
   /** Stops following when a touch gesture moves the reader toward earlier messages. */
-  const handleTouchMove = React.useCallback((event: React.TouchEvent<HTMLDivElement>) => {
-    const startY = touchStartYRef.current;
-    if (startY !== null && event.touches[0]?.clientY > startY) followRef.current = false;
-  }, [followRef]);
+  const handleTouchMove = React.useCallback(
+    (event: React.TouchEvent<HTMLDivElement>) => {
+      const startY = touchStartYRef.current;
+      if (startY !== null && event.touches[0]?.clientY > startY) followRef.current = false;
+    },
+    [followRef],
+  );
 
   return { onScroll: handleScroll, onWheel: handleWheel, onTouchStart: handleTouchStart, onTouchMove: handleTouchMove };
 }
@@ -188,7 +232,9 @@ export function useChatScroll({
   const commands = useScrollCommands(state, prefersReducedMotion);
 
   // Resetting follow state when the conversation changes must happen before paint.
-  useResetOnChange([conversationId], () => { setIsAtBottom(true); });
+  useResetOnChange([conversationId], () => {
+    setIsAtBottom(true);
+  });
   React.useLayoutEffect(() => {
     loadedRef.current = false;
     followRef.current = true;
@@ -202,6 +248,15 @@ export function useChatScroll({
     if (isStreaming) scrollToLatestAnswer(lastMessageId);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fires only on the busy rising edge
   }, [isStreaming]);
+  // A new user message (send, edit) puts its turn at the top of the viewport once; the answer is not chased afterwards.
+  const prevCountRef = React.useRef(messageCount);
+  React.useLayoutEffect(() => {
+    const grew = messageCount > prevCountRef.current && prevCountRef.current > 0;
+    prevCountRef.current = messageCount;
+    if (grew && lastMessageRole === 'user') scrollToLatestAnswer(lastMessageId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires only when the count changes
+  }, [messageCount]);
+  useContentResize(containerRef, setIsAtBottom);
   const scrollHandlers = useScrollGestures(state, setIsAtBottom, lastScrollTopRef);
 
   /** Explicit "jump to latest": re-engages follow and scrolls to the end. */

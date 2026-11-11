@@ -46,7 +46,12 @@ describe('ChatComposer web search toggle', () => {
 describe('ChatComposer auto-focus', () => {
   /** Renders the composer with an auto-focus key and a pointer-type stub. */
   function renderWith(key: string | undefined, fine: boolean) {
-    vi.stubGlobal('matchMedia', (q: string) => ({ matches: fine && q.includes('fine'), media: q, addEventListener() {}, removeEventListener() {} }));
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: fine && q.includes('fine'),
+      media: q,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
     return render(
       <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
         <ChatComposer mode="full" value="" onChange={vi.fn()} onSend={vi.fn()} isStreaming={false} autoFocusKey={key} />
@@ -61,5 +66,21 @@ describe('ChatComposer auto-focus', () => {
     (document.activeElement as HTMLElement | null)?.blur();
     renderWith('c1', false);
     expect(document.activeElement).not.toBe(screen.getByRole('textbox'));
+  });
+});
+
+describe('ChatComposer edit mode', () => {
+  it('shows the banner inside the box and cancels from its button and from Escape', async () => {
+    const onCancel = vi.fn();
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <ChatComposer mode="full" value="draft" onChange={vi.fn()} onSend={vi.fn()} isStreaming={false} editing={{ onCancel }} />
+      </NextIntlClientProvider>,
+    );
+    expect(screen.getByTestId('chat-edit-banner').textContent).toContain(messages['en-us'].chat.editingPrompt);
+    await userEvent.click(screen.getByRole('button', { name: messages['en-us'].chat.cancelEdit }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    await userEvent.type(screen.getByRole('textbox'), '{Escape}');
+    expect(onCancel).toHaveBeenCalledTimes(2);
   });
 });

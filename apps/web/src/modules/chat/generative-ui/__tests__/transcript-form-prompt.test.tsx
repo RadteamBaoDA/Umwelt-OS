@@ -28,8 +28,14 @@ describe('ChatTranscript widget prompt handlers', () => {
   beforeAll(() => {
     Element.prototype.scrollTo = (() => undefined) as unknown as typeof Element.prototype.scrollTo;
     window.matchMedia = ((query: string) => ({
-      matches: false, media: query, addEventListener: () => undefined, removeEventListener: () => undefined,
-      addListener: () => undefined, removeListener: () => undefined, onchange: null, dispatchEvent: () => false,
+      matches: false,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      onchange: null,
+      dispatchEvent: () => false,
     })) as unknown as typeof window.matchMedia;
   });
 
@@ -37,12 +43,18 @@ describe('ChatTranscript widget prompt handlers', () => {
     const plain = vi.fn();
     const rejecting = vi.fn().mockRejectedValue(new Error('busy'));
     render(
-      <QueryClientProvider client={queryClient}><NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-        <ChatTranscript
-          conversationId="c1" messages={[]} isStreaming streamingUi={[form, table]}
-          onSendPrompt={plain} onWidgetSendPrompt={rejecting}
-        />
-      </NextIntlClientProvider></QueryClientProvider>,
+      <QueryClientProvider client={queryClient}>
+        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+          <ChatTranscript
+            conversationId="c1"
+            messages={[]}
+            isStreaming
+            streamingUi={[form, table]}
+            onSendPrompt={plain}
+            onWidgetSendPrompt={rejecting}
+          />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
     );
     expect(await screen.findByTestId('w-form')).toBeTruthy();
     expect(received.table).toBe(plain);

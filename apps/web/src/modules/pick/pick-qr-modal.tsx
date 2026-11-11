@@ -20,7 +20,12 @@ const PickQrDialog = dynamic(() => import('./pick-qr-dialog').then((m) => m.Pick
 export function PickQrButton({ csrfToken, onPrompt }: { csrfToken: string; onPrompt: (prompt: string) => void }) {
   const t = useTranslations('pick');
   const [open, setOpen] = useState(false);
-  const status = useQuery({ queryKey: ['pick', 'status'], queryFn: ({ signal }) => pickEnabled(signal), retry: false, staleTime: Infinity });
+  const status = useQuery({
+    queryKey: ['pick', 'status'],
+    queryFn: ({ signal }) => pickEnabled(signal),
+    retry: false,
+    staleTime: Infinity,
+  });
   if (!status.data?.enabled) return null;
   return (
     <>

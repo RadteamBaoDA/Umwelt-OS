@@ -2,11 +2,7 @@ import * as React from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  PromptBridgeProvider,
-  usePromptBridge,
-  validateBridgeMessage,
-} from '../bridge';
+import { PromptBridgeProvider, usePromptBridge, validateBridgeMessage } from '../bridge';
 
 afterEach(() => {
   cleanup();
@@ -41,15 +37,14 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
     const base = { source: win, origin: 'null' };
 
     expect(
-      validateBridgeMessage(
-        { ...base, data: { type: 'umwelt:send-prompt', prompt: '  Compare Q3 vs Q4  ', nonce: NONCE } },
-        opts,
-      ),
+      validateBridgeMessage({ ...base, data: { type: 'umwelt:send-prompt', prompt: '  Compare Q3 vs Q4  ', nonce: NONCE } }, opts),
     ).toEqual({ type: 'send-prompt', prompt: 'Compare Q3 vs Q4', rawType: 'umwelt:send-prompt' });
 
-    expect(
-      validateBridgeMessage({ ...base, data: { type: 'umwelt:resize', height: 482.4, nonce: NONCE } }, opts),
-    ).toEqual({ type: 'resize', height: 483, rawType: 'umwelt:resize' });
+    expect(validateBridgeMessage({ ...base, data: { type: 'umwelt:resize', height: 482.4, nonce: NONCE } }, opts)).toEqual({
+      type: 'resize',
+      height: 483,
+      rawType: 'umwelt:resize',
+    });
 
     for (const data of [
       { type: 'umwelt:send-prompt', prompt: '   ' },
@@ -71,26 +66,16 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
     // Missing source.
     expect(validateBridgeMessage({ data, origin: 'null' }, opts)).toBeNull();
     // Nonce mismatch / missing.
-    expect(
-      validateBridgeMessage({ data: { ...data, nonce: 'other' }, source: trusted, origin: 'null' }, opts),
-    ).toBeNull();
-    expect(
-      validateBridgeMessage({ data: { type: data.type, prompt: 'hi' }, source: trusted, origin: 'null' }, opts),
-    ).toBeNull();
+    expect(validateBridgeMessage({ data: { ...data, nonce: 'other' }, source: trusted, origin: 'null' }, opts)).toBeNull();
+    expect(validateBridgeMessage({ data: { type: data.type, prompt: 'hi' }, source: trusted, origin: 'null' }, opts)).toBeNull();
     // Foreign / missing origin.
-    expect(
-      validateBridgeMessage({ data, source: trusted, origin: 'https://evil.example' }, opts),
-    ).toBeNull();
+    expect(validateBridgeMessage({ data, source: trusted, origin: 'https://evil.example' }, opts)).toBeNull();
     expect(validateBridgeMessage({ data, source: trusted }, opts)).toBeNull();
     // Host origin is accepted.
-    expect(
-      validateBridgeMessage({ data, source: trusted, origin: window.location.origin }, opts),
-    ).not.toBeNull();
+    expect(validateBridgeMessage({ data, source: trusted, origin: window.location.origin }, opts)).not.toBeNull();
     // No frames registered (or option omitted) rejects everything.
     expect(validateBridgeMessage({ data, source: trusted, origin: 'null' })).toBeNull();
-    expect(
-      validateBridgeMessage({ data, source: trusted, origin: 'null' }, { frames: new Map() }),
-    ).toBeNull();
+    expect(validateBridgeMessage({ data, source: trusted, origin: 'null' }, { frames: new Map() })).toBeNull();
   });
 
   it('invokes onSendPrompt via context hook and rate-limits rapid duplicate submissions', async () => {
@@ -117,20 +102,18 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
 
     function Registrar() {
       const { registerFrame } = usePromptBridge();
-      React.useEffect(() => registerFrame(frame, NONCE), [registerFrame]);
+      React.useEffect(() => registerFrame(frame, NONCE, onResize), [registerFrame]);
       return null;
     }
     render(
-      <PromptBridgeProvider onSendPrompt={onSendPrompt} onDraftPrompt={onDraftPrompt} onResize={onResize} cooldownMs={0}>
+      <PromptBridgeProvider onSendPrompt={onSendPrompt} onDraftPrompt={onDraftPrompt} cooldownMs={0}>
         <Registrar />
       </PromptBridgeProvider>,
     );
 
     const post = (data: object, source: unknown = frame, origin = 'null') =>
       act(() => {
-        window.dispatchEvent(
-          new MessageEvent('message', { data, source: source as Window, origin }),
-        );
+        window.dispatchEvent(new MessageEvent('message', { data, source: source as Window, origin }));
       });
 
     post({ type: 'umwelt:send-prompt', prompt: 'bad nonce', nonce: 'x' });
@@ -144,7 +127,7 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
     expect(onDraftPrompt).toHaveBeenCalledTimes(1);
     expect(onDraftPrompt).toHaveBeenCalledWith('Drill down');
     expect(onSendPrompt).not.toHaveBeenCalled();
-    expect(onResize).toHaveBeenCalledWith(615, frame);
+    expect(onResize).toHaveBeenCalledWith(615);
     await vi.waitFor(() => expect(frame.postMessage).toHaveBeenCalled());
     expect(frame.postMessage.mock.calls[0][0]).toEqual({
       type: 'umwelt:send-prompt-ack',
@@ -180,7 +163,6 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
     expect(onSendPrompt).not.toHaveBeenCalled();
   });
 });
-
 
 describe('PromptBridgeProvider sandbox hardening (F2.6)', () => {
   const frame = { postMessage: vi.fn() };
@@ -267,5 +249,29 @@ describe('PromptBridgeProvider sandbox hardening (F2.6)', () => {
     post({ type: 'umwelt:send-prompt', prompt: 'hello', nonce: NONCE });
     expect(onDraftPrompt).toHaveBeenCalledWith('hello');
     expect(onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('shows a host-side status line when a widget drafts a prompt and when the composer refuses it (G2)', () => {
+    const onDraftPrompt = vi.fn();
+    const post = mount({ onDraftPrompt });
+    post({ type: 'umwelt:send-prompt', prompt: 'hello', nonce: NONCE });
+    expect(screen.getByTestId('widget-prompt-notice').textContent).toContain('message box');
+
+    onDraftPrompt.mockImplementation(() => {
+      throw new Error('Composer has text');
+    });
+    post({ type: 'umwelt:send-prompt', prompt: 'again', nonce: NONCE });
+    expect(screen.getByTestId('widget-prompt-notice').textContent).toBe('Composer has text');
+  });
+
+  it('drops legacy wire message aliases (G8)', () => {
+    const win = {};
+    const opts = { frames: framesFor(win) };
+    const base = { source: win, origin: 'null' };
+    for (const type of ['sendPrompt', 'opengenui:send-prompt', 'resize', '__ogui_resize', 'openLink']) {
+      expect(
+        validateBridgeMessage({ ...base, data: { type, prompt: 'x', height: 100, url: 'https://a.example', nonce: NONCE } }, opts),
+      ).toBeNull();
+    }
   });
 });

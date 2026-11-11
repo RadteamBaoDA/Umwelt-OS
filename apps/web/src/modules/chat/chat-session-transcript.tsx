@@ -31,7 +31,12 @@ function useEmptyCapabilities(data: ChatSessionData, full: boolean): EmptyCapabi
   const attachBlocked = data.busy || data.attachmentsUnavailable || data.attachments.full;
   const webReason = web && !web.available ? t('webSearchNotSetUp') : web?.profileBlocked ? t('webSearchProfileOnly') : undefined;
   return {
-    webSearch: web && { pressed: web.available && !web.profileBlocked && web.enabled, disabledReason: webReason, disabled: data.busy, onActivate: () => web.onChange(!web.enabled) },
+    webSearch: web && {
+      pressed: web.available && !web.profileBlocked && web.enabled,
+      disabledReason: webReason,
+      disabled: data.busy,
+      onActivate: () => web.onChange(!web.enabled),
+    },
     dbQuery: db && { pressed: db.enabled, disabled: data.busy, onActivate: () => db.onChange(!db.enabled) },
     attach: {
       disabledReason: data.attachmentsUnavailable ? t('attachmentUnavailableBlock') : undefined,
@@ -57,6 +62,8 @@ export function SessionTranscript({ data, cmd, widget, conversationId, mode }: S
       csrfToken={data.session.csrfToken}
       mode={mode}
       messages={data.messages}
+      loading={data.detail.isLoading}
+      editingMessageId={full && !data.pendingMessageMutation ? data.effectiveEditingMessageId : null}
       streamingText={live.streamingText}
       streamingReasoning={live.streamingReasoning}
       cancelled={live.cancelled}

@@ -10,7 +10,7 @@ import { CheckIcon, CopyIcon, DownloadIcon, Maximize2Icon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { usePromptBridge } from '../bridge';
-import { genUiCopy } from '../copy';
+import { fmt, genUiCopy } from '../copy';
 import { downloadHtmlDocument, slugify } from './export-utils';
 import { frameDocumentProps } from './frame-content';
 
@@ -38,6 +38,8 @@ export interface ExportOverlayProps {
     close?: string;
     previewDescription?: string;
   };
+  /** Content shown at the start of the header row above the frame (provenance badge, streaming status). */
+  headerLeading?: React.ReactNode;
   /** Wrapped sandboxed widget frame. */
   children?: React.ReactNode;
 }
@@ -145,7 +147,7 @@ function CopyStateIcon({ copied }: { copied: boolean }) {
   return copied ? <CheckIcon className="size-3.5 text-primary" /> : <CopyIcon className="size-3.5" />;
 }
 
-/** Hover/focus toolbar over the widget: fullscreen, copy HTML and download. */
+/** Toolbar in the widget's header row (above the frame, never over its content): fullscreen, copy HTML and download. */
 function ExportToolbar({
   labels,
   copied,
@@ -161,15 +163,12 @@ function ExportToolbar({
 }) {
   const copyText = copied ? labels.copiedHtml : labels.copyHtml;
   return (
-    <div
-      className=" absolute top-2 right-2 z-10 flex items-center gap-1.5 rounded-md border border-border bg-surface/95 p-1 opacity-90 backdrop-blur-xs transition-opacity group-hover:opacity-100 focus-within:opacity-100"
-      data-testid="generative-ui-toolbar"
-    >
+    <div className="flex items-center gap-1" data-testid="generative-ui-toolbar">
       <Button
         type="button"
         variant="ghost"
         size="sm"
-        className="min-h-9 px-2.5 py-1 text-xs"
+        className="min-h-8 px-2 py-1 text-xs"
         onClick={onExpand}
         aria-label={labels.expand}
         title={labels.expand}
@@ -182,7 +181,7 @@ function ExportToolbar({
         type="button"
         variant="ghost"
         size="sm"
-        className="min-h-9 px-2.5 py-1 text-xs"
+        className="min-h-8 px-2 py-1 text-xs"
         onClick={onCopy}
         aria-label={copyText}
         title={copyText}
@@ -195,7 +194,7 @@ function ExportToolbar({
         type="button"
         variant="outline"
         size="sm"
-        className="min-h-9 px-2.5 py-1 text-xs"
+        className="min-h-8 px-2 py-1 text-xs"
         onClick={onDownload}
         aria-label={labels.exportHtml}
         title={labels.exportHtml}
@@ -268,7 +267,7 @@ function FullscreenDialog(props: FullscreenDialogProps) {
             <iframe
               // The document travels in `name`, which does not navigate on change: remount when the HTML changes.
               key={hashString(previewHtml)}
-              title={`${title} fullscreen preview`}
+              title={fmt(genUiCopy().genUiFullscreenFrameTitle, { title })}
               sandbox="allow-scripts"
               {...frameDocumentProps(previewHtml)}
               onLoad={onPreviewLoad}
@@ -284,7 +283,7 @@ function FullscreenDialog(props: FullscreenDialogProps) {
 }
 
 /**
- * Wraps a generative UI widget with hover/focus action controls for fullscreen preview
+ * Wraps a generative UI widget with a header row holding action controls for fullscreen preview
  * and standalone `.html` file export. Fullscreen preview renders inside a strictly
  * sandboxed `<iframe sandbox="allow-scripts">` hosted in the shared `Dialog` primitive.
  *
@@ -300,6 +299,7 @@ export function ExportOverlay({
   open: controlledOpen,
   onOpenChange,
   labels,
+  headerLeading,
   children,
 }: ExportOverlayProps) {
   const [isDialogOpen, setDialogOpen] = useDialogOpen(controlledOpen, onOpenChange);
@@ -310,16 +310,20 @@ export function ExportOverlay({
   const copied = copyState === 'copied';
 
   return (
-    <div className="group relative w-full" data-testid="generative-ui-export-overlay">
-      {exportable && (
-        <ExportToolbar
-          labels={resolvedLabels}
-          copied={copied}
-          onExpand={() => setDialogOpen(true)}
-          onCopy={handleCopy}
-          onDownload={handleDownload}
-        />
-      )}
+    <div className="w-full" data-testid="generative-ui-export-overlay">
+      {/* Thin header row above the frame, like native widgets: nothing is drawn over the model's content. */}
+      <div className="mb-1.5 flex min-h-8 items-center justify-between gap-2" data-testid="generative-ui-header">
+        <div className="flex min-w-0 items-center gap-2">{headerLeading}</div>
+        {exportable && (
+          <ExportToolbar
+            labels={resolvedLabels}
+            copied={copied}
+            onExpand={() => setDialogOpen(true)}
+            onCopy={handleCopy}
+            onDownload={handleDownload}
+          />
+        )}
+      </div>
 
       {children}
 

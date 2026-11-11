@@ -9,7 +9,14 @@ import { ArrowUpIcon, CloudIcon, DatabaseIcon, FileTextIcon, GlobeIcon, Papercli
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { COMPOSER_MENU_ID } from './chat-attachments';
 import { ModelPicker, type ChatModelPicker } from './model-picker';
 
@@ -64,6 +71,8 @@ export interface ChatComposerProps {
   menu?: ComposerMenuProps;
   /** Per-chat model dropdown (full and drawer); omitted while no chat model is configured. */
   modelPicker?: ChatModelPicker;
+  /** Edit mode (full Chat): shows the "editing a previous prompt" banner inside the box; Esc or Cancel calls `onCancel`. */
+  editing?: { onCancel: () => void };
   /** When defined, the textarea takes focus each time this value changes (opening/switching a conversation), on fine pointers only. */
   autoFocusKey?: string;
 }
@@ -83,7 +92,17 @@ type ComposerShared = Pick<ChatComposerProps, 'isStreaming' | 'dbQuery' | 'model
  * @returns Event handlers and whether Send is currently allowed.
  */
 function useComposerHandlers(props: ChatComposerProps, textareaRef: React.RefObject<HTMLTextAreaElement | null>) {
-  const { value, onChange, onSend, isStreaming, disabled = false, sendBlockedBy = null, onAttachFiles, attachmentBusy = false } = props;
+  const {
+    value,
+    onChange,
+    onSend,
+    isStreaming,
+    disabled = false,
+    sendBlockedBy = null,
+    onAttachFiles,
+    attachmentBusy = false,
+    editing,
+  } = props;
 
   /** Submits the trimmed draft message if non-empty and not currently streaming. */
   const handleSend = React.useCallback(() => {
@@ -95,13 +114,18 @@ function useComposerHandlers(props: ChatComposerProps, textareaRef: React.RefObj
   /** Enter submits, Shift+Enter inserts a newline. */
   const handleKeyDown = React.useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Escape' && editing && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        editing.onCancel();
+        return;
+      }
       // Enter during IME composition commits text instead of submitting the chat turn.
       if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
         e.preventDefault();
         handleSend();
       }
     },
-    [handleSend],
+    [handleSend, editing],
   );
 
   /**
@@ -145,7 +169,15 @@ function useComposerHandlers(props: ChatComposerProps, textareaRef: React.RefObj
 function StopButton({ onStop }: { onStop?: () => void }) {
   const t = useTranslations('chat');
   return (
-    <Button type="button" variant="outline" size="icon" onClick={onStop} className="border-negative text-negative hover:text-negative" data-testid="chat-stop" aria-label={t('stopGenerating')}>
+    <Button
+      type="button"
+      variant="outline"
+      size="icon"
+      onClick={onStop}
+      className="border-negative text-negative hover:text-negative"
+      data-testid="chat-stop"
+      aria-label={t('stopGenerating')}
+    >
       <SquareIcon className="size-3.5 fill-current" aria-hidden="true" />
     </Button>
   );
@@ -186,7 +218,15 @@ function MenuTrigger({ disabled }: { disabled: boolean }) {
   const t = useTranslations('chat');
   return (
     <DropdownMenuTrigger asChild>
-      <Button id={COMPOSER_MENU_ID} type="button" variant="ghost" size="icon" className="text-muted-foreground" aria-label={t('composerMenu')} disabled={disabled}>
+      <Button
+        id={COMPOSER_MENU_ID}
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="text-muted-foreground"
+        aria-label={t('composerMenu')}
+        disabled={disabled}
+      >
         <PlusIcon className="size-4" aria-hidden="true" />
       </Button>
     </DropdownMenuTrigger>
@@ -229,7 +269,15 @@ function DrawerComposer({ dbQuery, modelPicker, isStreaming, disabled, textarea,
 }
 
 /** Web-search checkbox of the full menu, with a hint explaining why it is disabled. */
-function WebSearchMenuItem({ webSearch, checked, busy }: { webSearch: NonNullable<ChatComposerProps['webSearch']>; checked: boolean; busy: boolean }) {
+function WebSearchMenuItem({
+  webSearch,
+  checked,
+  busy,
+}: {
+  webSearch: NonNullable<ChatComposerProps['webSearch']>;
+  checked: boolean;
+  busy: boolean;
+}) {
   const t = useTranslations('chat');
   const unavailable = !webSearch.available || webSearch.profileBlocked;
   return (
@@ -258,7 +306,14 @@ function WebSearchMenuItem({ webSearch, checked, busy }: { webSearch: NonNullabl
 }
 
 /** The full-page "+" menu: add context, attach, share toggle, web search and database query. */
-function FullMenu({ menu, webSearch, webSearchChecked, dbQuery, isStreaming, disabled }: {
+function FullMenu({
+  menu,
+  webSearch,
+  webSearchChecked,
+  dbQuery,
+  isStreaming,
+  disabled,
+}: {
   menu: ComposerMenuProps;
   webSearch: ChatComposerProps['webSearch'];
   webSearchChecked: boolean;
@@ -273,11 +328,13 @@ function FullMenu({ menu, webSearch, webSearchChecked, dbQuery, isStreaming, dis
       <DropdownMenuContent align="start" side="top">
         {menu.onAddContext && (
           <DropdownMenuItem inset onSelect={menu.onAddContext}>
-            <FileTextIcon aria-hidden="true" />{t('addContext')}
+            <FileTextIcon aria-hidden="true" />
+            {t('addContext')}
           </DropdownMenuItem>
         )}
         <DropdownMenuItem inset disabled={menu.attachDisabled} onSelect={menu.onAttach}>
-          <PaperclipIcon aria-hidden="true" />{t('attach')}
+          <PaperclipIcon aria-hidden="true" />
+          {t('attach')}
         </DropdownMenuItem>
         <DropdownMenuCheckboxItem
           checked={menu.share.checked}
@@ -317,8 +374,26 @@ function ModelLine({ modelLabel, sourcesCount, hasPicker }: { modelLabel: string
   return (
     // Below sm the picker already names the model; a truncated "Mo…" line only steals width.
     <span className={`min-w-0 flex-1 truncate text-xs text-muted-foreground ${hasPicker ? 'max-sm:invisible' : ''}`}>
-      {modelText}{sourcesCount > 0 ? `${modelText ? ' · ' : ''}${t('sourcesCount', { count: sourcesCount })}` : ''}
+      {modelText}
+      {sourcesCount > 0 ? `${modelText ? ' · ' : ''}${t('sourcesCount', { count: sourcesCount })}` : ''}
     </span>
+  );
+}
+
+/** "Editing a previous prompt" banner shown at the top of the composer box, with a Cancel action. */
+function EditBanner({ onCancel }: { onCancel: () => void }) {
+  const t = useTranslations('chat');
+  return (
+    <div
+      role="status"
+      data-testid="chat-edit-banner"
+      className="flex items-center justify-between gap-3 rounded-md bg-secondary px-3 py-2 text-xs"
+    >
+      <span className="text-muted-foreground">{t('editingPrompt')}</span>
+      <Button type="button" variant="outline" className="h-8 px-2 text-xs" onClick={onCancel}>
+        {t('cancelEdit')}
+      </Button>
+    </div>
   );
 }
 
@@ -327,17 +402,41 @@ function ModelLine({ modelLabel, sourcesCount, hasPicker }: { modelLabel: string
  * matching the transcript.
  */
 function FullComposer(props: ChatComposerProps & ComposerShared) {
-  const { contextBar, attachments, textarea, action, menu, webSearch, dbQuery, modelPicker, isStreaming, disabled, modelLabel = null, sourcesCount = 0 } = props;
+  const {
+    editing,
+    contextBar,
+    attachments,
+    textarea,
+    action,
+    menu,
+    webSearch,
+    dbQuery,
+    modelPicker,
+    isStreaming,
+    disabled,
+    modelLabel = null,
+    sourcesCount = 0,
+  } = props;
   const webSearchChecked = !!webSearch && webSearch.available && !webSearch.profileBlocked && webSearch.enabled;
   const t = useTranslations('chat');
   return (
     <div className="relative shrink-0 bg-surface px-3 py-3 sm:px-5 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       <div className="mx-auto flex w-full max-w-[720px] flex-col gap-2 rounded-lg border border-control bg-surface p-3 focus-within:ring-2 focus-within:ring-data">
+        {editing && <EditBanner onCancel={editing.onCancel} />}
         {contextBar}
         {attachments}
         {textarea}
         <div className="flex items-center gap-2">
-          {menu && <FullMenu menu={menu} webSearch={webSearch} webSearchChecked={webSearchChecked} dbQuery={dbQuery} isStreaming={isStreaming} disabled={disabled} />}
+          {menu && (
+            <FullMenu
+              menu={menu}
+              webSearch={webSearch}
+              webSearchChecked={webSearchChecked}
+              dbQuery={dbQuery}
+              isStreaming={isStreaming}
+              disabled={disabled}
+            />
+          )}
           {webSearchChecked && (
             <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-web-search-badge">
               <GlobeIcon className="size-3" aria-hidden="true" />
@@ -376,6 +475,7 @@ export function ChatComposer(props: ChatComposerProps) {
   const textarea = (
     <Textarea
       ref={textareaRef}
+      data-chat-composer-input
       value={value}
       onChange={handleChange}
       onKeyDown={handleKeyDown}
@@ -390,7 +490,11 @@ export function ChatComposer(props: ChatComposerProps) {
       aria-label={t('composerPlaceholder')}
     />
   );
-  const action = isStreaming ? <StopButton onStop={onStop} /> : <SendButton onClick={handleSend} canSend={canSend} describedBy={sendBlockedBy} />;
+  const action = isStreaming ? (
+    <StopButton onStop={onStop} />
+  ) : (
+    <SendButton onClick={handleSend} canSend={canSend} describedBy={sendBlockedBy} />
+  );
   const shared: ComposerShared = { isStreaming, dbQuery, modelPicker, disabled, textarea, action };
   return mode === 'full' ? <FullComposer {...props} {...shared} /> : <DrawerComposer {...shared} />;
 }

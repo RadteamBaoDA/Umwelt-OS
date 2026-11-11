@@ -56,4 +56,41 @@ describe('useChatScroll', () => {
     });
     expect(screen.getByTestId('unread').textContent).toBe('false');
   });
+
+  it('reports not-at-bottom when content grows below the fold without a scroll event', () => {
+    let notify: () => void = () => undefined;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          notify = cb;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    function Probe() {
+      const { containerRef, isAtBottom } = useChatScroll({
+        conversationId: 'c1',
+        messageCount: 2,
+        lastMessageId: 'm',
+        lastMessageRole: 'user',
+        isStreaming: false,
+      });
+      return (
+        <div ref={containerRef} data-testid="box">
+          <span data-testid="bottom">{String(isAtBottom)}</span>
+        </div>
+      );
+    }
+    render(<Probe />);
+    const box = screen.getByTestId('box');
+    Object.defineProperty(box, 'scrollHeight', { configurable: true, value: 1000 });
+    Object.defineProperty(box, 'clientHeight', { configurable: true, value: 300 });
+    box.scrollTop = 0;
+    act(() => notify());
+    expect(screen.getByTestId('bottom').textContent).toBe('false');
+    vi.unstubAllGlobals();
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
+  });
 });

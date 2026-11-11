@@ -3,9 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ChatMarkdown } from './chat-markdown';
 import type { Citation } from './api';
 
-const citations: Citation[] = [
-  { sourceType: 'web', url: 'https://example.com/a', title: 'Example title', quote: 'Quoted overview text' },
-];
+const citations: Citation[] = [{ sourceType: 'web', url: 'https://example.com/a', title: 'Example title', quote: 'Quoted overview text' }];
 
 describe('ChatMarkdown citation tooltip', () => {
   it('shows an overview tooltip when hovering an inline citation', async () => {

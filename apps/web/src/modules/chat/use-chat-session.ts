@@ -6,6 +6,7 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { cancelResponse, chatKeys, getConversation, submitResponseInput, type ChatMessage } from './api';
 import { settleWidgetPrompt } from './generative-ui/bridge/widget-prompt';
 import { useChatAttachments } from './chat-attachments';
+import { mergeOptimistic, useOptimisticMessages } from './chat-optimistic';
 import { useChatLiveState } from './chat-live-state';
 import { useChatSessionRefs } from './chat-session-refs';
 import { useChatModelPicker } from './model-picker';
@@ -51,17 +52,23 @@ export function useChatSessionData({ conversationId, mode }: ChatSessionOptions)
   const { live, actions } = useChatLiveState();
   const refs = useChatSessionRefs({ conversationId: chatCtrl.activeConversationId, generation: chatCtrl.activeConversationGeneration });
   const composer = useChatComposerState();
-  const pendingProfileRun = conversationId ? chatCtrl.pendingSpecialistRuns[conversationId] ?? null : null;
-  const pendingMessageMutation = conversationId ? chatCtrl.pendingMessageMutations[conversationId] ?? null : null;
-  const effectiveEditingMessageId = composer.editingMessageId
-    ?? (pendingMessageMutation?.action === 'edit' ? pendingMessageMutation.targetMessageId : null);
+  const pendingProfileRun = conversationId ? (chatCtrl.pendingSpecialistRuns[conversationId] ?? null) : null;
+  const pendingMessageMutation = conversationId ? (chatCtrl.pendingMessageMutations[conversationId] ?? null) : null;
+  const effectiveEditingMessageId =
+    composer.editingMessageId ?? (pendingMessageMutation?.action === 'edit' ? pendingMessageMutation.targetMessageId : null);
   // Fetch full conversation details if conversationId is defined
   const detail = useQuery({
     queryKey: chatKeys.conversation(conversationId ?? ''),
     queryFn: () => getConversation(conversationId!),
     enabled: Boolean(conversationId),
   });
-  const messages: ChatMessage[] = React.useMemo(() => detail.data?.messages ?? [], [detail.data?.messages]);
+  const serverMessages: ChatMessage[] = React.useMemo(() => detail.data?.messages ?? [], [detail.data?.messages]);
+  // The user's own message shows at once; the server copy replaces it (matched by client_request_id) on refetch.
+  const optimisticMessages = useOptimisticMessages(conversationId, serverMessages);
+  const messages: ChatMessage[] = React.useMemo(
+    () => mergeOptimistic(serverMessages, optimisticMessages),
+    [serverMessages, optimisticMessages],
+  );
   const latestAssistant = React.useMemo(() => [...messages].reverse().find((message) => message.role === 'assistant'), [messages]);
   // Specialist-agent sends (non-assistant profile or a pending profile retry) do not carry web_search or attachments.
   const profileBlocked = composer.selectedProfileId !== 'assistant' || Boolean(pendingProfileRun);
@@ -77,8 +84,20 @@ export function useChatSessionData({ conversationId, mode }: ChatSessionOptions)
   }, [refetchDetail, queryClient]);
   useFollowupRefresh({ conversationId, messages, busy, refresh: refreshFollowup });
   return {
-    session, chatCtrl, live, actions, refs, composer, detail, messages, latestAssistant,
-    pendingProfileRun, pendingMessageMutation, effectiveEditingMessageId, profileBlocked, attachmentsUnavailable,
+    session,
+    chatCtrl,
+    live,
+    actions,
+    refs,
+    composer,
+    detail,
+    messages,
+    latestAssistant,
+    pendingProfileRun,
+    pendingMessageMutation,
+    effectiveEditingMessageId,
+    profileBlocked,
+    attachmentsUnavailable,
     busy,
     /** True while files may be added (drop zone and attach controls share the rule). */
     canAttachFiles: canAddFiles(busy, attachmentsUnavailable, attachments.full),
@@ -101,6 +120,50 @@ function canAddFiles(busy: boolean, unavailable: boolean, full: boolean): boolea
 export type ChatSessionData = ReturnType<typeof useChatSessionData>;
 
 /**
+ * Builds the append-only edit and regenerate commands of the full Chat transcript.
+ *
+ * @param d - State from {@link useChatSessionData} (controller draft and composer edit state).
+ * @param mode - Hosting mode; edit and regenerate are no-ops outside `full`.
+ * @param handleMessageMutation - Send-hook command that submits a revision or regeneration.
+ * @returns `handleEditMessage` (stashes the typed draft once, then loads the message), `handleCancelEdit` (restores the
+ * stash) and `handleRegenerateMessage` (assistant messages only).
+ */
+function useMessageEditCommands(
+  d: ChatSessionData,
+  mode: ChatSessionOptions['mode'],
+  handleMessageMutation: (action: 'regenerate' | 'edit', targetMessageId: string, content?: string) => Promise<unknown>,
+) {
+  const { chatCtrl, composer } = d;
+  const { setEditingMessageId, draftStashRef, editingMessageId } = composer;
+  const { setDraft } = chatCtrl;
+  /** Opens the full Chat composer with a user message's content for an append-only edit. */
+  const handleEditMessage = React.useCallback(
+    (message: ChatMessage) => {
+      if (mode !== 'full' || message.role !== 'user') return;
+      // Stash the typed draft once (re-editing another message keeps the original stash) so Cancel can restore it.
+      if (!editingMessageId) draftStashRef.current = chatCtrl.draft;
+      setEditingMessageId(message.id);
+      setDraft(message.content);
+    },
+    [mode, setEditingMessageId, setDraft, editingMessageId, draftStashRef, chatCtrl.draft],
+  );
+  /** Leaves edit mode and restores the draft that was in the composer before the edit began. */
+  const handleCancelEdit = React.useCallback(() => {
+    setEditingMessageId(null);
+    setDraft(draftStashRef.current ?? '');
+    draftStashRef.current = null;
+  }, [setEditingMessageId, setDraft, draftStashRef]);
+  /** Reuses the parent assistant message's captured context for a new answer branch. */
+  const handleRegenerateMessage = React.useCallback(
+    (message: ChatMessage) => {
+      if (mode === 'full' && message.role === 'assistant') void handleMessageMutation('regenerate', message.id);
+    },
+    [handleMessageMutation, mode],
+  );
+  return { handleEditMessage, handleCancelEdit, handleRegenerateMessage };
+}
+
+/**
  * Wires the stream, selection and send hooks and builds the session's remaining commands.
  *
  * @param d - State from {@link useChatSessionData}.
@@ -117,10 +180,13 @@ export function useChatSessionCommands(
 ) {
   const { conversationId, mode, onConversationCreated } = options;
   const { session, chatCtrl, live, actions, refs, composer } = d;
-  const { setProviderGateOpen, setEditingMessageId } = composer;
+  const { setProviderGateOpen, setEditingMessageId, draftStashRef } = composer;
   const { setActiveAgentRunId } = agent;
   const streamResponseRun = useChatStream(refs, actions, setThemeRequest);
-  const onSelectionReset = React.useCallback(() => { setActiveAgentRunId(null); setEditingMessageId(null); }, [setActiveAgentRunId, setEditingMessageId]);
+  const onSelectionReset = React.useCallback(() => {
+    setActiveAgentRunId(null);
+    setEditingMessageId(null);
+  }, [setActiveAgentRunId, setEditingMessageId]);
   useConversationSelection({
     refs,
     live: actions,
@@ -133,14 +199,34 @@ export function useChatSessionCommands(
     onSelectionReset,
   });
   const openProviderGate = React.useCallback(() => setProviderGateOpen(true), [setProviderGateOpen]);
-  const clearEditing = React.useCallback(() => setEditingMessageId(null), [setEditingMessageId]);
+  const clearEditing = React.useCallback(() => {
+    setEditingMessageId(null);
+    draftStashRef.current = null;
+  }, [setEditingMessageId, draftStashRef]);
   const send = useChatSend({
-    refs, live: actions, chatCtrl, csrfToken: session.csrfToken, conversationId, mode, onConversationCreated, messages: d.messages,
-    isBusy: d.busy, providerReady: d.providerReady, openProviderGate,
-    modelChoice: d.modelPicker?.value ?? null, webSearchRequested: d.webSearch.usable && composer.webSearchOn,
-    dbQueryEffective: d.dbQueryEffective, resetToggles: composer.resetToggles, effectiveEditingMessageId: d.effectiveEditingMessageId,
-    clearEditing, selectedProfileId: composer.selectedProfileId, profiles: agent.profiles.data,
-    pendingProfileRun: d.pendingProfileRun, attachments: d.attachments, setActiveAgentRunId, streamResponseRun,
+    refs,
+    live: actions,
+    chatCtrl,
+    csrfToken: session.csrfToken,
+    conversationId,
+    mode,
+    onConversationCreated,
+    messages: d.messages,
+    isBusy: d.busy,
+    providerReady: d.providerReady,
+    openProviderGate,
+    modelChoice: d.modelPicker?.value ?? null,
+    webSearchRequested: d.webSearch.usable && composer.webSearchOn,
+    dbQueryEffective: d.dbQueryEffective,
+    resetToggles: composer.resetToggles,
+    effectiveEditingMessageId: d.effectiveEditingMessageId,
+    clearEditing,
+    selectedProfileId: composer.selectedProfileId,
+    profiles: agent.profiles.data,
+    pendingProfileRun: d.pendingProfileRun,
+    attachments: d.attachments,
+    setActiveAgentRunId,
+    streamResponseRun,
   });
   const { refetch: refetchDetail } = d.detail;
   const activeResponseId = live.activeResponseId;
@@ -176,23 +262,16 @@ export function useChatSessionCommands(
   }, [resetConversation, refs, actions, setEditingMessageId, resetToggles]);
 
   /** Answers the pending user-input request so the paused run resumes (no new message or run). */
-  const handleSubmitInput = React.useCallback(async (requestId: string, answer: string): Promise<void> => {
-    if (!activeResponseId) throw new Error('No active response');
-    await submitResponseInput(activeResponseId, requestId, answer, session.csrfToken);
-  }, [activeResponseId, session.csrfToken]);
+  const handleSubmitInput = React.useCallback(
+    async (requestId: string, answer: string): Promise<void> => {
+      if (!activeResponseId) throw new Error('No active response');
+      await submitResponseInput(activeResponseId, requestId, answer, session.csrfToken);
+    },
+    [activeResponseId, session.csrfToken],
+  );
 
   const { handleMessageMutation, handleSend } = send;
-  const { setDraft } = chatCtrl;
-  /** Opens the full Chat composer with a user message's content for an append-only edit. */
-  const handleEditMessage = React.useCallback((message: ChatMessage) => {
-    if (mode !== 'full' || message.role !== 'user') return;
-    setEditingMessageId(message.id);
-    setDraft(message.content);
-  }, [mode, setEditingMessageId, setDraft]);
-  /** Reuses the parent assistant message's captured context for a new answer branch. */
-  const handleRegenerateMessage = React.useCallback((message: ChatMessage) => {
-    if (mode === 'full' && message.role === 'assistant') void handleMessageMutation('regenerate', message.id);
-  }, [handleMessageMutation, mode]);
+  const edit = useMessageEditCommands(d, mode, handleMessageMutation);
   const draft = chatCtrl.draft;
   const pendingPrompt = d.pendingProfileRun?.prompt;
   /** Resends the pending specialist prompt, the last sent content, or the draft. */
@@ -201,7 +280,7 @@ export function useChatSessionCommands(
     if (retryDraft) void handleSend(retryDraft);
   }, [pendingPrompt, refs, draft, handleSend]);
 
-  return { ...send, handleStop, handleNewChat, handleSubmitInput, handleEditMessage, handleRegenerateMessage, retryLast };
+  return { ...send, ...edit, handleStop, handleNewChat, handleSubmitInput, retryLast };
 }
 
 /**
@@ -222,18 +301,33 @@ export function useWidgetPromptHandlers(p: {
 }) {
   const t = useTranslations('chat');
   const { chatCtrl, busy, handleSend, setError } = p;
-  /** Places a widget prompt in the composer; throws (reported to the widget as retryable) when the owner already typed. */
-  const onDraftPrompt = React.useCallback((prompt: string) => {
-    if (chatCtrl.draft.trim()) throw new Error('Composer already has text');
-    chatCtrl.setDraft(prompt);
-  }, [chatCtrl]);
+  /**
+   * Places a widget prompt in the composer and moves focus there so the owner can review and send it. Throws a localized
+   * error (reported to the widget as retryable and shown by the bridge) when the owner already typed.
+   */
+  const onDraftPrompt = React.useCallback(
+    (prompt: string) => {
+      if (chatCtrl.draft.trim()) throw new Error(t('genUiPromptComposerBusy'));
+      chatCtrl.setDraft(prompt);
+      // Wait one tick so the textarea already shows the drafted text when it takes focus.
+      setTimeout(() => {
+        const input = document.querySelector<HTMLTextAreaElement>('textarea[data-chat-composer-input]');
+        input?.focus();
+        input?.scrollIntoView({ block: 'nearest' });
+      }, 0);
+    },
+    [chatCtrl, t],
+  );
   /** Submits a widget follow-up; rejects with a localized error while busy so the bridge reports a retryable failure. */
   const onSendPrompt = React.useCallback(
     (prompt: string): Promise<void> => settleWidgetPrompt(busy, () => handleSend(prompt), t('genUiPromptBusy'), t('genUiPromptFailed')),
     [handleSend, busy, t],
   );
-  const onTranscriptSendPrompt = React.useCallback((prompt: string) => {
-    onSendPrompt(prompt).catch((err: unknown) => setError(err instanceof Error ? err.message : t('genUiPromptBusy')));
-  }, [onSendPrompt, setError, t]);
+  const onTranscriptSendPrompt = React.useCallback(
+    (prompt: string) => {
+      onSendPrompt(prompt).catch((err: unknown) => setError(err instanceof Error ? err.message : t('genUiPromptBusy')));
+    },
+    [onSendPrompt, setError, t],
+  );
   return { onDraftPrompt, onSendPrompt, onTranscriptSendPrompt };
 }

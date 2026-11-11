@@ -10,7 +10,8 @@ export interface AttachedResponseStream {
 
 /** A fresh conversation created by an in-flight send, preserved across the selection change it triggers. */
 export interface PromotedSelection {
-  conversationId: string;
+  /** Null when a failed first send returns the view to a fresh thread. */
+  conversationId: string | null;
   generation: number;
   sendGeneration: number;
 }

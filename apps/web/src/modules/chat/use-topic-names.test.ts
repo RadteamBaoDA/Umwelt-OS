@@ -10,7 +10,9 @@ vi.mock('@/modules/news', () => ({ fetchTopics }));
 /** Renders the hook inside a fresh query client so cache never leaks between tests. */
 function renderHook<T>(callback: () => T) {
   const client = new QueryClient();
-  return baseRenderHook(callback, { wrapper: ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children) });
+  return baseRenderHook(callback, {
+    wrapper: ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children),
+  });
 }
 
 beforeEach(() => {

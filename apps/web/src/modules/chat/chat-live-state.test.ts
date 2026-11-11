@@ -25,17 +25,34 @@ describe('chatLiveReducer', () => {
   });
 
   it('clearOutput resets streamed output but keeps flags; clearPartial keeps web search and tool', () => {
-    const dirty = base({ streamingText: 'x', streamingReasoning: 'r', streamingUi: [{ part_id: 'p' }], isStreaming: true, activeTool: 'web_search' });
+    const dirty = base({
+      streamingText: 'x',
+      streamingReasoning: 'r',
+      streamingUi: [{ part_id: 'p' }],
+      isStreaming: true,
+      activeTool: 'web_search',
+    });
     const cleared = chatLiveReducer(dirty, { type: 'clearOutput' });
     expect(cleared).toMatchObject({ streamingText: '', streamingReasoning: '', streamingUi: [], activeTool: null, isStreaming: true });
     expect(chatLiveReducer(dirty, { type: 'clearPartial' }).activeTool).toBe('web_search');
+  });
+
+  it('uiDiscard keeps the frame as rebuilding until a replacement part or the run end clears it (G6)', () => {
+    const live = base({ streamingUi: [{ part_id: 'r1-a', status: 'completed' }] });
+    const discarded = chatLiveReducer(live, { type: 'uiDiscard', partId: 'r1-a' });
+    expect(discarded.streamingUi).toEqual([{ part_id: 'r1-a', status: 'streaming', rebuilding: true }]);
+    const replaced = chatLiveReducer(discarded, { type: 'uiUpsert', ui: { part_id: 'r2-a', status: 'streaming' } });
+    expect(replaced.streamingUi).toEqual([{ part_id: 'r2-a', status: 'streaming' }]);
+    expect(chatLiveReducer(discarded, { type: 'clearOutput' }).streamingUi).toEqual([]);
   });
 
   it('input resolution only affects the matching request and cancel only touches pending ones', () => {
     const request = { request_id: 'r1', kind: 'text' as const, prompt: 'p', options: [], slots: [], expires_at: '' };
     const pending = base({ inputRequest: { request, state: 'pending' } });
     expect(chatLiveReducer(pending, { type: 'inputResolved', resolved: { request_id: 'other', outcome: 'answered' } })).toBe(pending);
-    expect(chatLiveReducer(pending, { type: 'inputResolved', resolved: { request_id: 'r1', outcome: 'expired' } }).inputRequest?.state).toBe('expired');
+    expect(
+      chatLiveReducer(pending, { type: 'inputResolved', resolved: { request_id: 'r1', outcome: 'expired' } }).inputRequest?.state,
+    ).toBe('expired');
     expect(chatLiveReducer(pending, { type: 'cancelPendingInput' }).inputRequest?.state).toBe('cancelled');
     const answered = chatLiveReducer(pending, { type: 'inputResolved', resolved: { request_id: 'r1', outcome: 'answered', label: 'L' } });
     expect(chatLiveReducer(answered, { type: 'cancelPendingInput' })).toBe(answered);

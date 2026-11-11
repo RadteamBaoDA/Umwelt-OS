@@ -9,7 +9,7 @@ export const SEND_PROMPT_ACK_TYPE = 'umwelt:send-prompt-ack';
 /** Message type posted back to a widget iframe when the host accepted and handled its `sendPrompt`. */
 export const SEND_PROMPT_RESULT_TYPE = 'umwelt:send-prompt-result';
 
-/** Message type posted to a widget with the loaded image's `blob:` URL. */
+/** Message type posted to a widget with the loaded image as a `data:` URL. */
 export const LOAD_IMAGE_RESULT_TYPE = 'umwelt:load-image-result';
 
 /** Message type posted to a widget when an image request is refused or fails. */

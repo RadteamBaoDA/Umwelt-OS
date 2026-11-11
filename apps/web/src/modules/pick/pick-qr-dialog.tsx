@@ -33,7 +33,10 @@ function PickQrSession({ csrfToken, onPrompt, onClose }: { csrfToken: string; on
   // Callbacks live in refs so a parent re-render never restarts the session (that would burn the QR code).
   const promptRef = useRef(onPrompt);
   const closeRef = useRef(onClose);
-  useEffect(() => { promptRef.current = onPrompt; closeRef.current = onClose; });
+  useEffect(() => {
+    promptRef.current = onPrompt;
+    closeRef.current = onClose;
+  });
 
   useEffect(() => {
     const abort = new AbortController();
@@ -55,15 +58,24 @@ function PickQrSession({ csrfToken, onPrompt, onClose }: { csrfToken: string; on
       }
       timer = setTimeout(() => void tick(id), POLL_MS);
     };
-    createPickSession(csrfToken).then((session) => {
-      if (abort.signal.aborted) return;
-      setCreated(session);
-      void tick(session.session_id);
-    }).catch(() => { if (!abort.signal.aborted) setState('error'); });
-    return () => { abort.abort(); if (timer) clearTimeout(timer); };
+    createPickSession(csrfToken)
+      .then((session) => {
+        if (abort.signal.aborted) return;
+        setCreated(session);
+        void tick(session.session_id);
+      })
+      .catch(() => {
+        if (!abort.signal.aborted) setState('error');
+      });
+    return () => {
+      abort.abort();
+      if (timer) clearTimeout(timer);
+    };
   }, [csrfToken]);
 
-  const statusText = { waiting: t('waiting'), scanned: t('scanned'), picked: t('picked'), expired: t('expired'), error: t('startError') }[state];
+  const statusText = { waiting: t('waiting'), scanned: t('scanned'), picked: t('picked'), expired: t('expired'), error: t('startError') }[
+    state
+  ];
   return (
     <div className="flex flex-col items-center gap-3">
       {created && state !== 'expired' ? (
@@ -73,14 +85,24 @@ function PickQrSession({ csrfToken, onPrompt, onClose }: { csrfToken: string; on
         </div>
       ) : null}
       {created && !created.lan_ip ? <p className="text-xs text-muted-foreground">{t('noLan')}</p> : null}
-      <p role="status" className="text-sm text-muted-foreground">{statusText}</p>
+      <p role="status" className="text-sm text-muted-foreground">
+        {statusText}
+      </p>
     </div>
   );
 }
 
 /** Modal shell around {@link PickQrSession}; Radix unmounts the content on close, ending the poll. */
-export function PickQrDialog({ open, onOpenChange, csrfToken, onPrompt }: {
-  open: boolean; onOpenChange: (open: boolean) => void; csrfToken: string; onPrompt: (prompt: string) => void;
+export function PickQrDialog({
+  open,
+  onOpenChange,
+  csrfToken,
+  onPrompt,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  csrfToken: string;
+  onPrompt: (prompt: string) => void;
 }) {
   const t = useTranslations('pick');
   return (

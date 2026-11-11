@@ -6,11 +6,10 @@
  * `/vendor/genui/` (absolute origin import map), so the app must be reachable when they are opened.
  */
 
-import {
-  buildSandboxStylesheet,
-  buildImportMapScriptTag,
-  type SandboxTheme,
-} from '../design-system';
+import { buildSandboxStylesheet, buildImportMapScriptTag, type SandboxTheme } from '../design-system';
+import { resolveWidgetLocale } from '../copy';
+import type { AppLocaleId } from '@/core/i18n';
+import { buildCspMetaTag } from './frame-content';
 import { TRIP_ANIMATOR_SCRIPT } from './trip-animator';
 
 export interface StandaloneActivityContent {
@@ -50,12 +49,7 @@ export function escapeStyleClose(css: string): string {
  * @returns HTML-escaped string.
  */
 export function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 /**
@@ -86,19 +80,11 @@ function buildGeneratedScript(content: StandaloneActivityContent): string {
       : [];
 
   const scriptParts = [
-    ...(content.jsFunctions && content.jsFunctions.trim().length > 0
-      ? [escapeScriptClose(content.jsFunctions)]
-      : []),
-    ...(expressionLines.length > 0
-      ? [
-          `(async () => {\n${expressionLines.map(escapeScriptClose).join('\n')}\n})();`,
-        ]
-      : []),
+    ...(content.jsFunctions && content.jsFunctions.trim().length > 0 ? [escapeScriptClose(content.jsFunctions)] : []),
+    ...(expressionLines.length > 0 ? [`(async () => {\n${expressionLines.map(escapeScriptClose).join('\n')}\n})();`] : []),
   ];
 
-  return scriptParts.length > 0
-    ? `\n  <script>\n${scriptParts.join('\n')}\n  </script>`
-    : '';
+  return scriptParts.length > 0 ? `\n  <script>\n${scriptParts.join('\n')}\n  </script>` : '';
 }
 
 /**
@@ -106,6 +92,7 @@ function buildGeneratedScript(content: StandaloneActivityContent): string {
  * or `StandaloneActivityContent`).
  *
  * Ordering invariants:
+ * 0. The same strict CSP meta tag as the in-app frame (a downloaded file must not get open network access)
  * 1. `<script type="importmap">` (absolute app-origin URLs; needs the app reachable) first in `<head>`
  * 2. `TRIP_ANIMATOR_SCRIPT` (`window.createTripAnimator`)
  * 3. Umwelt-OS + OpenIntelligentUI Design System CSS (`buildSandboxStylesheet(theme)`)
@@ -118,38 +105,35 @@ function buildGeneratedScript(content: StandaloneActivityContent): string {
  * @param content - Widget content (`css`, `html`, `jsFunctions`, `jsExpressions`).
  * @param title - Document `<title>` (defaults to `content.title` or `'generated-widget'`).
  * @param theme - Active Umwelt-OS theme (`'light'` or `'dark'`). Defaults to `'light'`.
+ * @param locale - Locale written to `<html lang>` (defaults to the page locale).
  * @returns Complete standalone `<!DOCTYPE html>` document string.
  */
 export function buildStandaloneHtmlDocument(
   content: StandaloneActivityContent,
   title?: string,
   theme: SandboxTheme = 'light',
+  locale: AppLocaleId = resolveWidgetLocale(),
 ): string {
   // Absolute origin: a root-relative import map resolves against file:// in a downloaded copy and breaks.
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const resolvedTitle = title ?? content.title ?? 'generated-widget';
-  const body = Array.isArray(content.html)
-    ? content.html.join('')
-    : (content.html ?? '');
+  const body = Array.isArray(content.html) ? content.html.join('') : (content.html ?? '');
   const generatedScript = buildGeneratedScript(content);
 
   const themeClass = theme === 'dark' ? ' class="dark"' : '';
 
   return `<!DOCTYPE html>
-<html lang="en" data-theme="${theme}"${themeClass}>
+<html lang="${locale === 'vi-vi' ? 'vi' : 'en'}" data-theme="${theme}"${themeClass}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  ${buildCspMetaTag()}
   <title>${escapeHtml(resolvedTitle)}</title>
   ${buildImportMapScriptTag(origin)}
   ${TRIP_ANIMATOR_SCRIPT}
   <style>
 ${escapeStyleClose(buildSandboxStylesheet(theme))}
-  </style>${
-    content.css
-      ? `\n  <style>\n${escapeStyleClose(content.css)}\n  </style>`
-      : ''
-  }
+  </style>${content.css ? `\n  <style>\n${escapeStyleClose(content.css)}\n  </style>` : ''}
   <script>${STANDALONE_BRIDGE_STUB}</script>
 </head>
 <body>
@@ -157,9 +141,6 @@ ${body}${generatedScript}
 </body>
 </html>`;
 }
-
-/** Alias for `buildStandaloneHtmlDocument` matching OpenIntelligentUI naming. */
-export const assembleStandaloneHtmlFromActivity = buildStandaloneHtmlDocument;
 
 /**
  * Triggers a browser file download for a standalone HTML document string.
@@ -169,10 +150,7 @@ export const assembleStandaloneHtmlFromActivity = buildStandaloneHtmlDocument;
  * @param htmlString - Complete HTML document string to download.
  * @param filename - Target filename or title (automatically suffixed with `.html`).
  */
-export function downloadHtmlDocument(
-  htmlString: string,
-  filename = 'generated-widget.html',
-): void {
+export function downloadHtmlDocument(htmlString: string, filename = 'generated-widget.html'): void {
   const baseSlug = filename.endsWith('.html')
     ? slugify(filename.slice(0, -5)) || 'generated-widget'
     : slugify(filename) || 'generated-widget';
@@ -188,6 +166,3 @@ export function downloadHtmlDocument(
   document.body.removeChild(anchor);
   URL.revokeObjectURL(url);
 }
-
-/** Alias for `downloadHtmlDocument` matching OpenIntelligentUI naming. */
-export const triggerDownload = downloadHtmlDocument;
