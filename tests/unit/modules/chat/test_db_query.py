@@ -12,7 +12,8 @@ from core.realtime.routes import _wait_for_realtime_wakeup, notify_realtime_wake
 from modules.chat.db_query import (
     TOOL_QUERY_COLLECTED_DATA,
     build_db_query_tool_spec,
-    should_auto_enable_db_query,
+    has_collected_datasource,
+    is_gadget_turn,
     validate_readonly_sql,
 )
 from modules.chat.generative_ui.tool_specs import build_chat_tool_specs
@@ -63,18 +64,36 @@ def test_validate_readonly_sql_rejects_unsafe_or_unscoped_sql(bad_sql: str) -> N
         validate_readonly_sql(bad_sql)
 
 
-def test_should_auto_enable_db_query_triggers_on_flag_gadget_or_keywords() -> None:
-    """Auto-detection enables query_collected_data for explicit toggle, gadget context, or analytical/realtime prompts."""
-    assert should_auto_enable_db_query("Hello", {DB_QUERY_KEY: True}) is True
-    assert should_auto_enable_db_query("Hello", {DB_QUERY_KEY: {"requested": True}}) is True
-    assert should_auto_enable_db_query("Hello", {"kind": "gadget"}) is True
-    assert (
-        should_auto_enable_db_query("Hello", {GADGET_SCOPE_KEY: {"renderer": "finance_chart"}})
-        is True
-    )
-    assert should_auto_enable_db_query("What is the average BTC price today?", None) is True
-    assert should_auto_enable_db_query("Giá vàng mới nhất và thống kê biến động?", None) is True
-    assert should_auto_enable_db_query("Write a short poem about autumn leaves.", None) is False
+def test_is_gadget_turn_ignores_legacy_flag_and_keywords() -> None:
+    """Only the gadget path is request-driven; the old db_query flag and keyword matching are gone."""
+    assert is_gadget_turn({"kind": "gadget"}) is True
+    assert is_gadget_turn({GADGET_SCOPE_KEY: {"renderer": "finance_chart"}}) is True
+    assert is_gadget_turn({DB_QUERY_KEY: True}) is False
+    assert is_gadget_turn(None) is False
+
+
+class _OneRowSession:
+    """Session stub whose EXISTS-style query returns one row or none."""
+
+    def __init__(self, row: object | None) -> None:
+        self.row = row
+        self.statements: list[object] = []
+
+    async def execute(self, stmt: object) -> SimpleNamespace:
+        """Record the statement and return the configured first row."""
+        self.statements.append(stmt)
+        return SimpleNamespace(first=lambda: self.row)
+
+
+@pytest.mark.asyncio
+async def test_has_collected_datasource_follows_active_source_presence() -> None:
+    """The grant condition is the existence of an active collected source, nothing in the prompt."""
+    ws = uuid4()
+    yes = _OneRowSession((uuid4(),))
+    no = _OneRowSession(None)
+    assert await has_collected_datasource(yes, workspace_id=ws, allow_local_only=False) is True  # type: ignore[arg-type]
+    assert await has_collected_datasource(no, workspace_id=ws, allow_local_only=True) is False  # type: ignore[arg-type]
+    assert "local_only" in str(yes.statements[0]) and "local_only" not in str(no.statements[0])
 
 
 def test_build_chat_tool_specs_includes_db_query_when_enabled() -> None:
@@ -215,3 +234,28 @@ async def test_structured_empty_result_lists_available_providers(
         )
     )
     assert out["available_providers"] == ["emsc_quakes", "usgs"]
+
+
+@pytest.mark.asyncio
+async def test_db_query_granted_by_source_gadget_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No keyword or flag: a source grants the tool, none withholds it, a lookup error withholds it."""
+    from modules.chat._worker import setup as worker_setup
+
+    c = SimpleNamespace(scope=SimpleNamespace(workspace_id=uuid4()), response_id=uuid4())
+    plain = SimpleNamespace(req_params={DB_QUERY_KEY: True})  # legacy flag is ignored
+    gadget = SimpleNamespace(req_params={"kind": "gadget"})
+
+    async def run(turn: object, row: object | None) -> bool:
+        return await worker_setup._db_query_granted(_OneRowSession(row), c, turn, False)  # type: ignore[arg-type]
+
+    assert await run(plain, (uuid4(),)) is True
+    assert await run(plain, None) is False
+    assert await run(gadget, None) is True
+
+    async def boom(*_a: object, **_k: object) -> bool:
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(worker_setup, "has_collected_datasource", boom)
+    assert await run(plain, (uuid4(),)) is False

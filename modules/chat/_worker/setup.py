@@ -63,7 +63,8 @@ from modules.chat._worker.web import (
 )
 from modules.chat.db_query import (
     TOOL_QUERY_COLLECTED_DATA,
-    should_auto_enable_db_query,
+    has_collected_datasource,
+    is_gadget_turn,
 )
 from modules.chat.generative_ui import (
     build_chat_tool_specs,
@@ -625,6 +626,26 @@ def _gadget_note(req_params: dict[str, Any], db_query_on: bool) -> str:
     return ""
 
 
+async def _db_query_granted(
+    session: AsyncSession, c: _RunCtx, turn: _TurnInputs, local_only_turn: bool
+) -> bool:
+    """Whether ``query_collected_data`` is offered this turn: gadget turns, or any active collected source.
+
+    A failed lookup withholds the tool (logged without content) instead of failing the turn.
+    """
+    if is_gadget_turn(turn.req_params):
+        return True
+    try:
+        return await has_collected_datasource(
+            session, workspace_id=c.scope.workspace_id, allow_local_only=local_only_turn
+        )
+    except Exception as exc:  # noqa: BLE001  # boundary: tool availability is a hint, never a reason to fail the turn
+        logger.warning(
+            "Collected-datasource lookup failed for run %s (%s)", c.response_id, type(exc).__name__
+        )
+        return False
+
+
 async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs) -> _ModelSetup:
     """Resolve the model, gateway, prompts and offered tools for this turn (phase 3).
 
@@ -652,7 +673,8 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
         system_text = _compose_system_text(
             turn, answer_context, ai_config, web_images, owner_timezone
         )
-        db_query_on = should_auto_enable_db_query(turn.user_prompt, turn.req_params)
+        # No user switch: the tool is offered whenever there is collected data to query (or on the gadget path).
+        db_query_on = await _db_query_granted(session, c, turn, local_only_turn)
         ui_tools: list[dict[str, Any]] | None = build_chat_tool_specs(
             include_read_skill=bool(skill_names),
             include_trip_images=trip_images_on,

@@ -9,7 +9,6 @@ timeout, and automatic ``EvidenceItem`` registration for grounded citations.
 from __future__ import annotations
 
 import json
-import re
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -22,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from core.config import Settings
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope
-from modules.chat.schemas import DB_QUERY_KEY, GADGET_SCOPE_KEY, EvidenceItem
+from modules.chat.schemas import GADGET_SCOPE_KEY, EvidenceItem
 from modules.chat.sql_guard import check_select_policy
 from modules.knowledge.documents.public import (
     MEASUREMENT_PROVIDER_IDS,
@@ -42,20 +41,6 @@ from modules.sources.public import SourceReadProjection as Source
 TOOL_QUERY_COLLECTED_DATA = "query_collected_data"
 MAX_DB_QUERY_ROWS = 50
 MAX_SQL_LENGTH = 2000
-
-_AUTO_DB_KEYWORDS_RE = re.compile(
-    r"\b("
-    r"sql|database|datasource|query|observation|observations|metric|metrics|timeseries|"
-    r"price|prices|giá|tỷ\s*giá|lạm\s*phát|gdp|cpi|ppi|unemployment|fed|ecb|world\s*bank|"
-    r"binance|bitcoin|btc|eth|sol|crypto|coinpaprika|coingecko|frankfurter|"
-    r"earthquake|earthquakes|động\s*đất|seismic|magnitude|usgs|emsc|bmkg|tsunami|sóng\s*thần|"
-    r"weather|thời\s*tiết|temperature|nhiệt\s*độ|wind|rain|humidity|openaq|air\s*quality|"
-    r"alert|alerts|cảnh\s*báo|gdacs|nws|noaa|jma|iss|nasa|cisa|cve|nvd|"
-    r"average|avg|trung\s*bình|maximum|minimum|highest|lowest|cao\s*nhất|thấp\s*nhất|"
-    r"tổng\s*hợp|thống\s*kê|so\s*sánh|biến\s*động|xu\s*hướng"
-    r")\b",
-    re.IGNORECASE,
-)
 
 
 class QueryCollectedDataArgs(BaseModel):
@@ -186,26 +171,32 @@ def build_db_query_tool_spec() -> dict[str, Any]:
     }
 
 
-def should_auto_enable_db_query(
-    prompt: str,
-    retrieval_context: dict[str, Any] | None,
-) -> bool:
-    """Determine whether the database query tool should be enabled for this chat turn.
+def is_gadget_turn(retrieval_context: dict[str, Any] | None) -> bool:
+    """True when the turn was opened from a Dashboard gadget (the gadget path always gets the tool).
 
-    Args:
-        prompt: User message text.
-        retrieval_context: Stored ``ResponseRun.retrieval_context`` dictionary.
-
-    Returns:
-        True when explicitly requested, bound to a dashboard gadget, or triggered by data keywords.
+    The legacy ``DB_QUERY_KEY`` request flag is deliberately ignored: the tool no longer has a user switch.
     """
     ctx = retrieval_context or {}
-    db_flag = ctx.get(DB_QUERY_KEY)
-    if db_flag is True or (isinstance(db_flag, dict) and db_flag.get("requested") is True):
-        return True
-    if ctx.get("kind") == "gadget" or isinstance(ctx.get(GADGET_SCOPE_KEY), dict):
-        return True
-    return bool(_AUTO_DB_KEYWORDS_RE.search(prompt or ""))
+    return ctx.get("kind") == "gadget" or isinstance(ctx.get(GADGET_SCOPE_KEY), dict)
+
+
+async def has_collected_datasource(
+    session: AsyncSession, *, workspace_id: UUID, allow_local_only: bool
+) -> bool:
+    """Whether the workspace has at least one active connector-collected source this turn may query.
+
+    This is the grant condition for ``query_collected_data``: the owner either has collected data to
+    query or the tool would only waste a round. Read-only, one bounded ``EXISTS`` query; ``local_only``
+    sources count only when the turn may use them (same rule as ``_allowed_sources``).
+    """
+    stmt = select(Source.id).where(
+        Source.workspace_id == workspace_id,
+        Source.status == "active",
+        Source.provider.is_not(None),
+    )
+    if not allow_local_only:
+        stmt = stmt.where(Source.local_only.is_(False))
+    return (await session.execute(stmt.limit(1))).first() is not None
 
 
 def validate_readonly_sql(sql: str) -> str:

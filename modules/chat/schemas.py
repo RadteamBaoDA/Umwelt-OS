@@ -629,7 +629,11 @@ class ConversationDetailRead(ConversationRead):
 
 
 class SendMessageRequest(BaseModel):
-    """Payload for sending a user message within an existing conversation."""
+    """Payload for sending a user message within an existing conversation.
+
+    ``db_query`` is deprecated and ignored: the server grants ``query_collected_data`` whenever the owner
+    has an active collected datasource. The field is still accepted until clients stop sending it.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -651,7 +655,10 @@ class SendMessageRequest(BaseModel):
 
 
 class MessageMutationRequest(BaseModel):
-    """Append an edited user prompt or regenerate an answer with its original context."""
+    """Append an edited user prompt or regenerate an answer with its original context.
+
+    ``db_query`` is deprecated and ignored (see ``SendMessageRequest``); it is accepted for old clients.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
