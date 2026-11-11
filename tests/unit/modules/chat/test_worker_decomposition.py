@@ -256,3 +256,38 @@ def test_first_provenance_reads_dicts_objects_and_empty() -> None:
         "c",
     )
     assert _first_provenance([SimpleNamespace(source_id="s", document_id="d")]) == ("s", "d", None)
+
+
+def test_validate_citations_web_first_then_tool_evidence_numbering() -> None:
+    """Prompt web [1] and a DB row fetched later as [2] resolve to the web hit and the evidence item."""
+    hit = SimpleNamespace(url="https://example.test/a", title="A", snippet="snippet")
+    web_run = worker._WebSearchRun(  # type: ignore[arg-type]
+        {"status": "used"}, (hit,), "searxng", evidence_base=0
+    )
+    db_item = _evidence(content="Quake near Crete.")
+    context = AnswerContext(query="q", evidence=[db_item])
+    cited = worker._validate_citations(
+        "Web says A [1]. The database says quake [2].",
+        context,
+        AnswerContextRequest(query="q"),
+        web_run,
+        [],
+    )
+    assert len(cited.valid_citations) == 2
+    assert any(c.get("url") == "https://example.test/a" for c in cited.valid_citations)
+    assert any(
+        str(c.get("chunkId") or c.get("chunk_id")) == str(db_item.chunk_id)
+        for c in cited.valid_citations
+    )
+    # Model numbers: [1] web, [2] evidence; both survive in the map.
+    assert set(cited.number_map) == {1, 2}
+
+
+def test_citation_number_shifts_only_tool_evidence_behind_web_results() -> None:
+    """``_citation_number`` keeps prompt-time evidence numbers and shifts later items past the web block."""
+    from modules.chat.db_query import _citation_number
+
+    assert _citation_number(0, None) == 1
+    assert _citation_number(0, (0, 1)) == 2
+    assert _citation_number(1, (2, 3)) == 2
+    assert _citation_number(2, (2, 3)) == 6

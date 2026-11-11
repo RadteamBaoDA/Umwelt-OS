@@ -163,7 +163,7 @@ async def test_structured_event_feed_provider_returns_documents(
     async def fake_select(_s: object, _f: object, _l: int) -> list[object]:
         return [row]
 
-    async def fake_register(_s: object, _pairs: object, _ev: object, **_kw: object) -> dict:
+    async def fake_register(*_a: object, **_kw: object) -> dict:
         return {ver_id: 1}
 
     monkeypatch.setattr(db_query, "_select_structured_documents", fake_select)
@@ -197,7 +197,7 @@ async def test_structured_empty_result_lists_available_providers(
     async def fake_select(_s: object, _f: object, _l: int) -> list[object]:
         return []
 
-    async def fake_register(_s: object, _pairs: object, _ev: object, **_kw: object) -> dict:
+    async def fake_register(*_a: object, **_kw: object) -> dict:
         return {}
 
     monkeypatch.setattr(db_query, "_select_structured_documents", fake_select)

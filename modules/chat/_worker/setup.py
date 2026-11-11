@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
@@ -292,6 +292,9 @@ async def _prepare_turn(c: _RunCtx, claimed: _ClaimedRun) -> _TurnInputs:
     async with c.session_factory() as session:
         turn = await _load_turn_inputs(session, c, claimed)
         turn.answer_context, turn.web_run = await _retrieve_with_web(session, c, turn)
+        if turn.web_run is not None:
+            # Fix the prompt-time evidence count: evidence added later by tools is numbered after the web results.
+            turn.web_run = replace(turn.web_run, evidence_base=len(turn.answer_context.evidence))
         c.answer_context = turn.answer_context
         c.selected_only = turn.answer_request.selected_only
         # Recheck cancellation before model egress

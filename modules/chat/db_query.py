@@ -286,10 +286,22 @@ async def _allowed_sources(
     return [(row.id, row.provider, row.name) for row in rows]
 
 
+def _citation_number(index: int, web_numbering: tuple[int, int] | None) -> int:
+    """1-based model-facing citation number of ``evidence[index]``.
+
+    ``web_numbering`` is ``(base, web_count)``: the prompt numbered evidence ``1..base`` and then the web
+    results, so evidence appended later (by tools) is shifted behind the web results.
+    """
+    if web_numbering is not None and index >= web_numbering[0]:
+        return index + 1 + web_numbering[1]
+    return index + 1
+
+
 async def _register_evidence_for_versions(
     session: AsyncSession,
     version_pairs: list[tuple[UUID, UUID]],
     existing_evidence: list[EvidenceItem],
+    web_numbering: tuple[int, int] | None = None,
 ) -> dict[UUID, int]:
     """Load chunk_index=0 for returned document versions and append new ``EvidenceItem``s.
 
@@ -299,10 +311,12 @@ async def _register_evidence_for_versions(
         existing_evidence: Mutable list of ``EvidenceItem``s on the current ``AnswerContext``.
 
     Returns:
-        Mapping of ``document_version_id`` to 1-based citation index ``[n]`` in ``existing_evidence``.
+        Mapping of ``document_version_id`` to the citation number ``[n]`` the model must use; equal to the
+        1-based index in ``existing_evidence`` unless ``web_numbering`` shifts it behind the web results.
     """
     by_version: dict[UUID, int] = {
-        item.document_version_id: idx + 1 for idx, item in enumerate(existing_evidence)
+        item.document_version_id: _citation_number(idx, web_numbering)
+        for idx, item in enumerate(existing_evidence)
     }
     needed = [ver_id for _doc_id, ver_id in version_pairs if ver_id not in by_version][:12]
     if not needed:
@@ -356,7 +370,9 @@ async def _register_evidence_for_versions(
                 score=1.0,
             )
         )
-        by_version[row.document_version_id] = len(existing_evidence)
+        by_version[row.document_version_id] = _citation_number(
+            len(existing_evidence) - 1, web_numbering
+        )
     return by_version
 
 
@@ -371,6 +387,7 @@ async def execute_db_query_tool(
     allow_local_only: bool,
     evidence_list: list[EvidenceItem],
     redis: Any = None,
+    web_numbering: tuple[int, int] | None = None,
 ) -> str:
     """Execute a validated read-only database query for Chat and register grounded evidence refs.
 
@@ -384,6 +401,8 @@ async def execute_db_query_tool(
         allow_local_only: Whether local-only sources may be queried (False for remote models).
         evidence_list: Mutable ``AnswerContext.evidence`` list to append discovered ``EvidenceItem``s.
         redis: Optional Redis client to read hot connector snapshots.
+        web_numbering: ``(base, web_count)`` when web results already occupy citation numbers
+            ``base+1..base+web_count``; new evidence is numbered after them.
 
     Returns:
         Compact JSON string summarizing the query results and their ``[n]`` citation indices.
@@ -427,6 +446,7 @@ async def execute_db_query_tool(
                     allowed_source_ids=allowed_ids,
                     limit=args.limit,
                     evidence_list=evidence_list,
+                    web_numbering=web_numbering,
                 )
             return await _execute_structured_mode(
                 session,
@@ -437,6 +457,7 @@ async def execute_db_query_tool(
                 date_to=date_to,
                 evidence_list=evidence_list,
                 redis=redis,
+                web_numbering=web_numbering,
                 available_providers=sorted({str(p) for _i, p, _n in allowed if p}),
             )
     except ValueError as exc:
@@ -571,6 +592,7 @@ async def _execute_sql_mode(
     allowed_source_ids: list[UUID],
     limit: int,
     evidence_list: list[EvidenceItem],
+    web_numbering: tuple[int, int] | None = None,
 ) -> str:
     """Validate, run (least-privilege, read-only) and serialise a model-written SELECT.
 
@@ -593,7 +615,9 @@ async def _execute_sql_mode(
         ver_id = row.get("document_version_id")
         if isinstance(doc_id, UUID) and isinstance(ver_id, UUID):
             version_pairs.append((doc_id, ver_id))
-    citation_map = await _register_evidence_for_versions(session, version_pairs, evidence_list)
+    citation_map = await _register_evidence_for_versions(
+        session, version_pairs, evidence_list, web_numbering
+    )
 
     serialized_rows: list[dict[str, Any]] = []
     for row in mappings:
@@ -900,6 +924,7 @@ async def _execute_structured_mode(
     evidence_list: list[EvidenceItem],
     redis: Any = None,
     available_providers: list[str] | None = None,
+    web_numbering: tuple[int, int] | None = None,
 ) -> str:
     """Execute parameterized SQLAlchemy queries for observations and/or documents.
 
@@ -958,7 +983,9 @@ async def _execute_structured_mode(
         doc_rows_raw = await _select_structured_documents(session, doc_filters, args.limit)
         version_pairs.extend((d.document_id, d.document_version_id) for d in doc_rows_raw)
 
-    citation_map = await _register_evidence_for_versions(session, version_pairs, evidence_list)
+    citation_map = await _register_evidence_for_versions(
+        session, version_pairs, evidence_list, web_numbering
+    )
 
     if want_obs:
         out["observations"] = _serialize_observations(obs_rows, citation_map)

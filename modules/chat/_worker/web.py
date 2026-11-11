@@ -66,6 +66,8 @@ class _WebSearchRun:
     images: tuple[
         web.WebImage, ...
     ] = ()  # image-search hits; used only when media is permitted this turn
+    # Evidence count when the prompt numbered the results (web ``n`` = base + index + 1); None = not yet set.
+    evidence_base: int | None = None
 
 
 def _web_search_run(
