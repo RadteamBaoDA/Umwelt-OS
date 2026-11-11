@@ -6,6 +6,7 @@ below so ``modules.chat.worker`` keeps its original surface.
 """
 
 import asyncio
+import re
 import time
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -226,6 +227,25 @@ from modules.settings import public as settings_public  # noqa: F401
 from modules.sources import public as sources_public  # noqa: F401
 
 
+def _log_uncited_with_evidence(
+    run_id: UUID, st: _StreamState, answer_context: AnswerContext, cited: Any
+) -> None:
+    """Log counts only when an answer ended uncited although evidence existed (never any content).
+
+    Separates "the model wrote no [n]" (raw_markers == 0) from "markers were stripped by validation"
+    (raw_markers > 0) and from "cited narration was dropped" (narration_spans > 0).
+    """
+    if not (cited.uncited and answer_context.evidence):
+        return
+    logger.info(
+        "Uncited chat answer run=%s raw_markers=%d narration_spans=%d evidence=%d",
+        run_id,
+        len(re.findall(r"\[\d+\]", st.accumulated_text)),
+        len(st.narration_spans),
+        len(answer_context.evidence),
+    )
+
+
 async def _generate(c: _RunCtx, claimed: _ClaimedRun) -> None:
     """Run the generation phases for a claimed run: prepare, model setup, stream, validate, persist.
 
@@ -258,6 +278,7 @@ async def _generate(c: _RunCtx, claimed: _ClaimedRun) -> None:
         turn.web_run,
         ts.ui_parts,
     )
+    _log_uncited_with_evidence(c.response_id, st, cast(AnswerContext, turn.answer_context), cited)
     generative_uis = _finalize_widgets(env, cited.final_answer, cited)
     message_id = await _persist_final(
         env, st, cited.final_answer, cited.valid_citations, generative_uis, cited.uncited

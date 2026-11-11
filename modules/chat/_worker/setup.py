@@ -692,8 +692,8 @@ def _gadget_note(
         return (
             f"\n\nDatabase query tool `{TOOL_QUERY_COLLECTED_DATA}` is enabled for this turn. "
             "Use `mode='structured'` for filters/aggregations or `mode='sql'` for read-only SELECT queries "
-            "against `scoped_observations` and `scoped_documents`, and cite any returned `[n]` markers."
-            + _provider_hint(providers)
+            "against `scoped_observations` and `scoped_documents`, and cite each row you use by its `citation` marker "
+            "(a null url does not make a row uncitable)." + _provider_hint(providers)
         )
     return ""
 

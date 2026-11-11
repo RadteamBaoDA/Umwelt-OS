@@ -305,6 +305,12 @@ async def _allowed_sources(
     return [(row.id, row.provider, row.name) for row in rows]
 
 
+CITATION_RULE = (
+    "The citation value of each row is its source reference; write it after every fact taken from that "
+    "row, e.g. M4.7 Guam region [3]. Rows with url=null are still cited this way."
+)
+
+
 def _citation_number(index: int, web_numbering: tuple[int, int] | None) -> int:
     """1-based model-facing citation number of ``evidence[index]``.
 
@@ -339,7 +345,7 @@ async def _register_evidence_for_versions(
     ``Document.workspace_id == workspace_id`` and ``Document.source_id IN allowed_source_ids`` (the source
     must also belong to the workspace). Unverified pairs are dropped: no evidence, no citation number.
 
-    Every returned version is registered (no cap): the caller bounds rows by ``args.limit`` (<= 50), and
+    New evidence is numbered in ``version_pairs`` order. Every returned version is registered (no cap): the caller bounds rows by ``args.limit`` (<= 50), and
     an uncited row would make the model drop the citation for the whole list.
 
     Returns:
@@ -384,9 +390,13 @@ async def _register_evidence_for_versions(
             .limit(len(needed))
         )
     ).all()
-    for row in rows:
-        if row.document_version_id in by_version:
-            continue
+    # Number in the caller's row order (the SQL return order is arbitrary), so the first listed row is the
+    # lowest new [n]; predictable markers are easier for a small model to copy and the rail matches the list.
+    by_row = {row.document_version_id: row for row in rows}
+    for ver_id in dict.fromkeys(needed):
+        row = by_row.get(ver_id)
+        if row is None:
+            continue  # dropped by the fence or has no chunk 0
         existing_evidence.append(
             EvidenceItem(
                 chunk_id=row.chunk_id,
@@ -677,6 +687,7 @@ async def _execute_sql_mode(
     return json.dumps(
         {
             "mode": "sql",
+            "citation_rule": CITATION_RULE,
             "row_count": len(serialized_rows),
             "rows": serialized_rows,
         },
@@ -985,7 +996,11 @@ async def _execute_structured_mode(
     evidence registration (which appends to ``evidence_list``), then the best-effort Redis
     hot-cache read. Read-only on ``session``; no commit. Returns the JSON payload string.
     """
-    out: dict[str, Any] = {"mode": "structured", "aggregation": args.aggregation}
+    out: dict[str, Any] = {
+        "mode": "structured",
+        "aggregation": args.aggregation,
+        "citation_rule": CITATION_RULE,
+    }
     version_pairs: list[tuple[UUID, UUID]] = []
     want_obs = args.target in ("observations", "both")
     requested = {p.strip().lower() for p in args.providers or [] if p.strip()}

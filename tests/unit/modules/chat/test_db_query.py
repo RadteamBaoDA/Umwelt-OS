@@ -210,6 +210,7 @@ async def test_structured_event_feed_provider_returns_documents(
         )
     )
     assert out["documents"][0]["citation"] == "[1]"
+    assert "url=null" in out["citation_rule"]
     # Always present so the model can correct provider ids even when this call returned rows.
     assert out["available_providers"] == ["emsc_quakes"]
 
@@ -463,3 +464,61 @@ async def test_sql_mode_literal_foreign_version_gets_no_citation(
     )
     assert evidence == []
     assert "citation" not in out["rows"][0]
+
+
+@pytest.mark.asyncio
+async def test_register_evidence_numbers_in_row_order_not_query_order() -> None:
+    """Rows returned by SQL in reverse order still get [1], [2], [3] in the caller's row order."""
+    from datetime import UTC, datetime
+
+    from modules.chat.db_query import _register_evidence_for_versions
+
+    pairs = [(uuid4(), uuid4()) for _ in range(3)]
+    chunk_rows = [
+        SimpleNamespace(
+            chunk_id=uuid4(),
+            content="x",
+            document_version_id=ver,
+            version_number=1,
+            observed_at=datetime(2026, 11, 1, tzinfo=UTC),
+            published_at=None,
+            document_id=doc,
+            source_id=uuid4(),
+            title="t",
+            url=None,
+            source_type="document",
+            source_generation=1,
+            local_only=False,
+        )
+        for doc, ver in reversed(pairs)
+    ]
+
+    class _Session:
+        async def execute(self, _stmt: object) -> SimpleNamespace:
+            return SimpleNamespace(all=lambda: chunk_rows)
+
+    evidence: list = []
+    numbers = await _register_evidence_for_versions(
+        _Session(),  # type: ignore[arg-type]
+        pairs,
+        evidence,
+        workspace_id=uuid4(),
+        allowed_source_ids=[uuid4()],
+    )
+    assert [numbers[ver] for _doc, ver in pairs] == [1, 2, 3]
+    assert [e.document_version_id for e in evidence] == [ver for _doc, ver in pairs]
+
+
+def test_finalize_keeps_in_range_markers_for_tool_evidence() -> None:
+    """Tool-appended evidence (no prompt evidence, no web run) keeps both in-range markers."""
+    from modules.chat._worker.finalize import _validate_citations
+    from modules.chat.schemas import AnswerContext, AnswerContextRequest
+    from tests.unit.modules.chat.test_rest_refactor_characterization import _evidence
+
+    ctx = AnswerContext(query="q")
+    ctx.evidence.extend(_evidence(f"quake record {n}") for n in range(25))
+    cited = _validate_citations(
+        "Guam [3] Oaxaca [17]", ctx, AnswerContextRequest(query="q"), None, []
+    )
+    assert len(cited.valid_citations) == 2
+    assert not cited.uncited
