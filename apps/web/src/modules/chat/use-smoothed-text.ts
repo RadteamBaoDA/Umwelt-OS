@@ -17,6 +17,8 @@ const MIN_TICK_MS = 80;
 export function useSmoothedText(target: string): string {
   const [shown, setShown] = React.useState(target);
   const shownRef = React.useRef(target);
+  // Survives effect re-runs: the target changes on every streamed delta, and a per-run timestamp would reset the throttle.
+  const lastTickRef = React.useRef(0);
 
   React.useEffect(() => {
     if (shownRef.current === target) return;
@@ -28,14 +30,13 @@ export function useSmoothedText(target: string): string {
       return;
     }
     let frame = 0;
-    let last = 0;
     /** Reveals a backlog-proportional slice (at least 2 chars) per throttled frame, snapping to the end on word boundaries. */
     const tick = (now: number) => {
-      if (last && now - last < MIN_TICK_MS) {
+      if (lastTickRef.current && now - lastTickRef.current < MIN_TICK_MS) {
         frame = requestAnimationFrame(tick);
         return;
       }
-      last = now;
+      lastTickRef.current = now;
       const backlog = target.length - shownRef.current.length;
       if (backlog <= 0) return;
       let next = shownRef.current.length + Math.max(2, Math.ceil(backlog / 4));

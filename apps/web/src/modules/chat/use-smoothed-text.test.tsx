@@ -35,4 +35,20 @@ describe('useSmoothedText', () => {
     // 400 ms of frames: <= 6 distinct displayed lengths (initial + ~5 throttled steps).
     expect(lengths.size).toBeLessThanOrEqual(7);
   });
+
+  it('keeps the throttle across per-delta target changes', () => {
+    const { result, rerender } = renderHook(({ t }) => useSmoothedText(t), { initialProps: { t: '' } });
+    const lengths = new Set<number>();
+    let text = '';
+    // A new delta every 16 ms (each re-runs the effect) must still yield at most one visible update per 80 ms.
+    for (let i = 0; i < 25; i += 1) {
+      text += 'abcdefgh';
+      rerender({ t: text });
+      act(() => {
+        vi.advanceTimersByTime(16);
+      });
+      lengths.add(result.current.length);
+    }
+    expect(lengths.size).toBeLessThanOrEqual(7);
+  });
 });

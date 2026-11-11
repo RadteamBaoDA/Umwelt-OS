@@ -1143,7 +1143,10 @@ function transcriptVisibility(props: ChatTranscriptProps, d: ReturnType<typeof w
  * @param busy - True while pending or streaming (drives scroll following).
  */
 function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
-  const { conversationId, messages, onSendPrompt, onWidgetSendPrompt } = props;
+  const { conversationId, messages } = props;
+  // Stable identities: the parent's send handlers change on every streamed token and would defeat message memoization.
+  const onSendPrompt = useStableCallback(props.onSendPrompt);
+  const onWidgetSendPrompt = useStableCallback(props.onWidgetSendPrompt);
   const display = useDisplayPreferences();
   const timezone = display.confirmedPreferences?.timezone || 'UTC';
   const locale = display.confirmedPreferences?.locale || 'en-us';

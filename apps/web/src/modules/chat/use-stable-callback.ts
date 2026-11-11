@@ -11,7 +11,8 @@ import * as React from 'react';
  */
 export function useStableCallback<A extends unknown[], R>(fn: ((...args: A) => R) | undefined): ((...args: A) => R) | undefined {
   const ref = React.useRef(fn);
-  React.useEffect(() => {
+  // Layout phase so the ref is current before any event handler or child effect can fire after this commit.
+  React.useLayoutEffect(() => {
     ref.current = fn;
   });
   const stable = React.useCallback((...args: A) => (ref.current as (...a: A) => R)(...args), []);

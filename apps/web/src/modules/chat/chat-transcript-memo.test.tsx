@@ -28,9 +28,7 @@ const msgs = [
   { id: 'u2', role: 'user', content: 'again', created_at: '2026-01-01T00:00:02Z' },
 ] as unknown as ChatMessage[];
 
-const sendPrompt = () => {};
-
-/** Renders the transcript with fresh inline edit/regenerate handlers on every call (the transcript must stabilise them). */
+/** Renders the transcript with fresh inline edit/regenerate/send handlers on every call (the transcript must stabilise them). */
 function tree(streamingText: string) {
   return (
     <QueryClientProvider client={new QueryClient()}>
@@ -42,7 +40,8 @@ function tree(streamingText: string) {
           streamingText={streamingText}
           onEditMessage={() => {}}
           onRegenerateMessage={() => {}}
-          onSendPrompt={sendPrompt}
+          onSendPrompt={() => {}}
+          onWidgetSendPrompt={() => {}}
         />
       </NextIntlClientProvider>
     </QueryClientProvider>
