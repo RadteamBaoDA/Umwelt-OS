@@ -94,6 +94,14 @@ describe('ChatHistory', () => {
     expect(actions.setArchived).toHaveBeenCalledWith('n1', true);
   });
 
+  it('marks only the conversation with an active run with a running dot (C15)', async () => {
+    listConversations.mockResolvedValue([conv('r1', { has_active_run: true }), conv('i1', { has_active_run: false })]);
+    renderHistory();
+    const dots = await screen.findAllByTestId('conversation-running');
+    expect(dots).toHaveLength(1);
+    expect(dots[0].getAttribute('aria-label')).toBe('Answering now');
+  });
+
   it('queries archived conversations when the archive filter is toggled', async () => {
     renderHistory();
     await waitFor(() => expect(listConversations).toHaveBeenCalled());

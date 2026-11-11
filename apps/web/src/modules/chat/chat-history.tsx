@@ -257,7 +257,22 @@ function HistoryStatus({
   );
 }
 
-/** One conversation row: open button (with inline loading spinner for the active row) plus a keyboard/touch-reachable actions menu. */
+/** Pulsing dot (C15): the list API reports a run still generating, so a conversation answering in the background is visible. */
+function RunningDot({ active }: { active: boolean }) {
+  const t = useTranslations('chat');
+  if (!active) return null;
+  return (
+    <span
+      role="img"
+      data-testid="conversation-running"
+      aria-label={t('conversationRunning')}
+      title={t('conversationRunning')}
+      className="size-2 shrink-0 animate-pulse rounded-full bg-accent motion-reduce:animate-none"
+    />
+  );
+}
+
+/** One conversation row: open button (with inline loading spinner for the active row, a pulsing dot while a run is active) plus a keyboard/touch-reachable actions menu. */
 function ConversationRow({
   conv,
   isActive,
@@ -301,6 +316,7 @@ function ConversationRow({
             <span className="flex items-center gap-1">
               {conv.pinned && <PinIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
               <span className="block truncate">{conv.title || t('untitledConversation')}</span>
+              <RunningDot active={conv.has_active_run} />
             </span>
             <span className="block text-xs font-normal text-muted-foreground">{stamp}</span>
           </span>
