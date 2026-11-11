@@ -162,3 +162,27 @@ async def test_publish_tool_status_event(monkeypatch: pytest.MonkeyPatch) -> Non
     assert seq == 5
     assert added[0].event_type == "tool.status"
     assert added[0].data == {"tool": "query_collected_data", "state": "running"}
+
+
+async def test_retrieval_variant_keeps_names_web_variant_strips_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3b: only the web instruction asks to drop personal names; the retrieval one keeps them."""
+    rig = _Rig(monkeypatch, json.dumps({"query": "q"}))
+    settings = SimpleNamespace(ai_allowed_endpoint_cidrs=())
+    for keep, expected in (
+        (False, worker.REWRITE_INSTRUCTIONS),
+        (True, worker.RETRIEVAL_REWRITE_INSTRUCTIONS),
+    ):
+        await worker._rewrite_web_query(
+            rig.factory,
+            settings,
+            MagicMock(),
+            MagicMock(),
+            "p",
+            [],
+            keep_names=keep,
+            timezone="Asia/Ho_Chi_Minh",
+        )  # type: ignore[arg-type]
+        assert rig.calls[-1][1][0]["content"].startswith(expected)
+    assert "Do not include personal data" not in worker.RETRIEVAL_REWRITE_INSTRUCTIONS

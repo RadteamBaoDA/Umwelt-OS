@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -414,10 +415,10 @@ def _validate_selected_only_request(request: AnswerContextRequest) -> None:
         raise ValueError("Selected source fences do not exactly cover the requested documents")
 
 
-# Search scores are reciprocal-rank-fusion sums (k=60): rank r in one list scores 1/(60+r), so 0.0164 is the best
-# single-list hit and 1/80 = 0.0125 is rank 20. The floor drops hits beyond rank ~25 of a single list. Scores are
-# rank-only (not similarity), so this trims a long tail but cannot judge relevance by itself.
-MIN_SEARCH_SCORE = 1 / 85
+# Search scores are reciprocal-rank-fusion sums (k=60), rank-only rather than similarity: a hit in both the
+# lexical and the vector list can reach ~0.033, a single-list rank-1 hit 0.0164. Hits scoring below this share of
+# the best hit are a low-relevance tail and are dropped; a lone hit always survives (it is its own top).
+MIN_RELATIVE_SEARCH_SCORE = 0.4
 
 
 async def _collect_search_refs(
@@ -431,7 +432,7 @@ async def _collect_search_refs(
 ) -> None:
     """Run the permitted search and append its hits to ``collector`` (search failure degrades).
 
-    Appends hits at or above ``MIN_SEARCH_SCORE`` in rank order, records
+    Appends hits scoring at least ``MIN_RELATIVE_SEARCH_SCORE`` of the best hit, in rank order, records
     scores, and extends ``warnings``. ``TypeError`` is re-raised; any other error is logged and
     reported as a warning. The worker commits before ``build_context`` so no locks are held.
     """
@@ -452,8 +453,9 @@ async def _collect_search_refs(
             **scope_kw,
         )
         warnings.extend(search_res.warnings)
+        top_score = max((hit.score for hit in search_res.items), default=0.0)
         for hit in search_res.items:
-            if hit.score < MIN_SEARCH_SCORE:
+            if hit.score < top_score * MIN_RELATIVE_SEARCH_SCORE:
                 continue
             ref = (hit.document_version_id, hit.chunk_id)
             collector.refs.append(ref)
@@ -1083,24 +1085,37 @@ def _safe_hostname(url: str | None) -> str | None:
     return host if host and len(host) <= 253 else None
 
 
-def _evidence_source_line(item: EvidenceItem) -> str:
+def _local_date(when: datetime, timezone: str | None) -> str:
+    """ISO calendar date of ``when`` in the owner's IANA zone; the stored (UTC) date when the zone is absent or unknown."""
+    try:
+        return (
+            when.astimezone(ZoneInfo(timezone)).date().isoformat()
+            if timezone
+            else when.date().isoformat()
+        )
+    except (KeyError, ValueError, OSError):
+        return when.date().isoformat()
+
+
+def _evidence_source_line(item: EvidenceItem, timezone: str | None = None) -> str:
     """Model-facing source line of one evidence chunk: title, publish/observe date and source host (pure).
 
     Internal ids stay out of the prompt (the model cites by ``[n]`` only); the date lets "latest" questions
-    order evidence and the host names the source. Missing parts are omitted.
+    order evidence and the host names the source. Missing parts are omitted. Dates are the owner's calendar
+    days in ``timezone`` (an IANA name; UTC dates when absent).
     """
     when = item.published_at or item.observed_at
     host = _safe_hostname(item.canonical_url)
     parts = [f"Document: {_neutralize_angles(item.title)}"]
     if when:
         label = "Published" if item.published_at else "Collected"
-        parts.append(f"{label}: {when.date().isoformat()}")
+        parts.append(f"{label}: {_local_date(when, timezone)}")
     if host:
         parts.append(f"Source: {_neutralize_angles(host)}")
     return " | ".join(parts)
 
 
-def format_grounded_context(context: AnswerContext) -> str:
+def format_grounded_context(context: AnswerContext, timezone: str | None = None) -> str:
     """Format retrieved evidence and contextual summaries into untrusted prompt delimiters.
 
     Explicitly demarcates retrieved document text as untrusted data to mitigate
@@ -1108,6 +1123,7 @@ def format_grounded_context(context: AnswerContext) -> str:
 
     Args:
         context: AnswerContext instance.
+        timezone: Owner's IANA zone for the evidence dates (UTC dates when absent).
 
     Returns:
         Safe prompt text containing XML-delimited reference evidence.
@@ -1120,7 +1136,7 @@ def format_grounded_context(context: AnswerContext) -> str:
     ]
 
     for idx, item in enumerate(context.evidence, 1):
-        parts.append(f"[{idx}] {_evidence_source_line(item)}")
+        parts.append(f"[{idx}] {_evidence_source_line(item, timezone)}")
         parts.append(_neutralize_angles(item.content.strip()))
         parts.append("")
 

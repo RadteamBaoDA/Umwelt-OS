@@ -266,7 +266,9 @@ async def test_tool_budget_exhausted_closes_with_synthesis_text(
 async def test_tool_round_narration_is_not_persisted(monkeypatch: pytest.MonkeyPatch) -> None:
     """Text written in rounds that ended in data-tool calls (S1) is dropped; only the final text persists."""
     call = _call(0, name="read_skill", args='{"name": "master-agent-playbook"}', call_id="s")
-    gen = _UIGen(monkeypatch, [[_text("Let me try one more query."), call], [_text("Final answer.")]])
+    gen = _UIGen(
+        monkeypatch, [[_text("Let me try one more query."), call], [_text("Final answer.")]]
+    )
     await gen.run()
     gen.failed.assert_not_awaited()
     message = next(m for m in gen.added if isinstance(m, Message))

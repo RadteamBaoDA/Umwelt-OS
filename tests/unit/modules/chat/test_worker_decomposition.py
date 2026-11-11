@@ -3,7 +3,7 @@
 import json
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -381,9 +381,17 @@ async def test_followup_retrieval_uses_rewritten_query_and_keeps_original_contex
         monkeypatch, "_rewrite_web_query", AsyncMock(return_value="printing press history")
     )
     patch_worker(monkeypatch, "_publish_status", AsyncMock())
+    patch_worker(monkeypatch, "_owner_locale_and_timezone", AsyncMock(return_value=("en-US", None)))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=False))
     session = SimpleNamespace(commit=AsyncMock())
     c = SimpleNamespace(
-        session_factory=None, settings=None, redis=None, scope=None, response_id=uuid4()
+        session_factory=None,
+        settings=None,
+        redis=None,
+        scope=None,
+        response_id=uuid4(),
+        seq=0,
+        privacy_fence=None,
     )
     turn = SimpleNamespace(
         user_prompt="tell me more",
@@ -401,8 +409,119 @@ async def test_followup_retrieval_uses_rewritten_query_and_keeps_original_contex
     assert seen == ["tell me more"]
 
 
-def test_search_score_floor_is_rank_based() -> None:
-    """The floor sits below rank 20 of a single list (1/80) and above rank ~100 (1/160)."""
-    from modules.chat.retrieval import MIN_SEARCH_SCORE
+def _hit(score: float) -> Any:
+    """Search hit double with a score and fresh refs."""
+    return SimpleNamespace(score=score, document_version_id=uuid4(), chunk_id=uuid4())
 
-    assert 1 / 160 < MIN_SEARCH_SCORE < 1 / 80
+
+@pytest.mark.asyncio
+async def test_search_score_cut_is_relative_to_the_best_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A low-relevance tail (below 40% of the top RRF score) is trimmed; a lone weak hit survives (S4)."""
+    from modules.chat import retrieval
+
+    strong, ok, tail = _hit(0.032), _hit(0.016), _hit(0.0125)
+    for hits, kept in (([strong, ok, tail], [strong, ok]), ([tail], [tail])):
+        monkeypatch.setattr(
+            retrieval.search_public,
+            "search",
+            AsyncMock(return_value=SimpleNamespace(items=hits, warnings=[])),
+        )
+        collector = retrieval._RefCollector()
+        request = AnswerContextRequest(query="q")
+        await retrieval._collect_search_refs(
+            MagicMock(), MagicMock(), MagicMock(), request, {}, collector, []
+        )
+        assert collector.refs == [(h.document_version_id, h.chunk_id) for h in kept]
+
+
+def _followup_rig(
+    monkeypatch: pytest.MonkeyPatch, order: list[str], *, cancelled: bool = False
+) -> Any:
+    """Patch the retrieval collaborators to log call order; return (session, ctx, turn) doubles."""
+    from modules.chat._worker import setup as worker_setup
+
+    async def status(_c: Any, tool: str, state: str, **_kw: Any) -> None:
+        order.append(f"{tool}:{state}")
+
+    async def rewrite(*_a: Any, **kw: Any) -> str:
+        order.append(f"rewrite:names={kw.get('keep_names')}")
+        return "rewritten"
+
+    async def build(_s: Any, _f: Any, _r: Any, _cfg: Any, request: Any, _scope: Any) -> Any:
+        order.append(f"build:{request.query}")
+        return AnswerContext(query=request.query, evidence=[])
+
+    patch_worker(monkeypatch, "build_context", build)
+    patch_worker(monkeypatch, "_rewrite_web_query", rewrite)
+    patch_worker(monkeypatch, "_publish_status", status)
+    patch_worker(monkeypatch, "_owner_locale_and_timezone", AsyncMock(return_value=("en-US", None)))
+    patch_worker(monkeypatch, "is_run_cancelled", AsyncMock(return_value=cancelled))
+    patch_worker(monkeypatch, "_mark_cancelled", AsyncMock())
+    c = SimpleNamespace(
+        session_factory=None,
+        settings=None,
+        redis=None,
+        scope=None,
+        response_id=uuid4(),
+        seq=0,
+        privacy_fence=None,
+    )
+    turn = SimpleNamespace(
+        user_prompt="tell me more",
+        prior_messages=[{"role": "user", "content": "history of Alice Nguyen"}],
+        req_params={},
+        answer_request=AnswerContextRequest(query="tell me more"),
+    )
+    return worker_setup, SimpleNamespace(commit=AsyncMock()), c, turn
+
+
+@pytest.mark.asyncio
+async def test_retrieval_step_precedes_rewrite_and_rewrite_keeps_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3b/c: retrieval is published running before the rewrite, which uses the names-keeping variant."""
+    order: list[str] = []
+    setup, session, c, turn = _followup_rig(monkeypatch, order)
+    await setup._retrieve_with_web(session, c, turn)
+    assert order[:3] == ["retrieval:running", "rewrite:names=True", "build:rewritten"]
+
+
+@pytest.mark.asyncio
+async def test_retrieval_rewrite_skipped_with_model_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3a: a conversation model override must not send prompts to the role-default model for a rewrite."""
+    from modules.chat.schemas import MODEL_OVERRIDE_KEY
+
+    order: list[str] = []
+    setup, session, c, turn = _followup_rig(monkeypatch, order)
+    turn.req_params = {MODEL_OVERRIDE_KEY: {"provider_id": "p", "model": "m"}}
+    await setup._retrieve_with_web(session, c, turn)
+    assert order[:2] == ["retrieval:running", "build:tell me more"] and not any(
+        "rewrite" in o for o in order
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrieval_stops_when_cancelled_during_rewrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3c: Stop during the rewrite persists the cancellation and never starts retrieval."""
+    order: list[str] = []
+    setup, session, c, turn = _followup_rig(monkeypatch, order, cancelled=True)
+    with pytest.raises(worker._RunStopped):
+        await setup._retrieve_with_web(session, c, turn)
+    assert not any(o.startswith("build") for o in order)
+
+
+def test_evidence_dates_use_the_owner_timezone() -> None:
+    """N4: 23:30 UTC on 11-03 is already 11-04 in Ho Chi Minh City; unknown zones fall back to UTC."""
+    from datetime import UTC, datetime
+
+    from modules.chat.retrieval import _local_date
+
+    when = datetime(2026, 11, 3, 23, 30, tzinfo=UTC)
+    assert _local_date(when, "Asia/Ho_Chi_Minh") == "2026-11-04"
+    assert _local_date(when, None) == _local_date(when, "Not/AZone") == "2026-11-03"

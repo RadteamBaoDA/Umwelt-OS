@@ -219,23 +219,49 @@ async def _retrieve_with_web(
     The search runs in its own task and sessions (create_task, not TaskGroup: exceptions keep their type;
     review P2-3). The retrieval commit (releasing the snapshot / selected-only Source FOR SHARE) stays before
     ``await search_task``. Any failure stops the search task before re-raising.
+
+    Follow-up turns retrieve with a names-keeping rewrite of the prompt (skipped for selected-only turns and
+    for conversations with a model override); the retrieval step is published before it and a Stop that
+    arrived during it ends the run before retrieval starts. The web search makes its own name-free rewrite.
     """
     web_opt_in = turn.req_params.get(WEB_SEARCH_KEY)
     web_requested = isinstance(web_opt_in, dict) and web_opt_in.get("requested") is True
     if web_requested:
         await _publish_status(c, "web_search", "running")
     request = turn.answer_request
-    rewritten: str | None = None
-    if turn.prior_messages and not request.selected_only:
-        # Follow-ups ("tell me more") carry no searchable words of their own: retrieve with the same
-        # standalone rewrite the web search uses (falls back to the literal prompt on any failure).
+    # Progress first: the rewrite below can take seconds and the step list should already show retrieval.
+    await _publish_status(c, "retrieval", "running")
+    # A conversation with a model override skips the rewrite: it would otherwise send the owner's prompts to the
+    # role-default model instead of the one the owner chose (for example a local model).
+    rewrite = bool(
+        turn.prior_messages
+        and not request.selected_only
+        and MODEL_OVERRIDE_KEY not in turn.req_params
+    )
+    owner_timezone: str | None = None
+    if rewrite or web_requested:
+        _, owner_timezone = await _owner_locale_and_timezone(session, c.scope)
+        await session.commit()  # no SQL transaction may stay open across the rewrite's model call
+    if rewrite:
+        # Follow-ups ("tell me more") carry no searchable words of their own: retrieve with a standalone
+        # rewrite that keeps names (own documents); the web search makes its own, name-free rewrite.
         rewritten = await _rewrite_web_query(
-            c.session_factory, c.settings, c.redis, c.scope, turn.user_prompt, turn.prior_messages
+            c.session_factory,
+            c.settings,
+            c.redis,
+            c.scope,
+            turn.user_prompt,
+            turn.prior_messages,
+            keep_names=True,
+            timezone=owner_timezone,
         )
+        if await is_run_cancelled(c.response_id, c.redis):
+            await _mark_cancelled(
+                c.response_id, c.session_factory, c.seq, c.privacy_fence, scope=c.scope
+            )
+            raise _RunStopped("Response was stopped during the retrieval rewrite")
         if rewritten != request.query:
             request = request.model_copy(update={"query": rewritten})
-    # Progress for the step list: counts only (no titles or text), so the event stays content-free.
-    await _publish_status(c, "retrieval", "running")
     search_task = (
         asyncio.create_task(
             _rewrite_and_search(
@@ -250,7 +276,7 @@ async def _retrieve_with_web(
                 c.privacy_fence,
                 scope=c.scope,
                 access_fence=c.access,
-                query=rewritten,
+                timezone=owner_timezone,
             )
         )
         if web_requested
@@ -612,7 +638,7 @@ def _compose_system_text(
             if day_scope
             else ""
         )
-        + format_grounded_context(answer_context)
+        + format_grounded_context(answer_context, timezone or turn.req_params.get("timezone"))
     )
     return system_text + _web_prompt_suffix(turn.web_run, len(answer_context.evidence), images)
 

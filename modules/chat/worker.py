@@ -184,6 +184,7 @@ from modules.chat._worker.tools import (  # noqa: F401
     register_chat_tool,
 )
 from modules.chat._worker.web import (  # noqa: F401
+    RETRIEVAL_REWRITE_INSTRUCTIONS,
     REWRITE_INSTRUCTIONS,
     REWRITE_MESSAGE_CHARS,
     REWRITE_QUERY_CHARS,
