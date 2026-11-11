@@ -249,7 +249,10 @@ describe('OpenGenerativeUIRenderer', () => {
   it('shows the localized rebuilding status for a discarded widget and localized default phrases (G6/G7)', () => {
     document.documentElement.lang = 'vi';
     const { rerender } = render(
-      <OpenGenerativeUIRenderer status="streaming" payload={{ kind: 'sandboxed_ui', status: 'streaming', rebuilding: true, sandbox: { html: '<p>x</p>' } }} />,
+      <OpenGenerativeUIRenderer
+        status="streaming"
+        payload={{ kind: 'sandboxed_ui', status: 'streaming', rebuilding: true, sandbox: { html: '<p>x</p>' } }}
+      />,
     );
     expect(screen.getByTestId('sandboxed-ui-placeholder').textContent).toContain('Đang dựng lại');
     expect(screen.getByTestId('sandboxed-ui-iframe')).toBeTruthy();

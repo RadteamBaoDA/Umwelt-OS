@@ -73,9 +73,10 @@ function useResolvedSandboxTheme(explicitTheme?: SandboxTheme): SandboxTheme {
  */
 function usePlaceholderRotation(active: boolean, customMessages?: string[], intervalMs = 1800): string {
   const catalog = genUiCopy();
-  const phrases = customMessages && customMessages.length > 0
-    ? customMessages
-    : [catalog.genUiLoadingPhrase1, catalog.genUiLoadingPhrase2, catalog.genUiLoadingPhrase3];
+  const phrases =
+    customMessages && customMessages.length > 0
+      ? customMessages
+      : [catalog.genUiLoadingPhrase1, catalog.genUiLoadingPhrase2, catalog.genUiLoadingPhrase3];
   const [index, setIndex] = React.useState(0);
 
   React.useEffect(() => {

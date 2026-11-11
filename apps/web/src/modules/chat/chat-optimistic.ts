@@ -34,7 +34,9 @@ export function addOptimisticMessage(queryClient: QueryClient, conversationId: s
 
 /** Removes an optimistic message (the server rejected the send or already returned its own copy). */
 export function removeOptimisticMessage(queryClient: QueryClient, conversationId: string, clientRequestId: string): void {
-  queryClient.setQueryData<ChatMessage[]>(optimisticKey(conversationId), (prev) => (prev ?? []).filter((m) => m.client_request_id !== clientRequestId));
+  queryClient.setQueryData<ChatMessage[]>(optimisticKey(conversationId), (prev) =>
+    (prev ?? []).filter((m) => m.client_request_id !== clientRequestId),
+  );
 }
 
 /**
@@ -69,7 +71,8 @@ export function useOptimisticMessages(conversationId: string | null | undefined,
   React.useEffect(() => {
     if (!conversationId) return;
     const confirmed = new Set(server.map((m) => m.client_request_id).filter(Boolean));
-    for (const m of data) if (confirmed.has(m.client_request_id)) removeOptimisticMessage(queryClient, conversationId, m.client_request_id!);
+    for (const m of data)
+      if (confirmed.has(m.client_request_id)) removeOptimisticMessage(queryClient, conversationId, m.client_request_id!);
   }, [conversationId, server, data, queryClient]);
   return data;
 }

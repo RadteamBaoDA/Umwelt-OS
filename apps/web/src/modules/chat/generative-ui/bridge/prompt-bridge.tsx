@@ -9,12 +9,7 @@
  */
 
 import * as React from 'react';
-import {
-  DEFAULT_LINK_CONFIRM_LABELS,
-  WidgetLinkConfirmDialog,
-  useWidgetLinkConfirm,
-  type LinkConfirmLabels,
-} from './link-confirm';
+import { DEFAULT_LINK_CONFIRM_LABELS, WidgetLinkConfirmDialog, useWidgetLinkConfirm, type LinkConfirmLabels } from './link-confirm';
 import { genUiCopy } from '../copy';
 import {
   useBridgeMessageListener,
@@ -88,8 +83,7 @@ const defaultBridgeContext: PromptBridgeContextValue = {
 };
 
 /** React context providing `sendPrompt` and `registerFrame` to generative UI widgets. */
-export const PromptBridgeContext =
-  React.createContext<PromptBridgeContextValue>(defaultBridgeContext);
+export const PromptBridgeContext = React.createContext<PromptBridgeContextValue>(defaultBridgeContext);
 
 export type { LinkConfirmLabels };
 
@@ -127,9 +121,12 @@ function useDraftNotice() {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setNotice(null), NOTICE_MS);
   }, []);
-  React.useEffect(() => () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-  }, []);
+  React.useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    [],
+  );
   return { notice, showNotice };
 }
 

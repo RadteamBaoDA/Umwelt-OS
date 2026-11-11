@@ -163,10 +163,7 @@ function ExportToolbar({
 }) {
   const copyText = copied ? labels.copiedHtml : labels.copyHtml;
   return (
-    <div
-      className="flex items-center gap-1"
-      data-testid="generative-ui-toolbar"
-    >
+    <div className="flex items-center gap-1" data-testid="generative-ui-toolbar">
       <Button
         type="button"
         variant="ghost"

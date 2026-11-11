@@ -180,10 +180,13 @@ export interface ChatLiveActions {
  */
 export function useChatLiveState(): { live: ChatLiveState; actions: ChatLiveActions } {
   const [live, dispatch] = React.useReducer(chatLiveReducer, INITIAL_LIVE_STATE);
-  const actions = React.useMemo<ChatLiveActions>(() => ({
-    dispatch,
-    patch: (patch) => dispatch({ type: 'patch', patch }),
-    clearOutput: () => dispatch({ type: 'clearOutput' }),
-  }), []);
+  const actions = React.useMemo<ChatLiveActions>(
+    () => ({
+      dispatch,
+      patch: (patch) => dispatch({ type: 'patch', patch }),
+      clearOutput: () => dispatch({ type: 'clearOutput' }),
+    }),
+    [],
+  );
   return { live, actions };
 }

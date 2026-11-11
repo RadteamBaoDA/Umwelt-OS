@@ -70,10 +70,7 @@ export interface ValidateBridgeMessageOptions {
  * @param allowedOrigins - Optional allowlist of origins.
  * @returns `true` if the URL is safe to open in a new tab.
  */
-export function isAllowedLinkUrl(
-  url: string,
-  allowedOrigins?: readonly string[],
-): boolean {
+export function isAllowedLinkUrl(url: string, allowedOrigins?: readonly string[]): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -167,12 +164,7 @@ type BridgeRaw<K extends ValidatedBridgeMessage['type']> = Extract<ValidatedBrid
 
 /** Prompt request: text comes from `prompt` or `text` and must satisfy the shared send-prompt schema (1..4000 chars). */
 function parseSendPrompt(record: Record<string, unknown>, rawType: BridgeRaw<'send-prompt'>): ValidatedBridgeMessage | null {
-  const candidate =
-    typeof record.prompt === 'string'
-      ? record.prompt
-      : typeof record.text === 'string'
-        ? record.text
-        : null;
+  const candidate = typeof record.prompt === 'string' ? record.prompt : typeof record.text === 'string' ? record.text : null;
   if (candidate === null) {
     return null;
   }
@@ -194,10 +186,7 @@ function parseResize(record: Record<string, unknown>, rawType: BridgeRaw<'resize
   if (typeof rawHeight !== 'number' || !Number.isFinite(rawHeight) || rawHeight <= 0) {
     return null;
   }
-  const clampedHeight = Math.max(
-    MIN_SANDBOX_HEIGHT,
-    Math.min(MAX_SANDBOX_HEIGHT, Math.ceil(rawHeight)),
-  );
+  const clampedHeight = Math.max(MIN_SANDBOX_HEIGHT, Math.min(MAX_SANDBOX_HEIGHT, Math.ceil(rawHeight)));
   return {
     type: 'resize',
     height: clampedHeight,

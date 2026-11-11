@@ -3,7 +3,21 @@
 import { messageUiParts, uiPartKey, type UiPart } from './generative-ui-parts';
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { AlertCircleIcon, ArrowDownIcon, BookOpenIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, CopyIcon, DatabaseIcon, GlobeIcon, Loader2Icon, PaperclipIcon, PencilIcon, RefreshCwIcon } from 'lucide-react';
+import {
+  AlertCircleIcon,
+  ArrowDownIcon,
+  BookOpenIcon,
+  CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  DatabaseIcon,
+  GlobeIcon,
+  Loader2Icon,
+  PaperclipIcon,
+  PencilIcon,
+  RefreshCwIcon,
+} from 'lucide-react';
 import type { ChatMessage, Citation, ToolStatus, ToolStep, WebSearchOutcome } from './api';
 import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
@@ -29,10 +43,24 @@ function WidgetSkeleton() {
 }
 
 // Widgets are optional per answer; load their renderer (and the template-save UI) only when a message carries one.
-const ToolRendering = dynamic(() => import('./generative-ui/components/tool-rendering').then((m) => m.ToolRendering), { loading: WidgetSkeleton });
-const SaveTemplateButton = dynamic(() => import('./generative-ui/templates/template-library').then((m) => m.SaveTemplateButton), { loading: () => <div aria-hidden="true" className="h-8 w-32" /> });
+const ToolRendering = dynamic(() => import('./generative-ui/components/tool-rendering').then((m) => m.ToolRendering), {
+  loading: WidgetSkeleton,
+});
+const SaveTemplateButton = dynamic(() => import('./generative-ui/templates/template-library').then((m) => m.SaveTemplateButton), {
+  loading: () => <div aria-hidden="true" className="h-8 w-32" />,
+});
 
-const KNOWN_REASONS = ['not_configured', 'query_too_long', 'empty_query', 'local_only_context', 'daily_limit', 'timeout', 'provider_error', 'network_denied', 'run_inactive'];
+const KNOWN_REASONS = [
+  'not_configured',
+  'query_too_long',
+  'empty_query',
+  'local_only_context',
+  'daily_limit',
+  'timeout',
+  'provider_error',
+  'network_denied',
+  'run_inactive',
+];
 
 /**
  * Markdown for a settled assistant answer whose top-level blocks fade in once on first view.
@@ -43,7 +71,11 @@ const KNOWN_REASONS = ['not_configured', 'query_too_long', 'empty_query', 'local
 function RevealMarkdown(props: React.ComponentProps<typeof ChatMarkdown>) {
   const ref = React.useRef<HTMLDivElement>(null);
   useRevealBlocks(ref, true, props.content);
-  return <div ref={ref}><ChatMarkdown {...props} /></div>;
+  return (
+    <div ref={ref}>
+      <ChatMarkdown {...props} />
+    </div>
+  );
 }
 
 /** Display names for the web-search provider ids reported in the search outcome. */
@@ -58,7 +90,12 @@ const PROVIDER_NAMES: Record<string, string> = { omniroute: 'OmniRoute', searxng
 function WebSearchProvider({ provider, fallback }: { provider?: string | null; fallback?: boolean }) {
   const t = useTranslations('chat');
   if (!provider) return null;
-  return <>{t('webSearchedVia', { provider: PROVIDER_NAMES[provider] ?? provider })}{fallback ? t('webSearchedFallback') : null}</>;
+  return (
+    <>
+      {t('webSearchedVia', { provider: PROVIDER_NAMES[provider] ?? provider })}
+      {fallback ? t('webSearchedFallback') : null}
+    </>
+  );
 }
 
 /**
@@ -74,15 +111,17 @@ function WebSearchNotice({ outcome }: { outcome?: WebSearchOutcome | null }) {
     const count = outcome.result_count ?? 0;
     return (
       <p data-testid="web-search-query" className="mt-1 text-xs text-muted-foreground">
-        {count > 0
-          ? t('webSearchedQueryCount', { query: outcome.query, count })
-          : t('webSearchedQuery', { query: outcome.query })}
+        {count > 0 ? t('webSearchedQueryCount', { query: outcome.query, count }) : t('webSearchedQuery', { query: outcome.query })}
         <WebSearchProvider provider={outcome.provider} fallback={outcome.fallback} />
       </p>
     );
   }
   if (outcome?.status === 'used' && outcome.reason === 'no_results') {
-    return <p data-testid="web-search-notice" className="mt-1 text-xs text-muted-foreground">{t('webNoResults')}</p>;
+    return (
+      <p data-testid="web-search-notice" className="mt-1 text-xs text-muted-foreground">
+        {t('webNoResults')}
+      </p>
+    );
   }
   if (!outcome || (outcome.status !== 'unavailable' && outcome.status !== 'skipped')) return null;
   return <WebSearchSkippedNotice outcome={outcome} />;
@@ -94,7 +133,10 @@ function WebSearchSkippedNotice({ outcome }: { outcome: WebSearchOutcome }) {
   const reason = outcome.reason && KNOWN_REASONS.includes(outcome.reason) ? t(`webReason_${outcome.reason}`) : t('webReason_unknown');
   const title = outcome.status === 'skipped' ? t('webSkipped') : t('webUnavailable');
   return (
-    <p data-testid="web-search-notice" className={`mt-1 text-xs ${outcome.status === 'unavailable' ? 'text-destructive' : 'text-muted-foreground'}`}>
+    <p
+      data-testid="web-search-notice"
+      className={`mt-1 text-xs ${outcome.status === 'unavailable' ? 'text-destructive' : 'text-muted-foreground'}`}
+    >
       {t('webNotice', { title, reason })}
     </p>
   );
@@ -130,7 +172,17 @@ export interface EmptyCapabilities {
  *
  * @param props - Icon, label and the chip model.
  */
-function CapabilityChipButton({ icon, label, chip, testId }: { icon: React.ReactNode; label: string; chip: CapabilityChip; testId: string }) {
+function CapabilityChipButton({
+  icon,
+  label,
+  chip,
+  testId,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  chip: CapabilityChip;
+  testId: string;
+}) {
   const toggle = chip.pressed !== undefined;
   const disabled = Boolean(chip.disabledReason) || Boolean(chip.disabled);
   return (
@@ -164,9 +216,30 @@ function CapabilityChips({ capabilities }: { capabilities: EmptyCapabilities }) 
   if (!webSearch && !dbQuery && !attach) return null;
   return (
     <div data-testid="capability-chips" role="group" aria-label={t('capabilitiesLabel')} className="flex flex-wrap gap-2">
-      {webSearch && <CapabilityChipButton testId="capability-web" icon={<GlobeIcon className="size-3.5" aria-hidden="true" />} label={t('capabilityWebSearch')} chip={webSearch} />}
-      {dbQuery && <CapabilityChipButton testId="capability-data" icon={<DatabaseIcon className="size-3.5" aria-hidden="true" />} label={t('capabilityData')} chip={dbQuery} />}
-      {attach && <CapabilityChipButton testId="capability-attach" icon={<PaperclipIcon className="size-3.5" aria-hidden="true" />} label={t('capabilityAttach')} chip={attach} />}
+      {webSearch && (
+        <CapabilityChipButton
+          testId="capability-web"
+          icon={<GlobeIcon className="size-3.5" aria-hidden="true" />}
+          label={t('capabilityWebSearch')}
+          chip={webSearch}
+        />
+      )}
+      {dbQuery && (
+        <CapabilityChipButton
+          testId="capability-data"
+          icon={<DatabaseIcon className="size-3.5" aria-hidden="true" />}
+          label={t('capabilityData')}
+          chip={dbQuery}
+        />
+      )}
+      {attach && (
+        <CapabilityChipButton
+          testId="capability-attach"
+          icon={<PaperclipIcon className="size-3.5" aria-hidden="true" />}
+          label={t('capabilityAttach')}
+          chip={attach}
+        />
+      )}
     </div>
   );
 }
@@ -178,7 +251,15 @@ function CapabilityChips({ capabilities }: { capabilities: EmptyCapabilities }) 
  * @param props - Send callback, active locale and the optional capability chips (full Chat).
  * @returns Left-aligned intro block with a labelled prompt group and the capability chips.
  */
-function EmptyIntro({ onSendPrompt, locale, capabilities }: { onSendPrompt: (prompt: string) => void; locale?: AppLocaleId; capabilities?: EmptyCapabilities }) {
+function EmptyIntro({
+  onSendPrompt,
+  locale,
+  capabilities,
+}: {
+  onSendPrompt: (prompt: string) => void;
+  locale?: AppLocaleId;
+  capabilities?: EmptyCapabilities;
+}) {
   const t = useTranslations('chat');
   const copy = genUiCopy(resolveWidgetLocale(locale));
   // Real topics replace the fixed chips; empty/failed load keeps the fixed ones.
@@ -192,15 +273,27 @@ function EmptyIntro({ onSendPrompt, locale, capabilities }: { onSendPrompt: (pro
       <div data-testid="starter-suggestions" role="group" aria-label={copy.shellSuggestionsLabel} className="flex flex-wrap gap-2">
         {topics.length > 0
           ? topics.map((topic) => (
-            <Button key={topic} type="button" variant="outline" className="h-auto whitespace-normal text-left" onClick={() => onSendPrompt(t('starterTopicPrompt', { topic }))}>
-              {t('starterTopicTitle', { topic })}
-            </Button>
-          ))
+              <Button
+                key={topic}
+                type="button"
+                variant="outline"
+                className="h-auto whitespace-normal text-left"
+                onClick={() => onSendPrompt(t('starterTopicPrompt', { topic }))}
+              >
+                {t('starterTopicTitle', { topic })}
+              </Button>
+            ))
           : STARTER_PROMPTS.map(({ title, prompt }) => (
-            <Button key={title} type="button" variant="outline" className="h-auto whitespace-normal text-left" onClick={() => onSendPrompt(t(prompt))}>
-              {t(title)}
-            </Button>
-          ))}
+              <Button
+                key={title}
+                type="button"
+                variant="outline"
+                className="h-auto whitespace-normal text-left"
+                onClick={() => onSendPrompt(t(prompt))}
+              >
+                {t(title)}
+              </Button>
+            ))}
       </div>
       {capabilities && <CapabilityChips capabilities={capabilities} />}
     </div>
@@ -287,13 +380,17 @@ function relationshipLabelFor(msg: ChatMessage, revised: ChatMessage | undefined
  *
  * @param props - Message, host mode, locale, the optional relationship label and the inline-citation click handler.
  */
-function MessageBody({ msg, mode, locale, relationshipLabel, onSelectCitation }: MessageViewProps & { relationshipLabel: string | null; onSelectCitation?: (citation: Citation) => void }) {
+function MessageBody({
+  msg,
+  mode,
+  locale,
+  relationshipLabel,
+  onSelectCitation,
+}: MessageViewProps & { relationshipLabel: string | null; onSelectCitation?: (citation: Citation) => void }) {
   const t = useTranslations('chat');
   const isUser = msg.role === 'user';
   return (
-    <div
-      className={isUser ? 'rounded-lg bg-raised px-4 py-3 text-sm text-foreground' : 'text-sm text-foreground'}
-    >
+    <div className={isUser ? 'rounded-lg bg-raised px-4 py-3 text-sm text-foreground' : 'text-sm text-foreground'}>
       <span className="sr-only">{isUser ? t('userSpeaker') : msg.model_identity || t('assistantFallback')}</span>
 
       {relationshipLabel && (
@@ -307,9 +404,11 @@ function MessageBody({ msg, mode, locale, relationshipLabel, onSelectCitation }:
 
       {!isUser && msg.reasoning ? <ChatReasoning text={msg.reasoning} /> : null}
 
-      {isUser
-        ? <ChatMarkdown content={msg.content} locale={locale} />
-        : <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} onSelectCitation={onSelectCitation} />}
+      {isUser ? (
+        <ChatMarkdown content={msg.content} locale={locale} />
+      ) : (
+        <RevealMarkdown content={msg.content} citations={msg.citations} locale={locale} onSelectCitation={onSelectCitation} />
+      )}
     </div>
   );
 }
@@ -319,7 +418,16 @@ function MessageBody({ msg, mode, locale, relationshipLabel, onSelectCitation }:
  *
  * @param props - The raw part, test id, prompt handler, host mode, locale and CSRF token.
  */
-function WidgetPart({ part, testId, onSendPrompt, mode, locale, csrfToken, allowSave, citations }: {
+function WidgetPart({
+  part,
+  testId,
+  onSendPrompt,
+  mode,
+  locale,
+  csrfToken,
+  allowSave,
+  citations,
+}: {
   part: UiPart;
   testId: string;
   onSendPrompt?: (prompt: string) => void | Promise<unknown>;
@@ -334,20 +442,8 @@ function WidgetPart({ part, testId, onSendPrompt, mode, locale, csrfToken, allow
   const canSave = allowSave && mode === 'full' && (part as { kind?: string }).kind === 'sandboxed_ui' && sandbox;
   return (
     <div className="w-full" data-testid={testId}>
-      <ToolRendering
-        payload={part as unknown as GenerativeUIPayload}
-        onSendPrompt={onSendPrompt}
-        locale={locale}
-        citations={citations}
-      />
-      {canSave && (
-        <SaveTemplateButton
-          sandbox={sandbox}
-          title={(part as { title?: string }).title}
-          locale={locale}
-          csrfToken={csrfToken}
-        />
-      )}
+      <ToolRendering payload={part as unknown as GenerativeUIPayload} onSendPrompt={onSendPrompt} locale={locale} citations={citations} />
+      {canSave && <SaveTemplateButton sandbox={sandbox} title={(part as { title?: string }).title} locale={locale} csrfToken={csrfToken} />}
     </div>
   );
 }
@@ -361,14 +457,33 @@ function WidgetPart({ part, testId, onSendPrompt, mode, locale, csrfToken, allow
 function VersionNavControl({ nav, onSelect }: { nav: VersionNav; onSelect: (nav: VersionNav, versionId: string) => void }) {
   const t = useTranslations('chat');
   const position = { index: nav.index + 1, count: nav.count };
-  const buttonClass = 'size-8 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  const buttonClass =
+    'size-8 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
   return (
     <div data-testid="version-nav" role="group" aria-label={t('versionGroup')} className="inline-flex items-center">
-      <Button type="button" variant="ghost" size="icon" className={buttonClass} aria-label={t('versionPrev')} disabled={nav.index === 0} onClick={() => onSelect(nav, nav.versionIds[nav.index - 1])}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className={buttonClass}
+        aria-label={t('versionPrev')}
+        disabled={nav.index === 0}
+        onClick={() => onSelect(nav, nav.versionIds[nav.index - 1])}
+      >
         <ChevronLeftIcon className="size-3.5" aria-hidden="true" />
       </Button>
-      <span className="min-w-8 text-center text-xs tabular-nums text-muted-foreground" aria-label={t('versionPositionLabel', position)}>{t('versionPosition', position)}</span>
-      <Button type="button" variant="ghost" size="icon" className={buttonClass} aria-label={t('versionNext')} disabled={nav.index === nav.count - 1} onClick={() => onSelect(nav, nav.versionIds[nav.index + 1])}>
+      <span className="min-w-8 text-center text-xs tabular-nums text-muted-foreground" aria-label={t('versionPositionLabel', position)}>
+        {t('versionPosition', position)}
+      </span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className={buttonClass}
+        aria-label={t('versionNext')}
+        disabled={nav.index === nav.count - 1}
+        onClick={() => onSelect(nav, nav.versionIds[nav.index + 1])}
+      >
         <ChevronRightIcon className="size-3.5" aria-hidden="true" />
       </Button>
     </div>
@@ -376,7 +491,19 @@ function VersionNavControl({ nav, onSelect }: { nav: VersionNav; onSelect: (nav:
 }
 
 /** Copy, edit and regenerate buttons under a message, preceded by the version control when the message has revisions. */
-function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, copy, onEditMessage, onRegenerateMessage, nav, onSelectVersion }: MessageViewProps & {
+function MessageActions({
+  msg,
+  mode,
+  locale,
+  timezone,
+  canEdit,
+  canRegenerate,
+  copy,
+  onEditMessage,
+  onRegenerateMessage,
+  nav,
+  onSelectVersion,
+}: MessageViewProps & {
   timezone: string;
   nav?: VersionNav;
   onSelectVersion?: (nav: VersionNav, versionId: string) => void;
@@ -395,18 +522,22 @@ function MessageActions({ msg, mode, locale, timezone, canEdit, canRegenerate, c
       {nav && onSelectVersion && <VersionNavControl nav={nav} onSelect={onSelectVersion} />}
       {formattedDate && <span className="text-xs text-muted-foreground">{formattedDate}</span>}
       {/* Expose one-click copy for all full-page messages and completed assistant messages in the drawer. */}
-      {(mode === 'full' || (!isUser && Boolean(msg.content))) && <Button
-        type="button"
-        variant="ghost"
-        onClick={() => void copyMessage(msg.id, msg.content)}
-        className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label={t('copyMessage')}
-      >
-        {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-        <span>{copiedMessageId === msg.id ? t('copiedMessage') : t('copyMessage')}</span>
-      </Button>}
+      {(mode === 'full' || (!isUser && Boolean(msg.content))) && (
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => void copyMessage(msg.id, msg.content)}
+          className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={t('copyMessage')}
+        >
+          {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+          <span>{copiedMessageId === msg.id ? t('copiedMessage') : t('copyMessage')}</span>
+        </Button>
+      )}
       {(mode === 'full' || !isUser) && failedMessageId === msg.id && (
-        <span role="status" className="text-xs text-destructive">{t('copyFailed')}</span>
+        <span role="status" className="text-xs text-destructive">
+          {t('copyFailed')}
+        </span>
       )}
       {canEdit && (
         <Button
@@ -445,7 +576,8 @@ function ModelLine({ msg, mode }: { msg: ChatMessage; mode: 'drawer' | 'full' })
   if (msg.role !== 'assistant' || !msg.model_identity) return null;
   return (
     <span data-testid="message-model" className="text-xs text-muted-foreground">
-      {t('modelLine', { model: msg.model_identity })}{mode === 'drawer' && msg.citations?.length ? ` · ${t('sourcesCount', { count: msg.citations.length })}` : ''}
+      {t('modelLine', { model: msg.model_identity })}
+      {mode === 'drawer' && msg.citations?.length ? ` · ${t('sourcesCount', { count: msg.citations.length })}` : ''}
     </span>
   );
 }
@@ -510,12 +642,31 @@ function messageClass(isUser: boolean, editing?: boolean): string {
  * @param props - See {@link TranscriptMessageProps}.
  */
 function TranscriptMessage(props: TranscriptMessageProps) {
-  const { msg, mode, locale, csrfToken, revised, isRevised, latest, widgetPromptHandler, onEditMessage, onRegenerateMessage, onSelectCitation, onOpenSources } = props;
+  const {
+    msg,
+    mode,
+    locale,
+    csrfToken,
+    revised,
+    isRevised,
+    latest,
+    widgetPromptHandler,
+    onEditMessage,
+    onRegenerateMessage,
+    onSelectCitation,
+    onOpenSources,
+  } = props;
   const t = useTranslations('chat');
   const isUser = msg.role === 'user';
   const canEdit = mode === 'full' && isUser && Boolean(msg.response_id) && !isRevised && latest && Boolean(onEditMessage);
-  const canRegenerate = mode === 'full' && !isUser && msg.role === 'assistant'
-    && Boolean(msg.response_id) && !isRevised && latest && Boolean(onRegenerateMessage);
+  const canRegenerate =
+    mode === 'full' &&
+    !isUser &&
+    msg.role === 'assistant' &&
+    Boolean(msg.response_id) &&
+    !isRevised &&
+    latest &&
+    Boolean(onRegenerateMessage);
   return (
     <div
       data-role={msg.role}
@@ -523,22 +674,29 @@ function TranscriptMessage(props: TranscriptMessageProps) {
       data-editing={props.editing ? 'true' : undefined}
       className={messageClass(isUser, props.editing)}
     >
-      <MessageBody msg={msg} mode={mode} locale={locale} relationshipLabel={relationshipLabelFor(msg, revised, t)} onSelectCitation={onSelectCitation} />
+      <MessageBody
+        msg={msg}
+        mode={mode}
+        locale={locale}
+        relationshipLabel={relationshipLabelFor(msg, revised, t)}
+        onSelectCitation={onSelectCitation}
+      />
 
       {/* Widget parts render in order after the text; older rows carry only `generative_ui`. */}
-      {!isUser && messageUiParts(msg).map((part, index) => (
-        <WidgetPart
-          key={uiPartKey(part, index)}
-          part={part}
-          testId="generative-ui-widget"
-          onSendPrompt={widgetPromptHandler(part)}
-          mode={mode}
-          locale={locale}
-          csrfToken={csrfToken}
-          allowSave
-          citations={msg.citations}
-        />
-      ))}
+      {!isUser &&
+        messageUiParts(msg).map((part, index) => (
+          <WidgetPart
+            key={uiPartKey(part, index)}
+            part={part}
+            testId="generative-ui-widget"
+            onSendPrompt={widgetPromptHandler(part)}
+            mode={mode}
+            locale={locale}
+            csrfToken={csrfToken}
+            allowSave
+            citations={msg.citations}
+          />
+        ))}
 
       <SourcesStrip msg={msg} mode={mode} onOpen={onOpenSources} />
 
@@ -561,7 +719,13 @@ function FollowupSuggestions({ suggestions, onSend }: { suggestions: string[]; o
   return (
     <div data-testid="followup-suggestions" role="group" aria-label={t('suggestionsLabel')} className="flex flex-wrap gap-2">
       {suggestions.map((suggestion) => (
-        <Button key={suggestion} type="button" variant="outline" className="h-auto whitespace-normal text-left text-xs" onClick={() => onSend(suggestion)}>
+        <Button
+          key={suggestion}
+          type="button"
+          variant="outline"
+          className="h-auto whitespace-normal text-left text-xs"
+          onClick={() => onSend(suggestion)}
+        >
           {suggestion}
         </Button>
       ))}
@@ -575,13 +739,23 @@ function FollowupSuggestions({ suggestions, onSend }: { suggestions: string[]; o
  * @param props - The last rendered entry, the settled run's steps and the send handler (chips need it).
  * @returns Nothing unless the thread ends with an assistant answer.
  */
-function SettledRunExtras({ last, steps, onSendPrompt }: { last?: RenderEntry; steps: ToolStep[]; onSendPrompt?: (prompt: string) => void }) {
+function SettledRunExtras({
+  last,
+  steps,
+  onSendPrompt,
+}: {
+  last?: RenderEntry;
+  steps: ToolStep[];
+  onSendPrompt?: (prompt: string) => void;
+}) {
   // An older version selected through the version control never gets chips or the step summary of the newest run.
   if (last?.msg.role !== 'assistant' || !last.latest) return null;
   return (
     <>
       <ChatStepList steps={steps} streaming={false} />
-      {onSendPrompt && last.msg.suggestions?.length ? <FollowupSuggestions suggestions={last.msg.suggestions} onSend={onSendPrompt} /> : null}
+      {onSendPrompt && last.msg.suggestions?.length ? (
+        <FollowupSuggestions suggestions={last.msg.suggestions} onSend={onSendPrompt} />
+      ) : null}
     </>
   );
 }
@@ -623,19 +797,37 @@ function StreamingStatus({ activeTool, label }: { activeTool: ToolStatus['tool']
  * @param props - See {@link StreamingBubbleProps}.
  */
 function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
-  const { mode, locale, csrfToken, streamingText, streamingReasoning, streamingCitations, streamingWebSearch, activeTool, streamingUi, isStreaming, widgetPromptHandler, steps, stopped = false } = props;
+  const {
+    mode,
+    locale,
+    csrfToken,
+    streamingText,
+    streamingReasoning,
+    streamingCitations,
+    streamingWebSearch,
+    activeTool,
+    streamingUi,
+    isStreaming,
+    widgetPromptHandler,
+    steps,
+    stopped = false,
+  } = props;
   const t = useTranslations('chat');
   const smoothText = useSmoothedText(streamingText || '');
   const label = activeTool
     ? t(activeTool === 'web_search' ? 'toolSearchingWeb' : 'toolQueryingData')
-    : (isStreaming || streamingText || streamingReasoning ? t('streaming') : t('thinking'));
+    : isStreaming || streamingText || streamingReasoning
+      ? t('streaming')
+      : t('thinking');
   return (
     <div data-streaming-answer className="mr-auto flex w-full scroll-mt-4 flex-col gap-2.5">
       <div className="text-sm text-foreground">
         {/* Live region stays mounted so tool-status changes are announced politely. */}
         {/* A running step already shows its own spinner row, so the single status line would only repeat it. */}
         {/* Once answer text flows the text itself is the signal; the line stays for the first-token wait and while a tool runs. */}
-        {!stopped && !steps.some((step) => step.state === 'running') && (activeTool || !(streamingText || streamingUi.length > 0)) && <StreamingStatus activeTool={activeTool} label={label} />}
+        {!stopped && !steps.some((step) => step.state === 'running') && (activeTool || !(streamingText || streamingUi.length > 0)) && (
+          <StreamingStatus activeTool={activeTool} label={label} />
+        )}
         <ChatStepList steps={steps} streaming={!stopped} />
 
         {mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}
@@ -670,9 +862,16 @@ function StoppedNotice({ target, onRegenerate }: { target?: ChatMessage; onRegen
   const t = useTranslations('chat');
   return (
     <div className="flex items-center gap-2">
-      <p role="status" data-testid="chat-cancelled" className="text-xs text-muted-foreground">{t('cancelled')}</p>
+      <p role="status" data-testid="chat-cancelled" className="text-xs text-muted-foreground">
+        {t('cancelled')}
+      </p>
       {target && onRegenerate && (
-        <Button type="button" variant="ghost" className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground" onClick={() => onRegenerate(target)}>
+        <Button
+          type="button"
+          variant="ghost"
+          className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+          onClick={() => onRegenerate(target)}
+        >
           <RefreshCwIcon className="size-3.5" aria-hidden="true" />
           {t('regenerateAnswer')}
         </Button>
@@ -685,7 +884,10 @@ function StoppedNotice({ target, onRegenerate }: { target?: ChatMessage; onRegen
 function TranscriptError({ error, onRetry }: { error: string; onRetry?: () => void }) {
   const t = useTranslations('chat');
   return (
-    <div role="alert" className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+    <div
+      role="alert"
+      className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+    >
       <div className="flex items-center gap-2">
         <AlertCircleIcon className="size-4 shrink-0" />
         <span>{error}</span>
@@ -700,7 +902,15 @@ function TranscriptError({ error, onRetry }: { error: string; onRetry?: () => vo
 }
 
 /** Starter gallery (or plain empty copy) for a brand-new view. */
-function EmptyState({ onSendPrompt, locale, capabilities }: { onSendPrompt?: (prompt: string) => void; locale: AppLocaleId; capabilities?: EmptyCapabilities }) {
+function EmptyState({
+  onSendPrompt,
+  locale,
+  capabilities,
+}: {
+  onSendPrompt?: (prompt: string) => void;
+  locale: AppLocaleId;
+  capabilities?: EmptyCapabilities;
+}) {
   const t = useTranslations('chat');
   if (onSendPrompt) return <EmptyIntro onSendPrompt={onSendPrompt} locale={locale} capabilities={capabilities} />;
   return (
@@ -724,7 +934,8 @@ function latestTurnLayout(entries: RenderEntry[], mode: 'drawer' | 'full', canRe
   const lastUser = entries.map((entry) => entry.msg.role).lastIndexOf('user');
   return {
     turnStart: mode === 'full' && lastUser >= 0 ? lastUser : entries.length,
-    regenerateTarget: mode === 'full' && canRegenerate && last?.latest && last.msg.role === 'assistant' && last.msg.response_id ? last.msg : undefined,
+    regenerateTarget:
+      mode === 'full' && canRegenerate && last?.latest && last.msg.role === 'assistant' && last.msg.response_id ? last.msg : undefined,
   };
 }
 
@@ -775,7 +986,10 @@ function withTranscriptDefaults(props: ChatTranscriptProps) {
  * Classifies a settled user stop: `partial` while the stopped text is only live output, `persisted` once the stored
  * assistant answer is the last message (the live copy must then disappear, not duplicate it), `none` otherwise.
  */
-function stopState(d: ReturnType<typeof withTranscriptDefaults>, lastRole: ChatMessage['role'] | undefined): 'none' | 'partial' | 'persisted' {
+function stopState(
+  d: ReturnType<typeof withTranscriptDefaults>,
+  lastRole: ChatMessage['role'] | undefined,
+): 'none' | 'partial' | 'persisted' {
   if (!d.cancelled || d.isStreaming || d.isPending) return 'none';
   return lastRole === 'assistant' ? 'persisted' : 'partial';
 }
@@ -823,7 +1037,7 @@ function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
   const copy = useCopyMessage(conversationId);
   const messageById = React.useMemo(() => new Map(messages.map((message) => [message.id, message])), [messages]);
   const revisedMessageIds = React.useMemo(
-    () => new Set(messages.flatMap((message) => message.revision_of_message_id ? [message.revision_of_message_id] : [])),
+    () => new Set(messages.flatMap((message) => (message.revision_of_message_id ? [message.revision_of_message_id] : []))),
     [messages],
   );
   // Chosen older version per revision chain; absent means "newest" so a new revision is followed automatically.
@@ -856,8 +1070,10 @@ function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
  * @returns Accessible conversation transcript viewport.
  */
 export function ChatTranscript(props: ChatTranscriptProps) {
-  const { csrfToken, streamingText, streamingCitations, streamingWebSearch, onRetry, onEditMessage, onRegenerateMessage, onSendPrompt } = props;
-  const { mode, streamingReasoning, cancelled, activeTool, streamingUi, isStreaming, isPending, error, steps } = withTranscriptDefaults(props);
+  const { csrfToken, streamingText, streamingCitations, streamingWebSearch, onRetry, onEditMessage, onRegenerateMessage, onSendPrompt } =
+    props;
+  const { mode, streamingReasoning, cancelled, activeTool, streamingUi, isStreaming, isPending, error, steps } =
+    withTranscriptDefaults(props);
   const t = useTranslations('chat');
   const m = useTranscriptModel(props, isStreaming || isPending);
   const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, hasUnread, jumpToLatest, widgetPromptHandler } = m;
@@ -892,58 +1108,58 @@ export function ChatTranscript(props: ChatTranscriptProps) {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-    <div
-      ref={containerRef}
-      {...scrollHandlers}
-      className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 focus:outline-none [container-type:size]"
-      role="log"
-      aria-live="polite"
-      // aria-busy keeps assistive tech from announcing every streamed token; the settled message is announced once.
-      aria-busy={isStreaming || isPending}
-      aria-label={t('title')}
-    >
-      {/* Readable measure: one centred 720px column inside the transcript region. */}
-      <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-4">
+      <div
+        ref={containerRef}
+        {...scrollHandlers}
+        className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 focus:outline-none [container-type:size]"
+        role="log"
+        aria-live="polite"
+        // aria-busy keeps assistive tech from announcing every streamed token; the settled message is announced once.
+        aria-busy={isStreaming || isPending}
+        aria-label={t('title')}
+      >
+        {/* Readable measure: one centred 720px column inside the transcript region. */}
+        <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-4">
+          {/* Starter gallery is for a brand-new view or a conversation without any message; it never reappears between turns. */}
+          {showStarter && <EmptyState onSendPrompt={onSendPrompt} locale={locale} capabilities={props.capabilities} />}
 
-      {/* Starter gallery is for a brand-new view or a conversation without any message; it never reappears between turns. */}
-      {showStarter && <EmptyState onSendPrompt={onSendPrompt} locale={locale} capabilities={props.capabilities} />}
+          {m.entries.slice(0, turnStart).map(renderMessage)}
 
-      {m.entries.slice(0, turnStart).map(renderMessage)}
+          {/* Full Chat: the newest turn is at least one viewport tall, so its question sits at the top and the answer fills downward. */}
+          <div
+            data-latest-turn={turnStart < m.entries.length ? '' : undefined}
+            className={turnStart < m.entries.length ? 'flex min-h-[calc(100cqh)] scroll-mt-4 flex-col gap-4' : 'contents'}
+          >
+            {m.entries.slice(turnStart).map(renderMessage)}
 
-      {/* Full Chat: the newest turn is at least one viewport tall, so its question sits at the top and the answer fills downward. */}
-      <div data-latest-turn={turnStart < m.entries.length ? '' : undefined} className={turnStart < m.entries.length ? 'flex min-h-[calc(100cqh)] scroll-mt-4 flex-col gap-4' : 'contents'}>
-      {m.entries.slice(turnStart).map(renderMessage)}
+            {!showStreaming && <SettledRunExtras last={m.entries[m.entries.length - 1]} steps={steps} onSendPrompt={onSendPrompt} />}
 
-      {!showStreaming && <SettledRunExtras last={m.entries[m.entries.length - 1]} steps={steps} onSendPrompt={onSendPrompt} />}
+            {showStreaming && (
+              <StreamingBubble
+                steps={steps}
+                mode={mode}
+                locale={locale}
+                csrfToken={csrfToken}
+                streamingText={streamingText}
+                streamingReasoning={streamingReasoning}
+                streamingCitations={streamingCitations}
+                streamingWebSearch={streamingWebSearch}
+                activeTool={activeTool}
+                streamingUi={streamingUi}
+                isStreaming={isStreaming}
+                isPending={isPending}
+                stopped={stopped}
+                widgetPromptHandler={widgetPromptHandler}
+              />
+            )}
 
-      {showStreaming && (
-        <StreamingBubble
-          steps={steps}
-          mode={mode}
-          locale={locale}
-          csrfToken={csrfToken}
-          streamingText={streamingText}
-          streamingReasoning={streamingReasoning}
-          streamingCitations={streamingCitations}
-          streamingWebSearch={streamingWebSearch}
-          activeTool={activeTool}
-          streamingUi={streamingUi}
-          isStreaming={isStreaming}
-          isPending={isPending}
-          stopped={stopped}
-          widgetPromptHandler={widgetPromptHandler}
-        />
-      )}
+            {/* Cancellation is a neutral outcome chosen by the user (or the server), not a failure: no alert, no Retry. */}
+            {cancelled && !error && <StoppedNotice target={regenerateTarget} onRegenerate={onRegenerateMessage} />}
 
-      {/* Cancellation is a neutral outcome chosen by the user (or the server), not a failure: no alert, no Retry. */}
-      {cancelled && !error && (
-        <StoppedNotice target={regenerateTarget} onRegenerate={onRegenerateMessage} />
-      )}
-
-      {error && <TranscriptError error={error} onRetry={onRetry} />}
+            {error && <TranscriptError error={error} onRetry={onRetry} />}
+          </div>
+        </div>
       </div>
-      </div>
-    </div>
       {!isAtBottom && <JumpToLatest onClick={jumpToLatest} hasUnread={hasUnread} />}
     </div>
   );

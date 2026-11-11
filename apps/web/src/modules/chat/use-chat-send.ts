@@ -7,15 +7,7 @@ import { PendingMessageMutationConflictError, type PendingSpecialistRun, type us
 import { writeDraft } from '@/core/app-shell/chat-draft-storage';
 import { uuid7 } from '@/core/uuid7';
 import { startAgentRun, type AgentProfile } from '@/modules/agents/public-api';
-import {
-  chatKeys,
-  createConversation,
-  deleteConversation,
-  hashMessageContent,
-  mutateMessage,
-  sendMessage,
-  type ChatMessage,
-} from './api';
+import { chatKeys, createConversation, deleteConversation, hashMessageContent, mutateMessage, sendMessage, type ChatMessage } from './api';
 import { chatFailureKey, LocalizedError, SELECTION_ERROR_KEYS } from './chat-errors';
 import { MAX_ITEMS, stripItemTitles } from './chat-context-bar';
 import { withAttachments, type useChatAttachments } from './chat-attachments';
@@ -80,10 +72,11 @@ function createViewScope(refs: ChatSessionRefs): ViewScope {
     sendGeneration,
     viewGeneration: refs.selection.generation,
     viewConversationId: refs.selection.conversationId,
-    isCurrent: () => refs.mounted
-      && refs.sendGeneration === sendGeneration
-      && refs.selection.generation === scope.viewGeneration
-      && refs.selection.conversationId === scope.viewConversationId,
+    isCurrent: () =>
+      refs.mounted &&
+      refs.sendGeneration === sendGeneration &&
+      refs.selection.generation === scope.viewGeneration &&
+      refs.selection.conversationId === scope.viewConversationId,
   };
   return scope;
 }
@@ -98,7 +91,13 @@ function newClientRequestId(): string {
 /** Puts the live state into "streaming response `responseId`" with all previous output cleared. */
 function beginStreaming(live: ChatLiveActions, responseId: string, clearInput: boolean): void {
   live.clearOutput();
-  live.patch({ activeResponseId: responseId, isPending: false, isStreaming: true, steps: [], ...(clearInput ? { inputRequest: null } : {}) });
+  live.patch({
+    activeResponseId: responseId,
+    isPending: false,
+    isStreaming: true,
+    steps: [],
+    ...(clearInput ? { inputRequest: null } : {}),
+  });
 }
 
 /**
@@ -124,7 +123,12 @@ async function runMessageMutation(
   live.patch({ error: null, cancelled: false, isPending: true });
   try {
     const baseContentHash = await hashMessageContent(target.content);
-    const envelope = chatCtrl.getOrCreatePendingMessageMutation(targetConversationId, { action, targetMessageId, baseContentHash, content });
+    const envelope = chatCtrl.getOrCreatePendingMessageMutation(targetConversationId, {
+      action,
+      targetMessageId,
+      baseContentHash,
+      content,
+    });
     const run = await mutateMessage(
       targetConversationId,
       targetMessageId,
@@ -156,9 +160,10 @@ async function runMessageMutation(
     if (scope.isCurrent()) {
       live.patch({
         isPending: false,
-        error: mutationError instanceof PendingMessageMutationConflictError
-          ? d.t('retryOriginalRevisionFirst')
-          : d.t(chatFailureKey(mutationError, 'revisionFailed')),
+        error:
+          mutationError instanceof PendingMessageMutationConflictError
+            ? d.t('retryOriginalRevisionFirst')
+            : d.t(chatFailureKey(mutationError, 'revisionFailed')),
       });
     }
   }
@@ -192,11 +197,16 @@ function captureDay(chatCtrl: ChatController): { date: string; timezone: string 
  * @throws LocalizedError when a specialist is selected but unavailable.
  */
 function resolveSelectedProfile(d: ChatSendDeps, retryEnvelope: PendingSpecialistRun | null): AgentProfile | undefined {
-  const selected = d.mode === 'full' && d.selectedProfileId !== 'assistant'
-    ? d.profiles?.find((profile) => profile.id === d.selectedProfileId)
-    : undefined;
-  if (d.mode === 'full' && d.selectedProfileId !== 'assistant' && !retryEnvelope
-      && (!selected || !selected.enabled || selected.capability === 'unavailable')) {
+  const selected =
+    d.mode === 'full' && d.selectedProfileId !== 'assistant'
+      ? d.profiles?.find((profile) => profile.id === d.selectedProfileId)
+      : undefined;
+  if (
+    d.mode === 'full' &&
+    d.selectedProfileId !== 'assistant' &&
+    !retryEnvelope &&
+    (!selected || !selected.enabled || selected.capability === 'unavailable')
+  ) {
     throw new LocalizedError(d.tAgents('agentUnavailable'));
   }
   return selected;
@@ -266,12 +276,16 @@ async function startSpecialistRun(
   };
   attempt.attemptedProfileRun = envelope;
   chatCtrl.setPendingSpecialistRun(envelope);
-  const run = await startAgentRun(envelope.profileId, {
-    prompt: envelope.prompt,
-    expected_profile_revision: envelope.profileRevision,
-    conversation_id: envelope.conversationId,
-    client_request_id: envelope.clientRequestId,
-  }, d.csrfToken);
+  const run = await startAgentRun(
+    envelope.profileId,
+    {
+      prompt: envelope.prompt,
+      expected_profile_revision: envelope.profileRevision,
+      conversation_id: envelope.conversationId,
+      client_request_id: envelope.clientRequestId,
+    },
+    d.csrfToken,
+  );
   chatCtrl.clearPendingSpecialistRun(envelope.conversationId);
   void d.queryClient.invalidateQueries({ queryKey: ['agent-runs', 'conversation', attempt.targetId] });
   if (scope.isCurrent()) {
@@ -335,15 +349,9 @@ async function sendAssistantMessage(
  *
  * @returns The user-visible error message.
  */
-function describeSendError(
-  d: ChatSendDeps,
-  attempt: SendAttempt,
-  err: unknown,
-  content: string,
-  hasSelectionItems: boolean,
-): string {
-  const selectionFailure = attempt.selectionStage && hasSelectionItems && err instanceof ApiError && !!err.code
-    && Object.hasOwn(SELECTION_ERROR_KEYS, err.code);
+function describeSendError(d: ChatSendDeps, attempt: SendAttempt, err: unknown, content: string, hasSelectionItems: boolean): string {
+  const selectionFailure =
+    attempt.selectionStage && hasSelectionItems && err instanceof ApiError && !!err.code && Object.hasOwn(SELECTION_ERROR_KEYS, err.code);
   if (err instanceof LocalizedError) return err.message;
   if (selectionFailure) return d.t(chatFailureKey(err, 'errorSending'));
   if (attempt.attemptedProfileRun?.prompt === content) return d.tAgents('agentStartFailed');
@@ -399,8 +407,17 @@ function rejectUnresolvedSpecialist(d: ChatSendDeps, content: string): boolean {
  * Resets the live state after a failed send and shows the localized error, only while this send still owns the view.
  * A send the server did not accept (409/422/429/network) must not lose the text the composer already cleared.
  */
-function reportSendFailure(d: ChatSendDeps, scope: ViewScope, attempt: SendAttempt, err: unknown, content: string, hasSelectionItems: boolean, day: unknown): void {
-  if (attempt.clientRequestId && attempt.targetId && !attempt.accepted) removeOptimisticMessage(d.queryClient, attempt.targetId, attempt.clientRequestId);
+function reportSendFailure(
+  d: ChatSendDeps,
+  scope: ViewScope,
+  attempt: SendAttempt,
+  err: unknown,
+  content: string,
+  hasSelectionItems: boolean,
+  day: unknown,
+): void {
+  if (attempt.clientRequestId && attempt.targetId && !attempt.accepted)
+    removeOptimisticMessage(d.queryClient, attempt.targetId, attempt.clientRequestId);
   const abandoned = discardEmptyConversation(d, scope, attempt, content, day);
   if (!scope.isCurrent()) return;
   d.live.patch({ isPending: false, isStreaming: false, activeResponseId: null });
@@ -418,9 +435,11 @@ function reportSendFailure(d: ChatSendDeps, scope: ViewScope, attempt: SendAttem
 function discardEmptyConversation(d: ChatSendDeps, scope: ViewScope, attempt: SendAttempt, content: string, day: unknown): boolean {
   const id = attempt.createdConversationId;
   if (!id || attempt.accepted || attempt.attemptedProfileRun || day) return false;
-  void deleteConversation(id, d.csrfToken).catch(() => undefined).finally(() => {
-    void d.queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
-  });
+  void deleteConversation(id, d.csrfToken)
+    .catch(() => undefined)
+    .finally(() => {
+      void d.queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+    });
   if (!scope.isCurrent()) return false;
   // Keep the pending/error state across the selection change (see useConversationSelection's promoted guard).
   d.refs.setPromotedSelection({ conversationId: null, generation: scope.viewGeneration + 1, sendGeneration: scope.sendGeneration });
@@ -450,12 +469,17 @@ function assertSelectionWithinLimit(selItems: { documentId: string }[], attempt:
 async function executeSend(d: ChatSendDeps, scope: ViewScope, content: string): Promise<boolean> {
   const { chatCtrl, mode, pendingProfileRun } = d;
   const retryEnvelope = pendingProfileRun?.prompt === content ? pendingProfileRun : null;
-  const attempt: SendAttempt = { targetId: retryEnvelope?.conversationId ?? d.conversationId, accepted: false, selectionStage: false, attemptedProfileRun: null };
+  const attempt: SendAttempt = {
+    targetId: retryEnvelope?.conversationId ?? d.conversationId,
+    accepted: false,
+    selectionStage: false,
+    attemptedProfileRun: null,
+  };
   // Day captured before any await: a day conversation is bound to it no matter where the user navigates.
   const day = captureDay(chatCtrl);
   // Ready Chat attachments join the U3 selection mechanism; the composer blocks Send while any are not ready.
   const sendContext = stripItemTitles(mode === 'full' ? withAttachments(chatCtrl.context, d.attachments.items) : chatCtrl.context);
-  const selItems = sendContext?.kind === 'selection' ? sendContext.items ?? [] : [];
+  const selItems = sendContext?.kind === 'selection' ? (sendContext.items ?? []) : [];
   try {
     assertSelectionWithinLimit(selItems, attempt);
     const selected = resolveSelectedProfile(d, retryEnvelope);
@@ -481,9 +505,7 @@ async function executeSend(d: ChatSendDeps, scope: ViewScope, content: string): 
  * @returns `handleMessageMutation(action, targetMessageId, content?)` and `handleSend(content)` (resolves true once the
  * server accepted the message).
  */
-export function useChatSend(
-  deps: Omit<ChatSendDeps, 'queryClient' | 't' | 'tAgents'>,
-): {
+export function useChatSend(deps: Omit<ChatSendDeps, 'queryClient' | 't' | 'tAgents'>): {
   handleMessageMutation: (action: 'edit' | 'regenerate', targetMessageId: string, content?: string) => Promise<void>;
   handleSend: (content: string) => Promise<boolean>;
 } {
@@ -494,11 +516,39 @@ export function useChatSend(
   const full = React.useMemo<ChatSendDeps>(
     () => ({ ...deps, queryClient, t, tAgents }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `deps` is a fresh object per render; its members are listed
-    [deps.refs, deps.live, deps.chatCtrl, deps.csrfToken, deps.conversationId, deps.mode, deps.onConversationCreated, deps.messages, deps.isBusy, deps.providerReady, deps.openProviderGate, deps.modelChoice, deps.webSearchRequested, deps.dbQueryEffective, deps.resetToggles, deps.effectiveEditingMessageId, deps.clearEditing, deps.selectedProfileId, deps.profiles, deps.pendingProfileRun, deps.attachments, deps.setActiveAgentRunId, deps.streamResponseRun, queryClient, t, tAgents],
+    [
+      deps.refs,
+      deps.live,
+      deps.chatCtrl,
+      deps.csrfToken,
+      deps.conversationId,
+      deps.mode,
+      deps.onConversationCreated,
+      deps.messages,
+      deps.isBusy,
+      deps.providerReady,
+      deps.openProviderGate,
+      deps.modelChoice,
+      deps.webSearchRequested,
+      deps.dbQueryEffective,
+      deps.resetToggles,
+      deps.effectiveEditingMessageId,
+      deps.clearEditing,
+      deps.selectedProfileId,
+      deps.profiles,
+      deps.pendingProfileRun,
+      deps.attachments,
+      deps.setActiveAgentRunId,
+      deps.streamResponseRun,
+      queryClient,
+      t,
+      tAgents,
+    ],
   );
   /** Edits a user prompt or regenerates an assistant response; failures surface through the live error banner. */
   const handleMessageMutation = React.useCallback(
-    (action: 'edit' | 'regenerate', targetMessageId: string, content?: string) => runMessageMutation(full, action, targetMessageId, content),
+    (action: 'edit' | 'regenerate', targetMessageId: string, content?: string) =>
+      runMessageMutation(full, action, targetMessageId, content),
     [full],
   );
   /** Sends a message; resolves true once the server accepted it. */

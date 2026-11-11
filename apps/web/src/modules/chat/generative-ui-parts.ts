@@ -48,10 +48,7 @@ export function markUiPartRebuilding(parts: readonly UiPart[], partId: string): 
  * @param message Message-like object with the optional widget fields.
  * @returns Parts in render order (possibly empty).
  */
-export function messageUiParts(message: {
-  generative_ui?: UiPart | null;
-  generative_ui_parts?: UiPart[] | null;
-}): UiPart[] {
+export function messageUiParts(message: { generative_ui?: UiPart | null; generative_ui_parts?: UiPart[] | null }): UiPart[] {
   if (Array.isArray(message.generative_ui_parts) && message.generative_ui_parts.length > 0) {
     return message.generative_ui_parts;
   }

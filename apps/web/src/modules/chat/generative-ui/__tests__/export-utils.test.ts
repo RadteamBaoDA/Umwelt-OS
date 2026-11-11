@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  buildStandaloneHtmlDocument,
-  downloadHtmlDocument,
-} from '../sandbox/export-utils';
+import { buildStandaloneHtmlDocument, downloadHtmlDocument } from '../sandbox/export-utils';
 
 describe('buildStandaloneHtmlDocument & downloadHtmlDocument', () => {
   const sampleContent = {
@@ -80,15 +77,9 @@ describe('buildStandaloneHtmlDocument & downloadHtmlDocument', () => {
   });
 
   it('triggers a Blob file download and revokes the object URL', () => {
-    const createObjectUrlSpy = vi
-      .spyOn(URL, 'createObjectURL')
-      .mockReturnValue('blob:umwelt-test');
-    const revokeObjectUrlSpy = vi
-      .spyOn(URL, 'revokeObjectURL')
-      .mockImplementation(() => undefined);
-    const clickSpy = vi
-      .spyOn(HTMLAnchorElement.prototype, 'click')
-      .mockImplementation(() => undefined);
+    const createObjectUrlSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:umwelt-test');
+    const revokeObjectUrlSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
 
     downloadHtmlDocument('<!DOCTYPE html><html></html>', 'Portfolio Allocation 2026');
 

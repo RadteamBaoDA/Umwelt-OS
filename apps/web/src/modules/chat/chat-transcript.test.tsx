@@ -21,14 +21,19 @@ vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q, addEvent
 /** Renders the transcript with English messages. */
 function renderTranscript(props: Partial<React.ComponentProps<typeof ChatTranscript>>) {
   return render(
-    <QueryClientProvider client={queryClient}><NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-      <ChatTranscript messages={[]} mode="full" {...props} />
-    </NextIntlClientProvider></QueryClientProvider>,
+    <QueryClientProvider client={queryClient}>
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <ChatTranscript messages={[]} mode="full" {...props} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
   );
 }
 
 describe('ChatTranscript empty state', () => {
-  beforeEach(() => { topicsMock.fetchTopics.mockReset(); topicsMock.fetchTopics.mockRejectedValue(new Error('offline')); });
+  beforeEach(() => {
+    topicsMock.fetchTopics.mockReset();
+    topicsMock.fetchTopics.mockRejectedValue(new Error('offline'));
+  });
   it('shows one sentence and three plain prompt buttons that send their prompt', async () => {
     const onSendPrompt = vi.fn();
     renderTranscript({ onSendPrompt });
@@ -68,9 +73,11 @@ describe('ChatTranscript tool status', () => {
     const { rerender } = renderTranscript({ activeTool: 'query_collected_data' });
     expect(screen.getByTestId('tool-status').textContent).toBe(messages['en-us'].chat.toolQueryingData);
     rerender(
-      <QueryClientProvider client={queryClient}><NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-        <ChatTranscript messages={[]} mode="full" activeTool={null} />
-      </NextIntlClientProvider></QueryClientProvider>,
+      <QueryClientProvider client={queryClient}>
+        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+          <ChatTranscript messages={[]} mode="full" activeTool={null} />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
     );
     expect(screen.queryByTestId('tool-status')).toBeNull();
   });
@@ -86,11 +93,16 @@ describe('ChatTranscript tool status', () => {
 
 describe('ChatTranscript sources and model line', () => {
   const cited = {
-    id: 'a1', role: 'assistant', content: 'Answer [1].', model_identity: 'model-x',
+    id: 'a1',
+    role: 'assistant',
+    content: 'Answer [1].',
+    model_identity: 'model-x',
     citations: [{ sourceType: 'web', url: 'https://example.com/a', title: 'Example', quote: 'q' }],
   } as unknown as React.ComponentProps<typeof ChatTranscript>['messages'][number];
 
-  beforeEach(() => { Element.prototype.scrollTo = vi.fn() as unknown as typeof Element.prototype.scrollTo; });
+  beforeEach(() => {
+    Element.prototype.scrollTo = vi.fn() as unknown as typeof Element.prototype.scrollTo;
+  });
 
   it('shows the model and a clickable sources strip on the full page', async () => {
     const onSelectCitation = vi.fn();
@@ -120,7 +132,10 @@ describe('ChatTranscript sources and model line', () => {
 });
 
 describe('ChatTranscript capability chips', () => {
-  beforeEach(() => { topicsMock.fetchTopics.mockReset(); topicsMock.fetchTopics.mockRejectedValue(new Error('offline')); });
+  beforeEach(() => {
+    topicsMock.fetchTopics.mockReset();
+    topicsMock.fetchTopics.mockRejectedValue(new Error('offline'));
+  });
 
   it('toggles composer options and opens the picker without sending a message', async () => {
     const onSendPrompt = vi.fn();
@@ -153,13 +168,31 @@ describe('ChatTranscript capability chips', () => {
 
 /** Minimal committed message for the stop / edit tests. */
 function msg(id: string, role: 'user' | 'assistant', extra: Record<string, unknown> = {}) {
-  return { id, conversation_id: 'c1', role, content: `${role} ${id}`, client_request_id: null, model_identity: null, citations: [], response_id: 'r-' + id, revision_of_message_id: null, created_at: '2026-01-01T00:00:00Z', ...extra } as never;
+  return {
+    id,
+    conversation_id: 'c1',
+    role,
+    content: `${role} ${id}`,
+    client_request_id: null,
+    model_identity: null,
+    citations: [],
+    response_id: 'r-' + id,
+    revision_of_message_id: null,
+    created_at: '2026-01-01T00:00:00Z',
+    ...extra,
+  } as never;
 }
 
 describe('ChatTranscript stop, status line and empty conversation', () => {
   it('keeps the stopped partial without spinner or status label and offers Regenerate for a regenerable answer', async () => {
     const onRegenerateMessage = vi.fn();
-    renderTranscript({ conversationId: 'c1', messages: [msg('u1', 'user')], streamingText: 'partial answer', cancelled: true, onRegenerateMessage });
+    renderTranscript({
+      conversationId: 'c1',
+      messages: [msg('u1', 'user')],
+      streamingText: 'partial answer',
+      cancelled: true,
+      onRegenerateMessage,
+    });
     expect(screen.getByText('partial answer')).toBeTruthy();
     expect(screen.queryByText(messages['en-us'].chat.streaming)).toBeNull();
     expect(screen.queryByText(messages['en-us'].chat.thinking)).toBeNull();
@@ -169,7 +202,13 @@ describe('ChatTranscript stop, status line and empty conversation', () => {
 
   it('does not duplicate the partial once the persisted answer is the last message, and Regenerate targets it', async () => {
     const onRegenerateMessage = vi.fn();
-    renderTranscript({ conversationId: 'c1', messages: [msg('u1', 'user'), msg('a1', 'assistant', { content: 'partial answer' })], streamingText: 'partial answer', cancelled: true, onRegenerateMessage });
+    renderTranscript({
+      conversationId: 'c1',
+      messages: [msg('u1', 'user'), msg('a1', 'assistant', { content: 'partial answer' })],
+      streamingText: 'partial answer',
+      cancelled: true,
+      onRegenerateMessage,
+    });
     expect(screen.getAllByText('partial answer')).toHaveLength(1);
     const buttons = screen.getAllByRole('button', { name: messages['en-us'].chat.regenerateAnswer });
     await userEvent.click(buttons[buttons.length - 1]);
@@ -180,9 +219,11 @@ describe('ChatTranscript stop, status line and empty conversation', () => {
     const { rerender } = renderTranscript({ conversationId: 'c1', messages: [msg('u1', 'user')], isStreaming: true });
     expect(screen.getByText(messages['en-us'].chat.streaming)).toBeTruthy();
     rerender(
-      <QueryClientProvider client={queryClient}><NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-        <ChatTranscript messages={[msg('u1', 'user')]} mode="full" isStreaming streamingText="Hello" />
-      </NextIntlClientProvider></QueryClientProvider>,
+      <QueryClientProvider client={queryClient}>
+        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+          <ChatTranscript messages={[msg('u1', 'user')]} mode="full" isStreaming streamingText="Hello" />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
     );
     expect(screen.queryByText(messages['en-us'].chat.streaming)).toBeNull();
   });
@@ -196,7 +237,11 @@ describe('ChatTranscript stop, status line and empty conversation', () => {
   });
 
   it('highlights the message being edited and wraps the newest turn in full Chat', () => {
-    const { container } = renderTranscript({ conversationId: 'c1', messages: [msg('u1', 'user'), msg('a1', 'assistant'), msg('u2', 'user')], editingMessageId: 'u2' });
+    const { container } = renderTranscript({
+      conversationId: 'c1',
+      messages: [msg('u1', 'user'), msg('a1', 'assistant'), msg('u2', 'user')],
+      editingMessageId: 'u2',
+    });
     expect(container.querySelector('[data-message-id="u2"]')?.getAttribute('data-editing')).toBe('true');
     expect(container.querySelector('[data-message-id="u1"]')?.getAttribute('data-editing')).toBeNull();
     expect(container.querySelector('[data-latest-turn] [data-message-id="u2"]')).toBeTruthy();

@@ -44,7 +44,10 @@ function imageResponse(type = 'image/png', size = 10) {
 beforeEach(() => {
   frame.postMessage.mockReset();
   apiRequest.mockReset().mockResolvedValue({ privacy: { allow_widget_remote_media: true } });
-  vi.stubGlobal('fetch', vi.fn(async () => imageResponse()));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => imageResponse()),
+  );
   URL.createObjectURL = vi.fn(() => 'blob:never');
   render(
     <PromptBridgeProvider onSendPrompt={() => undefined}>
@@ -106,17 +109,26 @@ describe('sandbox image loader bridge', () => {
   });
 
   it('rejects non-image and svg responses', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => imageResponse('text/html')));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => imageResponse('text/html')),
+    );
     ask(PROXY);
     await waitFor(() => expect(lastReply()?.type).toBe('umwelt:load-image-error'));
-    vi.stubGlobal('fetch', vi.fn(async () => imageResponse('image/svg+xml')));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => imageResponse('image/svg+xml')),
+    );
     frame.postMessage.mockClear();
     ask(PROXY, {}, 'i2');
     await waitFor(() => expect(lastReply()?.type).toBe('umwelt:load-image-error'));
   });
 
   it('rejects oversize images', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => imageResponse('image/png', 5 * 1024 * 1024 + 1)));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => imageResponse('image/png', 5 * 1024 * 1024 + 1)),
+    );
     ask(PROXY);
     await waitFor(() => expect(lastReply()?.type).toBe('umwelt:load-image-error'));
     expect(URL.createObjectURL).not.toHaveBeenCalled();
@@ -147,7 +159,7 @@ describe('sandbox image loader bridge', () => {
 
 describe('frame content', () => {
   it('keeps the CSP unchanged and exposes loadImage', () => {
-    expect(buildCspMetaTag('')).toContain("img-src data: blob:;");
+    expect(buildCspMetaTag('')).toContain('img-src data: blob:;');
     expect(buildCspMetaTag('')).toContain("connect-src 'none'");
     expect(buildCspMetaTag('')).toContain("default-src 'none'");
     expect(SANDBOX_BRIDGE_JS).toContain('window.loadImage');

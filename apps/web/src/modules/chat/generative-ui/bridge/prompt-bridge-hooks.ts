@@ -102,7 +102,12 @@ interface PromptHookOptions {
  *
  * @returns `(rawPrompt, replyTo?, requestId?) => accepted`.
  */
-export function useHostPromptDispatch({ frames, onSendPromptRef, disabledRef, cooldownMs }: PromptHookOptions & {
+export function useHostPromptDispatch({
+  frames,
+  onSendPromptRef,
+  disabledRef,
+  cooldownMs,
+}: PromptHookOptions & {
   onSendPromptRef: React.MutableRefObject<(prompt: string) => void | Promise<void>>;
 }) {
   const { replyToFrame, lastAcceptedAtRef } = frames;
@@ -151,7 +156,13 @@ export function useHostPromptDispatch({ frames, onSendPromptRef, disabledRef, co
  *
  * @returns `(rawPrompt, replyTo, requestId?) => void`.
  */
-export function useSandboxPromptDraft({ frames, onDraftPromptRef, disabledRef, cooldownMs, onNotice }: PromptHookOptions & {
+export function useSandboxPromptDraft({
+  frames,
+  onDraftPromptRef,
+  disabledRef,
+  cooldownMs,
+  onNotice,
+}: PromptHookOptions & {
   onDraftPromptRef: React.MutableRefObject<((prompt: string) => void) | undefined>;
   /** Host-side status line: `drafted` after the composer was filled, `blocked` with the refusal text otherwise. */
   onNotice?: (notice: { kind: 'drafted' | 'blocked'; message?: string }) => void;
@@ -159,8 +170,7 @@ export function useSandboxPromptDraft({ frames, onDraftPromptRef, disabledRef, c
   const { replyToFrame, lastAcceptedAtRef } = frames;
   return React.useCallback(
     (rawPrompt: string, replyTo: unknown, requestId?: string): void => {
-      const fail = (message: string) =>
-        replyToFrame(replyTo, { type: SEND_PROMPT_ERROR_TYPE, id: requestId, retryable: true, message });
+      const fail = (message: string) => replyToFrame(replyTo, { type: SEND_PROMPT_ERROR_TYPE, id: requestId, retryable: true, message });
       const draft = onDraftPromptRef.current;
       if (disabledRef.current || !draft) {
         fail('Prompt bridge is disabled');
@@ -216,9 +226,9 @@ function admitImageRequest(requests: Map<unknown, number[]>, source: unknown, no
 function readRemoteMediaAllowed(cacheRef: React.MutableRefObject<{ allowed: Promise<boolean>; at: number } | null>): Promise<boolean> {
   let cached = cacheRef.current;
   if (!cached || Date.now() - cached.at > PRIVACY_CACHE_MS) {
-    const allowed = apiRequest<{ privacy?: { allow_widget_remote_media?: boolean } }>(
-      '/api/v1/settings/ai',
-    ).then((settings) => settings.privacy?.allow_widget_remote_media === true);
+    const allowed = apiRequest<{ privacy?: { allow_widget_remote_media?: boolean } }>('/api/v1/settings/ai').then(
+      (settings) => settings.privacy?.allow_widget_remote_media === true,
+    );
     cached = { allowed, at: Date.now() };
     cacheRef.current = cached;
     const entry = cached;
@@ -243,8 +253,7 @@ export function useWidgetImageLoader(frames: FrameRegistry) {
   const privacyCacheRef = React.useRef<{ allowed: Promise<boolean>; at: number } | null>(null);
   return React.useCallback(
     async (source: unknown, id: string, rawUrl: string) => {
-      const fail = (message: string) =>
-        replyToFrame(source, { type: LOAD_IMAGE_ERROR_TYPE, id, message });
+      const fail = (message: string) => replyToFrame(source, { type: LOAD_IMAGE_ERROR_TYPE, id, message });
       const url = resolveMediaUrl(rawUrl, window.location.origin);
       if (!url) {
         fail('Image URL not allowed');
@@ -278,7 +287,12 @@ export function useWidgetImageLoader(frames: FrameRegistry) {
  * Attaches the single window `message` listener owning frame -> host messages (send-prompt, resize, load-image,
  * open-link). Resize reports go to the callback the frame registered (already clamped by `validateBridgeMessage`). Unauthenticated or malformed messages are dropped by `validateBridgeMessage`.
  */
-export function useBridgeMessageListener({ frames, draftSandboxPrompt, handleLoadImage, requestLink }: {
+export function useBridgeMessageListener({
+  frames,
+  draftSandboxPrompt,
+  handleLoadImage,
+  requestLink,
+}: {
   frames: FrameRegistry;
   draftSandboxPrompt: (rawPrompt: string, replyTo: unknown, requestId?: string) => void;
   handleLoadImage: (source: unknown, id: string, rawUrl: string) => Promise<void>;

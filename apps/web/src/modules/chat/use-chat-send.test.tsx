@@ -95,7 +95,9 @@ describe('useChatSend', () => {
     const { deps, chatCtrl } = makeDeps({ providerReady: false });
     const { result } = render(deps);
     let ok = true;
-    await act(async () => { ok = await result.current.handleSend('hello'); });
+    await act(async () => {
+      ok = await result.current.handleSend('hello');
+    });
     expect(ok).toBe(false);
     expect(chatCtrl.setDraft).toHaveBeenCalledWith('hello');
     expect(deps.openProviderGate).toHaveBeenCalled();
@@ -108,7 +110,9 @@ describe('useChatSend', () => {
     const { deps, refs, live } = makeDeps({ onConversationCreated: onCreated });
     const { result } = render(deps);
     let ok = false;
-    await act(async () => { ok = await result.current.handleSend('hello world'); });
+    await act(async () => {
+      ok = await result.current.handleSend('hello world');
+    });
 
     expect(ok).toBe(true);
     expect(h.createConversation).toHaveBeenCalledWith(expect.objectContaining({ title: 'hello world' }), 'csrf');
@@ -126,7 +130,9 @@ describe('useChatSend', () => {
     h.createConversation.mockResolvedValue({ id: 'new2' });
     const { deps, chatCtrl } = makeDeps();
     const { result } = render(deps);
-    await act(async () => { await result.current.handleSend('x'); });
+    await act(async () => {
+      await result.current.handleSend('x');
+    });
     expect(chatCtrl.setActiveConversationId).toHaveBeenCalledWith('new2');
   });
 
@@ -135,7 +141,9 @@ describe('useChatSend', () => {
     const { deps, chatCtrl, live } = makeDeps({ pendingProfileRun: pending, conversationId: 'c1' });
     const { result } = render(deps);
     let ok = true;
-    await act(async () => { ok = await result.current.handleSend('different text'); });
+    await act(async () => {
+      ok = await result.current.handleSend('different text');
+    });
     expect(ok).toBe(false);
     expect(chatCtrl.setDraft).toHaveBeenCalledWith('other');
     expect(live.patch).toHaveBeenLastCalledWith({ isPending: false, error: 'agentRetryPending' });
@@ -146,7 +154,9 @@ describe('useChatSend', () => {
   it('rejects an unavailable specialist with agentUnavailable and restores the draft', async () => {
     const { deps, chatCtrl, live } = makeDeps({ conversationId: 'c1', selectedProfileId: 'spec', profiles: [] });
     const { result } = render(deps);
-    await act(async () => { await result.current.handleSend('hi'); });
+    await act(async () => {
+      await result.current.handleSend('hi');
+    });
     expect(chatCtrl.setDraft).toHaveBeenLastCalledWith('hi');
     expect(live.patch).toHaveBeenLastCalledWith({ error: 'agentUnavailable' });
   });
@@ -154,13 +164,25 @@ describe('useChatSend', () => {
   it('starts a specialist run with an immutable envelope instead of sending a message', async () => {
     h.startAgentRun.mockResolvedValue({ id: 'run1' });
     const profile = { id: 'spec', revision: 3, enabled: true, capability: 'available' };
-    const { deps, chatCtrl } = makeDeps({ conversationId: 'c1', selectedProfileId: 'spec', profiles: [profile] as unknown as Deps['profiles'] });
+    const { deps, chatCtrl } = makeDeps({
+      conversationId: 'c1',
+      selectedProfileId: 'spec',
+      profiles: [profile] as unknown as Deps['profiles'],
+    });
     const { result } = render(deps);
     let ok = false;
-    await act(async () => { ok = await result.current.handleSend('go'); });
+    await act(async () => {
+      ok = await result.current.handleSend('go');
+    });
     expect(ok).toBe(true);
-    expect(chatCtrl.setPendingSpecialistRun).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'go', profileId: 'spec', profileRevision: 3, conversationId: 'c1' }));
-    expect(h.startAgentRun).toHaveBeenCalledWith('spec', expect.objectContaining({ prompt: 'go', expected_profile_revision: 3, conversation_id: 'c1' }), 'csrf');
+    expect(chatCtrl.setPendingSpecialistRun).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: 'go', profileId: 'spec', profileRevision: 3, conversationId: 'c1' }),
+    );
+    expect(h.startAgentRun).toHaveBeenCalledWith(
+      'spec',
+      expect.objectContaining({ prompt: 'go', expected_profile_revision: 3, conversation_id: 'c1' }),
+      'csrf',
+    );
     expect(chatCtrl.clearPendingSpecialistRun).toHaveBeenCalledWith('c1');
     expect(deps.setActiveAgentRunId).toHaveBeenCalledWith('run1');
     expect(h.sendMessage).not.toHaveBeenCalled();
@@ -171,7 +193,9 @@ describe('useChatSend', () => {
     const { deps, chatCtrl, live } = makeDeps({ conversationId: 'c1' }, { context: { kind: 'selection', items } });
     const { result } = render(deps);
     let ok = true;
-    await act(async () => { ok = await result.current.handleSend('hello'); });
+    await act(async () => {
+      ok = await result.current.handleSend('hello');
+    });
     expect(ok).toBe(false);
     expect(h.sendMessage).not.toHaveBeenCalled();
     expect(chatCtrl.setDraft).toHaveBeenLastCalledWith('hello');
@@ -183,7 +207,9 @@ describe('useChatSend', () => {
     const { deps, chatCtrl, live } = makeDeps({ conversationId: 'c1' });
     const { result } = render(deps);
     let ok = true;
-    await act(async () => { ok = await result.current.handleSend('hello'); });
+    await act(async () => {
+      ok = await result.current.handleSend('hello');
+    });
     expect(ok).toBe(false);
     expect(chatCtrl.setDraft).toHaveBeenLastCalledWith('hello');
     expect(live.patch).toHaveBeenLastCalledWith({ error: 'errorConflict' });
@@ -191,16 +217,25 @@ describe('useChatSend', () => {
 
   it('shows the user message at once (keyed by client_request_id) and removes it when the server rejects', async () => {
     let reject: (e: unknown) => void = () => undefined;
-    h.sendMessage.mockReturnValue(new Promise((_, r) => { reject = r; }));
+    h.sendMessage.mockReturnValue(
+      new Promise((_, r) => {
+        reject = r;
+      }),
+    );
     const client = new QueryClient();
     const { deps } = makeDeps({ conversationId: 'c1' });
     const { result } = render(deps, client);
     let pending: Promise<boolean> = Promise.resolve(false);
-    await act(async () => { pending = result.current.handleSend('hello'); });
+    await act(async () => {
+      pending = result.current.handleSend('hello');
+    });
     const shown = client.getQueryData<{ content: string; client_request_id: string }[]>(['chat', 'optimistic', 'c1']);
     expect(shown).toHaveLength(1);
     expect(shown?.[0]).toMatchObject({ content: 'hello', client_request_id: h.sendMessage.mock.calls[0][1].client_request_id });
-    await act(async () => { reject(new ApiError(409, 'conflict')); await pending; });
+    await act(async () => {
+      reject(new ApiError(409, 'conflict'));
+      await pending;
+    });
     expect(client.getQueryData(['chat', 'optimistic', 'c1'])).toEqual([]);
   });
 
@@ -208,7 +243,9 @@ describe('useChatSend', () => {
     const client = new QueryClient();
     const { deps } = makeDeps({ conversationId: 'c1' });
     const { result } = render(deps, client);
-    await act(async () => { await result.current.handleSend('hello'); });
+    await act(async () => {
+      await result.current.handleSend('hello');
+    });
     expect(client.getQueryData<unknown[]>(['chat', 'optimistic', 'c1'])).toHaveLength(1);
   });
 
@@ -217,7 +254,9 @@ describe('useChatSend', () => {
     h.sendMessage.mockRejectedValue(new ApiError(422, 'bad'));
     const { deps, chatCtrl, refs } = makeDeps({ onConversationCreated: vi.fn() });
     const { result } = render(deps);
-    await act(async () => { await result.current.handleSend('hello'); });
+    await act(async () => {
+      await result.current.handleSend('hello');
+    });
     expect(h.deleteConversation).toHaveBeenCalledWith('new1', 'csrf');
     expect(chatCtrl.setActiveConversationId).toHaveBeenCalledWith(null);
     expect(refs.promotedSelection).toMatchObject({ conversationId: null });
@@ -227,28 +266,46 @@ describe('useChatSend', () => {
     h.sendMessage.mockRejectedValue(new ApiError(422, 'bad'));
     const { deps } = makeDeps({ conversationId: 'c1' });
     const { result } = render(deps);
-    await act(async () => { await result.current.handleSend('hello'); });
+    await act(async () => {
+      await result.current.handleSend('hello');
+    });
     expect(h.deleteConversation).not.toHaveBeenCalled();
   });
 
   it('edit and regenerate send base_content_hash and the envelope client_request_id', async () => {
     const { deps, chatCtrl } = makeDeps({ conversationId: 'c1' });
     const { result } = render(deps);
-    await act(async () => { await result.current.handleMessageMutation('edit', 'm1', 'new text'); });
-    expect(h.mutateMessage).toHaveBeenCalledWith('c1', 'm1', { action: 'edit', base_content_hash: 'hash-1', client_request_id: 'req-1', content: 'new text' }, 'csrf');
+    await act(async () => {
+      await result.current.handleMessageMutation('edit', 'm1', 'new text');
+    });
+    expect(h.mutateMessage).toHaveBeenCalledWith(
+      'c1',
+      'm1',
+      { action: 'edit', base_content_hash: 'hash-1', client_request_id: 'req-1', content: 'new text' },
+      'csrf',
+    );
     expect(chatCtrl.clearPendingMessageMutation).toHaveBeenCalledWith('c1', 'req-1');
     expect(deps.streamResponseRun).toHaveBeenCalledWith('r2', 'c1', expect.any(Function));
 
-    await act(async () => { await result.current.handleMessageMutation('regenerate', 'm1'); });
+    await act(async () => {
+      await result.current.handleMessageMutation('regenerate', 'm1');
+    });
     expect(h.mutateMessage.mock.calls[1][2]).toEqual({ action: 'regenerate', base_content_hash: 'hash-1', client_request_id: 'req-1' });
   });
 
   it('maps a pending-mutation conflict to retryOriginalRevisionFirst', async () => {
-    const { deps, live } = makeDeps({ conversationId: 'c1' }, {
-      getOrCreatePendingMessageMutation: vi.fn((): never => { throw new PendingMessageMutationConflictError(); }),
-    });
+    const { deps, live } = makeDeps(
+      { conversationId: 'c1' },
+      {
+        getOrCreatePendingMessageMutation: vi.fn((): never => {
+          throw new PendingMessageMutationConflictError();
+        }),
+      },
+    );
     const { result } = render(deps);
-    await act(async () => { await result.current.handleMessageMutation('edit', 'm1', 'x'); });
+    await act(async () => {
+      await result.current.handleMessageMutation('edit', 'm1', 'x');
+    });
     expect(h.mutateMessage).not.toHaveBeenCalled();
     expect(live.patch).toHaveBeenLastCalledWith({ isPending: false, error: 'retryOriginalRevisionFirst' });
   });
@@ -256,10 +313,14 @@ describe('useChatSend', () => {
   it('ignores a mutation while busy or for an unknown target', async () => {
     const busy = makeDeps({ conversationId: 'c1', isBusy: true });
     const busyHook = render(busy.deps);
-    await act(async () => { await busyHook.result.current.handleMessageMutation('edit', 'm1', 'x'); });
+    await act(async () => {
+      await busyHook.result.current.handleMessageMutation('edit', 'm1', 'x');
+    });
     const unknown = makeDeps({ conversationId: 'c1' });
     const unknownHook = render(unknown.deps);
-    await act(async () => { await unknownHook.result.current.handleMessageMutation('edit', 'nope', 'x'); });
+    await act(async () => {
+      await unknownHook.result.current.handleMessageMutation('edit', 'nope', 'x');
+    });
     expect(h.mutateMessage).not.toHaveBeenCalled();
   });
 
@@ -267,7 +328,9 @@ describe('useChatSend', () => {
     const { deps } = makeDeps({ conversationId: 'c1', effectiveEditingMessageId: 'm1' });
     const { result } = render(deps);
     let ok = true;
-    await act(async () => { ok = await result.current.handleSend('edited'); });
+    await act(async () => {
+      ok = await result.current.handleSend('edited');
+    });
     expect(ok).toBe(false);
     expect(h.mutateMessage).toHaveBeenCalledTimes(1);
     expect(h.sendMessage).not.toHaveBeenCalled();

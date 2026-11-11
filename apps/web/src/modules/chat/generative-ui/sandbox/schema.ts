@@ -5,14 +5,7 @@ import { z } from 'zod';
  * Ordering ensures initialHeight and placeholderMessages arrive first, followed by
  * CSS rules, progressive HTML markup, and finally JavaScript functions/expressions.
  */
-export const CANONICAL_STREAM_KEYS = [
-  'initialHeight',
-  'placeholderMessages',
-  'css',
-  'html',
-  'jsFunctions',
-  'jsExpressions',
-] as const;
+export const CANONICAL_STREAM_KEYS = ['initialHeight', 'placeholderMessages', 'css', 'html', 'jsFunctions', 'jsExpressions'] as const;
 
 export type CanonicalStreamKey = (typeof CANONICAL_STREAM_KEYS)[number];
 
@@ -30,15 +23,7 @@ export interface SandboxedUiArgs {
 }
 
 /** Supported generative UI widget kinds across Pillar 1 (sandboxed) and Pillar 2 (curated). */
-export type GenerativeUIKind =
-  | 'sandboxed_ui'
-  | 'plan'
-  | 'table'
-  | 'bar_chart'
-  | 'pie_chart'
-  | 'meeting_time_picker'
-  | 'form'
-  | 'answer';
+export type GenerativeUIKind = 'sandboxed_ui' | 'plan' | 'table' | 'bar_chart' | 'pie_chart' | 'meeting_time_picker' | 'form' | 'answer';
 
 /** Image resolved server-side to the same-origin signed media proxy (`src` starts with `/`). */
 export interface AnswerImage {
@@ -125,31 +110,33 @@ export interface GenerativeUIPayload {
     source?: string;
     is_sample?: boolean;
   };
-  form?: {
-    title?: string;
-    description?: string;
-    subtitle?: string;
-    durationMinutes?: number;
-    duration_minutes?: number;
-    timezone?: string;
-    selected_slot_id?: string | null;
-    slots: Array<{
-      id: string;
-      date: string;
-      time?: string;
-      start_time?: string;
-      end_time?: string;
-      label?: string;
-      available?: boolean;
-      recommended?: boolean;
-    }>;
-  } | {
-    /** Generic input form (`render_form`); validated by `inputFormPayloadSchema`. */
-    title?: string;
-    description?: string;
-    submit_label?: string;
-    fields: Array<Record<string, unknown>>;
-  };
+  form?:
+    | {
+        title?: string;
+        description?: string;
+        subtitle?: string;
+        durationMinutes?: number;
+        duration_minutes?: number;
+        timezone?: string;
+        selected_slot_id?: string | null;
+        slots: Array<{
+          id: string;
+          date: string;
+          time?: string;
+          start_time?: string;
+          end_time?: string;
+          label?: string;
+          available?: boolean;
+          recommended?: boolean;
+        }>;
+      }
+    | {
+        /** Generic input form (`render_form`); validated by `inputFormPayloadSchema`. */
+        title?: string;
+        description?: string;
+        submit_label?: string;
+        fields: Array<Record<string, unknown>>;
+      };
 }
 
 /** Progressive streaming lifecycle stage derived from canonical key arrival. */
@@ -211,9 +198,7 @@ export function validateSandboxedUiArgs(input: unknown): SandboxedUiArgs {
   if (typeof raw.jsExpressions === 'string') {
     normalized.jsExpressions = raw.jsExpressions;
   } else if (Array.isArray(raw.jsExpressions)) {
-    normalized.jsExpressions = raw.jsExpressions
-      .filter((expr): expr is string => typeof expr === 'string')
-      .join('\n');
+    normalized.jsExpressions = raw.jsExpressions.filter((expr): expr is string => typeof expr === 'string').join('\n');
   }
 
   if (typeof raw.title === 'string' && raw.title.trim().length > 0) {
@@ -231,10 +216,7 @@ export function validateSandboxedUiArgs(input: unknown): SandboxedUiArgs {
  * @param status - Stream lifecycle status (`'streaming'` or `'completed'`).
  * @returns Active `StreamingStage` (`'placeholder'`, `'css'`, `'html'`, `'js'`, or `'completed'`).
  */
-export function getStreamingStage(
-  args?: SandboxedUiArgs | null,
-  status: 'streaming' | 'completed' = 'streaming',
-): StreamingStage {
+export function getStreamingStage(args?: SandboxedUiArgs | null, status: 'streaming' | 'completed' = 'streaming'): StreamingStage {
   if (status === 'completed') {
     return 'completed';
   }

@@ -9,12 +9,22 @@ import type { AgentRun } from '@/modules/agents/public-api';
 import { profileTitleKeys } from './chat-session-header';
 
 // Agent chrome renders only for runs/agent mode; keeping it out of the main chunk keeps plain chat first-load small.
-const ConversationAgentActivity = dynamic(() => import('@/modules/agents/conversation-agent-activity').then((m) => m.ConversationAgentActivity), { ssr: false });
+const ConversationAgentActivity = dynamic(
+  () => import('@/modules/agents/conversation-agent-activity').then((m) => m.ConversationAgentActivity),
+  { ssr: false },
+);
 const AgentRunDetail = dynamic(() => import('@/modules/agents/run-detail').then((m) => m.AgentRunDetail), { ssr: false });
 
-const runStatusKeys: Record<string, 'agentRunQueued' | 'agentRunRunning' | 'agentRunWaitingApproval' | 'agentRunSucceeded' | 'agentRunFailed' | 'agentRunCancelled'> = {
-  queued: 'agentRunQueued', running: 'agentRunRunning', waiting_approval: 'agentRunWaitingApproval',
-  succeeded: 'agentRunSucceeded', failed: 'agentRunFailed', cancelled: 'agentRunCancelled',
+const runStatusKeys: Record<
+  string,
+  'agentRunQueued' | 'agentRunRunning' | 'agentRunWaitingApproval' | 'agentRunSucceeded' | 'agentRunFailed' | 'agentRunCancelled'
+> = {
+  queued: 'agentRunQueued',
+  running: 'agentRunRunning',
+  waiting_approval: 'agentRunWaitingApproval',
+  succeeded: 'agentRunSucceeded',
+  failed: 'agentRunFailed',
+  cancelled: 'agentRunCancelled',
 };
 
 const ACTIVE_RUN_STATUSES = ['queued', 'running', 'waiting_approval'];
@@ -45,7 +55,8 @@ export function AgentPanels(props: AgentPanelsProps) {
     <>
       {pendingProfileRun ? (
         <div role="status" className="shrink-0 border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          {tAgents(profileTitleKeys[pendingProfileRun.profileId] ?? 'agentProfileKnowledge')} · {tAgents('agentPendingProfileRevision', { revision: pendingProfileRun.profileRevision })}
+          {tAgents(profileTitleKeys[pendingProfileRun.profileId] ?? 'agentProfileKnowledge')} ·{' '}
+          {tAgents('agentPendingProfileRevision', { revision: pendingProfileRun.profileRevision })}
         </div>
       ) : null}
       <ConversationAgentActivity
@@ -60,9 +71,24 @@ export function AgentPanels(props: AgentPanelsProps) {
       )}
       {agentMode && runs?.items.length ? (
         <details className="shrink-0 border-b border-border px-4 py-2">
-          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">{tAgents('agentHistory')} ({runs.items.length})</summary>
+          <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+            {tAgents('agentHistory')} ({runs.items.length})
+          </summary>
           <div className="mt-2 flex flex-wrap gap-2">
-            {runs.items.map((run) => <Button key={run.id} type="button" variant="outline" className="h-auto rounded-md px-2 py-1 text-xs font-normal" onClick={() => onOpenRun(run.id)}>{run.agent_id === 'assistant' ? tAgents('agentAssistant') : tAgents(profileTitleKeys[run.agent_id] ?? 'agentProfileKnowledge')}: {tAgents(runStatusKeys[run.status] ?? 'agentRunFailed')}</Button>)}
+            {runs.items.map((run) => (
+              <Button
+                key={run.id}
+                type="button"
+                variant="outline"
+                className="h-auto rounded-md px-2 py-1 text-xs font-normal"
+                onClick={() => onOpenRun(run.id)}
+              >
+                {run.agent_id === 'assistant'
+                  ? tAgents('agentAssistant')
+                  : tAgents(profileTitleKeys[run.agent_id] ?? 'agentProfileKnowledge')}
+                : {tAgents(runStatusKeys[run.status] ?? 'agentRunFailed')}
+              </Button>
+            ))}
           </div>
         </details>
       ) : null}

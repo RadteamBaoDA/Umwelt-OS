@@ -46,7 +46,12 @@ describe('ChatComposer web search toggle', () => {
 describe('ChatComposer auto-focus', () => {
   /** Renders the composer with an auto-focus key and a pointer-type stub. */
   function renderWith(key: string | undefined, fine: boolean) {
-    vi.stubGlobal('matchMedia', (q: string) => ({ matches: fine && q.includes('fine'), media: q, addEventListener() {}, removeEventListener() {} }));
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: fine && q.includes('fine'),
+      media: q,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
     return render(
       <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
         <ChatComposer mode="full" value="" onChange={vi.fn()} onSend={vi.fn()} isStreaming={false} autoFocusKey={key} />

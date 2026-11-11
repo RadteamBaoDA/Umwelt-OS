@@ -2,7 +2,14 @@ import * as React from 'react';
 import { apiRequest } from '@/core/api';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { chatKeys, getConversation, streamResponseEvents, type ConversationDetail, type MessageSuggestions, type StreamEventsOptions } from './api';
+import {
+  chatKeys,
+  getConversation,
+  streamResponseEvents,
+  type ConversationDetail,
+  type MessageSuggestions,
+  type StreamEventsOptions,
+} from './api';
 import type { ChatLiveActions } from './chat-live-state';
 import { chatFailureKey } from './chat-errors';
 import type { ChatSessionRefs } from './chat-session-refs';
@@ -56,18 +63,40 @@ export function buildContentHandlers(
 ): StreamEventsOptions {
   const { dispatch } = live;
   return {
-    onReasoning: (chunk) => { if (isCurrentView()) dispatch({ type: 'appendReasoning', chunk }); },
-    onDelta: (chunk) => { if (isCurrentView()) dispatch({ type: 'appendDelta', chunk }); },
-    onToolStatus: ({ tool, state }) => { if (isCurrentView()) dispatch({ type: 'toolStatus', tool, state }); },
-    onToolStep: (step) => { if (isCurrentView()) dispatch({ type: 'toolStep', step }); },
-    onWebSearch: (outcome) => { if (isCurrentView()) dispatch({ type: 'webSearch', outcome }); },
-    onCitations: (cites) => { if (isCurrentView()) live.patch({ streamingCitations: cites }); },
+    onReasoning: (chunk) => {
+      if (isCurrentView()) dispatch({ type: 'appendReasoning', chunk });
+    },
+    onDelta: (chunk) => {
+      if (isCurrentView()) dispatch({ type: 'appendDelta', chunk });
+    },
+    onToolStatus: ({ tool, state }) => {
+      if (isCurrentView()) dispatch({ type: 'toolStatus', tool, state });
+    },
+    onToolStep: (step) => {
+      if (isCurrentView()) dispatch({ type: 'toolStep', step });
+    },
+    onWebSearch: (outcome) => {
+      if (isCurrentView()) dispatch({ type: 'webSearch', outcome });
+    },
+    onCitations: (cites) => {
+      if (isCurrentView()) live.patch({ streamingCitations: cites });
+    },
     // One entry per widget part, merged by part_id so parts stream and complete independently.
-    onUiDelta: (ui) => { if (isCurrentView()) dispatch({ type: 'uiUpsert', ui }); },
-    onUiDone: (ui) => { if (isCurrentView()) dispatch({ type: 'uiUpsert', ui }); },
-    onUiDiscard: (partId) => { if (isCurrentView()) dispatch({ type: 'uiDiscard', partId }); },
-    onThemeRequest: (mode) => { if (isCurrentView()) setThemeRequest(mode); },
-    onInputRequest: (request) => { if (isCurrentView()) live.patch({ inputRequest: { request, state: 'pending' } }); },
+    onUiDelta: (ui) => {
+      if (isCurrentView()) dispatch({ type: 'uiUpsert', ui });
+    },
+    onUiDone: (ui) => {
+      if (isCurrentView()) dispatch({ type: 'uiUpsert', ui });
+    },
+    onUiDiscard: (partId) => {
+      if (isCurrentView()) dispatch({ type: 'uiDiscard', partId });
+    },
+    onThemeRequest: (mode) => {
+      if (isCurrentView()) setThemeRequest(mode);
+    },
+    onInputRequest: (request) => {
+      if (isCurrentView()) live.patch({ inputRequest: { request, state: 'pending' } });
+    },
     onInputResolved: (resolved) => {
       if (!isCurrentView()) return;
       dispatch({ type: 'inputResolved', resolved });
@@ -101,9 +130,11 @@ function applyLiveTitle(queryClient: QueryClient, conversationId: string, title:
  * @param payload - `message.suggestions` payload; ignored when the message is not (yet) in the cache.
  */
 function applyLiveSuggestions(queryClient: QueryClient, conversationId: string, payload: MessageSuggestions): void {
-  queryClient.setQueryData<ConversationDetail>(chatKeys.conversation(conversationId), (old) => (old
-    ? { ...old, messages: old.messages.map((m) => (m.id === payload.message_id ? { ...m, suggestions: payload.suggestions } : m)) }
-    : old));
+  queryClient.setQueryData<ConversationDetail>(chatKeys.conversation(conversationId), (old) =>
+    old
+      ? { ...old, messages: old.messages.map((m) => (m.id === payload.message_id ? { ...m, suggestions: payload.suggestions } : m)) }
+      : old,
+  );
 }
 
 /**
@@ -148,14 +179,16 @@ function handleFailed(ctx: StreamContext, payload: unknown): void {
 function handleAuthExpired(ctx: StreamContext): void {
   ctx.live.patch({ isStreaming: false, activeResponseId: null, error: ctx.t('sessionExpired') });
   // apiRequest dispatches umwelt:unauthorized only on a real 401.
-  void apiRequest('/api/v1/auth/session').then(async () => {
-    await ctx.run.promise?.catch(() => undefined);
-    if (ctx.refs.attachedStream === ctx.run.attachment) ctx.refs.setAttachedStream(null);
-    if (!ctx.isCurrentView() || ctx.refs.attachedStream) return;
-    ctx.live.dispatch({ type: 'clearPartial' });
-    ctx.live.patch({ error: null, cancelled: false, activeResponseId: ctx.responseId, isStreaming: true });
-    await ctx.refs.streamRun?.(ctx.responseId, ctx.conversationId, ctx.isCurrentView);
-  }).catch(() => undefined);
+  void apiRequest('/api/v1/auth/session')
+    .then(async () => {
+      await ctx.run.promise?.catch(() => undefined);
+      if (ctx.refs.attachedStream === ctx.run.attachment) ctx.refs.setAttachedStream(null);
+      if (!ctx.isCurrentView() || ctx.refs.attachedStream) return;
+      ctx.live.dispatch({ type: 'clearPartial' });
+      ctx.live.patch({ error: null, cancelled: false, activeResponseId: ctx.responseId, isStreaming: true });
+      await ctx.refs.streamRun?.(ctx.responseId, ctx.conversationId, ctx.isCurrentView);
+    })
+    .catch(() => undefined);
 }
 
 /**
@@ -202,12 +235,20 @@ async function consumeWithResume(ctx: StreamContext, streamOptions: StreamEvents
     } catch (err: unknown) {
       const status = (err as { status?: number }).status;
       // Only transient failures (network, 5xx) resume; 4xx means the server rejected this stream.
-      if (abortCtrl.signal.aborted || ctx.run.terminal || (status !== undefined && status < 500) || attempt >= MAX_RESUME_ATTEMPTS) throw err;
+      if (abortCtrl.signal.aborted || ctx.run.terminal || (status !== undefined && status < 500) || attempt >= MAX_RESUME_ATTEMPTS)
+        throw err;
       // Without a cursor the server replays from the start, so drop partial local output to avoid duplicates.
       if (!streamOptions.lastEventId && ctx.isCurrentView()) ctx.live.dispatch({ type: 'clearPartial' });
       await new Promise<void>((resolve) => {
         const timer = window.setTimeout(resolve, RESUME_BACKOFF_MS * 2 ** attempt);
-        abortCtrl.signal.addEventListener('abort', () => { window.clearTimeout(timer); resolve(); }, { once: true });
+        abortCtrl.signal.addEventListener(
+          'abort',
+          () => {
+            window.clearTimeout(timer);
+            resolve();
+          },
+          { once: true },
+        );
       });
       if (abortCtrl.signal.aborted) return;
     }
@@ -230,12 +271,20 @@ async function recoverLostStream(ctx: StreamContext): Promise<void> {
   const firstRecovery = !refs.reattached.has(responseId);
   refs.reattached.add(responseId);
   void ctx.queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
-  const detail = await ctx.queryClient.fetchQuery({
-    queryKey: chatKeys.conversation(ctx.conversationId),
-    queryFn: () => getConversation(ctx.conversationId),
-    staleTime: 0,
-  }).catch(() => null);
-  if (firstRecovery && refs.attachCount.get(responseId) === 1 && detail?.active_response_id === responseId && !refs.attachedStream && isCurrentView()) {
+  const detail = await ctx.queryClient
+    .fetchQuery({
+      queryKey: chatKeys.conversation(ctx.conversationId),
+      queryFn: () => getConversation(ctx.conversationId),
+      staleTime: 0,
+    })
+    .catch(() => null);
+  if (
+    firstRecovery &&
+    refs.attachCount.get(responseId) === 1 &&
+    detail?.active_response_id === responseId &&
+    !refs.attachedStream &&
+    isCurrentView()
+  ) {
     live.patch({ activeResponseId: responseId, isStreaming: true });
     await refs.streamRun?.(responseId, ctx.conversationId, isCurrentView).catch(() => undefined);
   }
@@ -258,54 +307,74 @@ export function useChatStream(
   const queryClient = useQueryClient();
   const tChat = useTranslations('chat');
   const t = tChat as unknown as StreamContext['t'];
-  const streamResponseRun = React.useCallback(async (
-    responseId: string,
-    responseConversationId: string,
-    isCurrentView: IsCurrentView,
-  ) => {
-    const attached = refs.attachedStream;
-    if (attached?.responseId === responseId && attached.conversationId === responseConversationId && !attached.controller.signal.aborted) {
-      await attached.promise;
-      return;
-    }
-    attached?.controller.abort();
-    refs.attachCount.set(responseId, (refs.attachCount.get(responseId) ?? 0) + 1);
-    const abortCtrl = new AbortController();
-    refs.setAbortController(abortCtrl);
-    const run: StreamRunState = { terminal: false, unavailable: false, promise: null, attachment: null };
-    const ctx: StreamContext = { responseId, conversationId: responseConversationId, isCurrentView, live, refs, queryClient, t, abortCtrl, run };
-    const streamOptions: StreamEventsOptions = {
-      signal: abortCtrl.signal,
-      ...buildContentHandlers(live, isCurrentView, setThemeRequest),
-      // Live title/suggestions arrive after message.done (the stream stays open until message.followup.done); they go straight into the cache and persisted values win later.
-      onConversationTitle: (title) => applyLiveTitle(queryClient, responseConversationId, title),
-      onSuggestions: (payload) => applyLiveSuggestions(queryClient, responseConversationId, payload),
-      onDone: () => handleDone(ctx),
-      onStatus: (status, payload) => handleStatus(ctx, status, payload),
-      // Failures are surfaced once, by the resume loop, after automatic resumes are exhausted.
-      onError: () => undefined,
-    };
-    const streamPromise = consumeWithResume(ctx, streamOptions);
-    run.promise = streamPromise;
-    const streamAttachment = { responseId, conversationId: responseConversationId, controller: abortCtrl, promise: streamPromise };
-    run.attachment = streamAttachment;
-    refs.setAttachedStream(streamAttachment);
-    try {
-      await streamPromise;
-    } catch (streamError: unknown) {
-      // fetch() can reject before streamResponseEvents reaches its SSE reader error callback.
-      if (!abortCtrl.signal.aborted && isCurrentView()) {
-        live.patch({ isStreaming: false, isPending: false, activeResponseId: null, error: t(chatFailureKey(streamError, 'errorSending')) });
+  const streamResponseRun = React.useCallback(
+    async (responseId: string, responseConversationId: string, isCurrentView: IsCurrentView) => {
+      const attached = refs.attachedStream;
+      if (
+        attached?.responseId === responseId &&
+        attached.conversationId === responseConversationId &&
+        !attached.controller.signal.aborted
+      ) {
+        await attached.promise;
+        return;
       }
-      throw streamError;
-    } finally {
-      if (refs.attachedStream === streamAttachment) {
-        refs.setAttachedStream(null);
-        if (refs.abortController === abortCtrl) refs.setAbortController(null);
+      attached?.controller.abort();
+      refs.attachCount.set(responseId, (refs.attachCount.get(responseId) ?? 0) + 1);
+      const abortCtrl = new AbortController();
+      refs.setAbortController(abortCtrl);
+      const run: StreamRunState = { terminal: false, unavailable: false, promise: null, attachment: null };
+      const ctx: StreamContext = {
+        responseId,
+        conversationId: responseConversationId,
+        isCurrentView,
+        live,
+        refs,
+        queryClient,
+        t,
+        abortCtrl,
+        run,
+      };
+      const streamOptions: StreamEventsOptions = {
+        signal: abortCtrl.signal,
+        ...buildContentHandlers(live, isCurrentView, setThemeRequest),
+        // Live title/suggestions arrive after message.done (the stream stays open until message.followup.done); they go straight into the cache and persisted values win later.
+        onConversationTitle: (title) => applyLiveTitle(queryClient, responseConversationId, title),
+        onSuggestions: (payload) => applyLiveSuggestions(queryClient, responseConversationId, payload),
+        onDone: () => handleDone(ctx),
+        onStatus: (status, payload) => handleStatus(ctx, status, payload),
+        // Failures are surfaced once, by the resume loop, after automatic resumes are exhausted.
+        onError: () => undefined,
+      };
+      const streamPromise = consumeWithResume(ctx, streamOptions);
+      run.promise = streamPromise;
+      const streamAttachment = { responseId, conversationId: responseConversationId, controller: abortCtrl, promise: streamPromise };
+      run.attachment = streamAttachment;
+      refs.setAttachedStream(streamAttachment);
+      try {
+        await streamPromise;
+      } catch (streamError: unknown) {
+        // fetch() can reject before streamResponseEvents reaches its SSE reader error callback.
+        if (!abortCtrl.signal.aborted && isCurrentView()) {
+          live.patch({
+            isStreaming: false,
+            isPending: false,
+            activeResponseId: null,
+            error: t(chatFailureKey(streamError, 'errorSending')),
+          });
+        }
+        throw streamError;
+      } finally {
+        if (refs.attachedStream === streamAttachment) {
+          refs.setAttachedStream(null);
+          if (refs.abortController === abortCtrl) refs.setAbortController(null);
+        }
       }
-    }
-    if (!run.terminal && (run.unavailable || !abortCtrl.signal.aborted)) await recoverLostStream(ctx);
-  }, [queryClient, t, refs, live, setThemeRequest]);
-  React.useEffect(() => { refs.setStreamRun(streamResponseRun); }, [refs, streamResponseRun]);
+      if (!run.terminal && (run.unavailable || !abortCtrl.signal.aborted)) await recoverLostStream(ctx);
+    },
+    [queryClient, t, refs, live, setThemeRequest],
+  );
+  React.useEffect(() => {
+    refs.setStreamRun(streamResponseRun);
+  }, [refs, streamResponseRun]);
   return streamResponseRun;
 }

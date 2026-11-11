@@ -16,8 +16,32 @@ import './chat-gaps.css';
 
 const SAFE_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const MARKDOWN_TAGS = [
-  'a', 'blockquote', 'br', 'code', 'del', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'hr', 'li', 'ol', 'p', 'pre', 'span', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul',
+  'a',
+  'blockquote',
+  'br',
+  'code',
+  'del',
+  'em',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'hr',
+  'li',
+  'ol',
+  'p',
+  'pre',
+  'span',
+  'strong',
+  'table',
+  'tbody',
+  'td',
+  'th',
+  'thead',
+  'tr',
+  'ul',
 ];
 
 /** Accepts web/email and same-origin relative links while rejecting active or ambiguous schemes. */
@@ -32,9 +56,17 @@ function isSafeMarkdownLink(href: string): boolean {
 
 /** Escapes plain markdown image alt text because remote images are intentionally not fetched. */
 function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  })[character] ?? character);
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[character] ?? character,
+  );
 }
 
 const CODE_BLOCK_CLASS = 'my-2 max-w-full overflow-x-auto rounded-md border border-border bg-muted p-3 text-xs';
@@ -108,19 +140,24 @@ function getPurifier(): ReturnType<typeof DOMPurify> {
 function linkCitations(html: string, citations?: Citation[]): string {
   if (!citations?.length) return html;
   // Odd split indices capture <pre>...</pre>, <code>...</code>, or HTML tags and must remain untouched.
-  return html.split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>|<[^>]+>)/).map((part, index) => {
-    if (index % 2) return part;
-    return part.replace(/\[(\d{1,2})\]/g, (marker, num: string) => {
-      const citation = citations[Number(num) - 1];
-      if (!citation) return marker;
-      if (citation.sourceType === 'web') {
-        const href = safeHttpUrl(citation.url);
-        return href ? `<a class="cite" data-cite="${num}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer nofollow">${num}</a>` : marker;
-      }
-      const query = new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId });
-      return `<a class="cite" data-cite="${num}" href="${escapeHtml(`/knowledge/documents/${encodeURIComponent(citation.documentId)}?${query}#cited-chunk`)}">${num}</a>`;
-    });
-  }).join('');
+  return html
+    .split(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>|<[^>]+>)/)
+    .map((part, index) => {
+      if (index % 2) return part;
+      return part.replace(/\[(\d{1,2})\]/g, (marker, num: string) => {
+        const citation = citations[Number(num) - 1];
+        if (!citation) return marker;
+        if (citation.sourceType === 'web') {
+          const href = safeHttpUrl(citation.url);
+          return href
+            ? `<a class="cite" data-cite="${num}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer nofollow">${num}</a>`
+            : marker;
+        }
+        const query = new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId });
+        return `<a class="cite" data-cite="${num}" href="${escapeHtml(`/knowledge/documents/${encodeURIComponent(citation.documentId)}?${query}#cited-chunk`)}">${num}</a>`;
+      });
+    })
+    .join('');
 }
 
 /**
@@ -151,8 +188,12 @@ export function ChatMarkdown({
     // Load highlight.js on the first fenced block; the effect below re-renders once it resolves.
     if (!hasFence || highlighterReady) return;
     let live = true;
-    void loadHighlighter().then(() => { if (live) setHighlighterReady(true); });
-    return () => { live = false; };
+    void loadHighlighter().then(() => {
+      if (live) setHighlighterReady(true);
+    });
+    return () => {
+      live = false;
+    };
   }, [hasFence, highlighterReady]);
 
   React.useEffect(() => {
@@ -160,13 +201,15 @@ export function ChatMarkdown({
     const purifier = getPurifier();
     const rendered = linkCitations(markdownRenderer.render(content), citations);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sanitizer needs the live window, so state is set after mount
-    setSafeHtml(purifier.sanitize(rendered, {
-      ALLOWED_TAGS: MARKDOWN_TAGS,
-      ALLOWED_ATTR: ['class', 'href', 'rel', 'target', 'data-cite'],
-      ALLOW_DATA_ATTR: false,
-      ALLOW_ARIA_ATTR: false,
-      FORBID_TAGS: ['img', 'iframe', 'object', 'script', 'style', 'svg', 'math'],
-    }));
+    setSafeHtml(
+      purifier.sanitize(rendered, {
+        ALLOWED_TAGS: MARKDOWN_TAGS,
+        ALLOWED_ATTR: ['class', 'href', 'rel', 'target', 'data-cite'],
+        ALLOW_DATA_ATTR: false,
+        ALLOW_ARIA_ATTR: false,
+        FORBID_TAGS: ['img', 'iframe', 'object', 'script', 'style', 'svg', 'math'],
+      }),
+    );
   }, [content, citations, highlighterReady]);
 
   React.useEffect(() => {
@@ -204,12 +247,12 @@ export function ChatMarkdown({
 
   return (
     <>
-    <div
-      ref={containerRef}
-      className="chat-markdown min-w-0 break-words text-sm leading-relaxed text-foreground [&_p]:my-1.5 [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-semibold [&_a]:text-primary [&_a:not(.cite)]:underline [&_table]:my-2 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:text-sm [&_td]:border-b [&_td]:border-border [&_td]:px-2.5 [&_td]:py-1.5 [&_tr:last-child_td]:border-b-0 [&_th]:border-b [&_th]:border-border [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-muted-foreground"
-      dangerouslySetInnerHTML={{ __html: safeHtml }}
-    />
-    {tip && <CitationTooltip tip={tip} />}
+      <div
+        ref={containerRef}
+        className="chat-markdown min-w-0 break-words text-sm leading-relaxed text-foreground [&_p]:my-1.5 [&_h1]:my-2 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-semibold [&_a]:text-primary [&_a:not(.cite)]:underline [&_table]:my-2 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:text-sm [&_td]:border-b [&_td]:border-border [&_td]:px-2.5 [&_td]:py-1.5 [&_tr:last-child_td]:border-b-0 [&_th]:border-b [&_th]:border-border [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-muted-foreground"
+        dangerouslySetInnerHTML={{ __html: safeHtml }}
+      />
+      {tip && <CitationTooltip tip={tip} />}
     </>
   );
 }
@@ -307,7 +350,7 @@ function useCitationTooltip(containerRef: React.RefObject<HTMLDivElement | null>
  */
 function CitationTooltip({ tip }: { tip: CitationTip }) {
   const { citation, index, left, top } = tip;
-  const origin = citation.sourceType === 'web' ? webHost(citation.url) : (citation.url ? webHost(citation.url) : '');
+  const origin = citation.sourceType === 'web' ? webHost(citation.url) : citation.url ? webHost(citation.url) : '';
   return (
     <div
       role="tooltip"
@@ -315,7 +358,9 @@ function CitationTooltip({ tip }: { tip: CitationTip }) {
       style={{ position: 'fixed', left, top, width: 280 }}
       className="pointer-events-none z-50 rounded-md border border-border bg-popover p-3 text-xs text-popover-foreground shadow-md"
     >
-      <p className="font-semibold">[{index}] {citation.title}</p>
+      <p className="font-semibold">
+        [{index}] {citation.title}
+      </p>
       {origin && <p className="mt-0.5 text-muted-foreground">{origin}</p>}
       {citation.quote && <p className="mt-1.5 line-clamp-4 text-muted-foreground">{citation.quote}</p>}
     </div>

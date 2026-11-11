@@ -12,7 +12,9 @@ const queryClient = new QueryClient();
 // The renderer itself is covered elsewhere; here it only has to show which part it received.
 vi.mock('../components/tool-rendering', () => ({
   ToolRendering: ({ payload }: { payload: { part_id?: string; title?: string; status?: string } }) => (
-    <div data-testid={`part-${payload.part_id}`}>{payload.title}:{payload.status}</div>
+    <div data-testid={`part-${payload.part_id}`}>
+      {payload.title}:{payload.status}
+    </div>
   ),
 }));
 vi.mock('@/core/query-provider', () => ({
@@ -24,17 +26,27 @@ const plan = { kind: 'plan', part_id: 'b', status: 'completed', title: 'Roadmap'
 
 function assistant(extra: Partial<ChatMessage>): ChatMessage {
   return {
-    id: 'm1', conversation_id: 'c1', role: 'assistant', content: 'Here you go.', client_request_id: null,
-    model_identity: 'm', citations: [], response_id: null, revision_of_message_id: null,
-    created_at: '2026-01-01T00:00:00Z', ...extra,
+    id: 'm1',
+    conversation_id: 'c1',
+    role: 'assistant',
+    content: 'Here you go.',
+    client_request_id: null,
+    model_identity: 'm',
+    citations: [],
+    response_id: null,
+    revision_of_message_id: null,
+    created_at: '2026-01-01T00:00:00Z',
+    ...extra,
   };
 }
 
 function view(props: Partial<React.ComponentProps<typeof ChatTranscript>>) {
   return render(
-    <QueryClientProvider client={queryClient}><NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-      <ChatTranscript conversationId="c1" messages={[]} {...props} />
-    </NextIntlClientProvider></QueryClientProvider>,
+    <QueryClientProvider client={queryClient}>
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <ChatTranscript conversationId="c1" messages={[]} {...props} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
   );
 }
 
@@ -43,8 +55,14 @@ describe('multiple generative UI parts', () => {
     // jsdom has no matchMedia/scrollTo; the reveal/scroll hooks use them.
     Element.prototype.scrollTo = (() => undefined) as unknown as typeof Element.prototype.scrollTo;
     window.matchMedia = ((query: string) => ({
-      matches: false, media: query, addEventListener: () => undefined, removeEventListener: () => undefined,
-      addListener: () => undefined, removeListener: () => undefined, onchange: null, dispatchEvent: () => false,
+      matches: false,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      onchange: null,
+      dispatchEvent: () => false,
     })) as unknown as typeof window.matchMedia;
   });
 
@@ -61,16 +79,27 @@ describe('multiple generative UI parts', () => {
   });
 
   it('renders streaming parts side by side', () => {
-    view({ isStreaming: true, streamingUi: [{ ...table, status: 'streaming' }, { ...plan, status: 'streaming' }] });
-    expect(screen.getAllByTestId('streaming-generative-ui-widget').map((w) => w.textContent))
-      .toEqual(['Sales:streaming', 'Roadmap:streaming']);
+    view({
+      isStreaming: true,
+      streamingUi: [
+        { ...table, status: 'streaming' },
+        { ...plan, status: 'streaming' },
+      ],
+    });
+    expect(screen.getAllByTestId('streaming-generative-ui-widget').map((w) => w.textContent)).toEqual([
+      'Sales:streaming',
+      'Roadmap:streaming',
+    ]);
   });
 
   it('upserts streamed snapshots by part_id and keeps arrival order', () => {
     let parts = upsertUiPart([], { part_id: 'a', n: 1 });
     parts = upsertUiPart(parts, { part_id: 'b', n: 1 });
     parts = upsertUiPart(parts, { part_id: 'a', n: 2 });
-    expect(parts).toEqual([{ part_id: 'a', n: 2 }, { part_id: 'b', n: 1 }]);
+    expect(parts).toEqual([
+      { part_id: 'a', n: 2 },
+      { part_id: 'b', n: 1 },
+    ]);
     expect(upsertUiPart([{ n: 1 }], { n: 2 })).toEqual([{ n: 2 }]); // legacy payloads without part_id
     expect(messageUiParts({})).toEqual([]);
     expect(uiPartKey({}, 3)).toBe('part-3');

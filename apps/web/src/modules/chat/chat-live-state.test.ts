@@ -25,7 +25,13 @@ describe('chatLiveReducer', () => {
   });
 
   it('clearOutput resets streamed output but keeps flags; clearPartial keeps web search and tool', () => {
-    const dirty = base({ streamingText: 'x', streamingReasoning: 'r', streamingUi: [{ part_id: 'p' }], isStreaming: true, activeTool: 'web_search' });
+    const dirty = base({
+      streamingText: 'x',
+      streamingReasoning: 'r',
+      streamingUi: [{ part_id: 'p' }],
+      isStreaming: true,
+      activeTool: 'web_search',
+    });
     const cleared = chatLiveReducer(dirty, { type: 'clearOutput' });
     expect(cleared).toMatchObject({ streamingText: '', streamingReasoning: '', streamingUi: [], activeTool: null, isStreaming: true });
     expect(chatLiveReducer(dirty, { type: 'clearPartial' }).activeTool).toBe('web_search');
@@ -44,7 +50,9 @@ describe('chatLiveReducer', () => {
     const request = { request_id: 'r1', kind: 'text' as const, prompt: 'p', options: [], slots: [], expires_at: '' };
     const pending = base({ inputRequest: { request, state: 'pending' } });
     expect(chatLiveReducer(pending, { type: 'inputResolved', resolved: { request_id: 'other', outcome: 'answered' } })).toBe(pending);
-    expect(chatLiveReducer(pending, { type: 'inputResolved', resolved: { request_id: 'r1', outcome: 'expired' } }).inputRequest?.state).toBe('expired');
+    expect(
+      chatLiveReducer(pending, { type: 'inputResolved', resolved: { request_id: 'r1', outcome: 'expired' } }).inputRequest?.state,
+    ).toBe('expired');
     expect(chatLiveReducer(pending, { type: 'cancelPendingInput' }).inputRequest?.state).toBe('cancelled');
     const answered = chatLiveReducer(pending, { type: 'inputResolved', resolved: { request_id: 'r1', outcome: 'answered', label: 'L' } });
     expect(chatLiveReducer(answered, { type: 'cancelPendingInput' })).toBe(answered);

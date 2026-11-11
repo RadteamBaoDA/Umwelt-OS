@@ -47,9 +47,12 @@ export function useChatModelPicker(): ChatModelPicker | undefined {
   const [stored, setStored] = React.useState<string | null>(readStored); // lazy: options load async, so SSR/hydration never shows it
 
   const options = React.useMemo<ChatModelOption[]>(
-    () => (query.data?.providers ?? []).flatMap((p) => (p.models ?? [])
-      .filter((m) => m.type === 'llm')
-      .map((m) => ({ providerId: p.id, model: m.id, label: `${p.label || p.id} · ${m.id}` }))),
+    () =>
+      (query.data?.providers ?? []).flatMap((p) =>
+        (p.models ?? [])
+          .filter((m) => m.type === 'llm')
+          .map((m) => ({ providerId: p.id, model: m.id, label: `${p.label || p.id} · ${m.id}` })),
+      ),
     [query.data],
   );
   const value = options.find((o) => refOf(o) === stored) ?? null;
@@ -79,12 +82,19 @@ export function ModelPicker({ picker, disabled = false }: { picker: ChatModelPic
       value={picker.value ? refOf(picker.value) : DEFAULT_VALUE}
       onValueChange={(next) => picker.onChange(picker.options.find((o) => refOf(o) === next) ?? null)}
     >
-      <SelectTrigger aria-label={t('modelPickerLabel')} className="h-8 w-auto max-w-48 min-w-0 border-0 bg-transparent text-xs text-muted-foreground shadow-none hover:bg-active">
+      <SelectTrigger
+        aria-label={t('modelPickerLabel')}
+        className="h-8 w-auto max-w-48 min-w-0 border-0 bg-transparent text-xs text-muted-foreground shadow-none hover:bg-active"
+      >
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={DEFAULT_VALUE}>{t('modelDefault')}</SelectItem>
-        {picker.options.map((o) => <SelectItem key={refOf(o)} value={refOf(o)}>{o.label}</SelectItem>)}
+        {picker.options.map((o) => (
+          <SelectItem key={refOf(o)} value={refOf(o)}>
+            {o.label}
+          </SelectItem>
+        ))}
       </SelectContent>
     </Select>
   );

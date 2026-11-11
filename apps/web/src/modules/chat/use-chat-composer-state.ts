@@ -45,7 +45,20 @@ export function useChatComposerState(): ChatComposerState {
     setDbQueryOn(false);
   }, []);
   return {
-    webSearchOn, setWebSearchOn, dbQueryOn, setDbQueryOn, contextPickerOpen, setContextPickerOpen, fileInputRef,
-    providerGateOpen, setProviderGateOpen, selectedProfileId, setSelectedProfileId, editingMessageId, setEditingMessageId, draftStashRef, resetToggles,
+    webSearchOn,
+    setWebSearchOn,
+    dbQueryOn,
+    setDbQueryOn,
+    contextPickerOpen,
+    setContextPickerOpen,
+    fileInputRef,
+    providerGateOpen,
+    setProviderGateOpen,
+    selectedProfileId,
+    setSelectedProfileId,
+    editingMessageId,
+    setEditingMessageId,
+    draftStashRef,
+    resetToggles,
   };
 }

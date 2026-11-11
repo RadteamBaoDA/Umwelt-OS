@@ -44,6 +44,38 @@ export interface ChatSessionProps {
 }
 
 /**
+ * Stack between the transcript and the composer: the agent todo list, a pending generative-UI input request and the
+ * provider-gate alert. Renders nothing for the parts whose state is absent; no side effects beyond forwarding callbacks.
+ */
+function SessionInputStack({
+  data: d,
+  cmd,
+  conversationId,
+}: {
+  data: ReturnType<typeof useChatSessionData>;
+  cmd: ReturnType<typeof useChatSessionCommands>;
+  conversationId?: string | null;
+}) {
+  const { live, composer } = d;
+  return (
+    <>
+      {d.agentMode && <TodosPanel conversationId={conversationId} isStreaming={live.isStreaming} />}
+      {live.inputRequest && (
+        <div className="shrink-0 px-4">
+          <UserInputRequest
+            request={live.inputRequest.request}
+            state={live.inputRequest.state}
+            answeredLabel={live.inputRequest.label}
+            onSubmitInput={cmd.handleSubmitInput}
+          />
+        </div>
+      )}
+      {composer.providerGateOpen && !d.providerReady && <ProviderGateAlert onDismiss={() => composer.setProviderGateOpen(false)} />}
+    </>
+  );
+}
+
+/**
  * Shared core chat session component powering both the quick-chat Sheet drawer and the /chat route.
  * Coordinates conversation querying, message sending with client_request_id idempotency,
  * active SSE event stream consumption, citation extraction, cancellation controls, and full-page
@@ -66,7 +98,10 @@ export function ChatSession({
   conversationId,
   onConversationCreated,
   mode = 'drawer',
-  onRenameConversation, onDeleteConversation, onSetPinned, onSetArchived,
+  onRenameConversation,
+  onDeleteConversation,
+  onSetPinned,
+  onSetArchived,
   headerLeading,
   headerTrailing,
 }: ChatSessionProps) {
@@ -96,7 +131,13 @@ export function ChatSession({
         cancel: t('genUiLinkConfirmCancel'),
       }}
     >
-      <ChatDropZone rootRef={rootRef} enabled={mode === 'full'} accepting={d.canAttachFiles} onFiles={d.attachments.add} className="flex flex-col h-full bg-background relative overflow-hidden">
+      <ChatDropZone
+        rootRef={rootRef}
+        enabled={mode === 'full'}
+        accepting={d.canAttachFiles}
+        onFiles={d.attachments.add}
+        className="flex flex-col h-full bg-background relative overflow-hidden"
+      >
         <ChatSessionHeader
           mode={mode}
           title={title}
@@ -105,7 +146,10 @@ export function ChatSession({
           headerTrailing={headerTrailing}
           onRenameConversation={onRenameConversation}
           onDeleteConversation={onDeleteConversation}
-          pinned={d.detail.data?.pinned} archived={d.detail.data?.archived} onSetPinned={onSetPinned} onSetArchived={onSetArchived}
+          pinned={d.detail.data?.pinned}
+          archived={d.detail.data?.archived}
+          onSetPinned={onSetPinned}
+          onSetArchived={onSetArchived}
           onExportConversation={handleExport}
           onSendPrompt={widget.onTranscriptSendPrompt}
           onNewChat={cmd.handleNewChat}
@@ -130,11 +174,14 @@ export function ChatSession({
           mode={mode}
           pendingMessageMutation={pendingMessageMutation}
           busy={d.busy}
-          onRetryRevision={() => pendingMessageMutation && void cmd.handleMessageMutation(
-            pendingMessageMutation.action,
-            pendingMessageMutation.targetMessageId,
-            pendingMessageMutation.content,
-          )}
+          onRetryRevision={() =>
+            pendingMessageMutation &&
+            void cmd.handleMessageMutation(
+              pendingMessageMutation.action,
+              pendingMessageMutation.targetMessageId,
+              pendingMessageMutation.content,
+            )
+          }
         />
         {themeRequest && (
           <AssistantThemeBanner mode={themeRequest} csrfToken={session.csrfToken} onResolved={() => setThemeRequest(null)} />
@@ -142,18 +189,7 @@ export function ChatSession({
 
         <SessionTranscript data={d} cmd={cmd} widget={widget} conversationId={conversationId} mode={mode} />
 
-        {d.agentMode && <TodosPanel conversationId={conversationId} isStreaming={live.isStreaming} />}
-        {live.inputRequest && (
-          <div className="shrink-0 px-4">
-            <UserInputRequest
-              request={live.inputRequest.request}
-              state={live.inputRequest.state}
-              answeredLabel={live.inputRequest.label}
-              onSubmitInput={cmd.handleSubmitInput}
-            />
-          </div>
-        )}
-        {composer.providerGateOpen && !d.providerReady && <ProviderGateAlert onDismiss={() => composer.setProviderGateOpen(false)} />}
+        <SessionInputStack data={d} cmd={cmd} conversationId={conversationId} />
 
         {/* Bottom composer */}
         <SessionComposer data={d} mode={mode} onSend={cmd.handleSend} onStop={cmd.handleStop} onCancelEdit={cmd.handleCancelEdit} />

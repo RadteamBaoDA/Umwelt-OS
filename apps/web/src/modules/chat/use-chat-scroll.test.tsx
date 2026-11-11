@@ -59,10 +59,29 @@ describe('useChatScroll', () => {
 
   it('reports not-at-bottom when content grows below the fold without a scroll event', () => {
     let notify: () => void = () => undefined;
-    vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { notify = cb; } observe() {} disconnect() {} });
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          notify = cb;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
     function Probe() {
-      const { containerRef, isAtBottom } = useChatScroll({ conversationId: 'c1', messageCount: 2, lastMessageId: 'm', lastMessageRole: 'user', isStreaming: false });
-      return <div ref={containerRef} data-testid="box"><span data-testid="bottom">{String(isAtBottom)}</span></div>;
+      const { containerRef, isAtBottom } = useChatScroll({
+        conversationId: 'c1',
+        messageCount: 2,
+        lastMessageId: 'm',
+        lastMessageRole: 'user',
+        isStreaming: false,
+      });
+      return (
+        <div ref={containerRef} data-testid="box">
+          <span data-testid="bottom">{String(isAtBottom)}</span>
+        </div>
+      );
     }
     render(<Probe />);
     const box = screen.getByTestId('box');

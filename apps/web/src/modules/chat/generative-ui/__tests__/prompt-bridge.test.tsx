@@ -2,11 +2,7 @@ import * as React from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  PromptBridgeProvider,
-  usePromptBridge,
-  validateBridgeMessage,
-} from '../bridge';
+import { PromptBridgeProvider, usePromptBridge, validateBridgeMessage } from '../bridge';
 
 afterEach(() => {
   cleanup();
@@ -41,15 +37,14 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
     const base = { source: win, origin: 'null' };
 
     expect(
-      validateBridgeMessage(
-        { ...base, data: { type: 'umwelt:send-prompt', prompt: '  Compare Q3 vs Q4  ', nonce: NONCE } },
-        opts,
-      ),
+      validateBridgeMessage({ ...base, data: { type: 'umwelt:send-prompt', prompt: '  Compare Q3 vs Q4  ', nonce: NONCE } }, opts),
     ).toEqual({ type: 'send-prompt', prompt: 'Compare Q3 vs Q4', rawType: 'umwelt:send-prompt' });
 
-    expect(
-      validateBridgeMessage({ ...base, data: { type: 'umwelt:resize', height: 482.4, nonce: NONCE } }, opts),
-    ).toEqual({ type: 'resize', height: 483, rawType: 'umwelt:resize' });
+    expect(validateBridgeMessage({ ...base, data: { type: 'umwelt:resize', height: 482.4, nonce: NONCE } }, opts)).toEqual({
+      type: 'resize',
+      height: 483,
+      rawType: 'umwelt:resize',
+    });
 
     for (const data of [
       { type: 'umwelt:send-prompt', prompt: '   ' },
@@ -71,26 +66,16 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
     // Missing source.
     expect(validateBridgeMessage({ data, origin: 'null' }, opts)).toBeNull();
     // Nonce mismatch / missing.
-    expect(
-      validateBridgeMessage({ data: { ...data, nonce: 'other' }, source: trusted, origin: 'null' }, opts),
-    ).toBeNull();
-    expect(
-      validateBridgeMessage({ data: { type: data.type, prompt: 'hi' }, source: trusted, origin: 'null' }, opts),
-    ).toBeNull();
+    expect(validateBridgeMessage({ data: { ...data, nonce: 'other' }, source: trusted, origin: 'null' }, opts)).toBeNull();
+    expect(validateBridgeMessage({ data: { type: data.type, prompt: 'hi' }, source: trusted, origin: 'null' }, opts)).toBeNull();
     // Foreign / missing origin.
-    expect(
-      validateBridgeMessage({ data, source: trusted, origin: 'https://evil.example' }, opts),
-    ).toBeNull();
+    expect(validateBridgeMessage({ data, source: trusted, origin: 'https://evil.example' }, opts)).toBeNull();
     expect(validateBridgeMessage({ data, source: trusted }, opts)).toBeNull();
     // Host origin is accepted.
-    expect(
-      validateBridgeMessage({ data, source: trusted, origin: window.location.origin }, opts),
-    ).not.toBeNull();
+    expect(validateBridgeMessage({ data, source: trusted, origin: window.location.origin }, opts)).not.toBeNull();
     // No frames registered (or option omitted) rejects everything.
     expect(validateBridgeMessage({ data, source: trusted, origin: 'null' })).toBeNull();
-    expect(
-      validateBridgeMessage({ data, source: trusted, origin: 'null' }, { frames: new Map() }),
-    ).toBeNull();
+    expect(validateBridgeMessage({ data, source: trusted, origin: 'null' }, { frames: new Map() })).toBeNull();
   });
 
   it('invokes onSendPrompt via context hook and rate-limits rapid duplicate submissions', async () => {
@@ -128,9 +113,7 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
 
     const post = (data: object, source: unknown = frame, origin = 'null') =>
       act(() => {
-        window.dispatchEvent(
-          new MessageEvent('message', { data, source: source as Window, origin }),
-        );
+        window.dispatchEvent(new MessageEvent('message', { data, source: source as Window, origin }));
       });
 
     post({ type: 'umwelt:send-prompt', prompt: 'bad nonce', nonce: 'x' });
@@ -180,7 +163,6 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
     expect(onSendPrompt).not.toHaveBeenCalled();
   });
 });
-
 
 describe('PromptBridgeProvider sandbox hardening (F2.6)', () => {
   const frame = { postMessage: vi.fn() };
@@ -287,7 +269,9 @@ describe('PromptBridgeProvider sandbox hardening (F2.6)', () => {
     const opts = { frames: framesFor(win) };
     const base = { source: win, origin: 'null' };
     for (const type of ['sendPrompt', 'opengenui:send-prompt', 'resize', '__ogui_resize', 'openLink']) {
-      expect(validateBridgeMessage({ ...base, data: { type, prompt: 'x', height: 100, url: 'https://a.example', nonce: NONCE } }, opts)).toBeNull();
+      expect(
+        validateBridgeMessage({ ...base, data: { type, prompt: 'x', height: 100, url: 'https://a.example', nonce: NONCE } }, opts),
+      ).toBeNull();
     }
   });
 });

@@ -18,12 +18,17 @@ function json(body: unknown, status = 200) {
 
 function wrap(node: React.ReactNode, locale: 'en-us' | 'vi-vi' = 'en-us') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={messages[locale]}>
-    <QueryClientProvider client={client}>{node}</QueryClientProvider>
-  </NextIntlClientProvider>);
+  return render(
+    <NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={messages[locale]}>
+      <QueryClientProvider client={client}>{node}</QueryClientProvider>
+    </NextIntlClientProvider>,
+  );
 }
 
-afterEach(() => { vi.restoreAllMocks(); window.history.replaceState(null, '', '/'); });
+afterEach(() => {
+  vi.restoreAllMocks();
+  window.history.replaceState(null, '', '/');
+});
 
 describe('pick catalogs and routing', () => {
   it('has identical en/vi keys and a public /pick route', () => {
@@ -48,7 +53,11 @@ describe('PickQrButton', () => {
   });
 
   it('shows waiting, then scanned, then delivers the picked prompt once and closes', async () => {
-    const polls = [{ state: 'waiting', prompt: null }, { state: 'scanned', prompt: null }, { state: 'picked', prompt: 'DNA Helix' }];
+    const polls = [
+      { state: 'waiting', prompt: null },
+      { state: 'scanned', prompt: null },
+      { state: 'picked', prompt: 'DNA Helix' },
+    ];
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       const url = String(input);
       if (url.endsWith('/status')) return json({ enabled: true });
@@ -84,7 +93,14 @@ describe('PickPhone', () => {
     const calls: Array<[string, RequestInit | undefined]> = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       calls.push([String(input), init]);
-      if (init?.method === 'PUT') return json({ options: [{ index: 1, label: 'DNA Helix' }, { index: 4, label: 'Ocean Waves' }, { index: 9, label: 'Atom Model' }] });
+      if (init?.method === 'PUT')
+        return json({
+          options: [
+            { index: 1, label: 'DNA Helix' },
+            { index: 4, label: 'Ocean Waves' },
+            { index: 9, label: 'Atom Model' },
+          ],
+        });
       return Promise.resolve(new Response(null, { status: 204 }));
     });
     wrap(<PickPhone />);
@@ -122,7 +138,11 @@ describe('PickPhone', () => {
       // The server burns the session on the first scan (GETDEL); any repeat is a 404.
       return scans === 1 ? json({ options: [{ index: 1, label: 'DNA Helix' }] }) : json({ detail: 'x' }, 404);
     });
-    wrap(<StrictMode><PickPhone /></StrictMode>);
+    wrap(
+      <StrictMode>
+        <PickPhone />
+      </StrictMode>,
+    );
     expect(await screen.findByRole('button', { name: 'DNA Helix' })).toBeTruthy();
     expect(scans).toBe(1);
     expect(screen.queryByText(messages['en-us'].pick.phoneInvalid)).toBeNull();
