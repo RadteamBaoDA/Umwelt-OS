@@ -11,7 +11,7 @@ import { onCitationFocus, showAllCitations, useCitationFocus } from './chat-cita
 
 /**
  * Source list shared by the desktop rail and mobile sheet. Opened from an answer it shows only that answer's sources
- * with the numbering of its inline chips, plus a "View all" button; otherwise it lists every source of the conversation.
+ * with the numbering of its inline chips, plus a "View all" button (only when the answer does not already cover every source); otherwise it lists every source of the conversation.
  *
  * @param props - Every de-duplicated source of the conversation and its id (focus requests of other conversations are ignored).
  * @returns The citation list with an optional "View all" action.
@@ -24,7 +24,7 @@ function RailSources({ citations, conversationId }: { citations: Citation[]; con
   const scope = focus.scope && focus.scope.every((citation) => known.has(citationIdentity(citation))) ? focus.scope : null;
   return (
     <div className="flex flex-col gap-1">
-      {scope && (
+      {scope && scope.length < citations.length && (
         <Button type="button" variant="ghost" className="min-h-9 w-fit px-2 text-xs pointer-coarse:min-h-11" onClick={showAllCitations}>
           {t('railViewAll', { count: citations.length })}
         </Button>

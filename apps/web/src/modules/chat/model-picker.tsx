@@ -77,6 +77,31 @@ export function useChatModelPicker(): ChatModelPicker | undefined {
 export const MODEL_LOCKED_HINT_ID = 'chat-model-locked-hint-text';
 
 /**
+ * Text of the closed trigger. Below `sm` only the model's short name shows (the "Default ·" / provider prefix is
+ * hidden by CSS so the 390px toolbar stays readable); the full text stays in the DOM and in the trigger's title.
+ *
+ * @param picker - Picker state; the chosen option, else the default model's name when known.
+ * @param defaultPrefix - Localized "Default · " prefix used when no explicit model is chosen.
+ * @param fallback - Localized "Default model" text when the default model is unnamed.
+ * @returns The trigger's value content.
+ */
+function triggerText(picker: ChatModelPicker, defaultPrefix: string, fallback: string): { title: string; node: React.ReactNode } {
+  const chosen = picker.value;
+  const name = chosen ? chosen.model : picker.defaultModel;
+  if (!name) return { title: fallback, node: fallback };
+  const prefix = chosen ? (chosen.label.endsWith(name) ? chosen.label.slice(0, -name.length) : '') : defaultPrefix;
+  return {
+    title: `${prefix}${name}`,
+    node: (
+      <>
+        {prefix && <span className="hidden sm:inline">{prefix}</span>}
+        {name}
+      </>
+    ),
+  };
+}
+
+/**
  * Compact select listing the owner's default plus each configured chat model.
  *
  * @param props - Picker state from `useChatModelPicker`, whether the control is disabled and whether an agent locks it (then the lock hint describes it).
@@ -92,6 +117,7 @@ export function ModelPicker({
   locked?: boolean;
 }) {
   const t = useTranslations('chat');
+  const text = triggerText(picker, t('modelDefaultPrefix'), t('modelDefault'));
   return (
     <Select
       disabled={disabled || locked}
@@ -101,9 +127,10 @@ export function ModelPicker({
       <SelectTrigger
         aria-label={t('modelPickerLabel')}
         aria-describedby={locked ? MODEL_LOCKED_HINT_ID : undefined}
+        title={text.title}
         className="h-8 w-auto max-w-48 min-w-0 border-0 bg-transparent text-xs text-muted-foreground shadow-none hover:bg-active"
       >
-        <SelectValue />
+        <SelectValue>{text.node}</SelectValue>
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={DEFAULT_VALUE}>

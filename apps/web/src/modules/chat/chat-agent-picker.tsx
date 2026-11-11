@@ -53,7 +53,7 @@ export function AgentPicker({ value, disabled, onChange, profiles, onOpen }: Age
           data-testid="chat-agent-picker"
           aria-describedby={disabled ? reasonId : undefined}
           title={disabled ? t('agentPickerBusyHint') : undefined}
-          className="h-8 w-auto max-w-32 min-w-0 border-0 bg-transparent text-xs text-muted-foreground shadow-none hover:bg-active"
+          className="h-8 w-auto max-w-32 shrink-0 border-0 bg-transparent text-xs text-muted-foreground shadow-none hover:bg-active"
         >
           <SelectValue placeholder={tAgents('agentSelect')} />
         </SelectTrigger>

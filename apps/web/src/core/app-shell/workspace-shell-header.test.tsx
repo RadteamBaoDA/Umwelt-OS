@@ -4,8 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const toggleDrawer = vi.fn();
 const apiRequest = vi.fn();
+let mockPath = '/dashboard/abc';
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: vi.fn() }), usePathname: () => '/dashboard/abc' }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: vi.fn() }), usePathname: () => mockPath }));
 vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
 vi.mock('@/core/api', async () => {
   class ApiError extends Error {
@@ -47,6 +48,7 @@ import { WorkspaceShell } from '@/core/app-shell/workspace-shell';
 
 describe('WorkspaceShell header', () => {
   beforeEach(() => {
+    mockPath = '/dashboard/abc';
     toggleDrawer.mockClear();
     apiRequest.mockReset();
     apiRequest.mockImplementation(async (path: string) =>
@@ -70,6 +72,15 @@ describe('WorkspaceShell header', () => {
     toggleDrawer.mockClear();
     fireEvent.keyDown(window, { key: 'j', ctrlKey: true });
     expect(toggleDrawer).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers the quick chat button and Ctrl+J on the dashboard home too', async () => {
+    mockPath = '/dashboard';
+    mount();
+    await screen.findByText('avatar');
+    fireEvent.keyDown(window, { key: 'j', ctrlKey: true });
+    expect(toggleDrawer).toHaveBeenCalledTimes(1);
+    mockPath = '/dashboard/abc';
   });
 
   it('hides the workspace switcher and bell below 640px (they live in the avatar menu there)', async () => {

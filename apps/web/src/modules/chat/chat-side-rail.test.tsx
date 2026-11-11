@@ -89,6 +89,13 @@ describe('citation focus', () => {
     expect(screen.queryByRole('button', { name: /View all/ })).toBeNull();
   });
 
+  it('hides "View all" when the answer already covers every source', () => {
+    render(wrap(<ChatSideRail citations={[web, other]} />));
+    act(() => focusCitations([web, other]));
+    expect(screen.getAllByTestId('rail-source')).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /View all/ })).toBeNull();
+  });
+
   it('has no Context tab', () => {
     render(wrap(<ChatSideRail citations={[web]} />));
     expect(screen.queryByRole('tab')).toBeNull();

@@ -243,7 +243,7 @@ function ShellTopbar({
 }: {
   apiStatus: Parameters<typeof ConnectionFooter>[0]['apiStatus'];
   health: ApiHealth;
-  /** Registers the Ctrl/Cmd+J drawer shortcut (dashboard detail routes when chat is available). */
+  /** Registers the Ctrl/Cmd+J drawer shortcut (dashboard home and detail routes when chat is available). */
   quickChat: boolean;
   menuTriggerRef: RefObject<HTMLButtonElement | null>;
   onOpenPreferences: () => void;
@@ -558,7 +558,7 @@ export function WorkspaceShell({ children }: { children: ReactNode }) {
             <ShellTopbar
               apiStatus={apiStatusOf(online, apiHealth)}
               health={apiHealth}
-              quickChat={pathname.startsWith('/dashboard/') && visibleMainNavigation.some((item) => item.id === 'chat')}
+              quickChat={pathname.startsWith('/dashboard') && visibleMainNavigation.some((item) => item.id === 'chat')}
               menuTriggerRef={menuTriggerRef}
               onOpenPreferences={() => setPreferencesOpen(true)}
               onOpenAccount={() => setAccountOpen(true)}
