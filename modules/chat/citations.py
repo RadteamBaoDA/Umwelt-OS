@@ -295,17 +295,23 @@ def parse_citation_markers(answer: str, evidence_count: int) -> list[int]:
     return list(seen)
 
 
-def renumber_citation_markers(answer: str, mapping: dict[int, int], evidence_count: int) -> str:
+def renumber_citation_markers(
+    answer: str, mapping: dict[int, int], evidence_count: int, *, drop_invented: bool = False
+) -> str:
     """Rewrite citation marker runs through ``mapping`` (old number -> new number) as ``[k][j]``.
 
     A run with at least one number in 1..evidence_count is a citation: numbers absent from the
     mapping are removed and an emptied run is dropped with one leading space. Other bracketed
-    integers (``[2023]``) and code regions are left untouched.
+    integers (``[2023]``) and code regions are left untouched. With ``drop_invented`` a run whose numbers all
+    lie in evidence_count+1..evidence_count+20 is a marker for evidence that does not exist (the model
+    invented ``[9]``) and is dropped like an unmapped citation; larger numbers (years) still survive.
     """
 
     def repl(match: re.Match[str]) -> str:
         """Rewrite one marker run: renumber known citations, drop unknown ones, keep non-citations."""
         nums = _run_numbers(match.group(2))
+        if drop_invented and all(evidence_count < n <= evidence_count + 20 for n in nums):
+            return ""
         if not any(1 <= n <= evidence_count for n in nums):
             return match.group(0)
         new = dict.fromkeys(mapping[n] for n in nums if n in mapping)

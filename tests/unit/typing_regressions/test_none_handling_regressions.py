@@ -677,7 +677,7 @@ async def test_chat_completion_uncited_answer_emits_no_citations(
     )
 
     message = next(obj for obj in added if isinstance(obj, Message))
-    assert message.content == "Something unsupported [9]." and message.citations == []
+    assert message.content == "Something unsupported." and message.citations == []
     assert message.metadata_json == {"uncited": True}
     # Neither all evidence before generation nor any citations event for an uncited answer.
     assert not [

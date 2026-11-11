@@ -86,3 +86,10 @@ def test_no_post_hoc_citation_for_overlapping_uncited_answer() -> None:
         "Deployment completed successfully on Tuesday afternoon.", [], [item]
     )
     assert res.citations == [] and "[1]" not in res.answer
+
+
+def test_drop_invented_markers_keeps_years() -> None:
+    """A run beyond the evidence (``[9]``) is dropped when asked; ``[2023]`` and kept citations survive."""
+    text = "a [1] b [9][10] c [2023]."
+    assert renumber_citation_markers(text, {1: 1}, 3, drop_invented=True) == "a [1] b c [2023]."
+    assert renumber_citation_markers(text, {1: 1}, 3) == "a [1] b [9][10] c [2023]."

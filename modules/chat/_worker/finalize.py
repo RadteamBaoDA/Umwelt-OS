@@ -275,8 +275,9 @@ def _validate_citations(
             evidence_count,
             total_count,
         )
+    # drop_invented: a marker beyond the evidence (the model's invented "[9]") must not survive as text.
     final_answer = renumber_citation_markers(
-        answer_text, number_map, max(total_count, 1 if number_map else 0)
+        answer_text, number_map, max(total_count, 1 if number_map else 0), drop_invented=True
     )
     valid_citations = [
         c.model_dump(mode="json", by_alias=True) for c in validated.citations
