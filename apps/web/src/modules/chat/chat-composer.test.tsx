@@ -24,10 +24,12 @@ async function openMenu(webSearch: NonNullable<ChatComposerProps['webSearch']>) 
 }
 
 describe('ChatComposer web search toggle', () => {
-  it('explains an unconfigured provider and stays disabled', async () => {
+  it('links an unconfigured provider to the web search settings page', async () => {
     await openMenu({ available: false, enabled: true, onChange: vi.fn() });
-    expect(screen.getByTestId('chat-web-search-hint').textContent).toBe('Not set up — Settings › AI');
-    expect(screen.getByRole('menuitemcheckbox', { name: /Search the web/ }).getAttribute('aria-disabled')).toBe('true');
+    const link = screen.getByTestId('chat-web-search-setup');
+    expect(link.getAttribute('href')).toBe('/settings/web-search');
+    expect(link.textContent).toContain('Not set up — Settings › AI');
+    expect(screen.queryByRole('menuitemcheckbox', { name: /Search the web/ })).toBeNull();
     expect(screen.queryByTestId('chat-web-search-badge')).toBeNull();
   });
 
@@ -82,5 +84,33 @@ describe('ChatComposer edit mode', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
     await userEvent.type(screen.getByRole('textbox'), '{Escape}');
     expect(onCancel).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ChatComposer streaming hints and model label (C20, U2)', () => {
+  const picker = { options: [{ providerId: 'p', model: 'm', label: 'P · m' }], value: null, defaultModel: 'm', onChange: vi.fn() };
+  /** Renders the full composer. */
+  const renderFull = (props: Partial<ChatComposerProps>) =>
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <ChatComposer mode="full" value="" onChange={vi.fn()} onSend={vi.fn()} isStreaming={false} {...props} />
+      </NextIntlClientProvider>,
+    );
+
+  it('switches the placeholder and puts the shortcut in the Stop title while streaming', () => {
+    renderFull({ isStreaming: true });
+    expect(screen.getByPlaceholderText('Responding — Esc to stop')).toBeTruthy();
+    expect(screen.getByTestId('chat-stop').getAttribute('title')).toBe('Stop generating (Esc)');
+  });
+
+  it('drops the "Model:" line when a picker names the model, and names the default model in the picker', () => {
+    renderFull({ modelLabel: 'claude-x', modelPicker: picker });
+    expect(screen.queryByText(/Model: claude-x/)).toBeNull();
+    expect(screen.getByRole('combobox', { name: 'Model for this chat' }).textContent).toBe('Default · m');
+  });
+
+  it('keeps the model line without a picker', () => {
+    renderFull({ modelLabel: 'claude-x' });
+    expect(screen.getByText(/Model: claude-x/)).toBeTruthy();
   });
 });

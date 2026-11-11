@@ -16,10 +16,15 @@ export interface ChatModelOption {
 export interface ChatModelPicker {
   options: ChatModelOption[];
   value: ChatModelOption | null;
+  /** Model id of the owner's default chat model, when settings name one; shown beside the "Default" entry. */
+  defaultModel?: string | null;
   onChange: (option: ChatModelOption | null) => void;
 }
 
-type AIProviders = { providers?: { id: string; label?: string; models?: { id: string; type: string }[] }[] };
+type AIProviders = {
+  providers?: { id: string; label?: string; models?: { id: string; type: string }[] }[];
+  defaults?: { chat?: { model: string } | null };
+};
 
 const STORAGE_KEY = 'umwelt.chat.model';
 const DEFAULT_VALUE = '__default__';
@@ -39,7 +44,7 @@ function readStored(): string | null {
  * Loads the owner's configured `llm` models and tracks the per-chat model choice, remembered in
  * localStorage (preference only). A remembered model that was removed from settings falls back to the default.
  *
- * @returns Picker state for the composer, or `undefined` while no chat model is configured.
+ * @returns Picker state for the composer (including the default chat model's name when known), or `undefined` while no chat model is configured.
  */
 export function useChatModelPicker(): ChatModelPicker | undefined {
   // Same cache key as the settings page, so saving provider settings refreshes the list.
@@ -65,7 +70,7 @@ export function useChatModelPicker(): ChatModelPicker | undefined {
       // Preference is best-effort; the in-memory choice still applies.
     }
   }, []);
-  return options.length ? { options, value, onChange } : undefined;
+  return options.length ? { options, value, onChange, defaultModel: query.data?.defaults?.chat?.model ?? null } : undefined;
 }
 
 /**
@@ -89,7 +94,9 @@ export function ModelPicker({ picker, disabled = false }: { picker: ChatModelPic
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value={DEFAULT_VALUE}>{t('modelDefault')}</SelectItem>
+        <SelectItem value={DEFAULT_VALUE}>
+          {picker.defaultModel ? t('modelDefaultNamed', { model: picker.defaultModel }) : t('modelDefault')}
+        </SelectItem>
         {picker.options.map((o) => (
           <SelectItem key={refOf(o)} value={refOf(o)}>
             {o.label}

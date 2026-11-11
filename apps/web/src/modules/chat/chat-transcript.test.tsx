@@ -107,7 +107,7 @@ describe('ChatTranscript sources and model line', () => {
   it('shows the model and a clickable sources strip on the full page', async () => {
     const onSelectCitation = vi.fn();
     renderTranscript({ messages: [cited], conversationId: 'c1', onSelectCitation });
-    expect(screen.getByTestId('message-model').textContent).toBe('Model: model-x');
+    expect(screen.getByTestId('message-model').textContent).toBe('model-x');
     const strip = screen.getByTestId('sources-strip');
     expect(strip.textContent).toBe('1 sources');
     const received: string[][] = [];
@@ -124,10 +124,11 @@ describe('ChatTranscript sources and model line', () => {
     expect(onSelectCitation).toHaveBeenCalledWith(cited.citations![0]);
   });
 
-  it('keeps the drawer free of the strip and appends the count to the model line', () => {
+  it('keeps the drawer free of the strip button and shows the count as text in the meta row', () => {
     renderTranscript({ messages: [cited], mode: 'drawer' });
     expect(screen.queryByTestId('sources-strip')).toBeNull();
-    expect(screen.getByTestId('message-model').textContent).toBe('Model: model-x · 1 sources');
+    expect(screen.getByTestId('message-model').textContent).toBe('model-x');
+    expect(screen.getByText('1 sources')).toBeTruthy();
   });
 });
 
@@ -246,5 +247,68 @@ describe('ChatTranscript stop, status line and empty conversation', () => {
     expect(container.querySelector('[data-message-id="u1"]')?.getAttribute('data-editing')).toBeNull();
     expect(container.querySelector('[data-latest-turn] [data-message-id="u2"]')).toBeTruthy();
     expect(container.querySelector('[data-latest-turn] [data-message-id="u1"]')).toBeNull();
+  });
+});
+
+describe('ChatTranscript meta row and steps (C10, C12, C19, U3)', () => {
+  const answer = {
+    id: 'a1',
+    role: 'assistant',
+    content: 'Answer',
+    model_identity: 'model-x',
+    created_at: '2026-06-15T10:42:00Z',
+    response_id: 'r1',
+    citations: [
+      { sourceType: 'web', url: 'https://example.com/a', title: 'A', quote: 'q' },
+      { sourceType: 'web', url: 'https://example.com/b', title: 'B', quote: 'q2' },
+    ],
+  } as unknown as React.ComponentProps<typeof ChatTranscript>['messages'][number];
+
+  beforeEach(() => {
+    Element.prototype.scrollTo = vi.fn() as unknown as typeof Element.prototype.scrollTo;
+  });
+
+  it('renders icon-only copy and regenerate with name, title and 44px coarse-pointer targets', () => {
+    renderTranscript({ messages: [answer], conversationId: 'c1', onRegenerateMessage: vi.fn() });
+    for (const name of ['Copy message', 'Regenerate answer']) {
+      const button = screen.getByRole('button', { name });
+      expect(button.getAttribute('title')).toBe(name);
+      expect(button.textContent).toBe('');
+      expect(button.className).toContain('pointer-coarse:min-h-11');
+    }
+    expect(screen.getByTestId('sources-strip').textContent).toBe('2 sources');
+  });
+
+  it('opens the rail on the whole answer from the sources button and from a chip click', async () => {
+    renderTranscript({ messages: [answer], conversationId: 'c1' });
+    let scope = 0;
+    const off = onCitationFocus(() => {
+      scope += 1;
+    });
+    await userEvent.click(screen.getByTestId('sources-strip'));
+    off();
+    expect(scope).toBe(1);
+  });
+
+  it('keeps "N steps" above the answer once the run settled', () => {
+    renderTranscript({ messages: [answer], conversationId: 'c1', steps: [{ tool: 'retrieval', state: 'done' }] as never });
+    const steps = screen.getByTestId('step-list');
+    const answerText = screen.getByText('Answer');
+    expect(steps.compareDocumentPosition(answerText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('anchors the empty state above the composer', () => {
+    topicsMock.fetchTopics.mockRejectedValue(new Error('offline'));
+    renderTranscript({ onSendPrompt: vi.fn() });
+    expect(screen.getByTestId('starter-suggestions').parentElement!.className).toContain('mt-auto');
+  });
+
+  it('turns an unconfigured web-search chip into a settings link', () => {
+    topicsMock.fetchTopics.mockRejectedValue(new Error('offline'));
+    renderTranscript({
+      onSendPrompt: vi.fn(),
+      capabilities: { webSearch: { disabledReason: 'Not set up', href: '/settings/web-search', onActivate: vi.fn() } },
+    });
+    expect(screen.getByTestId('capability-web').getAttribute('href')).toBe('/settings/web-search');
   });
 });

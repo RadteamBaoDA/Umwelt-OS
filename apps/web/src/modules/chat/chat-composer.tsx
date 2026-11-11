@@ -4,6 +4,7 @@
 // PromptInput source; ChatController remains the private in-memory draft owner.
 
 import * as React from 'react';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { ArrowUpIcon, CloudIcon, DatabaseIcon, FileTextIcon, GlobeIcon, PaperclipIcon, PlusIcon, SquareIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -174,9 +175,10 @@ function StopButton({ onStop }: { onStop?: () => void }) {
       variant="outline"
       size="icon"
       onClick={onStop}
-      className="border-negative text-negative hover:text-negative"
+      className="border-destructive text-destructive hover:text-destructive"
       data-testid="chat-stop"
       aria-label={t('stopGenerating')}
+      title={`${t('stopGenerating')} (Esc)`}
     >
       <SquareIcon className="size-3.5 fill-current" aria-hidden="true" />
     </Button>
@@ -206,7 +208,7 @@ function SendButton({ onClick, canSend, describedBy }: { onClick: () => void; ca
 function DbQueryBadge() {
   const t = useTranslations('chat');
   return (
-    <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-db-query-badge">
+    <Badge variant="secondary" className="shrink-0 gap-1 text-xs" data-testid="chat-db-query-badge">
       <DatabaseIcon className="size-3" aria-hidden="true" />
       {t('dbQueryBadge')}
     </Badge>
@@ -268,7 +270,11 @@ function DrawerComposer({ dbQuery, modelPicker, isStreaming, disabled, textarea,
   );
 }
 
-/** Web-search checkbox of the full menu, with a hint explaining why it is disabled. */
+/**
+ * Web-search entry of the full menu. When no search provider is configured it is a link to the web-search settings
+ * page (a disabled checkbox gave no way to fix it); when the active agent profile cannot search it stays a disabled
+ * checkbox with that reason.
+ */
 function WebSearchMenuItem({
   webSearch,
   checked,
@@ -279,28 +285,40 @@ function WebSearchMenuItem({
   busy: boolean;
 }) {
   const t = useTranslations('chat');
-  const unavailable = !webSearch.available || webSearch.profileBlocked;
+  const notSetUp = !webSearch.available && !webSearch.profileBlocked;
   return (
     <>
       <DropdownMenuSeparator />
-      <DropdownMenuCheckboxItem
-        id="chat-web-search"
-        checked={checked}
-        disabled={unavailable || busy}
-        onSelect={(e) => e.preventDefault()}
-        onCheckedChange={(next) => webSearch.onChange(next === true)}
-      >
-        <GlobeIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-        <span className="flex flex-col">
-          {t('webSearchToggle')}
-          {/* Disabled items give no reason; explain why so the owner knows what to fix. */}
-          {unavailable && (
-            <span className="text-xs text-muted-foreground" data-testid="chat-web-search-hint">
-              {webSearch.profileBlocked ? t('webSearchProfileOnly') : t('webSearchNotSetUp')}
+      {notSetUp ? (
+        <DropdownMenuItem inset asChild>
+          <Link href="/settings/web-search" data-testid="chat-web-search-setup">
+            <GlobeIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+            <span className="flex flex-col">
+              {t('webSearchToggle')}
+              <span className="text-xs text-muted-foreground">{t('webSearchNotSetUp')}</span>
             </span>
-          )}
-        </span>
-      </DropdownMenuCheckboxItem>
+          </Link>
+        </DropdownMenuItem>
+      ) : (
+        <DropdownMenuCheckboxItem
+          id="chat-web-search"
+          checked={checked}
+          disabled={Boolean(webSearch.profileBlocked) || busy}
+          onSelect={(e) => e.preventDefault()}
+          onCheckedChange={(next) => webSearch.onChange(next === true)}
+        >
+          <GlobeIcon className="size-4 text-muted-foreground" aria-hidden="true" />
+          <span className="flex flex-col">
+            {t('webSearchToggle')}
+            {/* Disabled items give no reason; explain why so the owner knows what to fix. */}
+            {webSearch.profileBlocked && (
+              <span className="text-xs text-muted-foreground" data-testid="chat-web-search-hint">
+                {t('webSearchProfileOnly')}
+              </span>
+            )}
+          </span>
+        </DropdownMenuCheckboxItem>
+      )}
     </>
   );
 }
@@ -367,13 +385,16 @@ function FullMenu({
   );
 }
 
-/** Model line plus source count shown at the end of the full-page toolbar. */
+/**
+ * Spacer at the end of the full-page toolbar. Without a model picker it also names the latest answer's model and source
+ * count; with a picker the picker is the single model label (a second "Model: …" next to it said the same thing twice).
+ */
 function ModelLine({ modelLabel, sourcesCount, hasPicker }: { modelLabel: string | null; sourcesCount: number; hasPicker: boolean }) {
   const t = useTranslations('chat');
+  if (hasPicker) return <span className="min-w-0 flex-1" />;
   const modelText = modelLabel ? t('modelLine', { model: modelLabel }) : null;
   return (
-    // Below sm the picker already names the model; a truncated "Mo…" line only steals width.
-    <span className={`min-w-0 flex-1 truncate text-xs text-muted-foreground ${hasPicker ? 'max-sm:invisible' : ''}`}>
+    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
       {modelText}
       {sourcesCount > 0 ? `${modelText ? ' · ' : ''}${t('sourcesCount', { count: sourcesCount })}` : ''}
     </span>
@@ -438,7 +459,7 @@ function FullComposer(props: ChatComposerProps & ComposerShared) {
             />
           )}
           {webSearchChecked && (
-            <Badge variant="secondary" className="shrink-0 gap-1 text-[11px]" data-testid="chat-web-search-badge">
+            <Badge variant="secondary" className="shrink-0 gap-1 text-xs" data-testid="chat-web-search-badge">
               <GlobeIcon className="size-3" aria-hidden="true" />
               {t('webSearchBadge')}
             </Badge>
@@ -480,13 +501,13 @@ export function ChatComposer(props: ChatComposerProps) {
       onChange={handleChange}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
-      placeholder={placeholder ?? t('composerPlaceholder')}
+      placeholder={placeholder ?? t(isStreaming ? 'composerPlaceholderStreaming' : 'composerPlaceholder')}
       // readOnly + aria-disabled (not disabled) so the textarea keeps focus while a send is dispatching.
       readOnly={disabled}
       aria-disabled={disabled || undefined}
-      rows={2}
+      rows={1}
       // The surrounding box owns the border and focus ring in both layouts, so the field itself is borderless.
-      className="block field-sizing-fixed max-h-[200px] min-h-14 w-full resize-none overflow-y-auto rounded-none border-0 bg-transparent px-1 py-1 text-base text-foreground shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 aria-disabled:opacity-50 sm:text-[15px] md:text-[15px] dark:bg-transparent"
+      className="block field-sizing-fixed max-h-[200px] min-h-9 w-full sm:min-h-14 resize-none overflow-y-auto rounded-none border-0 bg-transparent px-1 py-1 text-base text-foreground shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 aria-disabled:opacity-50 dark:bg-transparent"
       aria-label={t('composerPlaceholder')}
     />
   );

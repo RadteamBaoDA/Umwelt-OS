@@ -9,7 +9,10 @@ import type { ToolStep } from './api';
 type Translator = ReturnType<typeof useTranslations<'chat'>>;
 
 /** Message keys (running, finished) of the tools whose copy needs no placeholder. */
-const STEP_KEYS: Record<string, readonly ['stepRetrievalRunning' | 'stepWebRunning' | 'stepDataRunning', 'stepRetrievalDoneNoCount' | 'stepWebDone' | 'stepDataDone']> = {
+const STEP_KEYS: Record<
+  string,
+  readonly ['stepRetrievalRunning' | 'stepWebRunning' | 'stepDataRunning', 'stepRetrievalDoneNoCount' | 'stepWebDone' | 'stepDataDone']
+> = {
   retrieval: ['stepRetrievalRunning', 'stepRetrievalDoneNoCount'],
   web_search: ['stepWebRunning', 'stepWebDone'],
   query_collected_data: ['stepDataRunning', 'stepDataDone'],
@@ -53,7 +56,12 @@ export function ChatStepList({ steps, streaming }: { steps: ToolStep[]; streamin
   if (steps.length === 0) return null;
   const expanded = streaming || open;
   return (
-    <div data-testid="step-list" role={streaming ? 'status' : undefined} aria-live={streaming ? 'polite' : undefined} className="flex flex-col gap-1 text-xs text-muted-foreground">
+    <div
+      data-testid="step-list"
+      role={streaming ? 'status' : undefined}
+      aria-live={streaming ? 'polite' : undefined}
+      className="flex flex-col gap-1 text-xs text-muted-foreground"
+    >
       {!streaming && (
         <Button
           type="button"
@@ -61,9 +69,13 @@ export function ChatStepList({ steps, streaming }: { steps: ToolStep[]; streamin
           aria-expanded={open}
           aria-controls={listId}
           onClick={() => setOpen((value) => !value)}
-          className="min-h-8 w-fit gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="min-h-8 pointer-coarse:min-h-11 w-fit gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {open ? <ChevronDownIcon className="size-3.5" aria-hidden="true" /> : <ChevronRightIcon className="size-3.5" aria-hidden="true" />}
+          {open ? (
+            <ChevronDownIcon className="size-3.5" aria-hidden="true" />
+          ) : (
+            <ChevronRightIcon className="size-3.5" aria-hidden="true" />
+          )}
           <span>{t('stepsSummary', { count: steps.length })}</span>
           <span className="sr-only">{open ? t('stepsHide') : t('stepsShow')}</span>
         </Button>
@@ -72,9 +84,11 @@ export function ChatStepList({ steps, streaming }: { steps: ToolStep[]; streamin
         <ul id={listId} aria-label={t('stepsLabel')} className="flex flex-col gap-1 pl-1">
           {steps.map((step, index) => (
             <li key={`${step.tool}:${index}`} data-state={step.state} className="flex items-center gap-2">
-              {step.state === 'running'
-                ? <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
-                : <CheckIcon className="size-3.5" aria-hidden="true" />}
+              {step.state === 'running' ? (
+                <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <CheckIcon className="size-3.5" aria-hidden="true" />
+              )}
               <span>{stepText(t, step)}</span>
             </li>
           ))}

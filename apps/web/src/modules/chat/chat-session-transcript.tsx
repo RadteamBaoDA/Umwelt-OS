@@ -34,6 +34,8 @@ function useEmptyCapabilities(data: ChatSessionData, full: boolean): EmptyCapabi
     webSearch: web && {
       pressed: web.available && !web.profileBlocked && web.enabled,
       disabledReason: webReason,
+      // Not set up: the chip becomes a link to the page that fixes it (profile restrictions have no such fix).
+      href: web.available || web.profileBlocked ? undefined : '/settings/web-search',
       disabled: data.busy,
       onActivate: () => web.onChange(!web.enabled),
     },

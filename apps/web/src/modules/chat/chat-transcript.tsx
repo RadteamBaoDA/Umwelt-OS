@@ -32,6 +32,7 @@ import { useTopicNames } from './use-topic-names';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 import dynamic from 'next/dynamic';
+import Link from 'next/link';
 import { genUiCopy, resolveWidgetLocale } from './generative-ui/copy';
 import type { AppLocaleId } from '@/core/i18n';
 import { useRevealBlocks } from './reveal-blocks';
@@ -157,6 +158,8 @@ export interface CapabilityChip {
   disabledReason?: string;
   /** True when disabled without an explanation (busy or limit reached). */
   disabled?: boolean;
+  /** When set the chip is a link (e.g. to the settings page that fixes an unavailable capability) and is never disabled. */
+  href?: string;
   onActivate: () => void;
 }
 
@@ -168,7 +171,7 @@ export interface EmptyCapabilities {
 }
 
 /**
- * One outline chip. Toggles expose `aria-pressed`; a disabled chip names its reason for assistive tech and as a title.
+ * One outline chip. Toggles expose `aria-pressed`; a disabled chip names its reason for assistive tech and as a title; a chip with an `href` renders as a link.
  *
  * @param props - Icon, label and the chip model.
  */
@@ -184,7 +187,24 @@ function CapabilityChipButton({
   testId: string;
 }) {
   const toggle = chip.pressed !== undefined;
-  const disabled = Boolean(chip.disabledReason) || Boolean(chip.disabled);
+  const disabled = !chip.href && (Boolean(chip.disabledReason) || Boolean(chip.disabled));
+  const className = 'h-auto gap-1.5 px-3 py-1.5 text-xs aria-pressed:border-data aria-pressed:bg-active';
+  const content = (
+    <>
+      {icon}
+      {label}
+      {chip.disabledReason && <span className="sr-only"> ({chip.disabledReason})</span>}
+    </>
+  );
+  if (chip.href) {
+    return (
+      <Button asChild variant="outline" data-testid={testId} className={className}>
+        <Link href={chip.href} title={chip.disabledReason}>
+          {content}
+        </Link>
+      </Button>
+    );
+  }
   return (
     <Button
       type="button"
@@ -194,11 +214,9 @@ function CapabilityChipButton({
       disabled={disabled}
       title={chip.disabledReason}
       onClick={chip.onActivate}
-      className="h-auto gap-1.5 px-3 py-1.5 text-xs aria-pressed:border-data aria-pressed:bg-active"
+      className={className}
     >
-      {icon}
-      {label}
-      {chip.disabledReason && <span className="sr-only"> ({chip.disabledReason})</span>}
+      {content}
     </Button>
   );
 }
@@ -265,7 +283,7 @@ function EmptyIntro({
   // Real topics replace the fixed chips; empty/failed load keeps the fixed ones.
   const topics = useTopicNames();
   return (
-    <div className="my-auto flex flex-col gap-4 py-8">
+    <div className="mt-auto flex flex-col gap-4 py-8">
       <div className="flex flex-col gap-1">
         <h2 className="text-lg font-semibold text-foreground">{t('emptyStateTitle')}</h2>
         <p className="max-w-prose text-sm text-muted-foreground">{t('emptyStateDescription')}</p>
@@ -458,7 +476,7 @@ function VersionNavControl({ nav, onSelect }: { nav: VersionNav; onSelect: (nav:
   const t = useTranslations('chat');
   const position = { index: nav.index + 1, count: nav.count };
   const buttonClass =
-    'size-8 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+    'size-8 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
   return (
     <div data-testid="version-nav" role="group" aria-label={t('versionGroup')} className="inline-flex items-center">
       <Button
@@ -490,7 +508,91 @@ function VersionNavControl({ nav, onSelect }: { nav: VersionNav; onSelect: (nav:
   );
 }
 
-/** Copy, edit and regenerate buttons under a message, preceded by the version control when the message has revisions. */
+/** Shared classes of the icon-only meta-row buttons; 44px on coarse pointers (design-system touch target). */
+const META_BUTTON_CLASS =
+  'size-8 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+
+/**
+ * Icon-only meta-row button: the label is both the accessible name and the hover/long-press title.
+ *
+ * @param props - Label, click handler and the icon.
+ */
+function MetaIconButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <Button type="button" variant="ghost" size="icon" className={META_BUTTON_CLASS} onClick={onClick} aria-label={label} title={label}>
+      {children}
+    </Button>
+  );
+}
+
+/**
+ * "N sources" of a grounded answer: a button that opens the evidence rail on that answer's sources in full Chat,
+ * plain text in the drawer (no rail there).
+ *
+ * @param props - The answer's citations and the opener (absent outside full Chat).
+ */
+function SourcesMeta({ citations, onOpen }: { citations: Citation[]; onOpen?: (citations: Citation[]) => void }) {
+  const t = useTranslations('chat');
+  const label = t('sourcesCount', { count: citations.length });
+  if (!onOpen) return <span>{label}</span>;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      data-testid="sources-strip"
+      onClick={() => onOpen(citations)}
+      className="min-h-8 pointer-coarse:min-h-11 w-fit gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <BookOpenIcon className="size-3.5" aria-hidden="true" />
+      {label}
+    </Button>
+  );
+}
+
+/**
+ * Text facts of the meta row, dot-separated: "N sources" (assistant answers that cite), the answering model and the
+ * time. An absent fact adds neither text nor separator.
+ *
+ * @param props - The message, host mode, the preformatted time and the sources opener (full Chat only).
+ */
+function MessageFacts({
+  msg,
+  mode,
+  formattedDate,
+  onOpenSources,
+}: {
+  msg: ChatMessage;
+  mode: 'drawer' | 'full';
+  formattedDate: string | null;
+  onOpenSources?: (citations: Citation[]) => void;
+}) {
+  const isUser = msg.role === 'user';
+  const facts: React.ReactNode[] = [];
+  if (!isUser && msg.citations?.length) {
+    facts.push(<SourcesMeta key="sources" citations={msg.citations} onOpen={mode === 'full' ? onOpenSources : undefined} />);
+  }
+  if (!isUser && msg.model_identity) {
+    facts.push(
+      <span key="model" data-testid="message-model">
+        {msg.model_identity}
+      </span>,
+    );
+  }
+  if (formattedDate) facts.push(<span key="time">{formattedDate}</span>);
+  return facts.map((fact, index) => (
+    <React.Fragment key={index}>
+      {index > 0 && <span aria-hidden="true">·</span>}
+      {fact}
+    </React.Fragment>
+  ));
+}
+
+/**
+ * The single meta row under a message: version control, icon-only copy / edit / regenerate, then "N sources", the
+ * answering model and the time. Edit and regenerate appear only when the transcript allows them.
+ *
+ * @param props - Message, host mode, per-action permissions and handlers, version nav and the sources opener.
+ */
 function MessageActions({
   msg,
   mode,
@@ -503,6 +605,7 @@ function MessageActions({
   onRegenerateMessage,
   nav,
   onSelectVersion,
+  onOpenSources,
 }: MessageViewProps & {
   timezone: string;
   nav?: VersionNav;
@@ -512,27 +615,21 @@ function MessageActions({
   copy: ReturnType<typeof useCopyMessage>;
   onEditMessage?: (message: ChatMessage) => void;
   onRegenerateMessage?: (message: ChatMessage) => void;
+  onOpenSources?: (citations: Citation[]) => void;
 }) {
   const t = useTranslations('chat');
   const isUser = msg.role === 'user';
   const { copyMessage, copiedMessageId, failedMessageId } = copy;
+  const copied = copiedMessageId === msg.id;
   const formattedDate = msg.created_at ? formatDateTime(msg.created_at, locale, timezone) : null;
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center gap-x-1 gap-y-0 text-xs text-muted-foreground">
       {nav && onSelectVersion && <VersionNavControl nav={nav} onSelect={onSelectVersion} />}
-      {formattedDate && <span className="text-xs text-muted-foreground">{formattedDate}</span>}
       {/* Expose one-click copy for all full-page messages and completed assistant messages in the drawer. */}
       {(mode === 'full' || (!isUser && Boolean(msg.content))) && (
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => void copyMessage(msg.id, msg.content)}
-          className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label={t('copyMessage')}
-        >
-          {copiedMessageId === msg.id ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-          <span>{copiedMessageId === msg.id ? t('copiedMessage') : t('copyMessage')}</span>
-        </Button>
+        <MetaIconButton label={copied ? t('copiedMessage') : t('copyMessage')} onClick={() => void copyMessage(msg.id, msg.content)}>
+          {copied ? <CheckIcon className="size-3.5" aria-hidden="true" /> : <CopyIcon className="size-3.5" aria-hidden="true" />}
+        </MetaIconButton>
       )}
       {(mode === 'full' || !isUser) && failedMessageId === msg.id && (
         <span role="status" className="text-xs text-destructive">
@@ -540,69 +637,17 @@ function MessageActions({
         </span>
       )}
       {canEdit && (
-        <Button
-          type="button"
-          variant="ghost"
-          className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={() => onEditMessage?.(msg)}
-          aria-label={t('editPrompt')}
-        >
-          <PencilIcon className="size-3.5" />
-          <span>{t('editPrompt')}</span>
-        </Button>
+        <MetaIconButton label={t('editPrompt')} onClick={() => onEditMessage?.(msg)}>
+          <PencilIcon className="size-3.5" aria-hidden="true" />
+        </MetaIconButton>
       )}
       {canRegenerate && (
-        <Button
-          type="button"
-          variant="ghost"
-          className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={() => onRegenerateMessage?.(msg)}
-          aria-label={t('regenerateAnswer')}
-        >
-          <RefreshCwIcon className="size-3.5" />
-          <span>{t('regenerateAnswer')}</span>
-        </Button>
+        <MetaIconButton label={t('regenerateAnswer')} onClick={() => onRegenerateMessage?.(msg)}>
+          <RefreshCwIcon className="size-3.5" aria-hidden="true" />
+        </MetaIconButton>
       )}
+      <MessageFacts msg={msg} mode={mode} formattedDate={formattedDate} onOpenSources={onOpenSources} />
     </div>
-  );
-}
-
-/**
- * Model line under an assistant message. The drawer also shows the source count here; the full page shows sources as
- * the clickable {@link SourcesStrip} instead, so only the model name remains.
- */
-function ModelLine({ msg, mode }: { msg: ChatMessage; mode: 'drawer' | 'full' }) {
-  const t = useTranslations('chat');
-  if (msg.role !== 'assistant' || !msg.model_identity) return null;
-  return (
-    <span data-testid="message-model" className="text-xs text-muted-foreground">
-      {t('modelLine', { model: msg.model_identity })}
-      {mode === 'drawer' && msg.citations?.length ? ` · ${t('sourcesCount', { count: msg.citations.length })}` : ''}
-    </span>
-  );
-}
-
-/**
- * Compact "N sources" button under a grounded assistant answer; opens the evidence rail on that answer's sources.
- *
- * @param props - The message, host mode and the open handler (absent outside full Chat).
- * @returns The strip, or null for user turns, the drawer and answers that cite nothing.
- */
-function SourcesStrip({ msg, mode, onOpen }: { msg: ChatMessage; mode: 'drawer' | 'full'; onOpen?: (citations: Citation[]) => void }) {
-  const t = useTranslations('chat');
-  const citations = msg.citations;
-  if (mode !== 'full' || msg.role !== 'assistant' || !citations?.length || !onOpen) return null;
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      data-testid="sources-strip"
-      onClick={() => onOpen(citations)}
-      className="min-h-8 w-fit gap-1.5 px-2.5 text-xs font-normal text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <BookOpenIcon className="size-3.5" aria-hidden="true" />
-      {t('sourcesCount', { count: citations.length })}
-    </Button>
   );
 }
 
@@ -627,6 +672,8 @@ interface TranscriptMessageProps extends MessageViewProps {
   onOpenSources?: (citations: Citation[]) => void;
   /** True while this message's prompt is being edited in the composer. */
   editing?: boolean;
+  /** Settled processing steps of the run that produced this answer; shown collapsed above it (newest answer only). */
+  steps?: ToolStep[];
 }
 
 /** Layout classes of a committed message; the message being edited gets a ring. */
@@ -654,7 +701,6 @@ function TranscriptMessage(props: TranscriptMessageProps) {
     onEditMessage,
     onRegenerateMessage,
     onSelectCitation,
-    onOpenSources,
   } = props;
   const t = useTranslations('chat');
   const isUser = msg.role === 'user';
@@ -674,6 +720,8 @@ function TranscriptMessage(props: TranscriptMessageProps) {
       data-editing={props.editing ? 'true' : undefined}
       className={messageClass(isUser, props.editing)}
     >
+      {props.steps && <ChatStepList steps={props.steps} streaming={false} />}
+
       <MessageBody
         msg={msg}
         mode={mode}
@@ -698,11 +746,7 @@ function TranscriptMessage(props: TranscriptMessageProps) {
           />
         ))}
 
-      <SourcesStrip msg={msg} mode={mode} onOpen={onOpenSources} />
-
       <MessageActions {...props} canEdit={canEdit} canRegenerate={canRegenerate} />
-
-      <ModelLine msg={msg} mode={mode} />
     </div>
   );
 }
@@ -734,30 +778,17 @@ function FollowupSuggestions({ suggestions, onSend }: { suggestions: string[]; o
 }
 
 /**
- * What follows the latest assistant answer once the run settled: the collapsed step summary, then the follow-up chips.
+ * What follows the latest assistant answer once the run settled: the follow-up chips (the step summary sits above the answer).
  *
- * @param props - The last rendered entry, the settled run's steps and the send handler (chips need it).
+ * @param props - The last rendered entry and the send handler (chips need it).
  * @returns Nothing unless the thread ends with an assistant answer.
  */
-function SettledRunExtras({
-  last,
-  steps,
-  onSendPrompt,
-}: {
-  last?: RenderEntry;
-  steps: ToolStep[];
-  onSendPrompt?: (prompt: string) => void;
-}) {
-  // An older version selected through the version control never gets chips or the step summary of the newest run.
+function SettledRunExtras({ last, onSendPrompt }: { last?: RenderEntry; onSendPrompt?: (prompt: string) => void }) {
+  // An older version selected through the version control never gets the chips of the newest run.
   if (last?.msg.role !== 'assistant' || !last.latest) return null;
-  return (
-    <>
-      <ChatStepList steps={steps} streaming={false} />
-      {onSendPrompt && last.msg.suggestions?.length ? (
-        <FollowupSuggestions suggestions={last.msg.suggestions} onSend={onSendPrompt} />
-      ) : null}
-    </>
-  );
+  return onSendPrompt && last.msg.suggestions?.length ? (
+    <FollowupSuggestions suggestions={last.msg.suggestions} onSend={onSendPrompt} />
+  ) : null;
 }
 
 /** Props of {@link StreamingBubble}. */
@@ -886,7 +917,7 @@ function TranscriptError({ error, onRetry }: { error: string; onRetry?: () => vo
   return (
     <div
       role="alert"
-      className="flex items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+      className="flex items-center justify-between gap-2 rounded-lg border border-destructive bg-pill-negative p-3 text-xs text-pill-negative-foreground"
     >
       <div className="flex items-center gap-2">
         <AlertCircleIcon className="size-4 shrink-0" />
@@ -914,7 +945,7 @@ function EmptyState({
   const t = useTranslations('chat');
   if (onSendPrompt) return <EmptyIntro onSendPrompt={onSendPrompt} locale={locale} capabilities={capabilities} />;
   return (
-    <div className="my-auto flex flex-col gap-1 py-8">
+    <div className="mt-auto flex flex-col gap-1 py-8">
       <h2 className="text-base font-semibold text-foreground">{t('emptyStateTitle')}</h2>
       <p className="text-sm text-muted-foreground">{t('emptyStateDescription')}</p>
     </div>
@@ -1079,6 +1110,7 @@ export function ChatTranscript(props: ChatTranscriptProps) {
   const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, hasUnread, jumpToLatest, widgetPromptHandler } = m;
   const { showStarter, showStreaming, stopped } = transcriptVisibility(props, withTranscriptDefaults(props));
   const { regenerateTarget, turnStart } = latestTurnLayout(m.entries, mode, Boolean(onRegenerateMessage));
+  const lastEntry = m.entries[m.entries.length - 1];
   /** Renders one committed message with the transcript-wide handlers. */
   const renderMessage = ({ msg, latest, nav }: RenderEntry) => (
     <TranscriptMessage
@@ -1097,14 +1129,15 @@ export function ChatTranscript(props: ChatTranscriptProps) {
       widgetPromptHandler={widgetPromptHandler}
       onEditMessage={onEditMessage}
       onRegenerateMessage={onRegenerateMessage}
-      onSelectCitation={onSelectCitation}
+      onSelectCitation={onSelectCitation ?? (onOpenSources && ((citation) => onOpenSources(msg.citations ?? [citation], citation)))}
       onOpenSources={onOpenSources}
       editing={msg.id === props.editingMessageId}
+      steps={!showStreaming && msg === lastEntry?.msg && msg.role === 'assistant' && latest && steps.length > 0 ? steps : undefined}
     />
   );
   // Full Chat shows the evidence rail, so chip and strip clicks open it; the drawer has no rail and keeps plain links.
   const onOpenSources = mode === 'full' ? focusCitations : undefined;
-  const onSelectCitation = props.onSelectCitation ?? (onOpenSources ? (citation: Citation) => onOpenSources([citation]) : undefined);
+  const onSelectCitation = props.onSelectCitation;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -1132,7 +1165,7 @@ export function ChatTranscript(props: ChatTranscriptProps) {
           >
             {m.entries.slice(turnStart).map(renderMessage)}
 
-            {!showStreaming && <SettledRunExtras last={m.entries[m.entries.length - 1]} steps={steps} onSendPrompt={onSendPrompt} />}
+            {!showStreaming && <SettledRunExtras last={lastEntry} onSendPrompt={onSendPrompt} />}
 
             {showStreaming && (
               <StreamingBubble
