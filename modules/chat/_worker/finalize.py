@@ -60,6 +60,11 @@ class _CitedAnswer:
     valid_citations: list[dict[str, Any]]
     number_map: dict[int, int]
 
+    @property
+    def uncited(self) -> bool:
+        """True when no citation survived validation (the answer text is kept as streamed)."""
+        return not self.valid_citations
+
 
 @dataclass(frozen=True)
 class _Numbering:
@@ -150,19 +155,7 @@ def _validate_document_citations(
         for n, item in ((n, answer_context.evidence[n - 1]) for n in unique_numbers)
         if item.content.strip()
     ]
-    all_markers = parse_citation_markers(text, max(total_count + 20, 20))
-    allow_uncited_turn = (
-        bool(text.strip())
-        and not all_markers
-        and not answer_request.selected_only
-        and not answer_request.selected_refs
-    )
-    validated = validate_answer_citations(
-        text,
-        candidate_citations,
-        answer_context.evidence,
-        allow_uncited_conversational=allow_uncited_turn,
-    )
+    validated = validate_answer_citations(text, candidate_citations, answer_context.evidence)
     kept = {(c.documentVersionId, c.chunkId): i for i, c in enumerate(validated.citations, 1)}
     number_map = {n: kept[key] for n in candidate_numbers if (key := evidence_key(n)) in kept}
     if not doc_numbers and not number_map and validated.citations:
@@ -368,15 +361,21 @@ def _assistant_metadata(
     st: _StreamState,
     generative_uis: list[dict[str, Any]],
     route_decision: dict[str, Any] | None,
+    uncited: bool = False,
 ) -> dict[str, Any]:
-    """Message ``metadata_json`` kwargs: reasoning, Generative UI parts and the router audit trail (pure).
+    """Message ``metadata_json`` kwargs: reasoning, UI parts, the ``uncited`` flag and the router audit trail (pure).
 
     Returns ``{}`` when there is nothing to store so the column keeps its default.
     """
     generative_ui = (
         generative_uis[0] if generative_uis else None
     )  # first part, kept for older clients
-    if generative_ui is None and route_decision is None and not st.accumulated_reasoning:
+    if (
+        generative_ui is None
+        and route_decision is None
+        and not st.accumulated_reasoning
+        and not uncited
+    ):
         return {}
     return {
         "metadata_json": {
@@ -393,6 +392,7 @@ def _assistant_metadata(
                 if generative_ui is not None
                 else {}
             ),
+            **({"uncited": True} if uncited else {}),
             # Audit trail of the external router's choice (category + renderer only, no content).
             **(
                 {
@@ -414,6 +414,7 @@ async def _persist_final(
     final_answer: str,
     valid_citations: list[dict[str, Any]],
     generative_uis: list[dict[str, Any]],
+    uncited: bool = False,
 ) -> UUID:
     """Persist the completed assistant message, mark the run completed and publish the terminal events.
 
@@ -443,7 +444,7 @@ async def _persist_final(
             citations=valid_citations,
             response_id=c.response_id,
             revision_of_message_id=turn.revision_of_message_id,
-            **_assistant_metadata(st, generative_uis, env.ts.route_decision),
+            **_assistant_metadata(st, generative_uis, env.ts.route_decision, uncited),
         )
         session.add(assistant_msg)
         await session.flush()
@@ -476,6 +477,7 @@ async def _persist_final(
             "citations": valid_citations,
             "model": model_ident,
             "status": "completed",
+            "uncited": uncited,
         }
         if generative_uis:
             done_payload["generative_ui"] = generative_uis[0]

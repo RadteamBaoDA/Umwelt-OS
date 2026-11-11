@@ -6,7 +6,7 @@ Covers:
 - _extract_rerank_indices and _apply_configured_reranking safety (local-only fence enforcement)
 - revalidate_context_fence: active source check, generation matching, remote destination policy
 - validate_citations: citation verification, quote containment, whitespace tolerance, metadata extraction
-- ensure_grounded_answer and validate_answer_citations: grounded disclosure enforcement
+- validate_answer_citations: citation validation that keeps the answer text
 """
 
 from datetime import UTC, datetime
@@ -17,11 +17,9 @@ import pytest
 
 from modules.chat import retrieval
 from modules.chat.citations import (
-    INSUFFICIENT_EVIDENCE_MESSAGE,
     _contains_quote,
     _normalize_whitespace,
     _to_uuid,
-    ensure_grounded_answer,
     validate_answer_citations,
     validate_citations,
 )
@@ -452,41 +450,6 @@ class TestCitationSynthesisAndValidation:
         result = validate_citations(candidate, evidence)
         assert result.is_valid is False
         assert "does not match evidence document ID" in result.rejection_reasons[0]
-
-    def test_ensure_grounded_answer(self) -> None:
-        """Verify ensure_grounded_answer substitutes insufficient evidence notice when ungrounded."""
-        # When evidence is insufficient and citations empty, returns standard message
-        grounded = ensure_grounded_answer(
-            answer="Here is some ungrounded claim.",
-            citations=[],
-            has_sufficient_evidence=False,
-        )
-        assert grounded == INSUFFICIENT_EVIDENCE_MESSAGE
-
-        # If answer already admits lack of evidence, preserve original answer
-        already_admits = "I cannot answer because there is not enough information."
-        grounded2 = ensure_grounded_answer(
-            answer=already_admits,
-            citations=[],
-            has_sufficient_evidence=False,
-        )
-        assert grounded2 == already_admits
-
-        # When evidence is sufficient and citations exist, returns answer untouched
-        cit = Citation(
-            source_id=uuid4(),
-            document_id=uuid4(),
-            document_version_id=uuid4(),
-            chunk_id=uuid4(),
-            title="Title",
-            quote="Quote",
-        )
-        grounded3 = ensure_grounded_answer(
-            answer="Grounded answer.",
-            citations=[cit],
-            has_sufficient_evidence=True,
-        )
-        assert grounded3 == "Grounded answer."
 
     def test_validate_answer_citations_integration(self) -> None:
         """Verify full validate_answer_citations pipeline."""

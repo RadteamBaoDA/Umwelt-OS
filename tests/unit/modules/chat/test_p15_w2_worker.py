@@ -22,7 +22,6 @@ from core.model_gateway.transport import (
     body_sent,
 )
 from modules.chat import worker
-from modules.chat.citations import INSUFFICIENT_EVIDENCE_MESSAGE
 from modules.chat.models import Message, StreamEvent
 from modules.chat.schemas import WEB_SEARCH_OUTCOME_KEY, AnswerContext
 from modules.chat.web_search import WebSearchError, WebSearchResult
@@ -574,7 +573,8 @@ async def test_web_only_rejected_when_doc_marker_invalid_or_out_of_range(
         evidence=[_evidence(content="   ")],
     )
     await gen.run()
-    assert gen.message.content == INSUFFICIENT_EVIDENCE_MESSAGE
+    # The streamed text is kept (dropped markers stripped), never swapped for a canned sentence.
+    assert gen.message.content.startswith("Claim") and "[" not in gen.message.content
     assert gen.message.citations == []
 
 

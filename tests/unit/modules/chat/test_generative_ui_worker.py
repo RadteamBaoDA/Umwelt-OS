@@ -153,7 +153,7 @@ async def test_invalid_tool_args_produce_no_widget(monkeypatch: pytest.MonkeyPat
     gen.failed.assert_not_awaited()
     assert gen.events("message.ui.done") == []
     message = next(m for m in gen.added if isinstance(m, Message))
-    assert message.content.endswith("Answer.") and not getattr(message, "metadata_json", None)
+    assert message.content.endswith("Answer.") and "generative_ui" not in message.metadata_json
     assert "generative_ui" not in gen.events("message.done")[0].data
 
 
@@ -997,7 +997,10 @@ async def test_external_router_text_decision_removes_presentation_tools_and_pers
     assert "render_plan" in names
     assert "render_form" in names and "request_user_input" in names
     message = next(m for m in gen.added if isinstance(m, Message))
-    assert message.metadata_json == {"viz_decision": {"visualization": "text", "renderer": "text"}}
+    assert message.metadata_json == {
+        "uncited": True,
+        "viz_decision": {"visualization": "text", "renderer": "text"},
+    }
 
 
 async def test_external_router_map_decision_only_allows_sandbox_and_gates_tiles_on_media(

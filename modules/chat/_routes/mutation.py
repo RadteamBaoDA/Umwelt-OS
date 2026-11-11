@@ -14,6 +14,7 @@ from modules.chat._routes.guards import (
     _message_mutation_digest,
     _message_reasoning,
     _message_suggestions,
+    _message_uncited,
     _run_context,
 )
 from modules.chat.models import (
@@ -59,6 +60,7 @@ def _message_reads(
             generative_ui_parts=parts,
             reasoning=_message_reasoning(getattr(m, "metadata_json", None)),
             suggestions=_message_suggestions(getattr(m, "metadata_json", None)),
+            uncited=_message_uncited(getattr(m, "metadata_json", None)),
         )
         for m, citations, parts in zip(
             messages_rows,

@@ -422,6 +422,9 @@ class MessageRead(BaseModel):
     reasoning: str | None = None  # model "thinking" text kept from the stream, capped at write time
     # Follow-up question suggestions written by the post-answer step; empty until (or unless) generated.
     suggestions: list[str] = Field(default_factory=list)
+    # True when the stored answer carries no verified citation; the text is kept as streamed and the UI
+    # shows a "not based on your documents" label instead of a prefix inside the content.
+    uncited: bool = False
 
 
 class ChatExportCitation(BaseModel):

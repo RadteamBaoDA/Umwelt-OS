@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from modules.chat.citations import (
-    INSUFFICIENT_EVIDENCE_MESSAGE,
     parse_citation_markers,
     renumber_citation_markers,
     validate_answer_citations,
@@ -77,4 +76,4 @@ def test_only_cited_evidence_and_uncited_answer_disclosed() -> None:
     res = validate_answer_citations("Beta is true [2].", cands, items)
     assert [c.chunkId for c in res.citations] == [items[1].chunk_id]
     res = validate_answer_citations("Beta is true.", [], items)
-    assert res.citations == [] and res.answer == INSUFFICIENT_EVIDENCE_MESSAGE
+    assert res.citations == [] and res.answer == "Beta is true."  # text kept, never replaced

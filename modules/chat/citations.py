@@ -12,11 +12,6 @@ from modules.chat.schemas import (
     ValidatedAnswer,
 )
 
-INSUFFICIENT_EVIDENCE_MESSAGE = (
-    "I do not have sufficient evidence in the retrieved documents to answer this question."
-)
-UNCITED_ANSWER_NOTICE = "[Uncited] "
-
 _WORD_RE = re.compile(r"[a-z0-9\u00c0-\u024f\u1e00-\u1eff]{2,}", re.IGNORECASE)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _STOPWORDS = frozenset(
@@ -528,54 +523,12 @@ def _validate_one_citation(
     )
 
 
-def ensure_grounded_answer(
-    answer: str,
-    citations: list[Citation],
-    *,
-    has_sufficient_evidence: bool = False,
-    allow_uncited_conversational: bool = False,
-) -> str:
-    """Ensure that answers without sufficient evidence or citations explicitly disclose the limitation.
-
-    When ``allow_uncited_conversational`` is enabled for a streamed conversational turn that has no
-    matching citations (and no broken citation markers), prefixes ``[Uncited] `` to preserve the
-    already-streamed response with a clear uncited disclosure rather than wiping it.
-
-    Args:
-        answer: Raw generated answer text.
-        citations: List of verified citations.
-        has_sufficient_evidence: Whether the retrieved evidence was deemed sufficient.
-        allow_uncited_conversational: Whether to annotate an uncited conversational answer instead of wiping.
-
-    Returns:
-        The original answer if supported, an ``[Uncited]``-prefixed answer when allowed, or an explicit
-        insufficient-evidence response.
-    """
-    if not has_sufficient_evidence or not citations:
-        lower_ans = answer.lower()
-        if (
-            "insufficient evidence" in lower_ans
-            or "not enough information" in lower_ans
-            or "cannot answer" in lower_ans
-            or "do not have sufficient" in lower_ans
-        ):
-            return answer
-        if allow_uncited_conversational and answer.strip():
-            if answer.lstrip().startswith(UNCITED_ANSWER_NOTICE.strip()):
-                return answer
-            return f"{UNCITED_ANSWER_NOTICE}{answer}"
-        return INSUFFICIENT_EVIDENCE_MESSAGE
-    return answer
-
-
 def validate_answer_citations(
     answer: str,
     citations: list[Citation | dict[str, Any]],
     evidence: list[EvidenceItem] | dict[tuple[UUID, UUID], EvidenceItem],
-    *,
-    allow_uncited_conversational: bool = False,
 ) -> ValidatedAnswer:
-    """Validate answer citations against evidence and enforce grounded response disclosures.
+    """Validate answer citations against evidence; the answer text is never replaced or prefixed.
 
     If ``citations`` is empty but ``evidence`` is non-empty, performs a post-hoc lexical attribution
     check to attach ``[1]`` and its supporting quote when the answer has strong lexical overlap
@@ -585,11 +538,10 @@ def validate_answer_citations(
         answer: Candidate response text from language model.
         citations: Candidate citations list.
         evidence: Retrieved evidence set for the query.
-        allow_uncited_conversational: Whether to preserve uncited conversational answers with an
-            ``[Uncited]`` notice when no citations were proposed or rejected.
 
     Returns:
-        ValidatedAnswer instance containing verified citations and grounded answer text.
+        ValidatedAnswer with the verified citations and the (possibly post-hoc annotated) answer. An answer
+        without verified citations keeps its text; callers flag it through ``has_sufficient_evidence``.
     """
     effective_answer = answer
     effective_citations = list(citations)
@@ -607,21 +559,12 @@ def validate_answer_citations(
     has_sufficient = len(validation.valid_citations) > 0 and (
         bool(evidence) if isinstance(evidence, (list, dict)) else False
     )
-    can_allow_uncited = (
-        allow_uncited_conversational and not citations and len(validation.rejected_citations) == 0
-    )
-    final_answer = ensure_grounded_answer(
-        effective_answer,
-        validation.valid_citations,
-        has_sufficient_evidence=has_sufficient,
-        allow_uncited_conversational=can_allow_uncited,
-    )
     warnings = list(validation.rejection_reasons)
     if not has_sufficient:
         warnings.append("Answer lacks sufficient verified citations")
 
     return ValidatedAnswer(
-        answer=final_answer,
+        answer=effective_answer,
         citations=validation.valid_citations,
         has_sufficient_evidence=has_sufficient,
         warnings=warnings,

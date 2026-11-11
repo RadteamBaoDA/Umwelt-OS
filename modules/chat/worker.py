@@ -259,7 +259,7 @@ async def _generate(c: _RunCtx, claimed: _ClaimedRun) -> None:
     )
     generative_uis = _finalize_widgets(env, cited.final_answer, cited)
     message_id = await _persist_final(
-        env, st, cited.final_answer, cited.valid_citations, generative_uis
+        env, st, cited.final_answer, cited.valid_citations, generative_uis, cited.uncited
     )
     # 6. Best-effort title and follow-up suggestions after message.done; never fails or alters the answer.
     await generate_followup(env, message_id, cited.final_answer)

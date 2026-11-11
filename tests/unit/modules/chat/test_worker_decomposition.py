@@ -291,3 +291,21 @@ def test_citation_number_shifts_only_tool_evidence_behind_web_results() -> None:
     assert _citation_number(0, (0, 1)) == 2
     assert _citation_number(1, (2, 3)) == 2
     assert _citation_number(2, (2, 3)) == 6
+
+
+def test_uncited_answer_keeps_text_and_sets_flag() -> None:
+    """General-knowledge text is neither prefixed nor replaced; ``uncited`` marks it for the UI."""
+    from modules.chat._routes.guards import _message_uncited
+
+    context = AnswerContext(query="q", evidence=[_evidence(content="Unrelated archive text.")])
+    cited = worker._validate_citations(
+        "## HTTP Caching\nCaches store responses.",
+        context,
+        AnswerContextRequest(query="q"),
+        None,
+        [],
+    )
+    assert cited.final_answer == "## HTTP Caching\nCaches store responses."
+    assert cited.uncited is True and cited.valid_citations == []
+    assert _message_uncited({"uncited": True}) is True
+    assert _message_uncited({}) is False and _message_uncited(None) is False
