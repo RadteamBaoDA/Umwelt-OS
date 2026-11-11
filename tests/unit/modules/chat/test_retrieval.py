@@ -31,7 +31,6 @@ from modules.chat.retrieval import (
 )
 from modules.chat.schemas import (
     AnswerContext,
-    Citation,
     EntityContextItem,
     EvidenceItem,
     TemporalContextItem,
