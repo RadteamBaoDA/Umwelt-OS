@@ -843,7 +843,7 @@ async def _select_structured_documents(
             func.left(DocumentVersion.content, 500).label("excerpt"),
             recency.label("recency"),
             func.row_number()
-            .over(partition_by=Document.source_id, order_by=(desc(recency), desc(Document.id)))
+            .over(partition_by=Document.source_id, order_by=desc(recency))
             .label("source_rank"),
         )
         .join(

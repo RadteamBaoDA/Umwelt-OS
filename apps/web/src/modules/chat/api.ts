@@ -34,6 +34,34 @@ export interface WebCitation {
 export type Citation = DocumentCitation | WebCitation;
 
 /**
+ * Maps one stored citation to the camelCase shape the UI reads. The server persists and streams document
+ * citations with snake_case keys (`document_version_id`, `chunk_id`, ...); reading only camelCase left every
+ * document citation with undefined ids, so the rail de-duplicated them all into one card.
+ *
+ * @param raw - A citation as received from the API (snake_case, camelCase or web).
+ * @returns The citation with camelCase document keys; web citations and already-camelCase ones pass through.
+ */
+export function normalizeCitation(raw: Citation): Citation {
+  const c = raw as unknown as Record<string, unknown>;
+  if (c.sourceType === 'web' || c.source_type === 'web' || c.documentVersionId !== undefined) return raw;
+  return {
+    sourceId: c.source_id,
+    documentId: c.document_id,
+    documentVersionId: c.document_version_id,
+    chunkId: c.chunk_id,
+    title: c.title,
+    url: c.url ?? null,
+    observedAt: c.observed_at ?? null,
+    quote: c.quote,
+  } as DocumentCitation;
+}
+
+/** Normalizes a raw citation list (see {@link normalizeCitation}); non-arrays yield an empty list. */
+export function normalizeCitations(raw: unknown): Citation[] {
+  return Array.isArray(raw) ? (raw as Citation[]).map(normalizeCitation) : [];
+}
+
+/**
  * Gates the web_search toggle and request flag.
  * Enabled with W2 (worker search + outcome); set false to hide the toggle without a backend change.
  */
@@ -328,7 +356,8 @@ export async function listConversations(params?: {
  * @returns Complete conversation detail record.
  */
 export async function getConversation(conversationId: string): Promise<ConversationDetail> {
-  return apiRequest<ConversationDetail>(`/api/v1/conversations/${conversationId}`);
+  const detail = await apiRequest<ConversationDetail>(`/api/v1/conversations/${conversationId}`);
+  return { ...detail, messages: (detail.messages ?? []).map((m) => ({ ...m, citations: normalizeCitations(m.citations) })) };
 }
 
 /**
@@ -537,8 +566,7 @@ const SSE_HANDLERS: Record<string, SseHandler> = {
     }),
   'message.citations': (eventData, options) =>
     withJsonPayload('citations', eventData, (parsed) => {
-      const citationsList = Array.isArray(parsed?.citations) ? (parsed.citations as Citation[]) : [];
-      options.onCitations?.(citationsList);
+      options.onCitations?.(normalizeCitations(parsed?.citations));
     }),
   'message.ui.delta': (eventData, options) =>
     withJsonPayload('message.ui.delta', eventData, (parsed) => {
@@ -616,7 +644,7 @@ function toDoneResult(parsed: any): Parameters<NonNullable<StreamEventsOptions['
   const parts = parsed?.generative_ui_parts;
   return {
     text: parsed?.text ?? '',
-    citations: Array.isArray(parsed?.citations) ? parsed.citations : [],
+    citations: normalizeCitations(parsed?.citations),
     model: parsed?.model,
     status: parsed?.status ?? 'completed',
     generative_ui: ui && typeof ui === 'object' ? (ui as Record<string, unknown>) : null,
