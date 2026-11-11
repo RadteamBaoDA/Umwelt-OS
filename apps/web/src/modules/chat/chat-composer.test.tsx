@@ -138,3 +138,27 @@ describe('ChatComposer agent picker slot (C9)', () => {
     expect(screen.getByTestId('chat-model-locked-hint').textContent).toBe('Specialist agents choose their own model.');
   });
 });
+
+describe('ChatComposer + menu Templates item (G3)', () => {
+  it('opens the template library from the menu and omits the item when no handler is given', async () => {
+    const onTemplates = vi.fn();
+    const { unmount } = render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <ChatComposer
+          mode="full"
+          value=""
+          onChange={vi.fn()}
+          onSend={vi.fn()}
+          isStreaming={false}
+          menu={{ onTemplates, onAttach: vi.fn(), attachDisabled: false, share: { checked: false, disabled: false, onChange: vi.fn() } }}
+        />
+      </NextIntlClientProvider>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /add|more|menu|\+/i }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Templates' }));
+    expect(onTemplates).toHaveBeenCalledTimes(1);
+    unmount();
+    await openMenu({ available: true, enabled: true, onChange: vi.fn() });
+    expect(screen.queryByRole('menuitem', { name: 'Templates' })).toBeNull();
+  });
+});

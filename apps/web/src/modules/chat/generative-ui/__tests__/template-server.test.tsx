@@ -2,9 +2,25 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TemplateLibrary } from '../templates/template-library';
-import { clearUserTemplates, deleteUserTemplate, listUserTemplates, refreshUserTemplates, saveUserTemplate, setTemplateAccount } from '../templates/template-store';
+import {
+  clearUserTemplates,
+  deleteUserTemplate,
+  listUserTemplates,
+  refreshUserTemplates,
+  saveUserTemplate,
+  saveUserTemplateConfirmed,
+  setTemplateAccount,
+} from '../templates/template-store';
 
-const server = (id: string, name: string) => ({ id, name, description: '', html: '{"html":"x"}', data_description: '', version: 1, created_at: '2026-10-19T00:00:00Z' });
+const server = (id: string, name: string) => ({
+  id,
+  name,
+  description: '',
+  html: '{"html":"x"}',
+  data_description: '',
+  version: 1,
+  created_at: '2026-10-19T00:00:00Z',
+});
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
 beforeEach(() => {
@@ -18,15 +34,18 @@ describe('server-backed template store', () => {
     saveUserTemplate('Old', '{"html":"x"}');
     const posted: string[] = [];
     let stored: ReturnType<typeof server>[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
-      if (init?.method === 'POST') {
-        const body = JSON.parse(String(init.body));
-        posted.push(body.name);
-        stored = [server('11111111-1111-1111-1111-111111111111', body.name)];
-        return json(stored[0], 201);
-      }
-      return json(stored);
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          const body = JSON.parse(String(init.body));
+          posted.push(body.name);
+          stored = [server('11111111-1111-1111-1111-111111111111', body.name)];
+          return json(stored[0], 201);
+        }
+        return json(stored);
+      }),
+    );
     await refreshUserTemplates('tok');
     await refreshUserTemplates('tok');
     expect(posted).toEqual(['Old']);
@@ -42,7 +61,8 @@ describe('server-backed template store', () => {
 
   it('save with a token posts in the background and swaps the local id; delete calls the API for server ids', async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
-      init?.method === 'POST' ? json(server('22222222-2222-2222-2222-222222222222', 'Mine'), 201) : new Response(null, { status: 204 }));
+      init?.method === 'POST' ? json(server('22222222-2222-2222-2222-222222222222', 'Mine'), 201) : new Response(null, { status: 204 }),
+    );
     vi.stubGlobal('fetch', fetchMock);
     expect(saveUserTemplate('Mine', '{"html":"x"}', 'tok')).toBe(true);
     await waitFor(() => expect(listUserTemplates()[0].id).toBe('22222222-2222-2222-2222-222222222222'));
@@ -55,9 +75,10 @@ describe('server-backed template store', () => {
 
 describe('per-account template mirror', () => {
   it('never shows or uploads account A entries to account B, and drops the legacy key', async () => {
-    window.localStorage.setItem('umwelt.genui.templates.v1', JSON.stringify([
-      { id: 'tpl-legacy', title: 'Legacy', content: '{}', createdAt: 1 },
-    ]));
+    window.localStorage.setItem(
+      'umwelt.genui.templates.v1',
+      JSON.stringify([{ id: 'tpl-legacy', title: 'Legacy', content: '{}', createdAt: 1 }]),
+    );
     setTemplateAccount('2'); // re-bind so the legacy drop runs
     setTemplateAccount('1');
     saveUserTemplate('A secret', '{"html":"a"}');
@@ -66,10 +87,13 @@ describe('per-account template mirror', () => {
     setTemplateAccount('2');
     expect(listUserTemplates()).toEqual([]);
     const posted: string[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
-      if (init?.method === 'POST') posted.push(JSON.parse(String(init.body)).name);
-      return json([]);
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') posted.push(JSON.parse(String(init.body)).name);
+        return json([]);
+      }),
+    );
     await refreshUserTemplates('tok-b');
     expect(posted).toEqual([]);
     expect(listUserTemplates()).toEqual([]);
@@ -92,7 +116,9 @@ describe('TemplateLibrary pending template', () => {
   it('selects the template server-side and sends the short apply prompt', async () => {
     const user = userEvent.setup();
     const onSendPrompt = vi.fn();
-    const fetchMock = vi.fn(async (...args: [string, RequestInit?]) => (args[0].endsWith('/pending-template') ? json({ template_id: 'seed-weather-ny' }) : json([])));
+    const fetchMock = vi.fn(async (...args: [string, RequestInit?]) =>
+      args[0].endsWith('/pending-template') ? json({ template_id: 'seed-weather-ny' }) : json([]),
+    );
     vi.stubGlobal('fetch', fetchMock);
     render(<TemplateLibrary onSendPrompt={onSendPrompt} locale="en-us" csrfToken="tok" conversationId="c1" />);
     await user.click(screen.getByTestId('template-library-open'));
@@ -108,7 +134,10 @@ describe('TemplateLibrary pending template', () => {
   it('falls back to the inline JSON prompt when the pending call fails or there is no conversation', async () => {
     const user = userEvent.setup();
     const onSendPrompt = vi.fn();
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.endsWith('/pending-template') ? json({ detail: 'x' }, 404) : json([]))));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => (url.endsWith('/pending-template') ? json({ detail: 'x' }, 404) : json([]))),
+    );
     const { unmount } = render(<TemplateLibrary onSendPrompt={onSendPrompt} locale="en-us" csrfToken="tok" conversationId="c1" />);
     await user.click(screen.getByTestId('template-library-open'));
     await user.click(screen.getAllByRole('button', { name: 'Use template' })[0]);
@@ -121,5 +150,37 @@ describe('TemplateLibrary pending template', () => {
     await user.click(screen.getAllByRole('button', { name: 'Use template' })[0]);
     await waitFor(() => expect(second).toHaveBeenCalledTimes(1));
     expect(second.mock.calls[0][0]).toContain('Template JSON');
+  });
+});
+
+describe('confirmed save (G3)', () => {
+  it('resolves true only after the server accepted it and keeps the server row', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json(server('33333333-3333-3333-3333-333333333333', 'Mine'), 201)),
+    );
+    await expect(saveUserTemplateConfirmed('Mine', '{"html":"x"}', 'tok')).resolves.toBe(true);
+    expect(listUserTemplates().map((t) => t.id)).toEqual(['33333333-3333-3333-3333-333333333333']);
+  });
+
+  it('resolves false and leaves no local leftover when the server rejects, so a retry cannot duplicate', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json({ detail: 'no' }, 500)),
+    );
+    await expect(saveUserTemplateConfirmed('Mine', '{"html":"x"}', 'tok')).resolves.toBe(false);
+    expect(listUserTemplates()).toEqual([]);
+  });
+});
+
+describe('TemplateLibrary controlled by the composer menu (G3)', () => {
+  it('renders no trigger and shows the dialog when open', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => json([])),
+    );
+    render(<TemplateLibrary onSendPrompt={vi.fn()} locale="en-us" open onOpenChange={vi.fn()} />);
+    expect(screen.queryByTestId('template-library-open')).toBeNull();
+    expect(screen.getByRole('dialog')).toBeTruthy();
   });
 });

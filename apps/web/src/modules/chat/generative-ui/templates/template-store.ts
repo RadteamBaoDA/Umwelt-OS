@@ -141,16 +141,40 @@ async function syncOne(entry: UserTemplate, csrfToken: string): Promise<boolean>
  * @returns True when stored locally; false when oversize or browser storage is unavailable/full.
  */
 export function saveUserTemplate(title: string, content: string, csrfToken?: string): boolean {
-  if (!content || content.length > MAX_TEMPLATE_CHARS) return false;
-  const entry: UserTemplate = {
+  const entry = newLocalEntry(title, content);
+  if (!entry) return false;
+  const stored = persist([entry, ...listUserTemplates()].slice(0, MAX_TEMPLATES));
+  if (stored && csrfToken) void syncOne(entry, csrfToken);
+  return stored;
+}
+
+/** Builds an unsynced local entry, or null when the payload is empty or over the size cap. */
+function newLocalEntry(title: string, content: string): UserTemplate | null {
+  if (!content || content.length > MAX_TEMPLATE_CHARS) return null;
+  return {
     id: `${LOCAL_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     title: title.trim().slice(0, 120) || 'Untitled',
     content,
     createdAt: Date.now(),
   };
-  const stored = persist([entry, ...listUserTemplates()].slice(0, MAX_TEMPLATES));
-  if (stored && csrfToken) void syncOne(entry, csrfToken);
-  return stored;
+}
+
+/**
+ * Like {@link saveUserTemplate} but resolves only after the server answered (G3), so the UI never reports "saved" for a
+ * template the model cannot see. A failed upload removes the local entry again, so retrying does not duplicate it.
+ *
+ * @param title - Display title.
+ * @param content - JSON-serialized sandbox payload.
+ * @param csrfToken - Session CSRF token; without it the template is browser-only and resolves with the local result.
+ * @returns True when stored (and, with a token, accepted by the server).
+ */
+export async function saveUserTemplateConfirmed(title: string, content: string, csrfToken?: string): Promise<boolean> {
+  if (!csrfToken) return saveUserTemplate(title, content);
+  const entry = newLocalEntry(title, content);
+  if (!entry || !persist([entry, ...listUserTemplates()].slice(0, MAX_TEMPLATES))) return false;
+  if (await syncOne(entry, csrfToken)) return true;
+  persist(listUserTemplates().filter((t) => t.id !== entry.id));
+  return false;
 }
 
 /**

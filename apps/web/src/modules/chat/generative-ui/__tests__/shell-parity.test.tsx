@@ -186,3 +186,18 @@ describe('useChatScroll on submit', () => {
     expect(run(true)).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' }));
   });
 });
+
+describe('SaveTemplateButton server confirmation (G3)', () => {
+  it('the widget button reports saved only after the server answered, and failure allows a retry', async () => {
+    const user = userEvent.setup();
+    let release: (r: Response) => void = () => undefined;
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => (release = resolve)));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<SaveTemplateButton sandbox={{ html: '<b>x</b>' }} title="Mine" locale="en-us" csrfToken="tok" />);
+    await user.click(screen.getByTestId('save-template'));
+    expect(screen.getByRole('status').textContent).toBe('Saving…');
+    release(new Response('{}', { status: 500 }));
+    expect((await screen.findByText(/Could not save the template/)).textContent).toContain('Try again');
+    expect((screen.getByTestId('save-template') as HTMLButtonElement).disabled).toBe(false);
+  });
+});

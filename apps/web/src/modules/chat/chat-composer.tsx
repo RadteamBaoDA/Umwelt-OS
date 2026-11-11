@@ -6,7 +6,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { ArrowUpIcon, CloudIcon, FileTextIcon, GlobeIcon, PaperclipIcon, PlusIcon, SquareIcon } from 'lucide-react';
+import { ArrowUpIcon, BookmarkIcon, CloudIcon, FileTextIcon, GlobeIcon, PaperclipIcon, PlusIcon, SquareIcon } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -25,6 +25,8 @@ import { ModelPicker, type ChatModelPicker } from './model-picker';
 export interface ComposerMenuProps {
   /** Opens the context picker dialog; the item is omitted when context cannot be picked. */
   onAddContext?: () => void;
+  /** Opens the widget template library dialog (full composer only). */
+  onTemplates?: () => void;
   /** Opens the native file chooser. */
   onAttach: () => void;
   /** Disables Attach (attachments unavailable, busy, or at the limit). */
@@ -334,6 +336,12 @@ function FullMenu({
           <CloudIcon className="size-4 text-muted-foreground" aria-hidden="true" />
           {t('attachmentShareToggle')}
         </DropdownMenuCheckboxItem>
+        {menu.onTemplates && (
+          <DropdownMenuItem inset onSelect={menu.onTemplates}>
+            <BookmarkIcon aria-hidden="true" />
+            {t('templatesMenu')}
+          </DropdownMenuItem>
+        )}
         {webSearch && <WebSearchMenuItem webSearch={webSearch} checked={webSearchChecked} busy={isStreaming || disabled} />}
       </DropdownMenuContent>
     </DropdownMenu>

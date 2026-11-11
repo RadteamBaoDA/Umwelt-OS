@@ -1,7 +1,9 @@
 'use client';
 
 import * as React from 'react';
+import dynamic from 'next/dynamic';
 import { useTranslations } from 'next-intl';
+import { useDisplayPreferences } from '@/core/query-provider';
 import { WEB_SEARCH_SEND_ENABLED } from './api';
 import { ATTACHMENT_STATUS_ID, ChatAttachmentBar } from './chat-attachments';
 import { AgentPicker } from './chat-agent-picker';
@@ -10,6 +12,9 @@ import { ChatContextBar } from './chat-context-bar';
 import { WEB_SEARCH_PROVIDER_LABELS } from './use-chat-web-search';
 import type { AgentProfile } from '@/modules/agents';
 import type { ChatSessionData } from './use-chat-session';
+
+// Template library (dialog, seed templates, store) loads only after the owner first opens it from the + menu.
+const TemplateLibrary = dynamic(() => import('./generative-ui/templates/template-library').then((m) => m.TemplateLibrary), { ssr: false });
 
 /** Props of {@link SessionComposer}. */
 export interface SessionComposerProps {
@@ -51,6 +56,7 @@ function buildComposerMenu(data: ChatSessionData, attachmentsBlocked: boolean) {
   const canAddContext = !chatCtrl.context || chatCtrl.context.kind === 'selection';
   return {
     onAddContext: canAddContext ? () => composer.setContextPickerOpen(true) : undefined,
+    onTemplates: () => composer.setTemplatesOpen(true),
     onAttach: () => composer.fileInputRef.current?.click(),
     attachDisabled: attachmentsBlocked || attachments.full,
     share: { checked: attachments.shareWithModel, disabled: attachmentsBlocked, onChange: attachments.setShareWithModel },
@@ -122,6 +128,33 @@ function buildAgentPicker(data: ChatSessionData, profiles: AgentProfile[] | unde
 }
 
 /**
+ * Template library dialog of the full composer: mounted at the first open, then kept so closing animates and state persists.
+ *
+ * @param props.data - Session data (open state, CSRF token, conversation).
+ * @param props.onSend - Session send command; "Use template" sends its prompt through it.
+ */
+function SessionTemplates({ data, onSend }: { data: ChatSessionData; onSend: (content: string) => Promise<boolean> }) {
+  const { composer, chatCtrl, session } = data;
+  const display = useDisplayPreferences();
+  const [everOpened, setEverOpened] = React.useState(composer.templatesOpen);
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- latches the first open so the dialog chunk loads once
+    if (composer.templatesOpen) setEverOpened(true);
+  }, [composer.templatesOpen]);
+  if (!everOpened) return null;
+  return (
+    <TemplateLibrary
+      open={composer.templatesOpen}
+      onOpenChange={composer.setTemplatesOpen}
+      onSendPrompt={(prompt) => void onSend(prompt)}
+      locale={display.confirmedPreferences?.locale}
+      csrfToken={session.csrfToken}
+      conversationId={chatCtrl.activeConversationId}
+    />
+  );
+}
+
+/**
  * Bottom composer of the chat surface wired to the session state: context badges, attachments, + menu and tool toggles.
  *
  * @param props - See {@link SessionComposerProps}.
@@ -133,19 +166,22 @@ export function SessionComposer({ data, profiles, mode, onSend, onStop, onCancel
   const webSearch = useWebSearchToggle(data, full);
   const fullExtras = full ? buildFullModeExtras(data, attachmentsBlocked, profiles) : undefined;
   return (
-    <ChatComposer
-      mode={mode}
-      {...draftBinding(data)}
-      onSend={onSend}
-      onStop={onStop}
-      editing={full && data.effectiveEditingMessageId && !data.pendingMessageMutation ? { onCancel: onCancelEdit } : undefined}
-      attachmentBusy={attachmentsBlocked || attachments.full}
-      isStreaming={live.isStreaming}
-      disabled={live.isPending}
-      {...modelBinding(data)}
-      {...fullExtras}
-      webSearch={webSearch}
-      autoFocusKey={full ? (data.chatCtrl.activeConversationId ?? '') : undefined}
-    />
+    <>
+      <ChatComposer
+        mode={mode}
+        {...draftBinding(data)}
+        onSend={onSend}
+        onStop={onStop}
+        editing={full && data.effectiveEditingMessageId && !data.pendingMessageMutation ? { onCancel: onCancelEdit } : undefined}
+        attachmentBusy={attachmentsBlocked || attachments.full}
+        isStreaming={live.isStreaming}
+        disabled={live.isPending}
+        {...modelBinding(data)}
+        {...fullExtras}
+        webSearch={webSearch}
+        autoFocusKey={full ? (data.chatCtrl.activeConversationId ?? '') : undefined}
+      />
+      {full && <SessionTemplates data={data} onSend={onSend} />}
+    </>
   );
 }
