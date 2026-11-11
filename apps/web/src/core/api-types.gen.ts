@@ -1123,7 +1123,7 @@ export interface paths {
          * @description Return connector catalog entries to an authorized owner.
          *
          *     All owner reads/writes receive an explicit admitted workspace/job scope and the
-         *     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+         *     actual rollout flag; members have no Source/configuration/credential access. Read admission checks the owner role and access fence; CSRF/Origin checks apply only to write routes.
          */
         get: operations["get_catalog_api_v1_connectors_catalog_get"];
         put?: never;
@@ -1700,7 +1700,7 @@ export interface paths {
          * @description Read activation status for an authorized source owner.
          *
          *     All owner reads/writes receive an explicit admitted workspace/job scope and the
-         *     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+         *     actual rollout flag; members have no Source/configuration/credential access. Read admission checks the owner role and access fence; CSRF/Origin checks apply only to write routes.
          */
         get: operations["get_activation_api_v1_connectors__source_id__activation_get"];
         put?: never;
@@ -1791,7 +1791,7 @@ export interface paths {
          * @description Read a managed connector configuration for an authorized owner.
          *
          *     All owner reads/writes receive an explicit admitted workspace/job scope and the
-         *     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+         *     actual rollout flag; members have no Source/configuration/credential access. Read admission checks the owner role and access fence; CSRF/Origin checks apply only to write routes.
          */
         get: operations["get_configuration_api_v1_connectors__source_id__configuration_get"];
         /**
@@ -2262,7 +2262,7 @@ export interface paths {
          * @description Validate saved connector settings against configuration and URL policy.
          *
          *     All owner reads/writes receive an explicit admitted workspace/job scope and the
-         *     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+         *     actual rollout flag; members have no Source/configuration/credential access. These probes use read admission (owner role and access fence, no CSRF/Origin check, so the browser sends no CSRF token); the ``connector_probe`` budget bounds outbound calls.
          */
         post: operations["validate_configuration_api_v1_connectors__source_id__validate_post"];
         delete?: never;
@@ -2290,7 +2290,7 @@ export interface paths {
          *     Home Assistant, Notion and Slack drafts require an Authorization bearer header but are never contacted here.
          *
          *     All owner reads/writes receive an explicit admitted workspace/job scope and the
-         *     actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+         *     actual rollout flag; members have no Source/configuration/credential access. These probes use read admission (owner role and access fence, no CSRF/Origin check, so the browser sends no CSRF token); the ``connector_probe`` budget bounds outbound calls.
          */
         post: operations["validate_draft_configuration_api_v1_connectors__source_id__validate_draft_post"];
         delete?: never;
@@ -8834,6 +8834,12 @@ export interface components {
              */
             created_at: string;
             /**
+             * Has Active Run
+             * @description True while a response run (pending / streaming / awaiting input) is active. Filled by the conversation list only; always false on the single-conversation detail.
+             * @default false
+             */
+            has_active_run: boolean;
+            /**
              * Id
              * Format: uuid
              */
@@ -8892,6 +8898,12 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Has Active Run
+             * @description True while a response run (pending / streaming / awaiting input) is active. Filled by the conversation list only; always false on the single-conversation detail.
+             * @default false
+             */
+            has_active_run: boolean;
             /**
              * Id
              * Format: uuid
@@ -12758,6 +12770,8 @@ export interface components {
         /**
          * MessageMutationRequest
          * @description Append an edited user prompt or regenerate an answer with its original context.
+         *
+         *     ``db_query`` is deprecated and ignored (see ``SendMessageRequest``); it is accepted for old clients.
          */
         MessageMutationRequest: {
             /**
@@ -12830,6 +12844,11 @@ export interface components {
             role: string;
             /** Suggestions */
             suggestions?: string[];
+            /**
+             * Uncited
+             * @default false
+             */
+            uncited: boolean;
             web_search?: components["schemas"]["WebSearchOutcomeRead"] | null;
         };
         /**
@@ -15229,6 +15248,9 @@ export interface components {
         /**
          * SendMessageRequest
          * @description Payload for sending a user message within an existing conversation.
+         *
+         *     ``db_query`` is deprecated and ignored: the server grants ``query_collected_data`` whenever the owner
+         *     has an active collected datasource. The field is still accepted until clients stop sending it.
          */
         SendMessageRequest: {
             /** Client Request Id */
@@ -15633,6 +15655,8 @@ export interface components {
             document_version_id: string;
             /** Excerpt */
             excerpt: string;
+            /** Image Url */
+            image_url?: string | null;
             /** License Label */
             license_label?: string | null;
             /**
@@ -15709,6 +15733,8 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /** Image Url */
+            image_url?: string | null;
             /** Incomplete Reasons */
             incomplete_reasons?: string[];
             /**
@@ -21547,7 +21573,9 @@ export interface operations {
     list_presets_api_v1_dashboard_presets_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -21560,6 +21588,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardPresetRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -24078,7 +24115,9 @@ export interface operations {
     gadget_metric_catalog_api_v1_gadget_metric_catalog_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -24095,12 +24134,23 @@ export interface operations {
                     };
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     list_renderers_api_v1_gadget_renderers_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -24113,6 +24163,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RendererRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -24187,7 +24246,9 @@ export interface operations {
     list_gadget_templates_api_v1_gadget_templates_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Workspace-ID"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -24200,6 +24261,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GadgetTemplateRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
