@@ -58,3 +58,14 @@ describe('ChatTranscript memoization (P4)', () => {
     expect(rendered.settled).toBe(before);
   });
 });
+
+describe('ChatTranscript offscreen layout skipping (P7)', () => {
+  it('defers older settled messages but never the newest message or the streaming bubble', () => {
+    const { container } = render(tree('live'));
+    const deferred = (el: Element | null) => (el?.className ?? '').includes('content-visibility');
+    expect(deferred(container.querySelector('[data-message-id="u1"]'))).toBe(true);
+    expect(deferred(container.querySelector('[data-message-id="a1"]'))).toBe(true);
+    expect(deferred(container.querySelector('[data-message-id="u2"]'))).toBe(false);
+    expect(deferred(container.querySelector('[data-streaming-answer]'))).toBe(false);
+  });
+});

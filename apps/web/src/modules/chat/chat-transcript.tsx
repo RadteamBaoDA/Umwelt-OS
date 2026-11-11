@@ -720,14 +720,22 @@ interface TranscriptMessageProps extends MessageViewProps {
   onOpenSources?: (citations: Citation[], highlighted?: Citation) => void;
   /** True while this message's prompt is being edited in the composer. */
   editing?: boolean;
+  /** Settled older message: the browser may skip its layout and paint while it is off screen. */
+  deferOffscreen?: boolean;
   /** Settled processing steps of the run that produced this answer; shown collapsed above it (newest answer only). */
   steps?: ToolStep[];
 }
 
-/** Layout classes of a committed message; the message being edited gets a ring. */
-function messageClass(isUser: boolean, editing?: boolean): string {
+/**
+ * Layout classes of a committed message; the message being edited gets a ring. `deferOffscreen` adds
+ * `content-visibility: auto` with a remembered intrinsic height (`auto` keeps the last measured size), so long threads
+ * skip off-screen layout/paint without the scrollbar jumping. Never used for the newest message or the streaming bubble.
+ */
+function messageClass(isUser: boolean, editing?: boolean, deferOffscreen?: boolean): string {
   const side = isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto w-full';
-  return `flex flex-col gap-2.5 ${side} ${editing ? 'rounded-lg ring-2 ring-data ring-offset-2 ring-offset-background' : ''}`;
+  const ring = editing ? 'rounded-lg ring-2 ring-data ring-offset-2 ring-offset-background' : '';
+  const defer = deferOffscreen ? '[content-visibility:auto] [contain-intrinsic-size:auto_160px]' : '';
+  return `flex flex-col gap-2.5 ${side} ${ring} ${defer}`;
 }
 
 /**
@@ -767,7 +775,7 @@ const TranscriptMessage = React.memo(function TranscriptMessage(props: Transcrip
       data-role={msg.role}
       data-message-id={msg.id}
       data-editing={props.editing ? 'true' : undefined}
-      className={messageClass(isUser, props.editing)}
+      className={messageClass(isUser, props.editing, props.deferOffscreen)}
     >
       {props.steps && <ChatStepList steps={props.steps} streaming={false} />}
 
@@ -1207,7 +1215,7 @@ export function ChatTranscript(props: ChatTranscriptProps) {
   );
   const onOpenSources = mode === 'full' ? openSources : undefined;
   /** Renders one committed message with the transcript-wide handlers. */
-  const renderMessage = ({ msg, latest, nav }: RenderEntry) => (
+  const renderMessage = ({ msg, latest, nav }: RenderEntry, older = false) => (
     <TranscriptMessage
       key={msg.id}
       msg={msg}
@@ -1227,6 +1235,7 @@ export function ChatTranscript(props: ChatTranscriptProps) {
       onSelectCitation={onSelectCitation}
       onOpenSources={onOpenSources}
       editing={msg.id === props.editingMessageId}
+      deferOffscreen={older && msg !== lastEntry?.msg && msg.id !== props.editingMessageId}
       steps={!showStreaming && msg === lastEntry?.msg && msg.role === 'assistant' && latest && steps.length > 0 ? steps : undefined}
     />
   );
@@ -1248,14 +1257,14 @@ export function ChatTranscript(props: ChatTranscriptProps) {
           {/* Starter gallery is for a brand-new view or a conversation without any message; it never reappears between turns. */}
           {showStarter && <EmptyState onSendPrompt={onSendPrompt} capabilities={props.capabilities} />}
 
-          {m.entries.slice(0, turnStart).map(renderMessage)}
+          {m.entries.slice(0, turnStart).map((entry) => renderMessage(entry, true))}
 
           {/* Full Chat: the newest turn is at least one viewport tall, so its question sits at the top and the answer fills downward. */}
           <div
             data-latest-turn={turnStart < m.entries.length ? '' : undefined}
             className={turnStart < m.entries.length ? 'flex min-h-[calc(100cqh)] scroll-mt-4 flex-col gap-4' : 'contents'}
           >
-            {m.entries.slice(turnStart).map(renderMessage)}
+            {m.entries.slice(turnStart).map((entry) => renderMessage(entry))}
 
             {!showStreaming && <SettledRunExtras last={lastEntry} onSendPrompt={onSendPrompt} />}
 
