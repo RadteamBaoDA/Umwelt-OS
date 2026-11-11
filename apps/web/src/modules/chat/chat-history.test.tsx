@@ -19,25 +19,36 @@ import { ChatHistory, groupConversationsByDay, HISTORY_PAGE_SIZE } from './chat-
 import type { Conversation } from './api';
 
 /** Minimal conversation fixture; only the fields the list reads matter. */
-const conv = (id: string, over: Partial<Conversation> = {}): Conversation => ({
-  id, title: `Title ${id}`, context_kind: null, pinned: false, archived: false,
-  created_at: new Date().toISOString(), updated_at: new Date().toISOString(), metadata: {},
-  ...over,
-} as unknown as Conversation);
+const conv = (id: string, over: Partial<Conversation> = {}): Conversation =>
+  ({
+    id,
+    title: `Title ${id}`,
+    context_kind: null,
+    pinned: false,
+    archived: false,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    metadata: {},
+    ...over,
+  }) as unknown as Conversation;
 
 const daysAgo = (n: number, now: Date) => new Date(now.getTime() - n * 86_400_000).toISOString();
 
 const actions = { rename: vi.fn(), remove: vi.fn(), setPinned: vi.fn(), setArchived: vi.fn() };
 
-const renderHistory = () => render(
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-      <ChatHistory activeConversationId={null} onSelectConversation={vi.fn()} onNewConversation={vi.fn()} actions={actions} />
-    </NextIntlClientProvider>
-  </QueryClientProvider>,
-);
+const renderHistory = () =>
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <ChatHistory activeConversationId={null} onSelectConversation={vi.fn()} onNewConversation={vi.fn()} actions={actions} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
 
-beforeEach(() => { vi.clearAllMocks(); listConversations.mockResolvedValue([]); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  listConversations.mockResolvedValue([]);
+});
 
 describe('groupConversationsByDay', () => {
   it('buckets pinned, today, yesterday, 7 days, 30 days and older in preference timezone', () => {
@@ -52,7 +63,12 @@ describe('groupConversationsByDay', () => {
     ];
     const groups = groupConversationsByDay(list, 'UTC', now);
     expect(groups.map((g) => [g.key, g.items[0].id])).toEqual([
-      ['pinned', 'pin'], ['today', 't'], ['yesterday', 'y'], ['last7', 'w'], ['last30', 'm'], ['older', 'o'],
+      ['pinned', 'pin'],
+      ['today', 't'],
+      ['yesterday', 'y'],
+      ['last7', 'w'],
+      ['last30', 'm'],
+      ['older', 'o'],
     ]);
   });
 
@@ -100,7 +116,45 @@ describe('ChatHistory', () => {
       .mockResolvedValueOnce([conv('last')]);
     renderHistory();
     await userEvent.click(await screen.findByRole('button', { name: 'Load more' }));
-    await waitFor(() => expect(listConversations).toHaveBeenLastCalledWith(expect.objectContaining({ offset: HISTORY_PAGE_SIZE, limit: HISTORY_PAGE_SIZE })));
+    await waitFor(() =>
+      expect(listConversations).toHaveBeenLastCalledWith(expect.objectContaining({ offset: HISTORY_PAGE_SIZE, limit: HISTORY_PAGE_SIZE })),
+    );
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull());
+  });
+
+  it('explains an empty search and clears only the search', async () => {
+    renderHistory();
+    await userEvent.type(screen.getByRole('searchbox'), 'zzz');
+    expect(await screen.findByText('No conversations match your search')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('');
+  });
+
+  it('labels the archived view, explains an empty archive and goes back to the list', async () => {
+    renderHistory();
+    await userEvent.click(screen.getByRole('button', { name: 'Show archived conversations' }));
+    expect(await screen.findByText('No archived conversations')).toBeTruthy();
+    expect(screen.getByTestId('history-archived-label').textContent).toBe('Archived');
+    await userEvent.click(screen.getByRole('button', { name: 'Back to list' }));
+    expect(screen.queryByTestId('history-archived-label')).toBeNull();
+  });
+
+  it('shows the time only under Today and an inline error when pin or archive failed', async () => {
+    listConversations.mockResolvedValue([conv('n1', { updated_at: new Date().toISOString() })]);
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+          <ChatHistory
+            activeConversationId={null}
+            onSelectConversation={vi.fn()}
+            onNewConversation={vi.fn()}
+            actions={{ ...actions, flagError: 'n1' }}
+          />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    const row = screen.getByText('Title n1').closest('button')!;
+    expect(row.textContent).not.toMatch(/20\d\d/);
   });
 });

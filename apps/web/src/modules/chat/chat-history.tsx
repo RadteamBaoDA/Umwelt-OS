@@ -26,14 +26,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import type { ConversationActions } from './conversation-actions';
-import {
-  chatKeys,
-  getConversation,
-  listConversations,
-  type Conversation,
-} from './api';
+import { chatKeys, getConversation, listConversations, type Conversation } from './api';
 import { useDisplayPreferences } from '@/core/query-provider';
-import { formatDateTime, type AppLocaleId } from '@/core/i18n';
+import { formatDateTime, normalizeFormattingLocale, type AppLocaleId } from '@/core/i18n';
 
 /** Conversations fetched per "Load more" page; the server caps `limit` at 100. */
 export const HISTORY_PAGE_SIZE = 30;
@@ -52,7 +47,7 @@ export interface ChatHistoryProps {
   /** Optional callback that collapses the containing conversation-history sidebar. */
   onCollapse?: () => void;
   /** Row-menu openers from useConversationActions; the dialogs are mounted by the owner, not by this list. */
-  actions: Pick<ConversationActions, 'rename' | 'remove' | 'setPinned' | 'setArchived'>;
+  actions: Pick<ConversationActions, 'rename' | 'remove' | 'setPinned' | 'setArchived'> & Partial<Pick<ConversationActions, 'flagError'>>;
 }
 
 type GroupKey = 'pinned' | 'today' | 'yesterday' | 'last7' | 'last30' | 'older';
@@ -90,7 +85,17 @@ export function groupConversationsByDay(
   const groups: Record<GroupKey, Conversation[]> = { pinned: [], today: [], yesterday: [], last7: [], last30: [], older: [] };
   for (const conv of conversations) {
     const age = today - dayNumber(new Date(conv.updated_at));
-    const key: GroupKey = conv.pinned ? 'pinned' : age <= 0 ? 'today' : age === 1 ? 'yesterday' : age <= 7 ? 'last7' : age <= 30 ? 'last30' : 'older';
+    const key: GroupKey = conv.pinned
+      ? 'pinned'
+      : age <= 0
+        ? 'today'
+        : age === 1
+          ? 'yesterday'
+          : age <= 7
+            ? 'last7'
+            : age <= 30
+              ? 'last30'
+              : 'older';
     groups[key].push(conv);
   }
   return GROUP_ORDER.filter((key) => groups[key].length).map((key) => ({ key, items: groups[key] }));
@@ -163,7 +168,10 @@ function HistorySearch({ value, onChange }: { value: string; onChange: (value: s
   const t = useTranslations('chat');
   return (
     <div className="relative">
-      <SearchIcon className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground pointer-events-none" aria-hidden="true" />
+      <SearchIcon
+        className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground pointer-events-none"
+        aria-hidden="true"
+      />
       <Input
         type="search"
         value={value}
@@ -184,17 +192,39 @@ function HistorySearch({ value, onChange }: { value: string; onChange: (value: s
   );
 }
 
-/** Loading / error / empty feedback above the list. */
-function HistoryStatus({ isLoading, isError, onRetry, isEmpty, searching, onClearSearch }: {
+/**
+ * Loading / error / empty feedback above the list. An empty result is explained by what hides the conversations: a
+ * search with no match, an archive with nothing in it, or a workspace with no conversations at all.
+ *
+ * @param props - Query state, whether a search text or the archived view is active, and the way back from each filter.
+ */
+function HistoryStatus({
+  isLoading,
+  isError,
+  onRetry,
+  isEmpty,
+  searching,
+  archived,
+  onClearSearch,
+  onBackToList,
+}: {
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
   isEmpty: boolean;
-  /** True when a search or the archived view is hiding other conversations. */
+  /** True when a search text is hiding conversations. */
   searching: boolean;
+  /** True while the archived view is shown. */
+  archived: boolean;
   onClearSearch: () => void;
+  onBackToList: () => void;
 }) {
   const t = useTranslations('chat');
+  const empty = searching
+    ? { text: t('historySearchEmpty'), label: t('historyClearSearch'), onAction: onClearSearch }
+    : archived
+      ? { text: t('historyArchivedEmpty'), label: t('historyBackToList'), onAction: onBackToList }
+      : null;
   return (
     <>
       {isLoading && (
@@ -206,16 +236,18 @@ function HistoryStatus({ isLoading, isError, onRetry, isEmpty, searching, onClea
       {isError && (
         <div role="alert" className="flex flex-col items-center gap-2 p-4 text-center text-xs text-destructive">
           <span>{t('historyLoadFailed')}</span>
-          <Button type="button" variant="outline" size="sm" onClick={onRetry}>{t('retry')}</Button>
+          <Button type="button" variant="outline" size="sm" onClick={onRetry}>
+            {t('retry')}
+          </Button>
         </div>
       )}
 
       {!isLoading && !isError && isEmpty && (
         <div className="p-4 text-xs text-center text-muted-foreground flex flex-col items-center gap-2">
-          <span>{searching ? t('paletteNoResults') : t('noHistory')}</span>
-          {searching && (
-            <Button type="button" variant="outline" size="sm" onClick={onClearSearch}>
-              {t('cancel')}
+          <span>{empty ? empty.text : t('noHistory')}</span>
+          {empty && (
+            <Button type="button" variant="outline" size="sm" onClick={empty.onAction}>
+              {empty.label}
             </Button>
           )}
         </div>
@@ -225,70 +257,169 @@ function HistoryStatus({ isLoading, isError, onRetry, isEmpty, searching, onClea
 }
 
 /** One conversation row: open button (with inline loading spinner for the active row) plus a keyboard/touch-reachable actions menu. */
-function ConversationRow({ conv, isActive, activeLoading, locale, timezone, onSelect, actions }: {
+function ConversationRow({
+  conv,
+  isActive,
+  activeLoading,
+  locale,
+  timezone,
+  timeOnly,
+  onSelect,
+  actions,
+}: {
   conv: Conversation;
   isActive: boolean;
   activeLoading: boolean;
   locale: AppLocaleId;
   timezone: string;
+  /** Row sits under a Today/Yesterday heading, so the date would repeat the heading: show the time only. */
+  timeOnly: boolean;
   onSelect: (id: string) => void;
   actions: ChatHistoryProps['actions'];
 }) {
   const t = useTranslations('chat');
+  const stamp = timeOnly
+    ? new Intl.DateTimeFormat(normalizeFormattingLocale(locale), { timeStyle: 'short', timeZone: timezone }).format(
+        new Date(conv.updated_at),
+      )
+    : formatDateTime(conv.updated_at, locale, timezone);
   return (
-    <div
-      className={`group flex items-center gap-1 rounded-md text-sm ${isActive ? 'bg-active font-semibold text-foreground' : 'text-foreground hover:bg-raised'}`}
-    >
-      <Button
-        type="button"
-        variant="ghost"
-        onClick={() => onSelect(conv.id)}
-        aria-current={isActive ? 'true' : undefined}
-        aria-busy={isActive && activeLoading ? 'true' : undefined}
-        className="h-auto min-w-0 flex-1 justify-start whitespace-normal rounded-lg p-2 text-left font-[inherit] hover:bg-transparent"
+    <div>
+      <div
+        className={`group flex items-center gap-1 rounded-md text-sm ${isActive ? 'bg-active font-semibold text-foreground' : 'text-foreground hover:bg-raised'}`}
       >
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-1">
-            {conv.pinned && <PinIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            <span className="block truncate">{conv.title || t('untitledConversation')}</span>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => onSelect(conv.id)}
+          aria-current={isActive ? 'true' : undefined}
+          aria-busy={isActive && activeLoading ? 'true' : undefined}
+          className="h-auto min-w-0 flex-1 justify-start whitespace-normal rounded-lg p-2 text-left font-[inherit] hover:bg-transparent"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-1">
+              {conv.pinned && <PinIcon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />}
+              <span className="block truncate">{conv.title || t('untitledConversation')}</span>
+            </span>
+            <span className="block text-xs font-normal text-muted-foreground">{stamp}</span>
           </span>
-          <span className="block text-[11px] font-normal text-muted-foreground">{formatDateTime(conv.updated_at, locale, timezone)}</span>
-        </span>
-        {isActive && activeLoading && (
-          <Loader2Icon data-testid="conversation-loading" className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label={t('loading')} />
-        )}
-      </Button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+          {isActive && activeLoading && (
+            <Loader2Icon
+              data-testid="conversation-loading"
+              className="size-3.5 shrink-0 animate-spin text-muted-foreground"
+              aria-label={t('loading')}
+            />
+          )}
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="mr-1 size-9 shrink-0 text-muted-foreground focus-visible:opacity-100 data-[state=open]:opacity-100 md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100"
+              title={t('conversationActionsMenu')}
+              aria-label={t('conversationActionsMenu')}
+            >
+              <EllipsisIcon className="size-4" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={() => actions.rename({ id: conv.id, title: conv.title })}>
+              <PencilIcon aria-hidden="true" />
+              {t('renameConversation')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => actions.setPinned(conv.id, !conv.pinned)}>
+              {conv.pinned ? <PinOffIcon aria-hidden="true" /> : <PinIcon aria-hidden="true" />}
+              {conv.pinned ? t('unpinConversation') : t('pinConversation')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => actions.setArchived(conv.id, !conv.archived)}>
+              {conv.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
+              {conv.archived ? t('unarchiveConversation') : t('archiveConversation')}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={() => actions.remove(conv.id)}>
+              <Trash2Icon aria-hidden="true" />
+              {t('delete')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+      {actions.flagError === conv.id && (
+        <p role="alert" className="px-2 pb-1 text-xs text-destructive">
+          {t('historyFlagFailed')}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Header of the history sidebar: New chat (with its shortcut hint), the optional collapse button, the search box and the
+ * archived-view toggle.
+ *
+ * @param props - Handlers and the current search / archived state owned by {@link ChatHistory}.
+ */
+function HistoryToolbar({
+  onNewConversation,
+  onCollapse,
+  searchQuery,
+  onSearchChange,
+  showArchived,
+  onToggleArchived,
+}: {
+  onNewConversation: () => void;
+  onCollapse?: () => void;
+  searchQuery: string;
+  onSearchChange: (value: string) => void;
+  showArchived: boolean;
+  onToggleArchived: () => void;
+}) {
+  const t = useTranslations('chat');
+  return (
+    <div className="p-3 border-b border-border flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          onClick={onNewConversation}
+          title={`${t('newChat')} (Ctrl+Shift+O)`}
+          className="flex min-w-0 flex-1 items-center justify-center gap-2 text-sm font-semibold"
+        >
+          <PlusIcon className="size-4" aria-hidden="true" />
+          <span>{t('newChat')}</span>
+        </Button>
+        {onCollapse && (
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="icon"
-            className="mr-1 size-9 shrink-0 text-muted-foreground focus-visible:opacity-100 data-[state=open]:opacity-100 md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100"
-            title={t('conversationActionsMenu')}
-            aria-label={t('conversationActionsMenu')}
+            className="size-11 shrink-0"
+            onClick={onCollapse}
+            aria-label={t('collapseHistory')}
+            aria-expanded="true"
+            aria-controls="chat-history-sidebar"
           >
-            <EllipsisIcon className="size-4" aria-hidden="true" />
+            <PanelLeftClose aria-hidden="true" />
           </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => actions.rename({ id: conv.id, title: conv.title })}>
-            <PencilIcon aria-hidden="true" />{t('renameConversation')}
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => actions.setPinned(conv.id, !conv.pinned)}>
-            {conv.pinned ? <PinOffIcon aria-hidden="true" /> : <PinIcon aria-hidden="true" />}
-            {conv.pinned ? t('unpinConversation') : t('pinConversation')}
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => actions.setArchived(conv.id, !conv.archived)}>
-            {conv.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
-            {conv.archived ? t('unarchiveConversation') : t('archiveConversation')}
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" onSelect={() => actions.remove(conv.id)}>
-            <Trash2Icon aria-hidden="true" />{t('delete')}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <HistorySearch value={searchQuery} onChange={onSearchChange} />
+        </div>
+        <Button
+          type="button"
+          variant={showArchived ? 'default' : 'outline'}
+          size="icon"
+          className="size-9 shrink-0"
+          aria-pressed={showArchived}
+          title={t('historyShowArchived')}
+          aria-label={t('historyShowArchived')}
+          onClick={onToggleArchived}
+        >
+          <ArchiveIcon className="size-4" aria-hidden="true" />
+        </Button>
+      </div>
     </div>
   );
 }
@@ -315,46 +446,17 @@ export function ChatHistory({
   const [searchQuery, setSearchQuery] = React.useState('');
   const [showArchived, setShowArchived] = React.useState(false);
   const data = useHistoryData(activeConversationId, searchQuery, showArchived, timezone);
-  // A filter (search text or archived view) can legitimately yield nothing; offer a way back instead of "no history".
-  const filtered = Boolean(searchQuery.trim()) || showArchived;
 
   return (
-    <aside
-      className={`flex flex-col h-full bg-surface shrink-0 ${className}`}
-      aria-label={t('history')}
-    >
-      <div className="p-3 border-b border-border flex flex-col gap-2">
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            onClick={onNewConversation}
-            className="flex min-w-0 flex-1 items-center justify-center gap-2 text-sm font-semibold"
-          >
-            <PlusIcon className="size-4" aria-hidden="true" />
-            <span>{t('newChat')}</span>
-          </Button>
-          {onCollapse && (
-            <Button type="button" variant="outline" size="icon" className="size-11 shrink-0" onClick={onCollapse} aria-label={t('collapseHistory')} aria-expanded="true" aria-controls="chat-history-sidebar">
-              <PanelLeftClose aria-hidden="true" />
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1"><HistorySearch value={searchQuery} onChange={setSearchQuery} /></div>
-          <Button
-            type="button"
-            variant={showArchived ? 'default' : 'outline'}
-            size="icon"
-            className="size-9 shrink-0"
-            aria-pressed={showArchived}
-            title={t('historyShowArchived')}
-            aria-label={t('historyShowArchived')}
-            onClick={() => setShowArchived((value) => !value)}
-          >
-            <ArchiveIcon className="size-4" aria-hidden="true" />
-          </Button>
-        </div>
-      </div>
+    <aside className={`flex flex-col h-full bg-surface shrink-0 ${className}`} aria-label={t('history')}>
+      <HistoryToolbar
+        onNewConversation={onNewConversation}
+        onCollapse={onCollapse}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        showArchived={showArchived}
+        onToggleArchived={() => setShowArchived((value) => !value)}
+      />
 
       <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
         <HistoryStatus
@@ -362,9 +464,17 @@ export function ChatHistory({
           isError={data.isError}
           onRetry={() => void data.refetch()}
           isEmpty={data.conversations.length === 0}
-          searching={filtered}
-          onClearSearch={() => { setSearchQuery(''); setShowArchived(false); }}
+          searching={Boolean(searchQuery.trim())}
+          archived={showArchived}
+          onClearSearch={() => setSearchQuery('')}
+          onBackToList={() => setShowArchived(false)}
         />
+
+        {showArchived && !data.isLoading && (
+          <h3 data-testid="history-archived-label" className="px-2 pb-1 pt-2 text-xs font-semibold text-muted-foreground">
+            {t('historyArchivedLabel')}
+          </h3>
+        )}
 
         {data.groupedConversations.map(({ key, items }) => (
           <section key={key} aria-label={t(GROUP_LABEL[key])} className="flex flex-col gap-1">
@@ -377,6 +487,7 @@ export function ChatHistory({
                 activeLoading={data.activeLoading}
                 locale={locale}
                 timezone={timezone}
+                timeOnly={key === 'today' || key === 'yesterday'}
                 onSelect={onSelectConversation}
                 actions={actions}
               />
@@ -385,7 +496,14 @@ export function ChatHistory({
         ))}
 
         {data.hasMore && (
-          <Button type="button" variant="outline" size="sm" className="mt-1 self-center" disabled={data.loadingMore} onClick={data.loadMore}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-1 self-center"
+            disabled={data.loadingMore}
+            onClick={data.loadMore}
+          >
             {data.loadingMore ? t('loading') : t('historyLoadMore')}
           </Button>
         )}
