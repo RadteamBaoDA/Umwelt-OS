@@ -6,7 +6,9 @@
  * `window.sendPrompt` postMessage bridge.
  */
 
-import { buildSandboxStylesheet, DESIGN_SYSTEM_CSS, buildImportMapScriptTag, type SandboxTheme } from '../design-system';
+import { buildSandboxStylesheet, buildImportMapScriptTag, type SandboxTheme } from '../design-system';
+import { resolveWidgetLocale } from '../copy';
+import type { AppLocaleId } from '@/core/i18n';
 import { IDIOMORPH_INLINE_SCRIPT } from './idiomorph-inline';
 import { processPartialHtml } from './process-partial-html';
 import { TRIP_ANIMATOR_SCRIPT } from './trip-animator';
@@ -16,13 +18,7 @@ import { uuid7 } from '@/core/uuid7';
 /** Message type emitted by the sandboxed iframe when its content height changes. */
 export const RESIZE_MESSAGE_TYPE = 'umwelt:resize';
 
-/** Legacy resize message type alias for OpenIntelligentUI compatibility. */
-export const LEGACY_RESIZE_MESSAGE_TYPE = '__ogui_resize';
-
 export { FRAME_SHELL_PATH, FRAME_SHELL_SCRIPT, buildFrameShellCsp } from '@/core/genui-frame';
-
-/** Minimal preview shell used when initializing an empty sandboxed frame. */
-export const PREVIEW_FRAME_CONTENT = '<head></head><body><div id="umwelt-sandbox-root"></div></body>';
 
 /**
  * Builds the strict Content-Security-Policy meta tag enforced inside the sandboxed iframe.
@@ -37,9 +33,6 @@ export function buildCspMetaTag(origin = typeof window !== 'undefined' ? window.
   const vendor = origin ? ` ${origin}/vendor/genui/` : '';
   return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'${vendor}; style-src 'unsafe-inline'${vendor}; img-src data: blob:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">`;
 }
-
-/** Default CSP tag for the current origin (evaluated at import time; prefer `buildCspMetaTag` at render time). */
-export const CSP_META_TAG = buildCspMetaTag('');
 
 /**
  * Props that make an `<iframe>` render `doc` through the shell route instead of `srcdoc` (which would inherit the host CSP).
@@ -73,17 +66,6 @@ export function escapeScriptTagContent(js: string): string {
 }
 
 /**
- * Ensures an HTML fragment contains a `<head>` element so head styles/scripts can be inserted.
- *
- * @param html - Raw HTML string.
- * @returns HTML string guaranteed to contain a `<head>` tag.
- */
-export function ensureHead(html: string): string {
-  if (/<head[\s>]/i.test(html)) return html;
-  return `<head></head>${html}`;
-}
-
-/**
  * Continuous autosize script injected into the sandboxed iframe.
  * Observes `document.body` via `ResizeObserver` and posts `{ type: 'umwelt:resize', height }`
  * to the host window whenever content dimensions change.
@@ -101,6 +83,9 @@ export const MEASUREMENT_JS = `
       h += (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
       h += (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
     }
+    // A horizontal scrollbar takes viewport height: include it so it does not force a vertical one.
+    var docEl = document.documentElement;
+    if (docEl && window.innerHeight > docEl.clientHeight) h += window.innerHeight - docEl.clientHeight;
     var reported = Math.ceil(h);
     if (reported > 0 && window.parent && window.parent !== window) {
       window.parent.postMessage({ type: '${RESIZE_MESSAGE_TYPE}', height: reported, nonce: window.__umweltNonce }, '*');
@@ -323,63 +308,6 @@ export const SANDBOX_BRIDGE_JS = `
 })();
 `.trim();
 
-/**
- * Generates an inline script expression that morphs `document.body` (or `#umwelt-sandbox-root`)
- * using `Idiomorph.morph` with `morphStyle: 'innerHTML'` and a safe `innerHTML` fallback.
- *
- * @param body - Sanitized HTML body content to morph into the frame.
- * @returns Executable JavaScript snippet string.
- */
-export function buildPreviewBodyMorph(body: string): string {
-  return `(function() {
-  var html = ${JSON.stringify(body)};
-  var target = document.getElementById('umwelt-sandbox-root') || document.body;
-  if (typeof Idiomorph !== "undefined" && Idiomorph && Idiomorph.morph) {
-    try {
-      Idiomorph.morph(target, html, {
-        morphStyle: 'innerHTML',
-        callbacks: {
-          beforeNodeAdded: function(node) {
-            if (node.nodeType === 1) {
-              node.classList.add('morph-enter');
-              node.addEventListener('animationend', function() {
-                node.classList.remove('morph-enter');
-              }, { once: true });
-            }
-          }
-        }
-      });
-    } catch (err) {
-      target.innerHTML = html;
-    }
-  } else {
-    target.innerHTML = html;
-  }
-})();`;
-}
-
-/**
- * Builds the `<head>` inner HTML for a streaming preview sandbox.
- *
- * @param css - Optional widget-specific CSS string.
- * @param previewStyles - Optional concatenated `<style>` blocks extracted from partial HTML.
- * @param theme - Active Umwelt-OS theme (`'light'` or `'dark'`).
- * @returns HTML string containing `<style>` blocks for the preview `<head>`.
- */
-export function buildPreviewHeadContent(css?: string, previewStyles?: string, theme: SandboxTheme = 'light'): string {
-  const parts = [
-    '<style>html, body { overflow: hidden !important; }</style>',
-    `<style id="umwelt-design-system">${escapeStyleTagContent(buildSandboxStylesheet(theme))}</style>`,
-  ];
-  if (css) {
-    parts.push(`<style id="umwelt-widget-css">${escapeStyleTagContent(css)}</style>`);
-  }
-  if (previewStyles) {
-    parts.push(previewStyles);
-  }
-  return parts.join('');
-}
-
 export interface FrameDocumentOptions {
   /** Raw or partial HTML markup for the widget body. */
   html?: string;
@@ -395,6 +323,8 @@ export interface FrameDocumentOptions {
   executeScripts?: boolean;
   /** Optional title for the frame document. */
   title?: string;
+  /** Active locale; sets the document `lang` (defaults to the page locale). */
+  locale?: AppLocaleId;
   /**
    * Per-frame secret embedded in the document; host->frame messages must echo it and frame->host
    * messages carry it. Callers must pass the same value to the bridge registry. A random one is
@@ -414,7 +344,7 @@ export function createFrameNonce(): string {
 
 /**
  * Assembles the complete sandboxed iframe HTML document (delivered via `frameDocumentProps`, not `srcdoc`), combining:
- * 1. Strict `CSP_META_TAG` (`default-src 'none'; script-src/style-src 'unsafe-inline' + <origin>/vendor/genui/; connect-src 'none'`)
+ * 1. Strict CSP meta tag (`default-src 'none'; script-src/style-src 'unsafe-inline' + <origin>/vendor/genui/; connect-src 'none'`)
  * 2. Vendored-library import map (must precede any module import; backs `import('d3')` etc.)
  * 2b. Umwelt-OS + OpenIntelligentUI Design System CSS (`buildSandboxStylesheet(theme)`)
  * 3. Widget-specific CSS (`#umwelt-widget-css`)
@@ -436,6 +366,7 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
     theme = 'light',
     executeScripts = false,
     nonce = createFrameNonce(),
+    locale = resolveWidgetLocale(),
   } = options;
 
   const safeBody = processPartialHtml(html);
@@ -456,13 +387,13 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
   const userScriptTag = scriptParts.length > 0 ? `\n  <script id="umwelt-widget-js">\n${scriptParts.join('\n')}\n  </script>` : '';
 
   return `<!DOCTYPE html>
-<html lang="en" data-theme="${theme}"${themeClass}>
+<html lang="${locale === 'vi-vi' ? 'vi' : 'en'}" data-theme="${theme}"${themeClass}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   ${buildCspMetaTag()}
   ${buildImportMapScriptTag()}
-  <style>html, body { overflow: hidden !important; height: auto !important; min-height: 0 !important; }</style>
+  <style>html, body { overflow-x: auto !important; overflow-y: auto !important; height: auto !important; min-height: 0 !important; }</style>
   <style id="umwelt-design-system">${stylesheet}</style>
   <style id="umwelt-widget-css">${customCss}</style>
   <script>window.__umweltNonce=${JSON.stringify(nonce)};</script>
@@ -475,35 +406,4 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
   <script>${escapeScriptTagContent(MEASUREMENT_JS)}</script>${userScriptTag}
 </body>
 </html>`;
-}
-
-/**
- * Alias for `buildFrameDocument` matching upstream/contract naming.
- *
- * @param options - `FrameDocumentOptions` configuring HTML, CSS, scripts, and theme.
- * @returns Complete HTML document string for `<iframe {...frameDocumentProps(doc)} sandbox="allow-scripts">`.
- */
-export const assembleFrameHtml = buildFrameDocument;
-
-/**
- * Builds the final frame content compatible with upstream `buildFinalFrameContent(html, css)`.
- *
- * @param html - Raw HTML content.
- * @param css - Optional widget CSS rules.
- * @returns HTML document string with CSP, importmap, trip animator, and design-system styles in `<head>`.
- */
-export function buildFinalFrameContent(html: string, css?: string): string {
-  const headContent =
-    buildCspMetaTag() +
-    buildImportMapScriptTag() +
-    TRIP_ANIMATOR_SCRIPT +
-    `<style>${escapeStyleTagContent(DESIGN_SYSTEM_CSS)}</style>` +
-    (css ? `<style>${escapeStyleTagContent(css)}</style>` : '');
-  const withHead = ensureHead(html);
-  const openTag = withHead.match(/<head[^>]*>/i);
-  if (!openTag || openTag.index === undefined) {
-    return `<head>${headContent}</head>${withHead}`;
-  }
-  const insertAt = openTag.index + openTag[0].length;
-  return withHead.slice(0, insertAt) + headContent + withHead.slice(insertAt);
 }

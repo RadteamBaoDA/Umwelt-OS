@@ -16,9 +16,6 @@ export const CANONICAL_STREAM_KEYS = [
 
 export type CanonicalStreamKey = (typeof CANONICAL_STREAM_KEYS)[number];
 
-/** Activity identifier compatible with OpenIntelligentUI activity streams. */
-export const OPEN_GENERATIVE_UI_ACTIVITY_TYPE = 'open-generative-ui';
-
 /**
  * Arguments emitted by `generate_sandboxed_ui` for progressive iframe rendering.
  */
@@ -66,6 +63,8 @@ export type AnswerBlock =
 export interface GenerativeUIPayload {
   kind: GenerativeUIKind;
   status?: 'streaming' | 'completed';
+  /** Client-only: the server discarded this widget and asked the model to redo it; the frame shows a rebuilding status. */
+  rebuilding?: boolean;
   visualization?: string;
   title?: string;
   sandbox?: SandboxedUiArgs;

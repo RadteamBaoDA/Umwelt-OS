@@ -397,6 +397,7 @@ export function ChatComposer(props: ChatComposerProps) {
   const textarea = (
     <Textarea
       ref={textareaRef}
+      data-chat-composer-input
       value={value}
       onChange={handleChange}
       onKeyDown={handleKeyDown}

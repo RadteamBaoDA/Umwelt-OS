@@ -15,6 +15,7 @@ import {
   useWidgetLinkConfirm,
   type LinkConfirmLabels,
 } from './link-confirm';
+import { genUiCopy } from '../copy';
 import {
   useBridgeMessageListener,
   useFrameRegistry,
@@ -72,9 +73,10 @@ export interface PromptBridgeContextValue {
    *
    * @param frameWindow - `iframe.contentWindow` to authorize.
    * @param nonce - Per-frame secret embedded in the frame's `srcdoc`.
+   * @param onResize - Optional receiver of the frame's validated, clamped content height (pixels).
    * @returns Cleanup callback removing the frame from the authorized set.
    */
-  registerFrame: (frameWindow: unknown, nonce: string) => () => void;
+  registerFrame: (frameWindow: unknown, nonce: string, onResize?: (height: number) => void) => () => void;
   /** Whether the bridge is currently disabled (e.g. while a chat response is already streaming). */
   disabled: boolean;
 }
@@ -101,14 +103,34 @@ export interface PromptBridgeProviderProps {
   onDraftPrompt?: (prompt: string) => void;
   /** Localized strings for the open-link confirmation dialog (English fallback). */
   linkConfirmLabels?: LinkConfirmLabels;
-  /** Optional callback invoked when a sandboxed iframe reports a validated resize height. */
-  onResize?: (height: number, source: unknown) => void;
   /** Rate-limit cooldown in milliseconds between consecutive prompt submissions. Defaults to 500ms. */
   cooldownMs?: number;
   /** Disables prompt submission when true (e.g. while an assistant run is already active). */
   disabled?: boolean;
   /** Descendant chat transcript / generative UI tree. */
   children?: React.ReactNode;
+}
+
+/** How long the host-side widget prompt status line stays visible. */
+const NOTICE_MS = 6000;
+
+/**
+ * Host-side status line for widget prompt drafts: a localized message (active locale) that clears itself.
+ *
+ * @returns The current message (or null) and `showNotice`, which maps a draft outcome to its message and restarts the timer.
+ */
+function useDraftNotice() {
+  const [notice, setNotice] = React.useState<string | null>(null);
+  const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showNotice = React.useCallback((outcome: { kind: 'drafted' | 'blocked'; message?: string }) => {
+    setNotice(outcome.kind === 'drafted' ? genUiCopy().genUiPromptDrafted : (outcome.message ?? genUiCopy().genUiPromptComposerBusy));
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setNotice(null), NOTICE_MS);
+  }, []);
+  React.useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
+  return { notice, showNotice };
 }
 
 /**
@@ -123,25 +145,24 @@ export function PromptBridgeProvider({
   onSendPrompt,
   onDraftPrompt,
   linkConfirmLabels = DEFAULT_LINK_CONFIRM_LABELS,
-  onResize,
   cooldownMs = DEFAULT_PROMPT_COOLDOWN_MS,
   disabled = false,
   children,
 }: PromptBridgeProviderProps) {
   const onSendPromptRef = useLatest(onSendPrompt);
   const onDraftPromptRef = useLatest(onDraftPrompt);
-  const onResizeRef = useLatest(onResize);
   const disabledRef = useLatest(disabled);
   // Widget-requested link awaiting the owner's explicit confirmation (one at a time; extra requests are dropped).
   const linkConfirm = useWidgetLinkConfirm();
   const requestLink = linkConfirm.requestLink;
   const frames = useFrameRegistry();
   const dispatchValidatedPrompt = useHostPromptDispatch({ frames, onSendPromptRef, disabledRef, cooldownMs });
-  const draftSandboxPrompt = useSandboxPromptDraft({ frames, onDraftPromptRef, disabledRef, cooldownMs });
+  const { notice, showNotice } = useDraftNotice();
+  const draftSandboxPrompt = useSandboxPromptDraft({ frames, onDraftPromptRef, disabledRef, cooldownMs, onNotice: showNotice });
   const handleLoadImage = useWidgetImageLoader(frames);
   const { registerFrame } = frames;
 
-  useBridgeMessageListener({ frames, onResizeRef, draftSandboxPrompt, handleLoadImage, requestLink });
+  useBridgeMessageListener({ frames, draftSandboxPrompt, handleLoadImage, requestLink });
 
   const contextValue = React.useMemo<PromptBridgeContextValue>(
     () => ({
@@ -155,6 +176,15 @@ export function PromptBridgeProvider({
   return (
     <PromptBridgeContext.Provider value={contextValue}>
       {children}
+      {notice && (
+        <div
+          role="status"
+          data-testid="widget-prompt-notice"
+          className="fixed bottom-4 left-1/2 z-50 max-w-[min(92vw,32rem)] -translate-x-1/2 rounded-md border border-border bg-surface px-3 py-2 text-sm text-foreground shadow-md"
+        >
+          {notice}
+        </div>
+      )}
       <WidgetLinkConfirmDialog url={linkConfirm.pendingLink} labels={linkConfirmLabels} onResolve={linkConfirm.resolve} />
     </PromptBridgeContext.Provider>
   );

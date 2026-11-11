@@ -65,7 +65,7 @@ export function buildContentHandlers(
     // One entry per widget part, merged by part_id so parts stream and complete independently.
     onUiDelta: (ui) => { if (isCurrentView()) dispatch({ type: 'uiUpsert', ui }); },
     onUiDone: (ui) => { if (isCurrentView()) dispatch({ type: 'uiUpsert', ui }); },
-    onUiDiscard: (partId) => { if (isCurrentView()) dispatch({ type: 'uiRemove', partId }); },
+    onUiDiscard: (partId) => { if (isCurrentView()) dispatch({ type: 'uiDiscard', partId }); },
     onThemeRequest: (mode) => { if (isCurrentView()) setThemeRequest(mode); },
     onInputRequest: (request) => { if (isCurrentView()) live.patch({ inputRequest: { request, state: 'pending' } }); },
     onInputResolved: (resolved) => {
