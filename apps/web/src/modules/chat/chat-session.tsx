@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl';
 import { AssistantThemeBanner } from './assistant-theme-banner';
 import { TodosPanel } from './todos/todos-panel';
 import { ChatContextBar } from './chat-context-bar';
-import { PromptBridgeProvider } from './generative-ui/bridge';
+import { PromptBridgeNotice, PromptBridgeProvider } from './generative-ui/bridge';
 import { UserInputRequest } from './generative-ui/components/user-input-request';
 import { ProviderGateAlert } from './provider-gate';
 import { ChatSessionHeader } from './chat-session-header';
@@ -59,6 +59,7 @@ function SessionInputStack({
   const { live, composer } = d;
   return (
     <>
+      <PromptBridgeNotice />
       {d.agentMode && <TodosPanel conversationId={conversationId} isStreaming={live.isStreaming} />}
       {live.inputRequest && (
         <div className="shrink-0 px-4">
@@ -113,8 +114,8 @@ export function ChatSession({
   const agent = useChatAgentRuns({ conversationId, mode, agentMode: d.agentMode, csrfToken: session.csrfToken });
   const cmd = useChatSessionCommands(d, agent, options, setThemeRequest);
   const setError = React.useCallback((message: string) => actions.patch({ error: message }), [actions]);
-  const widget = useWidgetPromptHandlers({ chatCtrl, busy: d.busy, handleSend: cmd.handleSend, setError });
   const rootRef = React.useRef<HTMLDivElement>(null);
+  const widget = useWidgetPromptHandlers({ chatCtrl, busy: d.busy, handleSend: cmd.handleSend, setError, rootRef });
   const title = d.detail.data?.title ?? '';
   const handleExport = useConversationExport(title, d.messages, mode === 'full');
   // Esc stops an in-flight generation on the full page (same action as the Stop button).

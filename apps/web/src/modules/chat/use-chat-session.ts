@@ -126,7 +126,7 @@ export type ChatSessionData = ReturnType<typeof useChatSessionData>;
  * @param mode - Hosting mode; edit and regenerate are no-ops outside `full`.
  * @param handleMessageMutation - Send-hook command that submits a revision or regeneration.
  * @returns `handleEditMessage` (stashes the typed draft once, then loads the message), `handleCancelEdit` (restores the
- * stash) and `handleRegenerateMessage` (assistant messages only).
+ * stash) and `handleRegenerateMessage` (assistant messages only) and `handleRetryMessage` (user prompts).
  */
 function useMessageEditCommands(
   d: ChatSessionData,
@@ -160,7 +160,54 @@ function useMessageEditCommands(
     },
     [handleMessageMutation, mode],
   );
-  return { handleEditMessage, handleCancelEdit, handleRegenerateMessage };
+  /**
+   * Retries a turn whose answer was lost or stopped before it was stored: an edit mutation with the same text, which the
+   * server records as a new version of the same turn. A 409 (a run still active) surfaces the localized busy message.
+   */
+  const handleRetryMessage = React.useCallback(
+    (message: ChatMessage) => {
+      if (mode === 'full' && message.role === 'user') void handleMessageMutation('edit', message.id, message.content);
+    },
+    [handleMessageMutation, mode],
+  );
+  return { handleEditMessage, handleCancelEdit, handleRegenerateMessage, handleRetryMessage };
+}
+
+/**
+ * Builds the Stop command: aborts the local stream, cancels the server run, then shows the neutral stopped state.
+ *
+ * @param d - State from {@link useChatSessionData}.
+ * @returns `handleStop`; it records `stoppedResponseId` so the transcript can tell the stopped run's stored answer from
+ * an older last answer (the server never persists a partial on Stop).
+ */
+function useStopCommand(d: ChatSessionData) {
+  const { session, live, actions, refs } = d;
+  const { refetch: refetchDetail } = d.detail;
+  const activeResponseId = live.activeResponseId;
+  /** Explicitly cancels active response generation without losing transcript state. */
+  return React.useCallback(async () => {
+    if (refs.abortController) {
+      refs.abortController.abort();
+      refs.setAbortController(null);
+    }
+    if (activeResponseId) {
+      try {
+        await cancelResponse(activeResponseId, session.csrfToken);
+      } catch (err) {
+        console.warn('Failed to dispatch cancel endpoint', err);
+      }
+    }
+    // User-initiated stop is a neutral status line, never an error banner (so no Retry is offered).
+    actions.patch({
+      isStreaming: false,
+      isPending: false,
+      activeResponseId: null,
+      stoppedResponseId: activeResponseId ?? null,
+      error: null,
+      cancelled: true,
+    });
+    void refetchDetail();
+  }, [activeResponseId, refetchDetail, session.csrfToken, refs, actions]);
 }
 
 /**
@@ -186,7 +233,9 @@ export function useChatSessionCommands(
   const onSelectionReset = React.useCallback(() => {
     setActiveAgentRunId(null);
     setEditingMessageId(null);
-  }, [setActiveAgentRunId, setEditingMessageId]);
+    // A stash belongs to the conversation being edited; it must not leak into the next one.
+    draftStashRef.current = null;
+  }, [setActiveAgentRunId, setEditingMessageId, draftStashRef]);
   useConversationSelection({
     refs,
     live: actions,
@@ -199,9 +248,12 @@ export function useChatSessionCommands(
     onSelectionReset,
   });
   const openProviderGate = React.useCallback(() => setProviderGateOpen(true), [setProviderGateOpen]);
+  /** Leaves edit mode after a successful edit and returns the draft that was stashed when it began (null when none). */
   const clearEditing = React.useCallback(() => {
+    const stashed = draftStashRef.current;
     setEditingMessageId(null);
     draftStashRef.current = null;
+    return stashed;
   }, [setEditingMessageId, draftStashRef]);
   const send = useChatSend({
     refs,
@@ -228,26 +280,8 @@ export function useChatSessionCommands(
     setActiveAgentRunId,
     streamResponseRun,
   });
-  const { refetch: refetchDetail } = d.detail;
+  const handleStop = useStopCommand(d);
   const activeResponseId = live.activeResponseId;
-
-  /** Explicitly cancels active response generation without losing transcript state. */
-  const handleStop = React.useCallback(async () => {
-    if (refs.abortController) {
-      refs.abortController.abort();
-      refs.setAbortController(null);
-    }
-    if (activeResponseId) {
-      try {
-        await cancelResponse(activeResponseId, session.csrfToken);
-      } catch (err) {
-        console.warn('Failed to dispatch cancel endpoint', err);
-      }
-    }
-    // User-initiated stop is a neutral status line, never an error banner (so no Retry is offered).
-    actions.patch({ isStreaming: false, isPending: false, activeResponseId: null, error: null, cancelled: true });
-    void refetchDetail();
-  }, [activeResponseId, refetchDetail, session.csrfToken, refs, actions]);
 
   const { resetConversation } = chatCtrl;
   const { resetToggles } = composer;
@@ -290,6 +324,8 @@ export function useChatSessionCommands(
  * @param p.busy - True while a response is pending/streaming.
  * @param p.handleSend - Session send command.
  * @param p.setError - Receives errors of fire-and-forget transcript prompts.
+ * @param p.rootRef - This session's root element; the composer is looked up inside it so a drawer and the full page
+ * mounted together never steal each other's focus.
  * @returns `onDraftPrompt` (refuses to overwrite typed text), `onSendPrompt` (rejects while busy or on failure) and the
  * fire-and-forget `onTranscriptSendPrompt` that surfaces rejections as the session error banner.
  */
@@ -298,9 +334,10 @@ export function useWidgetPromptHandlers(p: {
   busy: boolean;
   handleSend: (content: string) => Promise<boolean>;
   setError: (message: string) => void;
+  rootRef: React.RefObject<HTMLElement | null>;
 }) {
   const t = useTranslations('chat');
-  const { chatCtrl, busy, handleSend, setError } = p;
+  const { chatCtrl, busy, handleSend, setError, rootRef } = p;
   /**
    * Places a widget prompt in the composer and moves focus there so the owner can review and send it. Throws a localized
    * error (reported to the widget as retryable and shown by the bridge) when the owner already typed.
@@ -311,12 +348,12 @@ export function useWidgetPromptHandlers(p: {
       chatCtrl.setDraft(prompt);
       // Wait one tick so the textarea already shows the drafted text when it takes focus.
       setTimeout(() => {
-        const input = document.querySelector<HTMLTextAreaElement>('textarea[data-chat-composer-input]');
+        const input = rootRef.current?.querySelector<HTMLTextAreaElement>('textarea[data-chat-composer-input]');
         input?.focus();
         input?.scrollIntoView({ block: 'nearest' });
       }, 0);
     },
-    [chatCtrl, t],
+    [chatCtrl, t, rootRef],
   );
   /** Submits a widget follow-up; rejects with a localized error while busy so the bridge reports a retryable failure. */
   const onSendPrompt = React.useCallback(

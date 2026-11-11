@@ -185,29 +185,48 @@ function msg(id: string, role: 'user' | 'assistant', extra: Record<string, unkno
 }
 
 describe('ChatTranscript stop, status line and empty conversation', () => {
-  it('keeps the stopped partial without spinner or status label and offers Regenerate for a regenerable answer', async () => {
+  it('keeps the stopped partial without spinner or status label and offers Retry for the unanswered prompt', async () => {
     const onRegenerateMessage = vi.fn();
+    const onRetryMessage = vi.fn();
     renderTranscript({
       conversationId: 'c1',
       messages: [msg('u1', 'user')],
       streamingText: 'partial answer',
       cancelled: true,
       onRegenerateMessage,
+      onRetryMessage,
     });
     expect(screen.getByText('partial answer')).toBeTruthy();
     expect(screen.queryByText(messages['en-us'].chat.streaming)).toBeNull();
     expect(screen.queryByText(messages['en-us'].chat.thinking)).toBeNull();
     expect(screen.getByTestId('chat-cancelled').textContent).toBe(messages['en-us'].chat.cancelled);
     expect(screen.queryByRole('button', { name: messages['en-us'].chat.regenerateAnswer })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: messages['en-us'].chat.retry }));
+    expect(onRetryMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }));
   });
 
-  it('does not duplicate the partial once the persisted answer is the last message, and Regenerate targets it', async () => {
+  it('keeps the live partial when stopping a regenerate leaves the OLD answer as the last message', () => {
+    renderTranscript({
+      conversationId: 'c1',
+      messages: [msg('u1', 'user'), msg('a1', 'assistant', { content: 'old answer' })],
+      streamingText: 'new partial',
+      cancelled: true,
+      stoppedResponseId: 'r-new',
+      onRegenerateMessage: vi.fn(),
+    });
+    expect(screen.getByText('new partial')).toBeTruthy();
+    // The stopped notice offers no action (the old answer's own message toolbar is separate).
+    expect(screen.getByTestId('chat-cancelled').parentElement?.querySelector('button')).toBeNull();
+  });
+
+  it('does not duplicate the partial once the stopped run answer is the last message, and Regenerate targets it', async () => {
     const onRegenerateMessage = vi.fn();
     renderTranscript({
       conversationId: 'c1',
       messages: [msg('u1', 'user'), msg('a1', 'assistant', { content: 'partial answer' })],
       streamingText: 'partial answer',
       cancelled: true,
+      stoppedResponseId: 'r-a1',
       onRegenerateMessage,
     });
     expect(screen.getAllByText('partial answer')).toHaveLength(1);

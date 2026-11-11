@@ -5,6 +5,7 @@
 export {
   PromptBridgeContext,
   PromptBridgeProvider,
+  PromptBridgeNotice,
   usePromptBridge,
   type PromptBridgeContextValue,
   type PromptBridgeProviderProps,

@@ -39,7 +39,8 @@ export interface ChatSendDeps {
   /** Restores the per-send tool toggles (web search on, db query off) once the server accepted a send. */
   resetToggles: () => void;
   effectiveEditingMessageId: string | null;
-  clearEditing: () => void;
+  /** Leaves edit mode; returns the composer draft stashed when the edit began (null when none was). */
+  clearEditing: () => string | null;
   selectedProfileId: string;
   profiles: AgentProfile[] | undefined;
   pendingProfileRun: PendingSpecialistRun | null;
@@ -101,6 +102,15 @@ function beginStreaming(live: ChatLiveActions, responseId: string, clearInput: b
 }
 
 /**
+ * Leaves edit mode after the server accepted a mutation. After an edit the composer gets the owner's pre-edit draft
+ * back; a regenerate or retry never touched the composer, so its draft is left alone.
+ */
+function leaveEditMode(d: ChatSendDeps): void {
+  const stashed = d.clearEditing();
+  if (d.effectiveEditingMessageId) d.chatCtrl.setDraft(stashed ?? '');
+}
+
+/**
  * Submits an edit or regeneration using a stable shared request envelope until acknowledged.
  *
  * @param d - Session snapshot.
@@ -145,10 +155,7 @@ async function runMessageMutation(
     );
     d.resetToggles();
     chatCtrl.clearPendingMessageMutation(targetConversationId, envelope.clientRequestId);
-    if (scope.isCurrent()) {
-      d.clearEditing();
-      chatCtrl.setDraft('');
-    }
+    if (scope.isCurrent()) leaveEditMode(d);
     void queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
     if (!scope.isCurrent()) {
       void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(targetConversationId) });
@@ -418,7 +425,7 @@ function reportSendFailure(
 ): void {
   if (attempt.clientRequestId && attempt.targetId && !attempt.accepted)
     removeOptimisticMessage(d.queryClient, attempt.targetId, attempt.clientRequestId);
-  const abandoned = discardEmptyConversation(d, scope, attempt, content, day);
+  const abandoned = discardEmptyConversation(d, scope, attempt, err, content, day);
   if (!scope.isCurrent()) return;
   d.live.patch({ isPending: false, isStreaming: false, activeResponseId: null });
   if (!attempt.accepted && !abandoned) d.chatCtrl.setDraft(content);
@@ -429,12 +436,24 @@ function reportSendFailure(
  * Deletes the conversation this send created when the server did not accept the message, so no empty thread is left in
  * the history. A day conversation (bound for reuse) and a specialist retry envelope keep theirs.
  *
+ * Only a definitive 4xx rejection (not 408) proves the server committed nothing; a network drop, timeout or 5xx may have
+ * accepted the message, so the conversation is kept (the draft is restored by the caller).
+ *
+ * @param err - The send failure; inspected for a definitive rejection status.
  * @param content - Failed text; handed to the new-chat draft slot because the view returns to a fresh thread.
  * @returns True when the view was moved back to a fresh thread (the caller must not write the draft to the old one).
  */
-function discardEmptyConversation(d: ChatSendDeps, scope: ViewScope, attempt: SendAttempt, content: string, day: unknown): boolean {
+function discardEmptyConversation(
+  d: ChatSendDeps,
+  scope: ViewScope,
+  attempt: SendAttempt,
+  err: unknown,
+  content: string,
+  day: unknown,
+): boolean {
   const id = attempt.createdConversationId;
-  if (!id || attempt.accepted || attempt.attemptedProfileRun || day) return false;
+  const definitiveRejection = err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 408;
+  if (!id || attempt.accepted || attempt.attemptedProfileRun || day || !definitiveRejection) return false;
   void deleteConversation(id, d.csrfToken)
     .catch(() => undefined)
     .finally(() => {

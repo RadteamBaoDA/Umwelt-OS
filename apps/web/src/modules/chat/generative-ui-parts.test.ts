@@ -19,4 +19,18 @@ describe('markUiPartRebuilding', () => {
     const rebuilding = markUiPartRebuilding([{ part_id: 'r1-a', status: 'completed' }], 'r1-a');
     expect(upsertUiPart(rebuilding, { part_id: 'r2-a', status: 'streaming' })).toEqual([{ part_id: 'r2-a', status: 'streaming' }]);
   });
+
+  it('keeps a rebuilding frame when a snapshot only updates another live part (R8)', () => {
+    const parts = markUiPartRebuilding(
+      [
+        { part_id: 'a', status: 'completed' },
+        { part_id: 'b', status: 'streaming' },
+      ],
+      'a',
+    );
+    expect(upsertUiPart(parts, { part_id: 'b', status: 'completed' })).toEqual([
+      { part_id: 'a', status: 'streaming', rebuilding: true },
+      { part_id: 'b', status: 'completed' },
+    ]);
+  });
 });

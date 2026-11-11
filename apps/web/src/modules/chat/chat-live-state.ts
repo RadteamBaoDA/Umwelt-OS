@@ -16,6 +16,8 @@ export interface ChatLiveState {
   streamingReasoning: string;
   /** Neutral "generation stopped" outcome; kept apart from `error` so it never renders as a failure with Retry. */
   cancelled: boolean;
+  /** Response id of the run the user stopped (set by Stop before `activeResponseId` clears); null otherwise. */
+  stoppedResponseId: string | null;
   streamingCitations: Citation[];
   streamingWebSearch: WebSearchOutcome | null;
   /** Tool currently running for the active run (`tool.status`); drives the transcript status line. */
@@ -35,6 +37,7 @@ export const INITIAL_LIVE_STATE: ChatLiveState = {
   streamingText: '',
   streamingReasoning: '',
   cancelled: false,
+  stoppedResponseId: null,
   streamingCitations: [],
   streamingWebSearch: null,
   activeTool: null,
