@@ -548,6 +548,22 @@ def _owner_today(timezone: str | None) -> str:
         return datetime.now(UTC).date().isoformat()
 
 
+def _chat_request_policy(config: Any) -> RequestPolicy:
+    """Build the gateway ``RequestPolicy`` (identity, remote-reasoning consent, destinations) for a role config."""
+    return RequestPolicy(
+        workspace_id=config.workspace_id,
+        actor_user_id=config.actor_user_id,
+        membership_revision=config.membership_revision,
+        gateway_identity=config.gateway_identity,
+        reasoning_allowed=config.privacy.allow_remote_reasoning,
+        permitted_destinations=frozenset(
+            {config.endpoint_destination_id} if config.endpoint_destination_id else ()
+        ),
+        reasoning_destinations=frozenset(config.privacy.reasoning_destinations),
+        configuration_revision=config.configuration_revision,
+    )
+
+
 async def _rewrite_web_query(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
@@ -583,18 +599,7 @@ async def _rewrite_web_query(
             await session.rollback()  # release locks before egress
         config = settings_public.derive_for_role(base, "chat")
         mapping = base.defaults.resolve("chat")
-        policy = RequestPolicy(
-            workspace_id=config.workspace_id,
-            actor_user_id=config.actor_user_id,
-            membership_revision=config.membership_revision,
-            gateway_identity=config.gateway_identity,
-            reasoning_allowed=config.privacy.allow_remote_reasoning,
-            permitted_destinations=frozenset(
-                {config.endpoint_destination_id} if config.endpoint_destination_id else ()
-            ),
-            reasoning_destinations=frozenset(config.privacy.reasoning_destinations),
-            configuration_revision=config.configuration_revision,
-        )
+        policy = _chat_request_policy(config)
 
         async def recheck_send() -> None:
             """Fail the attempt when settings or access drifted since the config was resolved."""

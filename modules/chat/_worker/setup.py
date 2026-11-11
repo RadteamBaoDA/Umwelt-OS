@@ -209,30 +209,17 @@ async def _load_turn_inputs(session: AsyncSession, c: _RunCtx, claimed: _Claimed
     )
 
 
-async def _retrieve_with_web(
-    session: AsyncSession,
-    c: _RunCtx,
-    turn: _TurnInputs,
-) -> tuple[AnswerContext, _WebSearchRun | None]:
-    """Run grounded retrieval, with the opted-in web search running concurrently, then publish its outcome.
+async def _rewrite_for_retrieval(
+    session: AsyncSession, c: _RunCtx, turn: _TurnInputs, web_requested: bool
+) -> tuple[AnswerContextRequest, str | None]:
+    """Return the retrieval request (rewritten query on follow-ups) and the owner's IANA timezone.
 
-    The search runs in its own task and sessions (create_task, not TaskGroup: exceptions keep their type;
-    review P2-3). The retrieval commit (releasing the snapshot / selected-only Source FOR SHARE) stays before
-    ``await search_task``. Any failure stops the search task before re-raising.
-
-    Follow-up turns retrieve with a names-keeping rewrite of the prompt (skipped for selected-only turns and
-    for conversations with a model override); the retrieval step is published before it and a Stop that
-    arrived during it ends the run before retrieval starts. The web search makes its own name-free rewrite.
+    A conversation with a model override skips the rewrite: it would otherwise send the owner's prompts to the
+    role-default model instead of the one the owner chose (for example a local model). The timezone is read
+    when a rewrite or a web search needs "today"; the session is committed so no SQL transaction stays open
+    across the rewrite's model call. Raises ``_RunStopped`` when Stop arrived during the rewrite.
     """
-    web_opt_in = turn.req_params.get(WEB_SEARCH_KEY)
-    web_requested = isinstance(web_opt_in, dict) and web_opt_in.get("requested") is True
-    if web_requested:
-        await _publish_status(c, "web_search", "running")
     request = turn.answer_request
-    # Progress first: the rewrite below can take seconds and the step list should already show retrieval.
-    await _publish_status(c, "retrieval", "running")
-    # A conversation with a model override skips the rewrite: it would otherwise send the owner's prompts to the
-    # role-default model instead of the one the owner chose (for example a local model).
     rewrite = bool(
         turn.prior_messages
         and not request.selected_only
@@ -241,7 +228,7 @@ async def _retrieve_with_web(
     owner_timezone: str | None = None
     if rewrite or web_requested:
         _, owner_timezone = await _owner_locale_and_timezone(session, c.scope)
-        await session.commit()  # no SQL transaction may stay open across the rewrite's model call
+        await session.commit()
     if rewrite:
         # Follow-ups ("tell me more") carry no searchable words of their own: retrieve with a standalone
         # rewrite that keeps names (own documents); the web search makes its own, name-free rewrite.
@@ -262,6 +249,33 @@ async def _retrieve_with_web(
             raise _RunStopped("Response was stopped during the retrieval rewrite")
         if rewritten != request.query:
             request = request.model_copy(update={"query": rewritten})
+    return request, owner_timezone
+
+
+async def _retrieve_with_web(
+    session: AsyncSession,
+    c: _RunCtx,
+    turn: _TurnInputs,
+) -> tuple[AnswerContext, _WebSearchRun | None]:
+    """Run grounded retrieval, with the opted-in web search running concurrently, then publish its outcome.
+
+    The search runs in its own task and sessions (create_task, not TaskGroup: exceptions keep their type;
+    review P2-3). The retrieval commit (releasing the snapshot / selected-only Source FOR SHARE) stays before
+    ``await search_task``. Any failure stops the search task before re-raising.
+
+    Follow-up turns retrieve with a names-keeping rewrite of the prompt (skipped for selected-only turns and
+    for conversations with a model override); the retrieval step is published before it and a Stop that
+    arrived during it ends the run before retrieval starts. The web search makes its own name-free rewrite.
+    """
+    web_opt_in = turn.req_params.get(WEB_SEARCH_KEY)
+    web_requested = isinstance(web_opt_in, dict) and web_opt_in.get("requested") is True
+    if web_requested:
+        await _publish_status(c, "web_search", "running")
+    # Progress first: the rewrite can take seconds and the step list should already show retrieval.
+    await _publish_status(c, "retrieval", "running")
+    # A conversation with a model override skips the rewrite: it would otherwise send the owner's prompts to the
+    # role-default model instead of the one the owner chose (for example a local model).
+    request, owner_timezone = await _rewrite_for_retrieval(session, c, turn, web_requested)
     search_task = (
         asyncio.create_task(
             _rewrite_and_search(
