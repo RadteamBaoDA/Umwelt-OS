@@ -338,6 +338,26 @@ function SandboxBadge() {
 }
 
 /**
+ * Resolves the render status: explicit prop first, then the payload's status, defaulting to `completed`.
+ *
+ * @param explicitStatus - Status prop, if any.
+ * @param payload - Generative UI payload, if any.
+ */
+function resolveStatus(explicitStatus: 'streaming' | 'completed' | undefined, payload?: GenerativeUIPayload): 'streaming' | 'completed' {
+  return explicitStatus ?? payload?.status ?? 'completed';
+}
+
+/**
+ * Picks the status text: the rebuilding notice for a discarded widget being rebuilt, otherwise the rotating phrase.
+ *
+ * @param payload - Generative UI payload, if any.
+ * @param rotating - Current rotating placeholder phrase.
+ */
+function resolvePlaceholder(payload: GenerativeUIPayload | undefined, rotating: string): string {
+  return payload?.rebuilding ? genUiCopy().genUiRebuilding : rotating;
+}
+
+/**
  * Renders a sandboxed streaming generative UI widget inside `<iframe sandbox="allow-scripts">`.
  *
  * Security invariants:
@@ -354,7 +374,7 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
   const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
   const { mergedRawArgs, expressionList } = useMergedSandboxArgs(props);
 
-  const status: 'streaming' | 'completed' = explicitStatus ?? payload?.status ?? 'completed';
+  const status = resolveStatus(explicitStatus, payload);
   const isStreaming = status === 'streaming';
   const isCompleted = status === 'completed';
 
@@ -364,7 +384,7 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
   const hasHtmlContent = sanitizedHtml.trim().length > 0;
   const rotatingPlaceholder = usePlaceholderRotation(isStreaming, mergedRawArgs.placeholderMessages, placeholderIntervalMs);
   // A discarded widget keeps its frame while the model rebuilds it; say so instead of showing generic progress.
-  const activePlaceholder = payload?.rebuilding ? genUiCopy().genUiRebuilding : rotatingPlaceholder;
+  const activePlaceholder = resolvePlaceholder(payload, rotatingPlaceholder);
   const resolvedTitle = mergedRawArgs.title ?? genUiCopy().genUiDefaultWidgetTitle;
   const { frameNonce, baseSrcDoc, previewSrcDoc } = useSandboxDocuments(mergedRawArgs, isCompleted, resolvedTheme, resolvedTitle);
   const [reportedHeight, setReportedHeight] = React.useState<number | null>(null);

@@ -343,6 +343,22 @@ export function createFrameNonce(): string {
 }
 
 /**
+ * Builds the deferred widget `<script>` tag (functions, then async expressions); empty unless `executeScripts` is set.
+ *
+ * @param executeScripts - Whether user scripts may run in this document.
+ * @param jsFunctions - Widget function declarations.
+ * @param jsExpressions - Widget expressions, wrapped in an async IIFE.
+ */
+function buildUserScriptTag(executeScripts: boolean, jsFunctions: string, jsExpressions: string): string {
+  const parts: string[] = [];
+  if (executeScripts) {
+    if (jsFunctions.trim().length > 0) parts.push(escapeScriptTagContent(jsFunctions));
+    if (jsExpressions.trim().length > 0) parts.push(`(async () => {\n${escapeScriptTagContent(jsExpressions)}\n})();`);
+  }
+  return parts.length > 0 ? `\n  <script id="umwelt-widget-js">\n${parts.join('\n')}\n  </script>` : '';
+}
+
+/**
  * Assembles the complete sandboxed iframe HTML document (delivered via `frameDocumentProps`, not `srcdoc`), combining:
  * 1. Strict CSP meta tag (`default-src 'none'; script-src/style-src 'unsafe-inline' + <origin>/vendor/genui/; connect-src 'none'`)
  * 2. Vendored-library import map (must precede any module import; backs `import('d3')` etc.)
@@ -374,17 +390,7 @@ export function buildFrameDocument(options: FrameDocumentOptions = {}): string {
   const customCss = escapeStyleTagContent(css);
   const themeClass = theme === 'dark' ? ' class="dark"' : '';
 
-  const scriptParts: string[] = [];
-  if (executeScripts) {
-    if (jsFunctions.trim().length > 0) {
-      scriptParts.push(escapeScriptTagContent(jsFunctions));
-    }
-    if (jsExpressions.trim().length > 0) {
-      scriptParts.push(`(async () => {\n${escapeScriptTagContent(jsExpressions)}\n})();`);
-    }
-  }
-
-  const userScriptTag = scriptParts.length > 0 ? `\n  <script id="umwelt-widget-js">\n${scriptParts.join('\n')}\n  </script>` : '';
+  const userScriptTag = buildUserScriptTag(executeScripts, jsFunctions, jsExpressions);
 
   return `<!DOCTYPE html>
 <html lang="${locale === 'vi-vi' ? 'vi' : 'en'}" data-theme="${theme}"${themeClass}>
