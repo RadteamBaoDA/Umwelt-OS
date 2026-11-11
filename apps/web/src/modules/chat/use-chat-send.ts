@@ -4,11 +4,13 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { PendingMessageMutationConflictError, type PendingSpecialistRun, type useChatController } from '@/core/app-shell/chat-controller';
+import { writeDraft } from '@/core/app-shell/chat-draft-storage';
 import { uuid7 } from '@/core/uuid7';
 import { startAgentRun, type AgentProfile } from '@/modules/agents/public-api';
 import {
   chatKeys,
   createConversation,
+  deleteConversation,
   hashMessageContent,
   mutateMessage,
   sendMessage,
@@ -17,6 +19,7 @@ import {
 import { chatFailureKey, LocalizedError, SELECTION_ERROR_KEYS } from './chat-errors';
 import { MAX_ITEMS, stripItemTitles } from './chat-context-bar';
 import { withAttachments, type useChatAttachments } from './chat-attachments';
+import { addOptimisticMessage, removeOptimisticMessage } from './chat-optimistic';
 import type { ChatLiveActions } from './chat-live-state';
 import type { ChatSessionRefs } from './chat-session-refs';
 import type { ChatModelPicker } from './model-picker';
@@ -170,6 +173,10 @@ interface SendAttempt {
   /** True only while the selection precheck / sendMessage can fail. */
   selectionStage: boolean;
   attemptedProfileRun: PendingSpecialistRun | null;
+  /** Idempotency key of the plain send, whose optimistic message must be removed if the server rejects it. */
+  clientRequestId?: string;
+  /** Conversation this very send created (not one it merely used); an empty one is deleted when the send fails. */
+  createdConversationId?: string;
 }
 
 /** Resolves the day (date + timezone) of a day-context conversation before any await, so it stays bound to it. */
@@ -221,6 +228,7 @@ async function ensureConversation(
   );
   const targetId = created.id;
   attempt.targetId = targetId;
+  attempt.createdConversationId = targetId;
   if (day) chatCtrl.bindDayConversation(day, targetId);
   if (scope.isCurrent()) {
     const nextGeneration = scope.viewGeneration + 1;
@@ -292,6 +300,8 @@ async function sendAssistantMessage(
   // Deterministic client_request_id for idempotency
   const clientRequestId = newClientRequestId();
   const responseConversationId = attempt.targetId!;
+  attempt.clientRequestId = clientRequestId;
+  addOptimisticMessage(queryClient, responseConversationId, clientRequestId, content);
   attempt.selectionStage = true;
   const responseRun = await sendMessage(
     responseConversationId,
@@ -389,11 +399,34 @@ function rejectUnresolvedSpecialist(d: ChatSendDeps, content: string): boolean {
  * Resets the live state after a failed send and shows the localized error, only while this send still owns the view.
  * A send the server did not accept (409/422/429/network) must not lose the text the composer already cleared.
  */
-function reportSendFailure(d: ChatSendDeps, scope: ViewScope, attempt: SendAttempt, err: unknown, content: string, hasSelectionItems: boolean): void {
+function reportSendFailure(d: ChatSendDeps, scope: ViewScope, attempt: SendAttempt, err: unknown, content: string, hasSelectionItems: boolean, day: unknown): void {
+  if (attempt.clientRequestId && attempt.targetId && !attempt.accepted) removeOptimisticMessage(d.queryClient, attempt.targetId, attempt.clientRequestId);
+  const abandoned = discardEmptyConversation(d, scope, attempt, content, day);
   if (!scope.isCurrent()) return;
   d.live.patch({ isPending: false, isStreaming: false, activeResponseId: null });
-  if (!attempt.accepted) d.chatCtrl.setDraft(content);
+  if (!attempt.accepted && !abandoned) d.chatCtrl.setDraft(content);
   d.live.patch({ error: describeSendError(d, attempt, err, content, hasSelectionItems) });
+}
+
+/**
+ * Deletes the conversation this send created when the server did not accept the message, so no empty thread is left in
+ * the history. A day conversation (bound for reuse) and a specialist retry envelope keep theirs.
+ *
+ * @param content - Failed text; handed to the new-chat draft slot because the view returns to a fresh thread.
+ * @returns True when the view was moved back to a fresh thread (the caller must not write the draft to the old one).
+ */
+function discardEmptyConversation(d: ChatSendDeps, scope: ViewScope, attempt: SendAttempt, content: string, day: unknown): boolean {
+  const id = attempt.createdConversationId;
+  if (!id || attempt.accepted || attempt.attemptedProfileRun || day) return false;
+  void deleteConversation(id, d.csrfToken).catch(() => undefined).finally(() => {
+    void d.queryClient.invalidateQueries({ queryKey: chatKeys.conversations() });
+  });
+  if (!scope.isCurrent()) return false;
+  // Keep the pending/error state across the selection change (see useConversationSelection's promoted guard).
+  d.refs.setPromotedSelection({ conversationId: null, generation: scope.viewGeneration + 1, sendGeneration: scope.sendGeneration });
+  writeDraft(null, content);
+  d.chatCtrl.setActiveConversationId(null);
+  return true;
 }
 
 /**
@@ -434,7 +467,7 @@ async function executeSend(d: ChatSendDeps, scope: ViewScope, content: string): 
     }
     await sendAssistantMessage(d, scope, attempt, content, sendContext);
   } catch (err: unknown) {
-    reportSendFailure(d, scope, attempt, err, content, selItems.length > 0);
+    reportSendFailure(d, scope, attempt, err, content, selItems.length > 0, day);
     return attempt.accepted;
   }
   return true;

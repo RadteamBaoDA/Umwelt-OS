@@ -86,7 +86,8 @@ function useScrollCommands({ containerRef, followRef }: FollowState, prefersRedu
     if (!element) return;
     // Compare attribute values instead of interpolating the id into a selector: ids are server-supplied strings.
     const byId = messageId ? Array.from(element.querySelectorAll('[data-message-id]')).find((node) => node.getAttribute('data-message-id') === messageId) : null;
-    const target = element.querySelector('[data-streaming-answer]') ?? byId ?? null;
+    // Full Chat wraps the newest turn (question + answer) so the question anchors at the top; otherwise the answer does.
+    const target = element.querySelector('[data-latest-turn]') ?? element.querySelector('[data-streaming-answer]') ?? byId ?? null;
     (target as HTMLElement | null)?.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion ? 'auto' : 'smooth' });
   }, [containerRef, prefersReducedMotion]);
 
@@ -116,6 +117,25 @@ function useFollowNewMessages(
       return;
     }
   }, [conversationId, messageCount, lastMessageId, lastMessageRole, scrollToBottom, pinToBottom, loadedRef]);
+}
+
+/**
+ * Keeps "at bottom" honest while content grows or shrinks without a scroll event (streamed answer below the fold).
+ *
+ * @param containerRef - Scroll container; its first child is the content column that resizes.
+ * @param setIsAtBottom - Receives the recomputed flag.
+ */
+function useContentResize(containerRef: React.RefObject<HTMLDivElement | null>, setIsAtBottom: (atBottom: boolean) => void) {
+  React.useEffect(() => {
+    const element = containerRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(() => {
+      setIsAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 40);
+    });
+    observer.observe(element);
+    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    return () => observer.disconnect();
+  }, [containerRef, setIsAtBottom]);
 }
 
 /**
@@ -202,6 +222,15 @@ export function useChatScroll({
     if (isStreaming) scrollToLatestAnswer(lastMessageId);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fires only on the busy rising edge
   }, [isStreaming]);
+  // A new user message (send, edit) puts its turn at the top of the viewport once; the answer is not chased afterwards.
+  const prevCountRef = React.useRef(messageCount);
+  React.useLayoutEffect(() => {
+    const grew = messageCount > prevCountRef.current && prevCountRef.current > 0;
+    prevCountRef.current = messageCount;
+    if (grew && lastMessageRole === 'user') scrollToLatestAnswer(lastMessageId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires only when the count changes
+  }, [messageCount]);
+  useContentResize(containerRef, setIsAtBottom);
   const scrollHandlers = useScrollGestures(state, setIsAtBottom, lastScrollTopRef);
 
   /** Explicit "jump to latest": re-engages follow and scrolls to the end. */

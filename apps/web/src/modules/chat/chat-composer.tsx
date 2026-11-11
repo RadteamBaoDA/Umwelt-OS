@@ -64,6 +64,8 @@ export interface ChatComposerProps {
   menu?: ComposerMenuProps;
   /** Per-chat model dropdown (full and drawer); omitted while no chat model is configured. */
   modelPicker?: ChatModelPicker;
+  /** Edit mode (full Chat): shows the "editing a previous prompt" banner inside the box; Esc or Cancel calls `onCancel`. */
+  editing?: { onCancel: () => void };
   /** When defined, the textarea takes focus each time this value changes (opening/switching a conversation), on fine pointers only. */
   autoFocusKey?: string;
 }
@@ -83,7 +85,7 @@ type ComposerShared = Pick<ChatComposerProps, 'isStreaming' | 'dbQuery' | 'model
  * @returns Event handlers and whether Send is currently allowed.
  */
 function useComposerHandlers(props: ChatComposerProps, textareaRef: React.RefObject<HTMLTextAreaElement | null>) {
-  const { value, onChange, onSend, isStreaming, disabled = false, sendBlockedBy = null, onAttachFiles, attachmentBusy = false } = props;
+  const { value, onChange, onSend, isStreaming, disabled = false, sendBlockedBy = null, onAttachFiles, attachmentBusy = false, editing } = props;
 
   /** Submits the trimmed draft message if non-empty and not currently streaming. */
   const handleSend = React.useCallback(() => {
@@ -95,13 +97,18 @@ function useComposerHandlers(props: ChatComposerProps, textareaRef: React.RefObj
   /** Enter submits, Shift+Enter inserts a newline. */
   const handleKeyDown = React.useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Escape' && editing && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        editing.onCancel();
+        return;
+      }
       // Enter during IME composition commits text instead of submitting the chat turn.
       if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
         e.preventDefault();
         handleSend();
       }
     },
-    [handleSend],
+    [handleSend, editing],
   );
 
   /**
@@ -322,17 +329,31 @@ function ModelLine({ modelLabel, sourcesCount, hasPicker }: { modelLabel: string
   );
 }
 
+/** "Editing a previous prompt" banner shown at the top of the composer box, with a Cancel action. */
+function EditBanner({ onCancel }: { onCancel: () => void }) {
+  const t = useTranslations('chat');
+  return (
+    <div role="status" data-testid="chat-edit-banner" className="flex items-center justify-between gap-3 rounded-md bg-secondary px-3 py-2 text-xs">
+      <span className="text-muted-foreground">{t('editingPrompt')}</span>
+      <Button type="button" variant="outline" className="h-8 px-2 text-xs" onClick={onCancel}>
+        {t('cancelEdit')}
+      </Button>
+    </div>
+  );
+}
+
 /**
  * Full-page layout: the one floating element, a single bordered field with a 12px radius and the 720px measure
  * matching the transcript.
  */
 function FullComposer(props: ChatComposerProps & ComposerShared) {
-  const { contextBar, attachments, textarea, action, menu, webSearch, dbQuery, modelPicker, isStreaming, disabled, modelLabel = null, sourcesCount = 0 } = props;
+  const { editing, contextBar, attachments, textarea, action, menu, webSearch, dbQuery, modelPicker, isStreaming, disabled, modelLabel = null, sourcesCount = 0 } = props;
   const webSearchChecked = !!webSearch && webSearch.available && !webSearch.profileBlocked && webSearch.enabled;
   const t = useTranslations('chat');
   return (
     <div className="relative shrink-0 bg-surface px-3 py-3 sm:px-5 sm:py-4 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
       <div className="mx-auto flex w-full max-w-[720px] flex-col gap-2 rounded-lg border border-control bg-surface p-3 focus-within:ring-2 focus-within:ring-data">
+        {editing && <EditBanner onCancel={editing.onCancel} />}
         {contextBar}
         {attachments}
         {textarea}

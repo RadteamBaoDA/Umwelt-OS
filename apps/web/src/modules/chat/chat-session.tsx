@@ -129,17 +129,12 @@ export function ChatSession({
         <RevisionBanners
           mode={mode}
           pendingMessageMutation={pendingMessageMutation}
-          effectiveEditingMessageId={d.effectiveEditingMessageId}
           busy={d.busy}
           onRetryRevision={() => pendingMessageMutation && void cmd.handleMessageMutation(
             pendingMessageMutation.action,
             pendingMessageMutation.targetMessageId,
             pendingMessageMutation.content,
           )}
-          onCancelEdit={() => {
-            composer.setEditingMessageId(null);
-            chatCtrl.setDraft('');
-          }}
         />
         {themeRequest && (
           <AssistantThemeBanner mode={themeRequest} csrfToken={session.csrfToken} onResolved={() => setThemeRequest(null)} />
@@ -161,7 +156,7 @@ export function ChatSession({
         {composer.providerGateOpen && !d.providerReady && <ProviderGateAlert onDismiss={() => composer.setProviderGateOpen(false)} />}
 
         {/* Bottom composer */}
-        <SessionComposer data={d} mode={mode} onSend={cmd.handleSend} onStop={cmd.handleStop} />
+        <SessionComposer data={d} mode={mode} onSend={cmd.handleSend} onStop={cmd.handleStop} onCancelEdit={cmd.handleCancelEdit} />
       </ChatDropZone>
     </PromptBridgeProvider>
   );

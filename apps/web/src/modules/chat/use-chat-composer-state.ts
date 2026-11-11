@@ -20,6 +20,8 @@ export interface ChatComposerState {
   /** Message whose prompt is being edited locally (before any pending mutation is considered). */
   editingMessageId: string | null;
   setEditingMessageId: (id: string | null) => void;
+  /** Draft typed before an edit began; restored when the edit is cancelled. */
+  draftStashRef: React.MutableRefObject<string | null>;
   /** Restores the per-send toggles after the server accepted a send (web search on, db query off). */
   resetToggles: () => void;
 }
@@ -36,6 +38,7 @@ export function useChatComposerState(): ChatComposerState {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [providerGateOpen, setProviderGateOpen] = React.useState(false);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
+  const draftStashRef = React.useRef<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = React.useState('assistant');
   const resetToggles = React.useCallback(() => {
     setWebSearchOn(true);
@@ -43,6 +46,6 @@ export function useChatComposerState(): ChatComposerState {
   }, []);
   return {
     webSearchOn, setWebSearchOn, dbQueryOn, setDbQueryOn, contextPickerOpen, setContextPickerOpen, fileInputRef,
-    providerGateOpen, setProviderGateOpen, selectedProfileId, setSelectedProfileId, editingMessageId, setEditingMessageId, resetToggles,
+    providerGateOpen, setProviderGateOpen, selectedProfileId, setSelectedProfileId, editingMessageId, setEditingMessageId, draftStashRef, resetToggles,
   };
 }

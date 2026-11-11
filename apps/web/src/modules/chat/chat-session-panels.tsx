@@ -74,18 +74,16 @@ export function AgentPanels(props: AgentPanelsProps) {
 export interface RevisionBannersProps {
   mode: 'drawer' | 'full';
   pendingMessageMutation: PendingMessageMutation | null;
-  effectiveEditingMessageId: string | null;
   busy: boolean;
   onRetryRevision: () => void;
-  onCancelEdit: () => void;
 }
 
 /**
- * Full-mode banners for an unacknowledged revision (with Retry) or a prompt being edited (with Cancel).
+ * Full-mode banner for an unacknowledged revision (with Retry). The edit-mode banner lives inside the composer.
  *
  * @param props - See {@link RevisionBannersProps}.
  */
-export function RevisionBanners({ mode, pendingMessageMutation, effectiveEditingMessageId, busy, onRetryRevision, onCancelEdit }: RevisionBannersProps) {
+export function RevisionBanners({ mode, pendingMessageMutation, busy, onRetryRevision }: RevisionBannersProps) {
   const t = useTranslations('chat');
   return (
     <>
@@ -94,14 +92,6 @@ export function RevisionBanners({ mode, pendingMessageMutation, effectiveEditing
           <span className="text-muted-foreground">{t('revisionUnacknowledged')}</span>
           <Button type="button" variant="outline" className="h-8 px-2 text-xs" disabled={busy} onClick={onRetryRevision}>
             {t('retryRevision')}
-          </Button>
-        </div>
-      )}
-      {mode === 'full' && effectiveEditingMessageId && !pendingMessageMutation && (
-        <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary px-4 py-2 text-xs">
-          <span className="text-muted-foreground">{t('editingPrompt')}</span>
-          <Button type="button" variant="outline" className="h-8 px-2 text-xs" onClick={onCancelEdit}>
-            {t('cancelEdit')}
           </Button>
         </div>
       )}

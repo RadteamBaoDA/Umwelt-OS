@@ -57,6 +57,8 @@ export function SessionTranscript({ data, cmd, widget, conversationId, mode }: S
       csrfToken={data.session.csrfToken}
       mode={mode}
       messages={data.messages}
+      loading={data.detail.isLoading}
+      editingMessageId={full && !data.pendingMessageMutation ? data.effectiveEditingMessageId : null}
       streamingText={live.streamingText}
       streamingReasoning={live.streamingReasoning}
       cancelled={live.cancelled}

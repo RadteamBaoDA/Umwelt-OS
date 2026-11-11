@@ -150,3 +150,56 @@ describe('ChatTranscript capability chips', () => {
     expect(screen.queryByTestId('capability-attach')).toBeNull();
   });
 });
+
+/** Minimal committed message for the stop / edit tests. */
+function msg(id: string, role: 'user' | 'assistant', extra: Record<string, unknown> = {}) {
+  return { id, conversation_id: 'c1', role, content: `${role} ${id}`, client_request_id: null, model_identity: null, citations: [], response_id: 'r-' + id, revision_of_message_id: null, created_at: '2026-01-01T00:00:00Z', ...extra } as never;
+}
+
+describe('ChatTranscript stop, status line and empty conversation', () => {
+  it('keeps the stopped partial without spinner or status label and offers Regenerate for a regenerable answer', async () => {
+    const onRegenerateMessage = vi.fn();
+    renderTranscript({ conversationId: 'c1', messages: [msg('u1', 'user')], streamingText: 'partial answer', cancelled: true, onRegenerateMessage });
+    expect(screen.getByText('partial answer')).toBeTruthy();
+    expect(screen.queryByText(messages['en-us'].chat.streaming)).toBeNull();
+    expect(screen.queryByText(messages['en-us'].chat.thinking)).toBeNull();
+    expect(screen.getByTestId('chat-cancelled').textContent).toBe(messages['en-us'].chat.cancelled);
+    expect(screen.queryByRole('button', { name: messages['en-us'].chat.regenerateAnswer })).toBeNull();
+  });
+
+  it('does not duplicate the partial once the persisted answer is the last message, and Regenerate targets it', async () => {
+    const onRegenerateMessage = vi.fn();
+    renderTranscript({ conversationId: 'c1', messages: [msg('u1', 'user'), msg('a1', 'assistant', { content: 'partial answer' })], streamingText: 'partial answer', cancelled: true, onRegenerateMessage });
+    expect(screen.getAllByText('partial answer')).toHaveLength(1);
+    const buttons = screen.getAllByRole('button', { name: messages['en-us'].chat.regenerateAnswer });
+    await userEvent.click(buttons[buttons.length - 1]);
+    expect(onRegenerateMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 'a1' }));
+  });
+
+  it('hides the status line once answer text has started but keeps it while a tool runs', () => {
+    const { rerender } = renderTranscript({ conversationId: 'c1', messages: [msg('u1', 'user')], isStreaming: true });
+    expect(screen.getByText(messages['en-us'].chat.streaming)).toBeTruthy();
+    rerender(
+      <QueryClientProvider client={queryClient}><NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <ChatTranscript messages={[msg('u1', 'user')]} mode="full" isStreaming streamingText="Hello" />
+      </NextIntlClientProvider></QueryClientProvider>,
+    );
+    expect(screen.queryByText(messages['en-us'].chat.streaming)).toBeNull();
+  });
+
+  it('shows the empty state for a loaded conversation without messages, not while it loads', () => {
+    const { unmount } = renderTranscript({ conversationId: 'c1', onSendPrompt: vi.fn() });
+    expect(screen.getByTestId('starter-suggestions')).toBeTruthy();
+    unmount();
+    renderTranscript({ conversationId: 'c1', loading: true, onSendPrompt: vi.fn() });
+    expect(screen.queryByTestId('starter-suggestions')).toBeNull();
+  });
+
+  it('highlights the message being edited and wraps the newest turn in full Chat', () => {
+    const { container } = renderTranscript({ conversationId: 'c1', messages: [msg('u1', 'user'), msg('a1', 'assistant'), msg('u2', 'user')], editingMessageId: 'u2' });
+    expect(container.querySelector('[data-message-id="u2"]')?.getAttribute('data-editing')).toBe('true');
+    expect(container.querySelector('[data-message-id="u1"]')?.getAttribute('data-editing')).toBeNull();
+    expect(container.querySelector('[data-latest-turn] [data-message-id="u2"]')).toBeTruthy();
+    expect(container.querySelector('[data-latest-turn] [data-message-id="u1"]')).toBeNull();
+  });
+});

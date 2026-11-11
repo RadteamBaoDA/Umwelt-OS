@@ -6,6 +6,7 @@ import { ApiError } from '@/core/api';
 
 const h = vi.hoisted(() => ({
   createConversation: vi.fn(),
+  deleteConversation: vi.fn(),
   sendMessage: vi.fn(),
   mutateMessage: vi.fn(),
   startAgentRun: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
   createConversation: h.createConversation,
+  deleteConversation: h.deleteConversation,
   sendMessage: h.sendMessage,
   mutateMessage: h.mutateMessage,
   hashMessageContent: async () => 'hash-1',
@@ -76,8 +78,7 @@ function makeDeps(over: Partial<Deps> = {}, ctrlOver: Record<string, unknown> = 
   return { deps, refs, chatCtrl, live };
 }
 
-function render(deps: Deps) {
-  const client = new QueryClient();
+function render(deps: Deps, client = new QueryClient()) {
   const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
   return renderHook(() => useChatSend(deps), { wrapper });
 }
@@ -87,6 +88,7 @@ describe('useChatSend', () => {
     vi.clearAllMocks();
     h.sendMessage.mockResolvedValue({ response_id: 'r1', status: 'queued' });
     h.mutateMessage.mockResolvedValue({ response_id: 'r2', status: 'queued' });
+    h.deleteConversation.mockResolvedValue(undefined);
   });
 
   it('opens the provider gate and keeps the text as the draft when no model is usable', async () => {
@@ -185,6 +187,48 @@ describe('useChatSend', () => {
     expect(ok).toBe(false);
     expect(chatCtrl.setDraft).toHaveBeenLastCalledWith('hello');
     expect(live.patch).toHaveBeenLastCalledWith({ error: 'errorConflict' });
+  });
+
+  it('shows the user message at once (keyed by client_request_id) and removes it when the server rejects', async () => {
+    let reject: (e: unknown) => void = () => undefined;
+    h.sendMessage.mockReturnValue(new Promise((_, r) => { reject = r; }));
+    const client = new QueryClient();
+    const { deps } = makeDeps({ conversationId: 'c1' });
+    const { result } = render(deps, client);
+    let pending: Promise<boolean> = Promise.resolve(false);
+    await act(async () => { pending = result.current.handleSend('hello'); });
+    const shown = client.getQueryData<{ content: string; client_request_id: string }[]>(['chat', 'optimistic', 'c1']);
+    expect(shown).toHaveLength(1);
+    expect(shown?.[0]).toMatchObject({ content: 'hello', client_request_id: h.sendMessage.mock.calls[0][1].client_request_id });
+    await act(async () => { reject(new ApiError(409, 'conflict')); await pending; });
+    expect(client.getQueryData(['chat', 'optimistic', 'c1'])).toEqual([]);
+  });
+
+  it('keeps the optimistic message when the server accepted the send', async () => {
+    const client = new QueryClient();
+    const { deps } = makeDeps({ conversationId: 'c1' });
+    const { result } = render(deps, client);
+    await act(async () => { await result.current.handleSend('hello'); });
+    expect(client.getQueryData<unknown[]>(['chat', 'optimistic', 'c1'])).toHaveLength(1);
+  });
+
+  it('deletes the conversation the first send created when the server did not accept the message', async () => {
+    h.createConversation.mockResolvedValue({ id: 'new1' });
+    h.sendMessage.mockRejectedValue(new ApiError(422, 'bad'));
+    const { deps, chatCtrl, refs } = makeDeps({ onConversationCreated: vi.fn() });
+    const { result } = render(deps);
+    await act(async () => { await result.current.handleSend('hello'); });
+    expect(h.deleteConversation).toHaveBeenCalledWith('new1', 'csrf');
+    expect(chatCtrl.setActiveConversationId).toHaveBeenCalledWith(null);
+    expect(refs.promotedSelection).toMatchObject({ conversationId: null });
+  });
+
+  it('does not delete a conversation that already existed', async () => {
+    h.sendMessage.mockRejectedValue(new ApiError(422, 'bad'));
+    const { deps } = makeDeps({ conversationId: 'c1' });
+    const { result } = render(deps);
+    await act(async () => { await result.current.handleSend('hello'); });
+    expect(h.deleteConversation).not.toHaveBeenCalled();
   });
 
   it('edit and regenerate send base_content_hash and the envelope client_request_id', async () => {

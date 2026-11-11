@@ -244,6 +244,10 @@ export interface ChatTranscriptProps {
   onEditMessage?: (message: ChatMessage) => void;
   /** Starts an append-only regeneration from an assistant answer in full Chat. */
   onRegenerateMessage?: (message: ChatMessage) => void;
+  /** True while the conversation detail is loading, so an existing conversation never flashes the empty state. */
+  loading?: boolean;
+  /** Message whose prompt is being edited in the composer; highlighted in the transcript. */
+  editingMessageId?: string | null;
   /** Optional callback when user clicks an inline citation chip; defaults to opening the evidence rail in full Chat. */
   onSelectCitation?: (citation: Citation) => void;
   /** Capability chips for the empty state (full Chat); each toggles the matching composer option or opens the file picker. */
@@ -489,6 +493,14 @@ interface TranscriptMessageProps extends MessageViewProps {
   onSelectCitation?: (citation: Citation) => void;
   /** "N sources" strip click (full Chat); the strip is hidden without it. */
   onOpenSources?: (citations: Citation[]) => void;
+  /** True while this message's prompt is being edited in the composer. */
+  editing?: boolean;
+}
+
+/** Layout classes of a committed message; the message being edited gets a ring. */
+function messageClass(isUser: boolean, editing?: boolean): string {
+  const side = isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto w-full';
+  return `flex flex-col gap-2.5 ${side} ${editing ? 'rounded-lg ring-2 ring-data ring-offset-2 ring-offset-background' : ''}`;
 }
 
 /**
@@ -508,7 +520,8 @@ function TranscriptMessage(props: TranscriptMessageProps) {
     <div
       data-role={msg.role}
       data-message-id={msg.id}
-      className={`flex flex-col gap-2.5 ${isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto w-full'}`}
+      data-editing={props.editing ? 'true' : undefined}
+      className={messageClass(isUser, props.editing)}
     >
       <MessageBody msg={msg} mode={mode} locale={locale} relationshipLabel={relationshipLabelFor(msg, revised, t)} onSelectCitation={onSelectCitation} />
 
@@ -586,6 +599,8 @@ interface StreamingBubbleProps {
   activeTool: ToolStatus['tool'] | null;
   streamingUi: UiPart[];
   isStreaming: boolean;
+  /** The user stopped generation: the partial output stays as final, with no spinner or status line. */
+  stopped?: boolean;
   widgetPromptHandler: (part: unknown) => ((prompt: string) => void | Promise<unknown>) | undefined;
 }
 
@@ -608,7 +623,7 @@ function StreamingStatus({ activeTool, label }: { activeTool: ToolStatus['tool']
  * @param props - See {@link StreamingBubbleProps}.
  */
 function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
-  const { mode, locale, csrfToken, streamingText, streamingReasoning, streamingCitations, streamingWebSearch, activeTool, streamingUi, isStreaming, widgetPromptHandler, steps } = props;
+  const { mode, locale, csrfToken, streamingText, streamingReasoning, streamingCitations, streamingWebSearch, activeTool, streamingUi, isStreaming, widgetPromptHandler, steps, stopped = false } = props;
   const t = useTranslations('chat');
   const smoothText = useSmoothedText(streamingText || '');
   const label = activeTool
@@ -619,12 +634,13 @@ function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
       <div className="text-sm text-foreground">
         {/* Live region stays mounted so tool-status changes are announced politely. */}
         {/* A running step already shows its own spinner row, so the single status line would only repeat it. */}
-        {!steps.some((step) => step.state === 'running') && <StreamingStatus activeTool={activeTool} label={label} />}
-        <ChatStepList steps={steps} streaming />
+        {/* Once answer text flows the text itself is the signal; the line stays for the first-token wait and while a tool runs. */}
+        {!stopped && !steps.some((step) => step.state === 'running') && (activeTool || !(streamingText || streamingUi.length > 0)) && <StreamingStatus activeTool={activeTool} label={label} />}
+        <ChatStepList steps={steps} streaming={!stopped} />
 
         {mode === 'full' && <WebSearchNotice outcome={streamingWebSearch} />}
 
-        <ChatReasoning text={streamingReasoning} streaming answerStarted={Boolean(streamingText) || streamingUi.length > 0} />
+        <ChatReasoning text={streamingReasoning} streaming={!stopped} answerStarted={Boolean(streamingText) || streamingUi.length > 0} />
 
         <ChatMarkdown content={smoothText} citations={streamingCitations} locale={locale} />
       </div>
@@ -641,6 +657,26 @@ function StreamingBubble(props: StreamingBubbleProps & { isPending: boolean }) {
           citations={streamingCitations}
         />
       ))}
+    </div>
+  );
+}
+
+/**
+ * Neutral "Generation stopped" line with a Regenerate action when a latest assistant answer can be regenerated.
+ *
+ * @param props - Regenerate target (absent when none exists) and the regenerate handler.
+ */
+function StoppedNotice({ target, onRegenerate }: { target?: ChatMessage; onRegenerate?: (message: ChatMessage) => void }) {
+  const t = useTranslations('chat');
+  return (
+    <div className="flex items-center gap-2">
+      <p role="status" data-testid="chat-cancelled" className="text-xs text-muted-foreground">{t('cancelled')}</p>
+      {target && onRegenerate && (
+        <Button type="button" variant="ghost" className="min-h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground" onClick={() => onRegenerate(target)}>
+          <RefreshCwIcon className="size-3.5" aria-hidden="true" />
+          {t('regenerateAnswer')}
+        </Button>
+      )}
     </div>
   );
 }
@@ -676,6 +712,46 @@ function EmptyState({ onSendPrompt, locale, capabilities }: { onSendPrompt?: (pr
 }
 
 /**
+ * Where the newest turn starts and which answer a stopped generation can regenerate.
+ *
+ * @param entries - Rendered entries in order.
+ * @param mode - Host mode; the viewport-tall newest turn and Regenerate exist in full Chat only.
+ * @param canRegenerate - Whether a regenerate handler was provided.
+ * @returns `turnStart` (index of the newest user message; `entries.length` when there is none) and `regenerateTarget`.
+ */
+function latestTurnLayout(entries: RenderEntry[], mode: 'drawer' | 'full', canRegenerate: boolean) {
+  const last = entries[entries.length - 1];
+  const lastUser = entries.map((entry) => entry.msg.role).lastIndexOf('user');
+  return {
+    turnStart: mode === 'full' && lastUser >= 0 ? lastUser : entries.length,
+    regenerateTarget: mode === 'full' && canRegenerate && last?.latest && last.msg.role === 'assistant' && last.msg.response_id ? last.msg : undefined,
+  };
+}
+
+/** Floating "Jump to latest" button with the unread dot. */
+function JumpToLatest({ onClick, hasUnread }: { onClick: () => void; hasUnread: boolean }) {
+  const t = useTranslations('chat');
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={onClick}
+      className="absolute bottom-3 left-1/2 z-10 min-h-8 -translate-x-1/2 gap-1 rounded-full bg-surface px-3 text-xs"
+    >
+      <ArrowDownIcon className="size-3.5" aria-hidden="true" />
+      {t('jumpToLatest')}
+      {hasUnread && (
+        <>
+          <span data-testid="jump-unread-dot" aria-hidden="true" className="size-2 rounded-full bg-data" />
+          <span className="sr-only">{t('jumpToLatestUnread')}</span>
+        </>
+      )}
+    </Button>
+  );
+}
+
+/**
  * Applies the transcript's optional-prop defaults in one place (keeps the component's branching low).
  *
  * @param props - Raw component props.
@@ -696,6 +772,15 @@ function withTranscriptDefaults(props: ChatTranscriptProps) {
 }
 
 /**
+ * Classifies a settled user stop: `partial` while the stopped text is only live output, `persisted` once the stored
+ * assistant answer is the last message (the live copy must then disappear, not duplicate it), `none` otherwise.
+ */
+function stopState(d: ReturnType<typeof withTranscriptDefaults>, lastRole: ChatMessage['role'] | undefined): 'none' | 'partial' | 'persisted' {
+  if (!d.cancelled || d.isStreaming || d.isPending) return 'none';
+  return lastRole === 'assistant' ? 'persisted' : 'partial';
+}
+
+/**
  * Which optional regions render: the starter gallery only for a brand-new view (once a conversation exists it never
  * reappears between turns), and the streaming bubble while anything is in flight.
  *
@@ -704,9 +789,14 @@ function withTranscriptDefaults(props: ChatTranscriptProps) {
  */
 function transcriptVisibility(props: ChatTranscriptProps, d: ReturnType<typeof withTranscriptDefaults>) {
   const { conversationId, messages, streamingText } = props;
+  // A stopped partial is committed output: once the persisted answer is the last message it replaces the bubble.
+  const stop = stopState(d, messages[messages.length - 1]?.role);
+  const hasLive = Boolean(streamingText || d.streamingReasoning || d.streamingUi.length > 0);
+  const loadingExisting = Boolean(conversationId && props.loading);
   return {
-    showStarter: !conversationId && messages.length === 0 && !streamingText && d.streamingUi.length === 0 && !d.isPending,
-    showStreaming: Boolean(streamingText || d.streamingReasoning || d.streamingUi.length > 0 || d.isStreaming || d.isPending || d.activeTool),
+    stopped: stop === 'partial',
+    showStarter: messages.length === 0 && !loadingExisting && !hasLive && !d.isPending,
+    showStreaming: stop !== 'persisted' && (hasLive || d.isStreaming || d.isPending || Boolean(d.activeTool)),
   };
 }
 
@@ -771,7 +861,31 @@ export function ChatTranscript(props: ChatTranscriptProps) {
   const t = useTranslations('chat');
   const m = useTranscriptModel(props, isStreaming || isPending);
   const { locale, timezone, copy, containerRef, scrollHandlers, isAtBottom, hasUnread, jumpToLatest, widgetPromptHandler } = m;
-  const { showStarter, showStreaming } = transcriptVisibility(props, withTranscriptDefaults(props));
+  const { showStarter, showStreaming, stopped } = transcriptVisibility(props, withTranscriptDefaults(props));
+  const { regenerateTarget, turnStart } = latestTurnLayout(m.entries, mode, Boolean(onRegenerateMessage));
+  /** Renders one committed message with the transcript-wide handlers. */
+  const renderMessage = ({ msg, latest, nav }: RenderEntry) => (
+    <TranscriptMessage
+      key={msg.id}
+      msg={msg}
+      latest={latest}
+      nav={nav}
+      onSelectVersion={m.selectVersion}
+      mode={mode}
+      locale={locale}
+      timezone={timezone}
+      csrfToken={csrfToken}
+      revised={m.revisedOf(msg)}
+      isRevised={m.revisedMessageIds.has(msg.id)}
+      copy={copy}
+      widgetPromptHandler={widgetPromptHandler}
+      onEditMessage={onEditMessage}
+      onRegenerateMessage={onRegenerateMessage}
+      onSelectCitation={onSelectCitation}
+      onOpenSources={onOpenSources}
+      editing={msg.id === props.editingMessageId}
+    />
+  );
   // Full Chat shows the evidence rail, so chip and strip clicks open it; the drawer has no rail and keeps plain links.
   const onOpenSources = mode === 'full' ? focusCitations : undefined;
   const onSelectCitation = props.onSelectCitation ?? (onOpenSources ? (citation: Citation) => onOpenSources([citation]) : undefined);
@@ -781,7 +895,7 @@ export function ChatTranscript(props: ChatTranscriptProps) {
     <div
       ref={containerRef}
       {...scrollHandlers}
-      className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 focus:outline-none"
+      className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 focus:outline-none [container-type:size]"
       role="log"
       aria-live="polite"
       // aria-busy keeps assistive tech from announcing every streamed token; the settled message is announced once.
@@ -791,30 +905,14 @@ export function ChatTranscript(props: ChatTranscriptProps) {
       {/* Readable measure: one centred 720px column inside the transcript region. */}
       <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-4">
 
-      {/* Starter gallery is only for a brand-new view: once a conversation exists it never reappears between turns. */}
+      {/* Starter gallery is for a brand-new view or a conversation without any message; it never reappears between turns. */}
       {showStarter && <EmptyState onSendPrompt={onSendPrompt} locale={locale} capabilities={props.capabilities} />}
 
-      {m.entries.map(({ msg, latest, nav }) => (
-        <TranscriptMessage
-          key={msg.id}
-          msg={msg}
-          latest={latest}
-          nav={nav}
-          onSelectVersion={m.selectVersion}
-          mode={mode}
-          locale={locale}
-          timezone={timezone}
-          csrfToken={csrfToken}
-          revised={m.revisedOf(msg)}
-          isRevised={m.revisedMessageIds.has(msg.id)}
-          copy={copy}
-          widgetPromptHandler={widgetPromptHandler}
-          onEditMessage={onEditMessage}
-          onRegenerateMessage={onRegenerateMessage}
-          onSelectCitation={onSelectCitation}
-          onOpenSources={onOpenSources}
-        />
-      ))}
+      {m.entries.slice(0, turnStart).map(renderMessage)}
+
+      {/* Full Chat: the newest turn is at least one viewport tall, so its question sits at the top and the answer fills downward. */}
+      <div data-latest-turn={turnStart < m.entries.length ? '' : undefined} className={turnStart < m.entries.length ? 'flex min-h-[calc(100cqh)] scroll-mt-4 flex-col gap-4' : 'contents'}>
+      {m.entries.slice(turnStart).map(renderMessage)}
 
       {!showStreaming && <SettledRunExtras last={m.entries[m.entries.length - 1]} steps={steps} onSendPrompt={onSendPrompt} />}
 
@@ -832,36 +930,21 @@ export function ChatTranscript(props: ChatTranscriptProps) {
           streamingUi={streamingUi}
           isStreaming={isStreaming}
           isPending={isPending}
+          stopped={stopped}
           widgetPromptHandler={widgetPromptHandler}
         />
       )}
 
       {/* Cancellation is a neutral outcome chosen by the user (or the server), not a failure: no alert, no Retry. */}
       {cancelled && !error && (
-        <p role="status" data-testid="chat-cancelled" className="text-xs text-muted-foreground">{t('cancelled')}</p>
+        <StoppedNotice target={regenerateTarget} onRegenerate={onRegenerateMessage} />
       )}
 
       {error && <TranscriptError error={error} onRetry={onRetry} />}
       </div>
+      </div>
     </div>
-      {!isAtBottom && (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={jumpToLatest}
-          className="absolute bottom-3 left-1/2 z-10 min-h-8 -translate-x-1/2 gap-1 rounded-full bg-surface px-3 text-xs"
-        >
-          <ArrowDownIcon className="size-3.5" aria-hidden="true" />
-          {t('jumpToLatest')}
-          {hasUnread && (
-            <>
-              <span data-testid="jump-unread-dot" aria-hidden="true" className="size-2 rounded-full bg-data" />
-              <span className="sr-only">{t('jumpToLatestUnread')}</span>
-            </>
-          )}
-        </Button>
-      )}
+      {!isAtBottom && <JumpToLatest onClick={jumpToLatest} hasUnread={hasUnread} />}
     </div>
   );
 }

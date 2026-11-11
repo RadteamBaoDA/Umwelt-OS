@@ -6,6 +6,7 @@ import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { cancelResponse, chatKeys, getConversation, submitResponseInput, type ChatMessage } from './api';
 import { settleWidgetPrompt } from './generative-ui/bridge/widget-prompt';
 import { useChatAttachments } from './chat-attachments';
+import { mergeOptimistic, useOptimisticMessages } from './chat-optimistic';
 import { useChatLiveState } from './chat-live-state';
 import { useChatSessionRefs } from './chat-session-refs';
 import { useChatModelPicker } from './model-picker';
@@ -61,7 +62,10 @@ export function useChatSessionData({ conversationId, mode }: ChatSessionOptions)
     queryFn: () => getConversation(conversationId!),
     enabled: Boolean(conversationId),
   });
-  const messages: ChatMessage[] = React.useMemo(() => detail.data?.messages ?? [], [detail.data?.messages]);
+  const serverMessages: ChatMessage[] = React.useMemo(() => detail.data?.messages ?? [], [detail.data?.messages]);
+  // The user's own message shows at once; the server copy replaces it (matched by client_request_id) on refetch.
+  const optimisticMessages = useOptimisticMessages(conversationId, serverMessages);
+  const messages: ChatMessage[] = React.useMemo(() => mergeOptimistic(serverMessages, optimisticMessages), [serverMessages, optimisticMessages]);
   const latestAssistant = React.useMemo(() => [...messages].reverse().find((message) => message.role === 'assistant'), [messages]);
   // Specialist-agent sends (non-assistant profile or a pending profile retry) do not carry web_search or attachments.
   const profileBlocked = composer.selectedProfileId !== 'assistant' || Boolean(pendingProfileRun);
@@ -117,7 +121,7 @@ export function useChatSessionCommands(
 ) {
   const { conversationId, mode, onConversationCreated } = options;
   const { session, chatCtrl, live, actions, refs, composer } = d;
-  const { setProviderGateOpen, setEditingMessageId } = composer;
+  const { setProviderGateOpen, setEditingMessageId, draftStashRef, editingMessageId } = composer;
   const { setActiveAgentRunId } = agent;
   const streamResponseRun = useChatStream(refs, actions, setThemeRequest);
   const onSelectionReset = React.useCallback(() => { setActiveAgentRunId(null); setEditingMessageId(null); }, [setActiveAgentRunId, setEditingMessageId]);
@@ -133,7 +137,7 @@ export function useChatSessionCommands(
     onSelectionReset,
   });
   const openProviderGate = React.useCallback(() => setProviderGateOpen(true), [setProviderGateOpen]);
-  const clearEditing = React.useCallback(() => setEditingMessageId(null), [setEditingMessageId]);
+  const clearEditing = React.useCallback(() => { setEditingMessageId(null); draftStashRef.current = null; }, [setEditingMessageId, draftStashRef]);
   const send = useChatSend({
     refs, live: actions, chatCtrl, csrfToken: session.csrfToken, conversationId, mode, onConversationCreated, messages: d.messages,
     isBusy: d.busy, providerReady: d.providerReady, openProviderGate,
@@ -186,9 +190,17 @@ export function useChatSessionCommands(
   /** Opens the full Chat composer with a user message's content for an append-only edit. */
   const handleEditMessage = React.useCallback((message: ChatMessage) => {
     if (mode !== 'full' || message.role !== 'user') return;
+    // Stash the typed draft once (re-editing another message keeps the original stash) so Cancel can restore it.
+    if (!editingMessageId) draftStashRef.current = chatCtrl.draft;
     setEditingMessageId(message.id);
     setDraft(message.content);
-  }, [mode, setEditingMessageId, setDraft]);
+  }, [mode, setEditingMessageId, setDraft, editingMessageId, draftStashRef, chatCtrl.draft]);
+  /** Leaves edit mode and restores the draft that was in the composer before the edit began. */
+  const handleCancelEdit = React.useCallback(() => {
+    setEditingMessageId(null);
+    setDraft(draftStashRef.current ?? '');
+    draftStashRef.current = null;
+  }, [setEditingMessageId, setDraft, draftStashRef]);
   /** Reuses the parent assistant message's captured context for a new answer branch. */
   const handleRegenerateMessage = React.useCallback((message: ChatMessage) => {
     if (mode === 'full' && message.role === 'assistant') void handleMessageMutation('regenerate', message.id);
@@ -201,7 +213,7 @@ export function useChatSessionCommands(
     if (retryDraft) void handleSend(retryDraft);
   }, [pendingPrompt, refs, draft, handleSend]);
 
-  return { ...send, handleStop, handleNewChat, handleSubmitInput, handleEditMessage, handleRegenerateMessage, retryLast };
+  return { ...send, handleStop, handleNewChat, handleSubmitInput, handleEditMessage, handleCancelEdit, handleRegenerateMessage, retryLast };
 }
 
 /**

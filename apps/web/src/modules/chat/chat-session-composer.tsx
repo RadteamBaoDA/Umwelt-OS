@@ -15,6 +15,8 @@ export interface SessionComposerProps {
   mode: 'drawer' | 'full';
   onSend: (content: string) => Promise<boolean>;
   onStop: () => Promise<void>;
+  /** Leaves edit mode and restores the stashed draft. */
+  onCancelEdit: () => void;
 }
 
 /**
@@ -105,7 +107,7 @@ function buildFullModeExtras(data: ChatSessionData, attachmentsBlocked: boolean)
  *
  * @param props - See {@link SessionComposerProps}.
  */
-export function SessionComposer({ data, mode, onSend, onStop }: SessionComposerProps) {
+export function SessionComposer({ data, mode, onSend, onStop, onCancelEdit }: SessionComposerProps) {
   const { attachments, live } = data;
   const full = mode === 'full';
   const attachmentsBlocked = data.busy || data.attachmentsUnavailable;
@@ -118,6 +120,7 @@ export function SessionComposer({ data, mode, onSend, onStop }: SessionComposerP
       {...draftBinding(data)}
       onSend={onSend}
       onStop={onStop}
+      editing={full && data.effectiveEditingMessageId && !data.pendingMessageMutation ? { onCancel: onCancelEdit } : undefined}
       onAttachFiles={fullExtras?.onAttachFiles}
       attachmentBusy={attachmentsBlocked || attachments.full}
       isStreaming={live.isStreaming}
