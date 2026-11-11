@@ -33,6 +33,19 @@ describe('useConversationSelection', () => {
     expect(refs.promotedSelection).toBeNull();
   });
 
+  it('reports a fresh chat (null id) so every entry point can restore the toggle defaults (C6/C9)', () => {
+    const { params, onSelectionReset } = setup({ conversationId: null, activeConversationId: null });
+    renderHook(() => useConversationSelection(params));
+    expect(onSelectionReset).toHaveBeenCalledWith({ conversationId: null, promoted: false });
+  });
+
+  it('flags the adoption of the conversation a send created so the share choice survives (C5)', () => {
+    const { params, onSelectionReset, refs } = setup({ conversationId: 'new1', activeConversationId: 'new1', activeConversationGeneration: 2 });
+    refs.setPromotedSelection({ conversationId: 'new1', generation: 2, sendGeneration: refs.sendGeneration });
+    renderHook(() => useConversationSelection(params));
+    expect(onSelectionReset).toHaveBeenCalledWith({ conversationId: 'new1', promoted: true });
+  });
+
   it('does not honour a promotion that belongs to an orphaned send', () => {
     const { params, live, refs } = setup({ conversationId: 'new1', activeConversationId: 'new1', activeConversationGeneration: 2 });
     refs.setPromotedSelection({ conversationId: 'new1', generation: 2, sendGeneration: refs.sendGeneration + 5 });

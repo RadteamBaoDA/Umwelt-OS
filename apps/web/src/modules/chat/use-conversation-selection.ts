@@ -16,8 +16,12 @@ export interface ConversationSelectionParams {
   /** Owner-reported durable run to reattach to, if any. */
   activeResponseId?: string | null;
   streamResponseRun: (responseId: string, conversationId: string, isCurrentView: IsCurrentView) => Promise<void>;
-  /** Clears view-local state that belongs to the previous selection (agent run, edited message). */
-  onSelectionReset: () => void;
+  /**
+   * Clears view-local state that belongs to the previous selection (agent run, edited message). `promoted` is true when
+   * the change only adopts the conversation an in-flight send just created, so per-conversation choices must survive;
+   * `conversationId` is null for a fresh unsaved chat.
+   */
+  onSelectionReset: (selection: { conversationId: string | null; promoted: boolean }) => void;
 }
 
 /**
@@ -51,13 +55,14 @@ export function useConversationSelection(params: ConversationSelectionParams): v
   React.useEffect(() => {
     // Detach the previous view's local stream; this does not send a server cancellation request.
     refs.detachStream();
-    onSelectionReset();
+    const promoted = refs.promotedSelection;
+    const isPromotion = Boolean(promoted && promoted.sendGeneration === refs.sendGeneration
+        && promoted.conversationId === (conversationId ?? null)
+        && promoted.generation === activeConversationGeneration);
+    onSelectionReset({ conversationId: conversationId ?? null, promoted: isPromotion });
     live.clearOutput();
     live.patch({ isStreaming: false, activeResponseId: null, steps: [] });
-    const promoted = refs.promotedSelection;
-    if (promoted && promoted.sendGeneration === refs.sendGeneration
-        && promoted.conversationId === (conversationId ?? null)
-        && promoted.generation === activeConversationGeneration) {
+    if (isPromotion) {
       // Preserve the pending state while this request promotes its fresh conversation.
       refs.setPromotedSelection(null);
       return;

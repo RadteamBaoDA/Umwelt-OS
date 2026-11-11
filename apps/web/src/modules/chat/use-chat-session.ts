@@ -229,15 +229,22 @@ export function useChatSessionCommands(
   const { setProviderGateOpen, setEditingMessageId, draftStashRef } = composer;
   const { setActiveAgentRunId } = agent;
   const { resetShareChoice } = d.attachments;
+  const { resetToggles } = composer;
   const streamResponseRun = useChatStream(refs, actions, setThemeRequest);
-  const onSelectionReset = React.useCallback(() => {
+  /**
+   * Resets view-local state when the selection changes. Every entry point (header, history, shortcut) funnels through
+   * here: a fresh chat also restores the toggle defaults (C6/C9), and the attachment-sharing answer is forgotten unless
+   * the change merely adopts the conversation this send created (C5).
+   */
+  const onSelectionReset = React.useCallback(({ conversationId: selected, promoted }: { conversationId: string | null; promoted: boolean }) => {
     setActiveAgentRunId(null);
     setEditingMessageId(null);
     // A stash belongs to the conversation being edited; it must not leak into the next one.
     draftStashRef.current = null;
-    // The attachment-sharing answer is remembered per conversation (C5).
-    resetShareChoice();
-  }, [setActiveAgentRunId, setEditingMessageId, draftStashRef, resetShareChoice]);
+    // The attachment-sharing answer is remembered per conversation (C5), including the one a first send creates.
+    if (!promoted) resetShareChoice();
+    if (!selected) resetToggles();
+  }, [setActiveAgentRunId, setEditingMessageId, draftStashRef, resetShareChoice, resetToggles]);
   useConversationSelection({
     refs,
     live: actions,
@@ -284,7 +291,6 @@ export function useChatSessionCommands(
   const activeResponseId = live.activeResponseId;
 
   const { resetConversation } = chatCtrl;
-  const { resetToggles } = composer;
   /** Starts a clean new conversation thread: orphans in-flight sends, clears live output and per-send toggles. */
   const handleNewChat = React.useCallback(() => {
     refs.bumpSendGeneration();
