@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
+import { Loader2Icon } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { AgentProfile } from '@/modules/agents';
 import { profileTitleKeys } from './chat-session-header';
@@ -20,14 +21,25 @@ export interface AgentPickerProps {
 
 /**
  * Agent profile picker of the full composer: the Assistant plus each specialist, disabled when unavailable.
- * Styled like the model picker so both read as one toolbar.
+ * Styled like the model picker so both read as one toolbar. After the first open, a status row shows while the lazily
+ * loaded profile list is still undefined, so the list never looks empty.
  *
  * @param props - See {@link AgentPickerProps}.
  */
 export function AgentPicker({ value, disabled, onChange, profiles, onOpen }: AgentPickerProps) {
   const tAgents = useTranslations('aiSettings');
+  const [opened, setOpened] = React.useState(false);
   return (
-    <Select value={value} onValueChange={onChange} disabled={disabled} onOpenChange={(open) => open && onOpen()}>
+    <Select
+      value={value}
+      onValueChange={onChange}
+      disabled={disabled}
+      onOpenChange={(open) => {
+        if (!open) return;
+        setOpened(true);
+        onOpen();
+      }}
+    >
       <SelectTrigger
         aria-label={tAgents('agentSelect')}
         data-testid="chat-agent-picker"
@@ -37,6 +49,12 @@ export function AgentPicker({ value, disabled, onChange, profiles, onOpen }: Age
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="assistant">{tAgents('agentAssistant')}</SelectItem>
+        {opened && !profiles && (
+          <div role="status" className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
+            <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+            {tAgents('agentProfilesLoading')}
+          </div>
+        )}
         {(profiles ?? []).map((profile) => (
           <SelectItem key={profile.id} value={profile.id} disabled={!profile.enabled || profile.capability === 'unavailable'}>
             {tAgents(profileTitleKeys[profile.id] ?? 'agentProfileKnowledge')}

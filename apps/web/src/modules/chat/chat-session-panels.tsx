@@ -51,6 +51,7 @@ export interface AgentPanelsProps {
 export function AgentPanels(props: AgentPanelsProps) {
   const { conversationId, csrfToken, agentMode, pendingProfileRun, activeRun, runs, onCancelRun, cancelling, onOpenRun } = props;
   const tAgents = useTranslations('aiSettings');
+  const watching = Boolean(pendingProfileRun) || Boolean(runs?.items.some((run) => ACTIVE_RUN_STATUSES.includes(run.status)));
   return (
     <>
       {pendingProfileRun ? (
@@ -59,14 +60,9 @@ export function AgentPanels(props: AgentPanelsProps) {
           {tAgents('agentPendingProfileRevision', { revision: pendingProfileRun.profileRevision })}
         </div>
       ) : null}
-      {/* R7: approvals UI (and its chunk and polling) only exists while a specialist is in play. */}
-      {agentMode && (
-        <ConversationAgentActivity
-          conversationId={conversationId}
-          csrfToken={csrfToken}
-          watch={Boolean(pendingProfileRun) || Boolean(runs?.items.some((run) => ACTIVE_RUN_STATUSES.includes(run.status)))}
-        />
-      )}
+      {/* R7: approvals UI (and its chunk and polling) exists only while a specialist is selected or one of the
+          conversation's runs is still active (it may be waiting for approval even after switching back to Assistant). */}
+      {(agentMode || watching) && <ConversationAgentActivity conversationId={conversationId} csrfToken={csrfToken} watch={watching} />}
       {agentMode && activeRun && (
         <div className="shrink-0 border-b border-border p-3">
           <AgentRunDetail run={activeRun} onCancel={onCancelRun} cancelling={cancelling} />

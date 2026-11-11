@@ -85,6 +85,7 @@ export const aiSettingsMessages = {
     agentRunCounters: '{steps} steps · {tools} tool calls · {seconds}s active',
     agentUnavailableReason: 'Unavailable capability: {reason}',
     agentSelect: 'Run as',
+    agentProfilesLoading: 'Loading specialists…',
     agentAssistant: 'Assistant',
     agentStartFailed: 'Could not start the specialist run. Your draft is kept; send it again to retry the same request.',
     agentRetryPending: 'A prior specialist request is unresolved. Its exact draft has been restored; retry it or start a new chat.',
@@ -403,6 +404,7 @@ export const aiSettingsMessages = {
     agentRunCounters: '{steps} bước · {tools} lần gọi công cụ · {seconds} giây hoạt động',
     agentUnavailableReason: 'Khả năng không khả dụng: {reason}',
     agentSelect: 'Chạy bằng',
+    agentProfilesLoading: 'Đang tải các tác tử…',
     agentAssistant: 'Trợ lý',
     agentStartFailed: 'Không thể bắt đầu lần chạy tác tử. Bản nháp được giữ lại; hãy gửi lại để thử lại đúng yêu cầu này.',
     agentRetryPending:

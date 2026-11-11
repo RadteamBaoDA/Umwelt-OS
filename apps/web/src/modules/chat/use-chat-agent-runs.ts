@@ -10,7 +10,8 @@ const ACTIVE_RUN_STATUSES = ['queued', 'running', 'waiting_approval'];
  *
  * @param params.conversationId - Conversation whose runs are listed.
  * @param params.profilesWanted - Profiles load only in full mode and once wanted (picker opened) or in agent mode.
- * @param params.agentMode - True when a specialist is selected or a profile run is pending; gates the run queries.
+ * @param params.agentMode - True when a specialist is selected or a profile run is pending; gates the profiles and opened-run queries
+ * (the run list also loads for any full-Chat conversation).
  * @param params.csrfToken - Token for the cancel mutation.
  * @returns Query results, the opened run id with its setter, and the cancel mutation.
  */
@@ -32,7 +33,8 @@ export function useChatAgentRuns(params: {
   const agentRuns = useQuery({
     queryKey: ['agent-runs', 'conversation', conversationId],
     queryFn: () => listAgentRuns({ conversation_id: conversationId!, limit: 25 }),
-    enabled: agentMode && Boolean(conversationId),
+    // Full Chat also lists runs in Assistant mode, so a pending specialist approval still surfaces (R7 follow-up).
+    enabled: (agentMode || mode === 'full') && Boolean(conversationId),
     refetchInterval: (query) => (query.state.data?.items.some((run) => ACTIVE_RUN_STATUSES.includes(run.status)) ? 3000 : false),
   });
   const activeAgentRun = useQuery({
