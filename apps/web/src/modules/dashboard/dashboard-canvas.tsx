@@ -19,7 +19,15 @@ export interface CanvasOperations {
 }
 
 /** Layout editor toolbar (edit mode only): maps session, save and membership operations to its props. */
-export function LayoutEditorBar({ ops, activeDashboard, onOpenPresets, onAddGroup, openAddInitially, initialTemplateId, initialSourceId }: {
+export function LayoutEditorBar({
+  ops,
+  activeDashboard,
+  onOpenPresets,
+  onAddGroup,
+  openAddInitially,
+  initialTemplateId,
+  initialSourceId,
+}: {
   ops: CanvasOperations;
   activeDashboard: Dashboard | null;
   onOpenPresets: () => void;
@@ -62,8 +70,11 @@ export function LayoutEditorBar({ ops, activeDashboard, onOpenPresets, onAddGrou
       groups={activeDashboard?.groups.filter((group) => group.id === session.activeGroupId) ?? []}
       activeGroupId={session.activeGroupId}
       dirtyModalOpen={session.dirtyModalOpen}
-      dirtyDescription={editOrigin && requestedBreakpoint !== editOrigin.breakpoint
-        ? t('mobileBreakpointDirtyWarning', { breakpoint: layoutLabel(editOrigin.breakpoint) }) : undefined}
+      dirtyDescription={
+        editOrigin && requestedBreakpoint !== editOrigin.breakpoint
+          ? t('mobileBreakpointDirtyWarning', { breakpoint: layoutLabel(editOrigin.breakpoint) })
+          : undefined
+      }
       onDirtyModalResolution={save.handleDirtyModalResolution}
       saveError={session.saveError}
       onDismissSaveError={() => session.setSaveError(null)}
@@ -93,16 +104,28 @@ export function DashboardCanvas(props: CanvasProps) {
   const { ops, activeDashboard, visibleInstances, showFirstRun, isAdminViewer } = props;
   const { session, save } = ops;
   const visibleIds = useMemo(() => new Set(visibleInstances.map((instance) => instance.id)), [visibleInstances]);
-  const panelPlacements = useMemo(() => session.draftPlacements.filter((placement) => visibleIds.has(placement.instance_id)),
-    [session.draftPlacements, visibleIds]);
+  const panelPlacements = useMemo(
+    () => session.draftPlacements.filter((placement) => visibleIds.has(placement.instance_id)),
+    [session.draftPlacements, visibleIds],
+  );
+  const { draftPlacements, setReadablePlacements } = session;
   /** Merges the measured panel projection with untouched placements from the other panels. */
-  const setPanelProjection = useCallback((next: DashboardPlacement[] | null) => {
-    const byId = new Map(next?.map((placement) => [placement.instance_id, placement]));
-    session.setReadablePlacements(next
-      ? session.draftPlacements.map((placement) => byId.get(placement.instance_id) ?? placement) : null);
-  }, [session.draftPlacements, session.setReadablePlacements]);
+  const setPanelProjection = useCallback(
+    (next: DashboardPlacement[] | null) => {
+      const byId = new Map(next?.map((placement) => [placement.instance_id, placement]));
+      setReadablePlacements(next ? draftPlacements.map((placement) => byId.get(placement.instance_id) ?? placement) : null);
+    },
+    [draftPlacements, setReadablePlacements],
+  );
   if (showFirstRun && !session.editMode) {
-    return <FirstRunSetup sourceCount={0} csrfToken={props.csrfToken} onPickTopics={props.onPickTopics} onOpenStarterPacks={props.onOpenStarterPacks} />;
+    return (
+      <FirstRunSetup
+        sourceCount={0}
+        csrfToken={props.csrfToken}
+        onPickTopics={props.onPickTopics}
+        onOpenStarterPacks={props.onOpenStarterPacks}
+      />
+    );
   }
   if (!activeDashboard || visibleInstances.length === 0) {
     return (
@@ -112,7 +135,9 @@ export function DashboardCanvas(props: CanvasProps) {
         canEditLayout={session.canEditLayout}
         onOpenPresets={props.onOpenPresets}
         onCreateDashboard={props.onCreateDashboard}
-        onStartEmpty={() => { session.setIsEditMode(true); }}
+        onStartEmpty={() => {
+          session.setIsEditMode(true);
+        }}
       />
     );
   }

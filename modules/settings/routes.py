@@ -229,7 +229,10 @@ async def save_ai(
     return saved
 
 
-@router.post("/ai/discover")
+@router.post(
+    "/ai/discover",
+    dependencies=[Depends(require_budget("model_probe", 10, 60))],
+)
 async def discover_models(
     body: ConnectionDraft, request: Request, session: Session, _owner: OwnerWrite
 ) -> dict[str, list[str]]:
@@ -425,7 +428,11 @@ async def save_web_search(
     return saved
 
 
-@router.post("/web-search/test", response_model=ConnectionTestResult)
+@router.post(
+    "/web-search/test",
+    response_model=ConnectionTestResult,
+    dependencies=[Depends(require_budget("model_probe", 10, 60))],
+)
 async def test_web_search(
     body: WebSearchTest, session: Session, request: Request, _owner: OwnerWrite
 ) -> ConnectionTestResult:
@@ -487,7 +494,11 @@ async def save_n8n(
     return saved
 
 
-@router.post("/n8n/test", response_model=ConnectionTestResult)
+@router.post(
+    "/n8n/test",
+    response_model=ConnectionTestResult,
+    dependencies=[Depends(require_budget("model_probe", 10, 60))],
+)
 async def test_n8n(
     body: N8nTest, session: Session, request: Request, _owner: OwnerWrite
 ) -> ConnectionTestResult:

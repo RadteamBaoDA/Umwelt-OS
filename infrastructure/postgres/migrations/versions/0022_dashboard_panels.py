@@ -3,6 +3,10 @@
 Existing gadgets retain their group, width and height. The first group by the old
 ordering becomes Overview; its saved placements and every other group's placements
 are rebased to each group's own vertical origin.
+
+The partial unique index on ``dashboard_groups`` is built without ``CONCURRENTLY``: the table holds a few
+rows per dashboard, so the brief ``SHARE`` lock is negligible and the build stays inside the revision's
+transaction with the data backfill it guards.
 """
 
 from collections.abc import Sequence

@@ -19,14 +19,21 @@ type ChangePasswordDialogProps = {
   onCloseAutoFocus?: (event: Event) => void;
 };
 
-/** Changes the owner password; the server revokes every other session and rotates this one. */
-// eslint-disable-next-line complexity -- stateful workflow whose branches mirror independent UI/request states (loading, error, conflict, per-step content); extraction into per-state components is tracked as follow-up R3.6 so this refactor stays behaviour-neutral
-export function ChangePasswordDialog({ open, csrfToken, closeLabel, onOpenChange, onCloseAutoFocus }: ChangePasswordDialogProps) {
-  const t = useTranslations('account');
+/**
+ * Password form state and the change request. Clears the fields after success; `reset` also clears the mutation.
+ * @param csrfToken CSRF token for the POST; on success the rotated token replaces the cached session's token.
+ * @returns Field values/setters, the mutation, validation flags and the failure message key.
+ */
+function useChangePassword(csrfToken: string) {
   const queryClient = useQueryClient();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
+  const clear = () => {
+    setCurrent('');
+    setNext('');
+    setConfirm('');
+  };
   const change = useMutation({
     mutationFn: () =>
       apiRequest<{ csrfToken: string }>('/api/v1/auth/password', {
@@ -36,14 +43,9 @@ export function ChangePasswordDialog({ open, csrfToken, closeLabel, onOpenChange
       }),
     onSuccess: (state) => {
       queryClient.setQueryData<Record<string, unknown>>(SESSION_KEY, (old) => (old ? { ...old, csrfToken: state.csrfToken } : old));
-      setCurrent('');
-      setNext('');
-      setConfirm('');
+      clear();
     },
   });
-  const tooShort = next.length > 0 && next.length < 12;
-  const mismatch = confirm.length > 0 && confirm !== next;
-  const ready = current !== '' && next.length >= 12 && confirm === next;
   const failure =
     change.error instanceof ApiError && change.error.status === 429
       ? 'passwordTooMany'
@@ -52,17 +54,37 @@ export function ChangePasswordDialog({ open, csrfToken, closeLabel, onOpenChange
         : change.error
           ? (apiFailureKey(change.error) ?? 'requestFailed')
           : null;
+  const reset = () => {
+    change.reset();
+    clear();
+  };
+  return {
+    current,
+    setCurrent,
+    next,
+    setNext,
+    confirm,
+    setConfirm,
+    change,
+    failure,
+    reset,
+    tooShort: next.length > 0 && next.length < 12,
+    mismatch: confirm.length > 0 && confirm !== next,
+    ready: current !== '' && next.length >= 12 && confirm === next,
+  };
+}
+
+/** Changes the owner password; the server revokes every other session and rotates this one. */
+export function ChangePasswordDialog({ open, csrfToken, closeLabel, onOpenChange, onCloseAutoFocus }: ChangePasswordDialogProps) {
+  const t = useTranslations('account');
+  const { current, setCurrent, next, setNext, confirm, setConfirm, change, failure, reset, tooShort, mismatch, ready } =
+    useChangePassword(csrfToken);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (ready && !change.isPending) change.mutate();
   };
   const handleOpenChange = (value: boolean) => {
-    if (!value) {
-      change.reset();
-      setCurrent('');
-      setNext('');
-      setConfirm('');
-    }
+    if (!value) reset();
     onOpenChange(value);
   };
 

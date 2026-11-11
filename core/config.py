@@ -212,6 +212,7 @@ class Settings(BaseSettings):
     session_idle_hours: int = Field(default=8, gt=0, le=720, validation_alias="SESSION_IDLE_HOURS")
     # --- end auth hardening ---
     # Enable only after W4 scope review and V1 security validation; legacy/operator access stays bootstrap-only.
+    # Owner decision 2026-11-11 (audit B32): multi-workspace stays on the roadmap; keep the code, keep this off.
     multi_workspace_enabled: bool = Field(default=False, validation_alias="MULTI_WORKSPACE_ENABLED")
     # Phone prompt picker (QR). Off by default: the anonymous /pick phone routes are LAN-reachable.
     pick_enabled: bool = Field(default=False, validation_alias="PICK_ENABLED")

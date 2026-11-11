@@ -444,6 +444,37 @@ function useBuiltinWizardState() {
 }
 
 /**
+ * Enables the picked built-in with the declared use, AI options, realtime override and applicable options; the
+ * server records the terms acknowledgement.
+ * @returns The created source id, or the localized message key for the most specific failure.
+ */
+async function enablePicked(
+  selected: BuiltinSource,
+  state: ReturnType<typeof useBuiltinWizardState>,
+  csrfToken: string,
+): Promise<{ sourceId: string } | { errorKey: ReturnType<typeof builtinEnableErrorKey> }> {
+  const options = {
+    ...state.aiOptions,
+    ...(state.realtimeModeOverride ? { realtime_mode: state.realtimeModeOverride } : {}),
+    ...applicableOptionPayload(selected, state.optionValues),
+  };
+  try {
+    const result = await enableBuiltinSource(selected.id, state.use, csrfToken, undefined, options);
+    return result.source_id ? { sourceId: result.source_id } : { errorKey: 'builtinErrorGeneric' };
+  } catch (cause) {
+    return { errorKey: builtinEnableErrorKey(cause) };
+  }
+}
+
+type BuiltinWizardProps = {
+  onClose: () => void;
+  onChanged: () => void;
+  shapeFilter?: DataShape[];
+  onClearFilter?: () => void;
+  onAddConnector?: () => void;
+};
+
+/**
  * Three-step dialog for adding one built-in source: pick, confirm terms and declared use, then enable and prove a fetch.
  * A built-in that already has a source (`source_id` set, active or paused) is shown disabled with an "Added" badge;
  * resume it from the table instead. Enabling records the terms acknowledgement server-side. If the test fetch has not
@@ -451,19 +482,7 @@ function useBuiltinWizardState() {
  * When a shape filter leaves no built-in at all (for example Weather), the step points to "Connect a source" and
  * `onAddConnector` (when given) opens that wizard.
  */
-export function BuiltinWizard({
-  onClose,
-  onChanged,
-  shapeFilter,
-  onClearFilter,
-  onAddConnector,
-}: {
-  onClose: () => void;
-  onChanged: () => void;
-  shapeFilter?: DataShape[];
-  onClearFilter?: () => void;
-  onAddConnector?: () => void;
-}) {
+export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, onAddConnector }: BuiltinWizardProps) {
   const t = useTranslations('sources');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
@@ -488,26 +507,15 @@ export function BuiltinWizard({
       return true;
     }
     state.setError(null);
-    try {
-      const options = {
-        ...aiOptions,
-        ...(realtimeModeOverride ? { realtime_mode: realtimeModeOverride } : {}),
-        ...applicableOptionPayload(selected, optionValues),
-      };
-      const result = await enableBuiltinSource(selected.id, use, csrfToken, undefined, options);
-      if (!result.source_id) {
-        state.setError(t('builtinErrorGeneric'));
-        return false;
-      }
-      state.setCreatedId(result.source_id);
-      refresh();
-      void runTest(result.source_id);
-      return true;
-    } catch (cause) {
-      /** Maps a failed enable to the most specific localized message. */
-      state.setError(t(builtinEnableErrorKey(cause)));
+    const outcome = await enablePicked(selected, state, csrfToken);
+    if ('errorKey' in outcome) {
+      state.setError(t(outcome.errorKey));
       return false;
     }
+    state.setCreatedId(outcome.sourceId);
+    refresh();
+    void runTest(outcome.sourceId);
+    return true;
   }
 
   /** Pauses and archives the unverified source this dialog created, then closes. */
@@ -519,16 +527,15 @@ export function BuiltinWizard({
     onClose();
   }
 
-  const steps = [
-    { id: 'pick', title: t('stepBuiltinPick'), valid: selected !== null && selected.source_id === null },
-    { id: 'terms', title: t('stepBuiltinTerms'), valid: true },
-    { id: 'verify', title: t('stepVerify'), valid: verified },
-  ];
   return (
     <WizardShell
       title={t('wizardTitleBuiltin')}
       mode="add"
-      steps={steps}
+      steps={[
+        { id: 'pick', title: t('stepBuiltinPick'), valid: selected !== null && selected.source_id === null },
+        { id: 'terms', title: t('stepBuiltinTerms'), valid: true },
+        { id: 'verify', title: t('stepVerify'), valid: verified },
+      ]}
       stepIndex={index}
       onStepChange={setIndex}
       busy={testing}

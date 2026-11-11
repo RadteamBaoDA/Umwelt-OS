@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Check, Minus, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -444,6 +444,32 @@ function AiSettingsFooter({ vm }: { vm: AISettingsWorkspaceVm }) {
   );
 }
 
+/**
+ * Builds the PUT body for AI settings. Credential actions and new keys come from the per-provider secret state
+ * (never from the saved settings); web-search credentials are left unchanged here.
+ */
+function aiSaveBody(value: AISettings, secrets: Record<string, ProviderSecret>) {
+  return {
+    expected_revision: value.configuration_revision,
+    providers: value.providers.map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      label: item.label,
+      base_url: item.base_url || null,
+      models: item.models ?? [],
+      credential_action: secrets[item.id]?.action ?? 'unchanged',
+      api_key: secrets[item.id]?.key || null,
+    })),
+    web_search_provider: value.web_search_provider,
+    web_search_endpoint: value.web_search_endpoint || null,
+    web_search_credential_action: 'unchanged',
+    web_search_api_key: null,
+    defaults: value.defaults ?? {},
+    privacy: value.privacy,
+    request_timeout_seconds: value.request_timeout_seconds,
+  };
+}
+
 /** Declares the AI settings queries, local draft/secret state, stored test results and the save mutation. */
 function useAiSettingsState() {
   const t = useTranslations('aiSettings');
@@ -490,25 +516,7 @@ function useAiSettingsState() {
       apiRequest<AISettings>('/api/v1/settings/ai', {
         method: 'PUT',
         headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          expected_revision: value.configuration_revision,
-          providers: value.providers.map((item) => ({
-            id: item.id,
-            kind: item.kind,
-            label: item.label,
-            base_url: item.base_url || null,
-            models: item.models ?? [],
-            credential_action: secrets[item.id]?.action ?? 'unchanged',
-            api_key: secrets[item.id]?.key || null,
-          })),
-          web_search_provider: value.web_search_provider,
-          web_search_endpoint: value.web_search_endpoint || null,
-          web_search_credential_action: 'unchanged',
-          web_search_api_key: null,
-          defaults: value.defaults ?? {},
-          privacy: value.privacy,
-          request_timeout_seconds: value.request_timeout_seconds,
-        }),
+        body: JSON.stringify(aiSaveBody(value, secrets)),
       }),
     onSuccess: (value) => {
       setDraft(null);
@@ -551,6 +559,72 @@ function useAiSettingsState() {
     setRestoredSecret,
     csrfToken,
   };
+}
+
+/**
+ * While the AI settings draft is dirty or saving, warns on unload, confirms same-origin navigation (Navigation API,
+ * or a capture-phase link click fallback) and clears the stored draft when leaving is accepted. The auth-ending
+ * event always lets navigation through.
+ * @param allowNavigation Set once leaving has been accepted, so later events pass without asking again.
+ * @param confirmText Localized "discard changes?" prompt.
+ */
+function useDirtyNavigationGuard(dirty: boolean, pending: boolean, allowNavigation: MutableRefObject<boolean>, confirmText: string) {
+  useEffect(() => {
+    if (!dirty && !pending) return;
+    /** Prevents browser navigation while unsaved AI settings remain. */
+    const warn = (event: BeforeUnloadEvent) => {
+      if (allowNavigation.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    /** Allows the auth-ending navigation and removes the saved AI settings draft snapshot. */
+    const authEnding = () => {
+      allowNavigation.current = true;
+      sessionStorage.removeItem(draftStorageKey);
+    };
+    const navigationApi = (window as Window & { navigation?: EventTarget }).navigation;
+    /** Intercepts guarded route navigation while the settings draft is dirty. */
+    const guardNavigation = (event: Event) => {
+      if (allowNavigation.current) return;
+      const navigateEvent = event as Event & { destination?: { url?: string } };
+      let sameOrigin = false;
+      try {
+        sameOrigin = Boolean(navigateEvent.destination?.url && new URL(navigateEvent.destination.url).origin === window.location.origin);
+      } catch {
+        sameOrigin = false;
+      }
+      if (!sameOrigin || !event.cancelable) return;
+      if (pending || !window.confirm(confirmText)) {
+        event.preventDefault();
+        return;
+      }
+      sessionStorage.removeItem(draftStorageKey);
+      allowNavigation.current = true;
+    };
+    /** Intercepts eligible links so leaving a dirty settings draft requires confirmation. */
+    const guardLinks = (event: MouseEvent) => {
+      if (allowNavigation.current) return;
+      if (navigationApi) return;
+      const anchor = (event.target as HTMLElement | null)?.closest('a[href]');
+      if (!(anchor instanceof HTMLAnchorElement) || anchor.target || anchor.origin !== window.location.origin) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (pending || !window.confirm(confirmText)) return;
+      sessionStorage.removeItem(draftStorageKey);
+      allowNavigation.current = true;
+      window.location.assign(anchor.href);
+    };
+    window.addEventListener('beforeunload', warn);
+    window.addEventListener('umwelt:auth-ending', authEnding);
+    navigationApi?.addEventListener('navigate', guardNavigation);
+    document.addEventListener('click', guardLinks, true);
+    return () => {
+      window.removeEventListener('beforeunload', warn);
+      window.removeEventListener('umwelt:auth-ending', authEnding);
+      navigationApi?.removeEventListener('navigate', guardNavigation);
+      document.removeEventListener('click', guardLinks, true);
+    };
+  }, [dirty, pending, confirmText, allowNavigation]);
 }
 
 /** Restores a same-revision draft once during render, persists the dirty draft to sessionStorage and guards navigation while unsaved changes remain. */
@@ -615,82 +689,18 @@ function useAiDraftPersistence(p: ReturnType<typeof useAiSettingsState>) {
       sessionStorage.removeItem(draftStorageKey);
     }
   }, [query.data, restoredDraft, dirty, draft, secrets, save.isPending]);
-  useEffect(() => {
-    if (!dirty && !save.isPending) return;
-    /** Prevents browser navigation while unsaved AI settings remain. */
-    const warn = (event: BeforeUnloadEvent) => {
-      if (allowNavigation.current) return;
-      event.preventDefault();
-      event.returnValue = '';
-    };
-    /** Allows the auth-ending navigation and removes the saved AI settings draft snapshot. */
-    const authEnding = () => {
-      allowNavigation.current = true;
-      sessionStorage.removeItem(draftStorageKey);
-    };
-    const navigationApi = (window as Window & { navigation?: EventTarget }).navigation;
-    /** Intercepts guarded route navigation while the settings draft is dirty. */
-    const guardNavigation = (event: Event) => {
-      if (allowNavigation.current) return;
-      const navigateEvent = event as Event & { destination?: { url?: string } };
-      let sameOrigin = false;
-      try {
-        sameOrigin = Boolean(navigateEvent.destination?.url && new URL(navigateEvent.destination.url).origin === window.location.origin);
-      } catch {
-        sameOrigin = false;
-      }
-      if (!sameOrigin || !event.cancelable) return;
-      if (save.isPending || !window.confirm(t('discardChanges'))) {
-        event.preventDefault();
-        return;
-      }
-      sessionStorage.removeItem(draftStorageKey);
-      allowNavigation.current = true;
-    };
-    /** Intercepts eligible links so leaving a dirty settings draft requires confirmation. */
-    const guardLinks = (event: MouseEvent) => {
-      if (allowNavigation.current) return;
-      if (navigationApi) return;
-      const anchor = (event.target as HTMLElement | null)?.closest('a[href]');
-      if (!(anchor instanceof HTMLAnchorElement) || anchor.target || anchor.origin !== window.location.origin) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (save.isPending || !window.confirm(t('discardChanges'))) return;
-      sessionStorage.removeItem(draftStorageKey);
-      allowNavigation.current = true;
-      window.location.assign(anchor.href);
-    };
-    window.addEventListener('beforeunload', warn);
-    window.addEventListener('umwelt:auth-ending', authEnding);
-    navigationApi?.addEventListener('navigate', guardNavigation);
-    document.addEventListener('click', guardLinks, true);
-    return () => {
-      window.removeEventListener('beforeunload', warn);
-      window.removeEventListener('umwelt:auth-ending', authEnding);
-      navigationApi?.removeEventListener('navigate', guardNavigation);
-      document.removeEventListener('click', guardLinks, true);
-    };
-  }, [dirty, save.isPending, t, allowNavigation]);
+  useDirtyNavigationGuard(dirty, save.isPending, allowNavigation, t('discardChanges'));
 
   return p;
 }
 
-/** Declares discovery, embedding/draft probes and per-model test mutations with their result bookkeeping. */
-function useAiModelActions(p: ReturnType<typeof useAiDraftPersistence>) {
-  const {
-    t,
-    client,
-    query,
-    setDraft,
-    secrets,
-    setDiscoveringId,
-    setDiscoverError,
-    setDiscovered,
-    setModelTests,
-    setTestDetails,
-    csrfToken,
-  } = p;
-  const savedIds = (query.data?.providers ?? []).map((item) => item.id);
+/**
+ * Model discovery for one provider (fills the transient picker list; models join the draft via the Add row) and
+ * the OpenRouter browse call. A saved provider is addressed by id and its stored key; a draft one by its typed key.
+ * @param savedIds Provider ids that already exist server-side.
+ */
+function useAiDiscovery(p: ReturnType<typeof useAiDraftPersistence>, savedIds: string[]) {
+  const { t, query, secrets, setDiscoveringId, setDiscoverError, setDiscovered, csrfToken } = p;
   const discover = useMutation({
     mutationFn: (provider: ProviderRead) =>
       apiRequest<{ model_ids: string[] }>('/api/v1/settings/ai/discover', {
@@ -731,55 +741,15 @@ function useAiModelActions(p: ReturnType<typeof useAiDraftPersistence>) {
           limit,
         }),
       });
-  /** Probes the saved embedding default through the role endpoint, the only path that persists embeddings evidence. */
-  const embeddingProbe = useMutation({
-    mutationFn: () =>
-      apiRequest<Capability>('/api/v1/settings/models/embedding/test', {
-        method: 'POST',
-        headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ capability: 'embeddings' }),
-      }),
-    // Refetch even on failure so the chip shows the stored outcome.
-    onSettled: () => client.invalidateQueries({ queryKey: ['ai-settings'] }),
-  });
-  const draftProbe = useMutation({
-    mutationFn: ({
-      role,
-      mapping,
-      capability,
-      provider,
-    }: {
-      role: DefaultSlot;
-      mapping: Mapping;
-      capability: string;
-      provider: ProviderRead | undefined;
-    }) =>
-      apiRequest<Capability>('/api/v1/settings/models/draft-test', {
-        method: 'POST',
-        headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          role,
-          provider_id: provider && savedIds.includes(provider.id) ? provider.id : undefined,
-          base_url: provider?.base_url,
-          kind: provider?.kind,
-          api_key: provider ? (secrets[provider.id]?.key ?? '') : '',
-          model: mapping.model,
-          version: mapping.version,
-          capability,
-        }),
-      }),
-    // A supported embeddings probe records the vector size on the embedding default draft.
-    onSuccess: (data, { role, mapping }) => {
-      if (data.capability === 'embeddings' && data.result === 'supported' && typeof data.dimensions === 'number')
-        setDraft((current) => {
-          const from = current ?? query.data; // Ignore a late probe for a model the owner has since replaced.
-          const picked = from?.defaults?.[role];
-          return from && picked?.model === mapping.model
-            ? { ...from, defaults: { ...from.defaults, [role]: { ...picked, dimensions: data.dimensions } } }
-            : current;
-        });
-    },
-  });
+  return { discover, browseOpenRouter };
+}
+
+/**
+ * Per-model test mutation plus its result bookkeeping (local state first, then the stored result row).
+ * @param savedIds Provider ids that already exist server-side.
+ */
+function useAiModelTest(p: ReturnType<typeof useAiDraftPersistence>, savedIds: string[]) {
+  const { client, query, secrets, setModelTests, setTestDetails, csrfToken } = p;
   /**
    * Tests one provider model. A saved provider's saved chat (llm) model is probed through the role endpoint so the
    * streaming (and best-effort tools) evidence the chat run requires is stored; everything else uses the transient
@@ -856,6 +826,65 @@ function useAiModelActions(p: ReturnType<typeof useAiDraftPersistence>) {
       .then(() => setModelTests((current) => withoutKey(current, key)))
       .catch(() => undefined);
   }
+
+  return { testModel, setDetail, finishTest };
+}
+
+/** Declares discovery, embedding/draft probes and per-model test mutations with their result bookkeeping. */
+function useAiModelActions(p: ReturnType<typeof useAiDraftPersistence>) {
+  const { client, query, setDraft, secrets, csrfToken } = p;
+  const savedIds = (query.data?.providers ?? []).map((item) => item.id);
+  const { discover, browseOpenRouter } = useAiDiscovery(p, savedIds);
+  /** Probes the saved embedding default through the role endpoint, the only path that persists embeddings evidence. */
+  const embeddingProbe = useMutation({
+    mutationFn: () =>
+      apiRequest<Capability>('/api/v1/settings/models/embedding/test', {
+        method: 'POST',
+        headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capability: 'embeddings' }),
+      }),
+    // Refetch even on failure so the chip shows the stored outcome.
+    onSettled: () => client.invalidateQueries({ queryKey: ['ai-settings'] }),
+  });
+  const draftProbe = useMutation({
+    mutationFn: ({
+      role,
+      mapping,
+      capability,
+      provider,
+    }: {
+      role: DefaultSlot;
+      mapping: Mapping;
+      capability: string;
+      provider: ProviderRead | undefined;
+    }) =>
+      apiRequest<Capability>('/api/v1/settings/models/draft-test', {
+        method: 'POST',
+        headers: { ...csrfHeaders(csrfToken), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          role,
+          provider_id: provider && savedIds.includes(provider.id) ? provider.id : undefined,
+          base_url: provider?.base_url,
+          kind: provider?.kind,
+          api_key: provider ? (secrets[provider.id]?.key ?? '') : '',
+          model: mapping.model,
+          version: mapping.version,
+          capability,
+        }),
+      }),
+    // A supported embeddings probe records the vector size on the embedding default draft.
+    onSuccess: (data, { role, mapping }) => {
+      if (data.capability === 'embeddings' && data.result === 'supported' && typeof data.dimensions === 'number')
+        setDraft((current) => {
+          const from = current ?? query.data; // Ignore a late probe for a model the owner has since replaced.
+          const picked = from?.defaults?.[role];
+          return from && picked?.model === mapping.model
+            ? { ...from, defaults: { ...from.defaults, [role]: { ...picked, dimensions: data.dimensions } } }
+            : current;
+        });
+    },
+  });
+  const { testModel, setDetail, finishTest } = useAiModelTest(p, savedIds);
 
   return { ...p, savedIds, discover, browseOpenRouter, embeddingProbe, draftProbe, testModel, setDetail, finishTest };
 }

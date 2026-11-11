@@ -61,6 +61,10 @@ ALLOWED: dict[str, dict[str, str]] = {
         "stored-generated-column": "one-off document_chunks.content_tsv rewrite, documented in the revision "
         "docstring and docs/operations.md (maintenance window)",
     },
+    "0022_dashboard_panels": {
+        "index-not-concurrent": "dashboard_groups holds a few rows per dashboard; the partial unique index must "
+        "build in the same transaction as the Overview backfill (revision docstring)",
+    },
 }
 
 VOLATILE_FUNCTIONS = (

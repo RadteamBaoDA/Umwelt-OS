@@ -1,3 +1,12 @@
+<!-- audit-remediation-status:start -->
+## Repository audit remediation - 2026-11-11, branch feature/fix-ui
+
+- Owner-approved items from `docs/audit/2026-11-10-audit.html` are fixed: probe rate limits (connectors, settings discover/web-search/n8n tests), MultiFernet key ring for every credential cipher, CSRF secret required outside relaxed mode, dashboard catalog auth, workspace providers and the full message catalog scoped to `app/(workspace)` (landing first-load 273 -> 230 KB), shared `useSession`, dead code and 225 unused message keys removed, `bbd` names renamed where not persisted, docs/CI/compose/skill-mirror consistency.
+- Multi-workspace (B32): owner keeps it on the roadmap. `MULTI_WORKSPACE_ENABLED` stays off until W4 scope review and V1 security validation; the code is kept, not removed.
+- Migration `0022_dashboard_panels` builds its small partial unique index inside the revision transaction; the linter allows it with the reason recorded in `scripts/lint_migrations.py`.
+- Validation: pytest (7061 passed), ruff, mypy, lint-imports, function-length/file-size/GenUI parity gates, ESLint, tsc, Vitest, Prettier on changed files, production build and bundle budget all pass. Docker acceptance, Playwright and live provider calls were not run.
+<!-- audit-remediation-status:end -->
+
 <!-- dashboard-panel-status:start -->
 ## Dashboard Overview and independent panels - 2026-11-07, code/build complete
 

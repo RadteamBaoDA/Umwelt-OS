@@ -91,6 +91,8 @@ branch = true
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Vendored agent skills (third-party example scripts) are not application code.
+extend-exclude = [".claude", ".agents"]
 
 [tool.ruff.lint]
 # Quality gate (plan 3.3 R0). Rule families and why they are on:

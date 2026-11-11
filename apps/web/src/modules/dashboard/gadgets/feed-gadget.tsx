@@ -224,9 +224,135 @@ function useFeedShowMore(items: FeedStreamItem[], view: FeedView, filterKey: str
   return useShowMore(items, view === 'cards' ? 6 : 5, `${filterKey}|${view}`);
 }
 
+/**
+ * Feed toolbar wired to the transient filters: unread toggle, items-per-day spark (2+ days only), the filter
+ * popover (hidden when `showFilters` is false), select mode, refresh and the per-instance view choice.
+ */
+function FeedStreamToolbar(props: {
+  filters: ReturnType<typeof useFeedFilters>;
+  unreadCount: number;
+  volume: ReturnType<typeof bucketByDay>;
+  showFilters: boolean;
+  sourceIds: string[];
+  sourceNames: { id: string; name: string }[] | undefined;
+  activeFilterCount: number;
+  filtering: boolean;
+  canSelect: boolean;
+  onToggleSelect: () => void;
+  refreshing: boolean;
+  onRefresh: () => void;
+  view: FeedView;
+  setView: (view: FeedView) => void;
+}) {
+  const t = useTranslations('dashboard');
+  const { filters, volume } = props;
+  return (
+    <FeedToolbar
+      onlyUnread={filters.onlyUnread}
+      toggleUnread={() => filters.setOnlyUnread((prev) => !prev)}
+      unreadCount={props.unreadCount}
+      volume={
+        volume.length >= 2 && (
+          <span className="w-20 shrink-0" title={t('feedVolume')}>
+            <Sparkline data={volume} height={24} width={80} line />
+          </span>
+        )
+      }
+      filters={
+        props.showFilters && (
+          <FeedFilterPopover
+            searchText={filters.searchText}
+            setSearchText={filters.setSearchText}
+            sourceIds={props.sourceIds}
+            sourceFilter={filters.sourceFilter}
+            setSourceFilter={filters.setSourceFilter}
+            sourceNames={props.sourceNames}
+            language={filters.language}
+            setLanguage={filters.setLanguage}
+            timeWindow={filters.timeWindow}
+            setTimeWindow={filters.setTimeWindow}
+            activeFilterCount={props.activeFilterCount}
+            filtering={props.filtering}
+          />
+        )
+      }
+      canSelect={props.canSelect}
+      selectMode={filters.selectMode}
+      toggleSelectMode={props.onToggleSelect}
+      refreshing={props.refreshing}
+      onRefresh={props.onRefresh}
+      view={props.view}
+      setView={props.setView}
+    />
+  );
+}
+
+/**
+ * Bulk-selection bar, hide/undo bar and the notice for selections whose items left the feed. Hiding a
+ * selection clears it; undo restores the last hidden batch.
+ */
+function FeedModerationBars({
+  moderation,
+  selected,
+  clearSelected,
+  staleCount,
+  undoRef,
+  onAskAbout,
+}: {
+  moderation: ReturnType<typeof useFeedModeration>;
+  selected: SelectedTelegramIdentity[];
+  clearSelected: () => void;
+  staleCount: number;
+  undoRef: React.RefObject<HTMLButtonElement | null>;
+  onAskAbout: FeedRowContext['onAskAbout'];
+}) {
+  const t = useTranslations('dashboard');
+  const { interactionMutation } = moderation;
+  return (
+    <>
+      <FeedBulkBar
+        items={selected}
+        interactionPending={interactionMutation.isPending}
+        onAskAbout={onAskAbout}
+        onInteract={(change) => interactionMutation.mutate(change)}
+        onHide={(items) => {
+          moderation.setHidden(items, true);
+          clearSelected();
+        }}
+        onClear={clearSelected}
+      />
+      <FeedUndoBar
+        lastHidden={moderation.lastHidden}
+        undoFailed={moderation.undoFailed}
+        hideFailed={moderation.hideFailed}
+        interactionPending={interactionMutation.isPending}
+        undoRef={undoRef}
+        onUndo={() => moderation.setHidden(moderation.lastHidden, false)}
+      />
+      {staleCount > 0 && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t('selectionChanged', { count: staleCount })}
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * Derived feed signals: reports freshness and the item count to the gadget frame footer, notifies the parent of
+ * the unread count, and builds the client-side items-per-day series (the spark shows only with 2+ days).
+ */
+function useFeedSignals(feedItems: FeedStreamItem[], onUnreadCountChange: FeedGadgetProps['onUnreadCountChange']) {
+  const t = useTranslations('dashboard');
+  const unreadCount = feedItems.filter((i) => !i.read).length;
+  useReportGadgetFreshness(newestCollectedAt(feedItems), feedItems.length > 0 ? t('gadgetItemCount', { count: feedItems.length }) : null);
+  const volume = useMemo(() => bucketByDay(feedItems.map((i) => i.timestamp)), [feedItems]);
+  React.useEffect(() => onUnreadCountChange?.(unreadCount), [onUnreadCountChange, unreadCount]);
+  return { unreadCount, volume };
+}
+
 /** Renders the scrollable feed item stream with selection and Ask AI affordances. */
 function FeedStream({ instance, initialItems, onUnreadCountChange }: FeedGadgetProps) {
-  const t = useTranslations('dashboard');
   const { openDrawer } = useChatController();
   const definition = instance.definition;
   const isTelegram = definition.renderer === 'telegram_feed';
@@ -235,27 +361,21 @@ function FeedStream({ instance, initialItems, onUnreadCountChange }: FeedGadgetP
   const filters = useFeedFilters();
   // Layout choice is per gadget instance and survives reloads (unlike the transient filters).
   const [view, setView] = useLocalPref<FeedView>(`umwelt.dashboard.feedView.${instance.id}`, 'list', FEED_VIEWS);
-  const { onlyUnread, selectMode, searchText, sourceFilter, language, timeWindow } = filters;
+  const { onlyUnread, selectMode, sourceFilter, language, timeWindow } = filters;
   const [selectedTelegram, setSelectedTelegram] = useState<Record<string, SelectedTelegramIdentity>>({});
   const { docsQuery, sourcesQuery } = useFeedQueries({ sourceIds, channelIds, language, windowSince: filters.windowSince });
   const undoRef = useRef<HTMLButtonElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const moderation = useFeedModeration(instance.id, { undoRef, rootRef });
-  const { interactionMutation } = moderation;
 
   const feedItems = useFeedItems(initialItems, docsQuery, definition.renderer);
-  const unreadCount = feedItems.filter((i) => !i.read).length;
-  // Item count moves to the frame footer next to freshness.
-  useReportGadgetFreshness(newestCollectedAt(feedItems), feedItems.length > 0 ? t('gadgetItemCount', { count: feedItems.length }) : null);
-  // Client-side items-per-day series from the loaded items; the spark shows only with 2+ days.
-  const volume = useMemo(() => bucketByDay(feedItems.map((i) => i.timestamp)), [feedItems]);
+  const { unreadCount, volume } = useFeedSignals(feedItems, onUnreadCountChange);
   const selectedTelegramItems = Object.values(selectedTelegram);
   const { needle, filtering, activeFilterCount, serverFiltered } = describeFilters(filters);
   const displayedItems = filterFeedItems(feedItems, { hiddenIds: moderation.hiddenIds, onlyUnread, sourceFilter, needle });
   const more = useFeedShowMore(displayedItems, view, `${sourceFilter}|${needle}|${onlyUnread}|${language}|${timeWindow}`);
   // Search/language/time controls are noise on a settled empty feed with nothing active to clear.
   const showFilters = docsQuery.isLoading || feedItems.length > 0 || filtering || serverFiltered;
-  React.useEffect(() => onUnreadCountChange?.(unreadCount), [onUnreadCountChange, unreadCount]);
   const serverScope = `${sourceIds.join()}|${channelIds.join()}|${language}|${timeWindow}`;
   useAutoFetchWhenEmpty({
     docsQuery,
@@ -272,11 +392,10 @@ function FeedStream({ instance, initialItems, onUnreadCountChange }: FeedGadgetP
     selectMode,
     selected: selectedTelegram,
     setSelected: setSelectedTelegram,
-    interactionPending: interactionMutation.isPending,
-    onInteract: (change) => interactionMutation.mutate(change),
+    interactionPending: moderation.interactionMutation.isPending,
+    onInteract: (change) => moderation.interactionMutation.mutate(change),
     onAskAbout: askAbout,
   };
-  const staleCount = staleSelections(selectedTelegramItems, feedItems).length;
 
   return (
     <div
@@ -284,38 +403,17 @@ function FeedStream({ instance, initialItems, onUnreadCountChange }: FeedGadgetP
       tabIndex={-1}
       className="flex h-full flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card px-[var(--gadget-pad)] pb-[var(--gadget-pad)] pt-2 text-card-foreground focus:outline-none"
     >
-      <FeedToolbar
-        onlyUnread={onlyUnread}
-        toggleUnread={() => filters.setOnlyUnread((prev) => !prev)}
+      <FeedStreamToolbar
+        filters={filters}
         unreadCount={unreadCount}
-        volume={
-          volume.length >= 2 && (
-            <span className="w-20 shrink-0" title={t('feedVolume')}>
-              <Sparkline data={volume} height={24} width={80} line />
-            </span>
-          )
-        }
-        filters={
-          showFilters && (
-            <FeedFilterPopover
-              searchText={searchText}
-              setSearchText={filters.setSearchText}
-              sourceIds={sourceIds}
-              sourceFilter={sourceFilter}
-              setSourceFilter={filters.setSourceFilter}
-              sourceNames={sourcesQuery.data?.items}
-              language={language}
-              setLanguage={filters.setLanguage}
-              timeWindow={timeWindow}
-              setTimeWindow={filters.setTimeWindow}
-              activeFilterCount={activeFilterCount}
-              filtering={filtering}
-            />
-          )
-        }
+        volume={volume}
+        showFilters={showFilters}
+        sourceIds={sourceIds}
+        sourceNames={sourcesQuery.data?.items}
+        activeFilterCount={activeFilterCount}
+        filtering={filtering}
         canSelect={feedItems.some((item) => item.documentVersionId && item.sourceId)}
-        selectMode={selectMode}
-        toggleSelectMode={() => {
+        onToggleSelect={() => {
           filters.setSelectMode((prev) => !prev);
           setSelectedTelegram({});
         }}
@@ -330,30 +428,14 @@ function FeedStream({ instance, initialItems, onUnreadCountChange }: FeedGadgetP
         value={sourceFilter}
         onChange={filters.setSourceFilter}
       />
-      <FeedBulkBar
-        items={selectedTelegramItems}
-        interactionPending={interactionMutation.isPending}
-        onAskAbout={askAbout}
-        onInteract={(change) => interactionMutation.mutate(change)}
-        onHide={(items) => {
-          moderation.setHidden(items, true);
-          setSelectedTelegram({});
-        }}
-        onClear={() => setSelectedTelegram({})}
-      />
-      <FeedUndoBar
-        lastHidden={moderation.lastHidden}
-        undoFailed={moderation.undoFailed}
-        hideFailed={moderation.hideFailed}
-        interactionPending={interactionMutation.isPending}
+      <FeedModerationBars
+        moderation={moderation}
+        selected={selectedTelegramItems}
+        clearSelected={() => setSelectedTelegram({})}
+        staleCount={staleSelections(selectedTelegramItems, feedItems).length}
         undoRef={undoRef}
-        onUndo={() => moderation.setHidden(moderation.lastHidden, false)}
+        onAskAbout={askAbout}
       />
-      {staleCount > 0 && (
-        <p role="status" className="text-xs text-muted-foreground">
-          {t('selectionChanged', { count: staleCount })}
-        </p>
-      )}
       <FeedStatus
         docsQuery={docsQuery}
         feedItemCount={feedItems.length}

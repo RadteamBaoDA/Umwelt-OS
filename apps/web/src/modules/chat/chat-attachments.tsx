@@ -52,6 +52,74 @@ function uploadErrorKey(err: unknown): 'attachmentTooBig' | 'attachmentType' | '
 }
 
 /**
+ * Polls one accepted Document until ingest settles. Only a 404, too many consecutive failures or the overall
+ * deadline fail it; other errors back off exponentially. Returns silently once `signal` aborts.
+ * @param onSettle Receives the final patch for the entry.
+ * @param timedOut Localized message for the deadline failure.
+ */
+async function pollAttachment(
+  documentId: string,
+  signal: AbortSignal,
+  onSettle: (next: Partial<AttachmentEntry>) => void,
+  timedOut: string,
+): Promise<void> {
+  let failures = 0;
+  const deadline = Date.now() + MAX_POLL_MS;
+  while (!signal.aborted) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS * 2 ** failures));
+    if (signal.aborted) return;
+    try {
+      const doc = await getChatAttachment(documentId, signal);
+      failures = 0;
+      if (doc.status !== 'pending') return onSettle({ doc, state: doc.status });
+      if (Date.now() > deadline) return onSettle({ state: 'failed', error: timedOut });
+    } catch (err: unknown) {
+      if (signal.aborted) return;
+      if ((err instanceof ApiError && err.status === 404) || ++failures > MAX_POLL_FAILURES) return onSettle({ state: 'failed' });
+    }
+  }
+}
+
+/**
+ * Derives the send selection and why a send must wait. Only `ready` attachments with a version become items;
+ * the first blocking reason wins (unavailable, still uploading, failed, then local-only which offers re-attach).
+ */
+function sendState(entries: AttachmentEntry[], unavailable: boolean, t: (key: AttachmentBlockKey) => string) {
+  const items: Item[] = entries
+    .filter((e) => e.state === 'ready' && e.doc?.document_version_id)
+    .map((e) => ({ sourceId: e.doc!.source_id, documentId: e.doc!.document_id, documentVersionId: e.doc!.document_version_id! }));
+  let sendBlock: string | null = null;
+  let showReattach = false;
+  if (unavailable && entries.length) sendBlock = t('attachmentUnavailableBlock');
+  else if (entries.some((e) => e.state === 'uploading' || e.state === 'pending')) sendBlock = t('attachmentPendingBlock');
+  else if (entries.some((e) => e.state === 'failed' || e.state === 'too_large' || e.state === 'rejected'))
+    sendBlock = t('attachmentFailedBlock');
+  else if (entries.some((e) => e.doc?.local_only)) {
+    sendBlock = t('attachmentLocalOnlyBlock');
+    showReattach = true;
+  }
+  return { items, sendBlock, showReattach };
+}
+
+type AttachmentBlockKey = 'attachmentUnavailableBlock' | 'attachmentPendingBlock' | 'attachmentFailedBlock' | 'attachmentLocalOnlyBlock';
+
+/**
+ * Creates the entry for one picked file, rejecting a disallowed extension or an oversize file locally
+ * (the server re-validates both).
+ */
+function newEntry(file: File, t: (key: 'attachmentType' | 'attachmentTooBig') => string): AttachmentEntry {
+  const ext = file.name.includes('.') ? `.${file.name.split('.').pop()!.toLowerCase()}` : '';
+  const error = !allowed.has(ext) ? t('attachmentType') : file.size > ATTACHMENT_MAX_BYTES ? t('attachmentTooBig') : undefined;
+  return {
+    key: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    name: file.name,
+    file,
+    state: error ? 'rejected' : 'uploading',
+    error,
+  };
+}
+
+/**
  * Owns the full Chat composer's attachments. Each file is uploaded to a server-chosen source (the
  * private, local-only "Chat attachments" by default; "Chat attachments (shared)" when the owner opts
  * in) and polled until ingest finishes. Only `ready` attachments become `selection` items; `sendBlock`
@@ -78,34 +146,10 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
     [update],
   );
 
-  /** Polls one accepted Document until ingest settles; only a 404 fails it, other errors back off within a bound. */
+  /** Polls one accepted Document until ingest settles; see `pollAttachment`. */
   const poll = React.useCallback(
-    async (key: string, documentId: string, signal: AbortSignal) => {
-      let failures = 0;
-      const deadline = Date.now() + MAX_POLL_MS;
-      while (!signal.aborted) {
-        await new Promise((resolve) => setTimeout(resolve, POLL_MS * 2 ** failures));
-        if (signal.aborted) return;
-        try {
-          const doc = await getChatAttachment(documentId, signal);
-          failures = 0;
-          if (doc.status !== 'pending') {
-            patch(key, { doc, state: doc.status });
-            return;
-          }
-          if (Date.now() > deadline) {
-            patch(key, { state: 'failed', error: t('attachmentTimedOut') });
-            return;
-          }
-        } catch (err: unknown) {
-          if (signal.aborted) return;
-          if ((err instanceof ApiError && err.status === 404) || ++failures > MAX_POLL_FAILURES) {
-            patch(key, { state: 'failed' });
-            return;
-          }
-        }
-      }
-    },
+    (key: string, documentId: string, signal: AbortSignal) =>
+      pollAttachment(documentId, signal, (next) => patch(key, next), t('attachmentTimedOut')),
     [patch, t],
   );
 
@@ -130,17 +174,7 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
     (files: File[], share = shareWithModel) => {
       const room = Math.max(0, MAX_ATTACHMENTS - entriesRef.current.length);
       setDropped(Math.max(0, files.length - room));
-      const added = files.slice(0, room).map((file): AttachmentEntry => {
-        const ext = file.name.includes('.') ? `.${file.name.split('.').pop()!.toLowerCase()}` : '';
-        const error = !allowed.has(ext) ? t('attachmentType') : file.size > ATTACHMENT_MAX_BYTES ? t('attachmentTooBig') : undefined;
-        return {
-          key: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-          name: file.name,
-          file,
-          state: error ? 'rejected' : 'uploading',
-          error,
-        };
-      });
+      const added = files.slice(0, room).map((file) => newEntry(file, t));
       update((prev) => [...prev, ...added]);
       for (const e of added) if (e.state === 'uploading') upload(e.key, e.file, share);
     },
@@ -183,21 +217,7 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
     };
   }, []);
 
-  const items: Item[] = entries
-    .filter((e) => e.state === 'ready' && e.doc?.document_version_id)
-    .map((e) => ({ sourceId: e.doc!.source_id, documentId: e.doc!.document_id, documentVersionId: e.doc!.document_version_id! }));
-
-  let sendBlock: string | null = null;
-  let showReattach = false;
-  if (unavailable && entries.length) sendBlock = t('attachmentUnavailableBlock');
-  else if (entries.some((e) => e.state === 'uploading' || e.state === 'pending')) sendBlock = t('attachmentPendingBlock');
-  else if (entries.some((e) => e.state === 'failed' || e.state === 'too_large' || e.state === 'rejected'))
-    sendBlock = t('attachmentFailedBlock');
-  else if (entries.some((e) => e.doc?.local_only)) {
-    sendBlock = t('attachmentLocalOnlyBlock');
-    showReattach = true;
-  }
-
+  const { items, sendBlock, showReattach } = sendState(entries, unavailable, t);
   return {
     entries,
     items,
