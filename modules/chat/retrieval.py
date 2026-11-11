@@ -1072,6 +1072,17 @@ def _neutralize_angles(text: str) -> str:
     return text.replace("<", "‹").replace(">", "›")
 
 
+def _safe_hostname(url: str | None) -> str | None:
+    """Hostname of ``url`` or None when absent, malformed (urlparse raises ValueError) or over the 253-char DNS maximum."""
+    if not url:
+        return None
+    try:
+        host = urlparse(url).hostname
+    except ValueError:
+        return None
+    return host if host and len(host) <= 253 else None
+
+
 def _evidence_source_line(item: EvidenceItem) -> str:
     """Model-facing source line of one evidence chunk: title, publish/observe date and source host (pure).
 
@@ -1079,7 +1090,7 @@ def _evidence_source_line(item: EvidenceItem) -> str:
     order evidence and the host names the source. Missing parts are omitted.
     """
     when = item.published_at or item.observed_at
-    host = urlparse(item.canonical_url).hostname if item.canonical_url else None
+    host = _safe_hostname(item.canonical_url)
     parts = [f"Document: {_neutralize_angles(item.title)}"]
     if when:
         label = "Published" if item.published_at else "Collected"

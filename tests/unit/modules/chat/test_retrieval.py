@@ -562,3 +562,32 @@ async def test_build_context_releases_connection_during_embed() -> None:
             SCOPE,
         )
     assert search.call_args.kwargs["release_during_embed"] is True
+
+
+def _item_with_url(url: str) -> EvidenceItem:
+    """Minimal evidence item carrying ``url`` as its canonical URL."""
+    return EvidenceItem(
+        source_id=uuid4(),
+        source_generation=1,
+        local_only=False,
+        document_id=uuid4(),
+        document_version_id=uuid4(),
+        version_number=1,
+        chunk_id=uuid4(),
+        content="c",
+        title="T",
+        canonical_url=url,
+    )
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://[::1", "Document: T"),  # urlparse raises ValueError
+        ("http://" + "a" * 254 + ".com/x", "Document: T"),  # over the DNS maximum
+        ("https://example.com/x", "Document: T | Source: example.com"),
+    ],
+)
+def test_evidence_source_line_tolerates_bad_urls(url: str, expected: str) -> None:
+    """Malformed or over-long hosts drop the Source part instead of breaking prompt construction."""
+    assert retrieval._evidence_source_line(_item_with_url(url)) == expected
