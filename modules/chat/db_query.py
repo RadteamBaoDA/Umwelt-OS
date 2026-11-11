@@ -310,6 +310,9 @@ async def _register_evidence_for_versions(
         version_pairs: Pairs of ``(document_id, document_version_id)`` from query rows.
         existing_evidence: Mutable list of ``EvidenceItem``s on the current ``AnswerContext``.
 
+    Every returned version is registered (no cap): the caller bounds rows by ``args.limit`` (<= 50), and
+    an uncited row would make the model drop the citation for the whole list.
+
     Returns:
         Mapping of ``document_version_id`` to the citation number ``[n]`` the model must use; equal to the
         1-based index in ``existing_evidence`` unless ``web_numbering`` shifts it behind the web results.
@@ -318,7 +321,7 @@ async def _register_evidence_for_versions(
         item.document_version_id: _citation_number(idx, web_numbering)
         for idx, item in enumerate(existing_evidence)
     }
-    needed = [ver_id for _doc_id, ver_id in version_pairs if ver_id not in by_version][:12]
+    needed = [ver_id for _doc_id, ver_id in version_pairs if ver_id not in by_version]
     if not needed:
         return by_version
 
@@ -346,7 +349,7 @@ async def _register_evidence_for_versions(
                 DocumentVersion.id.in_(needed),
                 DocumentChunk.chunk_index == 0,
             )
-            .limit(12)
+            .limit(len(needed))
         )
     ).all()
     for row in rows:
@@ -799,45 +802,54 @@ def _document_filters(
 async def _select_structured_documents(
     session: AsyncSession, doc_filters: list[Any], limit: int
 ) -> list[Any]:
-    """Select the newest matching documents joined to source and current version (one SELECT)."""
-    return list(
-        (
-            await session.execute(
-                select(
-                    Document.id.label("document_id"),
-                    Document.source_id.label("source_id"),
-                    Source.provider.label("provider"),
-                    Source.name.label("source_name"),
-                    Document.title.label("title"),
-                    Document.canonical_url.label("url"),
-                    Document.published_at.label("published_at"),
-                    Document.observed_at.label("observed_at"),
-                    DocumentVersion.id.label("document_version_id"),
-                    func.left(DocumentVersion.content, 500).label("excerpt"),
-                )
-                .join(
-                    Source,
-                    and_(
-                        Source.id == Document.source_id,
-                        Source.workspace_id == Document.workspace_id,
-                    ),
-                )
-                .join(
-                    DocumentVersion,
-                    and_(
-                        DocumentVersion.document_id == Document.id,
-                        DocumentVersion.version_number == Document.current_version,
-                    ),
-                )
-                .where(*doc_filters)
-                .order_by(
-                    desc(func.coalesce(Document.observed_at, Document.created_at)),
-                    desc(Document.id),
-                )
-                .limit(limit)
-            )
-        ).all()
+    """Select matching documents joined to source and current version (one SELECT), newest first per source.
+
+    Rows are ranked newest-first inside each source (``row_number() OVER (PARTITION BY source_id)``) and
+    the outer query orders by that rank before recency, so a call spanning several feeds is interleaved
+    round-robin: a fast feed (news) cannot push a slow one (quakes) out of the ``limit`` window. With a
+    single source the order is plain newest-first.
+    """
+    recency = func.coalesce(Document.observed_at, Document.created_at)
+    ranked = (
+        select(
+            Document.id.label("document_id"),
+            Document.source_id.label("source_id"),
+            Source.provider.label("provider"),
+            Source.name.label("source_name"),
+            Document.title.label("title"),
+            Document.canonical_url.label("url"),
+            Document.published_at.label("published_at"),
+            Document.observed_at.label("observed_at"),
+            DocumentVersion.id.label("document_version_id"),
+            func.left(DocumentVersion.content, 500).label("excerpt"),
+            recency.label("recency"),
+            func.row_number()
+            .over(partition_by=Document.source_id, order_by=(desc(recency), desc(Document.id)))
+            .label("source_rank"),
+        )
+        .join(
+            Source,
+            and_(
+                Source.id == Document.source_id,
+                Source.workspace_id == Document.workspace_id,
+            ),
+        )
+        .join(
+            DocumentVersion,
+            and_(
+                DocumentVersion.document_id == Document.id,
+                DocumentVersion.version_number == Document.current_version,
+            ),
+        )
+        .where(*doc_filters)
+        .subquery()
     )
+    stmt = (
+        select(*(c for c in ranked.c if c.name not in ("recency", "source_rank")))
+        .order_by(ranked.c.source_rank, desc(ranked.c.recency), desc(ranked.c.document_id))
+        .limit(limit)
+    )
+    return list((await session.execute(stmt)).all())
 
 
 async def _hot_cache_snapshots(
@@ -992,7 +1004,7 @@ async def _execute_structured_mode(
     if want_docs:
         out["documents"] = _serialize_documents(doc_rows_raw, citation_map)
 
-    if not obs_rows and not doc_rows_raw and available_providers:
+    if available_providers:
         out["available_providers"] = available_providers
 
     if redis is not None and callable(getattr(redis, "get", None)):

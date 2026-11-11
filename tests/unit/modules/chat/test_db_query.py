@@ -210,7 +210,8 @@ async def test_structured_event_feed_provider_returns_documents(
         )
     )
     assert out["documents"][0]["citation"] == "[1]"
-    assert "available_providers" not in out
+    # Always present so the model can correct provider ids even when this call returned rows.
+    assert out["available_providers"] == ["emsc_quakes"]
 
 
 @pytest.mark.asyncio
@@ -276,3 +277,61 @@ async def test_db_query_granted_by_source_gadget_and_fails_closed(
 
     monkeypatch.setattr(worker_setup, "has_collected_datasource", boom)
     assert await run(plain, (uuid4(),)) is False
+
+
+@pytest.mark.asyncio
+async def test_register_evidence_cites_every_returned_version() -> None:
+    """All 15 returned versions get evidence and a citation number (no 12-row cap)."""
+    from datetime import UTC, datetime
+
+    from modules.chat.db_query import _register_evidence_for_versions
+
+    pairs = [(uuid4(), uuid4()) for _ in range(15)]
+    chunk_rows = [
+        SimpleNamespace(
+            chunk_id=uuid4(),
+            content="x",
+            document_version_id=ver,
+            version_number=1,
+            observed_at=datetime(2026, 11, 1, tzinfo=UTC),
+            published_at=None,
+            document_id=doc,
+            source_id=uuid4(),
+            title="t",
+            url=None,
+            source_type="document",
+            source_generation=1,
+            local_only=False,
+        )
+        for doc, ver in pairs
+    ]
+    seen: list[object] = []
+
+    class _Session:
+        async def execute(self, stmt: object) -> SimpleNamespace:
+            seen.append(stmt)
+            return SimpleNamespace(all=lambda: chunk_rows)
+
+    evidence: list = []
+    numbers = await _register_evidence_for_versions(_Session(), pairs, evidence)  # type: ignore[arg-type]
+    assert len(evidence) == 15
+    assert sorted(numbers.values()) == list(range(1, 16))
+    assert seen[0].compile().params["param_1"] == 15  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_structured_documents_rank_per_source() -> None:
+    """The documents SELECT partitions by source and orders by that rank first (fair share across feeds)."""
+    from modules.chat import db_query
+
+    captured: list[str] = []
+
+    class _Session:
+        async def execute(self, stmt: object) -> SimpleNamespace:
+            captured.append(str(stmt))
+            return SimpleNamespace(all=lambda: [])
+
+    await db_query._select_structured_documents(_Session(), [], 25)  # type: ignore[arg-type]
+    sql = captured[0]
+    assert "row_number() OVER (PARTITION BY documents.source_id" in sql
+    assert "ORDER BY anon_1.source_rank" in sql
