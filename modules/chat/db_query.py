@@ -65,6 +65,88 @@ class QueryCollectedDataArgs(BaseModel):
     limit: int = Field(default=25, ge=1, le=MAX_DB_QUERY_ROWS)
 
 
+def _db_query_parameter_properties() -> dict[str, Any]:
+    """Return the JSON-schema ``properties`` for the ``query_collected_data`` tool parameters.
+
+    Returns:
+        A fresh dict per call so callers cannot mutate shared module state.
+    """
+    return {
+        "mode": {
+            "type": "string",
+            "enum": ["structured", "sql"],
+            "description": "Use 'structured' for parameterized filters/aggregations or 'sql' for custom SELECT queries over scoped_observations / scoped_documents.",
+        },
+        "target": {
+            "type": "string",
+            "enum": ["observations", "documents", "both"],
+            "description": "Which collected tables to query in structured mode. Event and news feeds only have documents; documents are added automatically when a requested provider is not a measurement provider.",
+        },
+        "providers": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional provider IDs (e.g. ['binance', 'world_bank', 'emsc_quakes', 'vnexpress_business']).",
+        },
+        "metrics": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional metric names for measurement providers (e.g. ['price', 'temperature_2m']).",
+        },
+        "symbols": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional market/asset symbols (e.g. ['BTCUSDT', 'ETHUSDT', 'USD']).",
+        },
+        "region": {
+            "type": "string",
+            "description": "Optional region or country code filter (e.g. 'VN', 'US', 'GLOBAL').",
+        },
+        "text_query": {
+            "type": "string",
+            "description": "Optional keyword/full-text search query over collected document titles and content.",
+        },
+        "date_from": {
+            "type": "string",
+            "description": "Optional ISO-8601 start timestamp or YYYY-MM-DD date.",
+        },
+        "date_to": {
+            "type": "string",
+            "description": "Optional ISO-8601 end timestamp or YYYY-MM-DD date.",
+        },
+        "current_only": {
+            "type": "boolean",
+            "description": "When true (default), filter observations to is_current=true unless aggregation is timeseries.",
+        },
+        "aggregation": {
+            "type": "string",
+            "enum": [
+                "none",
+                "latest",
+                "avg",
+                "min",
+                "max",
+                "sum",
+                "count",
+                "timeseries",
+            ],
+            "description": "Optional SQL aggregation over observation values grouped by provider, metric, symbol, unit.",
+        },
+        "sql_query": {
+            "type": "string",
+            "description": (
+                "Read-only SELECT query when mode='sql'. Must query ONLY `scoped_observations` "
+                "and/or `scoped_documents` (no semicolons, comments, or DDL/DML)."
+            ),
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "Maximum rows to return (1-50, default 25).",
+        },
+    }
+
+
 def build_db_query_tool_spec() -> dict[str, Any]:
     """Return the OpenAI-compatible function tool specification for ``query_collected_data``.
 
@@ -92,80 +174,7 @@ def build_db_query_tool_spec() -> dict[str, Any]:
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "mode": {
-                        "type": "string",
-                        "enum": ["structured", "sql"],
-                        "description": "Use 'structured' for parameterized filters/aggregations or 'sql' for custom SELECT queries over scoped_observations / scoped_documents.",
-                    },
-                    "target": {
-                        "type": "string",
-                        "enum": ["observations", "documents", "both"],
-                        "description": "Which collected tables to query in structured mode. Event and news feeds only have documents; documents are added automatically when a requested provider is not a measurement provider.",
-                    },
-                    "providers": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional provider IDs (e.g. ['binance', 'world_bank', 'emsc_quakes', 'vnexpress_business']).",
-                    },
-                    "metrics": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional metric names for measurement providers (e.g. ['price', 'temperature_2m']).",
-                    },
-                    "symbols": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional market/asset symbols (e.g. ['BTCUSDT', 'ETHUSDT', 'USD']).",
-                    },
-                    "region": {
-                        "type": "string",
-                        "description": "Optional region or country code filter (e.g. 'VN', 'US', 'GLOBAL').",
-                    },
-                    "text_query": {
-                        "type": "string",
-                        "description": "Optional keyword/full-text search query over collected document titles and content.",
-                    },
-                    "date_from": {
-                        "type": "string",
-                        "description": "Optional ISO-8601 start timestamp or YYYY-MM-DD date.",
-                    },
-                    "date_to": {
-                        "type": "string",
-                        "description": "Optional ISO-8601 end timestamp or YYYY-MM-DD date.",
-                    },
-                    "current_only": {
-                        "type": "boolean",
-                        "description": "When true (default), filter observations to is_current=true unless aggregation is timeseries.",
-                    },
-                    "aggregation": {
-                        "type": "string",
-                        "enum": [
-                            "none",
-                            "latest",
-                            "avg",
-                            "min",
-                            "max",
-                            "sum",
-                            "count",
-                            "timeseries",
-                        ],
-                        "description": "Optional SQL aggregation over observation values grouped by provider, metric, symbol, unit.",
-                    },
-                    "sql_query": {
-                        "type": "string",
-                        "description": (
-                            "Read-only SELECT query when mode='sql'. Must query ONLY `scoped_observations` "
-                            "and/or `scoped_documents` (no semicolons, comments, or DDL/DML)."
-                        ),
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 50,
-                        "description": "Maximum rows to return (1-50, default 25).",
-                    },
-                },
+                "properties": _db_query_parameter_properties(),
             },
         },
     }

@@ -110,6 +110,15 @@ def test_build_chat_tool_specs_includes_db_query_when_enabled() -> None:
     assert spec["function"]["name"] == TOOL_QUERY_COLLECTED_DATA
 
 
+def test_db_query_tool_spec_is_pinned() -> None:
+    """The built tool spec is byte-stable; refactors of the builder must not change it."""
+    import hashlib
+    import json
+
+    digest = hashlib.sha256(json.dumps(build_db_query_tool_spec()).encode()).hexdigest()
+    assert digest == "1dc37843565d092887b0cc9859ebc027fe725922fc5f37dfde1515278d6402b1"
+
+
 def test_provider_specs_realtime_tier_skip_embedding_and_retention() -> None:
     """Provider specs classify realtime vs near_realtime tiers, skip vector embeddings by default, and set retention."""
     assert get_realtime_tier("coingecko") == "realtime"
