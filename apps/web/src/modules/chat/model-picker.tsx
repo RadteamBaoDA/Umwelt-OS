@@ -77,8 +77,9 @@ export function useChatModelPicker(): ChatModelPicker | undefined {
 export const MODEL_LOCKED_HINT_ID = 'chat-model-locked-hint-text';
 
 /**
- * Text of the closed trigger. Below `sm` only the model's short name shows (the "Default ·" / provider prefix is
- * hidden by CSS so the 390px toolbar stays readable); the full text stays in the DOM and in the trigger's title.
+ * Text of the closed trigger. The model's short name (provider path stripped: `anthropic/claude-haiku-5-5` shows
+ * `claude-haiku-5-5`) shows at every width; the "Default ·" / provider prefix is hidden by CSS below `md` so the
+ * 390px toolbar stays readable. The full text stays in the trigger's title.
  *
  * @param picker - Picker state; the chosen option, else the default model's name when known.
  * @param defaultPrefix - Localized "Default · " prefix used when no explicit model is chosen.
@@ -90,12 +91,14 @@ function triggerText(picker: ChatModelPicker, defaultPrefix: string, fallback: s
   const name = chosen ? chosen.model : picker.defaultModel;
   if (!name) return { title: fallback, node: fallback };
   const prefix = chosen ? (chosen.label.endsWith(name) ? chosen.label.slice(0, -name.length) : '') : defaultPrefix;
+  // Some providers embed their own path in the model id ("anthropic/claude-…"); show only the last segment.
+  const short = name.slice(name.lastIndexOf('/') + 1) || name;
   return {
     title: `${prefix}${name}`,
     node: (
       <>
-        {prefix && <span className="hidden sm:inline">{prefix}</span>}
-        {name}
+        {prefix && <span className="hidden md:inline">{prefix}</span>}
+        {short}
       </>
     ),
   };

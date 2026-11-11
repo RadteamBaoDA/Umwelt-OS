@@ -71,16 +71,23 @@ describe('ModelPicker narrow trigger', () => {
     return screen.getByRole('combobox', { name: 'Model for this chat' });
   };
 
-  it('wraps the "Default ·" prefix in an sm-only span and keeps the full text as title', () => {
+  it('wraps the "Default ·" prefix in an md-only span and keeps the full text as title', () => {
     const el = trigger(null, 'gpt-d');
     expect(el.textContent).toBe('Default · gpt-d');
     expect(el.getAttribute('title')).toBe('Default · gpt-d');
     expect(el.querySelector('span.hidden')?.textContent).toBe('Default · ');
   });
 
-  it('hides the provider prefix of a chosen model below sm', () => {
+  it('hides the provider prefix of a chosen model below md', () => {
     const el = trigger(option, null);
     expect(el.getAttribute('title')).toBe('Prov · gpt-a');
     expect(el.querySelector('span.hidden')?.textContent).toBe('Prov · ');
+  });
+
+  it('strips a provider path embedded in the model id but keeps it in the title', () => {
+    const el = trigger(null, 'anthropic/claude-haiku-5-5');
+    expect(el.textContent).toBe('Default · claude-haiku-5-5');
+    expect(el.getAttribute('title')).toBe('Default · anthropic/claude-haiku-5-5');
+    expect(el.querySelector('span.hidden')?.nextSibling?.textContent).toBe('claude-haiku-5-5');
   });
 });
