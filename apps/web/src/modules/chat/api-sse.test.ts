@@ -44,16 +44,6 @@ describe('streamResponseEvents generative UI events', () => {
     expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ text: 'ok', generative_ui: done, status: 'completed' }));
   });
 
-  it('carries the uncited flag of message.done (Q2)', async () => {
-    mockSse(`event: message.done
-data: ${JSON.stringify({ text: 'ok', uncited: true })}
-
-`);
-    const onDone = vi.fn();
-    await streamResponseEvents('r1', { onDone });
-    expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ uncited: true }));
-  });
-
   it('dispatches message.ui.discard with the part id and ignores redacted payloads', async () => {
     mockSse(`event: message.ui.discard
 data: {"part_id":"r1-t1"}

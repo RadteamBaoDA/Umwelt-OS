@@ -168,6 +168,33 @@ describe('ChatSession', () => {
     expect(h.sendMessage).toHaveBeenCalledTimes(1);
   });
 
+  it('Retry after a rejected new send resends the new text, not a new version of the older stored turn (C3)', async () => {
+    const stored = {
+      id: 'm1',
+      conversation_id: 'c1',
+      role: 'user',
+      content: 'old question',
+      client_request_id: 'old',
+      citations: [],
+      created_at: '2026-01-01T00:00:00Z',
+    };
+    h.getConversation.mockResolvedValue({ ...conversation(), messages: [stored] });
+    h.sendMessage.mockRejectedValueOnce(new ApiError(429, 'busy'));
+    renderSession({ mode: 'full' });
+    await screen.findByText('old question');
+    await sendText('new question');
+    await screen.findByRole('alert');
+
+    h.sendMessage.mockResolvedValueOnce({ response_id: 'r1', status: 'queued' });
+    h.streamResponseEvents.mockImplementation(async (_id: string, o: StreamEventsOptions) => {
+      o.onDone?.({ text: 'ok', citations: [], status: 'completed' });
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(h.sendMessage).toHaveBeenCalledTimes(2));
+    expect(h.sendMessage.mock.calls[1][1]).toMatchObject({ content: 'new question' });
+    expect(h.mutateMessage).not.toHaveBeenCalled();
+  });
+
   it('shows the provider failure reason carried by the terminal failed event', async () => {
     h.sendMessage.mockResolvedValue({ response_id: 'r1', status: 'queued' });
     h.streamResponseEvents.mockImplementation(async (_id: string, o: StreamEventsOptions) => {

@@ -284,8 +284,6 @@ export interface StreamEventsOptions {
     status: string;
     generative_ui?: Record<string, unknown> | null;
     generative_ui_parts?: Record<string, unknown>[];
-    /** Final answer carries no verified citation (`message.done.uncited`). */
-    uncited?: boolean;
   }) => void;
   onError?: (error: Error) => void;
 }
@@ -623,7 +621,6 @@ function toDoneResult(parsed: any): Parameters<NonNullable<StreamEventsOptions['
     status: parsed?.status ?? 'completed',
     generative_ui: ui && typeof ui === 'object' ? (ui as Record<string, unknown>) : null,
     generative_ui_parts: Array.isArray(parts) ? (parts as Record<string, unknown>[]) : undefined,
-    uncited: parsed?.uncited === true,
   };
 }
 

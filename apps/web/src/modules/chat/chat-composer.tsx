@@ -19,7 +19,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { COMPOSER_MENU_ID } from './chat-attachments';
-import { ModelPicker, type ChatModelPicker } from './model-picker';
+import { MODEL_LOCKED_HINT_ID, ModelPicker, type ChatModelPicker } from './model-picker';
 
 /** Actions behind the full composer's + menu; the session owns the picker dialog and file input they drive. */
 export interface ComposerMenuProps {
@@ -423,11 +423,11 @@ function FullComposer(props: ChatComposerProps & ComposerShared) {
           )}
           <ModelLine modelLabel={modelLabel} sourcesCount={sourcesCount} hasPicker={Boolean(modelPicker)} />
           {agentPicker}
-          {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled || modelLocked} />}
+          {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} locked={modelLocked} />}
           {action}
         </div>
         {modelLocked && modelPicker && (
-          <p className="text-xs text-muted-foreground" data-testid="chat-model-locked-hint">
+          <p id={MODEL_LOCKED_HINT_ID} className="text-xs text-muted-foreground" data-testid="chat-model-locked-hint">
             {t('modelLockedByAgent')}
           </p>
         )}

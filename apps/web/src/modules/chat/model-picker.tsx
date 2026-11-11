@@ -73,22 +73,34 @@ export function useChatModelPicker(): ChatModelPicker | undefined {
   return options.length ? { options, value, onChange, defaultModel: query.data?.defaults?.chat?.model ?? null } : undefined;
 }
 
+/** Element id of the "specialist agents choose their own model" hint; a locked picker is described by it. */
+export const MODEL_LOCKED_HINT_ID = 'chat-model-locked-hint-text';
+
 /**
  * Compact select listing the owner's default plus each configured chat model.
  *
- * @param props - Picker state from `useChatModelPicker`, and whether the control is disabled.
+ * @param props - Picker state from `useChatModelPicker`, whether the control is disabled and whether an agent locks it (then the lock hint describes it).
  * @returns A labelled Radix select.
  */
-export function ModelPicker({ picker, disabled = false }: { picker: ChatModelPicker; disabled?: boolean }) {
+export function ModelPicker({
+  picker,
+  disabled = false,
+  locked = false,
+}: {
+  picker: ChatModelPicker;
+  disabled?: boolean;
+  locked?: boolean;
+}) {
   const t = useTranslations('chat');
   return (
     <Select
-      disabled={disabled}
+      disabled={disabled || locked}
       value={picker.value ? refOf(picker.value) : DEFAULT_VALUE}
       onValueChange={(next) => picker.onChange(picker.options.find((o) => refOf(o) === next) ?? null)}
     >
       <SelectTrigger
         aria-label={t('modelPickerLabel')}
+        aria-describedby={locked ? MODEL_LOCKED_HINT_ID : undefined}
         className="h-8 w-auto max-w-48 min-w-0 border-0 bg-transparent text-xs text-muted-foreground shadow-none hover:bg-active"
       >
         <SelectValue />

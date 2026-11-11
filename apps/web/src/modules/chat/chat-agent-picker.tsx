@@ -28,44 +28,56 @@ export interface AgentPickerProps {
  */
 export function AgentPicker({ value, disabled, onChange, profiles, onOpen }: AgentPickerProps) {
   const tAgents = useTranslations('aiSettings');
+  const t = useTranslations('chat');
+  const reasonId = React.useId();
   const [opened, setOpened] = React.useState(false);
   return (
-    <Select
-      value={value}
-      onValueChange={onChange}
-      disabled={disabled}
-      onOpenChange={(open) => {
-        if (!open) return;
-        setOpened(true);
-        onOpen();
-      }}
-    >
-      <SelectTrigger
-        aria-label={tAgents('agentSelect')}
-        data-testid="chat-agent-picker"
-        className="h-8 w-auto max-w-32 min-w-0 border-0 bg-transparent text-xs text-muted-foreground shadow-none hover:bg-active"
+    <>
+      {disabled && (
+        <span id={reasonId} className="sr-only">
+          {t('agentPickerBusyHint')}
+        </span>
+      )}
+      <Select
+        value={value}
+        onValueChange={onChange}
+        disabled={disabled}
+        onOpenChange={(open) => {
+          if (!open) return;
+          setOpened(true);
+          onOpen();
+        }}
       >
-        <SelectValue placeholder={tAgents('agentSelect')} />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="assistant">{tAgents('agentAssistant')}</SelectItem>
-        {opened && !profiles && (
-          <div role="status" className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
-            <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
-            {tAgents('agentProfilesLoading')}
-          </div>
-        )}
-        {(profiles ?? []).map((profile) => (
-          <SelectItem key={profile.id} value={profile.id} disabled={!profile.enabled || profile.capability === 'unavailable'}>
-            {tAgents(profileTitleKeys[profile.id] ?? 'agentProfileKnowledge')}
-            {profile.capability === 'partial'
-              ? ` · ${tAgents('agentPartial')}`
-              : profile.capability === 'unavailable'
-                ? ` · ${tAgents('agentUnavailable')}`
-                : ''}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+        <SelectTrigger
+          aria-label={tAgents('agentSelect')}
+          data-testid="chat-agent-picker"
+          aria-describedby={disabled ? reasonId : undefined}
+          title={disabled ? t('agentPickerBusyHint') : undefined}
+          className="h-8 w-auto max-w-32 min-w-0 border-0 bg-transparent text-xs text-muted-foreground shadow-none hover:bg-active"
+        >
+          <SelectValue placeholder={tAgents('agentSelect')} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="assistant">{tAgents('agentAssistant')}</SelectItem>
+          {/* A disabled option keeps the listbox valid (no non-option child) while still announcing the pending load. */}
+          {opened && !profiles && (
+            <SelectItem value="__loading" disabled>
+              <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+              {tAgents('agentProfilesLoading')}
+            </SelectItem>
+          )}
+          {(profiles ?? []).map((profile) => (
+            <SelectItem key={profile.id} value={profile.id} disabled={!profile.enabled || profile.capability === 'unavailable'}>
+              {tAgents(profileTitleKeys[profile.id] ?? 'agentProfileKnowledge')}
+              {profile.capability === 'partial'
+                ? ` · ${tAgents('agentPartial')}`
+                : profile.capability === 'unavailable'
+                  ? ` · ${tAgents('agentUnavailable')}`
+                  : ''}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </>
   );
 }

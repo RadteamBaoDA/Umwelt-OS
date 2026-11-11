@@ -210,6 +210,33 @@ function useStopCommand(d: ChatSessionData) {
 }
 
 /**
+ * Builds the selection-change reset. Every entry point (header, history, shortcut) funnels through here: a fresh chat
+ * also restores the toggle defaults (C6/C9), and the attachment-sharing answer is forgotten unless the change merely
+ * adopts the conversation this send created (C5).
+ *
+ * @param d - Session state (composer, attachments).
+ * @param agent - Specialist-run data; its active run id is cleared on every selection change.
+ * @returns A stable callback for `useConversationSelection`.
+ */
+function useSelectionReset(d: ChatSessionData, agent: ReturnType<typeof useChatAgentRuns>) {
+  const { setEditingMessageId, draftStashRef, resetToggles } = d.composer;
+  const { setActiveAgentRunId } = agent;
+  const { resetShareChoice } = d.attachments;
+  return React.useCallback(
+    ({ conversationId: selected, promoted }: { conversationId: string | null; promoted: boolean }) => {
+      setActiveAgentRunId(null);
+      setEditingMessageId(null);
+      // A stash belongs to the conversation being edited; it must not leak into the next one.
+      draftStashRef.current = null;
+      // The attachment-sharing answer is remembered per conversation (C5), including the one a first send creates.
+      if (!promoted) resetShareChoice();
+      if (!selected) resetToggles();
+    },
+    [setActiveAgentRunId, setEditingMessageId, draftStashRef, resetShareChoice, resetToggles],
+  );
+}
+
+/**
  * Wires the stream, selection and send hooks and builds the session's remaining commands.
  *
  * @param d - State from {@link useChatSessionData}.
@@ -231,20 +258,7 @@ export function useChatSessionCommands(
   const { resetShareChoice } = d.attachments;
   const { resetToggles } = composer;
   const streamResponseRun = useChatStream(refs, actions, setThemeRequest);
-  /**
-   * Resets view-local state when the selection changes. Every entry point (header, history, shortcut) funnels through
-   * here: a fresh chat also restores the toggle defaults (C6/C9), and the attachment-sharing answer is forgotten unless
-   * the change merely adopts the conversation this send created (C5).
-   */
-  const onSelectionReset = React.useCallback(({ conversationId: selected, promoted }: { conversationId: string | null; promoted: boolean }) => {
-    setActiveAgentRunId(null);
-    setEditingMessageId(null);
-    // A stash belongs to the conversation being edited; it must not leak into the next one.
-    draftStashRef.current = null;
-    // The attachment-sharing answer is remembered per conversation (C5), including the one a first send creates.
-    if (!promoted) resetShareChoice();
-    if (!selected) resetToggles();
-  }, [setActiveAgentRunId, setEditingMessageId, draftStashRef, resetShareChoice, resetToggles]);
+  const onSelectionReset = useSelectionReset(d, agent);
   useConversationSelection({
     refs,
     live: actions,
@@ -317,19 +331,27 @@ export function useChatSessionCommands(
   const pendingPrompt = d.pendingProfileRun?.prompt;
   const lastMessage = d.messages.at(-1);
   const { handleRetryMessage } = edit;
+  const { refetch: refetchDetail } = d.detail;
   /**
-   * Error-banner Retry (C3). A turn the server already stored (the transcript ends at a persisted user message, so the
-   * run failed afterwards) is retried as a new version of that turn, never as a duplicate question. Otherwise the
-   * pending specialist prompt, the last sent content or the draft is sent again.
+   * Error-banner Retry (C3). A turn the server already stored (the transcript ends at a persisted user message that is
+   * the text last sent, so the run failed afterwards) is retried as a new version of that turn, never as a duplicate
+   * question. While that turn is still the optimistic bubble nothing is resent: the stored copy is refetched first.
+   * Otherwise (a newer send the server never accepted, a specialist prompt, a draft) the last sent text is sent again.
    */
   const retryLast = React.useCallback(() => {
-    if (!pendingPrompt && mode === 'full' && lastMessage?.role === 'user' && !lastMessage.id.startsWith('optimistic-')) {
-      handleRetryMessage(lastMessage);
-      return;
+    if (!pendingPrompt && mode === 'full' && lastMessage?.role === 'user') {
+      if (lastMessage.id.startsWith('optimistic-')) {
+        void refetchDetail();
+        return;
+      }
+      if (!refs.lastSent || refs.lastSent === lastMessage.content) {
+        handleRetryMessage(lastMessage);
+        return;
+      }
     }
     const retryDraft = pendingPrompt ?? refs.lastSent ?? draft;
     if (retryDraft) void handleSend(retryDraft);
-  }, [pendingPrompt, mode, lastMessage, handleRetryMessage, refs, draft, handleSend]);
+  }, [pendingPrompt, mode, lastMessage, handleRetryMessage, refetchDetail, refs, draft, handleSend]);
 
   return { ...send, ...edit, handleStop, handleNewChat, handleSubmitInput, retryLast };
 }
