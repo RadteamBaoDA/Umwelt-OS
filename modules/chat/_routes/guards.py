@@ -244,6 +244,11 @@ def _message_reasoning(metadata: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _message_uncited(metadata: Any) -> bool:
+    """True when the assistant answer was stored without any verified citation (``metadata.uncited``)."""
+    return isinstance(metadata, dict) and metadata.get("uncited") is True
+
+
 def _message_suggestions(metadata: Any) -> list[str]:
     """Return the stored follow-up suggestions from a message's metadata; malformed values yield ``[]``."""
     value = metadata.get(SUGGESTIONS_KEY) if isinstance(metadata, dict) else None

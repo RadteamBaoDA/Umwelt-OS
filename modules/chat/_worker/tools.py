@@ -172,6 +172,7 @@ class _TurnState:
     ui_rounds: int = 0  # model rounds that produced at least one widget
     skill_rounds: int = 0  # data-tool continuation rounds
     input_requests: int = 0  # request_user_input calls answered or rejected so far this turn
+    synth_done: bool = False  # the closing no-tools synthesis round was already opened this turn
 
 
 @dataclass(frozen=True)
@@ -284,6 +285,13 @@ class _QueryCollectedDataHandler:
         except json.JSONDecodeError:
             parsed_db_args = {}
         await _publish_status(c, TOOL_QUERY_COLLECTED_DATA, "running")
+        web_run = env.turn.web_run
+        # Web results hold the numbers right after the prompt's evidence; new DB evidence goes behind them.
+        web_numbering = (
+            (web_run.evidence_base, len(web_run.results))
+            if web_run is not None and web_run.evidence_base is not None and web_run.results
+            else None
+        )
         try:
             async with c.session_factory() as db_tool_session:
                 return await execute_db_query_tool(
@@ -296,6 +304,7 @@ class _QueryCollectedDataHandler:
                     allow_local_only=env.setup.local_only_turn,
                     evidence_list=cast(AnswerContext, env.turn.answer_context).evidence,
                     redis=c.redis,
+                    web_numbering=web_numbering,
                 )
         finally:
             # "done" also on error so the client never keeps a stale spinner; a run that ended

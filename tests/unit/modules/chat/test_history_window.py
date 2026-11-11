@@ -10,7 +10,7 @@ import pytest
 
 from core.workspaces.schemas import InternalJobScope
 from modules.chat import history
-from modules.chat.history import Turn, cap_turns, select_turns
+from modules.chat.history import Turn, cap_turns, select_turns, shorten_middle, shorten_newest
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 SCOPE = InternalJobScope(workspace_id=uuid4(), actor_user_id=1, membership_revision=1)
@@ -134,7 +134,7 @@ def test_char_cap_keeps_newest_whole_turns() -> None:
     msgs, runs = _flat(*[_turn(i, text="x" * 10) for i in range(5)])
     turns = select_turns(msgs, runs)
     assert len(cap_turns(turns, max_chars=45)) == 2  # 20 chars per turn
-    assert cap_turns(turns, max_chars=5) == []
+    assert cap_turns(turns, max_chars=5) == turns[-1:]  # the newest turn is always kept
     assert cap_turns(turns, max_chars=10_000) == turns
 
 
@@ -263,3 +263,15 @@ def test_widget_summaries_cover_every_part_within_one_shared_budget() -> None:
     # legacy rows (single widget only) and rows without widgets still work
     assert history.widget_summaries({"generative_ui": small}).count("[Widget shown") == 1
     assert history.widget_summaries({}) == "" and history.widget_summaries(None) == ""
+
+
+def test_oversize_newest_turn_is_kept_and_middle_truncated() -> None:
+    """A huge latest answer is never dropped: head and tail stay, the middle is marked, total fits the cap."""
+    msgs, runs = _flat(_turn(0, text="y" * 3000))
+    turns = select_turns(msgs, runs)
+    ((user, assistant),) = shorten_newest(cap_turns(turns, 1000), 1000)
+    assert "[truncated]" in assistant and assistant.startswith("y") and assistant.endswith("y")
+    assert len(user) + len(assistant) <= 1000
+    short = shorten_middle("a" * 50, 20)
+    assert len(short) == 20 and short.count("[truncated]") == 1
+    assert shorten_middle("abc", 10) == "abc"

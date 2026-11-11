@@ -9,7 +9,6 @@ timeout, and automatic ``EvidenceItem`` registration for grounded citations.
 from __future__ import annotations
 
 import json
-import re
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -22,8 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from core.config import Settings
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AccessFence, Scope
-from modules.chat.schemas import DB_QUERY_KEY, GADGET_SCOPE_KEY, EvidenceItem
+from modules.chat.schemas import GADGET_SCOPE_KEY, EvidenceItem
 from modules.chat.sql_guard import check_select_policy
+from modules.knowledge.documents.public import (
+    MEASUREMENT_PROVIDER_IDS,
+)
 from modules.knowledge.documents.public import (
     DocumentChunkReadProjection as DocumentChunk,
 )
@@ -39,20 +41,6 @@ from modules.sources.public import SourceReadProjection as Source
 TOOL_QUERY_COLLECTED_DATA = "query_collected_data"
 MAX_DB_QUERY_ROWS = 50
 MAX_SQL_LENGTH = 2000
-
-_AUTO_DB_KEYWORDS_RE = re.compile(
-    r"\b("
-    r"sql|database|datasource|query|observation|observations|metric|metrics|timeseries|"
-    r"price|prices|giá|tỷ\s*giá|lạm\s*phát|gdp|cpi|ppi|unemployment|fed|ecb|world\s*bank|"
-    r"binance|bitcoin|btc|eth|sol|crypto|coinpaprika|coingecko|frankfurter|"
-    r"earthquake|earthquakes|động\s*đất|seismic|magnitude|usgs|emsc|bmkg|tsunami|sóng\s*thần|"
-    r"weather|thời\s*tiết|temperature|nhiệt\s*độ|wind|rain|humidity|openaq|air\s*quality|"
-    r"alert|alerts|cảnh\s*báo|gdacs|nws|noaa|jma|iss|nasa|cisa|cve|nvd|"
-    r"average|avg|trung\s*bình|maximum|minimum|highest|lowest|cao\s*nhất|thấp\s*nhất|"
-    r"tổng\s*hợp|thống\s*kê|so\s*sánh|biến\s*động|xu\s*hướng"
-    r")\b",
-    re.IGNORECASE,
-)
 
 
 class QueryCollectedDataArgs(BaseModel):
@@ -77,6 +65,88 @@ class QueryCollectedDataArgs(BaseModel):
     limit: int = Field(default=25, ge=1, le=MAX_DB_QUERY_ROWS)
 
 
+def _db_query_parameter_properties() -> dict[str, Any]:
+    """Return the JSON-schema ``properties`` for the ``query_collected_data`` tool parameters.
+
+    Returns:
+        A fresh dict per call so callers cannot mutate shared module state.
+    """
+    return {
+        "mode": {
+            "type": "string",
+            "enum": ["structured", "sql"],
+            "description": "Use 'structured' for parameterized filters/aggregations or 'sql' for custom SELECT queries over scoped_observations / scoped_documents.",
+        },
+        "target": {
+            "type": "string",
+            "enum": ["observations", "documents", "both"],
+            "description": "Which collected tables to query in structured mode. Event and news feeds only have documents; documents are added automatically when a requested provider is not a measurement provider.",
+        },
+        "providers": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional provider IDs (e.g. ['binance', 'world_bank', 'emsc_quakes', 'vnexpress_business']).",
+        },
+        "metrics": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional metric names for measurement providers (e.g. ['price', 'temperature_2m']).",
+        },
+        "symbols": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional market/asset symbols (e.g. ['BTCUSDT', 'ETHUSDT', 'USD']).",
+        },
+        "region": {
+            "type": "string",
+            "description": "Optional region or country code filter (e.g. 'VN', 'US', 'GLOBAL').",
+        },
+        "text_query": {
+            "type": "string",
+            "description": "Optional keyword/full-text search query over collected document titles and content.",
+        },
+        "date_from": {
+            "type": "string",
+            "description": "Optional ISO-8601 start timestamp or YYYY-MM-DD date.",
+        },
+        "date_to": {
+            "type": "string",
+            "description": "Optional ISO-8601 end timestamp or YYYY-MM-DD date.",
+        },
+        "current_only": {
+            "type": "boolean",
+            "description": "When true (default), filter observations to is_current=true unless aggregation is timeseries.",
+        },
+        "aggregation": {
+            "type": "string",
+            "enum": [
+                "none",
+                "latest",
+                "avg",
+                "min",
+                "max",
+                "sum",
+                "count",
+                "timeseries",
+            ],
+            "description": "Optional SQL aggregation over observation values grouped by provider, metric, symbol, unit.",
+        },
+        "sql_query": {
+            "type": "string",
+            "description": (
+                "Read-only SELECT query when mode='sql'. Must query ONLY `scoped_observations` "
+                "and/or `scoped_documents` (no semicolons, comments, or DDL/DML)."
+            ),
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "Maximum rows to return (1-50, default 25).",
+        },
+    }
+
+
 def build_db_query_tool_spec() -> dict[str, Any]:
     """Return the OpenAI-compatible function tool specification for ``query_collected_data``.
 
@@ -96,109 +166,46 @@ def build_db_query_tool_spec() -> dict[str, Any]:
                 "observed_at, published_at, quality, is_current, document_id, document_version_id) "
                 "and `scoped_documents` "
                 "(columns: id, source_id, provider, title, canonical_url, published_at, observed_at, "
-                "language, content_excerpt, document_version_id)."
+                "language, content_excerpt, document_version_id). "
+                "Measurement providers (prices, rates, weather, macro series) store numeric rows in "
+                "observations. News and event feeds (earthquake, alert and news providers) store "
+                "documents only, so use target='documents' or 'both' for them; observations are empty "
+                "for those providers."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "mode": {
-                        "type": "string",
-                        "enum": ["structured", "sql"],
-                        "description": "Use 'structured' for parameterized filters/aggregations or 'sql' for custom SELECT queries over scoped_observations / scoped_documents.",
-                    },
-                    "target": {
-                        "type": "string",
-                        "enum": ["observations", "documents", "both"],
-                        "description": "Which collected tables to query in structured mode.",
-                    },
-                    "providers": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional provider IDs (e.g. ['binance', 'usgs', 'world_bank', 'vnexpress_business']).",
-                    },
-                    "metrics": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional metric names (e.g. ['price', 'magnitude', 'temperature_2m']).",
-                    },
-                    "symbols": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional market/asset symbols (e.g. ['BTCUSDT', 'ETHUSDT', 'USD']).",
-                    },
-                    "region": {
-                        "type": "string",
-                        "description": "Optional region or country code filter (e.g. 'VN', 'US', 'GLOBAL').",
-                    },
-                    "text_query": {
-                        "type": "string",
-                        "description": "Optional keyword/full-text search query over collected document titles and content.",
-                    },
-                    "date_from": {
-                        "type": "string",
-                        "description": "Optional ISO-8601 start timestamp or YYYY-MM-DD date.",
-                    },
-                    "date_to": {
-                        "type": "string",
-                        "description": "Optional ISO-8601 end timestamp or YYYY-MM-DD date.",
-                    },
-                    "current_only": {
-                        "type": "boolean",
-                        "description": "When true (default), filter observations to is_current=true unless aggregation is timeseries.",
-                    },
-                    "aggregation": {
-                        "type": "string",
-                        "enum": [
-                            "none",
-                            "latest",
-                            "avg",
-                            "min",
-                            "max",
-                            "sum",
-                            "count",
-                            "timeseries",
-                        ],
-                        "description": "Optional SQL aggregation over observation values grouped by provider, metric, symbol, unit.",
-                    },
-                    "sql_query": {
-                        "type": "string",
-                        "description": (
-                            "Read-only SELECT query when mode='sql'. Must query ONLY `scoped_observations` "
-                            "and/or `scoped_documents` (no semicolons, comments, or DDL/DML)."
-                        ),
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 50,
-                        "description": "Maximum rows to return (1-50, default 25).",
-                    },
-                },
+                "properties": _db_query_parameter_properties(),
             },
         },
     }
 
 
-def should_auto_enable_db_query(
-    prompt: str,
-    retrieval_context: dict[str, Any] | None,
-) -> bool:
-    """Determine whether the database query tool should be enabled for this chat turn.
+def is_gadget_turn(retrieval_context: dict[str, Any] | None) -> bool:
+    """True when the turn was opened from a Dashboard gadget (the gadget path always gets the tool).
 
-    Args:
-        prompt: User message text.
-        retrieval_context: Stored ``ResponseRun.retrieval_context`` dictionary.
-
-    Returns:
-        True when explicitly requested, bound to a dashboard gadget, or triggered by data keywords.
+    The legacy ``DB_QUERY_KEY`` request flag is deliberately ignored: the tool no longer has a user switch.
     """
     ctx = retrieval_context or {}
-    db_flag = ctx.get(DB_QUERY_KEY)
-    if db_flag is True or (isinstance(db_flag, dict) and db_flag.get("requested") is True):
-        return True
-    if ctx.get("kind") == "gadget" or isinstance(ctx.get(GADGET_SCOPE_KEY), dict):
-        return True
-    return bool(_AUTO_DB_KEYWORDS_RE.search(prompt or ""))
+    return ctx.get("kind") == "gadget" or isinstance(ctx.get(GADGET_SCOPE_KEY), dict)
+
+
+async def has_collected_datasource(
+    session: AsyncSession, *, workspace_id: UUID, allow_local_only: bool
+) -> bool:
+    """Whether the workspace has at least one active connector-collected source this turn may query.
+
+    This is the grant condition for ``query_collected_data``: the owner either has collected data to
+    query or the tool would only waste a round. Read-only, one bounded ``EXISTS`` query; ``local_only``
+    sources count only when the turn may use them (same rule as ``_allowed_sources``).
+    """
+    stmt = select(Source.id).where(
+        Source.workspace_id == workspace_id,
+        Source.status == "active",
+        Source.provider.is_not(None),
+    )
+    if not allow_local_only:
+        stmt = stmt.where(Source.local_only.is_(False))
+    return (await session.execute(stmt.limit(1))).first() is not None
 
 
 def validate_readonly_sql(sql: str) -> str:
@@ -279,10 +286,22 @@ async def _allowed_sources(
     return [(row.id, row.provider, row.name) for row in rows]
 
 
+def _citation_number(index: int, web_numbering: tuple[int, int] | None) -> int:
+    """1-based model-facing citation number of ``evidence[index]``.
+
+    ``web_numbering`` is ``(base, web_count)``: the prompt numbered evidence ``1..base`` and then the web
+    results, so evidence appended later (by tools) is shifted behind the web results.
+    """
+    if web_numbering is not None and index >= web_numbering[0]:
+        return index + 1 + web_numbering[1]
+    return index + 1
+
+
 async def _register_evidence_for_versions(
     session: AsyncSession,
     version_pairs: list[tuple[UUID, UUID]],
     existing_evidence: list[EvidenceItem],
+    web_numbering: tuple[int, int] | None = None,
 ) -> dict[UUID, int]:
     """Load chunk_index=0 for returned document versions and append new ``EvidenceItem``s.
 
@@ -292,10 +311,12 @@ async def _register_evidence_for_versions(
         existing_evidence: Mutable list of ``EvidenceItem``s on the current ``AnswerContext``.
 
     Returns:
-        Mapping of ``document_version_id`` to 1-based citation index ``[n]`` in ``existing_evidence``.
+        Mapping of ``document_version_id`` to the citation number ``[n]`` the model must use; equal to the
+        1-based index in ``existing_evidence`` unless ``web_numbering`` shifts it behind the web results.
     """
     by_version: dict[UUID, int] = {
-        item.document_version_id: idx + 1 for idx, item in enumerate(existing_evidence)
+        item.document_version_id: _citation_number(idx, web_numbering)
+        for idx, item in enumerate(existing_evidence)
     }
     needed = [ver_id for _doc_id, ver_id in version_pairs if ver_id not in by_version][:12]
     if not needed:
@@ -349,7 +370,9 @@ async def _register_evidence_for_versions(
                 score=1.0,
             )
         )
-        by_version[row.document_version_id] = len(existing_evidence)
+        by_version[row.document_version_id] = _citation_number(
+            len(existing_evidence) - 1, web_numbering
+        )
     return by_version
 
 
@@ -364,6 +387,7 @@ async def execute_db_query_tool(
     allow_local_only: bool,
     evidence_list: list[EvidenceItem],
     redis: Any = None,
+    web_numbering: tuple[int, int] | None = None,
 ) -> str:
     """Execute a validated read-only database query for Chat and register grounded evidence refs.
 
@@ -377,6 +401,8 @@ async def execute_db_query_tool(
         allow_local_only: Whether local-only sources may be queried (False for remote models).
         evidence_list: Mutable ``AnswerContext.evidence`` list to append discovered ``EvidenceItem``s.
         redis: Optional Redis client to read hot connector snapshots.
+        web_numbering: ``(base, web_count)`` when web results already occupy citation numbers
+            ``base+1..base+web_count``; new evidence is numbered after them.
 
     Returns:
         Compact JSON string summarizing the query results and their ``[n]`` citation indices.
@@ -420,6 +446,7 @@ async def execute_db_query_tool(
                     allowed_source_ids=allowed_ids,
                     limit=args.limit,
                     evidence_list=evidence_list,
+                    web_numbering=web_numbering,
                 )
             return await _execute_structured_mode(
                 session,
@@ -430,6 +457,8 @@ async def execute_db_query_tool(
                 date_to=date_to,
                 evidence_list=evidence_list,
                 redis=redis,
+                web_numbering=web_numbering,
+                available_providers=sorted({str(p) for _i, p, _n in allowed if p}),
             )
     except ValueError as exc:
         return json.dumps({"error": str(exc), "rows": []})
@@ -563,6 +592,7 @@ async def _execute_sql_mode(
     allowed_source_ids: list[UUID],
     limit: int,
     evidence_list: list[EvidenceItem],
+    web_numbering: tuple[int, int] | None = None,
 ) -> str:
     """Validate, run (least-privilege, read-only) and serialise a model-written SELECT.
 
@@ -585,7 +615,9 @@ async def _execute_sql_mode(
         ver_id = row.get("document_version_id")
         if isinstance(doc_id, UUID) and isinstance(ver_id, UUID):
             version_pairs.append((doc_id, ver_id))
-    citation_map = await _register_evidence_for_versions(session, version_pairs, evidence_list)
+    citation_map = await _register_evidence_for_versions(
+        session, version_pairs, evidence_list, web_numbering
+    )
 
     serialized_rows: list[dict[str, Any]] = []
     for row in mappings:
@@ -891,8 +923,14 @@ async def _execute_structured_mode(
     date_to: datetime | None,
     evidence_list: list[EvidenceItem],
     redis: Any = None,
+    available_providers: list[str] | None = None,
+    web_numbering: tuple[int, int] | None = None,
 ) -> str:
     """Execute parameterized SQLAlchemy queries for observations and/or documents.
+
+    Documents are queried too whenever a requested provider is not a measurement provider (event and
+    news feeds store documents only). When neither table returns rows, ``available_providers`` lists the
+    active providers so the model can retry with a valid id.
 
     Query order is fixed: optional observation aggregate, observation rows, document rows, then
     evidence registration (which appends to ``evidence_list``), then the best-effort Redis
@@ -901,7 +939,10 @@ async def _execute_structured_mode(
     out: dict[str, Any] = {"mode": "structured", "aggregation": args.aggregation}
     version_pairs: list[tuple[UUID, UUID]] = []
     want_obs = args.target in ("observations", "both")
-    want_docs = args.target in ("documents", "both")
+    requested = {p.strip().lower() for p in args.providers or [] if p.strip()}
+    want_docs = args.target in ("documents", "both") or bool(
+        requested - set(MEASUREMENT_PROVIDER_IDS)
+    )
 
     obs_rows: list[Any] = []
     if want_obs:
@@ -942,12 +983,17 @@ async def _execute_structured_mode(
         doc_rows_raw = await _select_structured_documents(session, doc_filters, args.limit)
         version_pairs.extend((d.document_id, d.document_version_id) for d in doc_rows_raw)
 
-    citation_map = await _register_evidence_for_versions(session, version_pairs, evidence_list)
+    citation_map = await _register_evidence_for_versions(
+        session, version_pairs, evidence_list, web_numbering
+    )
 
     if want_obs:
         out["observations"] = _serialize_observations(obs_rows, citation_map)
     if want_docs:
         out["documents"] = _serialize_documents(doc_rows_raw, citation_map)
+
+    if not obs_rows and not doc_rows_raw and available_providers:
+        out["available_providers"] = available_providers
 
     if redis is not None and callable(getattr(redis, "get", None)):
         hot_snapshots = await _hot_cache_snapshots(redis, workspace_id, allowed_source_ids)

@@ -277,6 +277,23 @@ async def list_conversations(
         ).all()
     )
 
+    # One batched lookup for the whole page (partial index on active statuses), not one query per row.
+    active_ids = (
+        set(
+            (
+                await session.scalars(
+                    select(ResponseRun.conversation_id)
+                    .where(
+                        ResponseRun.conversation_id.in_([row.id for row in rows]),
+                        ResponseRun.status.in_(ACTIVE_RUN_STATUSES),
+                    )
+                    .distinct()
+                )
+            ).all()
+        )
+        if rows
+        else set()
+    )
     return [
         ConversationRead(
             id=row.id,
@@ -288,6 +305,7 @@ async def list_conversations(
             created_at=row.created_at,
             updated_at=row.updated_at,
             metadata=row.metadata_json or {},
+            has_active_run=row.id in active_ids,
         )
         for row in rows
     ]

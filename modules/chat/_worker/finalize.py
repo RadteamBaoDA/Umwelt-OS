@@ -1,6 +1,7 @@
 """Chat worker finalization: citation validation, widget finalization and final message persistence."""
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -59,6 +60,50 @@ class _CitedAnswer:
     valid_citations: list[dict[str, Any]]
     number_map: dict[int, int]
 
+    @property
+    def uncited(self) -> bool:
+        """True when no citation survived validation (the answer text is kept as streamed)."""
+        return not self.valid_citations
+
+
+@dataclass(frozen=True)
+class _Numbering:
+    """Citation numbers as the model saw them versus the validator's "evidence first, web last" order.
+
+    The prompt numbers evidence ``1..base``, web results ``base+1..base+web_count`` and tool-fetched evidence
+    after that. The validators index ``evidence`` then ``web_results``; ``to_legacy`` / ``to_model`` translate
+    between the two. With no tool-added evidence (or no web results) both orders coincide.
+    """
+
+    base: int
+    web_count: int
+    evidence_count: int
+
+    @property
+    def shifted(self) -> bool:
+        """True when evidence added after the prompt was built sits behind the web numbers."""
+        return self.web_count > 0 and self.evidence_count > self.base
+
+    def to_legacy(self, n: int) -> int:
+        """Model number -> validator number; 0 when ``n`` is outside the numbers the model was given."""
+        if not self.shifted:
+            return n
+        if n < 1 or n > self.evidence_count + self.web_count:
+            return 0
+        if n <= self.base:
+            return n
+        if n <= self.base + self.web_count:
+            return n + self.evidence_count - self.base
+        return n - self.web_count
+
+    def to_model(self, n: int) -> int:
+        """Validator number -> model number (inverse of ``to_legacy``)."""
+        if not self.shifted or n <= self.base:
+            return n
+        if n <= self.evidence_count:
+            return n + self.web_count
+        return n - (self.evidence_count - self.base)
+
 
 def _validate_document_citations(
     text: str,
@@ -67,6 +112,7 @@ def _validate_document_citations(
     doc_numbers: list[int],
     ui_parts: list[tuple[str, dict[str, str]]],
     total_count: int,
+    numbering: _Numbering | None = None,
 ) -> tuple[Any, dict[int, int]]:
     """Validate document citations (prose markers plus widget-cited numbers) against the retrieved evidence.
 
@@ -82,7 +128,13 @@ def _validate_document_citations(
         item = answer_context.evidence[n - 1]
         return item.document_version_id, item.chunk_id
 
-    ui_numbers = [n for _, call in ui_parts for n in _tool_citation_numbers(call, evidence_count)]
+    ui_numbers = [
+        n
+        for _, call in ui_parts
+        for n in _tool_citation_numbers(
+            call, evidence_count, remap=numbering.to_legacy if numbering else None
+        )
+    ]
     candidate_numbers = list(dict.fromkeys([*doc_numbers, *ui_numbers]))
     first_by_key: dict[tuple[UUID, UUID], int] = {}
     for n in candidate_numbers:
@@ -103,24 +155,9 @@ def _validate_document_citations(
         for n, item in ((n, answer_context.evidence[n - 1]) for n in unique_numbers)
         if item.content.strip()
     ]
-    all_markers = parse_citation_markers(text, max(total_count + 20, 20))
-    allow_uncited_turn = (
-        bool(text.strip())
-        and not all_markers
-        and not answer_request.selected_only
-        and not answer_request.selected_refs
-    )
-    validated = validate_answer_citations(
-        text,
-        candidate_citations,
-        answer_context.evidence,
-        allow_uncited_conversational=allow_uncited_turn,
-    )
+    validated = validate_answer_citations(text, candidate_citations, answer_context.evidence)
     kept = {(c.documentVersionId, c.chunkId): i for i, c in enumerate(validated.citations, 1)}
     number_map = {n: kept[key] for n in candidate_numbers if (key := evidence_key(n)) in kept}
-    if not doc_numbers and not number_map and validated.citations:
-        # Preserve the [1] marker attached by post-hoc lexical attribution during renumbering.
-        number_map[1] = 1
     return validated, number_map
 
 
@@ -182,13 +219,26 @@ def _validate_citations(
 ) -> _CitedAnswer:
     """Validate the streamed answer's citations and renumber its markers (pure; no I/O).
 
-    Combined numbering: evidence 1..k, web k+1..k+m. Documents are validated through
+    Combined numbering: evidence 1..k0, web k0+1..k0+m, evidence fetched by tools after that (the order the
+    prompt and tool results showed the model; see ``_Numbering``). Internally the markers are translated to
+    "evidence 1..k, web k+1..k+m" and ``number_map`` is translated back. Documents are validated through
     ``validate_answer_citations`` (which returns a ValidatedAnswer); a cited web number becomes a server-built
     WebCitation numbered after the kept documents; uncited results are dropped.
     """
     web_results = list(web_run.results) if web_run is not None else []
     evidence_count = len(answer_context.evidence)
     total_count = evidence_count + len(web_results)
+    numbering = _Numbering(
+        web_run.evidence_base
+        if web_run is not None and web_run.evidence_base is not None
+        else evidence_count,
+        len(web_results),
+        evidence_count,
+    )
+    if numbering.shifted:
+        text = renumber_citation_markers(
+            text, {n: numbering.to_legacy(n) for n in range(1, total_count + 1)}, total_count
+        )
     cited_numbers = parse_citation_markers(text, total_count)
     doc_numbers = [n for n in cited_numbers if n <= evidence_count]
     # A rich answer may cite web results only inside its blocks; those count like inline markers.
@@ -196,7 +246,9 @@ def _validate_citations(
         n
         for _, call in ui_parts
         if call["name"] == TOOL_ANSWER
-        for n in _tool_citation_numbers(call, total_count, lowest=evidence_count + 1)
+        for n in _tool_citation_numbers(
+            call, total_count, lowest=evidence_count + 1, remap=numbering.to_legacy
+        )
     ]
     web_numbers = list(
         dict.fromkeys([*(n for n in cited_numbers if n > evidence_count), *widget_web])
@@ -208,6 +260,7 @@ def _validate_citations(
         doc_numbers,
         ui_parts,
         total_count,
+        numbering,
     )
     answer_text = validated.answer
     web_citations: list[dict[str, Any]] = []
@@ -228,7 +281,9 @@ def _validate_citations(
     valid_citations = [
         c.model_dump(mode="json", by_alias=True) for c in validated.citations
     ] + web_citations
-    return _CitedAnswer(final_answer, valid_citations, number_map)
+    return _CitedAnswer(
+        final_answer, valid_citations, {numbering.to_model(n): v for n, v in number_map.items()}
+    )
 
 
 def _answer_images(env: _ToolEnv) -> dict[str, dict[str, str]]:
@@ -303,15 +358,21 @@ def _assistant_metadata(
     st: _StreamState,
     generative_uis: list[dict[str, Any]],
     route_decision: dict[str, Any] | None,
+    uncited: bool = False,
 ) -> dict[str, Any]:
-    """Message ``metadata_json`` kwargs: reasoning, Generative UI parts and the router audit trail (pure).
+    """Message ``metadata_json`` kwargs: reasoning, UI parts, the ``uncited`` flag and the router audit trail (pure).
 
     Returns ``{}`` when there is nothing to store so the column keeps its default.
     """
     generative_ui = (
         generative_uis[0] if generative_uis else None
     )  # first part, kept for older clients
-    if generative_ui is None and route_decision is None and not st.accumulated_reasoning:
+    if (
+        generative_ui is None
+        and route_decision is None
+        and not st.accumulated_reasoning
+        and not uncited
+    ):
         return {}
     return {
         "metadata_json": {
@@ -328,6 +389,7 @@ def _assistant_metadata(
                 if generative_ui is not None
                 else {}
             ),
+            **({"uncited": True} if uncited else {}),
             # Audit trail of the external router's choice (category + renderer only, no content).
             **(
                 {
@@ -349,6 +411,7 @@ async def _persist_final(
     final_answer: str,
     valid_citations: list[dict[str, Any]],
     generative_uis: list[dict[str, Any]],
+    uncited: bool = False,
 ) -> UUID:
     """Persist the completed assistant message, mark the run completed and publish the terminal events.
 
@@ -378,7 +441,7 @@ async def _persist_final(
             citations=valid_citations,
             response_id=c.response_id,
             revision_of_message_id=turn.revision_of_message_id,
-            **_assistant_metadata(st, generative_uis, env.ts.route_decision),
+            **_assistant_metadata(st, generative_uis, env.ts.route_decision, uncited),
         )
         session.add(assistant_msg)
         await session.flush()
@@ -411,6 +474,7 @@ async def _persist_final(
             "citations": valid_citations,
             "model": model_ident,
             "status": "completed",
+            "uncited": uncited,
         }
         if generative_uis:
             done_payload["generative_ui"] = generative_uis[0]
@@ -440,9 +504,15 @@ def _cited_lists(args: Any) -> list[Any]:
 
 
 def _tool_citation_numbers(
-    ui_call: dict[str, str] | None, evidence_count: int, *, lowest: int = 1
+    ui_call: dict[str, str] | None,
+    evidence_count: int,
+    *,
+    lowest: int = 1,
+    remap: Callable[[int], int] | None = None,
 ) -> list[int]:
     """Return the in-range numbers (``lowest..evidence_count``) a presentation tool call cites.
+
+    ``remap`` translates each cited number (model numbering) before the range check; 0 drops it.
 
     Reads ``args.citations`` and, for ``render_answer``, every block's/stat's ``citations``. Malformed JSON,
     non-list values, bools, non-ints and out-of-range numbers are dropped; the caller still validates every
@@ -458,6 +528,6 @@ def _tool_citation_numbers(
         n
         for raw in _cited_lists(args)
         if isinstance(raw, list)
-        for n in raw
-        if type(n) is int and lowest <= n <= evidence_count
+        for n in (remap(m) if remap else m for m in raw if type(m) is int)
+        if lowest <= n <= evidence_count
     ]

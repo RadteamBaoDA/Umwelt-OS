@@ -9,7 +9,7 @@ MAX_PROMPT_CHARS = 4000
 DEFAULT_SYSTEM_PROMPTS: dict[str, str] = {
     "chat": (
         "You are Umwelt-OS Assistant, a personal intelligence assistant. "
-        "Answer the user's inquiry accurately and factually based on the retrieved context below."
+        "Answer the user's inquiry accurately and factually."
     ),
     "brief": "You write a concise personal daily brief (at most 150 words, plain text).",
     "entity_extraction": (

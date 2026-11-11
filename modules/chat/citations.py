@@ -12,11 +12,6 @@ from modules.chat.schemas import (
     ValidatedAnswer,
 )
 
-INSUFFICIENT_EVIDENCE_MESSAGE = (
-    "I do not have sufficient evidence in the retrieved documents to answer this question."
-)
-UNCITED_ANSWER_NOTICE = "[Uncited] "
-
 _WORD_RE = re.compile(r"[a-z0-9\u00c0-\u024f\u1e00-\u1eff]{2,}", re.IGNORECASE)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _STOPWORDS = frozenset(
@@ -284,91 +279,6 @@ def _best_scoring_segment(
     return best_quote, best_score
 
 
-def post_hoc_attribute_citations(
-    answer: str,
-    evidence: list[EvidenceItem],
-    *,
-    min_shared_tokens: int = 3,
-    min_overlap_ratio: float = 0.35,
-) -> tuple[str, list[Citation]]:
-    """Perform post-hoc lexical attribution when an answer omitted inline citation markers.
-
-    Checks whether any retrieved ``EvidenceItem`` shares strong lexical overlap with ``answer``
-    (at least ``min_shared_tokens`` content words or at least ``min_overlap_ratio`` of the answer's
-    content words with >= 2 shared tokens). When a strong match is found, attaches ``[1]`` to the
-    answer and constructs a ``Citation`` with ``extract_supporting_quote`` so grounded streamed
-    answers are preserved with a verified citation instead of being wiped.
-
-    Args:
-        answer: Generated response text lacking inline citation markers.
-        evidence: Ordered list of retrieved evidence items for the turn.
-        min_shared_tokens: Minimum shared non-stopword content tokens to qualify as grounded.
-        min_overlap_ratio: Minimum fraction of answer content tokens matched in the chunk.
-
-    Returns:
-        Tuple of (annotated_answer, candidate_citations). Returns (answer, []) if no chunk matches.
-    """
-    if not answer or not answer.strip() or not evidence:
-        return answer, []
-
-    lower_ans = answer.lower()
-    if (
-        "insufficient evidence" in lower_ans
-        or "not enough information" in lower_ans
-        or "cannot answer" in lower_ans
-        or "do not have sufficient" in lower_ans
-    ):
-        return answer, []
-
-    answer_tokens = _tokenize_content_words(answer)
-    if len(answer_tokens) < 2:
-        return answer, []
-
-    best_item: EvidenceItem | None = None
-    best_overlap = 0
-    best_ratio = 0.0
-
-    for item in evidence:
-        if not item.content or not item.content.strip():
-            continue
-        chunk_tokens = _tokenize_content_words(item.content)
-        if not chunk_tokens:
-            continue
-        shared = len(answer_tokens & chunk_tokens)
-        ratio = shared / len(answer_tokens)
-        if (shared >= min_shared_tokens or (shared >= 2 and ratio >= min_overlap_ratio)) and (
-            shared > best_overlap or (shared == best_overlap and ratio > best_ratio)
-        ):
-            best_overlap = shared
-            best_ratio = ratio
-            best_item = item
-
-    if best_item is None:
-        return answer, []
-
-    quote = extract_supporting_quote(answer, best_item.content, citation_number=1)
-    if not quote:
-        return answer, []
-
-    citation = Citation(
-        sourceType="document",
-        sourceId=best_item.source_id,
-        documentId=best_item.document_id,
-        documentVersionId=best_item.document_version_id,
-        chunkId=best_item.chunk_id,
-        title=best_item.title,
-        url=best_item.canonical_url,
-        observedAt=best_item.observed_at,
-        quote=quote,
-    )
-    stripped = answer.rstrip()
-    if stripped and stripped[-1] in ".!?":
-        annotated = f"{stripped[:-1]} [1]{stripped[-1]}"
-    else:
-        annotated = f"{stripped} [1]"
-    return annotated, [citation]
-
-
 def parse_citation_markers(answer: str, evidence_count: int) -> list[int]:
     """Return 1-based evidence numbers cited in the answer, first-cited order, deduplicated.
 
@@ -528,100 +438,35 @@ def _validate_one_citation(
     )
 
 
-def ensure_grounded_answer(
-    answer: str,
-    citations: list[Citation],
-    *,
-    has_sufficient_evidence: bool = False,
-    allow_uncited_conversational: bool = False,
-) -> str:
-    """Ensure that answers without sufficient evidence or citations explicitly disclose the limitation.
-
-    When ``allow_uncited_conversational`` is enabled for a streamed conversational turn that has no
-    matching citations (and no broken citation markers), prefixes ``[Uncited] `` to preserve the
-    already-streamed response with a clear uncited disclosure rather than wiping it.
-
-    Args:
-        answer: Raw generated answer text.
-        citations: List of verified citations.
-        has_sufficient_evidence: Whether the retrieved evidence was deemed sufficient.
-        allow_uncited_conversational: Whether to annotate an uncited conversational answer instead of wiping.
-
-    Returns:
-        The original answer if supported, an ``[Uncited]``-prefixed answer when allowed, or an explicit
-        insufficient-evidence response.
-    """
-    if not has_sufficient_evidence or not citations:
-        lower_ans = answer.lower()
-        if (
-            "insufficient evidence" in lower_ans
-            or "not enough information" in lower_ans
-            or "cannot answer" in lower_ans
-            or "do not have sufficient" in lower_ans
-        ):
-            return answer
-        if allow_uncited_conversational and answer.strip():
-            if answer.lstrip().startswith(UNCITED_ANSWER_NOTICE.strip()):
-                return answer
-            return f"{UNCITED_ANSWER_NOTICE}{answer}"
-        return INSUFFICIENT_EVIDENCE_MESSAGE
-    return answer
-
-
 def validate_answer_citations(
     answer: str,
     citations: list[Citation | dict[str, Any]],
     evidence: list[EvidenceItem] | dict[tuple[UUID, UUID], EvidenceItem],
-    *,
-    allow_uncited_conversational: bool = False,
 ) -> ValidatedAnswer:
-    """Validate answer citations against evidence and enforce grounded response disclosures.
+    """Validate answer citations against evidence; the answer text is never replaced or prefixed.
 
-    If ``citations`` is empty but ``evidence`` is non-empty, performs a post-hoc lexical attribution
-    check to attach ``[1]`` and its supporting quote when the answer has strong lexical overlap
-    (>= 3 shared content words or high overlap ratio) with a retrieved evidence chunk.
+    No citation is ever attached after the fact: an answer that cites nothing stays uncited (the caller
+    flags it) instead of inheriting a source by word overlap.
 
     Args:
         answer: Candidate response text from language model.
         citations: Candidate citations list.
         evidence: Retrieved evidence set for the query.
-        allow_uncited_conversational: Whether to preserve uncited conversational answers with an
-            ``[Uncited]`` notice when no citations were proposed or rejected.
 
     Returns:
-        ValidatedAnswer instance containing verified citations and grounded answer text.
+        ValidatedAnswer with the verified citations and the unchanged answer. An answer
+        without verified citations keeps its text; callers flag it through ``has_sufficient_evidence``.
     """
-    effective_answer = answer
-    effective_citations = list(citations)
-
-    evidence_list = list(evidence.values()) if isinstance(evidence, dict) else list(evidence)
-    if not effective_citations and evidence_list:
-        attributed_answer, attributed_citations = post_hoc_attribute_citations(
-            answer, evidence_list
-        )
-        if attributed_citations:
-            effective_answer = attributed_answer
-            effective_citations = list(attributed_citations)
-
-    validation = validate_citations(effective_citations, evidence)
+    validation = validate_citations(list(citations), evidence)
     has_sufficient = len(validation.valid_citations) > 0 and (
         bool(evidence) if isinstance(evidence, (list, dict)) else False
-    )
-    can_allow_uncited = (
-        allow_uncited_conversational and not citations and len(validation.rejected_citations) == 0
-    )
-    final_answer = ensure_grounded_answer(
-        effective_answer,
-        validation.valid_citations,
-        has_sufficient_evidence=has_sufficient,
-        allow_uncited_conversational=can_allow_uncited,
     )
     warnings = list(validation.rejection_reasons)
     if not has_sufficient:
         warnings.append("Answer lacks sufficient verified citations")
 
     return ValidatedAnswer(
-        answer=final_answer,
+        answer=answer,
         citations=validation.valid_citations,
         has_sufficient_evidence=has_sufficient,
         warnings=warnings,

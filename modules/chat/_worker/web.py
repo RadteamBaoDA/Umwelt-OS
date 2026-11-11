@@ -66,6 +66,8 @@ class _WebSearchRun:
     images: tuple[
         web.WebImage, ...
     ] = ()  # image-search hits; used only when media is permitted this turn
+    # Evidence count when the prompt numbered the results (web ``n`` = base + index + 1); None = not yet set.
+    evidence_base: int | None = None
 
 
 def _web_search_run(
@@ -603,7 +605,14 @@ async def _rewrite_web_query(
                 "chat",
                 mapping,
                 policy,
-                [{"role": "system", "content": REWRITE_INSTRUCTIONS}, *window],
+                [
+                    {
+                        "role": "system",
+                        # The date lets "latest"/"this year" resolve into a concrete search query.
+                        "content": f"{REWRITE_INSTRUCTIONS} Today is {datetime.now(UTC).date().isoformat()}.",
+                    },
+                    *window,
+                ],
                 schema,
                 max_tokens=64,
                 temperature=0,
@@ -611,6 +620,10 @@ async def _rewrite_web_query(
             )
         raw = json.loads(response["choices"][0]["message"]["content"])["query"]
         query = web.normalize_query(raw)
+        if not query:
+            # Content-free signal for tuning max_tokens: reasoning models can spend the whole cap thinking.
+            logger.warning("web query rewrite returned an empty query; using the literal prompt")
+            return user_prompt
         return query if len(query) <= REWRITE_QUERY_CHARS else user_prompt
     except asyncio.CancelledError:
         raise
@@ -632,17 +645,21 @@ async def _rewrite_and_search(
     *,
     scope: InternalJobScope,
     access_fence: AccessFence,
+    query: str | None = None,
 ) -> _WebSearchRun:
     """Rewrite the prompt into a search query, run ``_search_for_run`` with it and record the query used.
+
+    ``query`` is an already rewritten query (the follow-up retrieval rewrite); it skips a second model call.
 
     Runs as the concurrent search task, so the rewrite overlaps retrieval. The query is stored on the outcome
     only when a search actually ran (status ``used``); skipped/unavailable outcomes never sent anything. The
     outcome also carries ``provider``/``fallback`` when results were found. An image search for the same
     query runs concurrently with the text search and attaches its hits to the run (``[]`` on any failure).
     """
-    query = await _rewrite_web_query(
-        session_factory, settings, redis, scope, user_prompt, prior_messages
-    )
+    if query is None:
+        query = await _rewrite_web_query(
+            session_factory, settings, redis, scope, user_prompt, prior_messages
+        )
     # Images and text share the query and run concurrently; the image leg swallows its own failures.
     run, images = await asyncio.gather(
         _search_for_run(

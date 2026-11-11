@@ -278,6 +278,8 @@ class ConversationRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # True while a response run (pending / streaming / awaiting input) is active; filled by the list route.
+    has_active_run: bool = False
 
 
 class _GenerativeUIBase(BaseModel):
@@ -422,6 +424,9 @@ class MessageRead(BaseModel):
     reasoning: str | None = None  # model "thinking" text kept from the stream, capped at write time
     # Follow-up question suggestions written by the post-answer step; empty until (or unless) generated.
     suggestions: list[str] = Field(default_factory=list)
+    # True when the stored answer carries no verified citation; the text is kept as streamed and the UI
+    # shows a "not based on your documents" label instead of a prefix inside the content.
+    uncited: bool = False
 
 
 class ChatExportCitation(BaseModel):
@@ -626,7 +631,11 @@ class ConversationDetailRead(ConversationRead):
 
 
 class SendMessageRequest(BaseModel):
-    """Payload for sending a user message within an existing conversation."""
+    """Payload for sending a user message within an existing conversation.
+
+    ``db_query`` is deprecated and ignored: the server grants ``query_collected_data`` whenever the owner
+    has an active collected datasource. The field is still accepted until clients stop sending it.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -648,7 +657,10 @@ class SendMessageRequest(BaseModel):
 
 
 class MessageMutationRequest(BaseModel):
-    """Append an edited user prompt or regenerate an answer with its original context."""
+    """Append an edited user prompt or regenerate an answer with its original context.
+
+    ``db_query`` is deprecated and ignored (see ``SendMessageRequest``); it is accepted for old clients.
+    """
 
     model_config = ConfigDict(extra="forbid")
 

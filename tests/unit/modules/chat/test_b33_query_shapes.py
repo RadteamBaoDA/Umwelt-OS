@@ -85,3 +85,50 @@ async def test_get_conversation_run_lookup_filters_by_conversation(monkeypatch) 
 
 class _Stop(Exception):
     pass
+
+
+async def test_list_conversations_flags_active_runs_with_one_batched_query(monkeypatch) -> None:
+    """C15: ``has_active_run`` comes from a single IN (...) lookup for the page, not one query per row."""
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+
+    def row() -> SimpleNamespace:
+        return SimpleNamespace(
+            id=uuid4(),
+            title="t",
+            context_kind=None,
+            context_resource_id=None,
+            pinned=False,
+            archived=False,
+            created_at=now,
+            updated_at=now,
+            metadata_json={},
+        )
+
+    busy, idle = row(), row()
+    statements: list[object] = []
+
+    async def scalars(stmt):
+        statements.append(stmt)
+        result = [busy, idle] if len(statements) == 1 else [busy.id]
+        return MagicMock(all=MagicMock(return_value=result))
+
+    session = MagicMock(scalars=scalars)
+    monkeypatch.setattr(
+        chat_routes,
+        "owner_default_scope",
+        AsyncMock(return_value=SimpleNamespace(workspace_id=uuid4())),
+    )
+    out = await chat_routes.list_conversations(
+        session,
+        SimpleNamespace(owner_id=1),
+        MagicMock(headers={}),
+        limit=5,
+        offset=0,
+        archived=False,
+        q=None,
+    )
+    assert [c.has_active_run for c in out] == [True, False]
+    assert len(statements) == 2
+    assert "status IN" in str(statements[1].compile(dialect=postgresql.dialect()))

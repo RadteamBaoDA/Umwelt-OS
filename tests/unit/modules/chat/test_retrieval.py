@@ -6,7 +6,7 @@ Covers:
 - _extract_rerank_indices and _apply_configured_reranking safety (local-only fence enforcement)
 - revalidate_context_fence: active source check, generation matching, remote destination policy
 - validate_citations: citation verification, quote containment, whitespace tolerance, metadata extraction
-- ensure_grounded_answer and validate_answer_citations: grounded disclosure enforcement
+- validate_answer_citations: citation validation that keeps the answer text
 """
 
 from datetime import UTC, datetime
@@ -17,11 +17,9 @@ import pytest
 
 from modules.chat import retrieval
 from modules.chat.citations import (
-    INSUFFICIENT_EVIDENCE_MESSAGE,
     _contains_quote,
     _normalize_whitespace,
     _to_uuid,
-    ensure_grounded_answer,
     validate_answer_citations,
     validate_citations,
 )
@@ -33,7 +31,6 @@ from modules.chat.retrieval import (
 )
 from modules.chat.schemas import (
     AnswerContext,
-    Citation,
     EntityContextItem,
     EvidenceItem,
     TemporalContextItem,
@@ -73,7 +70,7 @@ class TestPromptAssembler:
         assert "<retrieved_evidence>" in prompt
         assert "</retrieved_evidence>" in prompt
         assert "Document: System Arch" in prompt
-        assert str(src_id) in prompt
+        assert str(src_id) not in prompt  # ids stay out of the model-facing source line
         assert "Architecture guidelines for Umwelt OS." in prompt
 
     def test_format_grounded_context_with_entities_and_temporal(self) -> None:
@@ -453,41 +450,6 @@ class TestCitationSynthesisAndValidation:
         assert result.is_valid is False
         assert "does not match evidence document ID" in result.rejection_reasons[0]
 
-    def test_ensure_grounded_answer(self) -> None:
-        """Verify ensure_grounded_answer substitutes insufficient evidence notice when ungrounded."""
-        # When evidence is insufficient and citations empty, returns standard message
-        grounded = ensure_grounded_answer(
-            answer="Here is some ungrounded claim.",
-            citations=[],
-            has_sufficient_evidence=False,
-        )
-        assert grounded == INSUFFICIENT_EVIDENCE_MESSAGE
-
-        # If answer already admits lack of evidence, preserve original answer
-        already_admits = "I cannot answer because there is not enough information."
-        grounded2 = ensure_grounded_answer(
-            answer=already_admits,
-            citations=[],
-            has_sufficient_evidence=False,
-        )
-        assert grounded2 == already_admits
-
-        # When evidence is sufficient and citations exist, returns answer untouched
-        cit = Citation(
-            source_id=uuid4(),
-            document_id=uuid4(),
-            document_version_id=uuid4(),
-            chunk_id=uuid4(),
-            title="Title",
-            quote="Quote",
-        )
-        grounded3 = ensure_grounded_answer(
-            answer="Grounded answer.",
-            citations=[cit],
-            has_sufficient_evidence=True,
-        )
-        assert grounded3 == "Grounded answer."
-
     def test_validate_answer_citations_integration(self) -> None:
         """Verify full validate_answer_citations pipeline."""
         src_id = uuid4()
@@ -600,3 +562,32 @@ async def test_build_context_releases_connection_during_embed() -> None:
             SCOPE,
         )
     assert search.call_args.kwargs["release_during_embed"] is True
+
+
+def _item_with_url(url: str) -> EvidenceItem:
+    """Minimal evidence item carrying ``url`` as its canonical URL."""
+    return EvidenceItem(
+        source_id=uuid4(),
+        source_generation=1,
+        local_only=False,
+        document_id=uuid4(),
+        document_version_id=uuid4(),
+        version_number=1,
+        chunk_id=uuid4(),
+        content="c",
+        title="T",
+        canonical_url=url,
+    )
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://[::1", "Document: T"),  # urlparse raises ValueError
+        ("http://" + "a" * 254 + ".com/x", "Document: T"),  # over the DNS maximum
+        ("https://example.com/x", "Document: T | Source: example.com"),
+    ],
+)
+def test_evidence_source_line_tolerates_bad_urls(url: str, expected: str) -> None:
+    """Malformed or over-long hosts drop the Source part instead of breaking prompt construction."""
+    assert retrieval._evidence_source_line(_item_with_url(url)) == expected

@@ -215,8 +215,6 @@ from modules.chat._public.export import (
     validate_export_fences as validate_export_fences,
 )
 from modules.chat.citations import (
-    INSUFFICIENT_EVIDENCE_MESSAGE,
-    ensure_grounded_answer,
     validate_answer_citations,
     validate_citations,
 )
@@ -279,7 +277,6 @@ from modules.chat.worker import (
 )
 
 __all__ = [
-    "INSUFFICIENT_EVIDENCE_MESSAGE",
     "AgentActivityLink",
     "AgentActivityRead",
     "AnswerContext",
@@ -323,7 +320,6 @@ __all__ = [
     "count_source_conversations",
     "delete_conversation",
     "ensure_demo_conversation",
-    "ensure_grounded_answer",
     "export_page",
     "external_router",
     "filter_current_citations",

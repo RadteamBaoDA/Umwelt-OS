@@ -12,7 +12,8 @@ from core.realtime.routes import _wait_for_realtime_wakeup, notify_realtime_wake
 from modules.chat.db_query import (
     TOOL_QUERY_COLLECTED_DATA,
     build_db_query_tool_spec,
-    should_auto_enable_db_query,
+    has_collected_datasource,
+    is_gadget_turn,
     validate_readonly_sql,
 )
 from modules.chat.generative_ui.tool_specs import build_chat_tool_specs
@@ -63,18 +64,36 @@ def test_validate_readonly_sql_rejects_unsafe_or_unscoped_sql(bad_sql: str) -> N
         validate_readonly_sql(bad_sql)
 
 
-def test_should_auto_enable_db_query_triggers_on_flag_gadget_or_keywords() -> None:
-    """Auto-detection enables query_collected_data for explicit toggle, gadget context, or analytical/realtime prompts."""
-    assert should_auto_enable_db_query("Hello", {DB_QUERY_KEY: True}) is True
-    assert should_auto_enable_db_query("Hello", {DB_QUERY_KEY: {"requested": True}}) is True
-    assert should_auto_enable_db_query("Hello", {"kind": "gadget"}) is True
-    assert (
-        should_auto_enable_db_query("Hello", {GADGET_SCOPE_KEY: {"renderer": "finance_chart"}})
-        is True
-    )
-    assert should_auto_enable_db_query("What is the average BTC price today?", None) is True
-    assert should_auto_enable_db_query("Giá vàng mới nhất và thống kê biến động?", None) is True
-    assert should_auto_enable_db_query("Write a short poem about autumn leaves.", None) is False
+def test_is_gadget_turn_ignores_legacy_flag_and_keywords() -> None:
+    """Only the gadget path is request-driven; the old db_query flag and keyword matching are gone."""
+    assert is_gadget_turn({"kind": "gadget"}) is True
+    assert is_gadget_turn({GADGET_SCOPE_KEY: {"renderer": "finance_chart"}}) is True
+    assert is_gadget_turn({DB_QUERY_KEY: True}) is False
+    assert is_gadget_turn(None) is False
+
+
+class _OneRowSession:
+    """Session stub whose EXISTS-style query returns one row or none."""
+
+    def __init__(self, row: object | None) -> None:
+        self.row = row
+        self.statements: list[object] = []
+
+    async def execute(self, stmt: object) -> SimpleNamespace:
+        """Record the statement and return the configured first row."""
+        self.statements.append(stmt)
+        return SimpleNamespace(first=lambda: self.row)
+
+
+@pytest.mark.asyncio
+async def test_has_collected_datasource_follows_active_source_presence() -> None:
+    """The grant condition is the existence of an active collected source, nothing in the prompt."""
+    ws = uuid4()
+    yes = _OneRowSession((uuid4(),))
+    no = _OneRowSession(None)
+    assert await has_collected_datasource(yes, workspace_id=ws, allow_local_only=False) is True  # type: ignore[arg-type]
+    assert await has_collected_datasource(no, workspace_id=ws, allow_local_only=True) is False  # type: ignore[arg-type]
+    assert "local_only" in str(yes.statements[0]) and "local_only" not in str(no.statements[0])
 
 
 def test_build_chat_tool_specs_includes_db_query_when_enabled() -> None:
@@ -89,6 +108,15 @@ def test_build_chat_tool_specs_includes_db_query_when_enabled() -> None:
     assert TOOL_QUERY_COLLECTED_DATA in enabled_names
     spec = build_db_query_tool_spec()
     assert spec["function"]["name"] == TOOL_QUERY_COLLECTED_DATA
+
+
+def test_db_query_tool_spec_is_pinned() -> None:
+    """The built tool spec is byte-stable; refactors of the builder must not change it."""
+    import hashlib
+    import json
+
+    digest = hashlib.sha256(json.dumps(build_db_query_tool_spec()).encode()).hexdigest()
+    assert digest == "1dc37843565d092887b0cc9859ebc027fe725922fc5f37dfde1515278d6402b1"
 
 
 def test_provider_specs_realtime_tier_skip_embedding_and_retention() -> None:
@@ -127,3 +155,116 @@ async def test_notify_realtime_wakeup_wakes_waiter_immediately() -> None:
         timeout=0.5,
     )
     await task
+
+
+class _EmptyObsSession:
+    """Session stub whose every observation SELECT returns no rows."""
+
+    async def execute(self, _stmt: object) -> SimpleNamespace:
+        """Return an empty result for both ``.scalars().all()`` and ``.all()`` shapes."""
+        return SimpleNamespace(all=lambda: [], scalars=lambda: SimpleNamespace(all=lambda: []))
+
+
+@pytest.mark.asyncio
+async def test_structured_event_feed_provider_returns_documents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-measurement provider (emsc_quakes) adds documents even for target='observations'."""
+    import json
+    from datetime import UTC, datetime
+
+    from modules.chat import db_query
+
+    ver_id = uuid4()
+    row = SimpleNamespace(
+        document_id=uuid4(),
+        document_version_id=ver_id,
+        provider="emsc_quakes",
+        source_name="EMSC",
+        title="M4.1 - Crete",
+        url="https://example.test/q",
+        published_at=None,
+        observed_at=datetime(2026, 11, 1, tzinfo=UTC),
+        excerpt="quake",
+    )
+
+    async def fake_select(_s: object, _f: object, _l: int) -> list[object]:
+        return [row]
+
+    async def fake_register(*_a: object, **_kw: object) -> dict:
+        return {ver_id: 1}
+
+    monkeypatch.setattr(db_query, "_select_structured_documents", fake_select)
+    monkeypatch.setattr(db_query, "_register_evidence_for_versions", fake_register)
+    args = db_query.QueryCollectedDataArgs(target="observations", providers=["emsc_quakes"])
+    out = json.loads(
+        await db_query._execute_structured_mode(
+            _EmptyObsSession(),  # type: ignore[arg-type]
+            args,
+            workspace_id=uuid4(),
+            allowed_source_ids=[uuid4()],
+            date_from=None,
+            date_to=None,
+            evidence_list=[],
+            available_providers=["emsc_quakes"],
+        )
+    )
+    assert out["documents"][0]["citation"] == "[1]"
+    assert "available_providers" not in out
+
+
+@pytest.mark.asyncio
+async def test_structured_empty_result_lists_available_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no rows at all the payload names the active providers so the model can retry."""
+    import json
+
+    from modules.chat import db_query
+
+    async def fake_select(_s: object, _f: object, _l: int) -> list[object]:
+        return []
+
+    async def fake_register(*_a: object, **_kw: object) -> dict:
+        return {}
+
+    monkeypatch.setattr(db_query, "_select_structured_documents", fake_select)
+    monkeypatch.setattr(db_query, "_register_evidence_for_versions", fake_register)
+    out = json.loads(
+        await db_query._execute_structured_mode(
+            _EmptyObsSession(),  # type: ignore[arg-type]
+            db_query.QueryCollectedDataArgs(providers=["emsc"]),
+            workspace_id=uuid4(),
+            allowed_source_ids=[uuid4()],
+            date_from=None,
+            date_to=None,
+            evidence_list=[],
+            available_providers=["emsc_quakes", "usgs"],
+        )
+    )
+    assert out["available_providers"] == ["emsc_quakes", "usgs"]
+
+
+@pytest.mark.asyncio
+async def test_db_query_granted_by_source_gadget_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No keyword or flag: a source grants the tool, none withholds it, a lookup error withholds it."""
+    from modules.chat._worker import setup as worker_setup
+
+    c = SimpleNamespace(scope=SimpleNamespace(workspace_id=uuid4()), response_id=uuid4())
+    plain = SimpleNamespace(req_params={DB_QUERY_KEY: True})  # legacy flag is ignored
+    gadget = SimpleNamespace(req_params={"kind": "gadget"})
+
+    async def run(turn: object, row: object | None) -> bool:
+        return await worker_setup._db_query_granted(_OneRowSession(row), c, turn, False)  # type: ignore[arg-type]
+
+    assert await run(plain, (uuid4(),)) is True
+    assert await run(plain, None) is False
+    assert await run(gadget, None) is True
+
+    async def boom(*_a: object, **_k: object) -> bool:
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(worker_setup, "has_collected_datasource", boom)
+    assert await run(plain, (uuid4(),)) is False
