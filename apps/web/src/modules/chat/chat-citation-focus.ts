@@ -4,25 +4,37 @@ import * as React from 'react';
 import { citationIdentity } from './citation-panel';
 import type { Citation } from './api';
 
-/** Sources the reader asked to see in the evidence rail; `nonce` changes on every request, even for the same keys. */
+/**
+ * Sources the reader asked to see in the evidence rail. `scope` is the opening answer's own citation list (numbered the
+ * way its inline chips are) or null for "all sources"; `keys` are the cards to emphasize. `nonce` changes on every
+ * request, even for the same keys.
+ */
 interface CitationFocus {
+  scope: readonly Citation[] | null;
   keys: readonly string[];
   nonce: number;
 }
 
-const EMPTY: CitationFocus = { keys: [], nonce: 0 };
+const EMPTY: CitationFocus = { scope: null, keys: [], nonce: 0 };
 let current: CitationFocus = EMPTY;
 const listeners = new Set<() => void>();
 
 /**
- * Asks the evidence rail (desktop) or sources sheet (mobile) to open on the given citations. The transcript and the
+ * Asks the evidence rail (desktop) or sources sheet (mobile) to open on one answer's sources. The transcript and the
  * rail are siblings in different owners (session vs. page), so this tiny module store is their only coupling.
  *
- * @param citations - Citations to highlight; the first one is scrolled into view. Empty input is ignored.
+ * @param citations - The answer's citations, in the order its inline chips number them. Empty input is ignored.
+ * @param highlighted - The clicked citation to emphasize and scroll into view; omit when opened from the sources button.
  */
-export function focusCitations(citations: readonly Citation[]): void {
+export function focusCitations(citations: readonly Citation[], highlighted?: Citation): void {
   if (citations.length === 0) return;
-  current = { keys: citations.map(citationIdentity), nonce: current.nonce + 1 };
+  current = { scope: citations, keys: highlighted ? [citationIdentity(highlighted)] : [], nonce: current.nonce + 1 };
+  listeners.forEach((listener) => listener());
+}
+
+/** Drops the per-answer scope so the rail lists every source of the conversation again ("View all"). */
+export function showAllCitations(): void {
+  current = { scope: null, keys: [], nonce: current.nonce + 1 };
   listeners.forEach((listener) => listener());
 }
 
@@ -34,10 +46,16 @@ export function focusCitations(citations: readonly Citation[]): void {
  */
 export function onCitationFocus(callback: () => void): () => void {
   listeners.add(callback);
-  return () => { listeners.delete(callback); };
+  return () => {
+    listeners.delete(callback);
+  };
 }
 
 /** Subscribes React to the latest focus request (for highlighting and scroll targets). */
 export function useCitationFocus(): CitationFocus {
-  return React.useSyncExternalStore(onCitationFocus, () => current, () => EMPTY);
+  return React.useSyncExternalStore(
+    onCitationFocus,
+    () => current,
+    () => EMPTY,
+  );
 }

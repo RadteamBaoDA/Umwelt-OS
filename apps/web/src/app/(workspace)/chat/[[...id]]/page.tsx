@@ -23,7 +23,7 @@ const HISTORY_COLLAPSED_KEY = 'umwelt.chat.historyCollapsed';
  */
 function ChatPageContent() {
   const s0 = useChatPageState();
-  const { chatCtrl, mobileView } = s0;
+  const { mobileView } = s0;
 
   // Two-way sync between `/chat/<id>` and the shared controller. A URL change (first load, pasted link)
   // wins once and selects that conversation; otherwise the URL mirrors the controller. Native replaceState
@@ -39,20 +39,16 @@ function ChatPageContent() {
   return (
     <div className="flex min-h-0 flex-1 shrink! basis-0 w-full min-w-0 overflow-hidden rounded-lg border border-border bg-surface">
       {/* Sidebar history on desktop; toggleable on mobile */}
-<ChatHistoryRail vm={vm} />
+      <ChatHistoryRail vm={vm} />
 
       {/* Main chat session area */}
-      <div
-        className={`${
-          mobileView === 'chat' ? 'flex' : 'hidden md:flex'
-        } flex-1 min-w-0 flex-col h-full`}
-      >
+      <div className={`${mobileView === 'chat' ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 flex-col h-full`}>
         <div className="flex-1 min-h-0 flex flex-col">
-<ChatSessionPanel vm={vm} />
+          <ChatSessionPanel vm={vm} />
         </div>
       </div>
 
-      <ChatSideRail citations={citations} context={chatCtrl.context} />
+      <ChatSideRail citations={citations} />
       {conversationActions.dialogs}
     </div>
   );
@@ -65,43 +61,67 @@ function ChatPageContent() {
  * @returns Full Chat page element; the shell is supplied by the (workspace) layout.
  */
 export default function ChatPage() {
-  return (
-    <ChatPageContent />
-  );
+  return <ChatPageContent />;
 }
 
 type ChatPageContentVm = ReturnType<typeof useChatPageData>;
 
 /** History sidebar: collapsed icon rail or the full conversation history. */
 function ChatHistoryRail({ vm }: { vm: ChatPageContentVm }) {
-  const { t, chatCtrl, mobileView, historyCollapsed, setHistoryCollapsed, handleSelectConversation, handleNewConversation, conversationActions } = vm;
+  const {
+    t,
+    chatCtrl,
+    mobileView,
+    historyCollapsed,
+    setHistoryCollapsed,
+    handleSelectConversation,
+    handleNewConversation,
+    conversationActions,
+  } = vm;
   return (
-      <div
-        id="chat-history-sidebar"
-        className={`${
-          mobileView === 'history' ? 'flex w-full' : historyCollapsed ? 'hidden md:flex md:w-12' : 'hidden md:flex md:w-[280px]'
-        } shrink-0 border-r border-border h-full`}
-      >
-        {historyCollapsed && mobileView !== 'history' ? (
-          <div className="mx-auto flex flex-col">
-            <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" onClick={handleNewConversation} aria-label={t('newChat')}>
-              <Plus aria-hidden="true" />
-            </Button>
-            <Button type="button" variant="ghost" size="icon" className="size-11 shrink-0" onClick={() => setHistoryCollapsed(false)} aria-label={t('expandHistory')} aria-expanded="false" aria-controls="chat-history-sidebar">
-              <PanelLeftOpen aria-hidden="true" />
-            </Button>
-          </div>
-        ) : (
-          <ChatHistory
-            activeConversationId={chatCtrl.activeConversationId}
-            onSelectConversation={handleSelectConversation}
-            onNewConversation={handleNewConversation}
-            className="w-full"
-            actions={conversationActions}
-            onCollapse={mobileView === 'history' ? undefined : () => setHistoryCollapsed(true)}
-          />
-        )}
-      </div>
+    <div
+      id="chat-history-sidebar"
+      className={`${
+        mobileView === 'history' ? 'flex w-full' : historyCollapsed ? 'hidden md:flex md:w-12' : 'hidden md:flex md:w-[280px]'
+      } shrink-0 border-r border-border h-full`}
+    >
+      {historyCollapsed && mobileView !== 'history' ? (
+        <div className="mx-auto flex flex-col">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-11 shrink-0"
+            onClick={handleNewConversation}
+            aria-label={t('newChat')}
+            title={`${t('newChat')} (Ctrl+Shift+O)`}
+          >
+            <Plus aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-11 shrink-0"
+            onClick={() => setHistoryCollapsed(false)}
+            aria-label={t('expandHistory')}
+            aria-expanded="false"
+            aria-controls="chat-history-sidebar"
+          >
+            <PanelLeftOpen aria-hidden="true" />
+          </Button>
+        </div>
+      ) : (
+        <ChatHistory
+          activeConversationId={chatCtrl.activeConversationId}
+          onSelectConversation={handleSelectConversation}
+          onNewConversation={handleNewConversation}
+          className="w-full"
+          actions={conversationActions}
+          onCollapse={mobileView === 'history' ? undefined : () => setHistoryCollapsed(true)}
+        />
+      )}
+    </div>
   );
 }
 
@@ -109,34 +129,37 @@ function ChatHistoryRail({ vm }: { vm: ChatPageContentVm }) {
 function ChatSessionPanel({ vm }: { vm: ChatPageContentVm }) {
   const { t, chatCtrl, setMobileView, conversationActions, citations, detail } = vm;
   return (
-          <ChatSession
-            conversationId={chatCtrl.activeConversationId}
-            onConversationCreated={(id) => chatCtrl.setActiveConversationId(id)}
-            mode="full"
-            headerLeading={(
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setMobileView('history')}
-                className="md:hidden min-h-9 pointer-coarse:min-h-11 gap-1.5 px-3 py-1.5 text-xs font-semibold"
-              >
-                <ArrowLeft aria-hidden="true" className="size-3.5" />{t('history')}
-              </Button>
-            )}
-            headerTrailing={<ChatSourcesSheet citations={citations} context={chatCtrl.context} />}
-            onRenameConversation={chatCtrl.activeConversationId
-              ? () => conversationActions.rename({ id: chatCtrl.activeConversationId!, title: detail?.title ?? '' })
-              : undefined}
-            onDeleteConversation={chatCtrl.activeConversationId
-              ? () => conversationActions.remove(chatCtrl.activeConversationId!)
-              : undefined}
-            onSetPinned={chatCtrl.activeConversationId
-              ? (pinned) => conversationActions.setPinned(chatCtrl.activeConversationId!, pinned)
-              : undefined}
-            onSetArchived={chatCtrl.activeConversationId
-              ? (archived) => conversationActions.setArchived(chatCtrl.activeConversationId!, archived)
-              : undefined}
-          />
+    <ChatSession
+      conversationId={chatCtrl.activeConversationId}
+      onConversationCreated={(id) => chatCtrl.setActiveConversationId(id)}
+      mode="full"
+      headerLeading={
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setMobileView('history')}
+          className="md:hidden min-h-9 pointer-coarse:min-h-11 gap-1.5 px-3 py-1.5 text-xs font-semibold"
+          aria-label={t('history')}
+          title={t('history')}
+        >
+          <ArrowLeft aria-hidden="true" className="size-4" />
+          <span className="hidden min-[480px]:inline">{t('history')}</span>
+        </Button>
+      }
+      headerTrailing={<ChatSourcesSheet citations={citations} />}
+      onRenameConversation={
+        chatCtrl.activeConversationId
+          ? () => conversationActions.rename({ id: chatCtrl.activeConversationId!, title: detail?.title ?? '' })
+          : undefined
+      }
+      onDeleteConversation={chatCtrl.activeConversationId ? () => conversationActions.remove(chatCtrl.activeConversationId!) : undefined}
+      onSetPinned={
+        chatCtrl.activeConversationId ? (pinned) => conversationActions.setPinned(chatCtrl.activeConversationId!, pinned) : undefined
+      }
+      onSetArchived={
+        chatCtrl.activeConversationId ? (archived) => conversationActions.setArchived(chatCtrl.activeConversationId!, archived) : undefined
+      }
+    />
   );
 }
 
@@ -148,26 +171,49 @@ function useChatPageState() {
   const [historyCollapsed, setHistoryCollapsedState] = React.useState(false); // 280px history region is open by default on desktop
   // Restore the saved choice after mount (not in the initializer) so server and first client render agree.
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time post-hydration read of an external store
-    try { if (localStorage.getItem(HISTORY_COLLAPSED_KEY) === '1') setHistoryCollapsedState(true); } catch { /* storage blocked: default open */ }
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time post-hydration read of an external store
+      if (localStorage.getItem(HISTORY_COLLAPSED_KEY) === '1') setHistoryCollapsedState(true);
+    } catch {
+      /* storage blocked: default open */
+    }
   }, []);
   /** Updates the collapsed flag and persists it per device; storage failures only lose persistence. */
   const setHistoryCollapsed = React.useCallback((collapsed: boolean) => {
     setHistoryCollapsedState(collapsed);
-    try { localStorage.setItem(HISTORY_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch { /* storage blocked */ }
+    try {
+      localStorage.setItem(HISTORY_COLLAPSED_KEY, collapsed ? '1' : '0');
+    } catch {
+      /* storage blocked */
+    }
   }, []);
   // Read from the pathname (not useParams): native history.replaceState updates usePathname but not route params.
   const pathname = usePathname();
   const urlConversationId = React.useMemo(() => {
     if (!pathname.startsWith('/chat/')) return null;
-    try { return decodeURIComponent(pathname.slice('/chat/'.length).split('/')[0]) || null; }
-    catch { return null; } // malformed escape in a pasted URL: treat as no conversation instead of crashing
+    try {
+      return decodeURIComponent(pathname.slice('/chat/'.length).split('/')[0]) || null;
+    } catch {
+      return null;
+    } // malformed escape in a pasted URL: treat as no conversation instead of crashing
   }, [pathname]);
   const activeConversationId = chatCtrl.activeConversationId;
   const { selectConversation } = chatCtrl;
   const lastUrlConversationIdRef = React.useRef<string | null | undefined>(undefined);
 
-  return { t, chatCtrl, pathname, urlConversationId, activeConversationId, lastUrlConversationIdRef, mobileView, setMobileView, historyCollapsed, setHistoryCollapsed, selectConversation };
+  return {
+    t,
+    chatCtrl,
+    pathname,
+    urlConversationId,
+    activeConversationId,
+    lastUrlConversationIdRef,
+    mobileView,
+    setMobileView,
+    historyCollapsed,
+    setHistoryCollapsed,
+    selectConversation,
+  };
 }
 
 /** Two-way sync between /chat/<id> and the shared controller; a URL change wins once, then the URL mirrors the controller via native replaceState. */
@@ -217,10 +263,14 @@ function useChatPageData(p: ReturnType<typeof useChatUrlSync>) {
   const citations = React.useMemo(() => {
     const seen = new Set<string>();
     const unique: Citation[] = [];
-    for (const message of detail?.messages ?? []) for (const citation of message.citations ?? []) {
-      const key = citation.sourceType === 'web' ? citation.url : `${citation.documentVersionId}:${citation.chunkId}`;
-      if (!seen.has(key)) { seen.add(key); unique.push(citation); }
-    }
+    for (const message of detail?.messages ?? [])
+      for (const citation of message.citations ?? []) {
+        const key = citation.sourceType === 'web' ? citation.url : `${citation.documentVersionId}:${citation.chunkId}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          unique.push(citation);
+        }
+      }
     return unique;
   }, [detail?.messages]);
 

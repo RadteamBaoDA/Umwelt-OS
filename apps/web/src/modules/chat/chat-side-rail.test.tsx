@@ -14,7 +14,7 @@ describe('ChatSourcesSheet', () => {
     const web = { sourceType: 'web', url: 'https://example.com/a', title: 'Example', quote: 'An excerpt' } as unknown as Citation;
     render(
       <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-        <ChatSourcesSheet citations={[web]} context={null} />
+        <ChatSourcesSheet citations={[web]} />
       </NextIntlClientProvider>,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Open sources and evidence' }));
@@ -24,7 +24,7 @@ describe('ChatSourcesSheet', () => {
   it('renders no trigger when there is nothing to show', () => {
     render(
       <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-        <ChatSourcesSheet citations={[]} context={null} />
+        <ChatSourcesSheet citations={[]} />
       </NextIntlClientProvider>,
     );
     expect(screen.queryByRole('button', { name: 'Open sources and evidence' })).toBeNull();
@@ -33,17 +33,19 @@ describe('ChatSourcesSheet', () => {
 
 describe('ChatSideRail', () => {
   const wrap = (node: React.ReactNode) => (
-    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>{node}</NextIntlClientProvider>
+    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+      {node}
+    </NextIntlClientProvider>
   );
 
   it('renders nothing when there is no rail data', () => {
-    const { container } = render(wrap(<ChatSideRail citations={[]} context={null} />));
+    const { container } = render(wrap(<ChatSideRail citations={[]} />));
     expect(container.querySelector('#chat-evidence-rail')).toBeNull();
   });
 
   it('lists cited sources as rows when citations exist', () => {
     const web = { sourceType: 'web', url: 'https://example.com/a', title: 'Example', quote: 'An excerpt' } as unknown as Citation;
-    render(wrap(<ChatSideRail citations={[web]} context={null} />));
+    render(wrap(<ChatSideRail citations={[web]} />));
     expect(screen.getAllByTestId('rail-source')).toHaveLength(1);
     expect(screen.getByText('An excerpt')).toBeTruthy();
   });
@@ -53,23 +55,39 @@ describe('citation focus', () => {
   const web = { sourceType: 'web', url: 'https://example.com/a', title: 'Example', quote: 'An excerpt' } as unknown as Citation;
   const other = { sourceType: 'web', url: 'https://example.com/b', title: 'Other', quote: 'Second excerpt' } as unknown as Citation;
   const wrap = (node: React.ReactNode) => (
-    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>{node}</NextIntlClientProvider>
+    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+      {node}
+    </NextIntlClientProvider>
   );
 
-  it('highlights the requested source in the rail and re-opens a collapsed rail', async () => {
-    render(wrap(<ChatSideRail citations={[web, other]} context={null} />));
+  it('shows only the answer sources with its numbering, highlights the clicked one and re-opens a collapsed rail', async () => {
+    render(wrap(<ChatSideRail citations={[web, other]} />));
     await userEvent.click(screen.getByRole('button', { name: /^Collapse sources/ }));
     expect(screen.queryAllByTestId('rail-source')).toHaveLength(0);
-    act(() => focusCitations([other]));
+    act(() => focusCitations([other], other));
     const cards = screen.getAllByTestId('rail-source');
-    expect(cards).toHaveLength(2);
-    expect(cards[1].getAttribute('aria-current')).toBe('true');
-    expect(cards[0].getAttribute('aria-current')).toBeNull();
+    expect(cards).toHaveLength(1);
+    expect(cards[0].getAttribute('aria-current')).toBe('true');
+    expect(cards[0].textContent).toContain('Other');
+  });
+
+  it('"View all" restores every source of the conversation', async () => {
+    render(wrap(<ChatSideRail citations={[web, other]} />));
+    act(() => focusCitations([other]));
+    expect(screen.getAllByTestId('rail-source')).toHaveLength(1);
+    await userEvent.click(screen.getByRole('button', { name: 'View all 2 sources' }));
+    expect(screen.getAllByTestId('rail-source')).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /View all/ })).toBeNull();
+  });
+
+  it('has no Context tab', () => {
+    render(wrap(<ChatSideRail citations={[web]} />));
+    expect(screen.queryByRole('tab')).toBeNull();
   });
 
   it('opens the mobile sheet on the requested source', async () => {
-    render(wrap(<ChatSourcesSheet citations={[web, other]} context={null} />));
-    act(() => focusCitations([web]));
+    render(wrap(<ChatSourcesSheet citations={[web, other]} />));
+    act(() => focusCitations([web, other], web));
     const cards = await screen.findAllByTestId('rail-source');
     expect(cards[0].getAttribute('aria-current')).toBe('true');
   });

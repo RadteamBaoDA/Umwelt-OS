@@ -12,7 +12,11 @@ import { safeHttpUrl } from '@/core/safe-url';
 
 /** Host of an untrusted web URL for display; empty string when unparsable. */
 export function webHost(url: string): string {
-  try { return new URL(url).hostname; } catch { return ''; }
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -60,11 +64,13 @@ function CardCitation({ citation, index, locale, timezone, highlighted = false, 
   React.useEffect(() => {
     if (scrollTarget) cardRef.current?.scrollIntoView?.({ block: 'nearest' });
   }, [scrollTarget, focusNonce]);
-  const href = citation.sourceType === 'web'
-    ? safeHttpUrl(citation.url)
-    : `/knowledge/documents/${encodeURIComponent(citation.documentId)}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`;
+  const href =
+    citation.sourceType === 'web'
+      ? safeHttpUrl(citation.url)
+      : `/knowledge/documents/${encodeURIComponent(citation.documentId)}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`;
   const when = citation.sourceType !== 'web' && citation.observedAt ? formatDateTime(citation.observedAt, locale, timezone) : null;
-  const linkClass = 'inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-1 text-[13px] font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  const linkClass =
+    'inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-1 text-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
   return (
     <div
       ref={cardRef}
@@ -74,14 +80,32 @@ function CardCitation({ citation, index, locale, timezone, highlighted = false, 
       className={`flex flex-col gap-1 rounded-md border-b border-rule px-2 py-2 text-xs hover:bg-active focus-within:bg-active ${highlighted ? 'bg-active ring-2 ring-data' : ''}`}
     >
       <span className="flex items-center gap-2">
-        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-sm bg-raised px-[5px] text-xs font-semibold text-foreground">{index + 1}</span>
+        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-sm bg-raised px-1 text-xs font-semibold text-foreground">
+          {index + 1}
+        </span>
         <strong className="line-clamp-2 text-sm font-semibold text-foreground">{citation.title}</strong>
       </span>
       {citation.quote && <span className="line-clamp-1 text-xs text-muted-foreground">{citation.quote}</span>}
-      <span className="text-xs text-muted-foreground">{citation.sourceType === 'web' ? webHost(citation.url) : [t('document'), when].filter(Boolean).join(' · ')}</span>
-      {href && (citation.sourceType === 'web'
-        ? <a href={href} target="_blank" rel="noopener noreferrer nofollow" className={linkClass} aria-label={t('openWebResultFor', { host: webHost(citation.url) })}>{t('openWebResult')}<ExternalLinkIcon className="size-3" aria-hidden="true" /></a>
-        : <Link href={href} className={linkClass}>{t('openExactItem')}</Link>)}
+      <span className="text-xs text-muted-foreground">
+        {citation.sourceType === 'web' ? webHost(citation.url) : [t('document'), when].filter(Boolean).join(' · ')}
+      </span>
+      {href &&
+        (citation.sourceType === 'web' ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            className={linkClass}
+            aria-label={t('openWebResultFor', { host: webHost(citation.url) })}
+          >
+            {t('openWebResult')}
+            <ExternalLinkIcon className="size-3" aria-hidden="true" />
+          </a>
+        ) : (
+          <Link href={href} className={linkClass}>
+            {t('openExactItem')}
+          </Link>
+        ))}
     </div>
   );
 }
@@ -93,19 +117,29 @@ function WebCitation({ citation, index }: Omit<CitationViewProps, 'citation'> & 
   return (
     <div className="flex flex-col gap-2 p-3 rounded-lg border border-border bg-background text-xs">
       <div className="flex items-start justify-between gap-2">
-        <span className="font-semibold text-foreground line-clamp-2">[{index + 1}] {citation.title}</span>
+        <span className="font-semibold text-foreground line-clamp-2">
+          [{index + 1}] {citation.title}
+        </span>
         <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground">
-          <GlobeIcon className="size-3" aria-hidden="true" />{t('webBadge')}
+          <GlobeIcon className="size-3" aria-hidden="true" />
+          {t('webBadge')}
         </span>
       </div>
       {citation.quote && (
-        <p className="pl-2 border-l-2 border-primary/40 text-muted-foreground line-clamp-4 text-xs leading-relaxed">{citation.quote}</p>
+        <p className="pl-2 border-l-2 border-border text-muted-foreground line-clamp-4 text-xs leading-relaxed">{citation.quote}</p>
       )}
-      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground pt-1 border-t border-border/40">
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground pt-1 border-t border-border">
         <span className="truncate">{webHost(citation.url)}</span>
         {href && (
-          <a href={href} target="_blank" rel="noopener noreferrer nofollow" className="inline-flex min-h-9 pointer-coarse:min-h-11 shrink-0 items-center gap-1 text-primary hover:underline" aria-label={t('openWebResultFor', { host: webHost(citation.url) })}>
-            <span>{t('openWebResult')}</span><ExternalLinkIcon className="size-3" aria-hidden="true" />
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            className="inline-flex min-h-9 pointer-coarse:min-h-11 shrink-0 items-center gap-1 text-primary hover:underline"
+            aria-label={t('openWebResultFor', { host: webHost(citation.url) })}
+          >
+            <span>{t('openWebResult')}</span>
+            <ExternalLinkIcon className="size-3" aria-hidden="true" />
           </a>
         )}
       </div>
@@ -121,9 +155,7 @@ function DocumentCitation({ citation, index, locale, timezone }: Omit<CitationVi
     chunkId: citation.chunkId,
   });
   const docHref = `/knowledge/documents/${encodeURIComponent(citation.documentId)}?${citationQuery.toString()}#cited-chunk`;
-  const formattedDate = citation.observedAt
-    ? formatDateTime(citation.observedAt, locale, timezone)
-    : null;
+  const formattedDate = citation.observedAt ? formatDateTime(citation.observedAt, locale, timezone) : null;
   const externalUrl = safeHttpUrl(citation.url);
   return (
     <div className="flex flex-col gap-2 p-3 rounded-lg border border-border bg-background text-xs">
@@ -155,13 +187,15 @@ function DocumentCitation({ citation, index, locale, timezone }: Omit<CitationVi
       </div>
 
       {citation.quote && (
-        <blockquote className="pl-2 border-l-2 border-primary/40 italic text-muted-foreground line-clamp-4 text-xs leading-relaxed">
+        <blockquote className="pl-2 border-l-2 border-border italic text-muted-foreground line-clamp-4 text-xs leading-relaxed">
           &ldquo;{citation.quote}&rdquo;
         </blockquote>
       )}
 
-      <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border/40">
-        <span>{t('source')}: {t('document')}</span>
+      <div className="flex items-center justify-between text-xs text-muted-foreground pt-1 border-t border-border">
+        <span>
+          {t('source')}: {t('document')}
+        </span>
         {formattedDate && <span>{formattedDate}</span>}
       </div>
     </div>
@@ -178,16 +212,14 @@ function citationKey(citation: Citation, variant: CitationPanelProps['variant'],
 function CitationEntry({ variant, ...view }: CitationViewProps & { variant: CitationPanelProps['variant'] }) {
   if (variant === 'card') return <CardCitation {...view} />;
   const { citation } = view;
-  return citation.sourceType === 'web'
-    ? <WebCitation {...view} citation={citation} />
-    : <DocumentCitation {...view} citation={citation} />;
+  return citation.sourceType === 'web' ? <WebCitation {...view} citation={citation} /> : <DocumentCitation {...view} citation={citation} />;
 }
 
 /** Container classes per panel variant. */
 const PANEL_CLASS = {
   standalone: 'flex flex-col gap-3 p-4 rounded-lg border border-border bg-surface',
   card: 'flex flex-col gap-1 mt-2',
-  inline: 'flex flex-col gap-2 mt-2 pt-2 border-t border-border/60',
+  inline: 'flex flex-col gap-2 mt-2 pt-2 border-t border-border',
 } as const;
 
 /**
@@ -221,10 +253,19 @@ export function CitationPanel({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
           <FileTextIcon className="size-3.5" />
-          <span>{t('citations')} ({itemsToRender.length})</span>
+          <span>
+            {t('citations')} ({itemsToRender.length})
+          </span>
         </div>
         {onClose && (
-          <Button type="button" variant="ghost" size="icon" onClick={onClose} className="size-11 text-muted-foreground" aria-label={t('closeDrawer')}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="size-11 text-muted-foreground"
+            aria-label={t('closeDrawer')}
+          >
             <XIcon className="size-3.5" aria-hidden="true" />
           </Button>
         )}
