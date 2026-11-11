@@ -361,3 +361,48 @@ def test_evidence_source_line_has_date_host_and_no_ids_and_entity_fields_are_neu
     for ident in (item.source_id, item.document_id, item.document_version_id, item.chunk_id):
         assert str(ident) not in text
     assert text.count("</entity_context>") == 1 and text.count("</temporal_context>") == 1
+
+
+@pytest.mark.asyncio
+async def test_followup_retrieval_uses_rewritten_query_and_keeps_original_context_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With history the retrieval request carries the standalone rewrite; the context keeps the user's words."""
+    from modules.chat._worker import setup as worker_setup
+
+    seen: list[str] = []
+
+    async def fake_build(_s: Any, _f: Any, _r: Any, _cfg: Any, request: Any, _scope: Any) -> Any:
+        seen.append(request.query)
+        return AnswerContext(query=request.query, evidence=[])
+
+    patch_worker(monkeypatch, "build_context", fake_build)
+    patch_worker(
+        monkeypatch, "_rewrite_web_query", AsyncMock(return_value="printing press history")
+    )
+    patch_worker(monkeypatch, "_publish_status", AsyncMock())
+    session = SimpleNamespace(commit=AsyncMock())
+    c = SimpleNamespace(
+        session_factory=None, settings=None, redis=None, scope=None, response_id=uuid4()
+    )
+    turn = SimpleNamespace(
+        user_prompt="tell me more",
+        prior_messages=[{"role": "user", "content": "history of printing"}],
+        req_params={},
+        answer_request=AnswerContextRequest(query="tell me more"),
+    )
+    context, web_run = await worker_setup._retrieve_with_web(session, c, turn)  # type: ignore[arg-type]
+    assert seen == ["printing press history"] and web_run is None
+    assert context.query == "tell me more"
+
+    turn.prior_messages = []  # first message: literal prompt, no rewrite call
+    seen.clear()
+    await worker_setup._retrieve_with_web(session, c, turn)  # type: ignore[arg-type]
+    assert seen == ["tell me more"]
+
+
+def test_search_score_floor_is_rank_based() -> None:
+    """The floor sits below rank 20 of a single list (1/80) and above rank ~100 (1/160)."""
+    from modules.chat.retrieval import MIN_SEARCH_SCORE
+
+    assert 1 / 160 < MIN_SEARCH_SCORE < 1 / 80

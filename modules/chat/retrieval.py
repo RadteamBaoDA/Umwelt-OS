@@ -414,6 +414,12 @@ def _validate_selected_only_request(request: AnswerContextRequest) -> None:
         raise ValueError("Selected source fences do not exactly cover the requested documents")
 
 
+# Search scores are reciprocal-rank-fusion sums (k=60): rank r in one list scores 1/(60+r), so 0.0164 is the best
+# single-list hit and 1/80 = 0.0125 is rank 20. The floor drops hits beyond rank ~25 of a single list. Scores are
+# rank-only (not similarity), so this trims a long tail but cannot judge relevance by itself.
+MIN_SEARCH_SCORE = 1 / 85
+
+
 async def _collect_search_refs(
     session: AsyncSession,
     redis: Redis,
@@ -425,7 +431,7 @@ async def _collect_search_refs(
 ) -> None:
     """Run the permitted search and append its hits to ``collector`` (search failure degrades).
 
-    Appends hits unconditionally in rank order (matching the original behaviour), records
+    Appends hits at or above ``MIN_SEARCH_SCORE`` in rank order, records
     scores, and extends ``warnings``. ``TypeError`` is re-raised; any other error is logged and
     reported as a warning. The worker commits before ``build_context`` so no locks are held.
     """
@@ -447,6 +453,8 @@ async def _collect_search_refs(
         )
         warnings.extend(search_res.warnings)
         for hit in search_res.items:
+            if hit.score < MIN_SEARCH_SCORE:
+                continue
             ref = (hit.document_version_id, hit.chunk_id)
             collector.refs.append(ref)
             collector.scores[ref] = hit.score

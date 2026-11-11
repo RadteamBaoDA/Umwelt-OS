@@ -58,6 +58,7 @@ from modules.chat._worker.state import (
 from modules.chat._worker.web import (
     _publish_web_search,
     _rewrite_and_search,
+    _rewrite_web_query,
     _stop_search,
     _WebSearchRun,
 )
@@ -224,6 +225,15 @@ async def _retrieve_with_web(
     if web_requested:
         await _publish_status(c, "web_search", "running")
     request = turn.answer_request
+    rewritten: str | None = None
+    if turn.prior_messages and not request.selected_only:
+        # Follow-ups ("tell me more") carry no searchable words of their own: retrieve with the same
+        # standalone rewrite the web search uses (falls back to the literal prompt on any failure).
+        rewritten = await _rewrite_web_query(
+            c.session_factory, c.settings, c.redis, c.scope, turn.user_prompt, turn.prior_messages
+        )
+        if rewritten != request.query:
+            request = request.model_copy(update={"query": rewritten})
     # Progress for the step list: counts only (no titles or text), so the event stays content-free.
     await _publish_status(c, "retrieval", "running")
     search_task = (
@@ -240,6 +250,7 @@ async def _retrieve_with_web(
                 c.privacy_fence,
                 scope=c.scope,
                 access_fence=c.access,
+                query=rewritten,
             )
         )
         if web_requested
@@ -254,6 +265,9 @@ async def _retrieve_with_web(
             request,
             c.scope,
         )
+        if request is not turn.answer_request:
+            # The context describes the owner's actual question, not the retrieval-only rewrite.
+            answer_context = answer_context.model_copy(update={"query": turn.user_prompt})
         await (
             session.commit()
         )  # release retrieval snapshot / selected-only Source FOR SHARE before awaiting web search

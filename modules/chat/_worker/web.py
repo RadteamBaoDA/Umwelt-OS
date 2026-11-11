@@ -634,17 +634,21 @@ async def _rewrite_and_search(
     *,
     scope: InternalJobScope,
     access_fence: AccessFence,
+    query: str | None = None,
 ) -> _WebSearchRun:
     """Rewrite the prompt into a search query, run ``_search_for_run`` with it and record the query used.
+
+    ``query`` is an already rewritten query (the follow-up retrieval rewrite); it skips a second model call.
 
     Runs as the concurrent search task, so the rewrite overlaps retrieval. The query is stored on the outcome
     only when a search actually ran (status ``used``); skipped/unavailable outcomes never sent anything. The
     outcome also carries ``provider``/``fallback`` when results were found. An image search for the same
     query runs concurrently with the text search and attaches its hits to the run (``[]`` on any failure).
     """
-    query = await _rewrite_web_query(
-        session_factory, settings, redis, scope, user_prompt, prior_messages
-    )
+    if query is None:
+        query = await _rewrite_web_query(
+            session_factory, settings, redis, scope, user_prompt, prior_messages
+        )
     # Images and text share the query and run concurrently; the image leg swallows its own failures.
     run, images = await asyncio.gather(
         _search_for_run(
