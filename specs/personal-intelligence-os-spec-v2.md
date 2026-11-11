@@ -4825,6 +4825,7 @@ This addendum is normative for production work and extends, without replacing, s
 - A transaction MUST NOT hold row, advisory or access-fence locks while awaiting a model, embedding, rerank, web search or graph call. The pattern is: lock and validate, release, perform the call, re-lock, compare the inputs that mattered, then publish; a mismatch MUST be a retryable outcome. Implemented for timeline extraction, entity extraction and chat retrieval; **not implemented** for temporal `_fresh_fact_action` (open item).
 - Streaming responses MUST flush buffered output before acquiring a database lock. Implemented for the publication gate and realtime fence.
 - Locks that are intentionally global for the single owner (privacy lock, replay lock) MUST NOT be held across batches of items. Implemented for chat purge.
+- Exception: OAuth access-token refresh (Google in `modules/connectors/_collection/oauth.py::_google_access_token` and the Google discovery route in `modules/connectors/oauth_routes.py`; Reddit in `refresh_reddit_grant`) holds the grant row lock, with the source and credential locks, across the single token-exchange request. Releasing first would let two workers spend the same refresh token, and providers that rotate refresh tokens may revoke the whole grant on reuse. The request is bounded (10 s timeout, one call, no retry under the lock); the cost is that another request on the same source waits up to that bound.
 
 ## 167.3. Bounded tables and retention
 

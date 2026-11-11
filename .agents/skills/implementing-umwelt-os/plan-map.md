@@ -4,7 +4,7 @@ All links resolve from this file. This is a navigation reference; task status li
 
 ## Required source documents
 
-- [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md): product contracts; sections 156–166 clarify the implementation strategy and approved drawer.
+- [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md): product contracts; sections 156–167 clarify the implementation strategy and approved drawer.
 - [Master plan](../../../docs/superpowers/plans/2026-09-25-umwelt-os-master-plan.md): dependencies, shared contracts, verification protocol and external gates.
 - [Implementation status](../../../docs/IMPLEMENTATION_STATUS.md): delivered versus planned capabilities.
 - [Architecture decisions](../../../docs/ARCHITECTURE_DECISIONS.md): selected stack and owner decisions.
@@ -48,8 +48,8 @@ The master owns exact dependencies. Default order is 1 through 12 after Phase 0 
 
 Request: “Continue implementation from the saved checkpoint.”
 
-Read current status, ledger and code first. If the ledger still selects P01-T1, load Phase 1 and verify Phase 0 evidence. Trace public auth extraction and every packaging/test-runner consumer. During the code stage run production builds/source review only; do not create, modify or run tests/fixtures, lint or standalone typecheck. Preserve deferred acceptance separately. If the checkpoint has advanced, use its current task instead.
+Read current status, ledger and code first. If the ledger still selects P01-T1, load Phase 1 and verify Phase 0 evidence. Trace public auth extraction and every packaging/test-runner consumer. Validate per the Testing Guidelines in `AGENTS.md`. If the checkpoint has advanced, use its current task instead.
 
 ## Current reconciliation
 
-Read [R01–R16](../../../docs/superpowers/plans/2026-09-30-umwelt-os-spec-reconciliation.md) for all supplemental owners/dependencies/acceptance. R01 is the first reconciliation task; preserve uncommitted P04-T1 in D:/Project/Umwelt-OS-phase-4. Earlier Today/Ask names are historical; sections 165–166 govern presentation. Push/pull-request CI builds only during implementation; run deferred validation only after all original and reconciliation production tasks are complete.
+Read [R01–R16](../../../docs/superpowers/plans/2026-09-30-umwelt-os-spec-reconciliation.md) for all supplemental owners/dependencies/acceptance. Earlier Today/Ask names are historical; sections 165–166 govern presentation.

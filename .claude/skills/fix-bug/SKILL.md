@@ -46,7 +46,7 @@ Pick the cheapest source that can confirm or kill a hypothesis:
 |------|---------------------|
 | Service logs | `docker compose logs --since 30m <api\|worker\|chat-worker\|model-worker\|web>` |
 | Recent changes (regressions) | `git log --oneline -15`, `git diff` (this repo often has large uncommitted work), `git log -S'<symbol>' --oneline` |
-| Find code by concept | `gitnexus_query({query: "<symptom>"})`, then `gitnexus_context({name})` — if GitNexus MCP is unavailable, fall back to Grep and say so |
+| Find code by concept | `query({search_query: "<symptom>"})`, then `context({name})` — if GitNexus MCP is unavailable, fall back to Grep and say so |
 | Call the API | `curl -s -i http://localhost:3000/api/v1/...` (dev stack; needs session cookie for authed routes) |
 | Upstream provider | `curl -s -o /dev/null -w '%{http_code}' <provider URL>` |
 | Existing tests | `uv run pytest -q <path>::<test>`, `cd apps/web && npx vitest run <file>` |
@@ -61,7 +61,7 @@ Trace from symptom to cause end to end; do not stop at the first suspicious line
 
 - Follow data backwards: where was the bad value produced, and why did nothing catch it?
 - Respect the module layout: frontend in `apps/web/src/{modules,core,components}`, backend modules in `modules/<capability>/` (public contract in `public.py`), shared infra in `core/`. Cross-module calls go through `public.py`.
-- Before settling on a function, list all its callers (`gitnexus_context` or grep). If siblings share the flaw, the root cause is in the shared function, and the fix belongs there — patching only the path the report names leaves the siblings broken.
+- Before settling on a function, list all its callers (`context` or grep). If siblings share the flaw, the root cause is in the shared function, and the fix belongs there — patching only the path the report names leaves the siblings broken.
 - Check what changed: if the behavior used to work, find the commit or uncommitted diff that broke it.
 
 Confirm with a reproduction when it is cheap: an existing test that fails, a scratchpad script, a curl call, or a short pytest/vitest file in the scratchpad. A cause you reproduced beats a cause you inferred. If you cannot reproduce, say so and say what evidence the conclusion rests on.
@@ -86,7 +86,7 @@ Use this structure (headings in the owner's language):
 
 ## Đề xuất sửa
 <where and what to change; why there and not at the symptom site>
-Ảnh hưởng: <callers/flows touched; gitnexus_impact risk if available>
+Ảnh hưởng: <callers/flows touched; `impact` risk if available>
 Test hồi quy: <test file and what it asserts>
 
 ## Độ tin cậy
@@ -99,11 +99,11 @@ Then stop and ask the owner to approve, adjust or reject. Do not start editing.
 
 ## Phase 2: Fix (after approval)
 
-1. **Impact first.** Run `gitnexus_impact({target, direction: "upstream"})` for each symbol you will edit and report the blast radius. If risk is HIGH or CRITICAL, warn and confirm before continuing. (Project rule in `AGENTS.md`.)
+1. **Impact first.** Run `impact({target, direction: "upstream"})` for each symbol you will edit and report the blast radius. If risk is HIGH or CRITICAL, warn and confirm before continuing. (Project rule in `AGENTS.md`.)
 2. **Regression test that fails first.** pytest (`tests/` beside the module or `tests/integration/`, `test_*.py`) for backend, Vitest (`*.test.ts(x)` next to the component) for frontend. Run it and see it fail for the reason in the diagnosis. If the bug is only reproducible through Playwright, write the spec but ask before running the Docker harness.
 3. **Fix at the root cause** identified in phase 1. Smallest correct change; no unrelated refactors. Every changed named function/component needs its JSDoc or docstring per `AGENTS.md` (explain the rule, not the statement). UI changes follow the `umwelt-os-ui-system` skill (semantic tokens, i18n for both `en-us` and `vi-vi`).
 4. **Verify.** Run the new test, then the smallest relevant set: the module's tests, `npm run typecheck` / `npx vitest run <dir>` for web, `uv run pytest -q <dir>` and `uv run ruff check <files>` for Python. Report real results, including failures.
-5. **Scope check.** `gitnexus_detect_changes()` (or `git diff --stat` if unavailable) to confirm only expected files changed.
+5. **Scope check.** `detect_changes({scope: "all"})` (or `git diff --stat` if unavailable) to confirm only expected files changed.
 6. **Don't commit.** Summarize: cause, change (file:line), test added, checks run with results, anything unverified (e.g. "not checked in the browser", "e2e not run — needs approval"). The owner decides on commit.
 
 If the fix turns out different from the approved proposal (the cause was wrong, or the fix grows beyond the plan), stop and report again rather than pushing through.

@@ -1,47 +1,15 @@
 'use client';
 
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
-import { NextIntlClientProvider, useMessages, type AbstractIntlMessages } from 'next-intl';
+import { NextIntlClientProvider } from 'next-intl';
 import { RouteLoader } from '@/core/app-shell/route-loader';
 import { ThemeProvider, useTheme } from 'next-themes';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppLocaleId, normalizeFormattingLocale } from '@/core/i18n';
-import { ChatControllerProvider } from '@/core/app-shell/chat-controller';
 import { GuardedNavigationProvider } from '@/core/guarded-navigation';
 import { OwnerPreferences, PreferenceValues } from '@/core/preferences';
-import { RealtimeProvider } from '@/core/realtime-provider';
-import { WorkspaceProvider } from '@/core/workspace-context';
 import { clearAccountBrowserStorage, subscribeToAccountErasure } from '@/core/account-erasure';
-
-/** Resolves a missing translated message from the English catalog using its namespace and key. */
-function englishMessageFallback(english: AbstractIntlMessages, namespace: string | undefined, key: string): string {
-  let value: unknown = english;
-  for (const part of [...(namespace?.split('.') ?? []), ...key.split('.')]) {
-    value = value && typeof value === 'object' ? (value as Record<string, unknown>)[part] : undefined;
-  }
-  return typeof value === 'string' ? value : [namespace, key].filter(Boolean).join('.');
-}
-
-/**
- * Returns the catalog for `locale`. English arrives from the server layout (RSC payload, not client JS); Vietnamese is a
- * lazily imported chunk, so English-only sessions never download it. English is shown until the chunk resolves.
- * Returns `[active, english]`; english also feeds the missing-key fallback.
- */
-function useLocaleMessages(locale: AppLocaleId): [AbstractIntlMessages, AbstractIntlMessages] {
-  const english = useMessages();
-  const [vietnamese, setVietnamese] = useState<AbstractIntlMessages | null>(null);
-  useEffect(() => {
-    if (locale !== 'vi-vi' || vietnamese) return;
-    let live = true;
-    void import('@/core/messages').then((m) => {
-      if (live) setVietnamese(m.messages['vi-vi']);
-    });
-    return () => {
-      live = false;
-    };
-  }, [locale, vietnamese]);
-  return [locale === 'vi-vi' && vietnamese ? vietnamese : english, english];
-}
+import { englishMessageFallback, useLocaleMessages } from '@/core/locale-messages';
 
 type PreviewState = { value: PreferenceValues; generation: number } | null;
 
@@ -105,7 +73,7 @@ function useAccountErasureReset(client: QueryClient, endAuthSession: (erase?: bo
     const erased = () => {
       if (ended) return;
       ended = true;
-      window.dispatchEvent(new Event('bbd:auth-ending'));
+      window.dispatchEvent(new Event('umwelt:auth-ending'));
       void client.cancelQueries();
       client.clear();
       endAuthSession(true);
@@ -218,13 +186,9 @@ function DisplayPreferencesProvider({ children }: { children: ReactNode }) {
         messages={localeMessages}
         getMessageFallback={({ namespace, key }) => englishMessageFallback(english, namespace, key)}
       >
-        {/* Keep chat retries across route shells, but drop their private drafts when auth ends. */}
-        <ChatControllerProvider key={authGeneration}>
-          <WorkspaceProvider>
-            <RealtimeProvider>{children}</RealtimeProvider>
-          </WorkspaceProvider>
-        </ChatControllerProvider>
-        {/* Outside RealtimeProvider/auth-keyed providers: their loading branches replace children and would unmount the overlay mid-load. */}
+        {/* Workspace-only providers (chat controller, workspace, realtime) mount in app/(workspace)/layout.tsx. */}
+        {children}
+        {/* Outside the workspace providers: their loading branches replace children and would unmount the overlay mid-load. */}
         <RouteLoader />
       </NextIntlClientProvider>
     </DisplayPreferenceContext.Provider>

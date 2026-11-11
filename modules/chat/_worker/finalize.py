@@ -8,7 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select, update
 
-from modules.chat import media
+from core import media_proxy
 from modules.chat._worker.base import (
     _next_event_seq,
 )
@@ -234,7 +234,7 @@ def _validate_citations(
 def _answer_images(env: _ToolEnv) -> dict[str, dict[str, str]]:
     """Map the turn's ``imgN`` ids to ``{src, alt, source_host}`` with owner-bound signed proxy paths.
 
-    Tokens are bound to ``workspace:actor`` and expire (``media.TOKEN_TTL_SECONDS``); an image that cannot be
+    Tokens are bound to ``workspace:actor`` and expire (``media_proxy.TOKEN_TTL_SECONDS``); an image that cannot be
     signed (missing secret, URL off the allowlist) is simply absent, so ``render_answer`` drops it.
     """
     secret = env.c.settings.csrf_signing_secret.get_secret_value()
@@ -242,11 +242,11 @@ def _answer_images(env: _ToolEnv) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
     for n, image in enumerate(env.setup.web_images, 1):
         try:
-            token = media.sign_media_url(secret, image.url, subject=subject)
-        except media.MediaError:
+            token = media_proxy.sign_media_url(secret, image.url, subject=subject)
+        except media_proxy.MediaError:
             continue
         out[f"img{n}"] = {
-            "src": f"{media.PROXY_PATH}?token={token}",
+            "src": f"{media_proxy.PROXY_PATH}?token={token}",
             "alt": image.description,
             "source_host": image.source_host,
         }

@@ -22,18 +22,18 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
 import { useLocale, useTranslations } from 'next-intl';
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { UmweltLogo, UmweltMark } from '@/components/brand/umwelt-mark';
-import { apiRequest } from '@/core/api';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { AppLocaleId } from '@/core/i18n';
 import type { LandingSourceId } from './source-canvas';
+import { useSession } from '@/core/session';
 
 const SourceCanvas = dynamic(() => import('./source-canvas').then((module) => module.SourceCanvas), { ssr: false });
+// The Radix sheet loads only after the first citation is opened, keeping it out of the landing first-load bundle.
+const DemoReferenceSheet = dynamic(() => import('./reference-sheet').then((module) => module.DemoReferenceSheet), { ssr: false });
 const SOURCE_IDS: LandingSourceId[] = ['website', 'feed', 'document'];
 const SOURCE_ICONS = { website: GlobeIcon, feed: RssIcon, document: FileTextIcon } as const;
 // Public, offline-readable overview; keep names aligned with docs/connectors/provider-catalog.md.
@@ -126,10 +126,7 @@ type DemoQuestion = 'latest' | 'summarize' | 'compare';
 
 /** Reads only the current sign-in status; workspace content and readiness never gate the public page. */
 export function LandingEntry() {
-  const session = useQuery({
-    queryKey: ['session'],
-    queryFn: () => apiRequest<{ authenticated: true; csrfToken: string }>('/api/v1/auth/session'),
-  });
+  const session = useSession();
   return <LandingPage authenticated={Boolean(session.data?.authenticated)} />;
 }
 
@@ -313,34 +310,15 @@ function DemoAnswerPane({ question, onQuestion, selectedSources, onOpenReference
   );
 }
 
-/** Side sheet showing the sample reference text for the opened citation; closed when `reference` is null. */
-function DemoReferenceSheet({ reference, onClose }: { reference: LandingSourceId | null; onClose: () => void }) {
-  const t = useTranslations('landing');
-  const activeReference = reference ? t(`sourceNames.${reference}`) : '';
-  return (
-    <Sheet
-      open={reference !== null}
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <SheetContent side="right" className="max-w-xl" closeLabel={t('close')}>
-        <SheetHeader>
-          <SheetTitle>{reference ? t('referenceTitle', { source: activeReference }) : t('citationsTitle')}</SheetTitle>
-          <SheetDescription>{t('citationsTitle')}</SheetDescription>
-        </SheetHeader>
-        {reference && <div className="p-5 text-sm leading-7 text-foreground">{t(`referenceText.${reference}`)}</div>}
-      </SheetContent>
-    </Sheet>
-  );
-}
-
 /** Renders a deterministic public preview; source and question selections affect only local sample content. */
 export function LandingDemo() {
   const [activeSources, setActiveSources] = useState<LandingSourceId[]>(SOURCE_IDS);
   const [question, setQuestion] = useState<DemoQuestion>('latest');
   const [pulseSource, setPulseSource] = useState<LandingSourceId | null>(null);
   const [reference, setReference] = useState<LandingSourceId | null>(null);
+  const [sheetRequested, setSheetRequested] = useState(false);
+  // Derived during render: once any citation opens, keep the sheet mounted so its close animation can run.
+  if (reference !== null && !sheetRequested) setSheetRequested(true);
   const selectedSources = SOURCE_IDS.filter((id) => activeSources.includes(id));
 
   /** Toggles one source and starts a matching brief visual pulse. */
@@ -364,7 +342,7 @@ export function LandingDemo() {
         />
         <DemoAnswerPane question={question} onQuestion={setQuestion} selectedSources={selectedSources} onOpenReference={setReference} />
       </div>
-      <DemoReferenceSheet reference={reference} onClose={() => setReference(null)} />
+      {sheetRequested && <DemoReferenceSheet reference={reference} onClose={() => setReference(null)} />}
     </section>
   );
 }

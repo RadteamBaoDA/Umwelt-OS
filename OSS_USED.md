@@ -4,12 +4,11 @@ Inventory reconciliation is in progress. The "Direct application runtime depende
 
 | Package | Locked version | License | Use |
 | --- | --- | --- | --- |
-| [AnythingLLM frontend source slices](https://github.com/Mintplex-Labs/anything-llm/tree/128a01575a50f0284aeca75a93399b6fb1db0328) | `128a01575a50f0284aeca75a93399b6fb1db0328` | MIT | Bounded adaptations of upstream scroll, composer input, markdown/sanitizer, and copy-feedback regions in `apps/web/src/modules/chat`; exact originals, local changes, and hashes are recorded in `docs/anythingllm-port.md` and `.superpowers/sdd/r07/source-regions.md`. No upstream transport, backend, provider code, CSS, or assets are included. |
+| [AnythingLLM frontend source slices](https://github.com/Mintplex-Labs/anything-llm/tree/128a01575a50f0284aeca75a93399b6fb1db0328) | `128a01575a50f0284aeca75a93399b6fb1db0328` | MIT | Bounded adaptations of upstream scroll, composer input, markdown/sanitizer, and copy-feedback regions in `apps/web/src/modules/chat`; exact originals, local changes, and hashes are recorded in `docs/anythingllm-port.md`. No upstream transport, backend, provider code, CSS, or assets are included. |
 | [OpenIntelligentUI (CopilotKit)](https://github.com/CopilotKit/OpenIntelligentUI/tree/8391a94c1c3939c679e40ddd7bfc08a9ef690e70) | `8391a94c1c3939c679e40ddd7bfc08a9ef690e70` | MIT | Adapted generative-UI sandbox renderer, table catalog, plan card, meeting time picker, trip animator, idiomorph helper, design system CSS and skills under `apps/web/src/modules/chat/generative-ui` and `modules/chat/generative_ui`; license text is reproduced in `THIRD_PARTY_NOTICES.md`. No upstream runtime, backend or telemetry is included. |
-| [age / age-keygen host CLI](https://github.com/FiloSottile/age) | Operator-installed; not bundled or lockfile-pinned | BSD-3-Clause ([upstream license](https://github.com/FiloSottile/age/blob/main/LICENSE)) | Standard age recipient encryption and protected identity verification for backup/isolated restore in `modules/backup/host.py`, integrated at `5212def`. The binary version and operational compatibility must be recorded during deferred restore acceptance; no source or binary is redistributed by this repository. |
 | [Authlib](https://github.com/authlib/authlib) | 1.8.0 | BSD-3-Clause | Server-side OpenID Connect discovery and Google sign-in validation, plus fixed-endpoint GitHub App OAuth code exchange and rotating-token refresh. |
 | [class-variance-authority](https://github.com/joe-bell/cva) | 0.7.1 | Apache-2.0 | Variant and size class selection for the repository-owned shared Button adapted from the official New York shadcn registry source. |
-| [DOMPurify](https://github.com/cure53/DOMPurify) | 3.4.16 | MPL-2.0 OR Apache-2.0 | Browser-side sanitization of rendered Chat markdown in `apps/web/src/modules/chat/chat-markdown.tsx`; Apache-2.0 notice from the locked npm package is reproduced in `THIRD_PARTY_NOTICES.md`. |
+| [DOMPurify](https://github.com/cure53/DOMPurify) | 3.4.17 | MPL-2.0 OR Apache-2.0 | Browser-side sanitization of rendered Chat markdown in `apps/web/src/modules/chat/chat-markdown.tsx`; Apache-2.0 notice from the locked npm package is reproduced in `THIRD_PARTY_NOTICES.md`. |
 | [backoff](https://github.com/litl/backoff) | 2.2.1 | MIT | Required dependency metadata for pinned PostHog; Graphiti telemetry is disabled before imports. Older release, with advisory review deferred. |
 | [Neo4j Community server](https://github.com/neo4j/neo4j) | 5.26.2 (`sha256:099b9f74968c123209972835417985ed2a1cc19c0422c0753a313e26a736c365`) | GPL-3.0 (image `NOTICE.txt`) | Unmodified image in the optional, disabled-by-default `graph` profile of `docker-compose.base.yml` for derived temporal knowledge. Private single-owner self-hosting only; any redistribution needs GPL review. |
 | [Graphiti Core](https://github.com/getzep/graphiti) | 0.30.2 | Apache-2.0 | `modules/knowledge/temporal/adapter.py` injects controlled LLM/embed/rerank clients and wraps the Neo4j driver; no Graphiti package source is modified. |
@@ -122,7 +121,12 @@ These additions use exact lockfile versions and matching installed distribution/
 | Component | Source version/reference | Notice state |
 | --- | --- | --- |
 | PostgreSQL with pgvector | pgvector/pgvector:0.8.6-pg16-bookworm | PostgreSQL, pgvector and Debian bundle notices pending; tag specifies PostgreSQL major16, not exact patched version. |
-| Redis server | redis:7.4.11-alpine | Server/Alpine bundle notices pending; Redis client license above does not describe the server. |
+| Redis server | redis:7.4.11-alpine | Redis 7.4 is dual RSALv2/SSPLv1 (no longer BSD); private self-hosting is permitted, redistribution needs review. Server/Alpine bundle notices pending; the Redis client license above does not describe the server. |
+| RustFS (optional `s3` profile) | rustfs/rustfs:1.0.4 (digest-pinned in `docker-compose.base.yml`) | Apache-2.0; image notices pending. |
+| Caddy (optional proxy overlay) | caddy:2.8.4-alpine | Apache-2.0; image notices pending. |
+| PgBouncer (optional overlay) | edoburu/pgbouncer:v1.24.1-p1 | PgBouncer is ISC; image packaging notices pending. |
+| Prometheus / Alertmanager (optional monitoring overlay) | prom/prometheus:v3.5.0, prom/alertmanager:v0.28.1 | Apache-2.0; image notices pending. |
+| Grafana (optional monitoring overlay) | grafana/grafana:12.1.0 | AGPL-3.0 (unmodified image, private self-hosting); image notices pending. |
 | Python base | python:3.12.14-slim-bookworm | Interpreter and Debian bundle notices pending. |
 | Node base | node:24.20.0-alpine3.23 | Node and Alpine bundle notices pending. |
 | Firewall build base | alpine:3.22 | Copied firewall artifact/component notices pending. |

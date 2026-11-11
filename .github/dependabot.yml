@@ -4,7 +4,8 @@ updates:
     directory: /
     schedule: {interval: weekly}
   - package-ecosystem: npm
-    directory: /apps/web
+    # npm workspace: the lockfile lives at the repo root.
+    directory: /
     schedule: {interval: weekly}
   - package-ecosystem: github-actions
     directory: /

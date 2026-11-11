@@ -8,6 +8,7 @@ import { DENSITY_INIT_SCRIPT } from '@/core/density';
 import { NONCE_HEADER } from '@/core/csp';
 import { getPublicOrigin } from '@/core/public-origin';
 import { messages } from '@/core/messages';
+import { PUBLIC_NAMESPACES, pickNamespaces } from '@/core/message-namespaces';
 import { QueryProvider } from '@/core/query-provider';
 import { SHARE_TAGLINE, SHARE_TITLE } from '@/core/share-card';
 import './globals.css';
@@ -37,7 +38,8 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         <script nonce={nonce} dangerouslySetInnerHTML={{ __html: DENSITY_INIT_SCRIPT }} />
       </head>
       <body>
-        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        {/* Public namespaces only: workspace routes add the full catalog in app/(workspace)/layout.tsx. */}
+        <NextIntlClientProvider locale="en-US" messages={pickNamespaces(messages['en-us'], PUBLIC_NAMESPACES)}>
           <QueryProvider nonce={nonce}>{children}</QueryProvider>
         </NextIntlClientProvider>
       </body>

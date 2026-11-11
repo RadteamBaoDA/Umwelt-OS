@@ -1,6 +1,5 @@
 'use client';
 
-import { FileText, Newspaper, Rss, Send } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import React, { useMemo, useRef, useState } from 'react';
 import { useReportGadgetFreshness } from '../gadget-freshness';
@@ -13,11 +12,24 @@ import { bucketByDay } from './relative-time';
 import { GadgetNotice, GadgetSkeleton } from './gadget-notice';
 import type { GadgetInstance } from '../api';
 import {
-  defaultSourceTypeFor, documentsToItems, filterFeedItems, newestCollectedAt, staleSelections,
-  type FeedStreamItem, type SelectedTelegramIdentity,
+  defaultSourceTypeFor,
+  documentsToItems,
+  filterFeedItems,
+  newestCollectedAt,
+  staleSelections,
+  type FeedStreamItem,
+  type SelectedTelegramIdentity,
 } from './feed-model';
 import {
-  FEED_VIEWS, FeedBulkBar, FeedFilterPopover, FeedItems, FeedSourceTabs, FeedToolbar, FeedUndoBar, type FeedRowContext, type FeedView,
+  FEED_VIEWS,
+  FeedBulkBar,
+  FeedFilterPopover,
+  FeedItems,
+  FeedSourceTabs,
+  FeedToolbar,
+  FeedUndoBar,
+  type FeedRowContext,
+  type FeedView,
 } from './feed-parts';
 import { ShowMoreButton, useShowMore } from './show-more';
 import { useLocalPref } from '@/core/use-local-pref';
@@ -33,25 +45,6 @@ export interface FeedGadgetProps {
   initialItems?: FeedStreamItem[];
   /** Callback notifying parent frame of unread count change. */
   onUnreadCountChange?: (count: number) => void;
-}
-
-/**
- * Returns a suitable icon for the feed source category.
- *
- * @param type Feed source classification.
- * @returns React icon element.
- */
-export function getFeedSourceIcon(type: FeedStreamItem['sourceType']): React.ReactElement {
-  switch (type) {
-    case 'telegram':
-      return <Send className="w-3.5 h-3.5" />;
-    case 'rss':
-      return <Rss className="w-3.5 h-3.5" />;
-    case 'news':
-      return <Newspaper className="w-3.5 h-3.5" />;
-    default:
-      return <FileText className="w-3.5 h-3.5" />;
-  }
 }
 
 /**
@@ -71,30 +64,57 @@ export function FeedGadget(props: FeedGadgetProps) {
   return (
     <Tabs value={tab} onValueChange={(value) => setTab(value as 'items' | 'stories')} className="flex h-full min-h-0 flex-col">
       <TabsList aria-label={t('feedTabs')} className="h-auto justify-start gap-1 rounded-none bg-transparent p-0 px-3 pt-2">
-        <TabsTrigger value="items" className="min-h-9 pointer-coarse:min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+        <TabsTrigger
+          value="items"
+          className="min-h-9 pointer-coarse:min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
+        >
           {t('feedTabItems')}
         </TabsTrigger>
-        <TabsTrigger value="stories" className="min-h-9 pointer-coarse:min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+        <TabsTrigger
+          value="stories"
+          className="min-h-9 pointer-coarse:min-h-11 rounded-none border-b-2 border-transparent text-xs text-muted-foreground data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
+        >
           {t('feedTabStories')}
         </TabsTrigger>
       </TabsList>
-      <TabsContent value="items" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden"><FeedStream {...props} /></TabsContent>
-      <TabsContent value="stories" className="mt-0 min-h-0 flex-1 overflow-hidden"><NewsFeed instance={props.instance} /></TabsContent>
+      <TabsContent value="items" forceMount className="mt-0 min-h-0 flex-1 overflow-hidden data-[state=inactive]:hidden">
+        <FeedStream {...props} />
+      </TabsContent>
+      <TabsContent value="stories" className="mt-0 min-h-0 flex-1 overflow-hidden">
+        <NewsFeed instance={props.instance} />
+      </TabsContent>
     </Tabs>
   );
 }
 
 /** Settled-empty notice: explains why nothing is shown and offers "configure sources" only when nothing is filtering. */
-function FeedEmptyNotice({ needle, sourceFilter, serverFiltered, onlyUnread }: {
-  needle: string; sourceFilter: string; serverFiltered: boolean; onlyUnread: boolean;
+function FeedEmptyNotice({
+  needle,
+  sourceFilter,
+  serverFiltered,
+  onlyUnread,
+}: {
+  needle: string;
+  sourceFilter: string;
+  serverFiltered: boolean;
+  onlyUnread: boolean;
 }) {
   const t = useTranslations('dashboard');
   const searching = Boolean(needle) || sourceFilter !== 'all';
   const emptyDetail = searching
     ? t('feedNoMatch')
-    : serverFiltered ? t('feedNoServerMatch') : onlyUnread ? t('feedCaughtUp') : t('feedEmptyDetail');
+    : serverFiltered
+      ? t('feedNoServerMatch')
+      : onlyUnread
+        ? t('feedCaughtUp')
+        : t('feedEmptyDetail');
   return (
-    <GadgetNotice kind="empty" message={`${t('feedEmptyTitle')}. ${emptyDetail}`} action={searching || serverFiltered || onlyUnread ? undefined : { href: '/settings/sources', label: t('gadgetConfigureAction') }} className="px-0" />
+    <GadgetNotice
+      kind="empty"
+      message={`${t('feedEmptyTitle')}. ${emptyDetail}`}
+      action={searching || serverFiltered || onlyUnread ? undefined : { href: '/settings/sources', label: t('gadgetConfigureAction') }}
+      className="px-0"
+    />
   );
 }
 
@@ -118,9 +138,7 @@ function FeedStatus(props: {
         <GadgetSkeleton variant="list" label={t('gadgetDataLoading')} className="flex-1 px-0" />
       )}
 
-      {docsQuery.isError && !docsQuery.isFetchNextPageError && (
-        <GadgetNotice kind="error" message={t('feedLoadError')} className="px-0" />
-      )}
+      {docsQuery.isError && !docsQuery.isFetchNextPageError && <GadgetNotice kind="error" message={t('feedLoadError')} className="px-0" />}
 
       {/* Empty State */}
       {!docsQuery.isLoading && !docsQuery.isError && (!docsQuery.hasNextPage || filtering) && props.displayedCount === 0 && (
@@ -131,7 +149,12 @@ function FeedStatus(props: {
 }
 
 /** Pagination footer: load-more error, load-more button or the end-of-list marker. */
-function FeedFooter({ docsQuery, hasInitialItems, feedItemCount, listExpanded }: {
+function FeedFooter({
+  docsQuery,
+  hasInitialItems,
+  feedItemCount,
+  listExpanded,
+}: {
   docsQuery: ReturnType<typeof useFeedQueries>['docsQuery'];
   hasInitialItems: boolean;
   feedItemCount: number;
@@ -143,7 +166,9 @@ function FeedFooter({ docsQuery, hasInitialItems, feedItemCount, listExpanded }:
   return (
     <>
       {docsQuery.isFetchNextPageError && (
-        <p role="alert" className="text-xs text-destructive">{t('feedLoadMoreError')}</p>
+        <p role="alert" className="text-xs text-destructive">
+          {t('feedLoadMoreError')}
+        </p>
       )}
       {docsQuery.hasNextPage && listExpanded && (
         <Button
@@ -153,7 +178,9 @@ function FeedFooter({ docsQuery, hasInitialItems, feedItemCount, listExpanded }:
           className="self-center"
           disabled={docsQuery.isFetchingNextPage}
           onClick={() => docsQuery.fetchNextPage()}
-        >{docsQuery.isFetchingNextPage ? t('feedLoadingMore') : t('feedLoadMore')}</Button>
+        >
+          {docsQuery.isFetchingNextPage ? t('feedLoadingMore') : t('feedLoadMore')}
+        </Button>
       )}
       {!docsQuery.hasNextPage && !docsQuery.isError && feedItemCount > 0 && listExpanded && (
         <p className="text-center text-xs text-muted-foreground">{t('feedEndOfList')}</p>
@@ -166,7 +193,11 @@ function FeedFooter({ docsQuery, hasInitialItems, feedItemCount, listExpanded }:
  * Derives the list of feed items from preloaded items or the loaded document pages.
  * Preloaded items (preview / SSR) win when present.
  */
-function useFeedItems(initialItems: FeedStreamItem[] | undefined, docsQuery: ReturnType<typeof useFeedQueries>['docsQuery'], renderer: string): FeedStreamItem[] {
+function useFeedItems(
+  initialItems: FeedStreamItem[] | undefined,
+  docsQuery: ReturnType<typeof useFeedQueries>['docsQuery'],
+  renderer: string,
+): FeedStreamItem[] {
   const isTelegram = renderer === 'telegram_feed';
   const defaultSourceType = defaultSourceTypeFor(renderer);
   return useMemo(() => {
@@ -194,11 +225,7 @@ function useFeedShowMore(items: FeedStreamItem[], view: FeedView, filterKey: str
 }
 
 /** Renders the scrollable feed item stream with selection and Ask AI affordances. */
-function FeedStream({
-  instance,
-  initialItems,
-  onUnreadCountChange,
-}: FeedGadgetProps) {
+function FeedStream({ instance, initialItems, onUnreadCountChange }: FeedGadgetProps) {
   const t = useTranslations('dashboard');
   const { openDrawer } = useChatController();
   const definition = instance.definition;
@@ -219,10 +246,7 @@ function FeedStream({
   const feedItems = useFeedItems(initialItems, docsQuery, definition.renderer);
   const unreadCount = feedItems.filter((i) => !i.read).length;
   // Item count moves to the frame footer next to freshness.
-  useReportGadgetFreshness(
-    newestCollectedAt(feedItems),
-    feedItems.length > 0 ? t('gadgetItemCount', { count: feedItems.length }) : null,
-  );
+  useReportGadgetFreshness(newestCollectedAt(feedItems), feedItems.length > 0 ? t('gadgetItemCount', { count: feedItems.length }) : null);
   // Client-side items-per-day series from the loaded items; the spark shows only with 2+ days.
   const volume = useMemo(() => bucketByDay(feedItems.map((i) => i.timestamp)), [feedItems]);
   const selectedTelegramItems = Object.values(selectedTelegram);
@@ -233,56 +257,121 @@ function FeedStream({
   const showFilters = docsQuery.isLoading || feedItems.length > 0 || filtering || serverFiltered;
   React.useEffect(() => onUnreadCountChange?.(unreadCount), [onUnreadCountChange, unreadCount]);
   const serverScope = `${sourceIds.join()}|${channelIds.join()}|${language}|${timeWindow}`;
-  useAutoFetchWhenEmpty({ docsQuery, displayedCount: displayedItems.length, filtering, hasInitialItems: Boolean(initialItems?.length), serverScope });
+  useAutoFetchWhenEmpty({
+    docsQuery,
+    displayedCount: displayedItems.length,
+    filtering,
+    hasInitialItems: Boolean(initialItems?.length),
+    serverScope,
+  });
 
   const askAbout: FeedRowContext['onAskAbout'] = (items) => openDrawer({ context: { kind: 'selection', items } });
   const rowContext: FeedRowContext = {
-    view, isTelegram, selectMode, selected: selectedTelegram, setSelected: setSelectedTelegram,
-    interactionPending: interactionMutation.isPending, onInteract: (change) => interactionMutation.mutate(change), onAskAbout: askAbout,
+    view,
+    isTelegram,
+    selectMode,
+    selected: selectedTelegram,
+    setSelected: setSelectedTelegram,
+    interactionPending: interactionMutation.isPending,
+    onInteract: (change) => interactionMutation.mutate(change),
+    onAskAbout: askAbout,
   };
   const staleCount = staleSelections(selectedTelegramItems, feedItems).length;
 
   return (
-    <div ref={rootRef} tabIndex={-1} className="flex h-full flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card px-[var(--gadget-pad)] pb-[var(--gadget-pad)] pt-2 text-card-foreground focus:outline-none">
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      className="flex h-full flex-col gap-3 overflow-y-auto overflow-x-hidden bg-card px-[var(--gadget-pad)] pb-[var(--gadget-pad)] pt-2 text-card-foreground focus:outline-none"
+    >
       <FeedToolbar
-        onlyUnread={onlyUnread} toggleUnread={() => filters.setOnlyUnread((prev) => !prev)} unreadCount={unreadCount}
-        volume={volume.length >= 2 && (
-          <span className="w-20 shrink-0" title={t('feedVolume')}><Sparkline data={volume} height={24} width={80} line /></span>
-        )}
-        filters={showFilters && (
-          <FeedFilterPopover
-            searchText={searchText} setSearchText={filters.setSearchText} sourceIds={sourceIds}
-            sourceFilter={sourceFilter} setSourceFilter={filters.setSourceFilter} sourceNames={sourcesQuery.data?.items}
-            language={language} setLanguage={filters.setLanguage} timeWindow={timeWindow} setTimeWindow={filters.setTimeWindow}
-            activeFilterCount={activeFilterCount} filtering={filtering}
-          />
-        )}
-        canSelect={feedItems.some((item) => item.documentVersionId && item.sourceId)} selectMode={selectMode}
-        toggleSelectMode={() => { filters.setSelectMode((prev) => !prev); setSelectedTelegram({}); }}
-        refreshing={docsQuery.isFetching} onRefresh={() => docsQuery.refetch()}
-        view={view} setView={setView}
+        onlyUnread={onlyUnread}
+        toggleUnread={() => filters.setOnlyUnread((prev) => !prev)}
+        unreadCount={unreadCount}
+        volume={
+          volume.length >= 2 && (
+            <span className="w-20 shrink-0" title={t('feedVolume')}>
+              <Sparkline data={volume} height={24} width={80} line />
+            </span>
+          )
+        }
+        filters={
+          showFilters && (
+            <FeedFilterPopover
+              searchText={searchText}
+              setSearchText={filters.setSearchText}
+              sourceIds={sourceIds}
+              sourceFilter={sourceFilter}
+              setSourceFilter={filters.setSourceFilter}
+              sourceNames={sourcesQuery.data?.items}
+              language={language}
+              setLanguage={filters.setLanguage}
+              timeWindow={timeWindow}
+              setTimeWindow={filters.setTimeWindow}
+              activeFilterCount={activeFilterCount}
+              filtering={filtering}
+            />
+          )
+        }
+        canSelect={feedItems.some((item) => item.documentVersionId && item.sourceId)}
+        selectMode={selectMode}
+        toggleSelectMode={() => {
+          filters.setSelectMode((prev) => !prev);
+          setSelectedTelegram({});
+        }}
+        refreshing={docsQuery.isFetching}
+        onRefresh={() => docsQuery.refetch()}
+        view={view}
+        setView={setView}
       />
-      <FeedSourceTabs sourceIds={sourceIds} sourceNames={sourcesQuery.data?.items} value={sourceFilter} onChange={filters.setSourceFilter} />
+      <FeedSourceTabs
+        sourceIds={sourceIds}
+        sourceNames={sourcesQuery.data?.items}
+        value={sourceFilter}
+        onChange={filters.setSourceFilter}
+      />
       <FeedBulkBar
-        items={selectedTelegramItems} interactionPending={interactionMutation.isPending} onAskAbout={askAbout}
+        items={selectedTelegramItems}
+        interactionPending={interactionMutation.isPending}
+        onAskAbout={askAbout}
         onInteract={(change) => interactionMutation.mutate(change)}
-        onHide={(items) => { moderation.setHidden(items, true); setSelectedTelegram({}); }} onClear={() => setSelectedTelegram({})}
+        onHide={(items) => {
+          moderation.setHidden(items, true);
+          setSelectedTelegram({});
+        }}
+        onClear={() => setSelectedTelegram({})}
       />
       <FeedUndoBar
-        lastHidden={moderation.lastHidden} undoFailed={moderation.undoFailed} hideFailed={moderation.hideFailed}
-        interactionPending={interactionMutation.isPending} undoRef={undoRef}
+        lastHidden={moderation.lastHidden}
+        undoFailed={moderation.undoFailed}
+        hideFailed={moderation.hideFailed}
+        interactionPending={interactionMutation.isPending}
+        undoRef={undoRef}
         onUndo={() => moderation.setHidden(moderation.lastHidden, false)}
       />
       {staleCount > 0 && (
-        <p role="status" className="text-xs text-muted-foreground">{t('selectionChanged', { count: staleCount })}</p>
+        <p role="status" className="text-xs text-muted-foreground">
+          {t('selectionChanged', { count: staleCount })}
+        </p>
       )}
       <FeedStatus
-        docsQuery={docsQuery} feedItemCount={feedItems.length} displayedCount={displayedItems.length} filtering={filtering}
-        needle={needle} sourceFilter={sourceFilter} serverFiltered={serverFiltered} onlyUnread={onlyUnread}
+        docsQuery={docsQuery}
+        feedItemCount={feedItems.length}
+        displayedCount={displayedItems.length}
+        filtering={filtering}
+        needle={needle}
+        sourceFilter={sourceFilter}
+        serverFiltered={serverFiltered}
+        onlyUnread={onlyUnread}
       />
       <FeedItems items={more.visible} ctx={rowContext} />
       <ShowMoreButton state={more} />
-      <FeedFooter docsQuery={docsQuery} hasInitialItems={Boolean(initialItems?.length)} feedItemCount={feedItems.length} listExpanded={more.hiddenCount === 0} />
+      <FeedFooter
+        docsQuery={docsQuery}
+        hasInitialItems={Boolean(initialItems?.length)}
+        feedItemCount={feedItems.length}
+        listExpanded={more.hiddenCount === 0}
+      />
     </div>
   );
 }

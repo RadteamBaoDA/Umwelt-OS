@@ -109,7 +109,7 @@ def test_dto_image_url_gating() -> None:
     signed = _dto(allowed)
     assert signed is not None and signed.startswith(f"{PROXY_PATH}?token=")
     token = signed.split("token=", 1)[1]
-    assert media.verify_media_token(SECRET, token, subject="w:1") == allowed
+    assert media.verify_media_claims(SECRET, token, subject="w:1")[0] == allowed
 
 
 PUBLISHER = "https://ichef.bbci.co.uk/news/976/a.jpg"

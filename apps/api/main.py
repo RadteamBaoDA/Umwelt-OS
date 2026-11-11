@@ -51,7 +51,8 @@ def _validated_csrf_secret(app_settings: Settings) -> str:
     """Return the configured CSRF signing secret after API-only startup validation.
 
     Raises:
-        RuntimeError: If a worker-count variable is not a positive integer, or several API
+        RuntimeError: If a worker-count variable is not a positive integer, the secret is empty outside an
+            explicit dev/test ENVIRONMENT (every write would otherwise fail with 503 at runtime), or several API
             workers would each sign with a different generated secret.
     """
     app_settings.require_trusted_client_ip_source()  # API-only: workers never key on client IP
@@ -65,6 +66,10 @@ def _validated_csrf_secret(app_settings: Settings) -> str:
         if not workers_raw.isdigit():
             raise RuntimeError(f"{name} must be a positive integer, got {workers_raw!r}")
         worker_counts.append(int(workers_raw))
+    if not csrf_secret and not app_settings.secrets_relaxed:
+        raise RuntimeError(
+            "CSRF_SIGNING_SECRET is required outside ENVIRONMENT=development|test (CSRF tokens and media proxy URLs are signed with it)"
+        )
     if not csrf_secret and max(worker_counts) > 1:
         raise RuntimeError(
             "CSRF_SIGNING_SECRET is required when WEB_CONCURRENCY or UVICORN_WORKERS > 1 (each worker would sign with a different secret)"

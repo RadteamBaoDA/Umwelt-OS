@@ -12,6 +12,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from core import media_proxy
 from core.config import Settings
 from core.model_gateway.client import (
     ModelGateway,
@@ -28,7 +29,6 @@ from core.model_gateway.transport import (
     approved_web_search_transport,
 )
 from core.workspaces.schemas import InternalJobScope
-from modules.chat import media
 from modules.chat import web_search as web
 from modules.chat._worker.base import (
     _CHAT_ROLE,
@@ -615,7 +615,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
         )
         skill_names = list_skills()
         # Trip images are offered only when the owner allowed remote widget media and the turn is not local-only.
-        trip_images_on = media.media_permitted(ai_config, local_only=local_only_turn)
+        trip_images_on = media_proxy.media_permitted(ai_config, local_only=local_only_turn)
         # Search images follow the same gate; the rich answer is offered only with web results on a non-local turn.
         web_run = turn.web_run
         has_web_results = web_run is not None and bool(web_run.results) and not local_only_turn

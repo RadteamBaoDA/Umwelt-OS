@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from core import metrics as prom
 
-logger = logging.getLogger("bbd.telemetry")
+logger = logging.getLogger("umwelt.telemetry")
 
 # --------------------------------------------------------------------------- trace context
 

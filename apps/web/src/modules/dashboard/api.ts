@@ -57,9 +57,16 @@ export type GadgetScope = {
 
 /** Explainable match against one immutable current document version. */
 export type DashboardHighlightMatch = {
-  document_id: string; document_version_id: string; source_id: string; title: string;
-  observed_at: string; rule_id: string; matched_keywords: string[];
-  severity: 'info' | 'warning' | 'critical'; notify: boolean; reason: string;
+  document_id: string;
+  document_version_id: string;
+  source_id: string;
+  title: string;
+  observed_at: string;
+  rule_id: string;
+  matched_keywords: string[];
+  severity: 'info' | 'warning' | 'critical';
+  notify: boolean;
+  reason: string;
 };
 
 /** Simple bounded text filters and strict integer item limit. */
@@ -105,7 +112,9 @@ export type HighlightRule = {
 
 /** Dry-run result over recent current evidence; nothing is stored or notified. */
 export type HighlightPreview = {
-  window_days: number; scanned: number; truncated: boolean;
+  window_days: number;
+  scanned: number;
+  truncated: boolean;
   matches: DashboardHighlightMatch[];
   rules: { rule_id: string; match_count: number; unresolved_topic_ids: string[] }[];
 };
@@ -260,16 +269,20 @@ export function getDashboard(id: string, signal?: AbortSignal) {
 /** Creates an owner dashboard with empty desktop and mobile layouts. */
 export function createDashboard(name: string, csrfToken: string, signal?: AbortSignal) {
   return apiRequest<Dashboard>('/api/v1/dashboards', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify({ name }), signal,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ name }),
+    signal,
   });
 }
 
 /** Renames a dashboard only if its shared revision still matches. */
 export function renameDashboard(id: string, name: string, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
   return apiRequest<Dashboard>(`/api/v1/dashboards/${encodeURIComponent(id)}`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify({ name, expected_revision: expectedRevision }), signal,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ name, expected_revision: expectedRevision }),
+    signal,
   });
 }
 
@@ -277,68 +290,92 @@ export function renameDashboard(id: string, name: string, expectedRevision: numb
 export function deleteDashboard(id: string, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
   const query = new URLSearchParams({ expected_revision: String(expectedRevision) });
   return apiRequest<void>(`/api/v1/dashboards/${encodeURIComponent(id)}?${query}`, {
-    method: 'DELETE', headers: csrfHeaders(csrfToken), signal,
+    method: 'DELETE',
+    headers: csrfHeaders(csrfToken),
+    signal,
   });
-}
-
-/** Lists ordered groups belonging to one owner dashboard. */
-export function listDashboardGroups(dashboardId: string, signal?: AbortSignal) {
-  return apiRequest<DashboardGroup[]>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/groups`, { signal });
 }
 
 /** Creates a dashboard group under the shared dashboard revision. */
-export function createDashboardGroup(dashboardId: string, name: string, expectedRevision: number, csrfToken: string, position = 0, signal?: AbortSignal) {
+export function createDashboardGroup(
+  dashboardId: string,
+  name: string,
+  expectedRevision: number,
+  csrfToken: string,
+  position = 0,
+  signal?: AbortSignal,
+) {
   return apiRequest<DashboardGroup>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/groups`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify({ name, expected_revision: expectedRevision, position }), signal,
-  });
-}
-
-/** Updates group name or ordering at the current dashboard revision. */
-export function patchDashboardGroup(dashboardId: string, groupId: string, expectedRevision: number, patch: { name?: string; position?: number }, csrfToken: string, signal?: AbortSignal) {
-  return apiRequest<DashboardGroup>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/groups/${encodeURIComponent(groupId)}`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify({ ...patch, expected_revision: expectedRevision }), signal,
-  });
-}
-
-/** Deletes an empty group under the dashboard revision guard. */
-export function deleteDashboardGroup(dashboardId: string, groupId: string, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
-  const query = new URLSearchParams({ expected_revision: String(expectedRevision) });
-  return apiRequest<void>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/groups/${encodeURIComponent(groupId)}?${query}`, {
-    method: 'DELETE', headers: csrfHeaders(csrfToken), signal,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ name, expected_revision: expectedRevision, position }),
+    signal,
   });
 }
 
 /** Adds a definition-backed instance and returns the committed dashboard projection. */
-export function createGadgetInstance(dashboardId: string, payload: { expected_revision: number; group_id?: string; definition_id: string; title?: string | null; position?: number }, csrfToken: string, signal?: AbortSignal) {
+export function createGadgetInstance(
+  dashboardId: string,
+  payload: { expected_revision: number; group_id?: string; definition_id: string; title?: string | null; position?: number },
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
   return apiRequest<Dashboard>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/instances`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify(payload), signal,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
   });
 }
 
 /** Updates an instance's group, title, or order without changing its saved rectangles. */
-export function patchGadgetInstance(dashboardId: string, instanceId: string, expectedRevision: number, patch: { group_id?: string; title?: string | null; position?: number }, csrfToken: string, signal?: AbortSignal) {
+export function patchGadgetInstance(
+  dashboardId: string,
+  instanceId: string,
+  expectedRevision: number,
+  patch: { group_id?: string; title?: string | null; position?: number },
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
   return apiRequest<Dashboard>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/instances/${encodeURIComponent(instanceId)}`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify({ ...patch, expected_revision: expectedRevision }), signal,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify({ ...patch, expected_revision: expectedRevision }),
+    signal,
   });
 }
 
 /** Removes an instance and both breakpoint placements while retaining its definition. */
-export function deleteGadgetInstance(dashboardId: string, instanceId: string, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
+export function deleteGadgetInstance(
+  dashboardId: string,
+  instanceId: string,
+  expectedRevision: number,
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
   const query = new URLSearchParams({ expected_revision: String(expectedRevision) });
-  return apiRequest<Dashboard>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/instances/${encodeURIComponent(instanceId)}?${query}`, {
-    method: 'DELETE', headers: csrfHeaders(csrfToken), signal,
-  });
+  return apiRequest<Dashboard>(
+    `/api/v1/dashboards/${encodeURIComponent(dashboardId)}/instances/${encodeURIComponent(instanceId)}?${query}`,
+    {
+      method: 'DELETE',
+      headers: csrfHeaders(csrfToken),
+      signal,
+    },
+  );
 }
 
 /** Replaces exactly one breakpoint's complete placement set under dashboard revision control. */
-export function replaceDashboardLayout(dashboardId: string, payload: { expected_revision: number; breakpoint: 'desktop' | 'mobile'; columns?: number; items: DashboardPlacement[] }, csrfToken: string, signal?: AbortSignal) {
+export function replaceDashboardLayout(
+  dashboardId: string,
+  payload: { expected_revision: number; breakpoint: 'desktop' | 'mobile'; columns?: number; items: DashboardPlacement[] },
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
   return apiRequest<Dashboard>(`/api/v1/dashboards/${encodeURIComponent(dashboardId)}/layout`, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify(payload), signal,
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
   });
 }
 
@@ -347,24 +384,23 @@ export function listGadgetDefinitions(limit = 200, signal?: AbortSignal) {
   return apiRequest<GadgetDefinition[]>(`/api/v1/gadget-definitions?${new URLSearchParams({ limit: String(limit) })}`, { signal });
 }
 
-/** Reads one reusable definition and its saved configuration. */
-export function getGadgetDefinition(id: string, signal?: AbortSignal) {
-  return apiRequest<GadgetDefinition>(`/api/v1/gadget-definitions/${encodeURIComponent(id)}`, { signal });
-}
-
 /** Creates a reusable definition using the explicit owner CSRF token. */
 export function createGadgetDefinition(payload: GadgetDefinitionCreate, csrfToken: string, signal?: AbortSignal) {
   return apiRequest<GadgetDefinition>('/api/v1/gadget-definitions', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify(payload), signal,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
   });
 }
 
 /** Applies a partial reusable definition update guarded by its independent revision. */
 export function patchGadgetDefinition(id: string, payload: GadgetDefinitionPatch, csrfToken: string, signal?: AbortSignal) {
   return apiRequest<GadgetDefinition>(`/api/v1/gadget-definitions/${encodeURIComponent(id)}`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify(payload), signal,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
   });
 }
 
@@ -372,7 +408,9 @@ export function patchGadgetDefinition(id: string, payload: GadgetDefinitionPatch
 export function deleteGadgetDefinition(id: string, expectedRevision: number, csrfToken: string, signal?: AbortSignal) {
   const query = new URLSearchParams({ expected_revision: String(expectedRevision) });
   return apiRequest<void>(`/api/v1/gadget-definitions/${encodeURIComponent(id)}?${query}`, {
-    method: 'DELETE', headers: csrfHeaders(csrfToken), signal,
+    method: 'DELETE',
+    headers: csrfHeaders(csrfToken),
+    signal,
   });
 }
 
@@ -430,9 +468,16 @@ export function evaluateGadgetHighlights(definitionId: string) {
 }
 
 /** Dry-runs draft rules over the last days (max 7) of current data; never notifies or saves. */
-export function previewHighlightRules(payload: { source_ids: string[]; rules: HighlightRule[]; days?: number; source_item_ids?: string[] }, csrfToken: string, signal?: AbortSignal) {
+export function previewHighlightRules(
+  payload: { source_ids: string[]; rules: HighlightRule[]; days?: number; source_item_ids?: string[] },
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
   return apiRequest<HighlightPreview>('/api/v1/gadget-definitions/highlight-preview', {
-    method: 'POST', headers: csrfHeaders(csrfToken), body: JSON.stringify(payload), signal,
+    method: 'POST',
+    headers: csrfHeaders(csrfToken),
+    body: JSON.stringify(payload),
+    signal,
   });
 }
 
@@ -449,32 +494,43 @@ export function listDashboardPresets(signal?: AbortSignal) {
 /** Resolves a preset and explicit source selection without persistence; CSRF is required because the route is POST. */
 export function previewDashboardPreset(presetId: string, payload: PresetPreviewRequest, csrfToken: string, signal?: AbortSignal) {
   return apiRequest<PresetPreview>(`/api/v1/dashboard-presets/${encodeURIComponent(presetId)}/preview`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify(payload), signal,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
   });
 }
 
 /** Applies the fingerprinted preset; backend 409 ApiError details pass through unchanged. */
-export function applyDashboardPreset(presetId: string, payload: PresetPreviewRequest & {
-  preview_fingerprint: string;
-  mode?: 'create' | 'replace' | 'append';
-  name?: string | null;
-  expected_revision?: number | null;
-  replace_confirmed?: boolean;
-}, csrfToken: string, signal?: AbortSignal) {
+export function applyDashboardPreset(
+  presetId: string,
+  payload: PresetPreviewRequest & {
+    preview_fingerprint: string;
+    mode?: 'create' | 'replace' | 'append';
+    name?: string | null;
+    expected_revision?: number | null;
+    replace_confirmed?: boolean;
+  },
+  csrfToken: string,
+  signal?: AbortSignal,
+) {
   return apiRequest<Dashboard>(`/api/v1/dashboard-presets/${encodeURIComponent(presetId)}/apply`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
-    body: JSON.stringify(payload), signal,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...csrfHeaders(csrfToken) },
+    body: JSON.stringify(payload),
+    signal,
   });
 }
 
 const highlightRuleErrorKeys: Record<string, string> = {
-  rule_sources_not_subset: 'ruleErrSources', rule_excludes_all_sources: 'ruleErrExcludesAll', rule_topic_unknown: 'ruleErrTopic',
+  rule_sources_not_subset: 'ruleErrSources',
+  rule_excludes_all_sources: 'ruleErrExcludesAll',
+  rule_topic_unknown: 'ruleErrTopic',
 };
 
 /** Maps a rule-condition 422 to a localized gadgetSettings key, or null when the code is not a rule error. */
 export function highlightRuleErrorKey(error: unknown): string | null {
-  return error instanceof ApiError && error.status === 422 ? highlightRuleErrorKeys[error.code ?? ''] ?? null : null;
+  return error instanceof ApiError && error.status === 422 ? (highlightRuleErrorKeys[error.code ?? ''] ?? null) : null;
 }
 
 /** Current local weather returned by the owner-only proxy; coordinates are never echoed back. */

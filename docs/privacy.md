@@ -45,6 +45,6 @@ is not classified in the table below or a writer passes `shared=True`.
 | chat/worker `_purge_expired_conversations`, `_purge_expired_activity_links`, `_purge_expired_runs` | expiry erasure | exclusive |
 | knowledge/documents/worker `_advance_raw_document_cleanup`, `_evict_memory_cache_after_commit`, `_advance_copied_cleanup`, `_recover_attempt` (via `lock_export_privacy_in_uow`) | cleanup erasure | exclusive |
 | sources/worker `_lock_operation` (via `lock_export_privacy_in_uow`) | purge | exclusive |
-| memory `export_page`, `validate_export_fences`, `_verified_memory_read`, `_verified_candidate_read`, `get_memories`, `get_memory`, `get_candidates` | consistent read | shared |
+| memory `export_page`, `validate_export_fences`, `_verified_memory_read`, `_verified_candidate_read`, `_visible_kind_counts`, `get_memories`, `get_memory`, `get_candidates` | consistent read | shared |
 | memory `create_memory`, `update_memory`, `forget_memory`, `invalidate_memory`, `supersede_memory`, `accept_candidate`, `reject_candidate`, `purge_memories` | memory mutation/erasure | exclusive |
 | memory `get_privacy_config` (default insert), `_read_privacy_config_under_fence`, `update_privacy_config` | privacy state writer | exclusive |

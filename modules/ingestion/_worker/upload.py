@@ -32,7 +32,7 @@ from modules.ingestion.parsers import ParsedDocument, parse_file_bounded
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
 
-logger = logging.getLogger("bbd.worker")
+logger = logging.getLogger("umwelt.worker")
 
 
 @dataclass(frozen=True)

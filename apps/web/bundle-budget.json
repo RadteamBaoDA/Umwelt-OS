@@ -2,15 +2,15 @@
   "maxRouteFirstLoadKb": 800,
   "totalClientKb": 2313,
   "routes": {
-    "/(public)/login/page": 375,
-    "/(public)/setup/page": 375,
-    "/(public)/invite/page": 330,
-    "/(public)/invitations/accept/page": 330,
-    "/(public)/account-deletion/page": 310,
-    "/(public)/pick/page": 271,
-    "/(public)/privacy/page": 263,
-    "/(public)/refunds/page": 263,
-    "/(public)/terms/page": 263,
-    "/(public)/page": 273
+    "/(public)/login/page": 350,
+    "/(public)/setup/page": 350,
+    "/(public)/invite/page": 310,
+    "/(public)/invitations/accept/page": 310,
+    "/(public)/account-deletion/page": 295,
+    "/(public)/pick/page": 255,
+    "/(public)/privacy/page": 245,
+    "/(public)/refunds/page": 245,
+    "/(public)/terms/page": 245,
+    "/(public)/page": 245
   }
 }

@@ -9,7 +9,7 @@ const api = vi.hoisted(() => ({ fetchTranslationSettings: vi.fn(), submitTransla
 vi.mock('@/modules/translations/api', () => api);
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
 vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ selection: { id: 'w1' } }) }));
-vi.mock('@/core/api', () => ({ workspaceGeneration: () => 1, ApiError: class extends Error {} }));
+vi.mock('@/core/api', () => ({ retrySessionConflict: () => false, workspaceGeneration: () => 1, ApiError: class extends Error {} }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 vi.mock('@/modules/knowledge/api', () => ({}));
 vi.mock('@/modules/knowledge/document-sharing', () => ({ ShareDialog: () => null, shareErrorKey: () => 'loadFailed' }));
@@ -20,12 +20,21 @@ import { SharedBriefs } from './brief-sharing';
 import { listBriefRevisions } from './daily-api';
 
 const brief = (revision: number, content = 'Original text') => ({
-  id: 'b1', brief_date: '2026-10-09', timezone: 'UTC', revision, status: 'current' as const, content,
-  citations: [], model_alias: 'm', generated_at: '2026-10-09T00:00:00Z',
+  id: 'b1',
+  brief_date: '2026-10-09',
+  timezone: 'UTC',
+  revision,
+  status: 'current' as const,
+  content,
+  citations: [],
+  model_alias: 'm',
+  generated_at: '2026-10-09T00:00:00Z',
 });
 const view = (b: ReturnType<typeof brief>) => (
   <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <NextIntlClientProvider locale="en-US" messages={{ translations: translationsMessages['en-us'] }}><BriefText brief={b} /></NextIntlClientProvider>
+    <NextIntlClientProvider locale="en-US" messages={{ translations: translationsMessages['en-us'] }}>
+      <BriefText brief={b} />
+    </NextIntlClientProvider>
   </QueryClientProvider>
 );
 
@@ -34,7 +43,8 @@ describe('Daily Brief translation', () => {
     vi.clearAllMocks();
     api.fetchTranslationSettings.mockResolvedValue({ enabled: true, target_language: 'vi', configuration_revision: 1 });
     api.submitTranslationBatch.mockResolvedValue({
-      batch_id: null, items: [{ resource_type: 'daily_brief', resource_id: 'b1', status: 'ready', translation: { content: 'Ban dich' } }],
+      batch_id: null,
+      items: [{ resource_type: 'daily_brief', resource_id: 'b1', status: 'ready', translation: { content: 'Ban dich' } }],
     });
   });
 
@@ -42,7 +52,9 @@ describe('Daily Brief translation', () => {
     render(view(brief(2)));
     expect(screen.getByText('Original text')).toBeTruthy();
     expect(await screen.findByText('Ban dich')).toBeTruthy();
-    expect(api.submitTranslationBatch.mock.calls[0][0]).toEqual([{ resource_type: 'daily_brief', resource_id: 'b1', resource_revision: '2' }]);
+    expect(api.submitTranslationBatch.mock.calls[0][0]).toEqual([
+      { resource_type: 'daily_brief', resource_id: 'b1', resource_revision: '2' },
+    ]);
     await userEvent.click(screen.getByRole('button', { name: 'View original' }));
     expect(screen.getByText('Original text')).toBeTruthy();
     expect(screen.queryByText('Ban dich')).toBeNull();
@@ -50,7 +62,8 @@ describe('Daily Brief translation', () => {
 
   it('shows a short reason line when the translation is blocked', async () => {
     api.submitTranslationBatch.mockResolvedValue({
-      batch_id: null, items: [{ resource_type: 'daily_brief', resource_id: 'b1', status: 'blocked', error_code: 'privacy_blocked' }],
+      batch_id: null,
+      items: [{ resource_type: 'daily_brief', resource_id: 'b1', status: 'blocked', error_code: 'privacy_blocked' }],
     });
     render(view(brief(3)));
     expect(await screen.findByText('Not translated because of your privacy settings.')).toBeTruthy();
@@ -69,10 +82,17 @@ describe('Daily Brief translation', () => {
     vi.mocked(listBriefRevisions).mockResolvedValue([brief(2)]);
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <NextIntlClientProvider locale="en-US" messages={{ translations: translationsMessages['en-us'], sharing: { sharedBriefs: 'Shared briefs', loading: '…', noSharedBriefs: '-', briefMeta: 'r{revision} {time}' } }}>
+        <NextIntlClientProvider
+          locale="en-US"
+          messages={{
+            translations: translationsMessages['en-us'],
+            sharing: { sharedBriefs: 'Shared briefs', loading: '…', noSharedBriefs: '-', briefMeta: 'r{revision} {time}' },
+          }}
+        >
           <SharedBriefs date="2026-10-09" timezone="UTC" />
         </NextIntlClientProvider>
-      </QueryClientProvider>);
+      </QueryClientProvider>,
+    );
     expect(await screen.findByText('Ban dich')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'View original' }));
     expect(screen.getByText('Original text')).toBeTruthy();

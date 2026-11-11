@@ -139,28 +139,30 @@ function usePendingMessageMutations() {
   const pendingMessageMutationsRef = useRef<Record<string, PendingMessageMutation>>({});
 
   /** Retains the mutation identity synchronously so a lost acknowledgement can retry exactly. */
-  const getOrCreatePendingMessageMutation = useCallback((
-    conversationId: string,
-    input: Omit<PendingMessageMutation, 'clientRequestId'>,
-  ): PendingMessageMutation => {
-    const existing = pendingMessageMutationsRef.current[conversationId];
-    if (existing) {
-      const matches = existing.action === input.action
-        && existing.targetMessageId === input.targetMessageId
-        && existing.baseContentHash === input.baseContentHash
-        && existing.content === input.content;
-      if (matches) return existing;
-      throw new PendingMessageMutationConflictError();
-    }
-    const clientRequestId = typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
-      ? uuid7()
-      : `mutation-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-    const mutation = { ...input, clientRequestId };
-    const next = { ...pendingMessageMutationsRef.current, [conversationId]: mutation };
-    pendingMessageMutationsRef.current = next;
-    setPendingMessageMutations(next);
-    return mutation;
-  }, []);
+  const getOrCreatePendingMessageMutation = useCallback(
+    (conversationId: string, input: Omit<PendingMessageMutation, 'clientRequestId'>): PendingMessageMutation => {
+      const existing = pendingMessageMutationsRef.current[conversationId];
+      if (existing) {
+        const matches =
+          existing.action === input.action &&
+          existing.targetMessageId === input.targetMessageId &&
+          existing.baseContentHash === input.baseContentHash &&
+          existing.content === input.content;
+        if (matches) return existing;
+        throw new PendingMessageMutationConflictError();
+      }
+      const clientRequestId =
+        typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
+          ? uuid7()
+          : `mutation-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+      const mutation = { ...input, clientRequestId };
+      const next = { ...pendingMessageMutationsRef.current, [conversationId]: mutation };
+      pendingMessageMutationsRef.current = next;
+      setPendingMessageMutations(next);
+      return mutation;
+    },
+    [],
+  );
 
   /** Removes a request only after its matching durable response acknowledgement arrives. */
   const clearPendingMessageMutation = useCallback((conversationId: string, clientRequestId: string) => {
@@ -216,15 +218,22 @@ function useConversationSelection(
   // Key of the conversation whose draft the composer currently shows; updated after commit so a write always targets
   // the visible conversation.
   const draftKeyRef = useRef<string | null>(null);
-  useLayoutEffect(() => { draftKeyRef.current = activeConversationId; });
+  useLayoutEffect(() => {
+    draftKeyRef.current = activeConversationId;
+  });
   // Switching (or reloading into) a conversation shows that conversation's saved draft; pure read plus own setter.
-  useResetOnChange([activeConversationId], () => { setDraftState(readDraft(activeConversationId)); });
+  useResetOnChange([activeConversationId], () => {
+    setDraftState(readDraft(activeConversationId));
+  });
   // Logout/session end: drop persisted and visible drafts before the next account can see them.
   useEffect(() => {
     /** Clears every stored draft and the visible one when the shell announces the session is ending. */
-    const authEnding = () => { clearAllDrafts(); setDraftState(''); };
-    window.addEventListener('bbd:auth-ending', authEnding);
-    return () => window.removeEventListener('bbd:auth-ending', authEnding);
+    const authEnding = () => {
+      clearAllDrafts();
+      setDraftState('');
+    };
+    window.addEventListener('umwelt:auth-ending', authEnding);
+    return () => window.removeEventListener('umwelt:auth-ending', authEnding);
   }, []);
 
   /** Updates the visible draft and mirrors it to sessionStorage under the active conversation. */
@@ -251,37 +260,58 @@ function useConversationSelection(
   // Day -> conversation bindings for this browser session; a conversation keeps the day it was created with.
   const dayConversations = useRef(new Map<string, string>());
   const contextRef = useRef<ChatContext | null>(null);
-  useLayoutEffect(() => { contextRef.current = context; });
+  useLayoutEffect(() => {
+    contextRef.current = context;
+  });
 
   const bindDayConversation = useCallback((day: { date: string; timezone: string }, conversationId: string) => {
     dayConversations.current.set(dayKey(day.date, day.timezone), conversationId);
   }, []);
 
   /** Switches context and conversation together so a send can never mix two days. */
-  const selectDay = useCallback((day: { date: string; timezone: string }) => {
-    setContext({ kind: 'day', date: day.date, timezone: day.timezone });
-    selectConversationRaw(dayConversations.current.get(dayKey(day.date, day.timezone)) ?? null);
-  }, [selectConversationRaw]);
+  const selectDay = useCallback(
+    (day: { date: string; timezone: string }) => {
+      setContext({ kind: 'day', date: day.date, timezone: day.timezone });
+      selectConversationRaw(dayConversations.current.get(dayKey(day.date, day.timezone)) ?? null);
+    },
+    [selectConversationRaw],
+  );
 
-  const unbindConversation = useCallback((id: string) => {
-    for (const [key, value] of dayConversations.current) {
-      if (value === id) dayConversations.current.delete(key);
-    }
-    const pending = pendingMessageMutationsRef.current[id];
-    if (pending) clearPendingMessageMutation(id, pending.clientRequestId);
-  }, [clearPendingMessageMutation, pendingMessageMutationsRef]);
+  const unbindConversation = useCallback(
+    (id: string) => {
+      for (const [key, value] of dayConversations.current) {
+        if (value === id) dayConversations.current.delete(key);
+      }
+      const pending = pendingMessageMutationsRef.current[id];
+      if (pending) clearPendingMessageMutation(id, pending.clientRequestId);
+    },
+    [clearPendingMessageMutation, pendingMessageMutationsRef],
+  );
 
-  const selectHistoryConversation = useCallback((id: string) => {
-    const now = contextRef.current;
-    if (now?.kind === 'day' && dayConversations.current.get(dayKey(now.date, now.timezone)) !== id) {
-      setContext(null);
-    }
-    selectConversationRaw(id);
-  }, [selectConversationRaw]);
+  const selectHistoryConversation = useCallback(
+    (id: string) => {
+      const now = contextRef.current;
+      if (now?.kind === 'day' && dayConversations.current.get(dayKey(now.date, now.timezone)) !== id) {
+        setContext(null);
+      }
+      selectConversationRaw(id);
+    },
+    [selectConversationRaw],
+  );
 
   return {
-    activeConversationId, activeConversationGeneration, context, draft, setContext, setDraft, clearNewChatDraft,
-    selectConversationRaw, bindDayConversation, selectDay, unbindConversation, selectHistoryConversation,
+    activeConversationId,
+    activeConversationGeneration,
+    context,
+    draft,
+    setContext,
+    setDraft,
+    clearNewChatDraft,
+    selectConversationRaw,
+    bindDayConversation,
+    selectDay,
+    unbindConversation,
+    selectHistoryConversation,
   };
 }
 
@@ -296,15 +326,18 @@ function useChatDrawer(
   /**
    * Opens the chat drawer and optionally focuses a specific conversation or context.
    */
-  const openDrawer = useCallback((params?: ChatOpenParams) => {
-    if (params?.conversationId !== undefined) {
-      selectConversationRaw(params.conversationId);
-    }
-    if (params?.context !== undefined) {
-      setContext(params.context);
-    }
-    setIsDrawerOpen(true);
-  }, [selectConversationRaw, setContext]);
+  const openDrawer = useCallback(
+    (params?: ChatOpenParams) => {
+      if (params?.conversationId !== undefined) {
+        selectConversationRaw(params.conversationId);
+      }
+      if (params?.context !== undefined) {
+        setContext(params.context);
+      }
+      setIsDrawerOpen(true);
+    },
+    [selectConversationRaw, setContext],
+  );
 
   /**
    * Closes the drawer presentation only. Active generation runs continue on the server.
@@ -342,66 +375,80 @@ function useChatDrawer(
  * @returns Context provider element.
  */
 export function ChatControllerProvider({ children }: { children: ReactNode }) {
-  const { pendingMessageMutations, pendingMessageMutationsRef, getOrCreatePendingMessageMutation, clearPendingMessageMutation } = usePendingMessageMutations();
+  const { pendingMessageMutations, pendingMessageMutationsRef, getOrCreatePendingMessageMutation, clearPendingMessageMutation } =
+    usePendingMessageMutations();
   const { pendingSpecialistRuns, setPendingSpecialistRun, clearPendingSpecialistRun } = usePendingSpecialistRuns();
   const {
-    activeConversationId, activeConversationGeneration, context, draft, setContext, setDraft, clearNewChatDraft,
-    selectConversationRaw, bindDayConversation, selectDay, unbindConversation, selectHistoryConversation,
-  } = useConversationSelection(pendingMessageMutationsRef, clearPendingMessageMutation);
-  const { isDrawerOpen, openDrawer, closeDrawer, toggleDrawer, resetConversation } = useChatDrawer(selectConversationRaw, setContext, clearNewChatDraft);
-
-  // Memoize the context value so consumers only re-render when chat state or stable callbacks change.
-  const value = useMemo<ChatControllerContextValue>(() => ({
-    isDrawerOpen,
     activeConversationId,
     activeConversationGeneration,
     context,
     draft,
-    pendingSpecialistRuns,
-    pendingMessageMutations,
-    openDrawer,
-    closeDrawer,
-    toggleDrawer,
-    setActiveConversationId: selectConversationRaw,
     setContext,
     setDraft,
-    setPendingSpecialistRun,
-    clearPendingSpecialistRun,
-    getOrCreatePendingMessageMutation,
-    clearPendingMessageMutation,
-    resetConversation,
-    selectDay,
+    clearNewChatDraft,
+    selectConversationRaw,
     bindDayConversation,
-    selectConversation: selectHistoryConversation,
+    selectDay,
     unbindConversation,
-  }), [
-    isDrawerOpen,
-    activeConversationId,
-    activeConversationGeneration,
-    context,
-    draft,
-    pendingSpecialistRuns,
-    pendingMessageMutations,
-    openDrawer,
-    closeDrawer,
-    toggleDrawer,
+    selectHistoryConversation,
+  } = useConversationSelection(pendingMessageMutationsRef, clearPendingMessageMutation);
+  const { isDrawerOpen, openDrawer, closeDrawer, toggleDrawer, resetConversation } = useChatDrawer(
     selectConversationRaw,
     setContext,
-    setDraft,
-    setPendingSpecialistRun,
-    clearPendingSpecialistRun,
-    getOrCreatePendingMessageMutation,
-    clearPendingMessageMutation,
-    resetConversation,
-    selectDay,
-    bindDayConversation,
-    selectHistoryConversation,
-    unbindConversation,
-  ]);
-
-  return (
-    <ChatControllerContext.Provider value={value}>
-      {children}
-    </ChatControllerContext.Provider>
+    clearNewChatDraft,
   );
+
+  // Memoize the context value so consumers only re-render when chat state or stable callbacks change.
+  const value = useMemo<ChatControllerContextValue>(
+    () => ({
+      isDrawerOpen,
+      activeConversationId,
+      activeConversationGeneration,
+      context,
+      draft,
+      pendingSpecialistRuns,
+      pendingMessageMutations,
+      openDrawer,
+      closeDrawer,
+      toggleDrawer,
+      setActiveConversationId: selectConversationRaw,
+      setContext,
+      setDraft,
+      setPendingSpecialistRun,
+      clearPendingSpecialistRun,
+      getOrCreatePendingMessageMutation,
+      clearPendingMessageMutation,
+      resetConversation,
+      selectDay,
+      bindDayConversation,
+      selectConversation: selectHistoryConversation,
+      unbindConversation,
+    }),
+    [
+      isDrawerOpen,
+      activeConversationId,
+      activeConversationGeneration,
+      context,
+      draft,
+      pendingSpecialistRuns,
+      pendingMessageMutations,
+      openDrawer,
+      closeDrawer,
+      toggleDrawer,
+      selectConversationRaw,
+      setContext,
+      setDraft,
+      setPendingSpecialistRun,
+      clearPendingSpecialistRun,
+      getOrCreatePendingMessageMutation,
+      clearPendingMessageMutation,
+      resetConversation,
+      selectDay,
+      bindDayConversation,
+      selectHistoryConversation,
+      unbindConversation,
+    ],
+  );
+
+  return <ChatControllerContext.Provider value={value}>{children}</ChatControllerContext.Provider>;
 }

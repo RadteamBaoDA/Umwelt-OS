@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth.dependencies import is_instance_operator
 from core.ids import uuid7
+from core.rate_limit import require_budget
 from core.realtime import commit_with_replay, make_source_change
 from core.workspaces.schemas import AccessFence, WorkspaceContext
 from modules.connectors import (
@@ -73,7 +74,7 @@ async def get_configuration(
     """Read a managed connector configuration for an authorized owner.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Read admission checks the owner role and access fence; CSRF/Origin checks apply only to write routes.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
@@ -135,7 +136,12 @@ async def get_configuration(
     )
 
 
-@router.post("/{source_id}/validate-draft", response_model=DraftValidationRead)
+@router.post(
+    "/{source_id}/validate-draft",
+    response_model=DraftValidationRead,
+    # Outbound probe on read admission (no CSRF/Origin check): the budget bounds abuse.
+    dependencies=[Depends(require_budget("connector_probe", 30, 60))],
+)
 async def validate_draft_configuration(
     source_id: UUID,
     payload: DraftValidationRequest,
@@ -151,7 +157,7 @@ async def validate_draft_configuration(
     Home Assistant, Notion and Slack drafts require an Authorization bearer header but are never contacted here.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. These probes use read admission (owner role and access fence, no CSRF/Origin check, so the browser sends no CSRF token); the ``connector_probe`` budget bounds outbound calls.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
@@ -295,7 +301,12 @@ async def _fetch_sample_json(url: str, before_send: Callable[[], Awaitable[None]
         raise HTTPException(status_code=422, detail="rest_sample_not_json") from exc
 
 
-@router.post("/{source_id}/rest-sample", response_model=RestSampleRead)
+@router.post(
+    "/{source_id}/rest-sample",
+    response_model=RestSampleRead,
+    # Outbound probe on read admission (no CSRF/Origin check): the budget bounds abuse.
+    dependencies=[Depends(require_budget("connector_probe", 30, 60))],
+)
 async def fetch_rest_sample(
     source_id: UUID,
     payload: DraftValidationRequest,
@@ -731,7 +742,7 @@ async def get_catalog(
     """Return connector catalog entries to an authorized owner.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Read admission checks the owner role and access fence; CSRF/Origin checks apply only to write routes.
     """
     scope = _owner
     await _owner_access(session, request, scope)
@@ -989,14 +1000,19 @@ async def put_configuration(
     )
 
 
-@router.post("/{source_id}/validate", response_model=ActivationRead)
+@router.post(
+    "/{source_id}/validate",
+    response_model=ActivationRead,
+    # Outbound probe on read admission (no CSRF/Origin check): the budget bounds abuse.
+    dependencies=[Depends(require_budget("connector_probe", 30, 60))],
+)
 async def validate_configuration(
     source_id: UUID, session: Session, request: Request, _owner: OwnerRead
 ) -> ActivationRead:
     """Validate saved connector settings against configuration and URL policy.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. These probes use read admission (owner role and access fence, no CSRF/Origin check, so the browser sends no CSRF token); the ``connector_probe`` budget bounds outbound calls.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled
@@ -1032,7 +1048,7 @@ async def get_activation(
     """Read activation status for an authorized source owner.
 
     All owner reads/writes receive an explicit admitted workspace/job scope and the
-    actual rollout flag; members have no Source/configuration/credential access. Browser write admission retains CSRF checks and original session/access lineage.
+    actual rollout flag; members have no Source/configuration/credential access. Read admission checks the owner role and access fence; CSRF/Origin checks apply only to write routes.
     """
     scope = _owner
     multi_workspace_enabled = request.app.state.settings.multi_workspace_enabled

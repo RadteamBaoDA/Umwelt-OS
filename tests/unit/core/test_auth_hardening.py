@@ -114,7 +114,7 @@ async def test_login_global_cap_removed() -> None:
 
 
 def test_audit_hashes_ip_and_redacts(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO, logger="bbd.auth"):
+    with caplog.at_level(logging.INFO, logger="umwelt.auth"):
         routes._audit(_req(), "login_failure", 1)
     text = caplog.text
     assert (

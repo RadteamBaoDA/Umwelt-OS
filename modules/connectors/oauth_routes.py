@@ -15,7 +15,7 @@ from uuid import UUID
 
 import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client  # type: ignore[import-untyped]
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -29,6 +29,7 @@ from core.config import Settings
 from core.database import get_session
 from core.errors import DomainError
 from core.ids import uuid7
+from core.key_ring import key_ring
 from core.realtime import commit_with_replay
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.public import lock_access_fence
@@ -109,7 +110,7 @@ def _cipher(
         separators=(",", ":"),
         default=serialize,
     )
-    return Fernet(key.encode("ascii")).encrypt(payload.encode("utf-8")).decode("ascii")
+    return key_ring(key).encrypt(payload.encode("utf-8")).decode("ascii")
 
 
 def _open_cipher(
@@ -117,7 +118,7 @@ def _open_cipher(
 ) -> dict[str, Any]:
     """Decrypt only a credential whose source, operation and configuration binding still matches."""
     try:
-        payload = json.loads(Fernet(key.encode("ascii")).decrypt(ciphertext.encode("ascii")))
+        payload = json.loads(key_ring(key).decrypt(ciphertext.encode("ascii")))
     except (ValueError, UnicodeEncodeError, InvalidToken, json.JSONDecodeError) as exc:
         raise ValueError("connector_oauth_cipher_invalid") from exc
     if not isinstance(payload, dict):

@@ -70,7 +70,8 @@ def _static_cache(response: Response) -> None:
     """Mark build-time constant catalogs (renderers, templates, metric catalog) cacheable for an hour.
 
     They contain no owner data and change only on deploy, so the browser can skip the request when the
-    gadget dialog reopens instead of queueing it behind live gadget polling.
+    gadget dialog reopens instead of queueing it behind live gadget polling. Their routes still require workspace
+    read admission like the rest of this router; the catalogs are not part of the public site.
     """
     response.headers["Cache-Control"] = "private, max-age=3600"
 
@@ -590,14 +591,22 @@ async def delete_definition(
     return Response(status_code=204, headers={"Cache-Control": "private, no-store"})
 
 
-@router.get("/gadget-renderers", response_model=list[RendererRead])
+@router.get(
+    "/gadget-renderers",
+    response_model=list[RendererRead],
+    dependencies=[Depends(require_workspace_observer_read)],
+)
 async def list_renderers(response: Response) -> list[RendererRead]:
     """Return renderer adapter metadata and minimum geometry without runtime acceptance claims."""
     _static_cache(response)
     return public.renderer_reads()
 
 
-@router.get("/gadget-templates", response_model=list[GadgetTemplateRead])
+@router.get(
+    "/gadget-templates",
+    response_model=list[GadgetTemplateRead],
+    dependencies=[Depends(require_workspace_observer_read)],
+)
 async def list_gadget_templates(response: Response) -> list[GadgetTemplateRead]:
     """Return generic gadget display templates and their renderer compatibility metadata."""
     _static_cache(response)
@@ -617,7 +626,11 @@ async def gadget_compatible_counts(
     )
 
 
-@router.get("/gadget-metric-catalog", response_model=dict[str, ProviderMetricsRead])
+@router.get(
+    "/gadget-metric-catalog",
+    response_model=dict[str, ProviderMetricsRead],
+    dependencies=[Depends(require_workspace_observer_read)],
+)
 async def gadget_metric_catalog(response: Response) -> dict[str, dict[str, Any]]:
     """Return the static per-provider metric catalog used by the gadget editor."""
     _static_cache(response)
@@ -645,7 +658,11 @@ async def list_gadget_sources(
     return page.model_dump(mode="json")
 
 
-@router.get("/dashboard-presets", response_model=list[DashboardPresetRead])
+@router.get(
+    "/dashboard-presets",
+    response_model=list[DashboardPresetRead],
+    dependencies=[Depends(require_workspace_observer_read)],
+)
 async def list_presets(response: Response) -> list[DashboardPresetRead]:
     """Return stable static preset templates without creating sources or collecting data."""
     _no_store(response)

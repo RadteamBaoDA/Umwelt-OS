@@ -41,3 +41,7 @@ apps/web/coverage/
 
 # Claude Code agent worktrees (local only)
 .claude/worktrees/
+
+# Python coverage output
+.coverage
+htmlcov/

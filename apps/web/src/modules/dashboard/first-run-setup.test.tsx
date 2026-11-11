@@ -5,10 +5,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
 
 const mocks = vi.hoisted(() => ({ apiRequest: vi.fn(), fetchTopics: vi.fn(), getDailyContext: vi.fn() }));
-vi.mock('@/core/api', () => ({ apiRequest: mocks.apiRequest }));
+vi.mock('@/core/api', () => ({ retrySessionConflict: () => false, apiRequest: mocks.apiRequest }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 vi.mock('@/modules/news/api', () => ({ fetchTopics: mocks.fetchTopics }));
-vi.mock('./daily-api', () => ({ dailyKeys: { context: (d: string, z: string) => ['c', d, z] }, generateBrief: vi.fn(), getDailyContext: mocks.getDailyContext }));
+vi.mock('./daily-api', () => ({
+  dailyKeys: { context: (d: string, z: string) => ['c', d, z] },
+  generateBrief: vi.fn(),
+  getDailyContext: mocks.getDailyContext,
+}));
 
 import { FirstRunSetup } from './first-run-setup';
 

@@ -211,7 +211,7 @@ function useAuthEndingReset(draft: ConnectorDraft, acceptLeave: () => void) {
       setName('');
       loadedFor.current = '';
     };
-    window.addEventListener('bbd:auth-ending', endAuthSession);
-    return () => window.removeEventListener('bbd:auth-ending', endAuthSession);
+    window.addEventListener('umwelt:auth-ending', endAuthSession);
+    return () => window.removeEventListener('umwelt:auth-ending', endAuthSession);
   }, [acceptLeave, setSourceId, setSourceGeneration, setConfiguration, setName, sourceGenerationRef, loadedFor]);
 }

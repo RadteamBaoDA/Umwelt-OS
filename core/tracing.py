@@ -20,7 +20,7 @@ from typing import Any, cast
 
 from arq.connections import ArqRedis
 
-logger = logging.getLogger("bbd.tracing")
+logger = logging.getLogger("umwelt.tracing")
 
 TRACE_KWARG = "_trace_carrier"
 _TRACER_NAME = "umwelt-os"

@@ -15,7 +15,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from core.ids import uuid7
 from core.telemetry import bind_trace, count, observe_ms
 
-logger = logging.getLogger("bbd.api")
+logger = logging.getLogger("umwelt.api")
 _TIMEOUT_SQLSTATES = {"57014", "55P03"}
 
 

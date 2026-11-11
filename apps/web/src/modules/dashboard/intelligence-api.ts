@@ -41,32 +41,10 @@ export type CorrelationResult = {
   interpretation: 'temporal_co_occurrence_only';
 };
 
-/** CII v8 projection that preserves the owner-requested countries and never substitutes a score. */
-export type CiiAvailability = {
-  method_version: 'v8';
-  requested_countries: string[];
-  score: null;
-  band: null;
-  movement_24h: null;
-  as_of: null;
-  availability: 'method_data_license_unverified';
-  reason: string;
-};
-
 /** Request one bounded correlation projection over the saved region, source, and date scope. */
-export function getCorrelations(
-  filters: { sourceIds: string[]; regions: string[]; from: Date; to: Date },
-  signal?: AbortSignal,
-) {
+export function getCorrelations(filters: { sourceIds: string[]; regions: string[]; from: Date; to: Date }, signal?: AbortSignal) {
   const query = new URLSearchParams({ from_at: filters.from.toISOString(), to_at: filters.to.toISOString() });
   for (const sourceId of filters.sourceIds) query.append('source_ids', sourceId);
   for (const region of filters.regions) query.append('regions', region);
   return apiRequest<CorrelationResult>(`/api/v1/intelligence/correlations?${query.toString()}`, { signal });
-}
-
-/** Read the consumed unavailable CII v8 method state for the exact requested country selectors. */
-export function getCiiAvailability(countries: string[], signal?: AbortSignal) {
-  const query = new URLSearchParams();
-  for (const country of countries) query.append('countries', country);
-  return apiRequest<CiiAvailability>(`/api/v1/intelligence/cii?${query.toString()}`, { signal });
 }

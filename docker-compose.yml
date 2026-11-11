@@ -132,6 +132,7 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.ChatWorkerSettings"]
+    # Not on the `storage` network: its jobs read only database text and never call core.storage.
     env_file: .env
     healthcheck:
       test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:chat:health-check"]
@@ -163,6 +164,7 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     command: ["arq", "apps.worker.main.ModelWorkerSettings"]
+    # Not on the `storage` network: its jobs read only database text and never call core.storage.
     env_file: .env
     healthcheck:
       test: ["CMD", "python", "-m", "core.worker_healthcheck", "arq:model:health-check"]

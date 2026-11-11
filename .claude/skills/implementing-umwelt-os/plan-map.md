@@ -4,7 +4,7 @@ All links resolve from this file. This is a navigation reference; task status li
 
 ## Required source documents
 
-- [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md): product contracts; sections 156–164 clarify the implementation strategy and approved drawer.
+- [Canonical specification](../../../specs/personal-intelligence-os-spec-v2.md): product contracts; sections 156–167 clarify the implementation strategy and approved drawer.
 - [Master plan](../../../docs/superpowers/plans/2026-09-25-umwelt-os-master-plan.md): dependencies, shared contracts, verification protocol and external gates.
 - [Implementation status](../../../docs/IMPLEMENTATION_STATUS.md): delivered versus planned capabilities.
 - [Architecture decisions](../../../docs/ARCHITECTURE_DECISIONS.md): selected stack and owner decisions.
@@ -37,7 +37,7 @@ The master owns exact dependencies. Default order is 1 through 12 after Phase 0 
 | Public auth helper or new module missing from image/wheel/migrations? | P01-T1; master Public Contracts and Ownership. Includes runner/CI discovery, not just moving route helpers. |
 | Receipt acknowledged before queue survives restart? | P02-T1; spec 158–159: durable PostgreSQL batch/pending work before acknowledgement; idempotent dispatch. |
 | Remote reasoning/embeddings or fallback permitted? | P03-T1/T2, P06-T1, P07; spec 157: separate owner grants, source-local policy, destination guarantees, fixed embedding identity per generation. |
-| Drawer close versus Stop, reconnect or expanded Ask? | P06-T2/T3; spec 42/164: close hides UI, Stop cancels, same conversation on `/ask`, no duplicate sends. |
+| Drawer close versus Stop, reconnect or expanded Ask? | P06-T2/T3; spec 165–166: close hides UI, Stop cancels, same conversation on `/chat`, no duplicate sends. |
 | Historical Today and selected date? | P08-T3/T4; spec 46/164: date + timezone bound conversations, saved brief revisions, currently retained records with update time; no implied historical task snapshot. |
 | Approval or external side-effect retry? | P07-T3; spec 158: immutable action/arguments, expiry, execution-time revalidation, reconciliation of uncertain outcomes. |
 | Collection schedules versus automation authoring? | P02-T3 owns initial n8n collection; P09 specializes GitHub; P10 adds rule authoring. |
@@ -48,4 +48,8 @@ The master owns exact dependencies. Default order is 1 through 12 after Phase 0 
 
 Request: “Continue implementation from the saved checkpoint.”
 
-Read current status, ledger and code first. If the ledger still selects P01-T1, load Phase 1 and verify Phase 0 evidence. Trace public auth extraction and every packaging/test-runner consumer. Use the existing disposable full test runner until targeted flags are implemented. Record real failing/passing evidence and advance to P01-T2 only after P01-T1 acceptance. If the checkpoint has advanced, use its current task instead.
+Read current status, ledger and code first. If the ledger still selects P01-T1, load Phase 1 and verify Phase 0 evidence. Trace public auth extraction and every packaging/test-runner consumer. Validate per the Testing Guidelines in `AGENTS.md`. If the checkpoint has advanced, use its current task instead.
+
+## Current reconciliation
+
+Read [R01–R16](../../../docs/superpowers/plans/2026-09-30-umwelt-os-spec-reconciliation.md) for all supplemental owners/dependencies/acceptance. Earlier Today/Ask names are historical; sections 165–166 govern presentation.

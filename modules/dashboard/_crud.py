@@ -834,6 +834,79 @@ async def create_instance(
     )
 
 
+async def _move_instance_to_group(
+    session: AsyncSession,
+    dashboard_id: UUID,
+    instance: GadgetInstance,
+    group_id: UUID | None,
+    *,
+    scope: Scope,
+) -> None:
+    """Move a locked instance into another panel of the same dashboard, re-homing its saved rectangles.
+
+    Raises ValueError when ``group_id`` is None or the destination has no free position at some breakpoint,
+    and DashboardMissing when the panel is not in this workspace's dashboard. The caller holds the dashboard
+    and instance locks and publishes the revision.
+    """
+    if group_id is None:
+        raise ValueError("group_id cannot be cleared")
+    if (
+        await session.scalar(
+            select(DashboardGroup.id)
+            .join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
+            .where(
+                DashboardGroup.id == group_id,
+                DashboardGroup.dashboard_id == dashboard_id,
+                Dashboard.workspace_id == scope.workspace_id,
+            )
+        )
+        is None
+    ):
+        raise DashboardMissing
+    if instance.group_id != group_id:
+        # Each panel owns its own origin. Re-home both saved rectangles before changing membership.
+        placements = list(
+            (
+                await session.scalars(
+                    select(GadgetPlacement).where(
+                        GadgetPlacement.dashboard_id == dashboard_id,
+                        GadgetPlacement.instance_id == instance.id,
+                    )
+                )
+            ).all()
+        )
+        for placement in placements:
+            layout_columns = await session.scalar(
+                select(DashboardLayout.columns).where(
+                    DashboardLayout.dashboard_id == dashboard_id,
+                    DashboardLayout.breakpoint == placement.breakpoint,
+                )
+            )
+            occupied = list(
+                (
+                    await session.scalars(
+                        select(GadgetPlacement)
+                        .join(GadgetInstance, GadgetInstance.id == GadgetPlacement.instance_id)
+                        .where(
+                            GadgetPlacement.dashboard_id == dashboard_id,
+                            GadgetPlacement.breakpoint == placement.breakpoint,
+                            GadgetInstance.group_id == group_id,
+                        )
+                    )
+                ).all()
+            )
+            position = layouts.find_free_position(
+                [(item.x, item.y, item.w, item.h) for item in occupied],
+                layout_columns or 20,
+                placement.w,
+                placement.h,
+            )
+            if position is None:
+                raise ValueError("No free layout position remains in the destination panel")
+            placement.x, placement.y = position
+        instance.group_id = group_id
+
+
 async def patch_instance(
     session: AsyncSession,
     dashboard_id: UUID,
@@ -884,63 +957,9 @@ async def patch_instance(
     if "title" in payload.model_fields_set:
         instance.title = payload.title
     if "group_id" in payload.model_fields_set:
-        if payload.group_id is None:
-            raise ValueError("group_id cannot be cleared")
-        if (
-            await session.scalar(
-                select(DashboardGroup.id)
-                .join(Dashboard, Dashboard.id == DashboardGroup.dashboard_id)
-                .where(
-                    DashboardGroup.id == payload.group_id,
-                    DashboardGroup.dashboard_id == dashboard_id,
-                    Dashboard.workspace_id == scope.workspace_id,
-                )
-            )
-            is None
-        ):
-            raise DashboardMissing
-        if instance.group_id != payload.group_id:
-            # Each panel owns its own origin. Re-home both saved rectangles before changing membership.
-            placements = list(
-                (
-                    await session.scalars(
-                        select(GadgetPlacement).where(
-                            GadgetPlacement.dashboard_id == dashboard_id,
-                            GadgetPlacement.instance_id == instance_id,
-                        )
-                    )
-                ).all()
-            )
-            for placement in placements:
-                layout_columns = await session.scalar(
-                    select(DashboardLayout.columns).where(
-                        DashboardLayout.dashboard_id == dashboard_id,
-                        DashboardLayout.breakpoint == placement.breakpoint,
-                    )
-                )
-                occupied = list(
-                    (
-                        await session.scalars(
-                            select(GadgetPlacement)
-                            .join(GadgetInstance, GadgetInstance.id == GadgetPlacement.instance_id)
-                            .where(
-                                GadgetPlacement.dashboard_id == dashboard_id,
-                                GadgetPlacement.breakpoint == placement.breakpoint,
-                                GadgetInstance.group_id == payload.group_id,
-                            )
-                        )
-                    ).all()
-                )
-                position = layouts.find_free_position(
-                    [(item.x, item.y, item.w, item.h) for item in occupied],
-                    layout_columns or 20,
-                    placement.w,
-                    placement.h,
-                )
-                if position is None:
-                    raise ValueError("No free layout position remains in the destination panel")
-                placement.x, placement.y = position
-            instance.group_id = payload.group_id
+        await _move_instance_to_group(
+            session, dashboard_id, instance, payload.group_id, scope=scope
+        )
     if "position" in payload.model_fields_set:
         if payload.position is None:
             raise ValueError("position cannot be cleared")

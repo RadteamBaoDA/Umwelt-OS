@@ -10,7 +10,7 @@ const t = Object.assign((key: string, values?: Record<string, unknown>) => `${ke
   has: (key: string) => known.has(key),
 });
 vi.mock('next-intl', () => ({ useTranslations: () => t }));
-vi.mock('@/core/api', () => ({ apiRequest: mocks.apiRequest }));
+vi.mock('@/core/api', () => ({ retrySessionConflict: () => false, apiRequest: mocks.apiRequest }));
 vi.mock('./api', async (original) => ({
   ...(await original<typeof import('./api')>()),
   listNotifications: mocks.listNotifications,

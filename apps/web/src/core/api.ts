@@ -11,7 +11,7 @@ export class ApiError extends Error {
     payload?: { code?: unknown; details?: unknown; [key: string]: unknown },
   ) {
     super(message);
-    this.code = typeof payload?.code === "string" ? payload.code : null;
+    this.code = typeof payload?.code === 'string' ? payload.code : null;
     this.details = payload?.details;
     this.payload = payload ?? {};
   }
@@ -20,12 +20,12 @@ export class ApiError extends Error {
 /** Thrown when the selected workspace changed while a request was in flight; callers must drop the result. */
 export class StaleWorkspaceError extends Error {
   constructor() {
-    super("Workspace changed before the response resolved");
-    this.name = "StaleWorkspaceError";
+    super('Workspace changed before the response resolved');
+    this.name = 'StaleWorkspaceError';
   }
 }
 
-export type WorkspaceTarget = "selected" | "none";
+export type WorkspaceTarget = 'selected' | 'none';
 type WorkspaceSource = {
   selectedId(): string | null;
   generation(): number;
@@ -44,32 +44,28 @@ export function workspaceGeneration(): number {
 
 // Default-workspace routes accept a missing header for every account; sending another workspace would 409.
 const NO_WORKSPACE_PREFIXES = [
-  "/api/v1/auth",
-  "/api/v1/workspaces",
-  "/api/v1/chat",
-  "/api/v1/memory",
-  "/api/v1/agents",
-  "/api/v1/agent-runs",
-  "/api/v1/approvals",
-  "/api/v1/exports",
-  "/api/v1/system",
-  "/api/v1/operator",
+  '/api/v1/auth',
+  '/api/v1/workspaces',
+  '/api/v1/chat',
+  '/api/v1/memory',
+  '/api/v1/agents',
+  '/api/v1/agent-runs',
+  '/api/v1/approvals',
+  '/api/v1/exports',
+  '/api/v1/system',
+  '/api/v1/operator',
 ];
 
 /** Classifies an API path as workspace-scoped ('selected') or default-workspace ('none'). */
 export function workspaceTargetFor(path: string): WorkspaceTarget {
   const bare = path.split(/[?#]/, 1)[0];
-  return NO_WORKSPACE_PREFIXES.some((prefix) => bare.startsWith(prefix))
-    ? "none"
-    : "selected";
+  return NO_WORKSPACE_PREFIXES.some((prefix) => bare.startsWith(prefix)) ? 'none' : 'selected';
 }
 
 /** Builds the X-Workspace-ID header for the selected workspace; empty for 'none' or no selection. */
-export function workspaceHeaders(
-  target: WorkspaceTarget = "selected",
-): HeadersInit {
-  const id = target === "selected" ? workspaceSource?.selectedId() : null;
-  return id ? { "X-Workspace-ID": id } : {};
+export function workspaceHeaders(target: WorkspaceTarget = 'selected'): HeadersInit {
+  const id = target === 'selected' ? workspaceSource?.selectedId() : null;
+  return id ? { 'X-Workspace-ID': id } : {};
 }
 
 type Session = { authenticated: true; csrfToken: string };
@@ -87,31 +83,24 @@ export type RawRequestOptions = {
  * True when a mutation was rejected for an invalid CSRF token and one refresh-and-retry is still allowed.
  * GET/HEAD never retry; a request that carried no CSRF token cannot be fixed by refreshing.
  */
-function shouldRetryCsrf(
-  response: Response,
-  headers: Headers,
-  options: RequestInit,
-  retryCsrf: boolean,
-): boolean {
+function shouldRetryCsrf(response: Response, headers: Headers, options: RequestInit, retryCsrf: boolean): boolean {
   return (
     retryCsrf &&
     response.status === 403 &&
-    response.headers.get("X-CSRF-Error") === "invalid" &&
-    headers.has("X-CSRF-Token") &&
-    !["GET", "HEAD"].includes((options.method ?? "GET").toUpperCase())
+    response.headers.get('X-CSRF-Error') === 'invalid' &&
+    headers.has('X-CSRF-Token') &&
+    !['GET', 'HEAD'].includes((options.method ?? 'GET').toUpperCase())
   );
 }
 
 /**
  * Refreshes the auth session once for all concurrent callers (single flight) and announces the new session via
- * `bbd:session-refreshed`. The shared promise is cleared when it settles so a later rejection can refresh again.
+ * `umwelt:session-refreshed`. The shared promise is cleared when it settles so a later rejection can refresh again.
  */
 function refreshSessionOnce(): Promise<Session> {
-  sessionRefresh ??= apiRequest<Session>("/api/v1/auth/session")
+  sessionRefresh ??= apiRequest<Session>('/api/v1/auth/session')
     .then((session) => {
-      window.dispatchEvent(
-        new CustomEvent("bbd:session-refreshed", { detail: session }),
-      );
+      window.dispatchEvent(new CustomEvent('umwelt:session-refreshed', { detail: session }));
       return session;
     })
     .finally(() => {
@@ -128,32 +117,24 @@ type SentRequest = { response: Response; scoped: boolean; isStale: () => boolean
  * (any status) so JSON and raw callers share identical transport semantics.
  * @throws StaleWorkspaceError when the selected workspace changed while the request was in flight.
  */
-async function sendApiRequest(
-  path: string,
-  options: RequestInit,
-  retryCsrf: boolean,
-): Promise<SentRequest> {
+async function sendApiRequest(path: string, options: RequestInit, retryCsrf: boolean): Promise<SentRequest> {
   const headers = new Headers(options.headers);
-  const scoped = workspaceTargetFor(path) === "selected";
+  const scoped = workspaceTargetFor(path) === 'selected';
   const source = scoped ? workspaceSource : null;
   const generation = source?.generation() ?? 0;
   const isStale = () => source !== null && source.generation() !== generation;
-  if (scoped && !headers.has("X-Workspace-ID")) {
-    new Headers(workspaceHeaders("selected")).forEach((value, key) =>
-      headers.set(key, value),
-    );
+  if (scoped && !headers.has('X-Workspace-ID')) {
+    new Headers(workspaceHeaders('selected')).forEach((value, key) => headers.set(key, value));
   }
   // Chain the per-generation abort signal with any caller signal.
-  const signals = [options.signal, source?.signal()].filter(
-    (s): s is AbortSignal => Boolean(s),
-  );
+  const signals = [options.signal, source?.signal()].filter((s): s is AbortSignal => Boolean(s));
   const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
   let response: Response;
   try {
     response = await fetch(path, {
       ...options,
-      cache: "no-store",
-      credentials: "same-origin",
+      cache: 'no-store',
+      credentials: 'same-origin',
       headers,
       signal,
     });
@@ -166,7 +147,7 @@ async function sendApiRequest(
     // Share one session refresh across concurrent rejected mutations to avoid competing CSRF rotations.
     if (isStale()) throw new StaleWorkspaceError();
     const session = await refreshSessionOnce();
-    headers.set("X-CSRF-Token", session.csrfToken);
+    headers.set('X-CSRF-Token', session.csrfToken);
     // Disable further CSRF retries so a failed refresh cannot recurse indefinitely.
     return sendApiRequest(path, { ...options, headers }, false);
   }
@@ -175,12 +156,12 @@ async function sendApiRequest(
 
 /** Tells the workspace provider to fall back when the selected workspace itself is gone or revoked. */
 function dispatchWorkspaceInvalid(): void {
-  window.dispatchEvent(new Event("bbd:workspace-invalid"));
+  window.dispatchEvent(new Event('umwelt:workspace-invalid'));
 }
 
 /** Broadcasts a lost session so the shell can return to login. */
 function dispatchUnauthorized(): void {
-  window.dispatchEvent(new Event("umwelt:unauthorized"));
+  window.dispatchEvent(new Event('umwelt:unauthorized'));
 }
 
 /**
@@ -196,7 +177,7 @@ export async function apiRequestRaw(
   { retryCsrf = true, emitAuthEvents = true }: RawRequestOptions = {},
 ): Promise<Response> {
   const { response, scoped, isStale } = await sendApiRequest(path, options, retryCsrf);
-  if (!response.ok && typeof window !== "undefined") {
+  if (!response.ok && typeof window !== 'undefined') {
     if (scoped && response.status === 404) {
       // Inspect a clone so the caller can still read the original body.
       const detail = await response
@@ -207,7 +188,7 @@ export async function apiRequestRaw(
           () => undefined,
         );
       if (isStale()) throw new StaleWorkspaceError();
-      if (detail === "Workspace not found") dispatchWorkspaceInvalid();
+      if (detail === 'Workspace not found') dispatchWorkspaceInvalid();
     }
     if (response.status === 401 && emitAuthEvents) dispatchUnauthorized();
   }
@@ -230,14 +211,10 @@ type ApiResponseBody = {
  * Dispatches the global events a failed response implies: workspace-invalid for a scoped 404 "Workspace not found"
  * and unauthorized for a 401. Browser-only; no-op during SSR.
  */
-function dispatchFailureEvents(
-  response: Response,
-  body: ApiResponseBody,
-  scoped: boolean,
-): void {
-  if (typeof window === "undefined") return;
+function dispatchFailureEvents(response: Response, body: ApiResponseBody, scoped: boolean): void {
+  if (typeof window === 'undefined') return;
   // The selected workspace itself is gone or revoked: let the provider fall back to the default.
-  if (scoped && response.status === 404 && body.detail === "Workspace not found") {
+  if (scoped && response.status === 404 && body.detail === 'Workspace not found') {
     dispatchWorkspaceInvalid();
   }
   if (response.status === 401) dispatchUnauthorized();
@@ -245,14 +222,8 @@ function dispatchFailureEvents(
 
 /** Builds the ApiError for a non-OK parsed response, preferring `error.message`, then `detail.message`/`detail`. */
 function apiErrorFromBody(status: number, body: ApiResponseBody): ApiError {
-  const detail =
-    typeof body.detail === "object" && body.detail !== null
-      ? body.detail
-      : undefined;
-  const message =
-    body.error?.message ??
-    detail?.message ??
-    (typeof body.detail === "string" ? body.detail : "Request failed");
+  const detail = typeof body.detail === 'object' && body.detail !== null ? body.detail : undefined;
+  const message = body.error?.message ?? detail?.message ?? (typeof body.detail === 'string' ? body.detail : 'Request failed');
   return new ApiError(status, message, body.error ?? detail);
 }
 
@@ -261,11 +232,7 @@ function apiErrorFromBody(status: number, body: ApiResponseBody): ApiError {
  * 204 resolves undefined; non-JSON bodies (gateway HTML) become ApiError with the HTTP status.
  * @throws StaleWorkspaceError when the workspace changed mid-flight.
  */
-export async function apiRequest<T>(
-  path: string,
-  options: RequestInit = {},
-  retryCsrf = true,
-): Promise<T> {
+export async function apiRequest<T>(path: string, options: RequestInit = {}, retryCsrf = true): Promise<T> {
   const { response, scoped, isStale } = await sendApiRequest(path, options, retryCsrf);
   if (response.status === 204) return undefined as T;
 
@@ -275,10 +242,7 @@ export async function apiRequest<T>(
     parsed = await response.json();
   } catch {
     if (isStale()) throw new StaleWorkspaceError();
-    throw new ApiError(
-      response.status,
-      response.ok ? "Invalid response" : "Request failed",
-    );
+    throw new ApiError(response.status, response.ok ? 'Invalid response' : 'Request failed');
   }
   const body = parsed as ApiResponseBody & T;
   if (isStale()) throw new StaleWorkspaceError();
@@ -291,7 +255,7 @@ export async function apiRequest<T>(
 
 /** Builds the request headers used to submit the supplied CSRF token. */
 export function csrfHeaders(token: string): HeadersInit {
-  return { "X-CSRF-Token": token };
+  return { 'X-CSRF-Token': token };
 }
 
 /**

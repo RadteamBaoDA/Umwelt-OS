@@ -358,28 +358,6 @@ async def reserve_effect_before_send(
         return True
 
 
-async def mark_approval_requires_review(
-    session_factory: SessionFactory,
-    run_id: UUID,
-    action_id: UUID,
-) -> None:
-    """Set a fail-closed review stop without making approval or replay capable of clearing uncertainty."""
-    async with session_factory() as session:
-        run = await session.scalar(select(AgentRun).where(AgentRun.id == run_id).with_for_update())
-        row = await session.scalar(
-            select(AgentApproval)
-            .where(
-                AgentApproval.action_id == action_id,
-                AgentApproval.run_id == run_id,
-            )
-            .with_for_update()
-        )
-        if run is not None and row is not None and row.status == "approved":
-            row.status = "requires_review"
-            row.resolved_at = datetime.now(UTC)
-            await session.commit()
-
-
 async def mark_effect_outcome(
     session_factory: SessionFactory,
     action_id: str,

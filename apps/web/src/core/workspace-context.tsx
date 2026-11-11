@@ -6,8 +6,12 @@ import { apiRequest, configureWorkspace } from '@/core/api';
 import { workspaceKeys } from '@/core/query-keys';
 
 export type WorkspaceRead = {
-  id: string; name: string; owner_user_id: number; is_default: boolean;
-  role: 'owner' | 'member' | 'admin_viewer'; configuration_revision: number;
+  id: string;
+  name: string;
+  owner_user_id: number;
+  is_default: boolean;
+  role: 'owner' | 'member' | 'admin_viewer';
+  configuration_revision: number;
 };
 export type WorkspaceSelection = { id: string; role: 'owner' | 'member' | 'admin_viewer'; revision: number };
 export type WorkspaceContextValue = {
@@ -31,12 +35,19 @@ export function useWorkspace(): WorkspaceContextValue {
 }
 
 function readStored(): string | null {
-  try { return window.sessionStorage.getItem(STORAGE_KEY); } catch { return null; }
+  try {
+    return window.sessionStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
 }
 function writeStored(id: string | null) {
   try {
-    if (id) window.sessionStorage.setItem(STORAGE_KEY, id); else window.sessionStorage.removeItem(STORAGE_KEY);
-  } catch { /* sessionStorage can be blocked; the selection then lives only in memory. */ }
+    if (id) window.sessionStorage.setItem(STORAGE_KEY, id);
+    else window.sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* sessionStorage can be blocked; the selection then lives only in memory. */
+  }
 }
 
 /** Loads workspaces, owns the per-tab owner/member/admin-viewer selection, and clears scoped state on a switch. */
@@ -55,16 +66,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [generation, setGeneration] = useState(0);
   const generationRef = useRef(0);
   const controllerRef = useRef(new AbortController());
-  const [stored] = useState(() => typeof window === 'undefined' ? null : readStored());
+  const [stored] = useState(() => (typeof window === 'undefined' ? null : readStored()));
 
   const chosen = requestedId ?? stored;
   const current = workspaces.find((w) => w.id === chosen) ?? workspaces.find((w) => w.is_default) ?? null;
   const selection = useMemo<WorkspaceSelection | null>(
-    () => current ? { id: current.id, role: current.role, revision: current.configuration_revision } : null,
+    () => (current ? { id: current.id, role: current.role, revision: current.configuration_revision } : null),
     [current],
   );
   const selectedIdRef = useRef<string | null>(null);
-  useLayoutEffect(() => { selectedIdRef.current = selection?.id ?? null; }, [selection]);
+  useLayoutEffect(() => {
+    selectedIdRef.current = selection?.id ?? null;
+  }, [selection]);
 
   useLayoutEffect(() => {
     configureWorkspace({
@@ -75,25 +88,31 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => configureWorkspace(null);
   }, []);
 
-  const reset = useCallback(async (id: string | null) => {
-    const keep = workspaces;
-    generationRef.current += 1;
-    controllerRef.current.abort();
-    controllerRef.current = new AbortController();
-    selectedIdRef.current = id;
-    await client.cancelQueries();
-    client.clear();
-    // The list itself must survive the clear or the selection would drop to null.
-    client.setQueryData(workspaceKeys.list(), { items: keep });
-    setGeneration(generationRef.current);
-  }, [client, workspaces]);
+  const reset = useCallback(
+    async (id: string | null) => {
+      const keep = workspaces;
+      generationRef.current += 1;
+      controllerRef.current.abort();
+      controllerRef.current = new AbortController();
+      selectedIdRef.current = id;
+      await client.cancelQueries();
+      client.clear();
+      // The list itself must survive the clear or the selection would drop to null.
+      client.setQueryData(workspaceKeys.list(), { items: keep });
+      setGeneration(generationRef.current);
+    },
+    [client, workspaces],
+  );
 
-  const selectWorkspace = useCallback((id: string) => {
-    if (id === selectedIdRef.current || !workspaces.some((w) => w.id === id)) return;
-    writeStored(id);
-    setRequestedId(id);
-    void reset(id);
-  }, [reset, workspaces]);
+  const selectWorkspace = useCallback(
+    (id: string) => {
+      if (id === selectedIdRef.current || !workspaces.some((w) => w.id === id)) return;
+      writeStored(id);
+      setRequestedId(id);
+      void reset(id);
+    },
+    [reset, workspaces],
+  );
 
   // A revoked or vanished selected workspace falls back to the account default.
   useEffect(() => {
@@ -103,17 +122,29 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setRequestedId(defaultWorkspaceId);
       void reset(defaultWorkspaceId);
     };
-    window.addEventListener('bbd:workspace-invalid', fallback);
-    return () => window.removeEventListener('bbd:workspace-invalid', fallback);
+    window.addEventListener('umwelt:workspace-invalid', fallback);
+    return () => window.removeEventListener('umwelt:workspace-invalid', fallback);
   }, [defaultWorkspaceId, reset]);
 
-  const value = useMemo<WorkspaceContextValue>(() => ({
-    selection, defaultWorkspaceId, workspaces, generation,
-    isOwner: selection?.role === 'owner', isAdminViewer: selection?.role === 'admin_viewer', selectWorkspace,
-  }), [selection, defaultWorkspaceId, workspaces, generation, selectWorkspace]);
+  const value = useMemo<WorkspaceContextValue>(
+    () => ({
+      selection,
+      defaultWorkspaceId,
+      workspaces,
+      generation,
+      isOwner: selection?.role === 'owner',
+      isAdminViewer: selection?.role === 'admin_viewer',
+      selectWorkspace,
+    }),
+    [selection, defaultWorkspaceId, workspaces, generation, selectWorkspace],
+  );
 
   // Remounting on the selection clears protected view state and chat drafts.
-  return <WorkspaceContext.Provider value={value}>
-    <div key={selection?.id ?? 'pending'} className="contents">{children}</div>
-  </WorkspaceContext.Provider>;
+  return (
+    <WorkspaceContext.Provider value={value}>
+      <div key={selection?.id ?? 'pending'} className="contents">
+        {children}
+      </div>
+    </WorkspaceContext.Provider>
+  );
 }

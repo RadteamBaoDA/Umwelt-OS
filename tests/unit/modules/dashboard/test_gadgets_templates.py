@@ -70,6 +70,11 @@ def test_gadget_templates_route_is_cacheable_and_parses() -> None:
     app.include_router(routes.router)
     for dep in routes.router.dependencies:
         app.dependency_overrides[dep.dependency] = lambda: None
+    route = next(
+        r for r in routes.router.routes if getattr(r, "path", "") == "/api/v1/gadget-templates"
+    )
+    assert routes.require_workspace_observer_read in [d.dependency for d in route.dependencies]  # type: ignore[attr-defined]
+    app.dependency_overrides[routes.require_workspace_observer_read] = lambda: None
     response = TestClient(app).get("/api/v1/gadget-templates")
     assert response.status_code == 200
     assert "max-age=3600" in response.headers["cache-control"]

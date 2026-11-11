@@ -91,7 +91,7 @@ def downgrade() -> None:
     """Stack panels back into collision-free dashboard rows, failing before an unsafe overflow."""
     bind = op.get_bind()
     if bind.execute(sa.text(
-        _STACK_OFFSETS + "SELECT 1 FROM offsets WHERE y_offset + height > 100000 LIMIT 1"
+        _STACK_OFFSETS + "SELECT 1 FROM offsets WHERE y_offset + height > 100000 LIMIT 1"  # noqa: S608 - constant SQL
     )).first() is not None:
         raise RuntimeError("Dashboard panel heights exceed the old layout row limit")
     op.execute(_STACK_OFFSETS + """
@@ -101,6 +101,6 @@ def downgrade() -> None:
                     AND offsets.group_id = inst.group_id
         WHERE place.instance_id = inst.id AND place.dashboard_id = inst.dashboard_id
           AND place.breakpoint = offsets.breakpoint
-    """)
+    """)  # noqa: S608 - constant SQL, no input
     op.drop_index("uq_dashboard_groups_one_overview", table_name="dashboard_groups")
     op.drop_column("dashboard_groups", "is_overview")

@@ -10,22 +10,41 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { ApiError } from '@/core/api';
 import { safeHttpUrl } from '@/core/safe-url';
-import { archiveSource, connectorKeys, disableBuiltinSource, enableBuiltinSource, listBuiltinSources, sourceKeys, type BuiltinCategory, type BuiltinSource, type DeclaredUse, type RealtimeMode } from './api';
+import {
+  archiveSource,
+  connectorKeys,
+  disableBuiltinSource,
+  enableBuiltinSource,
+  listBuiltinSources,
+  sourceKeys,
+  type BuiltinCategory,
+  type BuiltinSource,
+  type DeclaredUse,
+  type RealtimeMode,
+} from './api';
 import { BuiltinOptions, type BuiltinOptionValues } from './builtin-options';
 import { OPTION_SPECS } from './builtin-option-specs';
 import { matchesShapes } from './shape-filter';
 import type { DataShape } from '@/core/data-shapes';
 import { WizardShell } from './source-wizard';
-import type { SourceAiOptions } from './source-ai-toggles';
+import type { SourceAiOptions } from './api';
 import { useBuiltinTest, type TestState } from './use-builtin-test';
 import { BareButton } from '@/components/bare-button';
 
 const CATEGORY_ORDER: BuiltinCategory[] = ['news', 'economy', 'hazards', 'space', 'security', 'tech'];
 const CATEGORY_KEY = {
-  news: 'builtinCategoryNews', economy: 'builtinCategoryEconomy', hazards: 'builtinCategoryHazards',
-  space: 'builtinCategorySpace', security: 'builtinCategorySecurity', tech: 'builtinCategoryTech',
+  news: 'builtinCategoryNews',
+  economy: 'builtinCategoryEconomy',
+  hazards: 'builtinCategoryHazards',
+  space: 'builtinCategorySpace',
+  security: 'builtinCategorySecurity',
+  tech: 'builtinCategoryTech',
 } as const;
-const USES = [['personal', 'termsUsePersonal'], ['noncommercial', 'termsUseNoncommercial'], ['commercial', 'termsUseCommercial']] as const;
+const USES = [
+  ['personal', 'termsUsePersonal'],
+  ['noncommercial', 'termsUseNoncommercial'],
+  ['commercial', 'termsUseCommercial'],
+] as const;
 
 /**
  * Lists built-ins that were added earlier but are switched off, with a Resume action for each.
@@ -58,24 +77,38 @@ export function BuiltinResumeList({ onChanged }: { onChanged: () => void }) {
     }
   }
 
-  return <section className="flex flex-col gap-2" aria-label={t('builtinResumeTitle')}>
-    <h3 className="m-0 text-sm font-semibold">{t('builtinResumeTitle')}</h3>
-    {error && <p className="text-destructive" role="alert">{error}</p>}
-    {paused.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 rounded-md border border-border p-3">
-      <span className="font-medium">{item.label}</span>
-      <Button variant="outline" disabled={busyId !== null} onClick={() => void resume(item)}>{busyId === item.id ? t('enabling') : t('builtinResume')}</Button>
-    </div>)}
-  </section>;
+  return (
+    <section className="flex flex-col gap-2" aria-label={t('builtinResumeTitle')}>
+      <h3 className="m-0 text-sm font-semibold">{t('builtinResumeTitle')}</h3>
+      {error && (
+        <p className="text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      {paused.map((item) => (
+        <div key={item.id} className="flex items-center justify-between gap-3 rounded-md border border-border p-3">
+          <span className="font-medium">{item.label}</span>
+          <Button variant="outline" disabled={busyId !== null} onClick={() => void resume(item)}>
+            {busyId === item.id ? t('enabling') : t('builtinResume')}
+          </Button>
+        </div>
+      ))}
+    </section>
+  );
 }
 
 /** Groups built-ins by category in the fixed display order, dropping empty categories. */
 function groupByCategory(items: BuiltinSource[]): [BuiltinCategory, BuiltinSource[]][] {
-  return CATEGORY_ORDER.map((category): [BuiltinCategory, BuiltinSource[]] => [category, items.filter((item) => item.category === category)])
-    .filter(([, rows]) => rows.length > 0);
+  return CATEGORY_ORDER.map((category): [BuiltinCategory, BuiltinSource[]] => [
+    category,
+    items.filter((item) => item.category === category),
+  ]).filter(([, rows]) => rows.length > 0);
 }
 
 /** Message key (in the `sources` namespace) for a failed built-in enable; 403 operator/terms codes get specific text. */
-export function builtinEnableErrorKey(cause: unknown): 'builtinErrorOperator' | 'builtinErrorTerms' | 'builtinAlreadyAdded' | 'builtinErrorGeneric' {
+export function builtinEnableErrorKey(
+  cause: unknown,
+): 'builtinErrorOperator' | 'builtinErrorTerms' | 'builtinAlreadyAdded' | 'builtinErrorGeneric' {
   const message = cause instanceof ApiError ? cause.message : '';
   const code = cause instanceof ApiError ? cause.code : null;
   if (message === 'operator_required') return 'builtinErrorOperator';
@@ -84,7 +117,29 @@ export function builtinEnableErrorKey(cause: unknown): 'builtinErrorOperator' | 
   return 'builtinErrorGeneric';
 }
 
-const COLLECT_ERROR_CODES = ['provider_rate_limited', 'provider_collection_failed', 'retry_exhausted', 'transient_failure', 'collection_unsupported', 'admission_expired', 'executor_error', 'invalid_normalization_record', 'record_exceeds_normalization_limit', 'cancelled', 'source_generation_changed', 'required_credential_binding_unresolved', 'provider_revoked', 'provider_timeout', 'provider_unavailable', 'provider_response_invalid', 'schema_changed', 'invalid_credential', 'credential_missing', 'collection_incomplete', 'destination_blocked'] as const;
+const COLLECT_ERROR_CODES = [
+  'provider_rate_limited',
+  'provider_collection_failed',
+  'retry_exhausted',
+  'transient_failure',
+  'collection_unsupported',
+  'admission_expired',
+  'executor_error',
+  'invalid_normalization_record',
+  'record_exceeds_normalization_limit',
+  'cancelled',
+  'source_generation_changed',
+  'required_credential_binding_unresolved',
+  'provider_revoked',
+  'provider_timeout',
+  'provider_unavailable',
+  'provider_response_invalid',
+  'schema_changed',
+  'invalid_credential',
+  'credential_missing',
+  'collection_incomplete',
+  'destination_blocked',
+] as const;
 
 /** Message key (in the `sources` namespace) of a plain-language collection-run error. */
 export type MessageKey = `collectError_${(typeof COLLECT_ERROR_CODES)[number]}`;
@@ -94,7 +149,9 @@ export type MessageKey = `collectError_${(typeof COLLECT_ERROR_CODES)[number]}`;
  * Pure; unknown, empty or missing codes return null so the caller keeps its raw-code fallback text.
  */
 export function collectErrorKey(code: string | null | undefined): MessageKey | null {
-  return (COLLECT_ERROR_CODES as readonly string[]).includes(code ?? '') ? `collectError_${code as (typeof COLLECT_ERROR_CODES)[number]}` : null;
+  return (COLLECT_ERROR_CODES as readonly string[]).includes(code ?? '')
+    ? `collectError_${code as (typeof COLLECT_ERROR_CODES)[number]}`
+    : null;
 }
 
 /**
@@ -103,7 +160,14 @@ export function collectErrorKey(code: string | null | undefined): MessageKey | n
  * Controlled by the caller; shared by the wizard and the gadget editor dialog.
  * An `error` (already localized) renders as a role=alert line below the fields.
  */
-export function BuiltinTermsFields({ builtin, use, onUseChange, realtimeMode, onRealtimeModeChange, error }: {
+export function BuiltinTermsFields({
+  builtin,
+  use,
+  onUseChange,
+  realtimeMode,
+  onRealtimeModeChange,
+  error,
+}: {
   builtin: BuiltinSource;
   use: DeclaredUse;
   onUseChange: (use: DeclaredUse) => void;
@@ -122,28 +186,60 @@ export function BuiltinTermsFields({ builtin, use, onUseChange, realtimeMode, on
     setLocalRealtimeMode(next);
     onRealtimeModeChange?.(next);
   };
-  return <section className="grid gap-3 text-sm" aria-label={t('builtinDialogTitle', { name: builtin.label })}>
-    <h3 className="m-0 text-base font-semibold">{t('builtinDialogTitle', { name: builtin.label })}</h3>
-    <p className="text-muted-foreground">{t('builtinTermsHint')}</p>
-    <p><strong>{t('guideAttribution')}:</strong> {builtin.attribution}</p>
-    <p><a className="text-foreground underline underline-offset-2" href={safeHttpUrl(builtin.terms_url)} target="_blank" rel="noopener noreferrer">{t('providerTerms')}</a> · {t('termsVersion')}: {builtin.terms_checked_on}</p>
-    {builtin.eligibility === 'review' && <p role="note">{t('builtinOperatorNote')}</p>}
-    <div className="field"><Label htmlFor="builtin-declared-use">{t('termsDeclaredUse')}</Label>
-      <Select value={use} onValueChange={(value) => onUseChange(value as DeclaredUse)}>
-        <SelectTrigger id="builtin-declared-use"><SelectValue /></SelectTrigger>
-        <SelectContent>{USES.map(([value, label]) => <SelectItem key={value} value={value}>{t(label)}</SelectItem>)}</SelectContent>
-      </Select></div>
-    <div className="field"><Label htmlFor="builtin-realtime-mode">{t('trackingModeLabel')}</Label>
-      <Select value={effectiveRealtimeMode} onValueChange={(value) => handleRealtimeModeChange(value as RealtimeMode)}>
-        <SelectTrigger id="builtin-realtime-mode"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value="realtime">{t('trackingModeRealtime')}</SelectItem>
-          <SelectItem value="near_realtime">{t('trackingModeNearRealtime')}</SelectItem>
-        </SelectContent>
-      </Select>
-      <small className="text-muted-foreground">{t('trackingModeHelp')}</small></div>
-    {error && <p className="text-destructive" role="alert">{error}</p>}
-  </section>;
+  return (
+    <section className="grid gap-3 text-sm" aria-label={t('builtinDialogTitle', { name: builtin.label })}>
+      <h3 className="m-0 text-base font-semibold">{t('builtinDialogTitle', { name: builtin.label })}</h3>
+      <p className="text-muted-foreground">{t('builtinTermsHint')}</p>
+      <p>
+        <strong>{t('guideAttribution')}:</strong> {builtin.attribution}
+      </p>
+      <p>
+        <a
+          className="text-foreground underline underline-offset-2"
+          href={safeHttpUrl(builtin.terms_url)}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {t('providerTerms')}
+        </a>{' '}
+        · {t('termsVersion')}: {builtin.terms_checked_on}
+      </p>
+      {builtin.eligibility === 'review' && <p role="note">{t('builtinOperatorNote')}</p>}
+      <div className="field">
+        <Label htmlFor="builtin-declared-use">{t('termsDeclaredUse')}</Label>
+        <Select value={use} onValueChange={(value) => onUseChange(value as DeclaredUse)}>
+          <SelectTrigger id="builtin-declared-use">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {USES.map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {t(label)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="field">
+        <Label htmlFor="builtin-realtime-mode">{t('trackingModeLabel')}</Label>
+        <Select value={effectiveRealtimeMode} onValueChange={(value) => handleRealtimeModeChange(value as RealtimeMode)}>
+          <SelectTrigger id="builtin-realtime-mode">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="realtime">{t('trackingModeRealtime')}</SelectItem>
+            <SelectItem value="near_realtime">{t('trackingModeNearRealtime')}</SelectItem>
+          </SelectContent>
+        </Select>
+        <small className="text-muted-foreground">{t('trackingModeHelp')}</small>
+      </div>
+      {error && (
+        <p className="text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
 }
 
 /**
@@ -175,12 +271,37 @@ function isEmptyOptionValue(value: unknown): boolean {
 }
 
 /** Shows the "all added / none compatible" status line when a shape filter leaves nothing pickable. */
-function ShapeFilterEmpty({ rows, shapeFilter, onClearFilter, onAddConnector }: { rows: BuiltinSource[]; shapeFilter: DataShape[] | undefined; onClearFilter?: () => void; onAddConnector?: () => void }) {
+function ShapeFilterEmpty({
+  rows,
+  shapeFilter,
+  onClearFilter,
+  onAddConnector,
+}: {
+  rows: BuiltinSource[];
+  shapeFilter: DataShape[] | undefined;
+  onClearFilter?: () => void;
+  onAddConnector?: () => void;
+}) {
   const t = useTranslations('sources');
-  if (!(Boolean(shapeFilter?.length) && !rows.some((row) => matchesShapes(row.data_shapes, shapeFilter) && row.source_id === null))) return null;
+  if (!(Boolean(shapeFilter?.length) && !rows.some((row) => matchesShapes(row.data_shapes, shapeFilter) && row.source_id === null)))
+    return null;
   // Compatible built-ins that are all already added/paused read as "all added", not "none compatible".
   const anyCompatible = rows.some((row) => matchesShapes(row.data_shapes, shapeFilter));
-  return <p role="status" className="text-muted-foreground">{anyCompatible ? t('addBuiltinAllAdded') : t('shapeFilterNoBuiltin')} {onAddConnector && !anyCompatible && <Button variant="outline" size="sm" onClick={onAddConnector}>{t('addConnector')}</Button>} {onClearFilter && <Button variant="outline" size="sm" onClick={onClearFilter}>{t('shapeFilterClear')}</Button>}</p>;
+  return (
+    <p role="status" className="text-muted-foreground">
+      {anyCompatible ? t('addBuiltinAllAdded') : t('shapeFilterNoBuiltin')}{' '}
+      {onAddConnector && !anyCompatible && (
+        <Button variant="outline" size="sm" onClick={onAddConnector}>
+          {t('addConnector')}
+        </Button>
+      )}{' '}
+      {onClearFilter && (
+        <Button variant="outline" size="sm" onClick={onClearFilter}>
+          {t('shapeFilterClear')}
+        </Button>
+      )}
+    </p>
+  );
 }
 
 /** One selectable built-in row: realtime tier, Added/experimental/review badges and attribution; disabled once added. */
@@ -188,22 +309,39 @@ function BuiltinPickRow({ row, selected, onPick }: { row: BuiltinSource; selecte
   const t = useTranslations('sources');
   const added = row.source_id !== null;
   const tier = row.realtime_tier ?? 'near_realtime';
-  return <BareButton type="button" disabled={added} aria-pressed={selected} onClick={() => onPick(row)}
-    className={`flex w-full items-start justify-between gap-3 rounded-md border bg-transparent p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 ${selected ? 'border-primary' : 'border-border'}`}>
-    <span className="min-w-0">
-      <span className="m-0 flex flex-wrap items-center gap-2 font-medium">{row.label}
-        <Badge variant={tier === 'realtime' ? 'default' : 'secondary'}>{t(tier === 'realtime' ? 'badgeRealtime' : 'badgeNearRealtime')}</Badge>
-        {added && <Badge variant="secondary">{t('builtinAdded')}</Badge>}
-        {row.execution === 'experimental' && <Badge variant="outline">{t('builtinExperimental')}</Badge>}
-        {row.eligibility === 'review' && <Badge variant="secondary">{t('builtinReviewClass')}</Badge>}
+  return (
+    <BareButton
+      type="button"
+      disabled={added}
+      aria-pressed={selected}
+      onClick={() => onPick(row)}
+      className={`flex w-full items-start justify-between gap-3 rounded-md border bg-transparent p-3 text-left disabled:cursor-not-allowed disabled:opacity-60 ${selected ? 'border-primary' : 'border-border'}`}
+    >
+      <span className="min-w-0">
+        <span className="m-0 flex flex-wrap items-center gap-2 font-medium">
+          {row.label}
+          <Badge variant={tier === 'realtime' ? 'default' : 'secondary'}>
+            {t(tier === 'realtime' ? 'badgeRealtime' : 'badgeNearRealtime')}
+          </Badge>
+          {added && <Badge variant="secondary">{t('builtinAdded')}</Badge>}
+          {row.execution === 'experimental' && <Badge variant="outline">{t('builtinExperimental')}</Badge>}
+          {row.eligibility === 'review' && <Badge variant="secondary">{t('builtinReviewClass')}</Badge>}
+        </span>
+        <span className="block text-sm text-muted-foreground">{row.attribution}</span>
       </span>
-      <span className="block text-sm text-muted-foreground">{row.attribution}</span>
-    </span>
-  </BareButton>;
+    </BareButton>
+  );
 }
 
 /** Step 1: loading/error/empty states plus the category-grouped list of pickable built-ins. */
-function BuiltinPickStep({ builtins, shapeFilter, selectedId, onPick, onClearFilter, onAddConnector }: {
+function BuiltinPickStep({
+  builtins,
+  shapeFilter,
+  selectedId,
+  onPick,
+  onClearFilter,
+  onAddConnector,
+}: {
   builtins: { isPending: boolean; isError: boolean; isSuccess: boolean; data: BuiltinSource[] | undefined; refetch: () => unknown };
   shapeFilter?: DataShape[];
   selectedId: string | undefined;
@@ -213,31 +351,58 @@ function BuiltinPickStep({ builtins, shapeFilter, selectedId, onPick, onClearFil
 }) {
   const t = useTranslations('sources');
   const rows = builtins.data ?? [];
-  return <section className="flex flex-col gap-3" aria-label={t('stepBuiltinPick')}>
-    <p className="text-muted-foreground">{t('builtinPickHint')}</p>
-    {builtins.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
-    {builtins.isError && <p className="text-destructive" role="alert">{t('builtinLoadFailed')} <Button variant="outline" onClick={() => builtins.refetch()}>{t('retry')}</Button></p>}
-    {builtins.isSuccess && <ShapeFilterEmpty rows={rows} shapeFilter={shapeFilter} onClearFilter={onClearFilter} onAddConnector={onAddConnector} />}
-    {groupByCategory(rows.filter((row) => matchesShapes(row.data_shapes, shapeFilter))).map(([category, group]) => <div key={category} className="flex flex-col gap-2" role="group" aria-label={t(CATEGORY_KEY[category])}>
-      <h3 className="m-0 text-sm font-semibold text-muted-foreground">{t(CATEGORY_KEY[category])}</h3>
-      {group.map((row) => <BuiltinPickRow key={row.id} row={row} selected={selectedId === row.id} onPick={onPick} />)}
-    </div>)}
-  </section>;
+  return (
+    <section className="flex flex-col gap-3" aria-label={t('stepBuiltinPick')}>
+      <p className="text-muted-foreground">{t('builtinPickHint')}</p>
+      {builtins.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
+      {builtins.isError && (
+        <p className="text-destructive" role="alert">
+          {t('builtinLoadFailed')}{' '}
+          <Button variant="outline" onClick={() => builtins.refetch()}>
+            {t('retry')}
+          </Button>
+        </p>
+      )}
+      {builtins.isSuccess && (
+        <ShapeFilterEmpty rows={rows} shapeFilter={shapeFilter} onClearFilter={onClearFilter} onAddConnector={onAddConnector} />
+      )}
+      {groupByCategory(rows.filter((row) => matchesShapes(row.data_shapes, shapeFilter))).map(([category, group]) => (
+        <div key={category} className="flex flex-col gap-2" role="group" aria-label={t(CATEGORY_KEY[category])}>
+          <h3 className="m-0 text-sm font-semibold text-muted-foreground">{t(CATEGORY_KEY[category])}</h3>
+          {group.map((row) => (
+            <BuiltinPickRow key={row.id} row={row} selected={selectedId === row.id} onPick={onPick} />
+          ))}
+        </div>
+      ))}
+    </section>
+  );
 }
 
 /** Step 3: live status of the verification fetch (activation, collection, outcome) with a retry once it failed. */
 function BuiltinVerifyStep({ test, createdId, onRetry }: { test: TestState; createdId: string; onRetry: () => void }) {
   const t = useTranslations('sources');
-  return <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('verifyTitle')}>
-    <h3 className="m-0 text-base font-semibold">{t('verifyTitle')}</h3>
-    {test.phase === 'activating' && <p role="status">{t('verifyWaitingActivation')}</p>}
-    {test.phase === 'collecting' && <p role="status">{t('verifyCollecting')}</p>}
-    {test.phase === 'succeeded' && <p role="status">{t('verifySucceeded')}</p>}
-    {test.phase === 'no_changes' && <p role="status">{t('verifyNoChanges')}</p>}
-    {test.phase === 'failed' && <p className="error" role="alert">{t('verifyFailed', { code: test.code ?? 'unknown' })}</p>}
-    {test.runId && <p className="text-muted-foreground">{t('verifyRunId', { id: test.runId })}</p>}
-    {test.phase === 'failed' && createdId && <div><Button variant="outline" onClick={onRetry}>{t('verifyRetry')}</Button></div>}
-  </section>;
+  return (
+    <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('verifyTitle')}>
+      <h3 className="m-0 text-base font-semibold">{t('verifyTitle')}</h3>
+      {test.phase === 'activating' && <p role="status">{t('verifyWaitingActivation')}</p>}
+      {test.phase === 'collecting' && <p role="status">{t('verifyCollecting')}</p>}
+      {test.phase === 'succeeded' && <p role="status">{t('verifySucceeded')}</p>}
+      {test.phase === 'no_changes' && <p role="status">{t('verifyNoChanges')}</p>}
+      {test.phase === 'failed' && (
+        <p className="error" role="alert">
+          {t('verifyFailed', { code: test.code ?? 'unknown' })}
+        </p>
+      )}
+      {test.runId && <p className="text-muted-foreground">{t('verifyRunId', { id: test.runId })}</p>}
+      {test.phase === 'failed' && createdId && (
+        <div>
+          <Button variant="outline" onClick={onRetry}>
+            {t('verifyRetry')}
+          </Button>
+        </div>
+      )}
+    </section>
+  );
 }
 
 /**
@@ -254,11 +419,28 @@ function useBuiltinWizardState() {
   const [createdId, setCreatedId] = useState('');
   /** Selects a built-in row and resets use, realtime override, options (default section) and error. */
   const pick = (row: BuiltinSource) => {
-    setSelected(row); setUse('personal'); setRealtimeModeOverride(null);
+    setSelected(row);
+    setUse('personal');
+    setRealtimeModeOverride(null);
     setOptionValues({ feed_sections: row.default_section ? [row.default_section] : undefined });
     setError(null);
   };
-  return { selected, use, setUse, realtimeModeOverride, setRealtimeModeOverride, optionValues, setOptionValues, aiOptions, setAiOptions, error, setError, createdId, setCreatedId, pick };
+  return {
+    selected,
+    use,
+    setUse,
+    realtimeModeOverride,
+    setRealtimeModeOverride,
+    optionValues,
+    setOptionValues,
+    aiOptions,
+    setAiOptions,
+    error,
+    setError,
+    createdId,
+    setCreatedId,
+    pick,
+  };
 }
 
 /**
@@ -269,7 +451,19 @@ function useBuiltinWizardState() {
  * When a shape filter leaves no built-in at all (for example Weather), the step points to "Connect a source" and
  * `onAddConnector` (when given) opens that wizard.
  */
-export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, onAddConnector }: { onClose: () => void; onChanged: () => void; shapeFilter?: DataShape[]; onClearFilter?: () => void; onAddConnector?: () => void }) {
+export function BuiltinWizard({
+  onClose,
+  onChanged,
+  shapeFilter,
+  onClearFilter,
+  onAddConnector,
+}: {
+  onClose: () => void;
+  onChanged: () => void;
+  shapeFilter?: DataShape[];
+  onClearFilter?: () => void;
+  onAddConnector?: () => void;
+}) {
   const t = useTranslations('sources');
   const { csrfToken } = useWorkspaceSession();
   const queryClient = useQueryClient();
@@ -289,12 +483,22 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
   /** Enables the picked built-in when leaving the terms step, then starts the test fetch for the created source. */
   async function onNext(): Promise<boolean> {
     if (index !== 1 || !selected) return true;
-    if (createdId) { void runTest(createdId); return true; }
+    if (createdId) {
+      void runTest(createdId);
+      return true;
+    }
     state.setError(null);
     try {
-      const options = { ...aiOptions, ...(realtimeModeOverride ? { realtime_mode: realtimeModeOverride } : {}), ...applicableOptionPayload(selected, optionValues) };
+      const options = {
+        ...aiOptions,
+        ...(realtimeModeOverride ? { realtime_mode: realtimeModeOverride } : {}),
+        ...applicableOptionPayload(selected, optionValues),
+      };
       const result = await enableBuiltinSource(selected.id, use, csrfToken, undefined, options);
-      if (!result.source_id) { state.setError(t('builtinErrorGeneric')); return false; }
+      if (!result.source_id) {
+        state.setError(t('builtinErrorGeneric'));
+        return false;
+      }
       state.setCreatedId(result.source_id);
       refresh();
       void runTest(result.source_id);
@@ -320,12 +524,51 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
     { id: 'terms', title: t('stepBuiltinTerms'), valid: true },
     { id: 'verify', title: t('stepVerify'), valid: verified },
   ];
-  return <WizardShell title={t('wizardTitleBuiltin')} mode="add" steps={steps} stepIndex={index} onStepChange={setIndex} busy={testing} onNext={onNext} onRequestClose={onClose}
-    final={{ label: t('done'), disabled: !verified, onClick: onClose }}
-    discard={createdId ? { needed: !verified, onConfirm: discard } : undefined}>
-    {index === 0 && <BuiltinPickStep builtins={builtins} shapeFilter={shapeFilter} selectedId={selected?.id} onPick={state.pick} onClearFilter={onClearFilter} onAddConnector={onAddConnector} />}
-    {index === 1 && selected && <BuiltinTermsFields builtin={selected} use={use} onUseChange={state.setUse} realtimeMode={realtimeModeOverride ?? selected.realtime_tier ?? 'near_realtime'} onRealtimeModeChange={state.setRealtimeModeOverride} aiOptions={aiOptions} onAiOptionsChange={state.setAiOptions} error={error} />}
-    {index === 1 && selected && <BuiltinOptions builtin={selected} values={optionValues} showName showSchedule onChange={(key, value) => state.setOptionValues((current) => ({ ...current, [key]: value }))} />}
-    {index === 2 && <BuiltinVerifyStep test={test} createdId={createdId} onRetry={() => void runTest(createdId)} />}
-  </WizardShell>;
+  return (
+    <WizardShell
+      title={t('wizardTitleBuiltin')}
+      mode="add"
+      steps={steps}
+      stepIndex={index}
+      onStepChange={setIndex}
+      busy={testing}
+      onNext={onNext}
+      onRequestClose={onClose}
+      final={{ label: t('done'), disabled: !verified, onClick: onClose }}
+      discard={createdId ? { needed: !verified, onConfirm: discard } : undefined}
+    >
+      {index === 0 && (
+        <BuiltinPickStep
+          builtins={builtins}
+          shapeFilter={shapeFilter}
+          selectedId={selected?.id}
+          onPick={state.pick}
+          onClearFilter={onClearFilter}
+          onAddConnector={onAddConnector}
+        />
+      )}
+      {index === 1 && selected && (
+        <BuiltinTermsFields
+          builtin={selected}
+          use={use}
+          onUseChange={state.setUse}
+          realtimeMode={realtimeModeOverride ?? selected.realtime_tier ?? 'near_realtime'}
+          onRealtimeModeChange={state.setRealtimeModeOverride}
+          aiOptions={aiOptions}
+          onAiOptionsChange={state.setAiOptions}
+          error={error}
+        />
+      )}
+      {index === 1 && selected && (
+        <BuiltinOptions
+          builtin={selected}
+          values={optionValues}
+          showName
+          showSchedule
+          onChange={(key, value) => state.setOptionValues((current) => ({ ...current, [key]: value }))}
+        />
+      )}
+      {index === 2 && <BuiltinVerifyStep test={test} createdId={createdId} onRetry={() => void runTest(createdId)} />}
+    </WizardShell>
+  );
 }

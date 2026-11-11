@@ -1,15 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import {
-  Building2,
-  ExternalLink,
-  FolderGit2,
-  RotateCw,
-  Search,
-  User,
-  Users,
-} from 'lucide-react';
+import { ExternalLink, RotateCw, Search, Users } from 'lucide-react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import React, { useMemo, useState } from 'react';
@@ -28,41 +20,15 @@ export interface EntityGadgetProps {
   initialEntities?: Entity[];
 }
 
-/**
- * Maps an entity type to an appropriate semantic Lucide icon.
- *
- * @param type Entity classification string.
- * @returns React icon element.
- */
-export function getEntityIcon(type: string): React.ReactElement {
-  switch (type.toLowerCase()) {
-    case 'person':
-      return <User className="w-3.5 h-3.5" />;
-    case 'company':
-    case 'organization':
-      return <Building2 className="w-3.5 h-3.5" />;
-    case 'project':
-    case 'repository':
-      return <FolderGit2 className="w-3.5 h-3.5" />;
-    default:
-      return <Users className="w-3.5 h-3.5" />;
-  }
-}
-
 /** One compact entity row: linked name, type with aliases (or revision), optional description and last-seen time. */
 function EntityRow({ entity }: { entity: Entity }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
-  const lastSeen = entity.last_seen_at
-    ? formatDateTime(entity.last_seen_at, display.locale, display.timezone)
-    : null;
+  const lastSeen = entity.last_seen_at ? formatDateTime(entity.last_seen_at, display.locale, display.timezone) : null;
   return (
     <li className="flex items-baseline justify-between gap-3 py-2">
       <div className="min-w-0">
-        <Link
-          href={`/knowledge/entities/${entity.id}`}
-          className="block truncate text-sm font-semibold text-foreground hover:underline"
-        >
+        <Link href={`/knowledge/entities/${entity.id}`} className="block truncate text-sm font-semibold text-foreground hover:underline">
           {entity.name || entity.canonical_name || t('entityUnnamed')}
         </Link>
         <p className="truncate text-xs text-muted-foreground">
@@ -73,11 +39,13 @@ function EntityRow({ entity }: { entity: Entity }) {
               : t('entityRevision', { revision: entity.revision }),
           ].join(' · ')}
         </p>
-        {entity.description && (
-          <p className="line-clamp-1 text-xs text-muted-foreground">{entity.description}</p>
-        )}
+        {entity.description && <p className="line-clamp-1 text-xs text-muted-foreground">{entity.description}</p>}
       </div>
-      {lastSeen && <span className="shrink-0 text-xs tabular-nums text-muted-foreground" title={t('entitySeen', { time: lastSeen })}>{lastSeen}</span>}
+      {lastSeen && (
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground" title={t('entitySeen', { time: lastSeen })}>
+          {lastSeen}
+        </span>
+      )}
     </li>
   );
 }
@@ -142,11 +110,7 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
         >
           <RotateCw className={`w-3.5 h-3.5 ${entitiesQuery.isFetching ? 'animate-spin' : ''}`} />
         </BareButton>
-        <Link
-          href="/knowledge/entities"
-          className="p-1 text-muted-foreground hover:text-foreground"
-          title={ts('entBrowse')}
-        >
+        <Link href="/knowledge/entities" className="p-1 text-muted-foreground hover:text-foreground" title={ts('entBrowse')}>
           <ExternalLink className="w-3.5 h-3.5" />
         </Link>
       </div>
@@ -164,16 +128,16 @@ export function EntityGadget({ instance, initialEntities }: EntityGadgetProps) {
         <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-muted-foreground">
           <Users className="w-8 h-8 mb-2 opacity-50" />
           <p className="text-xs font-semibold text-foreground mb-1">{ts('entNone')}</p>
-          <p className="text-[11px] max-w-xs text-muted-foreground">
-            {ts('entNoneHint')}
-          </p>
+          <p className="text-[11px] max-w-xs text-muted-foreground">{ts('entNoneHint')}</p>
         </div>
       )}
 
       {/* Compact rows: name (14px) left, last-seen right and tabular; type and aliases stay muted. */}
       {entities.length > 0 && (
         <ul className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto pr-0.5">
-          {entities.map((entity) => <EntityRow key={entity.id} entity={entity} />)}
+          {entities.map((entity) => (
+            <EntityRow key={entity.id} entity={entity} />
+          ))}
         </ul>
       )}
     </div>

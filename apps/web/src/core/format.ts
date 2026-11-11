@@ -82,13 +82,5 @@ export function formatRelative(value: string | number | Date, locale: AppLocaleI
   const abs = Math.abs(diffSeconds);
   const [unit, size] = RELATIVE_UNITS.find(([, s]) => abs >= s) ?? ['second', 1];
   const options = { numeric: 'auto' } as const;
-  return memo('relative', locale, options, (l) => new Intl.RelativeTimeFormat(l, options)).format(
-    Math.trunc(diffSeconds / size),
-    unit,
-  );
-}
-
-/** Test helper: drops memoised formatters. */
-export function resetFormatCache(): void {
-  cache.clear();
+  return memo('relative', locale, options, (l) => new Intl.RelativeTimeFormat(l, options)).format(Math.trunc(diffSeconds / size), unit);
 }

@@ -12,9 +12,10 @@ import httpx
 
 # authlib ships no stubs or py.typed marker
 from authlib.integrations.httpx_client import AsyncOAuth2Client  # type: ignore[import-untyped]
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import InvalidToken
 
 from core.config import Settings
+from core.key_ring import key_ring
 from modules.connectors.credentials import CredentialEncryptionUnavailable
 from modules.connectors.github.schemas import GitHubSourceConfig
 
@@ -53,7 +54,7 @@ def _token_cipher(
         raise TypeError("Unsupported token value")
 
     return (
-        Fernet(key.encode("ascii"))
+        key_ring(key)
         .encrypt(
             json.dumps(
                 payload,
@@ -71,7 +72,7 @@ def _open_token_cipher(
 ) -> dict[str, Any]:
     """Decrypt a GitHub token pair only when its exact local source and revision match."""
     try:
-        payload = json.loads(Fernet(key.encode("ascii")).decrypt(ciphertext.encode("ascii")))
+        payload = json.loads(key_ring(key).decrypt(ciphertext.encode("ascii")))
     except (ValueError, UnicodeEncodeError, InvalidToken, json.JSONDecodeError) as exc:
         raise CredentialEncryptionUnavailable("Stored GitHub grant is unavailable") from exc
     if (

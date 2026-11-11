@@ -301,6 +301,18 @@ class Settings(BaseSettings):
     otel_traces_sample_ratio: float = Field(
         default=1.0, ge=0.0, le=1.0, validation_alias="OTEL_TRACES_SAMPLE_RATIO"
     )
+    # Optional metadata-only Langfuse export (core/langfuse_export.py): needs both opt-ins, an https base URL and keys.
+    langfuse_enabled: bool = Field(default=False, validation_alias="LANGFUSE_ENABLED")
+    telemetry_egress_approved: bool = Field(
+        default=False, validation_alias="TELEMETRY_EGRESS_APPROVED"
+    )
+    langfuse_base_url: str = Field(default="", validation_alias="LANGFUSE_BASE_URL")
+    langfuse_public_key: SecretStr = Field(
+        default=SecretStr(""), validation_alias="LANGFUSE_PUBLIC_KEY", repr=False
+    )
+    langfuse_secret_key: SecretStr = Field(
+        default=SecretStr(""), validation_alias="LANGFUSE_SECRET_KEY", repr=False
+    )
     # Widget MCP server (modules/mcp_widgets): off by default; when enabled a bearer token is mandatory.
     mcp_widgets_enabled: bool = Field(default=False, validation_alias="MCP_WIDGETS_ENABLED")
     mcp_widgets_token: SecretStr = Field(

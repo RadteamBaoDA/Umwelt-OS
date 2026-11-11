@@ -7,15 +7,17 @@ import logging
 import os
 import re
 import time
+from functools import lru_cache
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
 
+from core.config import Settings
 from core.ids import uuid7
 
-logger = logging.getLogger("bbd.telemetry.langfuse")
+logger = logging.getLogger("umwelt.telemetry.langfuse")
 _QUEUE_LIMIT = 32
 _SEND_TIMEOUT_SECONDS = 2.0
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]")
@@ -28,16 +30,30 @@ _queue_loop: asyncio.AbstractEventLoop | None = None
 _worker: asyncio.Task[None] | None = None
 
 
+_ENV_NAMES = (
+    "LANGFUSE_ENABLED",
+    "TELEMETRY_EGRESS_APPROVED",
+    "LANGFUSE_BASE_URL",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+)
+
+
+@lru_cache(maxsize=4)
+def _settings_for(_environment: tuple[str | None, ...]) -> Settings:
+    """Build Settings once per distinct Langfuse environment (Settings() costs ~10 ms; this runs per model call)."""
+    return Settings()
+
+
 def _configuration() -> tuple[str, str, str] | None:
     """Return a validated HTTPS endpoint and backend credentials only after explicit egress approval."""
-    if os.getenv("LANGFUSE_ENABLED", "false").casefold() != "true":
-        return None
-    if os.getenv("TELEMETRY_EGRESS_APPROVED", "false").casefold() != "true":
+    settings = _settings_for(tuple(os.environ.get(name) for name in _ENV_NAMES))
+    if not settings.langfuse_enabled or not settings.telemetry_egress_approved:
         return None
 
-    base_url = os.getenv("LANGFUSE_BASE_URL", "").strip()
-    public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()
-    secret_key = os.getenv("LANGFUSE_SECRET_KEY", "").strip()
+    base_url = settings.langfuse_base_url.strip()
+    public_key = settings.langfuse_public_key.get_secret_value().strip()
+    secret_key = settings.langfuse_secret_key.get_secret_value().strip()
     try:
         parsed = urlsplit(base_url)
         if (

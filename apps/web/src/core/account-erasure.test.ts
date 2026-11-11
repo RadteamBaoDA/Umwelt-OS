@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { announceAccountErasure, clearAccountBrowserStorage, subscribeToAccountErasure } from './account-erasure';
 
-afterEach(() => { localStorage.clear(); sessionStorage.clear(); vi.unstubAllGlobals(); });
+afterEach(() => {
+  localStorage.clear();
+  sessionStorage.clear();
+  vi.unstubAllGlobals();
+});
 
 describe('account browser erasure', () => {
   it('removes app preferences and private drafts without removing unrelated origin data', () => {
@@ -11,6 +15,9 @@ describe('account browser erasure', () => {
     localStorage.setItem('umwelt.genui.templates.v1', 'legacy private template');
     sessionStorage.setItem('bbd:settings:ai:draft:v2', 'private');
     sessionStorage.setItem('umwelt:workspace', 'private');
+    localStorage.setItem('umwelt.chat.model', 'model');
+    localStorage.setItem('umwelt.dashboard.groupSeen.0190-group', 'seen');
+    localStorage.setItem('umwelt-accent', 'teal');
     sessionStorage.setItem('unrelated', 'keep');
     clearAccountBrowserStorage();
     expect(localStorage.length).toBe(0);

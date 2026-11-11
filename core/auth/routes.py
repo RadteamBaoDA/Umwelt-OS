@@ -61,7 +61,7 @@ from core.errors import DomainError
 from core.telemetry import log_event
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
-logger = logging.getLogger("bbd.auth")
+logger = logging.getLogger("umwelt.auth")
 # Machine code lets the client branch without parsing English text.
 # Bounded wait for the owner row on login/password change (seconds) before a retryable error.
 OWNER_LOCK_WAIT_SECONDS = 3.0

@@ -61,17 +61,20 @@ def _history(
 
 
 def _session(*results: list[Any], exists: bool = True) -> Any:
-    """Session: ``scalars`` yields the given lists in order (missing probe, then page); ``scalar`` is the live-row check."""
+    """Session: ``scalars`` yields the given lists in order (missing probe, then page), then the batched
+    live-row probe, which returns every page id when ``exists`` and none otherwise."""
     pending = list(results)
+    page: list[Any] = []
 
     async def scalars(_statement: Any) -> Any:
-        batch = pending.pop(0)
+        if pending:
+            batch = pending.pop(0)
+            page[:] = batch
+        else:
+            batch = [row.relationship_id for row in page] if exists else []
         return SimpleNamespace(all=lambda: batch)
 
-    return SimpleNamespace(
-        scalars=AsyncMock(side_effect=scalars),
-        scalar=AsyncMock(return_value=uuid4() if exists else None),
-    )
+    return SimpleNamespace(scalars=AsyncMock(side_effect=scalars))
 
 
 @pytest.fixture(autouse=True)

@@ -24,11 +24,11 @@ import httpx
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 
+from core.media_proxy import MediaError, check_upstream_url
 from core.model_gateway.schemas import AIExecutionConfig, PrivacySettings, WebSearchTarget
 from core.model_gateway.transport import EndpointNetworkPolicyError
-from modules.chat.media import MediaError, check_upstream_url
 
-logger = logging.getLogger("bbd.chat.web_search")
+logger = logging.getLogger("umwelt.chat.web_search")
 
 WEB_QUERY_MAX_CHARS = 400
 WEB_SEARCH_TIMEOUT_SECONDS = 8

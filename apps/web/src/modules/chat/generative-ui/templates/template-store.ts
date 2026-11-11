@@ -58,8 +58,7 @@ function readRaw(): string | null {
 /** Type guard dropping malformed entries so corrupted storage can never crash the drawer. */
 function isTemplate(value: unknown): value is UserTemplate {
   const v = value as Partial<UserTemplate> | null;
-  return !!v && typeof v.id === 'string' && typeof v.title === 'string'
-    && typeof v.content === 'string' && typeof v.createdAt === 'number';
+  return !!v && typeof v.id === 'string' && typeof v.title === 'string' && typeof v.content === 'string' && typeof v.createdAt === 'number';
 }
 
 /**
@@ -212,8 +211,7 @@ export async function setPendingTemplate(conversationId: string, templateId: str
 export function deleteUserTemplate(id: string, csrfToken?: string): boolean {
   const stored = persist(listUserTemplates().filter((t) => t.id !== id));
   if (csrfToken && !id.startsWith(LOCAL_PREFIX)) {
-    void apiRequest(`${API}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: csrfHeaders(csrfToken) })
-      .catch(() => undefined);
+    void apiRequest(`${API}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: csrfHeaders(csrfToken) }).catch(() => undefined);
   }
   return stored;
 }
@@ -270,8 +268,8 @@ export function useTemplateAccount(): void {
     setTemplateAccount(owner);
   }, [owner]);
   React.useEffect(() => {
-    window.addEventListener('bbd:auth-ending', clearUserTemplates);
-    return () => window.removeEventListener('bbd:auth-ending', clearUserTemplates);
+    window.addEventListener('umwelt:auth-ending', clearUserTemplates);
+    return () => window.removeEventListener('umwelt:auth-ending', clearUserTemplates);
   }, []);
 }
 
@@ -296,7 +294,11 @@ function subscribe(listener: () => void): () => void {
  */
 export function useUserTemplates(csrfToken?: string): UserTemplate[] {
   useTemplateAccount();
-  const account = React.useSyncExternalStore(subscribe, () => accountId, () => null);
+  const account = React.useSyncExternalStore(
+    subscribe,
+    () => accountId,
+    () => null,
+  );
   React.useEffect(() => {
     if (csrfToken && account) void refreshUserTemplates(csrfToken);
   }, [csrfToken, account]);

@@ -27,7 +27,7 @@ from modules.knowledge.documents import public as documents
 from modules.knowledge.observations import public as observations
 from modules.sources.public import ConnectorSource, SourceFence
 
-logger = logging.getLogger("bbd.worker")
+logger = logging.getLogger("umwelt.worker")
 STAGE_TIMEOUT_SECONDS = 120
 MAX_STAGE_ATTEMPTS = 5
 NORMALIZATION_VERSION = 1

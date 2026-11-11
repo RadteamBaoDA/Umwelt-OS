@@ -250,11 +250,6 @@ WORLD_BANK_URL = (
 WORLD_BANK_INDICATORS: tuple[tuple[str, str, str], ...] = (
     ("VN", "NY.GDP.MKTP.CD", "gdp_current_usd"),
 )
-FRED_SERIES: tuple[tuple[str, str, str], ...] = (
-    ("DFF", "fed_funds_rate", "percent"),
-    ("CPIAUCSL", "us_cpi_index", "index"),
-    ("DGS10", "us_10y_treasury_yield", "percent"),
-)
 _WB_MAX_ROWS = 50
 _WB_COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
 _WB_INDICATOR_RE = re.compile(r"^[A-Z0-9._-]{3,40}$")
@@ -455,86 +450,6 @@ def map_world_bank(
                     "period": period,
                     "unit": unit,
                 },
-            )
-        )
-    return records
-
-
-def fetch_world_bank_indicators(
-    payloads_by_indicator: dict[tuple[str, str], object],
-    collected_at: datetime,
-    *,
-    indicators: tuple[tuple[str, str, str], ...] = WORLD_BANK_INDICATORS,
-) -> list[IngestionRecord]:
-    """Map a batch of pre-fetched World Bank payloads keyed by ``(country_iso2, indicator_id)``."""
-    records: list[IngestionRecord] = []
-    for country_id, indicator_id, metric_name in indicators:
-        payload = payloads_by_indicator.get((country_id, indicator_id))
-        if payload is None:
-            raise ProviderPayloadError("world_bank_response_invalid")
-        records.extend(
-            map_world_bank(
-                payload,
-                collected_at,
-                indicators=((country_id, indicator_id, metric_name),),
-            )
-        )
-    return records
-
-
-def map_fred_series(
-    payload: object,
-    collected_at: datetime,
-    *,
-    series_id: str = "DFF",
-    series: tuple[tuple[str, str, str], ...] = FRED_SERIES,
-) -> list[IngestionRecord]:
-    """Map FRED observations JSON into typed ``IngestionRecord`` items for a configured series."""
-    allowed_series = {sid: (metric, unit) for sid, metric, unit in series}
-    if series_id not in allowed_series:
-        raise ProviderPayloadError("fred_scope_mismatch")
-    metric_name, unit_name = allowed_series[series_id]
-    if not isinstance(payload, dict):
-        raise ProviderPayloadError("fred_response_invalid")
-    if "error_code" in payload or "error_message" in payload:
-        raise ProviderPayloadError("fred_error_payload")
-    observations = payload.get("observations")
-    if not isinstance(observations, list) or not observations or len(observations) > _WB_MAX_ROWS:
-        raise ProviderPayloadError("fred_observations_invalid")
-    seen: set[str] = set()
-    records: list[IngestionRecord] = []
-    for item in observations:
-        if not isinstance(item, dict):
-            raise ProviderPayloadError("fred_observations_invalid")
-        day = parse_iso_date(item.get("date"))
-        iso = day.isoformat()
-        if iso in seen:
-            raise ProviderPayloadError("fred_date_duplicate")
-        seen.add(iso)
-        observed_at = day_start(day)
-        if observed_at > collected_at:
-            raise ProviderPayloadError("fred_date_in_future")
-        raw_val = item.get("value")
-        try:
-            # FRED encodes missing observations as "."
-            value = None if raw_val in {None, "."} else finite_decimal(raw_val)
-        except ValueError as exc:
-            raise ProviderPayloadError("fred_value_invalid") from exc
-        text = "null" if value is None else decimal_text(value)
-        records.append(
-            build_record(
-                provider="fred",
-                identity=f"fred:{series_id}:{iso}",
-                content=f"FRED {series_id} ({metric_name}) {iso}: {'not reported' if value is None else text + ' ' + unit_name}",
-                title=f"FRED {series_id} {iso}",
-                observed_at=observed_at,
-                collected_at=collected_at,
-                version=content_version("fred", series_id, iso, text),
-                metric=metric_name,
-                value=value,
-                unit=unit_name,
-                quality="provider_reported",
-                provider_fields={"series_id": series_id, "date": iso, "unit": unit_name},
             )
         )
     return records

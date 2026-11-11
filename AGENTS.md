@@ -7,12 +7,14 @@ This repository implements the single-user, self-hosted Personal Intelligence OS
 Follow the specification when adding code:
 - `apps/web/`: Next.js, React, and TypeScript frontend.
 - `apps/api/` and `apps/worker/`: Python FastAPI backend and background processing.
-- `packages/`: shared UI, contracts, SDK, and configuration.
+- `packages/` (planned by the specification, not created yet): shared UI, contracts, SDK, and configuration.
 - `core/` and `modules/<capability>/`: shared infrastructure and domain modules, following the modular-monolith requirements in sections 139–143.
 - `tests/integration/`, `tests/e2e/`, and `tests/fixtures/`: cross-module validation.
 - `infrastructure/` and `docs/`: deployment configuration and operational documentation.
 
 Keep module internals private; integrate through public contracts or events. Create directories only when used.
+
+Project skills are edited under `.claude/skills` and mirrored to `.agents/skills` with `python scripts/sync_skills.py` (CI checks the mirror).
 
 ## Build, Test, and Development Commands
 
@@ -104,7 +106,3 @@ This project is indexed by GitNexus as **Umwelt-OS** (37085 symbols, 78299 relat
 - Comment-only work must preserve application logic, public signatures and schema operations. Historical migration documentation may describe operations; it must not change revision IDs, ancestry or database behavior.
 - Include documentation compliance in each agent handoff and source review. GitNexus impact/change-scope rules still apply.
 - Update status/checkpoint files as work proceeds, but commit status documentation only with a large completed task or phase; do not make a standalone docs commit for every progress update.
-
-## Execution context after repository rename
-
-The repository folder is `D:/Project/Umwelt-OS`. This chat can still inject the obsolete `D:/Project/BBD-OS` as its default cwd. On this host, pass the assigned checkout's actual absolute path in `workdir` on every shell tool call, using forward slashes; implementations in worktrees must use their assigned worktree path. Do not run against the injected/default BBD-OS path or create a shortcut/junction to make it work. A process-creation error267 at the old cwd does not prove the host or Docker is unavailable. Retry with the explicit assigned path before attempting unrelated worktree recovery or asking the user to reconnect.

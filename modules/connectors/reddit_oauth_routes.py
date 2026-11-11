@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,6 +27,7 @@ from core.auth.public import authenticated_session_ref
 from core.config import Settings
 from core.database import get_session
 from core.ids import uuid7
+from core.key_ring import key_ring
 from core.realtime import commit_with_replay
 from core.workspaces.dependencies import require_workspace_read, require_workspace_write
 from core.workspaces.public import lock_access_fence
@@ -93,7 +94,7 @@ def _seal(
         sort_keys=True,
         separators=(",", ":"),
     )
-    return Fernet(key.encode("ascii")).encrypt(payload.encode("utf-8")).decode("ascii")
+    return key_ring(key).encrypt(payload.encode("utf-8")).decode("ascii")
 
 
 def _open(
@@ -106,7 +107,7 @@ def _open(
 ) -> dict[str, Any]:
     """Decrypt one token set only when its persisted source/configuration binding matches."""
     try:
-        payload = json.loads(Fernet(key.encode("ascii")).decrypt(ciphertext.encode("ascii")))
+        payload = json.loads(key_ring(key).decrypt(ciphertext.encode("ascii")))
     except (ValueError, UnicodeEncodeError, InvalidToken, json.JSONDecodeError) as exc:
         raise ValueError("reddit_oauth_cipher_invalid") from exc
     if not isinstance(payload, dict):

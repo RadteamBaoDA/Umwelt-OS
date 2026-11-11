@@ -28,9 +28,11 @@ function subscribePhone(onChange: () => void): () => void {
 
 /** Shared owner-scoped map controller; the range line and any empty/location-sharing notice precede a nonshrinking plot and scrollable evidence. */
 export function MapGadget({ instance, isEditMode = false }: { instance: GadgetInstance; isEditMode?: boolean }) {
-  return instance.definition.filters?.map_mode === 'live'
-    ? <LiveMapGadget instance={instance} isEditMode={isEditMode} />
-    : <SelectedSourcesMapGadget instance={instance} isEditMode={isEditMode} />;
+  return instance.definition.filters?.map_mode === 'live' ? (
+    <LiveMapGadget instance={instance} isEditMode={isEditMode} />
+  ) : (
+    <SelectedSourcesMapGadget instance={instance} isEditMode={isEditMode} />
+  );
 }
 
 /** Observation features of the map (loaded page by page, up to 5 pages of 100). */
@@ -55,19 +57,30 @@ function useMapScope(instance: GadgetInstance) {
  * Loads the geospatial observations (only with precise locations enabled and at least one source) and projects them
  * to map features and layers.
  */
-function useMapObservations(instance: GadgetInstance, scope: ReturnType<typeof useMapScope>) {
+export function useMapObservations(instance: GadgetInstance, scope: ReturnType<typeof useMapScope>) {
   const { sourceIds, regions, layerIds, precise, days } = scope;
-  // Re-anchored per gadget instance so the lookback window restarts when the instance changes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const to = useMemo(() => new Date(), [instance.id]);
-  const from = useMemo(() => new Date(to.getTime() - days * 86_400_000), [to, days]);
   const observations = useInfiniteQuery({
     queryKey: ['world-observations', 'map', instance.id, sourceIds, regions, days, precise],
-    queryFn: ({ pageParam, signal }) => listGeospatialObservations({
-      sourceIds, regions, from, to, limit: 100, cursor: pageParam,
-    }, signal),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage, pages) => pages.length < 5 ? lastPage.next_cursor ?? undefined : undefined,
+    // The first page anchors the window at "now" on every fetch and refetch, so new observations appear. Later
+    // pages reuse that anchor: the server binds each cursor to its from/to window and rejects a moved one (422).
+    queryFn: async ({ pageParam, signal }) => {
+      const to = pageParam.to ?? new Date();
+      const page = await listGeospatialObservations(
+        {
+          sourceIds,
+          regions,
+          from: new Date(to.getTime() - days * 86_400_000),
+          to,
+          limit: 100,
+          cursor: pageParam.cursor,
+        },
+        signal,
+      );
+      return { ...page, anchor: to };
+    },
+    initialPageParam: {} as { cursor?: string; to?: Date },
+    getNextPageParam: (lastPage, pages) =>
+      pages.length < 5 && lastPage.next_cursor ? { cursor: lastPage.next_cursor, to: lastPage.anchor } : undefined,
     enabled: precise && sourceIds.length > 0,
     staleTime: 60_000,
   });
@@ -92,9 +105,12 @@ function usePlotObservers() {
   useEffect(() => {
     const node = plotNode;
     if (!node) return;
-    const observer = new ResizeObserver(([entry]) => setSize({
-      width: Math.floor(entry.contentRect.width), height: Math.floor(entry.contentRect.height),
-    }));
+    const observer = new ResizeObserver(([entry]) =>
+      setSize({
+        width: Math.floor(entry.contentRect.width),
+        height: Math.floor(entry.contentRect.height),
+      }),
+    );
     observer.observe(node);
     return () => observer.disconnect();
   }, [plotNode]);
@@ -110,14 +126,21 @@ function usePlotObservers() {
     const onVisibility = () => setVisible(intersectingRef.current && document.visibilityState === 'visible');
     observer.observe(node);
     document.addEventListener('visibilitychange', onVisibility);
-    return () => { observer.disconnect(); document.removeEventListener('visibilitychange', onVisibility); };
+    return () => {
+      observer.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [plotNode]);
 
   return { setPlotNode, size, visible };
 }
 
 /** Localized empty-state message: precise locations off or opt-in required, no source, layer disabled, or plain empty. */
-function mapEmptyMessage(t: ReturnType<typeof useTranslations>, precise: boolean, layer: ReturnType<typeof useMapObservations>['activeLayer']): string {
+function mapEmptyMessage(
+  t: ReturnType<typeof useTranslations>,
+  precise: boolean,
+  layer: ReturnType<typeof useMapObservations>['activeLayer'],
+): string {
   if (!precise || layer?.reason === 'privacy_opt_in_required') return t('mapPreciseDisabled');
   if (layer?.reason === 'no_source_selected') return t('mapSourceRequired');
   return layer?.enabled === false ? t('mapObservationLayerDisabled') : t('mapEmpty');
@@ -126,11 +149,34 @@ function mapEmptyMessage(t: ReturnType<typeof useTranslations>, precise: boolean
 /** Detail card of the picked feature: metric, value, region/provider, source identity, quality and revision link. */
 function SelectedFeatureCard({ selected }: { selected: NonNullable<ReturnType<typeof useMapObservations>['features'][number]> }) {
   const t = useTranslations('dashboard');
-  return <p className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs">{formatMetricLabel(selected.metric, t)} · {selected.value ?? t('weatherMissingValue')} {selected.unit} · {selected.region ?? formatProviderName(selected.provider)}<span className="block">{t('mapSourceIdentity')}: {selected.source_id} · {t('mapQuality')}: {selected.quality}</span>{selected.document_version_number ? <Link className="underline" href={`/knowledge/documents/${selected.document_id}?version=${selected.document_version_number}#cited-revision`}>{t('mapOpenRevision', { version: selected.document_version_number })}</Link> : <span>{t('mapRevisionUnavailable')}</span>}</p>;
+  return (
+    <p className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 px-2 py-1 text-xs">
+      {formatMetricLabel(selected.metric, t)} · {selected.value ?? t('weatherMissingValue')} {selected.unit} ·{' '}
+      {selected.region ?? formatProviderName(selected.provider)}
+      <span className="block">
+        {t('mapSourceIdentity')}: {selected.source_id} · {t('mapQuality')}: {selected.quality}
+      </span>
+      {selected.document_version_number ? (
+        <Link
+          className="underline"
+          href={`/knowledge/documents/${selected.document_id}?version=${selected.document_version_number}#cited-revision`}
+        >
+          {t('mapOpenRevision', { version: selected.document_version_number })}
+        </Link>
+      ) : (
+        <span>{t('mapRevisionUnavailable')}</span>
+      )}
+    </p>
+  );
 }
 
 /** Accessible evidence list: one button per feature, pagination and the truncation note. */
-function MapEvidence({ features, observations, selectedFeatureId, onPick }: {
+function MapEvidence({
+  features,
+  observations,
+  selectedFeatureId,
+  onPick,
+}: {
   features: ReturnType<typeof useMapObservations>['features'];
   observations: MapObservations;
   selectedFeatureId: string | null;
@@ -138,21 +184,53 @@ function MapEvidence({ features, observations, selectedFeatureId, onPick }: {
 }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
-  const truncated = observations.data?.pages.some((page) => page.truncated)
-    || ((observations.data?.pages.length ?? 0) >= 5 && Boolean(observations.data?.pages.at(-1)?.next_cursor));
-  return <div className={`flex min-h-0 flex-col ${features.length > 0 ? 'flex-1' : 'shrink-0'}`}>
-    {features.length > 0 && <h3 className="line-clamp-2 break-words text-xs font-semibold">{t('mapEvidenceList', { count: features.length })}</h3>}
-    <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto" aria-label={t('mapEvidenceListLabel')}>
-      {features.map((feature) => <li key={feature.feature_id}>
-        <BareButton type="button" onClick={() => onPick(feature.feature_id)} aria-pressed={feature.feature_id === selectedFeatureId} className="flex w-full items-start justify-between gap-2 py-1.5 text-left text-xs hover:bg-muted/30">
-          <span className="min-w-0 truncate">{formatMetricLabel(feature.metric, t)} · {feature.region ?? formatProviderName(feature.provider)}<time className="block text-xs text-muted-foreground" dateTime={feature.observed_at}>{formatDateTime(feature.observed_at, display.locale, display.timezone)}</time></span>
-          <span className="shrink-0 tabular-nums">{feature.value ?? '—'} {feature.unit}</span>
+  const truncated =
+    observations.data?.pages.some((page) => page.truncated) ||
+    ((observations.data?.pages.length ?? 0) >= 5 && Boolean(observations.data?.pages.at(-1)?.next_cursor));
+  return (
+    <div className={`flex min-h-0 flex-col ${features.length > 0 ? 'flex-1' : 'shrink-0'}`}>
+      {features.length > 0 && (
+        <h3 className="line-clamp-2 break-words text-xs font-semibold">{t('mapEvidenceList', { count: features.length })}</h3>
+      )}
+      <ul className="min-h-0 flex-1 divide-y divide-border overflow-y-auto" aria-label={t('mapEvidenceListLabel')}>
+        {features.map((feature) => (
+          <li key={feature.feature_id}>
+            <BareButton
+              type="button"
+              onClick={() => onPick(feature.feature_id)}
+              aria-pressed={feature.feature_id === selectedFeatureId}
+              className="flex w-full items-start justify-between gap-2 py-1.5 text-left text-xs hover:bg-muted/30"
+            >
+              <span className="min-w-0 truncate">
+                {formatMetricLabel(feature.metric, t)} · {feature.region ?? formatProviderName(feature.provider)}
+                <time className="block text-xs text-muted-foreground" dateTime={feature.observed_at}>
+                  {formatDateTime(feature.observed_at, display.locale, display.timezone)}
+                </time>
+              </span>
+              <span className="shrink-0 tabular-nums">
+                {feature.value ?? '—'} {feature.unit}
+              </span>
+            </BareButton>
+          </li>
+        ))}
+      </ul>
+      {observations.hasNextPage && (
+        <BareButton
+          type="button"
+          disabled={observations.isFetchingNextPage}
+          onClick={() => void observations.fetchNextPage()}
+          className="line-clamp-2 max-w-full self-start break-words py-1 text-xs text-primary underline disabled:opacity-50"
+        >
+          {observations.isFetchingNextPage ? t('observationLoading') : t('mapLoadMore')}
         </BareButton>
-      </li>)}
-    </ul>
-    {observations.hasNextPage && <BareButton type="button" disabled={observations.isFetchingNextPage} onClick={() => void observations.fetchNextPage()} className="line-clamp-2 max-w-full self-start break-words py-1 text-xs text-primary underline disabled:opacity-50">{observations.isFetchingNextPage ? t('observationLoading') : t('mapLoadMore')}</BareButton>}
-    {truncated && <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('observationTruncated')}</p>}
-  </div>;
+      )}
+      {truncated && (
+        <p role="status" className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">
+          {t('observationTruncated')}
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** Props the map engines share. */
@@ -167,23 +245,61 @@ type EngineProps = {
 };
 
 /** Notices above the plot: empty / location-sharing, missing source and load failure (the empty one moves into flow without a plot). */
-function MapNotices({ showPlot, mapEmpty, emptyMessage, needsSource, loadFailed }: {
-  showPlot: boolean; mapEmpty: boolean; emptyMessage: string; needsSource: boolean; loadFailed: boolean;
+function MapNotices({
+  showPlot,
+  mapEmpty,
+  emptyMessage,
+  needsSource,
+  loadFailed,
+}: {
+  showPlot: boolean;
+  mapEmpty: boolean;
+  emptyMessage: string;
+  needsSource: boolean;
+  loadFailed: boolean;
 }) {
   const t = useTranslations('dashboard');
-  const empty = <GadgetNotice kind="empty" message={emptyMessage} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="shrink-0 px-0 py-1 text-xs" />;
-  return <>
-    {/* Location-sharing / empty notice sits above the map in flow so it never covers the basemap. */}
-    {showPlot && mapEmpty && empty}
-    {needsSource && <GadgetNotice kind="setup" message={t('mapSourceRequired')} action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }} className="shrink-0 px-0 py-1 text-xs" />}
-    {loadFailed && <GadgetNotice kind="error" message={t('observationLoadFailed')} className="shrink-0 px-0 py-1 text-xs" />}
-    {/* On-demand phone state with no points: the notice renders in normal flow (an absolute notice in a collapsed plot is clipped). */}
-    {!showPlot && empty}
-  </>;
+  const empty = (
+    <GadgetNotice
+      kind="empty"
+      message={emptyMessage}
+      action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }}
+      className="shrink-0 px-0 py-1 text-xs"
+    />
+  );
+  return (
+    <>
+      {/* Location-sharing / empty notice sits above the map in flow so it never covers the basemap. */}
+      {showPlot && mapEmpty && empty}
+      {needsSource && (
+        <GadgetNotice
+          kind="setup"
+          message={t('mapSourceRequired')}
+          action={{ href: '/settings/sources', label: t('gadgetConfigureAction') }}
+          className="shrink-0 px-0 py-1 text-xs"
+        />
+      )}
+      {loadFailed && <GadgetNotice kind="error" message={t('observationLoadFailed')} className="shrink-0 px-0 py-1 text-xs" />}
+      {/* On-demand phone state with no points: the notice renders in normal flow (an absolute notice in a collapsed plot is clipped). */}
+      {!showPlot && empty}
+    </>
+  );
 }
 
 /** The plot: phone opt-in prompt, loading hint, the lazily loaded engine, hide button and the picked-feature card. */
-function MapPlot({ setPlotNode, mapOnDemand, mapEmpty, mapRequested, setMapRequested, isPhone, loading, canRenderEngine, engine, engineProps, selected }: {
+function MapPlot({
+  setPlotNode,
+  mapOnDemand,
+  mapEmpty,
+  mapRequested,
+  setMapRequested,
+  isPhone,
+  loading,
+  canRenderEngine,
+  engine,
+  engineProps,
+  selected,
+}: {
   setPlotNode: (node: HTMLDivElement | null) => void;
   mapOnDemand: boolean;
   mapEmpty: boolean;
@@ -197,18 +313,48 @@ function MapPlot({ setPlotNode, mapOnDemand, mapEmpty, mapRequested, setMapReque
   selected: ReturnType<typeof useMapObservations>['features'][number] | null;
 }) {
   const t = useTranslations('dashboard');
-  const rendererLoading = <p role="status" className="p-2 text-xs text-muted-foreground">{t('mapRendererLoading')}</p>;
-  return <div ref={setPlotNode} role="group" className="relative min-h-48 flex-[2] overflow-hidden rounded border border-border" aria-label={t('mapPlotLabel')}>
-    {mapOnDemand && !mapEmpty && <div className="flex h-full flex-col items-start justify-center gap-2 p-3"><p className="text-xs text-muted-foreground">{t('mapOnDemand')}</p><Button type="button" variant="outline" onClick={() => setMapRequested(true)}>{t('mapOpen')}</Button></div>}
-    {/* Loading sits over the plot instead of a separate skeleton block, so a drawn map is never pushed down. */}
-    {loading && <p role="status" className="absolute left-2 top-2 z-10 m-0 rounded bg-card/90 px-2 py-1 text-xs text-muted-foreground">{t('observationLoading')}</p>}
-    {/* Engines paint into an absolute layer so the canvas never sizes the plot: the plot takes its height from the card's flex layout, and the footer stays inside the card. */}
-    {canRenderEngine && <div className="absolute inset-0">
-      <Suspense fallback={rendererLoading}>{engine === 'globe' ? <GlobeMap {...engineProps} /> : <FlatMap {...engineProps} />}</Suspense>
-    </div>}
-    {isPhone && mapRequested && <Button type="button" variant="outline" className="absolute right-2 top-2 z-10" onClick={() => setMapRequested(false)}>{t('mapHide')}</Button>}
-    {selected && <SelectedFeatureCard selected={selected} />}
-  </div>;
+  const rendererLoading = (
+    <p role="status" className="p-2 text-xs text-muted-foreground">
+      {t('mapRendererLoading')}
+    </p>
+  );
+  return (
+    <div
+      ref={setPlotNode}
+      role="group"
+      className="relative min-h-48 flex-[2] overflow-hidden rounded border border-border"
+      aria-label={t('mapPlotLabel')}
+    >
+      {mapOnDemand && !mapEmpty && (
+        <div className="flex h-full flex-col items-start justify-center gap-2 p-3">
+          <p className="text-xs text-muted-foreground">{t('mapOnDemand')}</p>
+          <Button type="button" variant="outline" onClick={() => setMapRequested(true)}>
+            {t('mapOpen')}
+          </Button>
+        </div>
+      )}
+      {/* Loading sits over the plot instead of a separate skeleton block, so a drawn map is never pushed down. */}
+      {loading && (
+        <p role="status" className="absolute left-2 top-2 z-10 m-0 rounded bg-card/90 px-2 py-1 text-xs text-muted-foreground">
+          {t('observationLoading')}
+        </p>
+      )}
+      {/* Engines paint into an absolute layer so the canvas never sizes the plot: the plot takes its height from the card's flex layout, and the footer stays inside the card. */}
+      {canRenderEngine && (
+        <div className="absolute inset-0">
+          <Suspense fallback={rendererLoading}>
+            {engine === 'globe' ? <GlobeMap {...engineProps} /> : <FlatMap {...engineProps} />}
+          </Suspense>
+        </div>
+      )}
+      {isPhone && mapRequested && (
+        <Button type="button" variant="outline" className="absolute right-2 top-2 z-10" onClick={() => setMapRequested(false)}>
+          {t('mapHide')}
+        </Button>
+      )}
+      {selected && <SelectedFeatureCard selected={selected} />}
+    </div>
+  );
 }
 
 /**
@@ -217,7 +363,15 @@ function MapPlot({ setPlotNode, mapOnDemand, mapEmpty, mapRequested, setMapReque
  * locations off the observations query never runs, so that state counts as empty at once. The phone on-demand empty
  * state skips the plot entirely (its notice renders in flow and no credit is shown).
  */
-function mapViewState(i: { isPhone: boolean; mapRequested: boolean; visible: boolean; size: { width: number; height: number }; pointCount: number; precise: boolean; observationsPending: boolean }) {
+function mapViewState(i: {
+  isPhone: boolean;
+  mapRequested: boolean;
+  visible: boolean;
+  size: { width: number; height: number };
+  pointCount: number;
+  precise: boolean;
+  observationsPending: boolean;
+}) {
   const mapOnDemand = i.isPhone && !i.mapRequested;
   const canRenderEngine = i.visible && i.size.width > 0 && i.size.height > 0 && !mapOnDemand;
   const mapEmpty = !i.pointCount && (!i.precise || !i.observationsPending);
@@ -231,7 +385,11 @@ function SelectedSourcesMapGadget({ instance, isEditMode = false }: { instance: 
   const { sourceIds, precise, engine, days } = scope;
   const { setPlotNode, size, visible } = usePlotObservers();
   const [pickedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
-  const isPhone = useSyncExternalStore(subscribePhone, () => window.matchMedia(PHONE_QUERY).matches, () => false);
+  const isPhone = useSyncExternalStore(
+    subscribePhone,
+    () => window.matchMedia(PHONE_QUERY).matches,
+    () => false,
+  );
   const [mapRequested, setMapRequested] = useState(false);
   const { observations, features, activeLayer, points } = useMapObservations(instance, scope);
 
@@ -240,24 +398,60 @@ function SelectedSourcesMapGadget({ instance, isEditMode = false }: { instance: 
   const selectFeature = useCallback((featureId: string) => setSelectedFeatureId(featureId), []);
   const selected = features.find((feature) => feature.feature_id === selectedFeatureId) ?? null;
   const { mapOnDemand, canRenderEngine, mapEmpty, showPlot } = mapViewState({
-    isPhone, mapRequested, visible, size, pointCount: points.length, precise, observationsPending: observations.isPending,
+    isPhone,
+    mapRequested,
+    visible,
+    size,
+    pointCount: points.length,
+    precise,
+    observationsPending: observations.isPending,
   });
   const emptyMessage = mapEmptyMessage(t, precise, activeLayer);
-  const engineProps = { features: points, selectedFeatureId, onSelectFeature: selectFeature, width: size.width, height: size.height, visible, interactive: !isEditMode };
-  return <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
-    {/* The gadget frame already shows the title; keep only the range line (the engine label is configuration noise). */}
-    <p className="m-0 line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('mapRange', { days })}</p>
-    <MapNotices
-      showPlot={showPlot} mapEmpty={mapEmpty} emptyMessage={emptyMessage}
-      needsSource={precise && sourceIds.length === 0} loadFailed={observations.isError}
-    />
-    {showPlot && <MapPlot
-      setPlotNode={setPlotNode} mapOnDemand={mapOnDemand} mapEmpty={mapEmpty} mapRequested={mapRequested} setMapRequested={setMapRequested}
-      isPhone={isPhone} loading={precise && sourceIds.length > 0 && observations.isPending} canRenderEngine={canRenderEngine}
-      engine={engine} engineProps={engineProps} selected={selected}
-    />}
-    <MapEvidence features={features} observations={observations} selectedFeatureId={selectedFeatureId} onPick={setSelectedFeatureId} />
-    {/* The data and basemap credit describes a drawn map, so it shows only when the plot is rendered. */}
-    {showPlot && <p className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground"><a className="underline" href="https://open-meteo.com/" target="_blank" rel="noreferrer">{t('openMeteoAttribution')}</a> · {t('mapNoRemoteTiles')}</p>}
-  </section>;
+  const engineProps = {
+    features: points,
+    selectedFeatureId,
+    onSelectFeature: selectFeature,
+    width: size.width,
+    height: size.height,
+    visible,
+    interactive: !isEditMode,
+  };
+  return (
+    <section className="flex h-full min-h-0 flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
+      {/* The gadget frame already shows the title; keep only the range line (the engine label is configuration noise). */}
+      <p className="m-0 line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('mapRange', { days })}</p>
+      <MapNotices
+        showPlot={showPlot}
+        mapEmpty={mapEmpty}
+        emptyMessage={emptyMessage}
+        needsSource={precise && sourceIds.length === 0}
+        loadFailed={observations.isError}
+      />
+      {showPlot && (
+        <MapPlot
+          setPlotNode={setPlotNode}
+          mapOnDemand={mapOnDemand}
+          mapEmpty={mapEmpty}
+          mapRequested={mapRequested}
+          setMapRequested={setMapRequested}
+          isPhone={isPhone}
+          loading={precise && sourceIds.length > 0 && observations.isPending}
+          canRenderEngine={canRenderEngine}
+          engine={engine}
+          engineProps={engineProps}
+          selected={selected}
+        />
+      )}
+      <MapEvidence features={features} observations={observations} selectedFeatureId={selectedFeatureId} onPick={setSelectedFeatureId} />
+      {/* The data and basemap credit describes a drawn map, so it shows only when the plot is rendered. */}
+      {showPlot && (
+        <p className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">
+          <a className="underline" href="https://open-meteo.com/" target="_blank" rel="noreferrer">
+            {t('openMeteoAttribution')}
+          </a>{' '}
+          · {t('mapNoRemoteTiles')}
+        </p>
+      )}
+    </section>
+  );
 }

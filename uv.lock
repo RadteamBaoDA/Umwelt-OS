@@ -2,6 +2,15 @@ version = 1
 revision = 3
 requires-python = ">=3.12, <3.14"
 
+[manifest]
+constraints = [
+    { name = "backoff", specifier = "==2.2.1" },
+    { name = "numpy", specifier = "==2.5.3" },
+    { name = "posthog", specifier = "==7.61.1" },
+    { name = "pytz", specifier = "==2026.4" },
+    { name = "tenacity", specifier = "==9.1.4" },
+]
+
 [[package]]
 name = "aioboto3"
 version = "15.5.0"
@@ -332,135 +341,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/47/d7/5bbeb12c44d7c4f2fb5b56abce497eb5ed9f34d85701de869acedd602619/backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba", size = 17001, upload-time = "2022-10-05T19:19:32.061Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/df/73/b6e24bd22e6720ca8ee9a85a0c4a2971af8497d8f3193fa05390cbd46e09/backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8", size = 15148, upload-time = "2022-10-05T19:19:30.546Z" },
-]
-
-[[package]]
-name = "bbd-os"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "aioboto3" },
-    { name = "alembic" },
-    { name = "argon2-cffi" },
-    { name = "arq" },
-    { name = "asyncpg" },
-    { name = "authlib" },
-    { name = "backoff" },
-    { name = "cryptography" },
-    { name = "fastapi" },
-    { name = "graphiti-core" },
-    { name = "httpx" },
-    { name = "httpx2" },
-    { name = "itsdangerous" },
-    { name = "jsonschema" },
-    { name = "langgraph" },
-    { name = "langgraph-checkpoint" },
-    { name = "langgraph-checkpoint-postgres" },
-    { name = "mcp" },
-    { name = "neo4j" },
-    { name = "numpy" },
-    { name = "ofxtools" },
-    { name = "openai" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-instrumentation-fastapi" },
-    { name = "opentelemetry-instrumentation-httpx" },
-    { name = "opentelemetry-instrumentation-redis" },
-    { name = "opentelemetry-instrumentation-sqlalchemy" },
-    { name = "opentelemetry-sdk" },
-    { name = "pglast" },
-    { name = "posthog" },
-    { name = "prometheus-client" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "psycopg-pool" },
-    { name = "pydantic-settings" },
-    { name = "pypdf" },
-    { name = "python-docx" },
-    { name = "python-multipart" },
-    { name = "pytz" },
-    { name = "redis" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "structlog" },
-    { name = "tenacity" },
-    { name = "tiktoken" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.dev-dependencies]
-browser = [
-    { name = "beautifulsoup4" },
-    { name = "crawlee", extra = ["beautifulsoup", "playwright"] },
-]
-dev = [
-    { name = "import-linter" },
-    { name = "moto", extra = ["server"] },
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aioboto3", specifier = ">=15,<16" },
-    { name = "alembic", specifier = ">=1.16,<2" },
-    { name = "argon2-cffi", specifier = ">=25,<26" },
-    { name = "arq", specifier = ">=0.27,<1" },
-    { name = "asyncpg", specifier = ">=0.30,<1" },
-    { name = "authlib", specifier = ">=1.9.1,<2" },
-    { name = "backoff", specifier = "==2.2.1" },
-    { name = "cryptography", specifier = ">=50,<51" },
-    { name = "fastapi", specifier = ">=0.116,<1" },
-    { name = "graphiti-core", specifier = "==0.30.2" },
-    { name = "httpx", specifier = ">=0.28,<1" },
-    { name = "httpx2", specifier = "==2.13.1" },
-    { name = "itsdangerous", specifier = ">=2.2,<3" },
-    { name = "jsonschema", specifier = ">=4.23,<5" },
-    { name = "langgraph", specifier = "==1.2.12" },
-    { name = "langgraph-checkpoint", specifier = ">=4.3.0,<5" },
-    { name = "langgraph-checkpoint-postgres", specifier = "==3.1.3" },
-    { name = "mcp", specifier = "==2.3.0" },
-    { name = "neo4j", specifier = "==5.28.3" },
-    { name = "numpy", specifier = "==2.5.3" },
-    { name = "ofxtools", specifier = ">=0.9,<1" },
-    { name = "openai", specifier = ">=2.20,<3" },
-    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.45,<2" },
-    { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.66b0,<1" },
-    { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.66b0,<1" },
-    { name = "opentelemetry-instrumentation-redis", specifier = ">=0.66b0,<1" },
-    { name = "opentelemetry-instrumentation-sqlalchemy", specifier = ">=0.66b0,<1" },
-    { name = "opentelemetry-sdk", specifier = ">=1.45,<2" },
-    { name = "pglast", specifier = ">=7,<9" },
-    { name = "posthog", specifier = "==7.61.1" },
-    { name = "prometheus-client", specifier = ">=0.21,<1" },
-    { name = "psycopg", extras = ["binary"], specifier = "==3.3.3" },
-    { name = "psycopg-pool", specifier = "==3.3.0" },
-    { name = "pydantic-settings", specifier = ">=2.10,<3" },
-    { name = "pypdf", specifier = ">=6.21.4,<7" },
-    { name = "python-docx", specifier = ">=1.2,<2" },
-    { name = "python-multipart", specifier = ">=0.0.20,<1" },
-    { name = "pytz", specifier = "==2026.4" },
-    { name = "redis", specifier = ">=5,<6" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.43,<3" },
-    { name = "structlog", specifier = ">=25,<26" },
-    { name = "tenacity", specifier = "==9.1.4" },
-    { name = "tiktoken", specifier = ">=0.12,<1" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1" },
-]
-
-[package.metadata.requires-dev]
-browser = [
-    { name = "beautifulsoup4", specifier = ">=4.13,<5" },
-    { name = "crawlee", extras = ["beautifulsoup", "playwright"], specifier = ">=1,<2" },
-]
-dev = [
-    { name = "import-linter", specifier = ">=2.3,<3" },
-    { name = "moto", extras = ["server"], specifier = ">=5,<6" },
-    { name = "mypy", specifier = ">=1.17,<2" },
-    { name = "pytest", specifier = ">=8.4,<9" },
-    { name = "pytest-asyncio", specifier = ">=1.1,<2" },
-    { name = "pytest-cov", specifier = ">=6,<8" },
-    { name = "ruff", specifier = ">=0.12,<1" },
 ]
 
 [[package]]
@@ -3144,15 +3024,6 @@ wheels = [
 ]
 
 [[package]]
-name = "structlog"
-version = "25.5.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ef/52/9ba0f43b686e7f3ddfeaa78ac3af750292662284b3661e91ad5494f21dbc/structlog-25.5.0.tar.gz", hash = "sha256:098522a3bebed9153d4570c6d0288abf80a031dfdb2048d59a49e9dc2190fc98", size = 1460830, upload-time = "2025-10-27T08:28:23.028Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a8/45/a132b9074aa18e799b891b91ad72133c98d8042c70f6240e4c5f9dabee2f/structlog-25.5.0-py3-none-any.whl", hash = "sha256:a8453e9b9e636ec59bd9e79bbd4a72f025981b3ba0f5837aebf48f02f37a7f9f", size = 72510, upload-time = "2025-10-27T08:28:21.535Z" },
-]
-
-[[package]]
 name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3263,6 +3134,123 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d9/68/f1b440335057bfce71b6e50a9d09445aa2ecbd08359a337976627b8409e7/tzdata-2026.5.tar.gz", hash = "sha256:8cc73c0a0bfca7dbfa59235d60b2eff82231dee33f53d206db1acd9173cfc0a7", size = 200404, upload-time = "2026-10-03T09:23:14.143Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/94/21/1e5995a1c920cce14e4bffae20c665ec10e7ed03ab25e006cd741092b718/tzdata-2026.5-py2.py3-none-any.whl", hash = "sha256:b683bd1b6659ddcd810ff02ad09ba821d4bf1065072805063eb35c49617905ac", size = 347996, upload-time = "2026-10-03T09:23:12.535Z" },
+]
+
+[[package]]
+name = "umwelt-os"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "aioboto3" },
+    { name = "alembic" },
+    { name = "argon2-cffi" },
+    { name = "arq" },
+    { name = "asyncpg" },
+    { name = "authlib" },
+    { name = "cryptography" },
+    { name = "fastapi" },
+    { name = "graphiti-core" },
+    { name = "httpx" },
+    { name = "httpx2" },
+    { name = "itsdangerous" },
+    { name = "jsonschema" },
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint" },
+    { name = "langgraph-checkpoint-postgres" },
+    { name = "mcp" },
+    { name = "neo4j" },
+    { name = "ofxtools" },
+    { name = "openai" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-instrumentation-httpx" },
+    { name = "opentelemetry-instrumentation-redis" },
+    { name = "opentelemetry-instrumentation-sqlalchemy" },
+    { name = "opentelemetry-sdk" },
+    { name = "pglast" },
+    { name = "prometheus-client" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg-pool" },
+    { name = "pydantic-settings" },
+    { name = "pypdf" },
+    { name = "python-docx" },
+    { name = "python-multipart" },
+    { name = "redis" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "tiktoken" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.dev-dependencies]
+browser = [
+    { name = "beautifulsoup4" },
+    { name = "crawlee", extra = ["beautifulsoup", "playwright"] },
+]
+dev = [
+    { name = "import-linter" },
+    { name = "moto", extra = ["server"] },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aioboto3", specifier = ">=15,<16" },
+    { name = "alembic", specifier = ">=1.16,<2" },
+    { name = "argon2-cffi", specifier = ">=25,<26" },
+    { name = "arq", specifier = ">=0.27,<1" },
+    { name = "asyncpg", specifier = ">=0.30,<1" },
+    { name = "authlib", specifier = ">=1.9.1,<2" },
+    { name = "cryptography", specifier = ">=50,<51" },
+    { name = "fastapi", specifier = ">=0.116,<1" },
+    { name = "graphiti-core", specifier = "==0.30.2" },
+    { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "httpx2", specifier = "==2.13.1" },
+    { name = "itsdangerous", specifier = ">=2.2,<3" },
+    { name = "jsonschema", specifier = ">=4.23,<5" },
+    { name = "langgraph", specifier = "==1.2.12" },
+    { name = "langgraph-checkpoint", specifier = ">=4.3.0,<5" },
+    { name = "langgraph-checkpoint-postgres", specifier = "==3.1.3" },
+    { name = "mcp", specifier = "==2.3.0" },
+    { name = "neo4j", specifier = "==5.28.3" },
+    { name = "ofxtools", specifier = ">=0.9,<1" },
+    { name = "openai", specifier = ">=2.20,<3" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.45,<2" },
+    { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.66b0,<1" },
+    { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.66b0,<1" },
+    { name = "opentelemetry-instrumentation-redis", specifier = ">=0.66b0,<1" },
+    { name = "opentelemetry-instrumentation-sqlalchemy", specifier = ">=0.66b0,<1" },
+    { name = "opentelemetry-sdk", specifier = ">=1.45,<2" },
+    { name = "pglast", specifier = ">=7,<9" },
+    { name = "prometheus-client", specifier = ">=0.21,<1" },
+    { name = "psycopg", extras = ["binary"], specifier = "==3.3.3" },
+    { name = "psycopg-pool", specifier = "==3.3.0" },
+    { name = "pydantic-settings", specifier = ">=2.10,<3" },
+    { name = "pypdf", specifier = ">=6.21.4,<7" },
+    { name = "python-docx", specifier = ">=1.2,<2" },
+    { name = "python-multipart", specifier = ">=0.0.20,<1" },
+    { name = "redis", specifier = ">=5,<6" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.43,<3" },
+    { name = "tiktoken", specifier = ">=0.12,<1" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1" },
+]
+
+[package.metadata.requires-dev]
+browser = [
+    { name = "beautifulsoup4", specifier = ">=4.13,<5" },
+    { name = "crawlee", extras = ["beautifulsoup", "playwright"], specifier = ">=1,<2" },
+]
+dev = [
+    { name = "import-linter", specifier = ">=2.3,<3" },
+    { name = "moto", extras = ["server"], specifier = ">=5,<6" },
+    { name = "mypy", specifier = ">=1.17,<2" },
+    { name = "pytest", specifier = ">=8.4,<9" },
+    { name = "pytest-asyncio", specifier = ">=1.1,<2" },
+    { name = "pytest-cov", specifier = ">=6,<8" },
+    { name = "ruff", specifier = ">=0.12,<1" },
 ]
 
 [[package]]

@@ -25,7 +25,7 @@ from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 from prometheus_client.core import GaugeMetricFamily
 from prometheus_client.registry import Collector
 
-logger = logging.getLogger("bbd.metrics")
+logger = logging.getLogger("umwelt.metrics")
 
 REGISTRY = CollectorRegistry(auto_describe=True)
 

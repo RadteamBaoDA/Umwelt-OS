@@ -535,8 +535,8 @@ async def _list_relationships_as_of(
     Current deletion/permission and retained exact support are checked again.
     Never return current fields as historical substitutes; unavailable intervals
     are explicit. Pagination covers snapshot identities, not loaded current rows.
-    Query order: missing-snapshot probe, then (after cursor validation) the snapshot page; per-item support
-    re-reads follow. Read-only; no commit.
+    Query order: missing-snapshot probe, then (after cursor validation) the snapshot page, one batched
+    existence probe for the page, then per-item support re-reads. Read-only; no commit.
     """
     missing = await _missing_history_ids(
         session, entity_id=entity_id, knowledge_as_of=knowledge_as_of, scope=scope
@@ -547,20 +547,27 @@ async def _list_relationships_as_of(
     rows, next_cursor = await _read_history_snapshot_page(
         session, statement, cursor=cursor, fingerprint=fingerprint, limit=limit
     )
+    # One existence probe for the whole page (<= limit ids) instead of one query per snapshot row.
+    candidate_ids = [h.relationship_id for h in rows if not h.deleted and h.state]
+    live_ids = (
+        set(
+            (
+                await session.scalars(
+                    select(Relationship.id).where(
+                        Relationship.workspace_id == scope.workspace_id,
+                        Relationship.id.in_(candidate_ids),
+                    )
+                )
+            ).all()
+        )
+        if candidate_ids
+        else set()
+    )
     items, unavailable = [], []
     for history in rows:
         if history.deleted:
             continue
-        if (
-            not history.state
-            or await session.scalar(
-                select(Relationship.id).where(
-                    Relationship.workspace_id == scope.workspace_id,
-                    Relationship.id == history.relationship_id,
-                )
-            )
-            is None
-        ):
+        if not history.state or history.relationship_id not in live_ids:
             unavailable.append(history.relationship_id)
             continue
         item = RelationshipRead.model_validate(history.state)

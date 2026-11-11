@@ -133,7 +133,7 @@ def test_format_web_images_lists_ids_not_urls() -> None:
 @pytest.mark.parametrize("url", [BING, BRAVE, WIKI, "https://ts12.mm.bing.net/th?id=a&pid=b"])
 def test_proxy_accepts_search_thumbnails_and_keeps_query(url: str) -> None:
     token = media.sign_media_url("secret", url, subject="w:1")
-    assert media.verify_media_token("secret", token, subject="w:1") == url
+    assert media.verify_media_claims("secret", token, subject="w:1")[0] == url
 
 
 @pytest.mark.parametrize(

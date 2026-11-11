@@ -6,15 +6,17 @@ import json
 import secrets
 from uuid import UUID
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import InvalidToken, MultiFernet
+
+from core.key_ring import key_ring
 
 
-def _cipher(key: str) -> Fernet:
-    """Create the Fernet primitive from the existing deployment connector key, failing closed if absent or invalid."""
+def _cipher(key: str) -> MultiFernet:
+    """Create the connector-key ring (``primary[,retiring]``) for MCP secrets, failing closed if absent or invalid."""
     if not key:
         raise ValueError("MCP credential encryption key is not configured")
     try:
-        return Fernet(key.encode("ascii"))
+        return key_ring(key)
     except (ValueError, UnicodeEncodeError) as exc:
         raise ValueError("MCP credential encryption key is invalid") from exc
 

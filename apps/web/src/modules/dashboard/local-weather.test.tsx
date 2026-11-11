@@ -13,7 +13,8 @@ import { LocalWeather } from './local-weather';
 /** Installs fake permission and geolocation APIs and returns the geolocation spy. */
 function stubBrowser(state: PermissionState, position?: { latitude: number; longitude: number }) {
   const getCurrentPosition = vi.fn((ok: PositionCallback, fail: PositionErrorCallback) => {
-    if (position) ok({ coords: position } as GeolocationPosition); else fail({} as GeolocationPositionError);
+    if (position) ok({ coords: position } as GeolocationPosition);
+    else fail({} as GeolocationPositionError);
   });
   Object.defineProperty(navigator, 'geolocation', { value: { getCurrentPosition }, configurable: true });
   Object.defineProperty(navigator, 'permissions', { value: { query: vi.fn().mockResolvedValue({ state }) }, configurable: true });
@@ -37,7 +38,23 @@ describe('LocalWeather', () => {
 
   it('loads silently when granted and shows rounded place and temperature', async () => {
     const geo = stubBrowser('granted', { latitude: 15.87654, longitude: 108.33219 });
-    mocks.get.mockResolvedValue({ temperature_c: 24.4, weather_code: 3, place: 'Hoi An, Quang Nam', observed_at: '2026-11-04T06:00:00Z', attribution: [], humidity_pct: 55, wind_kmh: 6.2, precipitation_probability_pct: 5, is_day: true, hourly: [0, 1, 2, 3].map((h) => ({ at: `2026-11-04T0${h * 3}:00:00Z`, temperature_c: 20 + h, precipitation_probability_pct: 10, wind_kmh: 5 })) });
+    mocks.get.mockResolvedValue({
+      temperature_c: 24.4,
+      weather_code: 3,
+      place: 'Hoi An, Quang Nam',
+      observed_at: '2026-11-04T06:00:00Z',
+      attribution: [],
+      humidity_pct: 55,
+      wind_kmh: 6.2,
+      precipitation_probability_pct: 5,
+      is_day: true,
+      hourly: [0, 1, 2, 3].map((h) => ({
+        at: `2026-11-04T0${h * 3}:00:00Z`,
+        temperature_c: 20 + h,
+        precipitation_probability_pct: 10,
+        wind_kmh: 5,
+      })),
+    });
     renderIt();
     // Inline summary first; the full card only after opening the info popover.
     expect(await screen.findByText(/Hoi An, Quang Nam/)).toBeTruthy();
@@ -45,7 +62,8 @@ describe('LocalWeather', () => {
     expect(screen.getByText(/Cloudy/)).toBeTruthy();
     expect(screen.queryByText('Humidity: 55%')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Weather details' }));
-    expect(await screen.findByText('Humidity: 55%')).toBeTruthy();
+    // WeatherCard loads through next/dynamic; under a full-suite run its import can exceed the 1 s default.
+    expect(await screen.findByText('Humidity: 55%', undefined, { timeout: 5000 })).toBeTruthy();
     expect(screen.getByText('Chance of rain: 5%')).toBeTruthy();
     expect(screen.getByText('Wind: 6 km/h')).toBeTruthy();
     expect(screen.getByText(/Wednesday/)).toBeTruthy();

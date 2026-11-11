@@ -1,14 +1,16 @@
 'use client';
 
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { usePathname } from 'next/navigation';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
-import { ApiError, apiRequest } from '@/core/api';
+import { ApiError } from '@/core/api';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { RealtimeConnection, type RealtimeStatus } from '@/core/realtime-connection';
 import { invalidateOperationalQueries } from '@/core/realtime-events';
+import { isPublicPath } from '@/core/session-gate';
 import { useResetOnChange } from '@/modules/shared';
+import { useSession } from '@/core/session';
 
 export type { RealtimeStatus };
 
@@ -109,17 +111,10 @@ export function useDocumentUpdateQueue(
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const client = useQueryClient();
   const pathname = usePathname();
-  const isPublicPage =
-    pathname === '/' ||
-    ['/login', '/setup', '/invite', '/invitations/accept', '/pick', '/privacy', '/terms', '/refunds', '/account-deletion'].includes(
-      pathname,
-    );
+  const isPublicPage = pathname !== null && isPublicPath(pathname);
   const { authGeneration, isCurrentGeneration: isCurrentAuthGeneration } = useDisplayPreferences();
   const t = useTranslations('shell');
-  const session = useQuery({
-    queryKey: ['session'],
-    queryFn: () => apiRequest<{ authenticated: true; csrfToken: string }>('/api/v1/auth/session'),
-  });
+  const session = useSession();
   const isAuthenticated = Boolean(session.data);
   const sessionExpired = !isAuthenticated && session.error instanceof ApiError && session.error.status === 401;
   const isConnectable = !isPublicPage && isAuthenticated;
@@ -160,10 +155,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       resetDocumentState,
     });
     connection.start();
-    window.addEventListener('bbd:auth-ending', connection.authEnding);
+    window.addEventListener('umwelt:auth-ending', connection.authEnding);
     return () => {
       connection.dispose();
-      window.removeEventListener('bbd:auth-ending', connection.authEnding);
+      window.removeEventListener('umwelt:auth-ending', connection.authEnding);
     };
   }, [client, authGeneration, isCurrentAuthGeneration, isConnectable, queueDocumentUpdate, resetDocumentState]);
 

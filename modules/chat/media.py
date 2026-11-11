@@ -21,11 +21,8 @@ import httpx
 from pydantic import BaseModel
 
 from core.media_proxy import (  # noqa: F401 - re-exported: the proxy helpers moved to core
-    _CTRL,
     FEED_KIND,
-    PROXY_HOSTS,
     PROXY_PATH,
-    SEARCH_THUMB_HOST,
     TOKEN_TTL_SECONDS,
     MediaError,
     check_feed_image_url,
@@ -33,7 +30,6 @@ from core.media_proxy import (  # noqa: F401 - re-exported: the proxy helpers mo
     media_permitted,
     sign_media_url,
     verify_media_claims,
-    verify_media_token,
 )
 from core.model_gateway.schemas import AIExecutionConfig
 from core.model_gateway.transport import EndpointNetworkPolicyError, approved_transport

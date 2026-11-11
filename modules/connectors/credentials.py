@@ -5,18 +5,10 @@ import json
 from uuid import UUID
 
 import httpx
-from cryptography.fernet import Fernet, InvalidToken, MultiFernet
+from cryptography.fernet import InvalidToken
 
+from core.key_ring import key_ring
 from modules.connectors.public import NativeCredentialSnapshot
-
-
-def key_ring(key: str) -> MultiFernet:
-    """Build a cipher from ``primary`` or ``primary,secondary`` (rotation): encrypt with the first key, decrypt with any.
-
-    Fernet keys are urlsafe base64 and never contain a comma, so the deployment key can carry the retiring key
-    without a new setting. Raises ValueError/UnicodeEncodeError for malformed keys.
-    """
-    return MultiFernet([Fernet(part.strip().encode("ascii")) for part in key.split(",")])
 
 
 class CredentialEncryptionUnavailable(RuntimeError):

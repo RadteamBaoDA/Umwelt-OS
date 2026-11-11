@@ -7,27 +7,32 @@ services:
     volumes:
       - ./apps:/app/apps
       - ./core:/app/core
+      - ./modules:/app/modules
       - ./infrastructure/postgres/migrations:/app/infrastructure/postgres/migrations
 
   worker:
     volumes:
       - ./apps:/app/apps
       - ./core:/app/core
+      - ./modules:/app/modules
 
   cron-worker:
     volumes:
       - ./apps:/app/apps
       - ./core:/app/core
+      - ./modules:/app/modules
 
   chat-worker:
     volumes:
       - ./apps:/app/apps
       - ./core:/app/core
+      - ./modules:/app/modules
 
   model-worker:
     volumes:
       - ./apps:/app/apps
       - ./core:/app/core
+      - ./modules:/app/modules
 
   web:
     build:

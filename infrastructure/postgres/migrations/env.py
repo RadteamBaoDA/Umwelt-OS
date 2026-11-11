@@ -232,8 +232,10 @@ if config.config_file_name is not None:
 
 # Migrations take DDL locks and may use session features: always the direct URL when one is configured.
 database_url = os.environ.get("DATABASE_DIRECT_URL") or os.environ.get("DATABASE_URL")
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
+if not database_url:
+    # No fallback URL: migrating a guessed local database would hide a missing setting.
+    raise RuntimeError("Set DATABASE_DIRECT_URL or DATABASE_URL before running Alembic")
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 
 # Indexes created only by migrations (online-safe FK indexes ``ix_fk_*``); the ORM models do not declare

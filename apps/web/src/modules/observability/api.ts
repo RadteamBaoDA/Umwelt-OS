@@ -58,8 +58,14 @@ export type HistoryBucket = {
 };
 
 export type HistoryDb = {
-  pg_size_bytes_max: number | null; pg_connections_avg: number | null; pg_connections_max: number | null; pg_cache_hit_ratio_avg: number | null;
-  pg_tps_avg: number | null; redis_memory_bytes_max: number | null; redis_ops_per_sec_avg: number | null; redis_hit_ratio_avg: number | null;
+  pg_size_bytes_max: number | null;
+  pg_connections_avg: number | null;
+  pg_connections_max: number | null;
+  pg_cache_hit_ratio_avg: number | null;
+  pg_tps_avg: number | null;
+  redis_memory_bytes_max: number | null;
+  redis_ops_per_sec_avg: number | null;
+  redis_hit_ratio_avg: number | null;
 };
 
 export type SystemHistory = {
@@ -87,23 +93,31 @@ export function listRuns(kind?: string) {
   return apiRequest<{ items: ObservedRun[]; limit: number }>(`/api/v1/system/runs?${query}`);
 }
 
-/** Fetch one owner-protected metadata-only detail projection using the run's kind and ID. */
-export function getRunDetail(run: ObservedRun) {
-  return apiRequest<ObservedRun>(`/api/v1/system/runs/${run.kind}/${encodeURIComponent(run.id)}`);
-}
 /** Fetch process-local counters and histograms; absent processes or measurements remain unknown. */
-export function getMetrics() { return apiRequest<Metrics>('/api/v1/system/metrics'); }
+export function getMetrics() {
+  return apiRequest<Metrics>('/api/v1/system/metrics');
+}
 /** Fetch bounded quality counts, preserving unavailable graph lag as `null` rather than zero. */
-export function getQuality() { return apiRequest<Quality>('/api/v1/system/quality'); }
+export function getQuality() {
+  return apiRequest<Quality>('/api/v1/system/quality');
+}
 /** Fetch queue counts only; the owner API explicitly excludes queued payload contents. */
-export function getQueueSummary() { return apiRequest<QueueSummary>('/api/v1/system/queue'); }
+export function getQueueSummary() {
+  return apiRequest<QueueSummary>('/api/v1/system/queue');
+}
 /** Fetch the owner system-health projection; component states are reported independently. */
-export function getSystemHealth() { return apiRequest<SystemHealth>('/api/v1/system/health'); }
+export function getSystemHealth() {
+  return apiRequest<SystemHealth>('/api/v1/system/health');
+}
 
 /** Fetch bucketed health history for the range; only buckets that hold samples are returned, ascending. */
-export function getSystemHistory(range: HistoryRange) { return apiRequest<SystemHistory>(`/api/v1/system/history?range=${range}`); }
+export function getSystemHistory(range: HistoryRange) {
+  return apiRequest<SystemHistory>(`/api/v1/system/history?range=${range}`);
+}
 /** Fetch the history retention setting with the revision that fences the next write. */
-export function getHistorySettings() { return apiRequest<HistorySettings>('/api/v1/system/history/settings'); }
+export function getHistorySettings() {
+  return apiRequest<HistorySettings>('/api/v1/system/history/settings');
+}
 /** Save history retention (1..90 days) and/or collection interval (0 = off); 409 when `expectedRevision` is stale. */
 export function saveHistorySettings(csrfToken: string, expectedRevision: number, patch: HistorySettingsPatch) {
   return apiRequest<HistorySettings>('/api/v1/system/history/settings', {
@@ -114,24 +128,59 @@ export function saveHistorySettings(csrfToken: string, expectedRevision: number,
 }
 
 export type PgTable = {
-  name: string; total_bytes: number | null; live_rows: number | null; dead_rows: number | null; dead_ratio: number | null;
-  seq_scans: number | null; index_scans: number | null; last_autovacuum: string | null; last_autoanalyze: string | null;
+  name: string;
+  total_bytes: number | null;
+  live_rows: number | null;
+  dead_rows: number | null;
+  dead_ratio: number | null;
+  seq_scans: number | null;
+  index_scans: number | null;
+  last_autovacuum: string | null;
+  last_autoanalyze: string | null;
 };
 
 export type PgStats = {
-  status: string; version: string | null; uptime_seconds: number | null; database_size_bytes: number | null;
-  connections: { active: number | null; idle: number | null; idle_in_transaction: number | null; waiting: number | null; total: number | null; max: number | null } | null;
-  cache_hit_ratio: number | null; index_hit_ratio: number | null; transactions: { commit: number | null; rollback: number | null } | null;
-  deadlocks: number | null; temp_bytes: number | null; locks_waiting: number | null; longest_transaction_seconds: number | null; tables: PgTable[] | null;
+  status: string;
+  version: string | null;
+  uptime_seconds: number | null;
+  database_size_bytes: number | null;
+  connections: {
+    active: number | null;
+    idle: number | null;
+    idle_in_transaction: number | null;
+    waiting: number | null;
+    total: number | null;
+    max: number | null;
+  } | null;
+  cache_hit_ratio: number | null;
+  index_hit_ratio: number | null;
+  transactions: { commit: number | null; rollback: number | null } | null;
+  deadlocks: number | null;
+  temp_bytes: number | null;
+  locks_waiting: number | null;
+  longest_transaction_seconds: number | null;
+  tables: PgTable[] | null;
 };
 
 export type RedisStats = {
-  status: string; version: string | null; uptime_seconds: number | null; used_memory_bytes: number | null; max_memory_bytes: number | null;
-  fragmentation_ratio: number | null; connected_clients: number | null; ops_per_sec: number | null; keyspace_hit_ratio: number | null;
-  evicted_keys: number | null; expired_keys: number | null; keys_total: number | null; last_save_status: string | null;
+  status: string;
+  version: string | null;
+  uptime_seconds: number | null;
+  used_memory_bytes: number | null;
+  max_memory_bytes: number | null;
+  fragmentation_ratio: number | null;
+  connected_clients: number | null;
+  ops_per_sec: number | null;
+  keyspace_hit_ratio: number | null;
+  evicted_keys: number | null;
+  expired_keys: number | null;
+  keys_total: number | null;
+  last_save_status: string | null;
 };
 
 export type DatabaseStats = { generated_at: string; postgres: PgStats | null; redis: RedisStats | null };
 
 /** Fetch live Postgres and Redis statistics; every figure may be null when the server could not read it. */
-export function getDatabaseStats() { return apiRequest<DatabaseStats>('/api/v1/system/database'); }
+export function getDatabaseStats() {
+  return apiRequest<DatabaseStats>('/api/v1/system/database');
+}

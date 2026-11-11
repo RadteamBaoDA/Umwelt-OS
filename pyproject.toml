@@ -1,5 +1,5 @@
 [project]
-name = "bbd-os"
+name = "umwelt-os"
 version = "0.1.0"
 description = "Self-hosted personal intelligence OS"
 requires-python = ">=3.12,<3.14"
@@ -17,7 +17,6 @@ dependencies = [
     "python-docx>=1.2,<2",
     "redis>=5,<6",
     "sqlalchemy[asyncio]>=2.0.43,<3",
-    "structlog>=25,<26",
     "tiktoken>=0.12,<1",
     "uvicorn[standard]>=0.35,<1",
     "authlib>=1.9.1,<2",
@@ -26,11 +25,6 @@ dependencies = [
     "cryptography>=50,<51",
     "graphiti-core==0.30.2",
     "neo4j==5.28.3",
-    "pytz==2026.4",
-    "numpy==2.5.3",
-    "tenacity==9.1.4",
-    "posthog==7.61.1",
-    "backoff==2.2.1",
     "jsonschema>=4.23,<5",
     "httpx2==2.13.1",
     "mcp==2.3.0",
@@ -48,6 +42,16 @@ dependencies = [
     "opentelemetry-instrumentation-redis>=0.66b0,<1",
     "ofxtools>=0.9,<1",
     "aioboto3>=15,<16",
+]
+
+[tool.uv]
+# Transitive pins (graphiti-core / neo4j / posthog): versions are held here without making them direct dependencies.
+constraint-dependencies = [
+    "pytz==2026.4",
+    "numpy==2.5.3",
+    "tenacity==9.1.4",
+    "posthog==7.61.1",
+    "backoff==2.2.1",
 ]
 
 [dependency-groups]

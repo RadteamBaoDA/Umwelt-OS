@@ -43,7 +43,9 @@ describe('ChatController draft persistence', () => {
     act(() => result.current.setDraft('private'));
     window.sessionStorage.setItem('umwelt:chat.draft.c2', 'other');
     window.sessionStorage.setItem('unrelated', 'keep');
-    act(() => { window.dispatchEvent(new Event('bbd:auth-ending')); });
+    act(() => {
+      window.dispatchEvent(new Event('umwelt:auth-ending'));
+    });
     expect(result.current.draft).toBe('');
     expect(window.sessionStorage.getItem('umwelt:chat.draft.c1')).toBeNull();
     expect(window.sessionStorage.getItem('umwelt:chat.draft.c2')).toBeNull();

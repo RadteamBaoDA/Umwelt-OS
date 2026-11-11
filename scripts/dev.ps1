@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true, Position = 0)]
-  [ValidateSet('setup', 'dev', 'stop', 'migrate', 'seed', 'reset-preview', 'reset', 'lint', 'typecheck', 'test', 'load-test', 'build')]
+  [ValidateSet('setup', 'dev', 'stop', 'migrate', 'seed', 'reset-preview', 'reset', 'lint', 'typecheck', 'test', 'load-test', 'build', 'audit')]
   [string]$Task,
   [string]$PytestTarget,
   [string]$E2eTarget,
@@ -34,19 +34,6 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "$Program failed with exit code $LASTEXITCODE" }
   }
 
-  function New-Secret {
-    <#
-    .SYNOPSIS
-    Generate a 48-byte cryptographically random secret encoded as unpadded Base64URL.
-
-    .OUTPUTS
-    System.String
-    #>
-    $bytes = [byte[]]::new(48)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    return [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-  }
-
   function Get-ComposeArgs {
     <#
     .SYNOPSIS
@@ -74,30 +61,11 @@ try {
 
   switch ($Task) {
     'setup' {
-      if (-not (Test-Path '.env')) {
-        $dbPassword = New-Secret
-        $redisPassword = New-Secret
-        $config = @"
-PUBLIC_ORIGIN=http://localhost:3000
-SECURE_COOKIES=false
-SETUP_TOKEN=$(New-Secret)
-CSRF_SIGNING_SECRET=$(New-Secret)
-SESSION_LIFETIME_HOURS=24
-POSTGRES_PASSWORD=$dbPassword
-DATABASE_URL=postgresql+asyncpg://bbd:${dbPassword}@postgres:5432/bbd
-REDISCLI_AUTH=$redisPassword
-REDIS_URL=redis://:${redisPassword}@redis:6379/0
-DATA_DIR=/data
-WEB_PORT=3000
-N8N_ENCRYPTION_KEY=$(New-Secret)
-"@
-        [System.IO.File]::WriteAllText((Join-Path $repo '.env'), $config, [System.Text.UTF8Encoding]::new($false))
-        Write-Output 'Created local .env with generated secrets. Keep it private.'
-      } else {
-        Write-Output 'Kept existing .env unchanged.'
-      }
       Invoke-Checked 'uv' @('sync', '--frozen')
       Invoke-Checked 'npm' @('ci')
+      # Same generator as `make setup`: creates or completes .env (all secrets, both Fernet keys) without
+      # changing existing real values.
+      Invoke-Checked 'python' @('scripts/ensure_env.py')
     }
     'dev' {
       if ($Workspace) { Invoke-Checked 'python' @('scripts/dev_workspace.py', 'up', '--name', $Workspace) }
@@ -308,6 +276,17 @@ N8N_ENCRYPTION_KEY=$(New-Secret)
     'build' {
       Invoke-Checked 'npm' @('run', 'build')
       Invoke-Checked 'docker' @('compose', '-f', 'docker-compose.yml', 'build')
+    }
+    'audit' {
+      # Mirrors scripts/audit.sh: npm high/critical advisories, then pip-audit over the locked production set.
+      Invoke-Checked 'npm' @('audit', '--audit-level=high')
+      $requirements = New-TemporaryFile
+      try {
+        Invoke-Checked 'uv' @('export', '--frozen', '--no-hashes', '--no-dev', '--no-emit-project', '-o', $requirements.FullName)
+        Invoke-Checked 'uvx' @('pip-audit', '--no-deps', '--disable-pip', '-r', $requirements.FullName)
+      } finally {
+        Remove-Item -LiteralPath $requirements.FullName -ErrorAction SilentlyContinue
+      }
     }
   }
 } finally {

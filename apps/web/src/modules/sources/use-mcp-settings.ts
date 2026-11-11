@@ -40,11 +40,11 @@ function useMcpLifecycle(core: McpState['core'], stateRef: { current: McpState }
       void load();
     }, 0);
     const clearSecret = () => clearSessionState(stateRef.current);
-    window.addEventListener('bbd:auth-ending', clearSecret);
+    window.addEventListener('umwelt:auth-ending', clearSecret);
     return () => {
       window.clearTimeout(initialLoad);
       markUnmounted();
-      window.removeEventListener('bbd:auth-ending', clearSecret);
+      window.removeEventListener('umwelt:auth-ending', clearSecret);
     };
   }, [markMounted, markUnmounted, load, stateRef]);
 }

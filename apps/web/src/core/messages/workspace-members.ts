@@ -65,9 +65,6 @@ export const workspaceMembersMessages = {
     inviteUnavailable: 'This invitation is no longer available. Ask the owner for a new link.',
     inviteTooMany: 'Too many attempts. Wait a minute and try again.',
     inviteAuthRequired: 'This email already has an account. Sign in with it, then open the link again.',
-    inviteDone: 'Invitation accepted',
-    inviteDoneBody: 'Sign in with your email to open the workspace.',
-    inviteSignIn: 'Go to sign in',
   },
   'vi-vi': {
     title: 'Thành viên không gian làm việc',
@@ -134,8 +131,5 @@ export const workspaceMembersMessages = {
     inviteUnavailable: 'Lời mời này không còn khả dụng. Hãy nhờ chủ sở hữu gửi liên kết mới.',
     inviteTooMany: 'Quá nhiều lần thử. Chờ một phút rồi thử lại.',
     inviteAuthRequired: 'Email này đã có tài khoản. Hãy đăng nhập bằng email đó rồi mở lại liên kết.',
-    inviteDone: 'Đã chấp nhận lời mời',
-    inviteDoneBody: 'Đăng nhập bằng email của bạn để mở không gian làm việc.',
-    inviteSignIn: 'Đến trang đăng nhập',
   },
 } as const;

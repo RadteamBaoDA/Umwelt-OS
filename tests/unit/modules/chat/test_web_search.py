@@ -599,7 +599,7 @@ def test_large_omniroute_snippets_parse_and_truncate() -> None:
 
 
 def test_failure_reasons_are_specific_and_secret_free(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.INFO, logger="bbd.chat.web_search")
+    caplog.set_level(logging.INFO, logger="umwelt.chat.web_search")
     assert (
         _reason(
             lambda r: httpx.Response(200, content=b"x" * (ws.MAX_RESPONSE_BYTES + 1), headers=JSON)

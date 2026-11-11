@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
-from cryptography.fernet import Fernet, InvalidToken, MultiFernet
+from cryptography.fernet import InvalidToken, MultiFernet
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from sqlalchemy import (
@@ -35,6 +35,7 @@ from core.errors import (
     UnavailableError,
     ValidationFailedError,
 )
+from core.key_ring import key_ring
 from core.workspaces import public as workspaces
 from core.workspaces.schemas import AdminWorkspaceReadContext, WorkspaceContext
 from modules.connectors.public import live_terms_catalog
@@ -132,7 +133,7 @@ class LiveCredentialUpdate(BaseModel):
 def _cipher(key: str) -> MultiFernet:
     """Create a rotation-capable connector-key cipher or reject missing deployment keys."""
     try:
-        return MultiFernet([Fernet(part.strip().encode("ascii")) for part in key.split(",")])
+        return key_ring(key)
     except (ValueError, TypeError, UnicodeEncodeError) as exc:
         raise UnavailableError(detail="Credential encryption unavailable") from exc
 

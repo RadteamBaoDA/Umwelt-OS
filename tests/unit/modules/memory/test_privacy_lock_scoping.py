@@ -40,6 +40,7 @@ READERS = {
     ("modules/memory/_export.py", "validate_export_fences"),
     ("modules/memory/_reads.py", "_verified_memory_read"),
     ("modules/memory/_reads.py", "_verified_candidate_read"),
+    ("modules/memory/_reads.py", "_visible_kind_counts"),
     ("modules/memory/_service.py", "MemoryService.get_memories"),
     ("modules/memory/_service.py", "MemoryService.get_memory"),
     ("modules/memory/_service.py", "MemoryService.get_candidates"),

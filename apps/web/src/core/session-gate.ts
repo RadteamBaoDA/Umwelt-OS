@@ -8,7 +8,20 @@ const PUBLIC_EXACT = ['/opengraph-image', '/twitter-image'];
 export const SESSION_COOKIE = 'bbd_session';
 
 // Public entry points: the home page decides setup vs sign-in itself, and invite/setup flows run unauthenticated.
-const PUBLIC_PREFIXES = ['/login', '/setup', '/invite', '/invitations', '/pick', '/privacy', '/terms', '/refunds', '/account-deletion', '/_next', '/api', '/health'];
+const PUBLIC_PREFIXES = [
+  '/login',
+  '/setup',
+  '/invite',
+  '/invitations',
+  '/pick',
+  '/privacy',
+  '/terms',
+  '/refunds',
+  '/account-deletion',
+  '/_next',
+  '/api',
+  '/health',
+];
 
 /**
  * Decides whether a page request should be redirected to /login.
@@ -18,6 +31,18 @@ const PUBLIC_PREFIXES = ['/login', '/setup', '/invite', '/invitations', '/pick',
  */
 export function needsLoginRedirect(pathname: string, hasSession: boolean): boolean {
   const lastSegment = pathname.slice(pathname.lastIndexOf('/') + 1);
-  if (hasSession || pathname === '/' || PUBLIC_EXACT.includes(pathname) || lastSegment.includes('.')) return false;
-  return !PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+  return !hasSession && !lastSegment.includes('.') && !isPublicPath(pathname);
+}
+
+/**
+ * Whether a route renders without a session (landing, auth, invite, legal, share images and framework paths).
+ * Shared by the proxy redirect and the realtime stream so both agree on which pages are public.
+ * @param pathname Request or router path.
+ */
+export function isPublicPath(pathname: string): boolean {
+  return (
+    pathname === '/' ||
+    PUBLIC_EXACT.includes(pathname) ||
+    PUBLIC_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
+  );
 }

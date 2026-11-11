@@ -12,7 +12,7 @@ export interface TelegramFeedProps extends Omit<FeedGadgetProps, 'instance'> {
 
 /**
  * Standard Telegram Feed gadget template.
- * Displays received channel posts and direct broadcast messages with BBD-OS read tracking.
+ * Displays received channel posts and direct broadcast messages with Umwelt-OS read tracking.
  *
  * @param props Gadget instance configuration and feed handlers.
  * @returns Accessible telegram feed component.

@@ -68,7 +68,7 @@ def test_ok_returns_proxied_url_and_credit() -> None:
     [stop] = _images(_wiki())
     assert stop["status"] == "ok" and stop["credit"] == "Jane" and stop["license"] == "CC BY-SA 4.0"
     assert stop["image_url"].startswith(media.PROXY_PATH + "?token=")
-    assert media.verify_media_token(SECRET, stop["image_url"].split("token=")[1]) == THUMB
+    assert media.verify_media_claims(SECRET, stop["image_url"].split("token=")[1])[0] == THUMB
     assert stop["article_url"] == "https://en.wikipedia.org/wiki/Eiffel_Tower"
 
 
@@ -147,7 +147,7 @@ def test_tool_ok_end_to_end() -> None:
 
 def test_token_tamper_expiry_and_host() -> None:
     token = media.sign_media_url(SECRET, THUMB, now=1000)
-    assert media.verify_media_token(SECRET, token, now=1001) == THUMB
+    assert media.verify_media_claims(SECRET, token, now=1001)[0] == THUMB
     payload, sig = token.split(".")
     for bad, code in (
         (f"{payload}.{'0' * 64}", "bad_token"),
@@ -155,13 +155,13 @@ def test_token_tamper_expiry_and_host() -> None:
         ("garbage", "bad_token"),
     ):
         with pytest.raises(media.MediaError) as err:
-            media.verify_media_token(SECRET, bad, now=1001)
+            media.verify_media_claims(SECRET, bad, now=1001)
         assert err.value.code == code
     with pytest.raises(media.MediaError) as err:
-        media.verify_media_token(SECRET, token, now=1000 + media.TOKEN_TTL_SECONDS + 1)
+        media.verify_media_claims(SECRET, token, now=1000 + media.TOKEN_TTL_SECONDS + 1)
     assert err.value.code == "expired"
     with pytest.raises(media.MediaError):
-        media.verify_media_token("other-secret", token, now=1001)
+        media.verify_media_claims("other-secret", token, now=1001)
     for url in (
         "https://evil.example/a.jpg",
         "http://upload.wikimedia.org/a.jpg",
@@ -225,14 +225,14 @@ def test_tool_spec_and_prompt_gated() -> None:
 
 def test_token_is_bound_to_its_subject() -> None:
     token = media.sign_media_url(SECRET, THUMB, now=1000, subject="ws1:7")
-    assert media.verify_media_token(SECRET, token, now=1001, subject="ws1:7") == THUMB
+    assert media.verify_media_claims(SECRET, token, now=1001, subject="ws1:7")[0] == THUMB
     for other in ("ws1:8", "ws2:7", ""):
         with pytest.raises(media.MediaError) as err:
-            media.verify_media_token(SECRET, token, now=1001, subject=other)
+            media.verify_media_claims(SECRET, token, now=1001, subject=other)
         assert err.value.code == "bad_token"
     unbound = media.sign_media_url(SECRET, THUMB, now=1000)
     with pytest.raises(media.MediaError):
-        media.verify_media_token(SECRET, unbound, now=1001, subject="ws1:7")
+        media.verify_media_claims(SECRET, unbound, now=1001, subject="ws1:7")
 
 
 def test_tool_signs_with_the_actor_subject() -> None:
@@ -247,9 +247,9 @@ def test_tool_signs_with_the_actor_subject() -> None:
         )
     )
     token = json.loads(out)["stops"][0]["image_url"].split("token=")[1]
-    assert media.verify_media_token(SECRET, token, subject="ws1:7") == THUMB
+    assert media.verify_media_claims(SECRET, token, subject="ws1:7")[0] == THUMB
     with pytest.raises(media.MediaError):
-        media.verify_media_token(SECRET, token, subject="ws1:8")
+        media.verify_media_claims(SECRET, token, subject="ws1:8")
 
 
 def test_media_routes_carry_the_budget_dependency() -> None:

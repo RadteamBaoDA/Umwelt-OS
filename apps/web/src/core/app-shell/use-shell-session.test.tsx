@@ -10,12 +10,20 @@ const endAuthSession = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ replace }) }));
 vi.mock('@/core/api', () => {
   class ApiError extends Error {
-    constructor(readonly status: number, message: string) { super(message); }
+    constructor(
+      readonly status: number,
+      message: string,
+    ) {
+      super(message);
+    }
   }
   return { ApiError, apiRequest: (...args: unknown[]) => apiRequest(...args), csrfHeaders: () => ({}), retrySessionConflict: () => false };
 });
 const display = vi.hoisted(() => ({
-  authGeneration: 0, isCurrentGeneration: () => true, confirmPreferences: () => {}, endAuthSession: () => {},
+  authGeneration: 0,
+  isCurrentGeneration: () => true,
+  confirmPreferences: () => {},
+  endAuthSession: () => {},
 }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ ...display, endAuthSession: () => endAuthSession() }) }));
 
@@ -33,27 +41,38 @@ function mount() {
 }
 
 describe('useShellSession', () => {
-  beforeEach(() => { replace.mockClear(); apiRequest.mockReset(); endAuthSession.mockClear(); resetOverlays.mockClear(); });
+  beforeEach(() => {
+    replace.mockClear();
+    apiRequest.mockReset();
+    endAuthSession.mockClear();
+    resetOverlays.mockClear();
+  });
 
   it('logout success ends the session once and routes to /login', async () => {
     apiRequest.mockImplementation(async (path: string) => (path === '/api/v1/auth/session' ? SESSION : undefined));
     const { result } = mount();
     await waitFor(() => expect(result.current.session.data).toBeTruthy());
-    await act(async () => { await result.current.logout.mutateAsync(); });
+    await act(async () => {
+      await result.current.logout.mutateAsync();
+    });
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'));
     expect(endAuthSession).toHaveBeenCalledTimes(1);
     expect(resetOverlays).toHaveBeenCalledTimes(1);
   });
 
-  it('announces bbd:auth-ending before the query cache is cleared', async () => {
+  it('announces umwelt:auth-ending before the query cache is cleared', async () => {
     apiRequest.mockImplementation(async (path: string) => (path === '/api/v1/auth/session' ? SESSION : undefined));
     const { result, client } = mount();
     await waitFor(() => expect(result.current.session.data).toBeTruthy());
     let cachedAtAnnounce: unknown = 'unset';
-    const onEnding = () => { cachedAtAnnounce = client.getQueryData(['session']); };
-    window.addEventListener('bbd:auth-ending', onEnding);
-    await act(async () => { await result.current.logout.mutateAsync(); });
-    window.removeEventListener('bbd:auth-ending', onEnding);
+    const onEnding = () => {
+      cachedAtAnnounce = client.getQueryData(['session']);
+    };
+    window.addEventListener('umwelt:auth-ending', onEnding);
+    await act(async () => {
+      await result.current.logout.mutateAsync();
+    });
+    window.removeEventListener('umwelt:auth-ending', onEnding);
     expect(cachedAtAnnounce).toEqual(SESSION);
     expect(client.getQueryData(['session'])).toBeUndefined();
   });
@@ -66,14 +85,20 @@ describe('useShellSession', () => {
     });
     const { result } = mount();
     await waitFor(() => expect(result.current.session.data).toBeTruthy());
-    await act(async () => { await result.current.logout.mutateAsync().catch(() => undefined); });
+    await act(async () => {
+      await result.current.logout.mutateAsync().catch(() => undefined);
+    });
     expect(replace).not.toHaveBeenCalled();
-    act(() => { window.dispatchEvent(new Event('umwelt:unauthorized')); });
+    act(() => {
+      window.dispatchEvent(new Event('umwelt:unauthorized'));
+    });
     expect(replace).toHaveBeenCalledWith('/login?reason=expired');
   });
 
   it('a 401 session read routes to /login?reason=expired', async () => {
-    apiRequest.mockImplementation(async () => { throw new ApiError(401, 'expired'); });
+    apiRequest.mockImplementation(async () => {
+      throw new ApiError(401, 'expired');
+    });
     mount();
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/login?reason=expired'));
   });
@@ -94,10 +119,14 @@ describe('useShellSession', () => {
     apiRequest.mockImplementation(async (path: string) => (path === '/api/v1/auth/session' ? SESSION : undefined));
     const first = mount();
     await waitFor(() => expect(first.result.current.session.data).toBeTruthy());
-    await act(async () => { await first.result.current.logout.mutateAsync(); });
+    await act(async () => {
+      await first.result.current.logout.mutateAsync();
+    });
     first.unmount();
     replace.mockClear();
-    apiRequest.mockImplementation(async () => { throw new ApiError(401, 'expired'); });
+    apiRequest.mockImplementation(async () => {
+      throw new ApiError(401, 'expired');
+    });
     mount();
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'));
     expect(replace).not.toHaveBeenCalledWith('/login?reason=expired');

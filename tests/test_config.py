@@ -55,6 +55,7 @@ def _prod(**kw: object) -> Settings:
         "public_origin": "https://example.com",
         "secure_cookies": True,
         "auth_trust_forwarded_for": True,
+        "csrf_signing_secret": "real-csrf-signing-secret",
     }
     return Settings(_env_file=None, **{**base, **kw})  # type: ignore[arg-type]
 
@@ -224,3 +225,10 @@ def test_client_ip_source_not_required_for_local_origin_or_dev() -> None:
         _env_file=None, ENVIRONMENT="development", public_origin="https://example.com", **ok
     )  # type: ignore[arg-type]
     assert dev.is_dev
+
+
+def test_production_api_refuses_empty_csrf_secret() -> None:
+    from apps.api.main import create_app
+
+    with pytest.raises(RuntimeError, match="CSRF_SIGNING_SECRET"):
+        create_app(_prod(csrf_signing_secret=""))

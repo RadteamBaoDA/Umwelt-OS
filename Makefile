@@ -49,6 +49,9 @@ typecheck:
 test:
 	PYTEST_TARGET="$(PYTEST_TARGET)" E2E_TARGET="$(E2E_TARGET)" bash scripts/test.sh
 
+e2e:
+	E2E_ONLY_RUN=1 E2E_TARGET="$(E2E_TARGET)" bash scripts/test.sh
+
 load-test:
 	bash scripts/load-test.sh
 

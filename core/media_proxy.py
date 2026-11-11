@@ -149,13 +149,6 @@ def sign_media_url(
     return f"{payload}.{sig}"
 
 
-def verify_media_token(
-    secret: str, token: str, *, now: float | None = None, subject: str = ""
-) -> str:
-    """Return the bound URL of a valid token (see ``verify_media_claims``); fetchers must use the claims form."""
-    return verify_media_claims(secret, token, now=now, subject=subject)[0]
-
-
 def verify_media_claims(
     secret: str, token: str, *, now: float | None = None, subject: str = ""
 ) -> tuple[str, str]:

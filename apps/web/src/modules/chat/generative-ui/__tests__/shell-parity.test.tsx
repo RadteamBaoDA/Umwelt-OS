@@ -7,10 +7,7 @@ import { useChatScroll } from '../../use-chat-scroll';
 import { useRevealBlocks } from '../../reveal-blocks';
 import { ToolReasoning } from '../components/tool-reasoning';
 import { ToolRendering } from '../components/tool-rendering';
-import { DemoGallery } from '../templates/demo-gallery';
-import { GALLERY_DEMOS, STARTER_DEMO_IDS } from '../templates/gallery-demos';
 import { SEED_HTML_TEMPLATES } from '../templates/seed-html-templates';
-import { StarterSuggestions } from '../templates/shell-extras';
 import { SaveTemplateButton, TemplateLibrary } from '../templates/template-library';
 import { listUserTemplates, saveUserTemplate, setTemplateAccount } from '../templates/template-store';
 
@@ -19,7 +16,10 @@ vi.mock('@/core/workspace-context', () => ({
   useWorkspace: () => ({ workspaces: [{ id: 'w1', owner_user_id: 1, is_default: true }] }),
 }));
 
-const SHELL_KEYS = (l: 'en-us' | 'vi-vi') => Object.keys(chatMessages[l]).filter((k) => k.startsWith('shell')).sort();
+const SHELL_KEYS = (l: 'en-us' | 'vi-vi') =>
+  Object.keys(chatMessages[l])
+    .filter((k) => k.startsWith('shell'))
+    .sort();
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -30,7 +30,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('shell message catalog', () => {
   it('has identical shell* keys and placeholders in en-us and vi-vi', () => {
     expect(SHELL_KEYS('vi-vi')).toEqual(SHELL_KEYS('en-us'));
-    expect(SHELL_KEYS('en-us').length).toBeGreaterThan(40);
+    expect(SHELL_KEYS('en-us').length).toBeGreaterThan(15);
     for (const key of SHELL_KEYS('en-us')) {
       const ph = (l: 'en-us' | 'vi-vi') => ((chatMessages[l] as unknown as Record<string, string>)[key].match(/\{\w+\}/g) ?? []).sort();
       expect(ph('vi-vi')).toEqual(ph('en-us'));
@@ -57,7 +57,12 @@ describe('TemplateLibrary', () => {
   it('saves from a widget, lists, applies and deletes a user template (Vietnamese labels)', async () => {
     const user = userEvent.setup();
     const onSendPrompt = vi.fn();
-    render(<><SaveTemplateButton sandbox={{ html: '<b>x</b>' }} title="Mine" locale="vi-vi" /><TemplateLibrary onSendPrompt={onSendPrompt} locale="vi-vi" /></>);
+    render(
+      <>
+        <SaveTemplateButton sandbox={{ html: '<b>x</b>' }} title="Mine" locale="vi-vi" />
+        <TemplateLibrary onSendPrompt={onSendPrompt} locale="vi-vi" />
+      </>,
+    );
     await user.click(screen.getByTestId('save-template'));
     expect(screen.getByRole('status')).toHaveTextContent(chatMessages['vi-vi'].shellTemplatesSaved);
     expect(listUserTemplates()).toHaveLength(1);
@@ -71,50 +76,11 @@ describe('TemplateLibrary', () => {
   it('reports failure when storage throws and tolerates corrupt stored data', async () => {
     window.localStorage.setItem('umwelt.genui.templates.v2:1', '{not json');
     expect(listUserTemplates()).toEqual([]);
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
     expect(saveUserTemplate('t', '{}')).toBe(false);
     vi.restoreAllMocks();
-  });
-});
-
-describe('DemoGallery', () => {
-  it('has seven demos, filters by category, Try sends the prompt, Escape closes', async () => {
-    const user = userEvent.setup();
-    const onSendPrompt = vi.fn();
-    expect(GALLERY_DEMOS).toHaveLength(7);
-    render(<DemoGallery onSendPrompt={onSendPrompt} locale="en-us" />);
-    await user.click(screen.getByTestId('demo-gallery-open'));
-    expect(screen.getAllByTestId(/^gallery-demo-/)).toHaveLength(7);
-    await user.click(screen.getByTestId('gallery-filter-make'));
-    expect(screen.getAllByTestId(/^gallery-demo-/)).toHaveLength(2);
-    await user.click(screen.getByTestId('gallery-try-splitter'));
-    expect(onSendPrompt).toHaveBeenCalledWith(chatMessages['en-us'].shellDemoSplitterPrompt);
-    expect(screen.queryByTestId('demo-gallery')).not.toBeInTheDocument();
-
-    await user.click(screen.getByTestId('demo-gallery-open'));
-    expect(screen.getByTestId('demo-gallery')).toBeInTheDocument();
-    await user.keyboard('{Escape}');
-    expect(screen.queryByTestId('demo-gallery')).not.toBeInTheDocument();
-  });
-
-  it('renders Vietnamese strings', async () => {
-    const user = userEvent.setup();
-    render(<DemoGallery onSendPrompt={vi.fn()} locale="vi-vi" />);
-    await user.click(screen.getByTestId('demo-gallery-open'));
-    expect(screen.getByText('Bài toán Monty Hall')).toBeInTheDocument();
-    expect(screen.getByTestId('gallery-filter-make')).toHaveTextContent('Tạo công cụ');
-  });
-});
-
-describe('StarterSuggestions', () => {
-  it('shows four demo chips and sends the prompt', async () => {
-    const user = userEvent.setup();
-    const onSendPrompt = vi.fn();
-    render(<StarterSuggestions onSendPrompt={onSendPrompt} locale="vi-vi" />);
-    expect(STARTER_DEMO_IDS).toHaveLength(4);
-    expect(screen.getAllByTestId('template-chip')).toHaveLength(4);
-    await user.click(screen.getByText(chatMessages['vi-vi'].shellDemoTripTitle));
-    expect(onSendPrompt).toHaveBeenCalledWith(chatMessages['vi-vi'].shellDemoTripPrompt);
   });
 });
 
@@ -140,8 +106,12 @@ describe('useRevealBlocks', () => {
   class FakeIO {
     static last: FakeIO;
     targets: Element[] = [];
-    constructor(public cb: (e: Array<{ isIntersecting: boolean; target: Element }>) => void) { FakeIO.last = this; }
-    observe(el: Element) { this.targets.push(el); }
+    constructor(public cb: (e: Array<{ isIntersecting: boolean; target: Element }>) => void) {
+      FakeIO.last = this;
+    }
+    observe(el: Element) {
+      this.targets.push(el);
+    }
     unobserve() {}
     disconnect() {}
   }
@@ -183,8 +153,25 @@ describe('useChatScroll on submit', () => {
     HTMLElement.prototype.scrollTo = vi.fn() as never;
     const spy = vi.fn();
     const Host = ({ busy }: { busy: boolean }) => {
-      const { containerRef } = useChatScroll({ conversationId: 'c', messageCount: 1, lastMessageId: 'u1', lastMessageRole: 'user', isStreaming: busy });
-      return <div ref={containerRef}>{busy && <div data-streaming-answer ref={(el) => { if (el) el.scrollIntoView = spy; }} />}</div>;
+      const { containerRef } = useChatScroll({
+        conversationId: 'c',
+        messageCount: 1,
+        lastMessageId: 'u1',
+        lastMessageRole: 'user',
+        isStreaming: busy,
+      });
+      return (
+        <div ref={containerRef}>
+          {busy && (
+            <div
+              data-streaming-answer
+              ref={(el) => {
+                if (el) el.scrollIntoView = spy;
+              }}
+            />
+          )}
+        </div>
+      );
     };
     const view = render(<Host busy={false} />);
     view.rerender(<Host busy />);
@@ -199,4 +186,3 @@ describe('useChatScroll on submit', () => {
     expect(run(true)).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' }));
   });
 });
-

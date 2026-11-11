@@ -42,6 +42,8 @@ jobs:
         run: uv run python scripts/check_file_size.py
       - name: GenUI parity
         run: uv run python scripts/check_genui_parity.py
+      - name: Skill mirror (.agents/skills == .claude/skills)
+        run: uv run python scripts/sync_skills.py --check
       - name: Import contracts (when configured)
         run: if [ -f .importlinter ]; then uv run lint-imports; else echo "no .importlinter; skipped"; fi
       # Non-docker unit tests: integration tests are gated by INTEGRATION (unset here).
@@ -196,12 +198,12 @@ jobs:
           name: k6-smoke
           path: test-results/load
 
-  # Nightly (and manual) Lighthouse CI against the disposable compose stack (production web build + API, same
-  # `docker-compose.test.yml` override as the acceptance job). Public routes (/login, /terms, /privacy) plus the
-  # authenticated dashboard (/): scripts/lighthouse-auth.cjs creates the owner and signs in before the audit.
-  # Accessibility < 0.9 fails the job; performance < 0.8 only warns (assertions in lighthouserc.json).
+  # Nightly (and manual-acceptance) Lighthouse CI against the disposable compose stack (production web build + API,
+  # same `docker-compose.test.yml` override as the acceptance job). Public routes (/, /login, /terms, /privacy) plus
+  # the authenticated /dashboard: scripts/lighthouse-auth.cjs (LHCI puppeteerScript, needs puppeteer) creates the owner
+  # and signs in before the audit. Accessibility < 0.9 fails the job; performance < 0.8 only warns (lighthouserc.json).
   lighthouse:
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_docker_acceptance) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -231,7 +233,10 @@ jobs:
         env:
           LH_SETUP_TOKEN: bbd-os-disposable-test-token
           LH_OWNER_PASSWORD: lhci-owner-password-42
-        run: npx --yes @lhci/cli@0.16.0 autorun
+        # puppeteerScript requires puppeteer; LHCI resolves it from the global node_modules via NODE_PATH.
+        run: |
+          npm install --global @lhci/cli@0.16.0 puppeteer@24
+          NODE_PATH="$(npm root --global)" lhci autorun
       - name: Stop disposable stack
         if: always()
         run: docker compose -p lhci -f docker-compose.yml -f docker-compose.test.yml down --volumes --remove-orphans
@@ -262,33 +267,16 @@ jobs:
           node-version: 24.20.0
           cache: npm
       - run: npm ci
-      # npm audit --audit-level=high plus pip-audit over the locked production set (scripts/audit.sh).
+      # Single dependency audit: npm audit --audit-level=high (all workspaces, dev included) plus pip-audit over the
+      # locked production set (scripts/audit.sh).
       - run: make audit
-
-  pip-audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-      - run: uv export --frozen --no-hashes --no-emit-project -o requirements-audit.txt
-      - run: uvx pip-audit --disable-pip --no-deps -r requirements-audit.txt
-
-  npm-audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24.20.0
-      # Lockfile lives at the repo root (npm workspace), so audit the apps/web workspace from there.
-      - run: npm audit --omit=dev --audit-level=high --workspace apps/web
 
   trivy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scanners: vuln,secret,misconfig

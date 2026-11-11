@@ -1,7 +1,7 @@
 """Unit tests for GitHub API adapter, event parsing, pagination, rate-limit backoff, and webhook verification.
 
 Covers:
-- GitHub API adapter (collect_github_segment, collect_github_repository, validate_github_scope, _read_json)
+- GitHub API adapter (collect_github_segment, collect_github_repository, _read_json)
 - Event parsing and target routing (github_target_path, _target_items, _target_proof)
 - Pagination parsing and Link header invariants (_github_next_page)
 - Rate-limit backoff logic and retry deadlines (_rate_limit_deadline, _raise_for_provider_limit)

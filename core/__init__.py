@@ -1,1 +1,1 @@
-"""Shared BBD-OS application infrastructure."""
+"""Shared Umwelt-OS application infrastructure."""

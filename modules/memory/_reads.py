@@ -57,10 +57,16 @@ async def _verified_memory_read(
     *,
     scope: Scope,
     multi_workspace_enabled: bool,
+    privacy_locked: bool = False,
 ) -> MemoryRead | None:
-    """Return a current-evidence projection or suppress a copied record whose origin is unverified."""
+    """Return a current-evidence projection or suppress a copied record whose origin is unverified.
+
+    ``privacy_locked=True`` means the caller already holds the shared workspace privacy lock in this
+    transaction (taken outside any savepoint), so the per-row advisory-lock round trip is skipped.
+    """
     try:
-        await lock_export_privacy(session, scope.workspace_id, shared=True)
+        if not privacy_locked:
+            await lock_export_privacy(session, scope.workspace_id, shared=True)
         if item.is_manual is not True:
             await _lock_live_provenance_evidence(
                 session,
@@ -193,6 +199,9 @@ async def _visible_kind_counts(
     counts: dict[str, int] = {}
     visible = scanned = 0
     last: tuple[datetime, UUID] | None = None
+    # One shared privacy lock for the whole scan instead of one per row (it is transaction-scoped).
+    # ponytail: provenance is still verified per row (up to COUNT_SCAN_CAP); batch it if this list gets slow.
+    await lock_export_privacy(session, scope.workspace_id, shared=True)
     while True:
         stmt = select(Memory).where(*filters)
         if last is not None:
@@ -208,7 +217,11 @@ async def _visible_kind_counts(
             scanned += 1
             if (
                 await _verified_memory_read(
-                    session, row, scope=scope, multi_workspace_enabled=multi_workspace_enabled
+                    session,
+                    row,
+                    scope=scope,
+                    multi_workspace_enabled=multi_workspace_enabled,
+                    privacy_locked=True,
                 )
                 is None
             ):

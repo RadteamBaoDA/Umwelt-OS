@@ -21,7 +21,7 @@ import {
   type ScopeIssue,
   type VerifyState,
 } from './connector-editor-model';
-import type { SourceAiOptions } from './source-ai-toggles';
+import type { SourceAiOptions } from './api';
 
 /** Result of the last successful draft validation, bound to the source generation and revision it checked. */
 export type DraftValidation = {
