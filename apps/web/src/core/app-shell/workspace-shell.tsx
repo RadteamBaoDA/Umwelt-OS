@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { type ComponentProps, type RefObject, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { MessageSquareIcon } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { UmweltLogo, UmweltMark } from '@/components/brand/umwelt-mark';
 import { Button } from '@/components/ui/button';
@@ -102,14 +103,15 @@ function LazyChatDrawer() {
 }
 
 /**
- * Registers the Cmd+J / Ctrl+J shortcut that toggles the quick-chat Sheet drawer. Renders nothing: the header
- * button was removed (Quick chat stays reachable here and from the command palette).
+ * Quick-chat header button (C13: restored so touch users can find it) plus the Cmd+J / Ctrl+J shortcut that toggles
+ * the quick-chat Sheet drawer. The button is icon-only with an accessible name; the drawer keeps its own state.
  *
- * @returns null.
+ * @returns The toggle button.
  */
 function QuickChatShortcut() {
   const { toggleDrawer } = useChatController();
   const pathname = usePathname();
+  const t = useTranslations('chat');
 
   useEffect(() => {
     /** Global shortcut Ctrl+J or Cmd+J to toggle chat drawer without rebinding on draft changes. */
@@ -125,7 +127,11 @@ function QuickChatShortcut() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [toggleDrawer, pathname]);
 
-  return null;
+  return (
+    <Button type="button" variant="ghost" size="icon" onClick={toggleDrawer} title={t('quickChat')} aria-label={t('quickChat')}>
+      <MessageSquareIcon className="size-4" aria-hidden="true" />
+    </Button>
+  );
 }
 
 /**

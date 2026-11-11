@@ -161,6 +161,16 @@ describe('ChatTranscript sources and model line', () => {
     expect(screen.getByTestId('message-model').textContent).toBe('model-x');
     expect(screen.getByText('1 source')).toBeTruthy();
   });
+
+  it('expands the sources inline under the answer in the drawer, tap-friendly (C13)', async () => {
+    renderTranscript({ messages: [cited], mode: 'drawer' });
+    expect(screen.queryByText('Example')).toBeNull();
+    const toggle = screen.getByTestId('sources-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await userEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText(/Example/)).toBeTruthy();
+  });
 });
 
 describe('ChatTranscript capability chips', () => {

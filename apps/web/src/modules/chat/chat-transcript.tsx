@@ -21,6 +21,7 @@ import type { ChatMessage, Citation, ToolStatus, ToolStep, WebSearchOutcome } fr
 import { Button } from '@/components/ui/button';
 import { ChatMarkdown } from './chat-markdown';
 import { focusCitations } from './chat-citation-focus';
+import { CitationPanel } from './citation-panel';
 import { useChatScroll } from './use-chat-scroll';
 import { useSmoothedText } from './use-smoothed-text';
 import { ChatReasoning } from './chat-reasoning';
@@ -543,14 +544,35 @@ function MetaIconButton({ label, onClick, children }: { label: string; onClick: 
 
 /**
  * "N sources" of a grounded answer: a button that opens the evidence rail on that answer's sources in full Chat,
- * plain text in the drawer (no rail there).
+ * a toggle in the drawer (no rail there) that expands the sources inline under the answer (C13), which also works on
+ * touch screens where hovering a chip is impossible.
  *
  * @param props - The answer's citations and the opener (absent outside full Chat).
  */
 function SourcesMeta({ citations, onOpen }: { citations: Citation[]; onOpen?: (citations: Citation[]) => void }) {
   const t = useTranslations('chat');
   const label = t('sourcesCount', { count: citations.length });
-  if (!onOpen) return <span>{label}</span>;
+  const [inlineOpen, setInlineOpen] = React.useState(false);
+  if (!onOpen) {
+    return (
+      <>
+        <button
+          type="button"
+          data-testid="sources-toggle"
+          aria-expanded={inlineOpen}
+          onClick={() => setInlineOpen((open) => !open)}
+          className="min-h-8 pointer-coarse:min-h-11 rounded-md px-1 text-xs underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {label}
+        </button>
+        {inlineOpen && (
+          <div className="w-full basis-full">
+            <CitationPanel citations={citations} variant="inline" onClose={() => setInlineOpen(false)} />
+          </div>
+        )}
+      </>
+    );
+  }
   return (
     <Button
       type="button"
