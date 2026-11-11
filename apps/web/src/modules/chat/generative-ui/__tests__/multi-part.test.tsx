@@ -1,10 +1,13 @@
-import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, screen, waitFor } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
 import type { ChatMessage } from '@/modules/chat/api';
 import { ChatTranscript } from '../../chat-transcript';
 import { messageUiParts, upsertUiPart, uiPartKey } from '../../generative-ui-parts';
+
+const queryClient = new QueryClient();
 
 // The renderer itself is covered elsewhere; here it only has to show which part it received.
 vi.mock('../components/tool-rendering', () => ({
@@ -29,9 +32,9 @@ function assistant(extra: Partial<ChatMessage>): ChatMessage {
 
 function view(props: Partial<React.ComponentProps<typeof ChatTranscript>>) {
   return render(
-    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+    <QueryClientProvider client={queryClient}><NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
       <ChatTranscript conversationId="c1" messages={[]} {...props} />
-    </NextIntlClientProvider>,
+    </NextIntlClientProvider></QueryClientProvider>,
   );
 }
 
@@ -45,8 +48,9 @@ describe('multiple generative UI parts', () => {
     })) as unknown as typeof window.matchMedia;
   });
 
-  it('renders every persisted part of a message in order', () => {
+  it('renders every persisted part of a message in order', async () => {
     view({ messages: [assistant({ generative_ui: table, generative_ui_parts: [table, plan] })] });
+    await waitFor(() => expect(screen.getByText('Sales:completed')).toBeTruthy());
     const widgets = screen.getAllByTestId('generative-ui-widget');
     expect(widgets.map((w) => w.textContent)).toEqual(['Sales:completed', 'Roadmap:completed']);
   });

@@ -6,7 +6,8 @@ import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
 import { needsLoginRedirect } from '@/core/session-gate';
-import { buildPickUrl, PickQrButton } from './pick-qr-modal';
+import { buildPickUrl } from './pick-qr-dialog';
+import { PickQrButton } from './pick-qr-modal';
 import { PickPhone } from './pick-phone';
 
 const SID = 'A'.repeat(22);

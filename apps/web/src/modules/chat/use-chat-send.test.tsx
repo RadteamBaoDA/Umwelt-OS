@@ -19,7 +19,7 @@ vi.mock('./api', async (importOriginal) => ({
   mutateMessage: h.mutateMessage,
   hashMessageContent: async () => 'hash-1',
 }));
-vi.mock('@/modules/agents', () => ({ startAgentRun: h.startAgentRun }));
+vi.mock('@/modules/agents/public-api', () => ({ startAgentRun: h.startAgentRun }));
 vi.mock('@/core/app-shell/chat-controller', () => ({
   PendingMessageMutationConflictError: class PendingMessageMutationConflictError extends Error {},
 }));

@@ -1,9 +1,17 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { createElement, type ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook as baseRenderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTopicNames } from './use-topic-names';
 
 const fetchTopics = vi.hoisted(() => vi.fn());
 vi.mock('@/modules/news', () => ({ fetchTopics }));
+
+/** Renders the hook inside a fresh query client so cache never leaks between tests. */
+function renderHook<T>(callback: () => T) {
+  const client = new QueryClient();
+  return baseRenderHook(callback, { wrapper: ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children) });
+}
 
 beforeEach(() => {
   fetchTopics.mockReset();

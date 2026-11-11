@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
@@ -12,14 +13,17 @@ vi.mock('@/modules/news/api', () => topicsMock);
 import { ChatTranscript } from './chat-transcript';
 import { onCitationFocus } from './chat-citation-focus';
 
+const queryClient = new QueryClient();
+beforeEach(() => queryClient.clear());
+
 vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} }));
 
 /** Renders the transcript with English messages. */
 function renderTranscript(props: Partial<React.ComponentProps<typeof ChatTranscript>>) {
   return render(
-    <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+    <QueryClientProvider client={queryClient}><NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
       <ChatTranscript messages={[]} mode="full" {...props} />
-    </NextIntlClientProvider>,
+    </NextIntlClientProvider></QueryClientProvider>,
   );
 }
 
@@ -64,9 +68,9 @@ describe('ChatTranscript tool status', () => {
     const { rerender } = renderTranscript({ activeTool: 'query_collected_data' });
     expect(screen.getByTestId('tool-status').textContent).toBe(messages['en-us'].chat.toolQueryingData);
     rerender(
-      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+      <QueryClientProvider client={queryClient}><NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
         <ChatTranscript messages={[]} mode="full" activeTool={null} />
-      </NextIntlClientProvider>,
+      </NextIntlClientProvider></QueryClientProvider>,
     );
     expect(screen.queryByTestId('tool-status')).toBeNull();
   });

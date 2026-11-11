@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns } from '@/modules/agents';
+import { cancelAgentRun, getAgentProfiles, getAgentRun, listAgentRuns } from '@/modules/agents/public-api';
 
 /** Agent run statuses that keep polling. */
 const ACTIVE_RUN_STATUSES = ['queued', 'running', 'waiting_approval'];

@@ -92,10 +92,11 @@ Ratchet procedure: when a change raises a measured value by 2 or more points, ra
 
 | Metric | Measured | Budget |
 | --- | --- | --- |
-| Largest route first-load JS (`/chat`) | 797.1 KB | 800 KB |
+| Largest route first-load JS (`/settings/global`) | 776.7 KB | 800 KB |
+| Chat (`/chat`) | 745.2 KB (was 797.2 before chat lazy-loading) | 785 KB |
 | Landing page (`/`) | 230.4 KB | 245 KB |
 | Sign-in (`/login`) | 337.8 KB | 350 KB |
-| Total client JS | 2195.9 KB | 2313 KB |
+| Total client JS | 2191.0 KB | 2313 KB |
 
 Measured 2026-11-11. Public routes carry per-route budgets in `routes`; the workspace providers and full message catalog load only under `app/(workspace)`.
 

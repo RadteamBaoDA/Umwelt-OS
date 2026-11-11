@@ -17,12 +17,20 @@ import { useCopyMessage } from './use-copy-message';
 import { useTopicNames } from './use-topic-names';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
-import { ToolRendering } from './generative-ui/components/tool-rendering';
-import { SaveTemplateButton } from './generative-ui/templates/template-library';
+import dynamic from 'next/dynamic';
 import { genUiCopy, resolveWidgetLocale } from './generative-ui/copy';
 import type { AppLocaleId } from '@/core/i18n';
 import { useRevealBlocks } from './reveal-blocks';
 import type { GenerativeUIPayload } from './generative-ui/sandbox/schema';
+
+/** Fixed-height placeholder shown while a widget chunk loads, so the transcript does not jump when it resolves. */
+function WidgetSkeleton() {
+  return <div aria-hidden="true" className="h-24 w-full animate-pulse rounded-lg bg-secondary" />;
+}
+
+// Widgets are optional per answer; load their renderer (and the template-save UI) only when a message carries one.
+const ToolRendering = dynamic(() => import('./generative-ui/components/tool-rendering').then((m) => m.ToolRendering), { loading: WidgetSkeleton });
+const SaveTemplateButton = dynamic(() => import('./generative-ui/templates/template-library').then((m) => m.SaveTemplateButton), { loading: () => <div aria-hidden="true" className="h-8 w-32" /> });
 
 const KNOWN_REASONS = ['not_configured', 'query_too_long', 'empty_query', 'local_only_context', 'daily_limit', 'timeout', 'provider_error', 'network_denied', 'run_inactive'];
 

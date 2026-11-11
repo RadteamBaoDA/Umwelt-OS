@@ -4,8 +4,13 @@ import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import type { PendingMessageMutation, PendingSpecialistRun } from '@/core/app-shell/chat-controller';
 import { Button } from '@/components/ui/button';
-import { AgentRunDetail, ConversationAgentActivity, type AgentRun } from '@/modules/agents';
+import dynamic from 'next/dynamic';
+import type { AgentRun } from '@/modules/agents/public-api';
 import { profileTitleKeys } from './chat-session-header';
+
+// Agent chrome renders only for runs/agent mode; keeping it out of the main chunk keeps plain chat first-load small.
+const ConversationAgentActivity = dynamic(() => import('@/modules/agents/conversation-agent-activity').then((m) => m.ConversationAgentActivity), { ssr: false });
+const AgentRunDetail = dynamic(() => import('@/modules/agents/run-detail').then((m) => m.AgentRunDetail), { ssr: false });
 
 const runStatusKeys: Record<string, 'agentRunQueued' | 'agentRunRunning' | 'agentRunWaitingApproval' | 'agentRunSucceeded' | 'agentRunFailed' | 'agentRunCancelled'> = {
   queued: 'agentRunQueued', running: 'agentRunRunning', waiting_approval: 'agentRunWaitingApproval',

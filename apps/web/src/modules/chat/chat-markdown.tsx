@@ -8,7 +8,7 @@ import { safeHttpUrl } from '@/core/safe-url';
 import type { AppLocaleId } from '@/core/i18n';
 import { genUiCopy } from './generative-ui/copy';
 import { webHost } from './citation-panel';
-import { fenceLanguage, highlightFence } from './code-highlight';
+import { fenceLanguage, highlightFence, loadHighlighter } from './code-highlight';
 import './chat-gaps.css';
 
 // The markdown-it renderer and safe link/code boundaries adapt AnythingLLM's
@@ -144,6 +144,16 @@ export function ChatMarkdown({
 }) {
   const [safeHtml, setSafeHtml] = React.useState('');
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const [highlighterReady, setHighlighterReady] = React.useState(false);
+  const hasFence = /^ {0,3}(`{3,}|~{3,})/m.test(content);
+
+  React.useEffect(() => {
+    // Load highlight.js on the first fenced block; the effect below re-renders once it resolves.
+    if (!hasFence || highlighterReady) return;
+    let live = true;
+    void loadHighlighter().then(() => { if (live) setHighlighterReady(true); });
+    return () => { live = false; };
+  }, [hasFence, highlighterReady]);
 
   React.useEffect(() => {
     // DOMPurify needs the live browser window; lazy singleton creation avoids touching it during SSR.
@@ -157,7 +167,7 @@ export function ChatMarkdown({
       ALLOW_ARIA_ATTR: false,
       FORBID_TAGS: ['img', 'iframe', 'object', 'script', 'style', 'svg', 'math'],
     }));
-  }, [content, citations]);
+  }, [content, citations, highlighterReady]);
 
   React.useEffect(() => {
     const root = containerRef.current;

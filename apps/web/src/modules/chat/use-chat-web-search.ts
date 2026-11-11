@@ -1,5 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
-import { apiRequest } from '@/core/api';
+import { useAiSettings } from './use-ai-settings';
 import { WEB_SEARCH_SEND_ENABLED } from './api';
 
 /** Display names for known web-search providers; anything else uses the neutral `webSearchProviderGeneric` copy. */
@@ -27,11 +26,7 @@ export function useChatWebSearch(mode: 'drawer' | 'full', profileBlocked: boolea
   usable: boolean;
   provider: string | undefined;
 } {
-  const aiSettings = useQuery({
-    queryKey: ['ai-settings'],
-    queryFn: () => apiRequest<WebSearchSettings>('/api/v1/settings/ai'),
-    enabled: mode === 'full',
-  });
+  const aiSettings = useAiSettings<WebSearchSettings>({ enabled: mode === 'full' });
   const data = aiSettings.data;
   const available = Boolean(
     data && data.web_search_provider !== 'none'

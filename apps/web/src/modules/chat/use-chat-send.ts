@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { PendingMessageMutationConflictError, type PendingSpecialistRun, type useChatController } from '@/core/app-shell/chat-controller';
 import { uuid7 } from '@/core/uuid7';
-import { startAgentRun, type AgentProfile } from '@/modules/agents';
+import { startAgentRun, type AgentProfile } from '@/modules/agents/public-api';
 import {
   chatKeys,
   createConversation,

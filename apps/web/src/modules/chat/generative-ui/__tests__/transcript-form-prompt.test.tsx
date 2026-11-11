@@ -1,8 +1,11 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
 import { ChatTranscript } from '../../chat-transcript';
+
+const queryClient = new QueryClient();
 
 type Handler = (prompt: string) => void | Promise<unknown>;
 
@@ -34,14 +37,14 @@ describe('ChatTranscript widget prompt handlers', () => {
     const plain = vi.fn();
     const rejecting = vi.fn().mockRejectedValue(new Error('busy'));
     render(
-      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+      <QueryClientProvider client={queryClient}><NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
         <ChatTranscript
           conversationId="c1" messages={[]} isStreaming streamingUi={[form, table]}
           onSendPrompt={plain} onWidgetSendPrompt={rejecting}
         />
-      </NextIntlClientProvider>,
+      </NextIntlClientProvider></QueryClientProvider>,
     );
-    expect(screen.getByTestId('w-form')).toBeTruthy();
+    expect(await screen.findByTestId('w-form')).toBeTruthy();
     expect(received.table).toBe(plain);
     expect(received.form).toBe(rejecting);
     await expect(received.form?.('hi')).rejects.toThrow('busy');

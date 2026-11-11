@@ -1,9 +1,8 @@
 'use client';
 
 import * as React from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
-import { apiRequest } from '@/core/api';
+import { useAiSettings } from './use-ai-settings';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 /** One configured chat-capable model the owner may pick for a message. */
@@ -44,7 +43,7 @@ function readStored(): string | null {
  */
 export function useChatModelPicker(): ChatModelPicker | undefined {
   // Same cache key as the settings page, so saving provider settings refreshes the list.
-  const query = useQuery({ queryKey: ['ai-settings'], queryFn: () => apiRequest<AIProviders>('/api/v1/settings/ai') });
+  const query = useAiSettings<AIProviders>();
   const [stored, setStored] = React.useState<string | null>(readStored); // lazy: options load async, so SSR/hydration never shows it
 
   const options = React.useMemo<ChatModelOption[]>(

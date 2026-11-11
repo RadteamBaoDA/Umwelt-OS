@@ -2,10 +2,9 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { Button } from '@/components/ui/button';
-import { apiRequest } from '@/core/api';
+import { useAiSettings } from './use-ai-settings';
 
 type GateProvider = { id: string; credential_configured: boolean; local: boolean; policy_denied: boolean; destination_id: string | null };
 type GateSettings = {
@@ -49,13 +48,7 @@ export function isChatProviderReady(s: GateSettings): boolean {
  * @returns True unless settings loaded and show no usable chat model.
  */
 export function useChatProviderReady(enabled = true): boolean {
-  const q = useQuery({
-    queryKey: ['ai-settings'],
-    queryFn: () => apiRequest<GateSettings>('/api/v1/settings/ai'),
-    enabled,
-    staleTime: PROVIDER_READY_STALE_MS,
-    retry: false,
-  });
+  const q = useAiSettings<GateSettings>({ enabled, staleTime: PROVIDER_READY_STALE_MS, retry: false });
   return !enabled || q.isError || !q.data || isChatProviderReady(q.data);
 }
 

@@ -30,7 +30,7 @@ describe('ChatMarkdown code blocks', () => {
     const { container } = render(<ChatMarkdown content={'```ts\nconst a: string = "<b>x</b>";\n```'} />);
     await waitFor(() => expect(container.querySelector('pre code')).not.toBeNull());
     expect(container.querySelector('.chat-code-lang')?.textContent).toBe('ts');
-    expect(container.querySelector('code .hljs-keyword')?.textContent).toBe('const');
+    await waitFor(() => expect(container.querySelector('code .hljs-keyword')?.textContent).toBe('const'));
     expect(container.querySelector('code')?.textContent).toBe('const a: string = "<b>x</b>";\n');
     expect(container.querySelector('code b')).toBeNull();
   });
