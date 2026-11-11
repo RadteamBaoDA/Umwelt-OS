@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   streamResponseEvents: vi.fn(),
   getConversation: vi.fn(),
   cancelResponse: vi.fn(),
+  mutateMessage: vi.fn(),
 }));
 
 vi.mock('./api', async (importOriginal) => ({
@@ -22,6 +23,8 @@ vi.mock('./api', async (importOriginal) => ({
   streamResponseEvents: h.streamResponseEvents,
   getConversation: h.getConversation,
   cancelResponse: h.cancelResponse,
+  mutateMessage: h.mutateMessage,
+  hashMessageContent: async () => 'hash',
 }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ confirmedPreferences: { locale: 'en-us', timezone: 'UTC' } }) }));
@@ -44,6 +47,8 @@ vi.mock('@/core/app-shell/chat-controller', () => ({
       setActiveConversationId: () => undefined,
       resetConversation: () => undefined,
       bindDayConversation: () => undefined,
+      getOrCreatePendingMessageMutation: (_id: string, p: object) => ({ ...p, clientRequestId: 'req1' }),
+      clearPendingMessageMutation: () => undefined,
       clearPendingSpecialistRun: () => undefined,
       setPendingSpecialistRun: () => undefined,
     };
@@ -128,6 +133,39 @@ describe('ChatSession', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(h.sendMessage).toHaveBeenCalledTimes(2));
     expect(h.sendMessage.mock.calls[1][1]).toMatchObject({ content: 'hello' });
+  });
+
+  it('retries a stored turn whose run failed as a new version of that turn, not a duplicate send (C3)', async () => {
+    const stored = {
+      id: 'm1',
+      conversation_id: 'c1',
+      role: 'user',
+      content: 'hello',
+      client_request_id: 'x',
+      citations: [],
+      created_at: '2026-01-01T00:00:00Z',
+    };
+    // The server copy carries the send's client_request_id, which is how the optimistic bubble is replaced.
+    h.getConversation.mockImplementation(async () => ({
+      ...conversation(),
+      messages: h.sendMessage.mock.calls.length ? [{ ...stored, client_request_id: h.sendMessage.mock.calls[0][1].client_request_id }] : [],
+    }));
+    h.sendMessage.mockResolvedValue({ response_id: 'r1', status: 'queued' });
+    h.mutateMessage.mockResolvedValue({ message_id: 'm2', response_id: 'r2', status: 'pending' });
+    h.streamResponseEvents.mockImplementationOnce(async (_id: string, o: StreamEventsOptions) => {
+      o.onStatus?.('failed', { status: 'failed', error: 'boom' });
+    });
+    renderSession({ mode: 'full' });
+    await sendText('hello');
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(h.mutateMessage).toHaveBeenCalledTimes(1));
+    expect(h.mutateMessage.mock.calls[0].slice(0, 3)).toEqual([
+      'c1',
+      'm1',
+      expect.objectContaining({ action: 'edit', content: 'hello', base_content_hash: 'hash' }),
+    ]);
+    expect(h.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it('shows the provider failure reason carried by the terminal failed event', async () => {

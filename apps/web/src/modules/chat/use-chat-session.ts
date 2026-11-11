@@ -309,11 +309,21 @@ export function useChatSessionCommands(
   const edit = useMessageEditCommands(d, mode, handleMessageMutation);
   const draft = chatCtrl.draft;
   const pendingPrompt = d.pendingProfileRun?.prompt;
-  /** Resends the pending specialist prompt, the last sent content, or the draft. */
+  const lastMessage = d.messages.at(-1);
+  const { handleRetryMessage } = edit;
+  /**
+   * Error-banner Retry (C3). A turn the server already stored (the transcript ends at a persisted user message, so the
+   * run failed afterwards) is retried as a new version of that turn, never as a duplicate question. Otherwise the
+   * pending specialist prompt, the last sent content or the draft is sent again.
+   */
   const retryLast = React.useCallback(() => {
+    if (!pendingPrompt && mode === 'full' && lastMessage?.role === 'user' && !lastMessage.id.startsWith('optimistic-')) {
+      handleRetryMessage(lastMessage);
+      return;
+    }
     const retryDraft = pendingPrompt ?? refs.lastSent ?? draft;
     if (retryDraft) void handleSend(retryDraft);
-  }, [pendingPrompt, refs, draft, handleSend]);
+  }, [pendingPrompt, mode, lastMessage, handleRetryMessage, refs, draft, handleSend]);
 
   return { ...send, ...edit, handleStop, handleNewChat, handleSubmitInput, retryLast };
 }
