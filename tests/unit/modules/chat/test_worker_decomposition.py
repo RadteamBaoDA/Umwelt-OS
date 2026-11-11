@@ -309,3 +309,25 @@ def test_uncited_answer_keeps_text_and_sets_flag() -> None:
     assert cited.uncited is True and cited.valid_citations == []
     assert _message_uncited({"uncited": True}) is True
     assert _message_uncited({}) is False and _message_uncited(None) is False
+
+
+def test_system_prompt_contract_language_and_owner_local_time() -> None:
+    """The prompt splits own-data (cite) from general answers, asks for the user's language and uses owner time."""
+    from modules.chat._worker.setup import _compose_system_text, _local_now_text
+
+    turn = SimpleNamespace(req_params={}, day_scope=None, web_run=None)
+    text = _compose_system_text(
+        turn,  # type: ignore[arg-type]
+        AnswerContext(query="q", evidence=[]),
+        SimpleNamespace(system_prompts={}),  # type: ignore[arg-type]
+        (),
+        "Asia/Ho_Chi_Minh",
+    )
+    assert "Answer in the language of the user's latest message." in text
+    assert "need no citations" in text and "sufficient evidence" not in text
+    assert (
+        "(Asia/Ho_Chi_Minh)" in text and " UTC" not in text.split("Current date and time:")[1][:40]
+    )
+    assert _local_now_text("Not/AZone").endswith("(UTC)") and _local_now_text(None).endswith(
+        "(UTC)"
+    )
