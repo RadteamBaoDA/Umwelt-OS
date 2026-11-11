@@ -132,7 +132,7 @@ def _validate_document_citations(
         n
         for _, call in ui_parts
         for n in _tool_citation_numbers(
-            call, evidence_count, remap=numbering and numbering.to_legacy
+            call, evidence_count, remap=numbering.to_legacy if numbering else None
         )
     ]
     candidate_numbers = list(dict.fromkeys([*doc_numbers, *ui_numbers]))
