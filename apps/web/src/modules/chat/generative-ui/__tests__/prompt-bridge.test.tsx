@@ -117,11 +117,11 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
 
     function Registrar() {
       const { registerFrame } = usePromptBridge();
-      React.useEffect(() => registerFrame(frame, NONCE), [registerFrame]);
+      React.useEffect(() => registerFrame(frame, NONCE, onResize), [registerFrame]);
       return null;
     }
     render(
-      <PromptBridgeProvider onSendPrompt={onSendPrompt} onDraftPrompt={onDraftPrompt} onResize={onResize} cooldownMs={0}>
+      <PromptBridgeProvider onSendPrompt={onSendPrompt} onDraftPrompt={onDraftPrompt} cooldownMs={0}>
         <Registrar />
       </PromptBridgeProvider>,
     );
@@ -144,7 +144,7 @@ describe('validateBridgeMessage & PromptBridgeProvider', () => {
     expect(onDraftPrompt).toHaveBeenCalledTimes(1);
     expect(onDraftPrompt).toHaveBeenCalledWith('Drill down');
     expect(onSendPrompt).not.toHaveBeenCalled();
-    expect(onResize).toHaveBeenCalledWith(615, frame);
+    expect(onResize).toHaveBeenCalledWith(615);
     await vi.waitFor(() => expect(frame.postMessage).toHaveBeenCalled());
     expect(frame.postMessage.mock.calls[0][0]).toEqual({
       type: 'umwelt:send-prompt-ack',
@@ -267,5 +267,27 @@ describe('PromptBridgeProvider sandbox hardening (F2.6)', () => {
     post({ type: 'umwelt:send-prompt', prompt: 'hello', nonce: NONCE });
     expect(onDraftPrompt).toHaveBeenCalledWith('hello');
     expect(onSendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('shows a host-side status line when a widget drafts a prompt and when the composer refuses it (G2)', () => {
+    const onDraftPrompt = vi.fn();
+    const post = mount({ onDraftPrompt });
+    post({ type: 'umwelt:send-prompt', prompt: 'hello', nonce: NONCE });
+    expect(screen.getByTestId('widget-prompt-notice').textContent).toContain('message box');
+
+    onDraftPrompt.mockImplementation(() => {
+      throw new Error('Composer has text');
+    });
+    post({ type: 'umwelt:send-prompt', prompt: 'again', nonce: NONCE });
+    expect(screen.getByTestId('widget-prompt-notice').textContent).toBe('Composer has text');
+  });
+
+  it('drops legacy wire message aliases (G8)', () => {
+    const win = {};
+    const opts = { frames: framesFor(win) };
+    const base = { source: win, origin: 'null' };
+    for (const type of ['sendPrompt', 'opengenui:send-prompt', 'resize', '__ogui_resize', 'openLink']) {
+      expect(validateBridgeMessage({ ...base, data: { type, prompt: 'x', height: 100, url: 'https://a.example', nonce: NONCE } }, opts)).toBeNull();
+    }
   });
 });

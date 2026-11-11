@@ -108,8 +108,10 @@ Use textContent for user or retrieved text; do not interpolate it into executabl
 HTML. Show loading and error states for asynchronous work.
 
 Local filtering, sliders, tabs, and calculations run in JavaScript. A clearly
-labeled user-clicked follow-up may ask the assistant to reason further through the
+labeled user-clicked follow-up may draft a question for the assistant through the
 existing validated bridge: `await Websandbox.connection.remote.sendPrompt({ text })`.
+The text is only placed in the user's message box; the user reads it and presses
+send, so label the button as a draft/suggestion, not as an instant answer.
 Include a concise description of selected values so the next turn has context.
 Never call sendPrompt automatically on load, timer, or ordinary input changes.
 Disable the triggering button while awaiting the call, catch rejection, show a
@@ -147,11 +149,8 @@ class SandboxedUiArgs(BaseModel):
 
     initialHeight: int = Field(default=360, ge=120, le=2000)
     placeholderMessages: list[str] = Field(
-        default_factory=lambda: [
-            "Analyzing structure…",
-            "Applying Umwelt-OS design tokens…",
-            "Rendering interactive view…",
-        ],
+        # Empty on purpose: the client then shows its localized catalog phrases instead of English text.
+        default_factory=list,
         min_length=1,
         max_length=8,
     )
@@ -225,7 +224,7 @@ def build_generative_ui_system_prompt(
             "titles, 1-8) before rendering. Use only the returned same-origin `image_url`, show each `credit` and "
             "`license`, and skip stops marked unavailable. Never use any other remote image URL. The frame cannot load "
             "it directly: call `await loadImage(image_url)` (also for individual map tiles) and set the returned "
-            "`blob:` URL as the <img> src; hide the image if it rejects."
+            "`data:` URL as the <img> src; hide the image if it rejects."
         )
     if rich_answer:
         prompt_parts.append(RICH_ANSWER_PROMPT)

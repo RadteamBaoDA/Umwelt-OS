@@ -9,21 +9,7 @@
  */
 
 import { buildSandboxStylesheet, type SandboxTheme } from '../design-system';
-import { buildFrameDocument, createFrameNonce, frameDocumentProps, type FrameDocumentOptions } from './frame-content';
 import { processPartialHtml } from './process-partial-html';
-
-export interface SandboxController {
-  /** Managed `<iframe sandbox="allow-scripts">` element. */
-  iframe: HTMLIFrameElement;
-  /** Sends a sanitized HTML/CSS delta to the iframe for Idiomorph DOM morphing. */
-  updateContent: (html: string, css?: string) => void;
-  /** Triggers deferred execution of `jsFunctions` and `jsExpressions` inside the iframe. */
-  executeScripts: (jsFunctions?: string, jsExpressions?: string) => void;
-  /** Synchronizes the active Umwelt-OS theme (`'light'` or `'dark'`) into the iframe. */
-  syncTheme: (theme: SandboxTheme) => void;
-  /** Cleans up the iframe document and detaches its content. */
-  destroy: () => void;
-}
 
 /**
  * Enforces the strict `sandbox="allow-scripts"` security policy on an iframe element,
@@ -135,45 +121,4 @@ export function syncSandboxTheme(iframe: HTMLIFrameElement | null, theme: Sandbo
   } catch {
     // Ignore transient postMessage errors before iframe contentWindow initializes.
   }
-}
-
-/**
- * Creates a `SandboxController` bound to an `HTMLIFrameElement`, enforcing `sandbox="allow-scripts"`
- * and optionally loading the initial frame document through the frame shell route (`src` + `name`, never `srcdoc`).
- *
- * @param iframe - Target `HTMLIFrameElement`.
- * @param initialOptions - Optional `FrameDocumentOptions` to load the document immediately.
- * @returns `SandboxController` with `updateContent`, `executeScripts`, `syncTheme`, and `destroy`.
- */
-export function createSandboxController(iframe: HTMLIFrameElement, initialOptions?: FrameDocumentOptions): SandboxController {
-  enforceStrictSandboxAttribute(iframe);
-
-  if (initialOptions) {
-    const nonce = initialOptions.nonce ?? createFrameNonce();
-    iframe.dataset.umweltNonce = nonce;
-    const { src, name } = frameDocumentProps(buildFrameDocument({ ...initialOptions, nonce }));
-    iframe.name = name;
-    iframe.src = src;
-    iframe.dataset.theme = initialOptions.theme ?? 'light';
-    if (initialOptions.html) {
-      iframe.dataset.latestHtml = processPartialHtml(initialOptions.html);
-    }
-    if (initialOptions.executeScripts && (initialOptions.jsFunctions || initialOptions.jsExpressions)) {
-      iframe.dataset.scriptsExecuted = 'true';
-    }
-  }
-
-  return {
-    iframe,
-    updateContent: (html: string, css?: string) => updateSandboxContent(iframe, html, css),
-    executeScripts: (jsFunctions?: string, jsExpressions?: string) => executeSandboxScripts(iframe, jsFunctions, jsExpressions),
-    syncTheme: (theme: SandboxTheme) => syncSandboxTheme(iframe, theme),
-    destroy: () => {
-      iframe.name = '';
-      iframe.removeAttribute('src');
-      delete iframe.dataset.latestHtml;
-      delete iframe.dataset.latestCss;
-      delete iframe.dataset.scriptsExecuted;
-    },
-  };
 }

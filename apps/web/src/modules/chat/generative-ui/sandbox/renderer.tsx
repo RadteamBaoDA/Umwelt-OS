@@ -11,7 +11,7 @@
 
 import * as React from 'react';
 import { Loader2Icon } from 'lucide-react';
-import { usePromptBridge, validateBridgeMessage } from '../bridge';
+import { usePromptBridge } from '../bridge';
 import { genUiCopy } from '../copy';
 import type { SandboxTheme } from '../design-system';
 import { ExportOverlay } from './export-overlay';
@@ -21,37 +21,8 @@ import { processPartialHtml } from './process-partial-html';
 import { getStreamingStage, validateSandboxedUiArgs, type GenerativeUIPayload, type SandboxedUiArgs } from './schema';
 import { enforceStrictSandboxAttribute, executeSandboxScripts, syncSandboxTheme, updateSandboxContent } from './websandbox-loader';
 
-/** Default throttle interval in milliseconds for high-frequency streaming snapshots. */
-export const THROTTLE_MS = 1000;
-
-const MIN_HEIGHT = 50;
-const MAX_HEIGHT = 4000;
+/** Frame height used before the first resize report and without `initialHeight`. */
 const DEFAULT_INITIAL_HEIGHT = 320;
-
-/** Default loading phrases rotated when `placeholderMessages` is not provided. */
-export const LOADING_PHRASES = [
-  'Sketching pixels',
-  'Wiring up nodes',
-  'Painting gradients',
-  'Compiling visuals',
-  'Arranging atoms',
-  'Rendering magic',
-  'Polishing edges',
-] as const;
-
-/**
- * Clamps a sandbox-reported pixel height to the safe viewport range `[50, 4000]`.
- * Returns `null` for non-finite or non-positive values so invalid reports never corrupt layout.
- *
- * @param height - Candidate height reported via `postMessage`.
- * @returns Clamped integer height in pixels, or `null` if invalid.
- */
-export function clampReportedHeight(height: unknown): number | null {
-  if (typeof height !== 'number' || !Number.isFinite(height) || height <= 0) {
-    return null;
-  }
-  return Math.max(MIN_HEIGHT, Math.min(Math.ceil(height), MAX_HEIGHT));
-}
 
 /**
  * Detects the active Umwelt-OS theme (`'light'` or `'dark'`) from `document.documentElement`
@@ -92,15 +63,19 @@ function useResolvedSandboxTheme(explicitTheme?: SandboxTheme): SandboxTheme {
 }
 
 /**
- * Rotates through `messages` on a fixed timer while `active` is true.
+ * Rotates through the placeholder phrases on a fixed timer while `active` is true. Without custom messages the
+ * localized catalog phrases are used (the server sends none by default).
  *
  * @param active - Whether rotation is active (`status === 'streaming'`).
  * @param customMessages - Optional custom `placeholderMessages` array from tool args.
  * @param intervalMs - Rotation interval in milliseconds (defaults to 1800ms).
  * @returns Currently active placeholder message string.
  */
-export function usePlaceholderRotation(active: boolean, customMessages?: string[], intervalMs = 1800): string {
-  const phrases = customMessages && customMessages.length > 0 ? customMessages : LOADING_PHRASES;
+function usePlaceholderRotation(active: boolean, customMessages?: string[], intervalMs = 1800): string {
+  const catalog = genUiCopy();
+  const phrases = customMessages && customMessages.length > 0
+    ? customMessages
+    : [catalog.genUiLoadingPhrase1, catalog.genUiLoadingPhrase2, catalog.genUiLoadingPhrase3];
   const [index, setIndex] = React.useState(0);
 
   React.useEffect(() => {
@@ -111,7 +86,7 @@ export function usePlaceholderRotation(active: boolean, customMessages?: string[
     return () => clearInterval(timer);
   }, [active, phrases.length, intervalMs]);
 
-  return phrases[index % phrases.length] ?? LOADING_PHRASES[0];
+  return phrases[index % phrases.length] ?? phrases[0];
 }
 
 export interface OpenGenerativeUIRendererProps {
@@ -201,6 +176,8 @@ interface FrameSyncArgs {
   isStreaming: boolean;
   isCompleted: boolean;
   theme: SandboxTheme;
+  /** Receives this frame's validated, clamped content height (delivered by the prompt bridge's single listener). */
+  onResize: (height: number) => void;
 }
 
 /**
@@ -221,6 +198,7 @@ function useSandboxFrameSync({
   isStreaming,
   isCompleted,
   theme,
+  onResize,
 }: FrameSyncArgs): () => void {
   const bridge = usePromptBridge();
   const frameLoadedRef = React.useRef(false);
@@ -245,11 +223,11 @@ function useSandboxFrameSync({
     const iframe = iframeRef.current;
     if (!iframe) return;
     enforceStrictSandboxAttribute(iframe);
-    const unregister = bridge.registerFrame(iframe.contentWindow, frameNonce);
+    const unregister = bridge.registerFrame(iframe.contentWindow, frameNonce, onResize);
     return () => {
       unregister();
     };
-  }, [bridge, hasHtmlContent, frameNonce, iframeRef]);
+  }, [bridge, hasHtmlContent, frameNonce, iframeRef, onResize]);
 
   // Morph HTML and CSS deltas inside the sandboxed iframe.
   React.useEffect(() => {
@@ -292,36 +270,6 @@ function useSandboxFrameSync({
 }
 
 /**
- * Listens for ResizeObserver height reports from this iframe only. `send-prompt` and `open-link` are owned exclusively
- * by PromptBridgeProvider so a prompt is never dispatched twice.
- *
- * @returns The last valid (clamped) reported height, or null before any report.
- */
-function useReportedFrameHeight(iframeRef: React.RefObject<HTMLIFrameElement | null>, frameNonce: string): number | null {
-  const [reportedHeight, setReportedHeight] = React.useState<number | null>(null);
-  React.useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      const iframe = iframeRef.current;
-      if (!iframe?.contentWindow) return;
-      const validated = validateBridgeMessage(event, {
-        frames: new Map([[iframe.contentWindow, frameNonce]]),
-      });
-      if (validated?.type !== 'resize') return;
-      const clamped = clampReportedHeight(validated.height);
-      if (clamped !== null) {
-        setReportedHeight(clamped);
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => {
-      window.removeEventListener('message', handleMessage);
-    };
-  }, [frameNonce, iframeRef]);
-  return reportedHeight;
-}
-
-/**
  * Frame documents: the inline iframe's document (loaded via `frameDocumentProps`) is created ONCE (empty body, no scripts); content, theme and JS reach
  * it via postMessage so streaming deltas never reload the frame or replay a stale preview. The fullscreen preview
  * gets the full self-contained document only once completed.
@@ -352,15 +300,21 @@ function useSandboxDocuments(merged: MergedArgs, isCompleted: boolean, theme: Sa
   return { frameNonce, baseSrcDoc, previewSrcDoc };
 }
 
-/** Streaming overlay: a corner chip once content exists, otherwise a full cover with the rotating phrase. */
-function StreamingPlaceholder({ hasHtmlContent, message }: { hasHtmlContent: boolean; message: string }) {
+/**
+ * Streaming status: a full cover with the rotating phrase while the frame is still empty, otherwise a compact chip that
+ * lives in the header row (never over the widget content).
+ *
+ * @param props.chip - Render the compact header variant instead of the cover.
+ * @param props.message - Current status text (rotating phrase or the rebuilding notice).
+ */
+function StreamingPlaceholder({ chip, message }: { chip: boolean; message: string }) {
   return (
     <div
       role="status"
       aria-live="polite"
       className={
-        hasHtmlContent
-          ? 'pointer-events-none absolute top-2 left-3 z-10 inline-flex items-center gap-1.5 rounded-md border border-border bg-surface/90 px-2.5 py-1 text-xs font-medium text-muted-foreground backdrop-blur-xs'
+        chip
+          ? 'inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground'
           : 'absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-surface/95 p-6 text-center text-sm text-muted-foreground'
       }
       data-testid="sandboxed-ui-placeholder"
@@ -368,6 +322,18 @@ function StreamingPlaceholder({ hasHtmlContent, message }: { hasHtmlContent: boo
       <Loader2Icon className="size-4 animate-spin text-primary" />
       <span>{message}</span>
     </div>
+  );
+}
+
+/** Provenance cue for the header row: this widget is model-generated code running in an isolated iframe. */
+function SandboxBadge() {
+  return (
+    <span
+      data-testid="sandboxed-ui-badge"
+      className="rounded-md border border-border bg-surface px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
+    >
+      {genUiCopy().sandboxedBadge}
+    </span>
   );
 }
 
@@ -381,7 +347,7 @@ function StreamingPlaceholder({ hasHtmlContent, message }: { hasHtmlContent: boo
  * - `jsFunctions` and `jsExpressions` are deferred and only executed when `status === 'completed'`.
  *
  * @param props - `OpenGenerativeUIRendererProps`.
- * @returns Sandboxed widget wrapped in `ExportOverlay`.
+ * @returns Sandboxed widget wrapped in `ExportOverlay` (toolbar, badge and streaming chip sit in its header row).
  */
 export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
   const { payload, status: explicitStatus, theme: explicitTheme, placeholderIntervalMs = 1800, labels } = props;
@@ -396,9 +362,12 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
   const stage = getStreamingStage(mergedRawArgs, status);
   const sanitizedHtml = React.useMemo(() => processPartialHtml(mergedRawArgs.html ?? ''), [mergedRawArgs.html]);
   const hasHtmlContent = sanitizedHtml.trim().length > 0;
-  const activePlaceholder = usePlaceholderRotation(isStreaming, mergedRawArgs.placeholderMessages, placeholderIntervalMs);
+  const rotatingPlaceholder = usePlaceholderRotation(isStreaming, mergedRawArgs.placeholderMessages, placeholderIntervalMs);
+  // A discarded widget keeps its frame while the model rebuilds it; say so instead of showing generic progress.
+  const activePlaceholder = payload?.rebuilding ? genUiCopy().genUiRebuilding : rotatingPlaceholder;
   const resolvedTitle = mergedRawArgs.title ?? genUiCopy().genUiDefaultWidgetTitle;
   const { frameNonce, baseSrcDoc, previewSrcDoc } = useSandboxDocuments(mergedRawArgs, isCompleted, resolvedTheme, resolvedTitle);
+  const [reportedHeight, setReportedHeight] = React.useState<number | null>(null);
   const handleFrameLoad = useSandboxFrameSync({
     iframeRef,
     frameNonce,
@@ -408,8 +377,8 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
     isStreaming,
     isCompleted,
     theme: resolvedTheme,
+    onResize: setReportedHeight,
   });
-  const reportedHeight = useReportedFrameHeight(iframeRef, frameNonce);
   const effectiveHeight = reportedHeight ?? mergedRawArgs.initialHeight ?? DEFAULT_INITIAL_HEIGHT;
 
   // Build standalone HTML document for .html export and fullscreen preview when completed.
@@ -445,6 +414,12 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
       ready={isCompleted && hasHtmlContent}
       frameNonce={frameNonce}
       labels={labels}
+      headerLeading={
+        <>
+          <SandboxBadge />
+          {isStreaming && hasHtmlContent && <StreamingPlaceholder chip message={activePlaceholder} />}
+        </>
+      }
     >
       <div
         className="relative w-full overflow-hidden rounded-lg border border-border bg-surface transition-[height] duration-200 ease-out"
@@ -453,7 +428,7 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
         data-stage={stage}
         data-status={status}
       >
-        {isStreaming && <StreamingPlaceholder hasHtmlContent={hasHtmlContent} message={activePlaceholder} />}
+        {isStreaming && !hasHtmlContent && <StreamingPlaceholder chip={false} message={activePlaceholder} />}
 
         <iframe
           ref={iframeRef}
@@ -469,17 +444,7 @@ export function OpenGenerativeUIRenderer(props: OpenGenerativeUIRendererProps) {
           }}
           data-testid="sandboxed-ui-iframe"
         />
-        {/* Provenance cue: this widget is model-generated code running in an isolated iframe. */}
-        <span
-          data-testid="sandboxed-ui-badge"
-          className="pointer-events-none absolute bottom-1.5 right-2 z-10 rounded-md border border-border bg-surface/90 px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
-        >
-          {genUiCopy().sandboxedBadge}
-        </span>
       </div>
     </ExportOverlay>
   );
 }
-
-/** Alias matching OpenIntelligentUI activity renderer naming. */
-export const OpenGenUIActivityRenderer = OpenGenerativeUIRenderer;

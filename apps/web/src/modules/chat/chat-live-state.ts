@@ -1,6 +1,6 @@
 import * as React from 'react';
 import type { Citation, InputRequest, ToolStatus, ToolStep, WebSearchOutcome } from './api';
-import { removeUiPart, upsertUiPart, type UiPart } from './generative-ui-parts';
+import { markUiPartRebuilding, upsertUiPart, type UiPart } from './generative-ui-parts';
 import type { InputRequestState } from './generative-ui/components/user-input-request';
 
 /** The pending human-in-the-loop `request_user_input` of the active run plus its local lifecycle state. */
@@ -56,7 +56,7 @@ export type ChatLiveAction =
   | { type: 'toolStep'; step: ToolStep }
   | { type: 'webSearch'; outcome: WebSearchOutcome }
   | { type: 'uiUpsert'; ui: UiPart }
-  | { type: 'uiRemove'; partId: string }
+  | { type: 'uiDiscard'; partId: string }
   | { type: 'inputResolved'; resolved: { request_id: string; outcome: string; label?: string } }
   | { type: 'cancelPendingInput' }
   /** Resets text, reasoning, citations, web search, active tool and widget parts (steps survive until the next send). */
@@ -126,7 +126,7 @@ const HANDLERS: Handlers = {
     streamingWebSearch: action.outcome,
   }),
   uiUpsert: (state, action) => ({ ...state, streamingUi: upsertUiPart(state.streamingUi, action.ui) }),
-  uiRemove: (state, action) => ({ ...state, streamingUi: removeUiPart(state.streamingUi, action.partId) }),
+  uiDiscard: (state, action) => ({ ...state, streamingUi: markUiPartRebuilding(state.streamingUi, action.partId) }),
   inputResolved: (state, action) => {
     const prev = state.inputRequest;
     if (!prev || prev.request.request_id !== action.resolved.request_id) return state;

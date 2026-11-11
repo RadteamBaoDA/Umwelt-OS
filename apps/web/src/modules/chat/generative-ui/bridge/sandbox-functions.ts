@@ -32,17 +32,17 @@ export type ValidatedBridgeMessage =
       prompt: string;
       /** Optional request id echoed back in the host's result/error reply. */
       id?: string;
-      rawType: 'umwelt:send-prompt' | 'sendPrompt' | 'opengenui:send-prompt';
+      rawType: 'umwelt:send-prompt';
     }
   | {
       type: 'resize';
       height: number;
-      rawType: 'umwelt:resize' | 'resize' | '__ogui_resize';
+      rawType: 'umwelt:resize';
     }
   | {
       type: 'open-link';
       url: string;
-      rawType: 'umwelt:open-link' | 'openLink';
+      rawType: 'umwelt:open-link';
     }
   | {
       type: 'load-image';
@@ -94,7 +94,7 @@ export function isAllowedLinkUrl(
  * Fail-closed: requires `event.source` to be a registered sandbox window, `event.origin` to be the
  * opaque `'null'` (sandboxed srcdoc) or the host origin, and `data.nonce` to equal that frame's
  * nonce. Then discriminates the message `type`
- * (`'umwelt:send-prompt' | 'sendPrompt' | 'umwelt:resize' | 'resize'`),
+ * (`umwelt:send-prompt`, `umwelt:resize`, `umwelt:open-link`, `umwelt:load-image`),
  * enforces prompt non-empty & max-length bounds (`1..4000`), and clamps resize heights (`50..4000`).
  *
  * @param event - Incoming `MessageEvent` or `{ data, source }` envelope.
@@ -108,13 +108,13 @@ export function validateBridgeMessage(
   const record = authenticateBridgeEvent(event, options);
   if (!record) return null;
   const rawType = record.type;
-  if (rawType === 'umwelt:send-prompt' || rawType === 'sendPrompt' || rawType === 'opengenui:send-prompt') {
+  if (rawType === 'umwelt:send-prompt') {
     return parseSendPrompt(record, rawType);
   }
-  if (rawType === 'umwelt:resize' || rawType === 'resize' || rawType === '__ogui_resize') {
+  if (rawType === 'umwelt:resize') {
     return parseResize(record, rawType);
   }
-  if (rawType === 'umwelt:open-link' || rawType === 'openLink') {
+  if (rawType === 'umwelt:open-link') {
     return parseOpenLink(record, rawType);
   }
   if (rawType === 'umwelt:load-image') {

@@ -31,6 +31,15 @@ describe('chatLiveReducer', () => {
     expect(chatLiveReducer(dirty, { type: 'clearPartial' }).activeTool).toBe('web_search');
   });
 
+  it('uiDiscard keeps the frame as rebuilding until a replacement part or the run end clears it (G6)', () => {
+    const live = base({ streamingUi: [{ part_id: 'r1-a', status: 'completed' }] });
+    const discarded = chatLiveReducer(live, { type: 'uiDiscard', partId: 'r1-a' });
+    expect(discarded.streamingUi).toEqual([{ part_id: 'r1-a', status: 'streaming', rebuilding: true }]);
+    const replaced = chatLiveReducer(discarded, { type: 'uiUpsert', ui: { part_id: 'r2-a', status: 'streaming' } });
+    expect(replaced.streamingUi).toEqual([{ part_id: 'r2-a', status: 'streaming' }]);
+    expect(chatLiveReducer(discarded, { type: 'clearOutput' }).streamingUi).toEqual([]);
+  });
+
   it('input resolution only affects the matching request and cancel only touches pending ones', () => {
     const request = { request_id: 'r1', kind: 'text' as const, prompt: 'p', options: [], slots: [], expires_at: '' };
     const pending = base({ inputRequest: { request, state: 'pending' } });

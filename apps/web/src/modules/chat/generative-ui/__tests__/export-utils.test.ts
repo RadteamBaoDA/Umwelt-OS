@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  assembleStandaloneHtmlFromActivity,
   buildStandaloneHtmlDocument,
   downloadHtmlDocument,
 } from '../sandbox/export-utils';
@@ -30,7 +29,7 @@ describe('buildStandaloneHtmlDocument & downloadHtmlDocument', () => {
   });
 
   it('joins html chunks or single html string into the body after </head>', () => {
-    const doc = assembleStandaloneHtmlFromActivity(sampleContent, 'My Widget');
+    const doc = buildStandaloneHtmlDocument(sampleContent, 'My Widget');
     expect(doc).toContain('<div>Hello</div><p>World</p>');
     expect(doc.indexOf('<div>Hello</div>')).toBeGreaterThan(doc.indexOf('</head>'));
 
@@ -100,5 +99,13 @@ describe('buildStandaloneHtmlDocument & downloadHtmlDocument', () => {
     createObjectUrlSpy.mockRestore();
     revokeObjectUrlSpy.mockRestore();
     clickSpy.mockRestore();
+  });
+
+  it('embeds the frame CSP and the locale in the exported document (G1/G7)', () => {
+    const doc = buildStandaloneHtmlDocument({ html: '<p>x</p>' }, 'T', 'light', 'vi-vi');
+    expect(doc).toContain('<meta http-equiv="Content-Security-Policy"');
+    expect(doc).toContain("connect-src 'none'");
+    expect(doc).toContain('<html lang="vi"');
+    expect(doc.indexOf('Content-Security-Policy')).toBeLessThan(doc.indexOf('<script'));
   });
 });

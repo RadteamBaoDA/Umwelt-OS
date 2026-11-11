@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PromptBridgeProvider, usePromptBridge } from '../bridge';
 import { IMAGE_RATE_MAX } from '../bridge/prompt-bridge';
 import { resolveMediaUrl } from '../bridge/image-loader';
-import { CSP_META_TAG, SANDBOX_BRIDGE_JS } from '../sandbox/frame-content';
+import { buildCspMetaTag, SANDBOX_BRIDGE_JS } from '../sandbox/frame-content';
 
 const apiRequest = vi.hoisted(() => vi.fn());
 vi.mock('@/core/api', () => ({ apiRequest }));
@@ -147,9 +147,9 @@ describe('sandbox image loader bridge', () => {
 
 describe('frame content', () => {
   it('keeps the CSP unchanged and exposes loadImage', () => {
-    expect(CSP_META_TAG).toContain("img-src data: blob:;");
-    expect(CSP_META_TAG).toContain("connect-src 'none'");
-    expect(CSP_META_TAG).toContain("default-src 'none'");
+    expect(buildCspMetaTag('')).toContain("img-src data: blob:;");
+    expect(buildCspMetaTag('')).toContain("connect-src 'none'");
+    expect(buildCspMetaTag('')).toContain("default-src 'none'");
     expect(SANDBOX_BRIDGE_JS).toContain('window.loadImage');
     expect(SANDBOX_BRIDGE_JS).toContain('data.dataUrl');
     expect(SANDBOX_BRIDGE_JS).not.toContain("indexOf('blob:')");

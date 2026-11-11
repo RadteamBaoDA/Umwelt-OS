@@ -222,11 +222,20 @@ export function useWidgetPromptHandlers(p: {
 }) {
   const t = useTranslations('chat');
   const { chatCtrl, busy, handleSend, setError } = p;
-  /** Places a widget prompt in the composer; throws (reported to the widget as retryable) when the owner already typed. */
+  /**
+   * Places a widget prompt in the composer and moves focus there so the owner can review and send it. Throws a localized
+   * error (reported to the widget as retryable and shown by the bridge) when the owner already typed.
+   */
   const onDraftPrompt = React.useCallback((prompt: string) => {
-    if (chatCtrl.draft.trim()) throw new Error('Composer already has text');
+    if (chatCtrl.draft.trim()) throw new Error(t('genUiPromptComposerBusy'));
     chatCtrl.setDraft(prompt);
-  }, [chatCtrl]);
+    // Wait one tick so the textarea already shows the drafted text when it takes focus.
+    setTimeout(() => {
+      const input = document.querySelector<HTMLTextAreaElement>('textarea[data-chat-composer-input]');
+      input?.focus();
+      input?.scrollIntoView({ block: 'nearest' });
+    }, 0);
+  }, [chatCtrl, t]);
   /** Submits a widget follow-up; rejects with a localized error while busy so the bridge reports a retryable failure. */
   const onSendPrompt = React.useCallback(
     (prompt: string): Promise<void> => settleWidgetPrompt(busy, () => handleSend(prompt), t('genUiPromptBusy'), t('genUiPromptFailed')),
