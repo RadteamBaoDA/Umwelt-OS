@@ -35,6 +35,8 @@ export interface ChatSessionProps {
   onSetPinned?: (pinned: boolean) => void;
   /** Archives/restores the open conversation (full mode header menu). */
   onSetArchived?: (archived: boolean) => void;
+  /** Localized failure of the last pin/archive request, shown in the header (the history rail may be collapsed). */
+  actionError?: string | null;
   /** Full-mode header slot before the title (e.g. the mobile History switch), so the page needs no second header row. */
   headerLeading?: React.ReactNode;
   /** Full-mode header slot after the controls (e.g. the Sources sheet trigger on narrow viewports). */
@@ -103,6 +105,7 @@ export function ChatSession({
   onDeleteConversation,
   onSetPinned,
   onSetArchived,
+  actionError,
   headerLeading,
   headerTrailing,
 }: ChatSessionProps) {
@@ -151,6 +154,7 @@ export function ChatSession({
           archived={d.detail.data?.archived}
           onSetPinned={onSetPinned}
           onSetArchived={onSetArchived}
+          actionError={actionError}
           onExportConversation={handleExport}
           onSendPrompt={widget.onTranscriptSendPrompt}
           onNewChat={cmd.handleNewChat}

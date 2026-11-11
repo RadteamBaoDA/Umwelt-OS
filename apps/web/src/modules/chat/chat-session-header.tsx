@@ -4,7 +4,13 @@ import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import { MoreHorizontalIcon, PlusIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { PickQrButton } from '@/modules/pick';
 import type { AgentProfile } from '@/modules/agents';
@@ -46,6 +52,8 @@ export interface ChatSessionHeaderProps {
   archived?: boolean;
   onSetPinned?: (pinned: boolean) => void;
   onSetArchived?: (archived: boolean) => void;
+  /** Localized failure of the last pin/archive request for this conversation; shown here because the history rail may be collapsed. */
+  actionError?: string | null;
   onSendPrompt: (prompt: string) => void;
   onNewChat: () => void;
   /** Profile id currently shown in the picker (a pending retry pins its own profile). */
@@ -96,9 +104,12 @@ function MoreMenu({
         )}
         {onExportConversation && <DropdownMenuItem onSelect={onExportConversation}>{t('exportMarkdown')}</DropdownMenuItem>}
         {onDeleteConversation && (
-          <DropdownMenuItem variant="destructive" onSelect={onDeleteConversation}>
-            {t('delete')}
-          </DropdownMenuItem>
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={onDeleteConversation}>
+              {t('delete')}
+            </DropdownMenuItem>
+          </>
         )}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -159,6 +170,7 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
     archived,
     onSetPinned,
     onSetArchived,
+    actionError,
     onSendPrompt,
     onNewChat,
   } = props;
@@ -195,6 +207,11 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
         </Button>
         {full && headerTrailing}
       </div>
+      {full && actionError && (
+        <p role="alert" className="w-full text-xs text-destructive">
+          {actionError}
+        </p>
+      )}
     </div>
   );
 }

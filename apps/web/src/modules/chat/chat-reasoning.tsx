@@ -16,7 +16,15 @@ import { ChevronRightIcon } from 'lucide-react';
  * @param props.answerStarted - True once answer text or widgets have begun streaming.
  * @returns Native details/summary disclosure with `data-testid="chat-reasoning"`.
  */
-export function ChatReasoning({ text, streaming = false, answerStarted = false }: { text: string; streaming?: boolean; answerStarted?: boolean }) {
+export function ChatReasoning({
+  text,
+  streaming = false,
+  answerStarted = false,
+}: {
+  text: string;
+  streaming?: boolean;
+  answerStarted?: boolean;
+}) {
   const t = useTranslations('chat');
   // null = follow the automatic rule; a boolean = the reader's explicit choice.
   const [pinned, setPinned] = React.useState<boolean | null>(null);
@@ -28,7 +36,7 @@ export function ChatReasoning({ text, streaming = false, answerStarted = false }
       open={open}
       data-testid="chat-reasoning"
       data-state={live ? 'thinking' : 'done'}
-      className="mb-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+      className="mb-2 rounded-lg border border-border bg-muted px-3 py-2 text-xs text-muted-foreground"
     >
       <summary
         className="flex min-h-8 cursor-pointer list-none items-center gap-1.5 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"

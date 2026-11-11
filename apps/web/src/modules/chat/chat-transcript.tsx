@@ -583,8 +583,9 @@ function MessageFacts({
     );
   }
   if (formattedDate) facts.push(<span key="time">{formattedDate}</span>);
+  // Keyed by the fact's own key so a fact appearing or disappearing never re-mounts its neighbours.
   return facts.map((fact, index) => (
-    <React.Fragment key={index}>
+    <React.Fragment key={React.isValidElement(fact) ? fact.key : index}>
       {index > 0 && <span aria-hidden="true">·</span>}
       {fact}
     </React.Fragment>

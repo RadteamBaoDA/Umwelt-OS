@@ -110,7 +110,7 @@ describe('ChatTranscript sources and model line', () => {
     renderTranscript({ messages: [cited], conversationId: 'c1', onSelectCitation });
     expect(screen.getByTestId('message-model').textContent).toBe('model-x');
     const strip = screen.getByTestId('sources-strip');
-    expect(strip.textContent).toBe('1 sources');
+    expect(strip.textContent).toBe('1 source');
     const received: string[][] = [];
     const off = onCitationFocus(() => received.push([]));
     await userEvent.click(strip);
@@ -159,7 +159,7 @@ describe('ChatTranscript sources and model line', () => {
     renderTranscript({ messages: [cited], mode: 'drawer' });
     expect(screen.queryByTestId('sources-strip')).toBeNull();
     expect(screen.getByTestId('message-model').textContent).toBe('model-x');
-    expect(screen.getByText('1 sources')).toBeTruthy();
+    expect(screen.getByText('1 source')).toBeTruthy();
   });
 });
 

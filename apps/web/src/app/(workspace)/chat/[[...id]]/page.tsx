@@ -94,7 +94,7 @@ function ChatHistoryRail({ vm }: { vm: ChatPageContentVm }) {
             className="size-11 shrink-0"
             onClick={handleNewConversation}
             aria-label={t('newChat')}
-            title={`${t('newChat')} (Ctrl+Shift+O)`}
+            title={t('newChatShortcut')}
           >
             <Plus aria-hidden="true" />
           </Button>
@@ -145,6 +145,9 @@ function ChatSessionPanel({ vm }: { vm: ChatPageContentVm }) {
           <ArrowLeft aria-hidden="true" className="size-4" />
           <span className="hidden min-[480px]:inline">{t('history')}</span>
         </Button>
+      }
+      actionError={
+        chatCtrl.activeConversationId && conversationActions.flagError === chatCtrl.activeConversationId ? t('historyFlagFailed') : null
       }
       headerTrailing={<ChatSourcesSheet citations={citations} conversationId={chatCtrl.activeConversationId} />}
       onRenameConversation={
