@@ -30,6 +30,7 @@ function useEmptyCapabilities(data: ChatSessionData, full: boolean): EmptyCapabi
   const attachBlocked = data.busy || data.attachmentsUnavailable || data.attachments.full;
   const webReason = web && !web.available ? t('webSearchNotSetUp') : web?.profileBlocked ? t('webSearchProfileOnly') : undefined;
   return {
+    providerMissing: !data.providerReady,
     webSearch: web && {
       pressed: web.available && !web.profileBlocked && web.enabled,
       disabledReason: webReason,

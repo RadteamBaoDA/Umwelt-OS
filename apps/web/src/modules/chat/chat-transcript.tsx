@@ -32,7 +32,6 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { genUiCopy, resolveWidgetLocale } from './generative-ui/copy';
 import type { AppLocaleId } from '@/core/i18n';
 import { useRevealBlocks } from './reveal-blocks';
 import type { GenerativeUIPayload } from './generative-ui/sandbox/schema';
@@ -164,6 +163,8 @@ export interface CapabilityChip {
 
 /** Capability chips shown in the empty state; each key is omitted when the control does not exist for this chat. */
 export interface EmptyCapabilities {
+  /** True when no chat model is configured: the empty state then shows a setup notice instead of the starter prompts. */
+  providerMissing?: boolean;
   webSearch?: CapabilityChip;
   attach?: CapabilityChip;
 }
@@ -231,23 +232,44 @@ function CapabilityChips({ capabilities }: { capabilities: EmptyCapabilities }) 
   const { webSearch, attach } = capabilities;
   if (!webSearch && !attach) return null;
   return (
-    <div data-testid="capability-chips" role="group" aria-label={t('capabilitiesLabel')} className="flex flex-wrap gap-2">
-      {webSearch && (
-        <CapabilityChipButton
-          testId="capability-web"
-          icon={<GlobeIcon className="size-3.5" aria-hidden="true" />}
-          label={t('capabilityWebSearch')}
-          chip={webSearch}
-        />
-      )}
-      {attach && (
-        <CapabilityChipButton
-          testId="capability-attach"
-          icon={<PaperclipIcon className="size-3.5" aria-hidden="true" />}
-          label={t('capabilityAttach')}
-          chip={attach}
-        />
-      )}
+    <div className="flex flex-col gap-2">
+      <p id="chat-capabilities-label" className="text-xs font-medium text-muted-foreground">
+        {t('capabilitiesHeading')}
+      </p>
+      <div data-testid="capability-chips" role="group" aria-labelledby="chat-capabilities-label" className="flex flex-wrap gap-2">
+        {webSearch && (
+          <CapabilityChipButton
+            testId="capability-web"
+            icon={<GlobeIcon className="size-3.5" aria-hidden="true" />}
+            label={t('capabilityWebSearch')}
+            chip={webSearch}
+          />
+        )}
+        {attach && (
+          <CapabilityChipButton
+            testId="capability-attach"
+            icon={<PaperclipIcon className="size-3.5" aria-hidden="true" />}
+            label={t('capabilityAttach')}
+            chip={attach}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Empty-state notice for an unconfigured chat model (C16): says so up front and links to the model settings. */
+function ProviderMissingNotice() {
+  const t = useTranslations('chat');
+  return (
+    <div role="status" className="flex max-w-prose flex-wrap items-center gap-3 rounded-lg border border-border bg-surface p-3 text-sm">
+      <div className="min-w-0 flex-1">
+        <p className="font-medium text-foreground">{t('providerGateTitle')}</p>
+        <p className="text-muted-foreground">{t('providerGateBody')}</p>
+      </div>
+      <Button asChild size="sm">
+        <Link href="/settings/models">{t('providerGateAction')}</Link>
+      </Button>
     </div>
   );
 }
@@ -256,20 +278,11 @@ function CapabilityChips({ capabilities }: { capabilities: EmptyCapabilities }) 
  * Composer-first empty state: one sentence about what Chat can do with this workspace plus starter prompts
  * (the owner's top topics, else three fixed ones) as plain outline buttons. Prompts are workspace-relevant message keys; selecting one sends it like a typed message.
  *
- * @param props - Send callback, active locale and the optional capability chips (full Chat).
+ * @param props - Send callback and the optional capability chips (full Chat; `providerMissing` swaps the starters for a setup notice).
  * @returns Left-aligned intro block with a labelled prompt group and the capability chips.
  */
-function EmptyIntro({
-  onSendPrompt,
-  locale,
-  capabilities,
-}: {
-  onSendPrompt: (prompt: string) => void;
-  locale?: AppLocaleId;
-  capabilities?: EmptyCapabilities;
-}) {
+function EmptyIntro({ onSendPrompt, capabilities }: { onSendPrompt: (prompt: string) => void; capabilities?: EmptyCapabilities }) {
   const t = useTranslations('chat');
-  const copy = genUiCopy(resolveWidgetLocale(locale));
   // Real topics replace the fixed chips; empty/failed load keeps the fixed ones.
   const topics = useTopicNames();
   return (
@@ -278,31 +291,40 @@ function EmptyIntro({
         <h2 className="text-lg font-semibold text-foreground">{t('emptyStateTitle')}</h2>
         <p className="max-w-prose text-sm text-muted-foreground">{t('emptyStateDescription')}</p>
       </div>
-      <div data-testid="starter-suggestions" role="group" aria-label={copy.shellSuggestionsLabel} className="flex flex-wrap gap-2">
-        {topics.length > 0
-          ? topics.map((topic) => (
-              <Button
-                key={topic}
-                type="button"
-                variant="outline"
-                className="h-auto whitespace-normal text-left"
-                onClick={() => onSendPrompt(t('starterTopicPrompt', { topic }))}
-              >
-                {t('starterTopicTitle', { topic })}
-              </Button>
-            ))
-          : STARTER_PROMPTS.map(({ title, prompt }) => (
-              <Button
-                key={title}
-                type="button"
-                variant="outline"
-                className="h-auto whitespace-normal text-left"
-                onClick={() => onSendPrompt(t(prompt))}
-              >
-                {t(title)}
-              </Button>
-            ))}
-      </div>
+      {capabilities?.providerMissing ? (
+        <ProviderMissingNotice />
+      ) : (
+        <div className="flex flex-col gap-2">
+          <p id="chat-starters-label" className="text-xs font-medium text-muted-foreground">
+            {t('startersHeading')}
+          </p>
+          <div data-testid="starter-suggestions" role="group" aria-labelledby="chat-starters-label" className="flex flex-wrap gap-2">
+            {topics.length > 0
+              ? topics.map((topic) => (
+                  <Button
+                    key={topic}
+                    type="button"
+                    variant="outline"
+                    className="h-auto whitespace-normal text-left"
+                    onClick={() => onSendPrompt(t('starterTopicPrompt', { topic }))}
+                  >
+                    {t('starterTopicTitle', { topic })}
+                  </Button>
+                ))
+              : STARTER_PROMPTS.map(({ title, prompt }) => (
+                  <Button
+                    key={title}
+                    type="button"
+                    variant="outline"
+                    className="h-auto whitespace-normal text-left"
+                    onClick={() => onSendPrompt(t(prompt))}
+                  >
+                    {t(title)}
+                  </Button>
+                ))}
+          </div>
+        </div>
+      )}
       {capabilities && <CapabilityChips capabilities={capabilities} />}
     </div>
   );
@@ -966,17 +988,9 @@ function TranscriptError({ error, onRetry }: { error: string; onRetry?: () => vo
 }
 
 /** Starter gallery (or plain empty copy) for a brand-new view. */
-function EmptyState({
-  onSendPrompt,
-  locale,
-  capabilities,
-}: {
-  onSendPrompt?: (prompt: string) => void;
-  locale: AppLocaleId;
-  capabilities?: EmptyCapabilities;
-}) {
+function EmptyState({ onSendPrompt, capabilities }: { onSendPrompt?: (prompt: string) => void; capabilities?: EmptyCapabilities }) {
   const t = useTranslations('chat');
-  if (onSendPrompt) return <EmptyIntro onSendPrompt={onSendPrompt} locale={locale} capabilities={capabilities} />;
+  if (onSendPrompt) return <EmptyIntro onSendPrompt={onSendPrompt} capabilities={capabilities} />;
   return (
     <div className="mt-auto flex flex-col gap-1 py-8">
       <h2 className="text-base font-semibold text-foreground">{t('emptyStateTitle')}</h2>
@@ -1194,7 +1208,7 @@ export function ChatTranscript(props: ChatTranscriptProps) {
         {/* Readable measure: one centred 720px column inside the transcript region. */}
         <div className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-4">
           {/* Starter gallery is for a brand-new view or a conversation without any message; it never reappears between turns. */}
-          {showStarter && <EmptyState onSendPrompt={onSendPrompt} locale={locale} capabilities={props.capabilities} />}
+          {showStarter && <EmptyState onSendPrompt={onSendPrompt} capabilities={props.capabilities} />}
 
           {m.entries.slice(0, turnStart).map(renderMessage)}
 

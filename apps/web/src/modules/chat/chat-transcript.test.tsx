@@ -169,6 +169,18 @@ describe('ChatTranscript capability chips', () => {
     topicsMock.fetchTopics.mockRejectedValue(new Error('offline'));
   });
 
+  it('labels the two button rows and names each group by its visible label (C16)', () => {
+    renderTranscript({ onSendPrompt: vi.fn(), capabilities: { webSearch: { pressed: true, onActivate: vi.fn() } } });
+    expect(screen.getByRole('group', { name: 'Try asking' })).toBe(screen.getByTestId('starter-suggestions'));
+    expect(screen.getByRole('group', { name: 'Tools for this message' })).toBe(screen.getByTestId('capability-chips'));
+  });
+
+  it('replaces the starters with a model setup notice when no chat model is configured (C16)', () => {
+    renderTranscript({ onSendPrompt: vi.fn(), capabilities: { providerMissing: true } });
+    expect(screen.queryByTestId('starter-suggestions')).toBeNull();
+    expect(screen.getByRole('link', { name: messages['en-us'].chat.providerGateAction }).getAttribute('href')).toBe('/settings/models');
+  });
+
   it('toggles composer options and opens the picker without sending a message', async () => {
     const onSendPrompt = vi.fn();
     const web = { pressed: false, onActivate: vi.fn() };
@@ -347,7 +359,7 @@ describe('ChatTranscript meta row and steps (C10, C12, C19, U3)', () => {
   it('anchors the empty state above the composer', () => {
     topicsMock.fetchTopics.mockRejectedValue(new Error('offline'));
     renderTranscript({ onSendPrompt: vi.fn() });
-    expect(screen.getByTestId('starter-suggestions').parentElement!.className).toContain('mt-auto');
+    expect(screen.getByTestId('starter-suggestions').closest('.mt-auto')).not.toBeNull();
   });
 
   it('turns an unconfigured web-search chip into a settings link', () => {
