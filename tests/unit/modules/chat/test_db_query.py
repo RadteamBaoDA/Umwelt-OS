@@ -253,8 +253,14 @@ async def test_db_query_granted_by_source_gadget_and_fails_closed(
     from modules.chat._worker import setup as worker_setup
 
     c = SimpleNamespace(scope=SimpleNamespace(workspace_id=uuid4()), response_id=uuid4())
-    plain = SimpleNamespace(req_params={DB_QUERY_KEY: True})  # legacy flag is ignored
-    gadget = SimpleNamespace(req_params={"kind": "gadget"})
+    open_scope = SimpleNamespace(selected_only=False)
+    plain = SimpleNamespace(
+        req_params={DB_QUERY_KEY: True}, answer_request=open_scope
+    )  # legacy flag is ignored
+    gadget = SimpleNamespace(req_params={"kind": "gadget"}, answer_request=open_scope)
+    selected = SimpleNamespace(
+        req_params={"kind": "gadget"}, answer_request=SimpleNamespace(selected_only=True)
+    )
 
     async def run(turn: object, row: object | None) -> bool:
         return await worker_setup._db_query_granted(_OneRowSession(row), c, turn, False)  # type: ignore[arg-type]
@@ -262,6 +268,8 @@ async def test_db_query_granted_by_source_gadget_and_fails_closed(
     assert await run(plain, (uuid4(),)) is True
     assert await run(plain, None) is False
     assert await run(gadget, None) is True
+    # Selected-only turns never get the workspace-wide data tool, even with a source or on a gadget turn (S5).
+    assert await run(selected, (uuid4(),)) is False
 
     async def boom(*_a: object, **_k: object) -> bool:
         raise RuntimeError("db down")

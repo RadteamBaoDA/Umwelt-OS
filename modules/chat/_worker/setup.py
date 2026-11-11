@@ -671,8 +671,12 @@ async def _db_query_granted(
 ) -> bool:
     """Whether ``query_collected_data`` is offered this turn: gadget turns, or any active collected source.
 
-    A failed lookup withholds the tool (logged without content) instead of failing the turn.
+    Never offered on selected-only turns: the tool reads every permitted workspace source and ignores the
+    selection fences, so it would leak beyond the documents the owner chose. A failed lookup withholds the
+    tool (logged without content) instead of failing the turn.
     """
+    if turn.answer_request.selected_only:
+        return False
     if is_gadget_turn(turn.req_params):
         return True
     try:
