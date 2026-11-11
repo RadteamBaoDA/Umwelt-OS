@@ -353,6 +353,9 @@ async def _answer_tool_calls(
     data calls are not run: they get a ``tool_budget_exhausted`` result so the model answers from what it has.
     """
     ts = env.ts
+    if any(id(call) not in rc.invalid_of and id(call) not in rc.part_of for call in rc.handled):
+        # A data-tool round's prose is narration; only the text after the last such round is the answer.
+        st.narration_spans.append((rs.text_start, len(st.accumulated_text)))
     tool_calls = [
         {
             "id": x["id"] or f"call_{i}",

@@ -143,9 +143,30 @@ class _StreamState:
     pending_reasoning: str = ""
     pending_ui: dict[str, dict[str, Any]] = field(default_factory=dict)
     accumulated_text: str = ""
+    # Spans of ``accumulated_text`` written by rounds that ended in data-tool calls (narration such as
+    # "let me search again"); streamed to the client but not part of the persisted answer.
+    narration_spans: list[tuple[int, int]] = field(default_factory=list)
     accumulated_reasoning: str = ""  # published reasoning, capped at REASONING_MAX_CHARS
     reasoning_truncated: bool = False
     last_flush: float = float("-inf")
+
+    def answer_text(self) -> str:
+        """Return the text to validate and persist: ``accumulated_text`` minus data-tool-round narration.
+
+        Falls back to the full text when removing narration would leave nothing, so a turn whose only prose
+        preceded a dropped tool call is not persisted empty.
+        """
+        if not self.narration_spans:
+            return self.accumulated_text
+        parts: list[str] = []
+        pos = 0
+        for start, end in self.narration_spans:
+            parts.append(self.accumulated_text[pos:start])
+            pos = end
+        parts.append(self.accumulated_text[pos:])
+        # The next round's paragraph-break prefix would otherwise lead the answer.
+        kept = "".join(parts).lstrip()
+        return kept or self.accumulated_text
 
     def drop_pending(self) -> None:
         """Discard unpublished buffers after the run was cancelled or redacted."""

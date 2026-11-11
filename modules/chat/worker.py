@@ -251,7 +251,7 @@ async def _generate(c: _RunCtx, claimed: _ClaimedRun) -> None:
     await _stream_turn(env, st)
     # 5. Complete generation and citation validation
     cited = _validate_citations(
-        st.accumulated_text,
+        st.answer_text(),
         cast(AnswerContext, turn.answer_context),
         turn.answer_request,
         turn.web_run,
