@@ -248,6 +248,14 @@ async def generate_followup(env: _ToolEnv, message_id: UUID, final_answer: str) 
             title, suggestions = await _ask_model(env, final_answer, want_title)
             if title or suggestions:
                 await _persist_followup(env, message_id, final_answer, title, suggestions)
+            else:
+                # Content-free signal (run id and what was asked) to measure how often the 300-token cap
+                # yields nothing before anyone changes it.
+                logger.warning(
+                    "Post-answer title/suggestions came back empty for run %s (title requested: %s)",
+                    env.c.response_id,
+                    want_title,
+                )
         except Exception as exc:  # noqa: BLE001  # boundary: a cosmetic step must never fail or delay the answer
             logger.warning(
                 "Post-answer title/suggestions skipped for run %s (%s)",

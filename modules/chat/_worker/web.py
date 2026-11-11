@@ -605,7 +605,14 @@ async def _rewrite_web_query(
                 "chat",
                 mapping,
                 policy,
-                [{"role": "system", "content": REWRITE_INSTRUCTIONS}, *window],
+                [
+                    {
+                        "role": "system",
+                        # The date lets "latest"/"this year" resolve into a concrete search query.
+                        "content": f"{REWRITE_INSTRUCTIONS} Today is {datetime.now(UTC).date().isoformat()}.",
+                    },
+                    *window,
+                ],
                 schema,
                 max_tokens=64,
                 temperature=0,
@@ -613,6 +620,10 @@ async def _rewrite_web_query(
             )
         raw = json.loads(response["choices"][0]["message"]["content"])["query"]
         query = web.normalize_query(raw)
+        if not query:
+            # Content-free signal for tuning max_tokens: reasoning models can spend the whole cap thinking.
+            logger.warning("web query rewrite returned an empty query; using the literal prompt")
+            return user_prompt
         return query if len(query) <= REWRITE_QUERY_CHARS else user_prompt
     except asyncio.CancelledError:
         raise

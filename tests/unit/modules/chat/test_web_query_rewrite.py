@@ -93,6 +93,7 @@ async def test_rewrites_and_excludes_assistant_messages(monkeypatch: pytest.Monk
     messages = rig.calls[0][1]
     assert [m["role"] for m in messages] == ["system", "user", "user", "user", "user"]
     assert "SECRET" not in json.dumps(messages)
+    assert "Today is 20" in messages[0]["content"]  # current date for "latest" queries
     assert [m["content"][:2] for m in messages[1:]] == ["u2", "u3", "u4", "gi"]
     assert len(messages[3]["content"]) == worker.REWRITE_MESSAGE_CHARS
 
