@@ -12,6 +12,7 @@ vi.mock('@/modules/news/api', () => topicsMock);
 
 import { ChatTranscript } from './chat-transcript';
 import { onCitationFocus } from './chat-citation-focus';
+import { ChatSideRail } from './chat-side-rail';
 
 const queryClient = new QueryClient();
 beforeEach(() => queryClient.clear());
@@ -122,6 +123,36 @@ describe('ChatTranscript sources and model line', () => {
     });
     await userEvent.click(chip);
     expect(onSelectCitation).toHaveBeenCalledWith(cited.citations![0]);
+  });
+
+  it('chip click opens the rail scoped to that answer and highlights the clicked source (D2)', async () => {
+    const two = {
+      ...cited,
+      content: 'First [1] and second [2].',
+      citations: [
+        { sourceType: 'web', url: 'https://example.com/a', title: 'Alpha', quote: 'qa' },
+        { sourceType: 'web', url: 'https://example.com/b', title: 'Beta', quote: 'qb' },
+      ],
+    } as unknown as typeof cited;
+    const other = { sourceType: 'web', url: 'https://example.com/z', title: 'Zeta', quote: 'qz' };
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+          <ChatTranscript messages={[two]} mode="full" conversationId="c-chip" />
+          <ChatSideRail citations={[...(two.citations as never[]), other as never]} conversationId="c-chip" />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    const chip = await waitFor(() => {
+      const found = document.querySelector('a.cite[data-cite="2"]');
+      expect(found).not.toBeNull();
+      return found as Element;
+    });
+    await userEvent.click(chip);
+    const cards = screen.getAllByTestId('rail-source');
+    expect(cards).toHaveLength(2);
+    expect(cards[1].getAttribute('aria-current')).toBe('true');
+    expect(cards[0].getAttribute('aria-current')).not.toBe('true');
   });
 
   it('keeps the drawer free of the strip button and shows the count as text in the meta row', () => {

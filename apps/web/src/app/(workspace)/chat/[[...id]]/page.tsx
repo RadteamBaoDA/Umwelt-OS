@@ -48,7 +48,7 @@ function ChatPageContent() {
         </div>
       </div>
 
-      <ChatSideRail citations={citations} />
+      <ChatSideRail citations={citations} conversationId={s2.chatCtrl.activeConversationId} />
       {conversationActions.dialogs}
     </div>
   );
@@ -146,7 +146,7 @@ function ChatSessionPanel({ vm }: { vm: ChatPageContentVm }) {
           <span className="hidden min-[480px]:inline">{t('history')}</span>
         </Button>
       }
-      headerTrailing={<ChatSourcesSheet citations={citations} />}
+      headerTrailing={<ChatSourcesSheet citations={citations} conversationId={chatCtrl.activeConversationId} />}
       onRenameConversation={
         chatCtrl.activeConversationId
           ? () => conversationActions.rename({ id: chatCtrl.activeConversationId!, title: detail?.title ?? '' })

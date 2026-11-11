@@ -1182,7 +1182,10 @@ export function ChatTranscript(props: ChatTranscriptProps) {
     />
   );
   // Full Chat shows the evidence rail, so chip and strip clicks open it; the drawer has no rail and keeps plain links.
-  const onOpenSources = mode === 'full' ? focusCitations : undefined;
+  const onOpenSources =
+    mode === 'full'
+      ? (citations: readonly Citation[], highlighted?: Citation) => focusCitations(citations, highlighted, props.conversationId)
+      : undefined;
   const onSelectCitation = props.onSelectCitation;
 
   return (
