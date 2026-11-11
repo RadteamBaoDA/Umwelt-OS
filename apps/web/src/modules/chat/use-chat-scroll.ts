@@ -222,11 +222,14 @@ export function useChatScroll({
   const loadedRef = React.useRef(false);
   const lastScrollTopRef = React.useRef(0);
   const [isAtBottom, setIsAtBottom] = React.useState(true);
-  // Unread dot: content changed while the reader is above the bottom. `seenSignal` follows the signal whenever the
-  // reader is at the bottom (render-phase sync of this component's own state), so only later changes count.
-  const [seenSignal, setSeenSignal] = React.useState(contentSignal);
-  if (isAtBottom && seenSignal !== contentSignal) setSeenSignal(contentSignal);
-  const hasUnread = !isAtBottom && seenSignal !== contentSignal;
+  // Unread dot: content changed while the reader is above the bottom. `seenSignal` follows the signal (in an effect, so
+  // streaming at the bottom causes no extra render) whenever the reader is at the bottom, so only later changes count.
+  const seenSignalRef = React.useRef(contentSignal);
+  React.useEffect(() => {
+    if (isAtBottom) seenSignalRef.current = contentSignal;
+  }, [isAtBottom, contentSignal]);
+  // eslint-disable-next-line react-hooks/refs -- the ref only changes in the effect above, never between a render and its commit
+  const hasUnread = !isAtBottom && seenSignalRef.current !== contentSignal;
   const prefersReducedMotion = usePrefersReducedMotion();
   const state: FollowState = { containerRef, followRef };
   const commands = useScrollCommands(state, prefersReducedMotion);

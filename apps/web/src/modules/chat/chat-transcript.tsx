@@ -28,6 +28,7 @@ import { ChatReasoning } from './chat-reasoning';
 import { ChatStepList } from './chat-steps';
 import { buildRenderEntries, type RenderEntry, type VersionNav } from './chat-versions';
 import { useCopyMessage } from './use-copy-message';
+import { useStableCallback } from './use-stable-callback';
 import { useTopicNames } from './use-topic-names';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime } from '@/core/i18n';
@@ -716,7 +717,7 @@ interface TranscriptMessageProps extends MessageViewProps {
   /** Inline citation chip click (full Chat); undefined leaves chips as plain links. */
   onSelectCitation?: (citation: Citation) => void;
   /** "N sources" strip click (full Chat); the strip is hidden without it. */
-  onOpenSources?: (citations: Citation[]) => void;
+  onOpenSources?: (citations: Citation[], highlighted?: Citation) => void;
   /** True while this message's prompt is being edited in the composer. */
   editing?: boolean;
   /** Settled processing steps of the run that produced this answer; shown collapsed above it (newest answer only). */
@@ -730,36 +731,37 @@ function messageClass(isUser: boolean, editing?: boolean): string {
 }
 
 /**
+ * Which message actions apply: edit for the newest unrevised user prompt, regenerate for the newest unrevised stored
+ * assistant answer; both only in full Chat and only when the host supplied the handler.
+ *
+ * @param props - The message, its mode, revision flags and handlers.
+ */
+function messageActionRights(props: TranscriptMessageProps): { canEdit: boolean; canRegenerate: boolean } {
+  const { msg, mode, isRevised, latest } = props;
+  const base = mode === 'full' && Boolean(msg.response_id) && !isRevised && latest;
+  return {
+    canEdit: base && msg.role === 'user' && Boolean(props.onEditMessage),
+    canRegenerate: base && msg.role === 'assistant' && Boolean(props.onRegenerateMessage),
+  };
+}
+
+/**
  * One committed message: body, widgets, actions and citations/model line. Edit and regenerate are offered only in full
  * Chat for messages that have a response id and have not already been revised.
  *
+ * Memoized: the transcript passes stable handler props, so a settled message re-renders only when its own data changes,
+ * never for streaming tokens of the live bubble.
+ *
  * @param props - See {@link TranscriptMessageProps}.
  */
-function TranscriptMessage(props: TranscriptMessageProps) {
-  const {
-    msg,
-    mode,
-    locale,
-    csrfToken,
-    revised,
-    isRevised,
-    latest,
-    widgetPromptHandler,
-    onEditMessage,
-    onRegenerateMessage,
-    onSelectCitation,
-  } = props;
+const TranscriptMessage = React.memo(function TranscriptMessage(props: TranscriptMessageProps) {
+  const { msg, mode, locale, csrfToken, revised, widgetPromptHandler, onOpenSources } = props;
   const t = useTranslations('chat');
+  // Without a host-provided chip handler, full Chat opens the evidence rail on this message's citations.
+  const onSelectCitation =
+    props.onSelectCitation ?? (onOpenSources && ((citation: Citation) => onOpenSources(msg.citations ?? [citation], citation)));
   const isUser = msg.role === 'user';
-  const canEdit = mode === 'full' && isUser && Boolean(msg.response_id) && !isRevised && latest && Boolean(onEditMessage);
-  const canRegenerate =
-    mode === 'full' &&
-    !isUser &&
-    msg.role === 'assistant' &&
-    Boolean(msg.response_id) &&
-    !isRevised &&
-    latest &&
-    Boolean(onRegenerateMessage);
+  const { canEdit, canRegenerate } = messageActionRights(props);
   return (
     <div
       data-role={msg.role}
@@ -796,7 +798,7 @@ function TranscriptMessage(props: TranscriptMessageProps) {
       <MessageActions {...props} canEdit={canEdit} canRegenerate={canRegenerate} />
     </div>
   );
-}
+});
 
 /**
  * Follow-up question chips under the latest assistant answer. Selecting one sends it like a typed message, so the
@@ -1167,8 +1169,10 @@ function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
   /** The message that `msg` revises, when loaded. */
   const revisedOf = (msg: ChatMessage) => (msg.revision_of_message_id ? messageById.get(msg.revision_of_message_id) : undefined);
   /** Form widgets get the rejecting handler (retryable errors); every other widget keeps the plain one. */
-  const widgetPromptHandler = (part: unknown) =>
-    (part as { kind?: string }).kind === 'form' && onWidgetSendPrompt ? onWidgetSendPrompt : onSendPrompt;
+  const widgetPromptHandler = React.useCallback(
+    (part: unknown) => ((part as { kind?: string }).kind === 'form' && onWidgetSendPrompt ? onWidgetSendPrompt : onSendPrompt),
+    [onWidgetSendPrompt, onSendPrompt],
+  );
   return { locale, timezone, copy, revisedOf, revisedMessageIds, widgetPromptHandler, entries, selectVersion, ...scroll };
 }
 
@@ -1182,8 +1186,11 @@ function useTranscriptModel(props: ChatTranscriptProps, busy: boolean) {
  * @returns Accessible conversation transcript viewport.
  */
 export function ChatTranscript(props: ChatTranscriptProps) {
-  const { csrfToken, streamingText, streamingCitations, streamingWebSearch, onRetry, onEditMessage, onRegenerateMessage, onSendPrompt } =
-    props;
+  const { csrfToken, streamingText, streamingCitations, streamingWebSearch, onRetry, onSendPrompt } = props;
+  // Stable identities keep memoized settled messages from re-rendering on every streamed token.
+  const onEditMessage = useStableCallback(props.onEditMessage);
+  const onRegenerateMessage = useStableCallback(props.onRegenerateMessage);
+  const onSelectCitation = useStableCallback(props.onSelectCitation);
   const { mode, streamingReasoning, cancelled, activeTool, streamingUi, isStreaming, isPending, error, steps } =
     withTranscriptDefaults(props);
   const t = useTranslations('chat');
@@ -1192,6 +1199,13 @@ export function ChatTranscript(props: ChatTranscriptProps) {
   const { showStarter, showStreaming, stopped, stop } = transcriptVisibility(props, withTranscriptDefaults(props));
   const { regenerateTarget, turnStart } = latestTurnLayout(m.entries, mode, Boolean(onRegenerateMessage));
   const lastEntry = m.entries[m.entries.length - 1];
+  // Full Chat shows the evidence rail, so chip and strip clicks open it; the drawer has no rail and keeps plain links.
+  const focusConversationId = props.conversationId;
+  const openSources = React.useCallback(
+    (citations: readonly Citation[], highlighted?: Citation) => focusCitations(citations, highlighted, focusConversationId),
+    [focusConversationId],
+  );
+  const onOpenSources = mode === 'full' ? openSources : undefined;
   /** Renders one committed message with the transcript-wide handlers. */
   const renderMessage = ({ msg, latest, nav }: RenderEntry) => (
     <TranscriptMessage
@@ -1210,18 +1224,12 @@ export function ChatTranscript(props: ChatTranscriptProps) {
       widgetPromptHandler={widgetPromptHandler}
       onEditMessage={onEditMessage}
       onRegenerateMessage={onRegenerateMessage}
-      onSelectCitation={onSelectCitation ?? (onOpenSources && ((citation) => onOpenSources(msg.citations ?? [citation], citation)))}
+      onSelectCitation={onSelectCitation}
       onOpenSources={onOpenSources}
       editing={msg.id === props.editingMessageId}
       steps={!showStreaming && msg === lastEntry?.msg && msg.role === 'assistant' && latest && steps.length > 0 ? steps : undefined}
     />
   );
-  // Full Chat shows the evidence rail, so chip and strip clicks open it; the drawer has no rail and keeps plain links.
-  const onOpenSources =
-    mode === 'full'
-      ? (citations: readonly Citation[], highlighted?: Citation) => focusCitations(citations, highlighted, props.conversationId)
-      : undefined;
-  const onSelectCitation = props.onSelectCitation;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">

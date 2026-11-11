@@ -51,5 +51,6 @@ export function useCopyMessage(conversationId: string | null | undefined) {
     };
   }, [conversationId]);
 
-  return { copyMessage, copiedMessageId, failedMessageId };
+  // Stable identity while nothing changed, so memoized transcript messages are not re-rendered by unrelated updates.
+  return React.useMemo(() => ({ copyMessage, copiedMessageId, failedMessageId }), [copyMessage, copiedMessageId, failedMessageId]);
 }
