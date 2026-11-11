@@ -103,6 +103,9 @@ export const chatMessages = {
     attachmentLocalOnlyBlock:
       'This file was attached as private (local only), so the cloud chat model cannot read it. It stays saved in Chat attachments. Re-attach it as shared or remove it to send.',
     attachmentReattachShared: 'Re-attach as shared',
+    attachmentShareAsk: 'Let the AI model read your attached files?',
+    attachmentShareYes: 'Let it read',
+    attachmentShareNo: 'Keep private',
     attachmentShareToggle: 'Allow cloud AI to read this file',
     attachmentDropped: 'Only {max} files per message; the extra files were not attached.',
     attachmentUnavailableBlock:
@@ -571,6 +574,9 @@ export const chatMessages = {
     attachmentLocalOnlyBlock:
       'Tệp này được đính kèm ở chế độ riêng tư (chỉ lưu trên máy) nên mô hình chat trên đám mây không đọc được. Tệp vẫn được lưu trong Chat attachments. Hãy đính kèm lại ở chế độ chia sẻ hoặc bỏ tệp để gửi.',
     attachmentReattachShared: 'Đính kèm lại ở chế độ chia sẻ',
+    attachmentShareAsk: 'Cho mô hình AI đọc các tệp bạn đính kèm?',
+    attachmentShareYes: 'Cho đọc',
+    attachmentShareNo: 'Giữ riêng tư',
     attachmentShareToggle: 'Cho phép AI đám mây đọc tệp này',
     attachmentDropped: 'Mỗi tin nhắn tối đa {max} tệp; các tệp thừa không được đính kèm.',
     attachmentUnavailableBlock:

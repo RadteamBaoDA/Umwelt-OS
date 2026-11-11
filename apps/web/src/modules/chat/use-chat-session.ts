@@ -228,13 +228,16 @@ export function useChatSessionCommands(
   const { session, chatCtrl, live, actions, refs, composer } = d;
   const { setProviderGateOpen, setEditingMessageId, draftStashRef } = composer;
   const { setActiveAgentRunId } = agent;
+  const { resetShareChoice } = d.attachments;
   const streamResponseRun = useChatStream(refs, actions, setThemeRequest);
   const onSelectionReset = React.useCallback(() => {
     setActiveAgentRunId(null);
     setEditingMessageId(null);
     // A stash belongs to the conversation being edited; it must not leak into the next one.
     draftStashRef.current = null;
-  }, [setActiveAgentRunId, setEditingMessageId, draftStashRef]);
+    // The attachment-sharing answer is remembered per conversation (C5).
+    resetShareChoice();
+  }, [setActiveAgentRunId, setEditingMessageId, draftStashRef, resetShareChoice]);
   useConversationSelection({
     refs,
     live: actions,
@@ -290,7 +293,8 @@ export function useChatSessionCommands(
     actions.clearOutput();
     actions.patch({ error: null, cancelled: false, inputRequest: null, isStreaming: false, isPending: false });
     resetToggles();
-  }, [resetConversation, refs, actions, setEditingMessageId, resetToggles]);
+    resetShareChoice();
+  }, [resetConversation, refs, actions, setEditingMessageId, resetToggles, resetShareChoice]);
 
   /** Answers the pending user-input request so the paused run resumes (no new message or run). */
   const handleSubmitInput = React.useCallback(

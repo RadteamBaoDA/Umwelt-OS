@@ -84,13 +84,14 @@ async function pollAttachment(
  * Derives the send selection and why a send must wait. Only `ready` attachments with a version become items;
  * the first blocking reason wins (unavailable, still uploading, failed, then local-only which offers re-attach).
  */
-function sendState(entries: AttachmentEntry[], unavailable: boolean, t: (key: AttachmentBlockKey) => string) {
+function sendState(entries: AttachmentEntry[], unavailable: boolean, askPending: boolean, t: (key: AttachmentBlockKey) => string) {
   const items: Item[] = entries
     .filter((e) => e.state === 'ready' && e.doc?.document_version_id)
     .map((e) => ({ sourceId: e.doc!.source_id, documentId: e.doc!.document_id, documentVersionId: e.doc!.document_version_id! }));
   let sendBlock: string | null = null;
   let showReattach = false;
-  if (unavailable && entries.length) sendBlock = t('attachmentUnavailableBlock');
+  if (askPending) sendBlock = t('attachmentShareAsk');
+  else if (unavailable && entries.length) sendBlock = t('attachmentUnavailableBlock');
   else if (entries.some((e) => e.state === 'uploading' || e.state === 'pending')) sendBlock = t('attachmentPendingBlock');
   else if (entries.some((e) => e.state === 'failed' || e.state === 'too_large' || e.state === 'rejected'))
     sendBlock = t('attachmentFailedBlock');
@@ -101,7 +102,8 @@ function sendState(entries: AttachmentEntry[], unavailable: boolean, t: (key: At
   return { items, sendBlock, showReattach };
 }
 
-type AttachmentBlockKey = 'attachmentUnavailableBlock' | 'attachmentPendingBlock' | 'attachmentFailedBlock' | 'attachmentLocalOnlyBlock';
+type AttachmentBlockKey =
+  'attachmentShareAsk' | 'attachmentUnavailableBlock' | 'attachmentPendingBlock' | 'attachmentFailedBlock' | 'attachmentLocalOnlyBlock';
 
 /**
  * Creates the entry for one picked file, rejecting a disallowed extension or an oversize file locally
@@ -120,16 +122,53 @@ function newEntry(file: File, t: (key: 'attachmentType' | 'attachmentTooBig') =>
 }
 
 /**
+ * Sharing-choice gate of the composer's attachments (C5): while the choice is unset, picked files are held back.
+ *
+ * @param addNow - Uploads files immediately with the given share flag.
+ * @returns `add` (uploads at once when the choice is known or passed, else holds the files), `resolveShare` (answers the
+ * question: remembers the choice and uploads the held files), `resetShareChoice`, the `pendingShare` files and the
+ * `shareWithModel` flag with its setter (an explicit setting counts as an answer).
+ */
+function useShareGate(addNow: (files: File[], share: boolean) => void) {
+  const [shareChoice, setShareChoice] = React.useState<'unset' | 'private' | 'shared'>('unset');
+  const [pendingShare, setPendingShare] = React.useState<File[]>([]);
+  const setShareWithModel = React.useCallback((share: boolean) => setShareChoice(share ? 'shared' : 'private'), []);
+  const add = React.useCallback(
+    (files: File[], share?: boolean) => {
+      if (share === undefined && shareChoice === 'unset') setPendingShare((prev) => [...prev, ...files]);
+      else addNow(files, share ?? shareChoice === 'shared');
+    },
+    [shareChoice, addNow],
+  );
+  const resolveShare = React.useCallback(
+    (share: boolean) => {
+      setShareChoice(share ? 'shared' : 'private');
+      setPendingShare([]);
+      addNow(pendingShare, share);
+    },
+    [addNow, pendingShare],
+  );
+  const resetShareChoice = React.useCallback(() => {
+    setShareChoice('unset');
+    setPendingShare([]);
+  }, []);
+  return { shareWithModel: shareChoice === 'shared', setShareWithModel, pendingShare, add, resolveShare, resetShareChoice };
+}
+
+/**
  * Owns the full Chat composer's attachments. Each file is uploaded to a server-chosen source (the
  * private, local-only "Chat attachments" by default; "Chat attachments (shared)" when the owner opts
  * in) and polled until ingest finishes. Only `ready` attachments become `selection` items; `sendBlock`
  * explains why a send must wait or cannot include them. Each entry owns an AbortController that
  * cancels its upload and polling when it is removed.
+ *
+ * Sharing choice (C5): the first file picked in a conversation is held until the owner says whether the model may read
+ * it (`pendingShare` + `resolveShare`); the answer is then remembered for the rest of the conversation. The owner (or
+ * the + menu toggle) can also decide up front. `resetShareChoice` forgets it (new chat, switching conversation).
  */
 export function useChatAttachments(csrfToken: string, unavailable = false) {
   const t = useTranslations('chat');
   const [entries, setEntries] = React.useState<AttachmentEntry[]>([]);
-  const [shareWithModel, setShareWithModel] = React.useState(false);
   const [dropped, setDropped] = React.useState(0);
   // Synchronous mirror of `entries`, so the remaining room is computed from the latest state, never a stale render.
   const entriesRef = React.useRef<AttachmentEntry[]>([]);
@@ -170,16 +209,18 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
   );
 
   /** Validates type and size locally (the server re-validates), then uploads each file that fits. */
-  const add = React.useCallback(
-    (files: File[], share = shareWithModel) => {
+  const addNow = React.useCallback(
+    (files: File[], share: boolean) => {
       const room = Math.max(0, MAX_ATTACHMENTS - entriesRef.current.length);
       setDropped(Math.max(0, files.length - room));
       const added = files.slice(0, room).map((file) => newEntry(file, t));
       update((prev) => [...prev, ...added]);
       for (const e of added) if (e.state === 'uploading') upload(e.key, e.file, share);
     },
-    [shareWithModel, t, update, upload],
+    [t, update, upload],
   );
+
+  const { shareWithModel, setShareWithModel, pendingShare, add, resolveShare, resetShareChoice } = useShareGate(addNow);
 
   const remove = React.useCallback(
     (key: string) => {
@@ -195,7 +236,6 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
     for (const c of controllers.current.values()) c.abort();
     controllers.current.clear();
     setDropped(0);
-    setShareWithModel(false);
     update(() => []);
   }, [update]);
 
@@ -217,7 +257,7 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
     };
   }, []);
 
-  const { items, sendBlock, showReattach } = sendState(entries, unavailable, t);
+  const { items, sendBlock, showReattach } = sendState(entries, unavailable, pendingShare.length > 0, t);
   return {
     entries,
     items,
@@ -230,6 +270,9 @@ export function useChatAttachments(csrfToken: string, unavailable = false) {
     showReattach,
     shareWithModel,
     setShareWithModel,
+    pendingShare,
+    resolveShare,
+    resetShareChoice,
     full: entries.length >= MAX_ATTACHMENTS,
   };
 }
@@ -374,12 +417,22 @@ export function ChatAttachmentBar({
         {removedNote}
       </span>
       {/* Rendered only with text; Send's aria-describedby points here only while a block is active, so the id exists then. */}
-      {(statusLine || state.showReattach) && (
+      {(statusLine || state.showReattach || state.pendingShare.length > 0) && (
         <div className="flex flex-wrap items-center gap-2">
           {statusLine && (
             <p id={ATTACHMENT_STATUS_ID} role="status" aria-live="polite" className="text-xs text-muted-foreground">
               {statusLine}
             </p>
+          )}
+          {state.pendingShare.length > 0 && (
+            <>
+              <Button type="button" variant="outline" size="sm" onClick={() => state.resolveShare(true)}>
+                {t('attachmentShareYes')}
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => state.resolveShare(false)}>
+                {t('attachmentShareNo')}
+              </Button>
+            </>
           )}
           {state.showReattach && (
             <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={state.reattachShared}>
