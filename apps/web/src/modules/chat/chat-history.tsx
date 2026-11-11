@@ -117,6 +117,19 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
+/** Poll period while some listed conversation still has a run generating (C15), so the dot clears by itself. */
+export const HISTORY_ACTIVE_REFETCH_MS = 5000;
+
+/**
+ * Refetch interval of the history list: polls only while a loaded conversation reports an active run, otherwise stops.
+ *
+ * @param pages - Loaded history pages (undefined before the first load).
+ * @returns Interval in ms, or `false` when nothing is running.
+ */
+export function historyRefetchInterval(pages: Conversation[][] | undefined): number | false {
+  return pages?.some((page) => page.some((c) => c.has_active_run)) ? HISTORY_ACTIVE_REFETCH_MS : false;
+}
+
 /**
  * Data for the history list: server-side searched and paged conversations, the passive active-transcript loading
  * flag and the day groups. Search (`q`, title or message text) and the archived filter run on the server; TanStack
@@ -138,6 +151,7 @@ function useHistoryData(activeConversationId: string | null | undefined, searchQ
     getNextPageParam: (lastPage, pages) => (lastPage.length < HISTORY_PAGE_SIZE ? undefined : pages.length * HISTORY_PAGE_SIZE),
     // Keep the previous results on screen while a new search is in flight (no flash of the empty state).
     placeholderData: (previous) => previous,
+    refetchInterval: (query) => historyRefetchInterval(query.state.data?.pages),
   });
 
   // Passive observer of the active transcript query (ChatSession owns fetching): the first load after a conversation

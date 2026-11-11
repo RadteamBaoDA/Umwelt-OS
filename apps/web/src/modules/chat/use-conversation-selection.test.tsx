@@ -6,11 +6,21 @@ import { useConversationSelection, type ConversationSelectionParams } from './us
 function setup(over: Partial<ConversationSelectionParams> = {}) {
   const refs = new ChatSessionRuntime({ conversationId: null, generation: 0 });
   const live = { dispatch: vi.fn(), patch: vi.fn(), clearOutput: vi.fn() };
-  const streamResponseRun = vi.fn<(responseId: string, conversationId: string, isCurrentView: () => boolean) => Promise<void>>(async () => undefined);
+  const streamResponseRun = vi.fn<(responseId: string, conversationId: string, isCurrentView: () => boolean) => Promise<void>>(
+    async () => undefined,
+  );
   const onSelectionReset = vi.fn();
   const params: ConversationSelectionParams = {
-    refs, live, isPending: false, conversationId: 'c1', activeConversationId: 'c1', activeConversationGeneration: 1,
-    activeResponseId: null, streamResponseRun, onSelectionReset, ...over,
+    refs,
+    live,
+    isPending: false,
+    conversationId: 'c1',
+    activeConversationId: 'c1',
+    activeConversationGeneration: 1,
+    activeResponseId: null,
+    streamResponseRun,
+    onSelectionReset,
+    ...over,
   };
   return { refs, live, streamResponseRun, onSelectionReset, params };
 }
@@ -40,7 +50,11 @@ describe('useConversationSelection', () => {
   });
 
   it('flags the adoption of the conversation a send created so the share choice survives (C5)', () => {
-    const { params, onSelectionReset, refs } = setup({ conversationId: 'new1', activeConversationId: 'new1', activeConversationGeneration: 2 });
+    const { params, onSelectionReset, refs } = setup({
+      conversationId: 'new1',
+      activeConversationId: 'new1',
+      activeConversationGeneration: 2,
+    });
     refs.setPromotedSelection({ conversationId: 'new1', generation: 2, sendGeneration: refs.sendGeneration });
     renderHook(() => useConversationSelection(params));
     expect(onSelectionReset).toHaveBeenCalledWith({ conversationId: 'new1', promoted: true });

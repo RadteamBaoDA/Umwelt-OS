@@ -66,5 +66,7 @@ describe('ChatTranscript offscreen layout skipping (P7)', () => {
     expect(deferred(container.querySelector('[data-message-id="a1"]'))).toBe(true);
     expect(deferred(container.querySelector('[data-message-id="u2"]'))).toBe(false);
     expect(deferred(container.querySelector('[data-streaming-answer]'))).toBe(false);
+    // Paint containment must not clip focus rings and shadows at the message edge.
+    expect(container.querySelector('[data-message-id="u1"]')?.className).toContain('overflow-clip-margin');
   });
 });

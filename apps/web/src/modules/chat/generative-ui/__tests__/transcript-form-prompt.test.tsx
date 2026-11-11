@@ -57,8 +57,10 @@ describe('ChatTranscript widget prompt handlers', () => {
       </QueryClientProvider>,
     );
     expect(await screen.findByTestId('w-form')).toBeTruthy();
-    expect(received.table).toBe(plain);
-    expect(received.form).toBe(rejecting);
+    // The transcript hands out stable wrappers (P4), so identity is checked by which prop each one reaches.
+    received.table?.('t');
+    expect(plain).toHaveBeenCalledWith('t');
+    expect(rejecting).not.toHaveBeenCalledWith('t');
     await expect(received.form?.('hi')).rejects.toThrow('busy');
   });
 });

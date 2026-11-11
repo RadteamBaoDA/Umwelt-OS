@@ -231,14 +231,15 @@ function CapabilityChipButton({
  */
 function CapabilityChips({ capabilities }: { capabilities: EmptyCapabilities }) {
   const t = useTranslations('chat');
+  const labelId = React.useId();
   const { webSearch, attach } = capabilities;
   if (!webSearch && !attach) return null;
   return (
     <div className="flex flex-col gap-2">
-      <p id="chat-capabilities-label" className="text-xs font-medium text-muted-foreground">
+      <p id={labelId} className="text-xs font-medium text-muted-foreground">
         {t('capabilitiesHeading')}
       </p>
-      <div data-testid="capability-chips" role="group" aria-labelledby="chat-capabilities-label" className="flex flex-wrap gap-2">
+      <div data-testid="capability-chips" role="group" aria-labelledby={labelId} className="flex flex-wrap gap-2">
         {webSearch && (
           <CapabilityChipButton
             testId="capability-web"
@@ -267,7 +268,7 @@ function ProviderMissingNotice() {
     <div role="status" className="flex max-w-prose flex-wrap items-center gap-3 rounded-lg border border-border bg-surface p-3 text-sm">
       <div className="min-w-0 flex-1">
         <p className="font-medium text-foreground">{t('providerGateTitle')}</p>
-        <p className="text-muted-foreground">{t('providerGateBody')}</p>
+        <p className="text-muted-foreground">{t('emptyProviderMissingBody')}</p>
       </div>
       <Button asChild size="sm">
         <Link href="/settings/models">{t('providerGateAction')}</Link>
@@ -287,6 +288,7 @@ function EmptyIntro({ onSendPrompt, capabilities }: { onSendPrompt: (prompt: str
   const t = useTranslations('chat');
   // Real topics replace the fixed chips; empty/failed load keeps the fixed ones.
   const topics = useTopicNames();
+  const startersId = React.useId();
   return (
     <div className="mt-auto flex flex-col gap-4 py-8">
       <div className="flex flex-col gap-1">
@@ -297,10 +299,10 @@ function EmptyIntro({ onSendPrompt, capabilities }: { onSendPrompt: (prompt: str
         <ProviderMissingNotice />
       ) : (
         <div className="flex flex-col gap-2">
-          <p id="chat-starters-label" className="text-xs font-medium text-muted-foreground">
+          <p id={startersId} className="text-xs font-medium text-muted-foreground">
             {t('startersHeading')}
           </p>
-          <div data-testid="starter-suggestions" role="group" aria-labelledby="chat-starters-label" className="flex flex-wrap gap-2">
+          <div data-testid="starter-suggestions" role="group" aria-labelledby={startersId} className="flex flex-wrap gap-2">
             {topics.length > 0
               ? topics.map((topic) => (
                   <Button
@@ -546,32 +548,38 @@ function MetaIconButton({ label, onClick, children }: { label: string; onClick: 
 /**
  * "N sources" of a grounded answer: a button that opens the evidence rail on that answer's sources in full Chat,
  * a toggle in the drawer (no rail there) that expands the sources inline under the answer (C13), which also works on
- * touch screens where hovering a chip is impossible.
+ * touch screens where hovering a chip is impossible. The inline panel itself is rendered by the message meta row,
+ * below the row, so it does not inherit the row's small text or its dot separators.
  *
- * @param props - The answer's citations and the opener (absent outside full Chat).
+ * @param props - The answer's citations, the opener (absent outside full Chat) and the drawer toggle state.
  */
-function SourcesMeta({ citations, onOpen }: { citations: Citation[]; onOpen?: (citations: Citation[]) => void }) {
+function SourcesMeta({
+  citations,
+  onOpen,
+  inlineOpen,
+  onToggleInline,
+  panelId,
+}: {
+  citations: Citation[];
+  onOpen?: (citations: Citation[]) => void;
+  inlineOpen: boolean;
+  onToggleInline: () => void;
+  panelId: string;
+}) {
   const t = useTranslations('chat');
   const label = t('sourcesCount', { count: citations.length });
-  const [inlineOpen, setInlineOpen] = React.useState(false);
   if (!onOpen) {
     return (
-      <>
-        <button
-          type="button"
-          data-testid="sources-toggle"
-          aria-expanded={inlineOpen}
-          onClick={() => setInlineOpen((open) => !open)}
-          className="min-h-8 pointer-coarse:min-h-11 rounded-md px-1 text-xs underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {label}
-        </button>
-        {inlineOpen && (
-          <div className="w-full basis-full">
-            <CitationPanel citations={citations} variant="inline" onClose={() => setInlineOpen(false)} />
-          </div>
-        )}
-      </>
+      <button
+        type="button"
+        data-testid="sources-toggle"
+        aria-expanded={inlineOpen}
+        aria-controls={inlineOpen ? panelId : undefined}
+        onClick={onToggleInline}
+        className="min-h-8 pointer-coarse:min-h-11 rounded-md px-1 text-xs underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {label}
+      </button>
     );
   }
   return (
@@ -599,17 +607,32 @@ function MessageFacts({
   mode,
   formattedDate,
   onOpenSources,
+  inlineOpen,
+  onToggleInline,
+  panelId,
 }: {
   msg: ChatMessage;
   mode: 'drawer' | 'full';
   formattedDate: string | null;
   onOpenSources?: (citations: Citation[]) => void;
+  inlineOpen: boolean;
+  onToggleInline: () => void;
+  panelId: string;
 }) {
   const t = useTranslations('chat');
   const isUser = msg.role === 'user';
   const facts: React.ReactNode[] = [];
   if (!isUser && msg.citations?.length) {
-    facts.push(<SourcesMeta key="sources" citations={msg.citations} onOpen={mode === 'full' ? onOpenSources : undefined} />);
+    facts.push(
+      <SourcesMeta
+        key="sources"
+        citations={msg.citations}
+        onOpen={mode === 'full' ? onOpenSources : undefined}
+        inlineOpen={inlineOpen}
+        onToggleInline={onToggleInline}
+        panelId={panelId}
+      />,
+    );
   }
   if (!isUser && msg.model_identity) {
     facts.push(
@@ -633,6 +656,36 @@ function MessageFacts({
       {fact}
     </React.Fragment>
   ));
+}
+
+/**
+ * State of the drawer's inline sources panel (C13): drawer only, where there is no evidence rail, an answer's sources
+ * expand under its meta row.
+ *
+ * @param msg - The message whose citations may expand.
+ * @param mode - Host mode; full Chat opens the rail instead, so the panel never shows there.
+ * @returns `open` (toggle state), `visible` (open and applicable), `panelId` for `aria-controls`, `toggle` and `close`.
+ */
+function useInlineSources(msg: ChatMessage, mode: 'drawer' | 'full') {
+  const [open, setOpen] = React.useState(false);
+  const panelId = React.useId();
+  const visible = open && mode !== 'full' && msg.role !== 'user' && Boolean(msg.citations?.length);
+  return { open, visible, panelId, toggle: () => setOpen((v) => !v), close: () => setOpen(false) };
+}
+
+/**
+ * The drawer's inline sources panel, under the meta row (outside its small text and dot separators); renders nothing
+ * while collapsed or not applicable.
+ *
+ * @param props - State from {@link useInlineSources} and the answer's citations.
+ */
+function InlineSourcesPanel({ inline, citations }: { inline: ReturnType<typeof useInlineSources>; citations?: Citation[] }) {
+  if (!inline.visible) return null;
+  return (
+    <div id={inline.panelId}>
+      <CitationPanel citations={citations ?? []} variant="inline" onClose={inline.close} />
+    </div>
+  );
 }
 
 /**
@@ -670,32 +723,44 @@ function MessageActions({
   const { copyMessage, copiedMessageId, failedMessageId } = copy;
   const copied = copiedMessageId === msg.id;
   const formattedDate = msg.created_at ? formatDateTime(msg.created_at, locale, timezone) : null;
+  const inline = useInlineSources(msg, mode);
   return (
-    <div className="flex flex-wrap items-center gap-x-1 gap-y-0 text-xs text-muted-foreground">
-      {nav && onSelectVersion && <VersionNavControl nav={nav} onSelect={onSelectVersion} />}
-      {/* Expose one-click copy for all full-page messages and completed assistant messages in the drawer. */}
-      {(mode === 'full' || (!isUser && Boolean(msg.content))) && (
-        <MetaIconButton label={copied ? t('copiedMessage') : t('copyMessage')} onClick={() => void copyMessage(msg.id, msg.content)}>
-          {copied ? <CheckIcon className="size-3.5" aria-hidden="true" /> : <CopyIcon className="size-3.5" aria-hidden="true" />}
-        </MetaIconButton>
-      )}
-      {(mode === 'full' || !isUser) && failedMessageId === msg.id && (
-        <span role="status" className="text-xs text-destructive">
-          {t('copyFailed')}
-        </span>
-      )}
-      {canEdit && (
-        <MetaIconButton label={t('editPrompt')} onClick={() => onEditMessage?.(msg)}>
-          <PencilIcon className="size-3.5" aria-hidden="true" />
-        </MetaIconButton>
-      )}
-      {canRegenerate && (
-        <MetaIconButton label={t('regenerateAnswer')} onClick={() => onRegenerateMessage?.(msg)}>
-          <RefreshCwIcon className="size-3.5" aria-hidden="true" />
-        </MetaIconButton>
-      )}
-      <MessageFacts msg={msg} mode={mode} formattedDate={formattedDate} onOpenSources={onOpenSources} />
-    </div>
+    <>
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-0 text-xs text-muted-foreground">
+        {nav && onSelectVersion && <VersionNavControl nav={nav} onSelect={onSelectVersion} />}
+        {/* Expose one-click copy for all full-page messages and completed assistant messages in the drawer. */}
+        {(mode === 'full' || (!isUser && Boolean(msg.content))) && (
+          <MetaIconButton label={copied ? t('copiedMessage') : t('copyMessage')} onClick={() => void copyMessage(msg.id, msg.content)}>
+            {copied ? <CheckIcon className="size-3.5" aria-hidden="true" /> : <CopyIcon className="size-3.5" aria-hidden="true" />}
+          </MetaIconButton>
+        )}
+        {(mode === 'full' || !isUser) && failedMessageId === msg.id && (
+          <span role="status" className="text-xs text-destructive">
+            {t('copyFailed')}
+          </span>
+        )}
+        {canEdit && (
+          <MetaIconButton label={t('editPrompt')} onClick={() => onEditMessage?.(msg)}>
+            <PencilIcon className="size-3.5" aria-hidden="true" />
+          </MetaIconButton>
+        )}
+        {canRegenerate && (
+          <MetaIconButton label={t('regenerateAnswer')} onClick={() => onRegenerateMessage?.(msg)}>
+            <RefreshCwIcon className="size-3.5" aria-hidden="true" />
+          </MetaIconButton>
+        )}
+        <MessageFacts
+          msg={msg}
+          mode={mode}
+          formattedDate={formattedDate}
+          onOpenSources={onOpenSources}
+          inlineOpen={inline.open}
+          onToggleInline={inline.toggle}
+          panelId={inline.panelId}
+        />
+      </div>
+      <InlineSourcesPanel inline={inline} citations={msg.citations} />
+    </>
   );
 }
 
@@ -734,7 +799,7 @@ interface TranscriptMessageProps extends MessageViewProps {
 function messageClass(isUser: boolean, editing?: boolean, deferOffscreen?: boolean): string {
   const side = isUser ? 'ml-auto max-w-[80%] items-end' : 'mr-auto w-full';
   const ring = editing ? 'rounded-lg ring-2 ring-data ring-offset-2 ring-offset-background' : '';
-  const defer = deferOffscreen ? '[content-visibility:auto] [contain-intrinsic-size:auto_160px]' : '';
+  const defer = deferOffscreen ? '[content-visibility:auto] [contain-intrinsic-size:auto_160px] [overflow-clip-margin:8px]' : '';
   return `flex flex-col gap-2.5 ${side} ${ring} ${defer}`;
 }
 

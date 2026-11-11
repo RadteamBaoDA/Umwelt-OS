@@ -189,6 +189,9 @@ describe('ChatTranscript capability chips', () => {
     renderTranscript({ onSendPrompt: vi.fn(), capabilities: { providerMissing: true } });
     expect(screen.queryByTestId('starter-suggestions')).toBeNull();
     expect(screen.getByRole('link', { name: messages['en-us'].chat.providerGateAction }).getAttribute('href')).toBe('/settings/models');
+    // The notice says the chat needs a model; the composer-gate wording ("your message is kept") would be wrong here.
+    expect(screen.getByText('Chat needs a model. Add one in Settings to start.')).toBeTruthy();
+    expect(screen.queryByText(messages['en-us'].chat.providerGateBody)).toBeNull();
   });
 
   it('toggles composer options and opens the picker without sending a message', async () => {

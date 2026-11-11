@@ -15,7 +15,7 @@ vi.mock('./api', async (importOriginal) => ({
   getConversation: vi.fn(),
 }));
 
-import { ChatHistory, groupConversationsByDay, HISTORY_PAGE_SIZE } from './chat-history';
+import { ChatHistory, groupConversationsByDay, HISTORY_ACTIVE_REFETCH_MS, historyRefetchInterval, HISTORY_PAGE_SIZE } from './chat-history';
 import type { Conversation } from './api';
 
 /** Minimal conversation fixture; only the fields the list reads matter. */
@@ -187,5 +187,13 @@ describe('ChatHistory', () => {
   it('puts the localized shortcut in the New chat title (D8)', () => {
     renderHistory();
     expect(screen.getByRole('button', { name: /New chat/ }).getAttribute('title')).toBe(messages['en-us'].chat.newChatShortcut);
+  });
+});
+
+describe('historyRefetchInterval (C15)', () => {
+  it('polls only while a loaded conversation has an active run', () => {
+    expect(historyRefetchInterval([[conv('a'), conv('b', { has_active_run: true })]])).toBe(HISTORY_ACTIVE_REFETCH_MS);
+    expect(historyRefetchInterval([[conv('a', { has_active_run: false })]])).toBe(false);
+    expect(historyRefetchInterval(undefined)).toBe(false);
   });
 });

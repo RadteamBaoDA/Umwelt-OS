@@ -137,8 +137,8 @@ export interface SaveTemplateButtonProps {
 
 /**
  * "Save as template" action shown under a rendered sandbox widget. The status line says "saved" only after the server
- * accepted the template (G3); a failure is announced and the button stays available to retry.
- 
+ * accepted the template (G3); the button is disabled while saving and once saved (no duplicates); a failure is announced
+ * and the button stays available to retry.
  *
  * @param props - Sandbox payload, title, locale and CSRF token.
  * @returns Button with an inline status.
@@ -154,7 +154,7 @@ export function SaveTemplateButton({ sandbox, title, locale, csrfToken }: SaveTe
         variant="ghost"
         size="sm"
         data-testid="save-template"
-        disabled={status === 'saving'}
+        disabled={status === 'saving' || status === 'saved'}
         onClick={() => {
           setStatus('saving');
           void saveUserTemplateConfirmed(title ?? '', JSON.stringify(sandbox), csrfToken).then((ok) => setStatus(ok ? 'saved' : 'failed'));

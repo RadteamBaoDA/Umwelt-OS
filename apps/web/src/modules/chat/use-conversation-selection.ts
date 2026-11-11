@@ -34,7 +34,17 @@ export interface ConversationSelectionParams {
  * @param params - See {@link ConversationSelectionParams}.
  */
 export function useConversationSelection(params: ConversationSelectionParams): void {
-  const { refs, live, isPending, conversationId, activeConversationId, activeConversationGeneration, activeResponseId, streamResponseRun, onSelectionReset } = params;
+  const {
+    refs,
+    live,
+    isPending,
+    conversationId,
+    activeConversationId,
+    activeConversationGeneration,
+    activeResponseId,
+    streamResponseRun,
+    onSelectionReset,
+  } = params;
 
   // Latest-value refs consumed only by async callbacks; they mirror state without re-rendering.
   refs.setSelection({ conversationId: activeConversationId, generation: activeConversationGeneration });
@@ -56,9 +66,12 @@ export function useConversationSelection(params: ConversationSelectionParams): v
     // Detach the previous view's local stream; this does not send a server cancellation request.
     refs.detachStream();
     const promoted = refs.promotedSelection;
-    const isPromotion = Boolean(promoted && promoted.sendGeneration === refs.sendGeneration
-        && promoted.conversationId === (conversationId ?? null)
-        && promoted.generation === activeConversationGeneration);
+    const isPromotion = Boolean(
+      promoted &&
+      promoted.sendGeneration === refs.sendGeneration &&
+      promoted.conversationId === (conversationId ?? null) &&
+      promoted.generation === activeConversationGeneration,
+    );
     onSelectionReset({ conversationId: conversationId ?? null, promoted: isPromotion });
     live.clearOutput();
     live.patch({ isStreaming: false, activeResponseId: null, steps: [] });
@@ -83,10 +96,11 @@ export function useConversationSelection(params: ConversationSelectionParams): v
 
     const viewGeneration = refs.selection.generation;
     const sendGeneration = refs.bumpSendGeneration();
-    const isCurrentView = () => refs.mounted
-      && refs.sendGeneration === sendGeneration
-      && refs.selection.generation === viewGeneration
-      && refs.selection.conversationId === conversationId;
+    const isCurrentView = () =>
+      refs.mounted &&
+      refs.sendGeneration === sendGeneration &&
+      refs.selection.generation === viewGeneration &&
+      refs.selection.conversationId === conversationId;
     live.clearOutput();
     live.patch({ activeResponseId: responseId, isPending: false, isStreaming: true, steps: [], error: null, cancelled: false });
     void streamResponseRun(responseId, conversationId, isCurrentView).catch(() => {

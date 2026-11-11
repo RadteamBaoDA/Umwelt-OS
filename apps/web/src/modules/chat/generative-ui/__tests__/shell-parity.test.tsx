@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -199,5 +199,15 @@ describe('SaveTemplateButton server confirmation (G3)', () => {
     release(new Response('{}', { status: 500 }));
     expect((await screen.findByText(/Could not save the template/)).textContent).toContain('Try again');
     expect((screen.getByTestId('save-template') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('disables the button once saved so a second click cannot create a duplicate', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<SaveTemplateButton sandbox={{ html: '<b>x</b>' }} title="Mine" locale="en-us" csrfToken="tok" />);
+    await user.click(screen.getByTestId('save-template'));
+    await waitFor(() => expect((screen.getByTestId('save-template') as HTMLButtonElement).disabled).toBe(true));
+    expect(screen.getByRole('status').textContent).not.toBe('Saving…');
   });
 });

@@ -1,8 +1,9 @@
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { messages } from '@/core/messages';
+import { MAX_ATTACHMENTS } from './api';
 
 const upload = vi.hoisted(() => vi.fn());
 vi.mock('./api', async (orig) => ({ ...(await orig<typeof import('./api')>()), uploadChatAttachment: upload, getChatAttachment: vi.fn() }));
@@ -27,7 +28,7 @@ describe('attachment sharing choice (C5)', () => {
     act(() => result.current.add([file('a.txt')]));
     expect(upload).not.toHaveBeenCalled();
     expect(result.current.pendingShare).toHaveLength(1);
-    expect(result.current.sendBlock).toBe('Let the AI model read your attached files?');
+    expect(result.current.sendBlock).toContain('Let the AI model read your attached files?');
   });
 
   it('uploads the held file with the answer and remembers it for later files, even after a send clears the bar', () => {
@@ -49,5 +50,35 @@ describe('attachment sharing choice (C5)', () => {
     act(() => result.current.resetShareChoice());
     act(() => result.current.add([file('b.txt')]));
     expect(result.current.pendingShare).toHaveLength(1);
+  });
+
+  it('flushes held files when the + menu share toggle answers the question', () => {
+    const { result } = renderHook(() => useChatAttachments('csrf'), { wrapper });
+    act(() => result.current.add([file('a.txt')]));
+    act(() => result.current.setShareWithModel(true));
+    expect(result.current.pendingShare).toHaveLength(0);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(upload).toHaveBeenLastCalledWith(expect.any(File), 'csrf', true, expect.anything());
+  });
+
+  it('counts held files toward the attachment cap and lets the owner drop one', () => {
+    const { result } = renderHook(() => useChatAttachments('csrf'), { wrapper });
+    act(() => result.current.add(Array.from({ length: MAX_ATTACHMENTS + 2 }, (_, i) => file(`f${i}.txt`))));
+    expect(result.current.pendingShare).toHaveLength(MAX_ATTACHMENTS);
+    expect(result.current.dropped).toBe(2);
+    expect(result.current.full).toBe(true);
+    act(() => result.current.removePending(0));
+    expect(result.current.pendingShare).toHaveLength(MAX_ATTACHMENTS - 1);
+  });
+
+  it('does not block Send for a private attachment; it only advises and offers re-attach', async () => {
+    upload.mockResolvedValue({ document_id: 'd', status: 'ready', local_only: true, source_id: 's', document_version_id: 'v' });
+    const { result } = renderHook(() => useChatAttachments('csrf'), { wrapper });
+    act(() => result.current.add([file('a.txt')]));
+    await act(async () => result.current.resolveShare(false));
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+    expect(result.current.sendBlock).toBeNull();
+    expect(result.current.advisory).toContain('private');
+    expect(result.current.showReattach).toBe(true);
   });
 });
