@@ -313,7 +313,13 @@ async def test_register_evidence_cites_every_returned_version() -> None:
             return SimpleNamespace(all=lambda: chunk_rows)
 
     evidence: list = []
-    numbers = await _register_evidence_for_versions(_Session(), pairs, evidence)  # type: ignore[arg-type]
+    numbers = await _register_evidence_for_versions(
+        _Session(),  # type: ignore[arg-type]
+        pairs,
+        evidence,
+        workspace_id=uuid4(),
+        allowed_source_ids=[uuid4()],
+    )
     assert len(evidence) == 15
     assert sorted(numbers.values()) == list(range(1, 16))
     assert seen[0].compile().params["param_1"] == 15  # type: ignore[attr-defined]
@@ -368,3 +374,92 @@ async def test_active_collected_providers_scoped_like_grant() -> None:
     assert "DISTINCT" in s.sql and "local_only" in s.sql
     await active_collected_providers(s, workspace_id=uuid4(), allow_local_only=True)  # type: ignore[arg-type]
     assert "local_only" not in s.sql
+
+
+@pytest.mark.asyncio
+async def test_register_evidence_drops_unverified_versions() -> None:
+    """A version id from another workspace or a disallowed source is never registered or cited."""
+    from datetime import UTC, datetime
+
+    from modules.chat.db_query import _register_evidence_for_versions
+
+    ws, other_ws, ok_src, bad_src = uuid4(), uuid4(), uuid4(), uuid4()
+    rows = []
+    for ws_id, src in ((ws, ok_src), (other_ws, ok_src), (ws, bad_src)):
+        rows.append(
+            SimpleNamespace(
+                ws=ws_id,
+                chunk_id=uuid4(),
+                content="x",
+                document_version_id=uuid4(),
+                version_number=1,
+                observed_at=datetime(2026, 11, 1, tzinfo=UTC),
+                published_at=None,
+                document_id=uuid4(),
+                source_id=src,
+                title="t",
+                url=None,
+                source_type="document",
+                source_generation=1,
+                local_only=False,
+            )
+        )
+
+    class _Session:
+        """Applies the statement's own workspace/source bind values like the database would."""
+
+        async def execute(self, stmt: object) -> SimpleNamespace:
+            params = stmt.compile().params.values()  # type: ignore[attr-defined]
+            flat = [v for x in params for v in (x if isinstance(x, (list, tuple)) else [x])]
+            kept = [r for r in rows if r.ws in flat and r.source_id in flat]
+            return SimpleNamespace(all=lambda: kept)
+
+    pairs = [(r.document_id, r.document_version_id) for r in rows]
+    evidence: list = []
+    numbers = await _register_evidence_for_versions(
+        _Session(),  # type: ignore[arg-type]
+        pairs,
+        evidence,
+        workspace_id=ws,
+        allowed_source_ids=[ok_src],
+    )
+    assert [e.document_version_id for e in evidence] == [rows[0].document_version_id]
+    assert list(numbers) == [rows[0].document_version_id]
+    assert rows[1].document_version_id not in numbers
+    assert rows[2].document_version_id not in numbers
+
+
+@pytest.mark.asyncio
+async def test_sql_mode_literal_foreign_version_gets_no_citation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model-written literal version id outside the fence yields no evidence and a null citation."""
+    import json
+
+    from modules.chat import db_query
+
+    ver = uuid4()
+
+    async def fake_reader(*_a: object, **_k: object) -> list[dict]:
+        return [{"document_id": uuid4(), "document_version_id": ver}]
+
+    class _Session:
+        bind = None
+
+        async def execute(self, _stmt: object) -> SimpleNamespace:
+            return SimpleNamespace(all=list)  # the fenced lookup finds nothing
+
+    monkeypatch.setattr(db_query, "_run_sql_as_reader", fake_reader)
+    evidence: list = []
+    out = json.loads(
+        await db_query._execute_sql_mode(
+            _Session(),  # type: ignore[arg-type]
+            "SELECT 1 FROM scoped_observations",
+            workspace_id=uuid4(),
+            allowed_source_ids=[uuid4()],
+            limit=5,
+            evidence_list=evidence,
+        )
+    )
+    assert evidence == []
+    assert "citation" not in out["rows"][0]

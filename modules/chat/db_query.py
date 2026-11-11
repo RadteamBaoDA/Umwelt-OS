@@ -321,6 +321,9 @@ async def _register_evidence_for_versions(
     version_pairs: list[tuple[UUID, UUID]],
     existing_evidence: list[EvidenceItem],
     web_numbering: tuple[int, int] | None = None,
+    *,
+    workspace_id: UUID,
+    allowed_source_ids: list[UUID],
 ) -> dict[UUID, int]:
     """Load chunk_index=0 for returned document versions and append new ``EvidenceItem``s.
 
@@ -328,6 +331,13 @@ async def _register_evidence_for_versions(
         session: Active asynchronous database session.
         version_pairs: Pairs of ``(document_id, document_version_id)`` from query rows.
         existing_evidence: Mutable list of ``EvidenceItem``s on the current ``AnswerContext``.
+        workspace_id: Workspace the turn runs in.
+        allowed_source_ids: Sources this turn may read (already local-only filtered by ``_allowed_sources``).
+
+    Authorization invariant: version ids are untrusted (in SQL mode they come from model-written rows, and
+    a literal UUID passes the reader fence), so the chunk lookup itself requires
+    ``Document.workspace_id == workspace_id`` and ``Document.source_id IN allowed_source_ids`` (the source
+    must also belong to the workspace). Unverified pairs are dropped: no evidence, no citation number.
 
     Every returned version is registered (no cap): the caller bounds rows by ``args.limit`` (<= 50), and
     an uncited row would make the model drop the citation for the whole list.
@@ -367,6 +377,9 @@ async def _register_evidence_for_versions(
             .where(
                 DocumentVersion.id.in_(needed),
                 DocumentChunk.chunk_index == 0,
+                Document.workspace_id == workspace_id,
+                Source.workspace_id == workspace_id,
+                Document.source_id.in_(allowed_source_ids),
             )
             .limit(len(needed))
         )
@@ -638,7 +651,12 @@ async def _execute_sql_mode(
         if isinstance(doc_id, UUID) and isinstance(ver_id, UUID):
             version_pairs.append((doc_id, ver_id))
     citation_map = await _register_evidence_for_versions(
-        session, version_pairs, evidence_list, web_numbering
+        session,
+        version_pairs,
+        evidence_list,
+        web_numbering,
+        workspace_id=workspace_id,
+        allowed_source_ids=allowed_source_ids,
     )
 
     serialized_rows: list[dict[str, Any]] = []
@@ -1015,7 +1033,12 @@ async def _execute_structured_mode(
         version_pairs.extend((d.document_id, d.document_version_id) for d in doc_rows_raw)
 
     citation_map = await _register_evidence_for_versions(
-        session, version_pairs, evidence_list, web_numbering
+        session,
+        version_pairs,
+        evidence_list,
+        web_numbering,
+        workspace_id=workspace_id,
+        allowed_source_ids=allowed_source_ids,
     )
 
     if want_obs:
