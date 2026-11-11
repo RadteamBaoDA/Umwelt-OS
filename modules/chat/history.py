@@ -75,16 +75,48 @@ def select_turns(
 
 
 def cap_turns(turns: Sequence[Turn], max_chars: int = HISTORY_MAX_CHARS) -> list[Turn]:
-    """Keep the newest whole turns that fit ``max_chars`` (user + assistant text)."""
+    """Keep the newest whole turns that fit ``max_chars`` (user + assistant text).
+
+    The newest turn is always kept, even when it alone exceeds ``max_chars``: a follow-up such as "shorten
+    that" needs the answer it refers to. ``shorten_newest`` then cuts that turn's middle to fit.
+    """
     kept: list[Turn] = []
     total = 0
     for turn in reversed(turns):
         total += len(turn.user.content) + len(turn.assistant.content)
-        if total > max_chars:
+        if total > max_chars and kept:
             break
         kept.append(turn)
     kept.reverse()
     return kept
+
+
+def shorten_middle(text: str, limit: int) -> str:
+    """Return ``text`` cut to ``limit`` chars by replacing its middle with an explicit marker (head and tail kept)."""
+    if len(text) <= limit:
+        return text
+    keep = max(limit - len(_TRUNCATED), 0)
+    head = keep - keep // 2
+    return text[:head] + _TRUNCATED + (text[len(text) - keep // 2 :] if keep // 2 else "")
+
+
+def shorten_newest(
+    turns: Sequence[Turn], max_chars: int = HISTORY_MAX_CHARS
+) -> list[tuple[str, str]]:
+    """``(user, assistant)`` texts of ``turns``; a lone oversize newest turn is middle-truncated to ``max_chars``.
+
+    Only the single-turn case can exceed the cap (``cap_turns`` stops adding older turns once it is
+    exceeded). The user text keeps at most a quarter of the budget, the answer gets the rest. Stored
+    messages are never mutated.
+    """
+    pairs = [(t.user.content, t.assistant.content) for t in turns]
+    if len(pairs) == 1 and sum(map(len, pairs[0])) > max_chars:
+        user, assistant = pairs[0]
+        user_limit = min(len(user), max_chars // 4)
+        pairs = [
+            (shorten_middle(user, user_limit), shorten_middle(assistant, max_chars - user_limit))
+        ]
+    return pairs
 
 
 def widget_summary(raw: Any, *, max_chars: int = WIDGET_SUMMARY_MAX_CHARS) -> str:
@@ -248,9 +280,10 @@ async def load_effective_history(
         revoked = await revoked_assistant_ids(session, turns, scope)
         turns = [t for t in turns if t.assistant.id not in revoked]
     out: list[dict[str, str]] = []
-    for turn in cap_turns(turns):
-        out.append({"role": "user", "content": turn.user.content})
+    capped = cap_turns(turns)
+    for turn, (user_text, assistant_text) in zip(capped, shorten_newest(capped), strict=True):
+        out.append({"role": "user", "content": user_text})
         # Revoked turns were already removed above, and cleanup drops a wiped widget from metadata.
         widget = widget_summaries(getattr(turn.assistant, "metadata_json", None))
-        out.append({"role": "assistant", "content": turn.assistant.content + widget})
+        out.append({"role": "assistant", "content": assistant_text + widget})
     return out
