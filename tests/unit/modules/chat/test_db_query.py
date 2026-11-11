@@ -116,7 +116,7 @@ def test_db_query_tool_spec_is_pinned() -> None:
     import json
 
     digest = hashlib.sha256(json.dumps(build_db_query_tool_spec()).encode()).hexdigest()
-    assert digest == "1dc37843565d092887b0cc9859ebc027fe725922fc5f37dfde1515278d6402b1"
+    assert digest == "20f34c6d5789a48c4d99f5008fe0e2c3d8e290ff251fa3d7e3804a9b611af3ed"
 
 
 def test_provider_specs_realtime_tier_skip_embedding_and_retention() -> None:
@@ -335,3 +335,36 @@ async def test_structured_documents_rank_per_source() -> None:
     sql = captured[0]
     assert "row_number() OVER (PARTITION BY documents.source_id" in sql
     assert "ORDER BY anon_1.source_rank" in sql
+
+
+def test_gadget_note_lists_provider_ids_and_round_budget() -> None:
+    """The prompt note names exact provider ids, the headline-only text_query rule and the 2-round budget."""
+    from modules.chat._worker.setup import _gadget_note
+
+    note = _gadget_note({}, True, ["emsc_quakes", "thanhnien_news"])
+    assert "emsc_quakes, thanhnien_news" in note
+    assert "at most 2 tool rounds" in note and "headline/body text only" in note
+    assert "Active providers" not in _gadget_note({}, True)
+    assert _gadget_note({}, False, ["emsc_quakes"]) == ""
+
+
+@pytest.mark.asyncio
+async def test_active_collected_providers_scoped_like_grant() -> None:
+    """Provider ids come from one DISTINCT select fenced by workspace, active status and local-only."""
+    from modules.chat.db_query import active_collected_providers
+
+    class _S:
+        def __init__(self) -> None:
+            self.sql = ""
+
+        async def execute(self, stmt: object) -> SimpleNamespace:
+            self.sql = str(stmt)
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: ["emsc_quakes"]))
+
+    s = _S()
+    assert await active_collected_providers(s, workspace_id=uuid4(), allow_local_only=False) == [  # type: ignore[arg-type]
+        "emsc_quakes"
+    ]
+    assert "DISTINCT" in s.sql and "local_only" in s.sql
+    await active_collected_providers(s, workspace_id=uuid4(), allow_local_only=True)  # type: ignore[arg-type]
+    assert "local_only" not in s.sql

@@ -85,7 +85,7 @@ def _db_query_parameter_properties() -> dict[str, Any]:
         "providers": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Optional provider IDs (e.g. ['binance', 'world_bank', 'emsc_quakes', 'vnexpress_business']).",
+            "description": "Optional provider IDs, matched exactly (e.g. ['binance', 'world_bank', 'emsc_quakes', 'vnexpress_business']). Several providers may be queried in one call; results are shared across them.",
         },
         "metrics": {
             "type": "array",
@@ -103,7 +103,7 @@ def _db_query_parameter_properties() -> dict[str, Any]:
         },
         "text_query": {
             "type": "string",
-            "description": "Optional keyword/full-text search query over collected document titles and content.",
+            "description": "Optional keyword match against document headline/body text only; it does not match provider or topic names (event feeds hold region, magnitude and depth, not the word 'earthquake'). Prefer providers=[...] to select a feed.",
         },
         "date_from": {
             "type": "string",
@@ -170,7 +170,7 @@ def build_db_query_tool_spec() -> dict[str, Any]:
                 "Measurement providers (prices, rates, weather, macro series) store numeric rows in "
                 "observations. News and event feeds (earthquake, alert and news providers) store "
                 "documents only, so use target='documents' or 'both' for them; observations are empty "
-                "for those providers."
+                "for those providers (e.g. emsc_quakes is documents-only; usgs is a measurement provider)."
             ),
             "parameters": {
                 "type": "object",
@@ -187,6 +187,25 @@ def is_gadget_turn(retrieval_context: dict[str, Any] | None) -> bool:
     """
     ctx = retrieval_context or {}
     return ctx.get("kind") == "gadget" or isinstance(ctx.get(GADGET_SCOPE_KEY), dict)
+
+
+async def active_collected_providers(
+    session: AsyncSession, *, workspace_id: UUID, allow_local_only: bool
+) -> list[str]:
+    """Sorted distinct provider ids of the active collected sources this turn may query (bounded to 30).
+
+    Scoped exactly like :func:`has_collected_datasource`; read-only, one ``SELECT DISTINCT``. Used to tell
+    the model the exact ids to pass as ``providers`` in its first call.
+    """
+    stmt = select(Source.provider).where(
+        Source.workspace_id == workspace_id,
+        Source.status == "active",
+        Source.provider.is_not(None),
+    )
+    if not allow_local_only:
+        stmt = stmt.where(Source.local_only.is_(False))
+    rows = await session.execute(stmt.distinct().order_by(Source.provider).limit(30))
+    return [str(p) for p in rows.scalars().all()]
 
 
 async def has_collected_datasource(

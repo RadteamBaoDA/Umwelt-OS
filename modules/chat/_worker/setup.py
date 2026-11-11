@@ -64,6 +64,7 @@ from modules.chat._worker.web import (
 )
 from modules.chat.db_query import (
     TOOL_QUERY_COLLECTED_DATA,
+    active_collected_providers,
     has_collected_datasource,
     is_gadget_turn,
 )
@@ -657,8 +658,24 @@ def _compose_system_text(
     return system_text + _web_prompt_suffix(turn.web_run, len(answer_context.evidence), images)
 
 
-def _gadget_note(req_params: dict[str, Any], db_query_on: bool) -> str:
-    """Prompt note about the Dashboard gadget scope or the enabled database query tool (pure)."""
+def _provider_hint(providers: Sequence[str]) -> str:
+    """Prompt sentence naming exact provider ids, the text_query limits and the 2-round budget (pure)."""
+    if not providers:
+        return ""
+    return (
+        f" Active providers: {', '.join(providers)}. Filter with providers=[...] using these exact ids; "
+        "text_query matches headline/body text only, not provider or topic names. "
+        "You have at most 2 tool rounds: query every needed provider in your first call."
+    )
+
+
+def _gadget_note(
+    req_params: dict[str, Any], db_query_on: bool, providers: Sequence[str] = ()
+) -> str:
+    """Prompt note about the Dashboard gadget scope or the enabled database query tool (pure).
+
+    ``providers`` are the active provider ids appended to the tool note so round 1 can use exact ids.
+    """
     gadget_meta = (
         req_params.get("_gadget_scope")
         if isinstance(req_params.get("_gadget_scope"), dict)
@@ -669,13 +686,14 @@ def _gadget_note(req_params: dict[str, Any], db_query_on: bool) -> str:
             f"\n\nThe user opened this chat from Dashboard gadget {gadget_meta.get('title')!r} "
             f"(renderer={gadget_meta.get('renderer')!r}, scope={json.dumps(gadget_meta.get('scope') or {})}). "
             f"Call `{TOOL_QUERY_COLLECTED_DATA}` when you need current or historical observations/records "
-            f"from the gadget's bound data sources."
+            f"from the gadget's bound data sources." + _provider_hint(providers)
         )
     if db_query_on:
         return (
             f"\n\nDatabase query tool `{TOOL_QUERY_COLLECTED_DATA}` is enabled for this turn. "
             "Use `mode='structured'` for filters/aggregations or `mode='sql'` for read-only SELECT queries "
             "against `scoped_observations` and `scoped_documents`, and cite any returned `[n]` markers."
+            + _provider_hint(providers)
         )
     return ""
 
@@ -702,6 +720,19 @@ async def _db_query_granted(
             "Collected-datasource lookup failed for run %s (%s)", c.response_id, type(exc).__name__
         )
         return False
+
+
+async def _db_query_providers(
+    session: AsyncSession, c: _RunCtx, local_only_turn: bool
+) -> list[str]:
+    """Active provider ids for the prompt hint; a failed lookup yields none (the hint is optional)."""
+    try:
+        return await active_collected_providers(
+            session, workspace_id=c.scope.workspace_id, allow_local_only=local_only_turn
+        )
+    except Exception as exc:  # noqa: BLE001  # boundary: a prompt hint must never fail the turn
+        logger.warning("Provider lookup failed for run %s (%s)", c.response_id, type(exc).__name__)
+        return []
 
 
 async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs) -> _ModelSetup:
@@ -733,6 +764,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
         )
         # No user switch: the tool is offered whenever there is collected data to query (or on the gadget path).
         db_query_on = await _db_query_granted(session, c, turn, local_only_turn)
+        db_providers = await _db_query_providers(session, c, local_only_turn) if db_query_on else []
         ui_tools: list[dict[str, Any]] | None = build_chat_tool_specs(
             include_read_skill=bool(skill_names),
             include_trip_images=trip_images_on,
@@ -745,7 +777,7 @@ async def _build_model_setup(c: _RunCtx, claimed: _ClaimedRun, turn: _TurnInputs
         )
     ui_system_text = (
         system_text
-        + _gadget_note(turn.req_params, db_query_on)
+        + _gadget_note(turn.req_params, db_query_on, db_providers)
         + "\n\n"
         + build_generative_ui_system_prompt(
             locale=ui_locale,
