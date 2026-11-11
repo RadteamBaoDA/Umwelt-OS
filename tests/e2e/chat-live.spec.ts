@@ -226,14 +226,16 @@ test.describe('chat (real stack, fake model)', () => {
     await expect(history).toHaveAttribute('aria-expanded', 'false');
 
     const renamed = `e2e-renamed-${testInfo.workerIndex}-${Date.now()}`;
-    await page.getByRole('button', { name: 'Rename conversation' }).click();
+    await page.getByRole('button', { name: 'More actions' }).click();
+    await page.getByRole('menuitem', { name: 'Rename conversation' }).click();
     const input = page.getByRole('dialog').getByLabel(/./).first();
     await input.fill(renamed);
     await page.getByRole('dialog').getByRole('button', { name: 'Save' }).click();
     await expect(page.getByRole('heading', { level: 1, name: renamed })).toBeVisible();
     expect((await (await page.request.get(`/api/v1/conversations/${id}`)).json()).title).toBe(renamed);
 
-    await page.getByRole('button', { name: 'Delete conversation' }).click();
+    await page.getByRole('button', { name: 'More actions' }).click();
+    await page.getByRole('menuitem', { name: 'Delete conversation' }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Delete conversation' }).click();
     await expect(page.getByRole('heading', { level: 1, name: renamed })).toHaveCount(0);
     await expect.poll(async () => (await page.request.get(`/api/v1/conversations/${id}`)).status()).toBe(404);

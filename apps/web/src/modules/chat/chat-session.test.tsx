@@ -36,7 +36,10 @@ vi.mock('@/core/app-shell/chat-controller', () => ({
       pendingMessageMutations: {},
       context: null,
       draft,
-      setDraft: (value: string) => { h.setDraft(value); setDraftState(value); },
+      setDraft: (value: string) => {
+        h.setDraft(value);
+        setDraftState(value);
+      },
       setContext: () => undefined,
       setActiveConversationId: () => undefined,
       resetConversation: () => undefined,
@@ -56,8 +59,17 @@ import { ChatSession } from './chat-session';
 
 const PLACEHOLDER = 'Ask a question about your knowledge or documents…';
 const conversation = (active: string | null = null) => ({
-  id: 'c1', title: 'T', messages: [], active_response_id: active, context_kind: null, context_resource_id: null,
-  pinned: false, archived: false, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', metadata: {},
+  id: 'c1',
+  title: 'T',
+  messages: [],
+  active_response_id: active,
+  context_kind: null,
+  context_resource_id: null,
+  pinned: false,
+  archived: false,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+  metadata: {},
 });
 
 function renderSession(props: Partial<React.ComponentProps<typeof ChatSession>> = {}) {
@@ -81,8 +93,14 @@ describe('ChatSession', () => {
     Element.prototype.scrollTo = (() => undefined) as unknown as typeof Element.prototype.scrollTo;
     Element.prototype.scrollIntoView = (() => undefined) as unknown as typeof Element.prototype.scrollIntoView;
     window.matchMedia = ((query: string) => ({
-      matches: false, media: query, addEventListener: () => undefined, removeEventListener: () => undefined,
-      addListener: () => undefined, removeListener: () => undefined, onchange: null, dispatchEvent: () => false,
+      matches: false,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      onchange: null,
+      dispatchEvent: () => false,
     })) as unknown as typeof window.matchMedia;
   });
   beforeEach(() => {
@@ -126,9 +144,12 @@ describe('ChatSession', () => {
 
   it('shows a neutral status (no alert, no Retry) after the user stops generation', async () => {
     h.sendMessage.mockResolvedValue({ response_id: 'r1', status: 'queued' });
-    h.streamResponseEvents.mockImplementation((_id: string, o: StreamEventsOptions) => new Promise<void>((resolve) => {
-      o.signal?.addEventListener('abort', () => resolve());
-    }));
+    h.streamResponseEvents.mockImplementation(
+      (_id: string, o: StreamEventsOptions) =>
+        new Promise<void>((resolve) => {
+          o.signal?.addEventListener('abort', () => resolve());
+        }),
+    );
     renderSession();
     await sendText('hello');
     await userEvent.click(await screen.findByTestId('chat-stop'));
@@ -185,20 +206,30 @@ describe('ChatSession', () => {
     h.sendMessage.mockResolvedValue({ response_id: 'r1', status: 'queued' });
     let finish: () => void = () => undefined;
     let opts: StreamEventsOptions | undefined;
-    h.streamResponseEvents.mockImplementation((_id: string, o: StreamEventsOptions) => new Promise<void>((resolve) => {
-      opts = o;
-      finish = () => { o.onDone?.({ text: 'a', citations: [], status: 'completed' }); resolve(); };
-    }));
+    h.streamResponseEvents.mockImplementation(
+      (_id: string, o: StreamEventsOptions) =>
+        new Promise<void>((resolve) => {
+          opts = o;
+          finish = () => {
+            o.onDone?.({ text: 'a', citations: [], status: 'completed' });
+            resolve();
+          };
+        }),
+    );
     renderSession();
     await sendText('hello');
     await waitFor(() => expect(opts).toBeDefined());
 
-    React.act(() => { opts?.onReasoning?.('step one'); });
+    React.act(() => {
+      opts?.onReasoning?.('step one');
+    });
     const block = await screen.findByTestId('chat-reasoning');
     expect((block as HTMLDetailsElement).open).toBe(true);
     expect(block.textContent).toContain('Thinking…');
 
-    React.act(() => { opts?.onDelta?.('Answer'); });
+    React.act(() => {
+      opts?.onDelta?.('Answer');
+    });
     await waitFor(() => expect((screen.getByTestId('chat-reasoning') as HTMLDetailsElement).open).toBe(false));
     expect(screen.getByTestId('chat-reasoning').textContent).toContain('Thought process');
     React.act(() => finish());
@@ -207,8 +238,9 @@ describe('ChatSession', () => {
   it('collapses Rename and Delete into a More menu and keeps them reachable in full mode', async () => {
     const rename = vi.fn();
     renderSession({ mode: 'full', onRenameConversation: rename, onDeleteConversation: vi.fn() });
-    expect(screen.getByRole('button', { name: 'More actions' })).toBeTruthy();
-    await userEvent.click(screen.getAllByRole('button', { name: 'Rename conversation' })[0]);
+    expect(screen.queryByRole('button', { name: 'Rename conversation' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Rename conversation' }));
     expect(rename).toHaveBeenCalled();
   });
 });

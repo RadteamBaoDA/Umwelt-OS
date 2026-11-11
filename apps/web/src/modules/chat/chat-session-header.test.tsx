@@ -55,8 +55,12 @@ describe('ChatSessionHeader pin and archive', () => {
     expect(onSetArchived).toHaveBeenCalledWith(false);
   });
 
-  it('shows no pin/archive items without handlers (new, unsaved chat)', () => {
+  it('shows no pin/archive items without handlers (new, unsaved chat)', async () => {
     renderHeader({ onRenameConversation: vi.fn() });
-    expect(screen.getByRole('button', { name: t.renameConversation })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: t.renameConversation })).toBeNull(); // C8: actions live only in the More menu
+    await userEvent.click(screen.getByRole('button', { name: t.moreActions }));
+    expect(screen.queryByRole('menuitem', { name: t.pinConversation })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: t.archiveConversation })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: t.renameConversation })).toBeTruthy();
   });
 });
