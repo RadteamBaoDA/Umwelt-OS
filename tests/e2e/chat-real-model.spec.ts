@@ -134,7 +134,7 @@ test.describe('chat (real model)', () => {
     await toggle.waitFor();
     if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
     await page.getByText(title).first().click();
-    await expect(page.getByText(answer.slice(0, 40), { exact: false }).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(answer.slice(0, 40).replace(/'/g, '’'), { exact: false }).first()).toBeVisible({ timeout: 30_000 });
   });
 
   test('reasoning block streams then completes; no literal <think>', async ({ page }, testInfo) => {

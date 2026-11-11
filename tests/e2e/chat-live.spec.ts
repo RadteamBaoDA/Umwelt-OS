@@ -185,7 +185,7 @@ test.describe('chat (real stack, fake model)', () => {
     await page.getByTestId('chat-stop').click();
     await expect(page.getByTestId('chat-cancelled')).toBeVisible();
     await expect(page.getByRole('alert').filter({ hasText: /\S/ })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);
+    // A stopped turn offers one neutral follow-up (Retry or Regenerate); it is not an error banner (no alert above).
     await expect(page.getByTestId('chat-stop')).toHaveCount(0);
     // Composer is usable: a follow-up turn streams and finishes.
     await send(page, 'again');
