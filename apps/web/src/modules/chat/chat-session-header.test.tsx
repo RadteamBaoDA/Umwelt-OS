@@ -12,18 +12,7 @@ import { ChatSessionHeader, type ChatSessionHeaderProps } from './chat-session-h
 function renderHeader(props: Partial<ChatSessionHeaderProps>) {
   return render(
     <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
-      <ChatSessionHeader
-        mode="full"
-        title="T"
-        csrfToken="x"
-        onSendPrompt={vi.fn()}
-        onNewChat={vi.fn()}
-        profileValue="assistant"
-        profilePickerDisabled={false}
-        onProfileChange={vi.fn()}
-        profiles={[]}
-        {...props}
-      />
+      <ChatSessionHeader mode="full" title="T" csrfToken="x" onSendPrompt={vi.fn()} onNewChat={vi.fn()} {...props} />
     </NextIntlClientProvider>,
   );
 }

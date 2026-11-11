@@ -41,8 +41,16 @@ export const WEB_SEARCH_SEND_ENABLED = true;
 
 /** Reason codes the backend may report for a skipped or unavailable web search. */
 export type WebSearchReason =
-  | 'not_configured' | 'query_too_long' | 'empty_query' | 'local_only_context' | 'daily_limit'
-  | 'timeout' | 'provider_error' | 'network_denied' | 'run_inactive' | 'no_results';
+  | 'not_configured'
+  | 'query_too_long'
+  | 'empty_query'
+  | 'local_only_context'
+  | 'daily_limit'
+  | 'timeout'
+  | 'provider_error'
+  | 'network_denied'
+  | 'run_inactive'
+  | 'no_results';
 
 /** Outcome of a requested web search; absent when the message did not opt in. */
 export interface WebSearchOutcome {
@@ -328,10 +336,7 @@ export async function getConversation(conversationId: string): Promise<Conversat
  * @param csrfToken - Session CSRF token for write authorization.
  * @returns Newly created conversation header.
  */
-export async function createConversation(
-  payload: ConversationCreate,
-  csrfToken: string,
-): Promise<Conversation> {
+export async function createConversation(payload: ConversationCreate, csrfToken: string): Promise<Conversation> {
   return apiRequest<Conversation>('/api/v1/conversations', {
     method: 'POST',
     headers: {
@@ -350,11 +355,7 @@ export async function createConversation(
  * @param csrfToken - Session CSRF token for write authorization.
  * @returns Updated conversation header.
  */
-export async function patchConversation(
-  conversationId: string,
-  payload: ConversationPatch,
-  csrfToken: string,
-): Promise<Conversation> {
+export async function patchConversation(conversationId: string, payload: ConversationPatch, csrfToken: string): Promise<Conversation> {
   return apiRequest<Conversation>(`/api/v1/conversations/${conversationId}`, {
     method: 'PATCH',
     headers: {
@@ -371,10 +372,7 @@ export async function patchConversation(
  * @param conversationId - Unique identifier of the conversation to delete.
  * @param csrfToken - Session CSRF token for write authorization.
  */
-export async function deleteConversation(
-  conversationId: string,
-  csrfToken: string,
-): Promise<void> {
+export async function deleteConversation(conversationId: string, csrfToken: string): Promise<void> {
   return apiRequest<void>(`/api/v1/conversations/${conversationId}`, {
     method: 'DELETE',
     headers: csrfHeaders(csrfToken),
@@ -390,11 +388,7 @@ export async function deleteConversation(
  * @param csrfToken - Session CSRF token for write authorization.
  * @returns Immediate acknowledgment containing message_id and response_id.
  */
-export async function sendMessage(
-  conversationId: string,
-  payload: SendMessagePayload,
-  csrfToken: string,
-): Promise<SendMessageResponse> {
+export async function sendMessage(conversationId: string, payload: SendMessagePayload, csrfToken: string): Promise<SendMessageResponse> {
   return apiRequest<SendMessageResponse>(`/api/v1/conversations/${conversationId}/messages`, {
     method: 'POST',
     headers: {
@@ -422,17 +416,14 @@ export async function mutateMessage(
   payload: MessageMutationPayload,
   csrfToken: string,
 ): Promise<SendMessageResponse> {
-  return apiRequest<SendMessageResponse>(
-    `/api/v1/conversations/${conversationId}/messages/${messageId}/mutations`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...csrfHeaders(csrfToken),
-      },
-      body: JSON.stringify(payload),
+  return apiRequest<SendMessageResponse>(`/api/v1/conversations/${conversationId}/messages/${messageId}/mutations`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...csrfHeaders(csrfToken),
     },
-  );
+    body: JSON.stringify(payload),
+  });
 }
 
 /**
@@ -455,10 +446,7 @@ export async function hashMessageContent(content: string): Promise<string> {
  * @param csrfToken - Session CSRF token for write authorization.
  * @returns Cancel acknowledgment with updated status.
  */
-export async function cancelResponse(
-  responseId: string,
-  csrfToken: string,
-): Promise<CancelResponse> {
+export async function cancelResponse(responseId: string, csrfToken: string): Promise<CancelResponse> {
   return apiRequest<CancelResponse>(`/api/v1/responses/${responseId}/cancel`, {
     method: 'POST',
     headers: csrfHeaders(csrfToken),
@@ -500,7 +488,8 @@ type SseHandler = (eventData: string, options: StreamEventsOptions) => void;
  * @param eventData - Raw payload.
  * @param apply - Invoked with the parsed value; runs inside the same guard as parsing, like the inline try/catch it replaced.
  */
-function withJsonPayload(label: string, eventData: string, apply: (parsed: any) => void): void { // eslint-disable-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function withJsonPayload(label: string, eventData: string, apply: (parsed: any) => void): void {
   try {
     apply(JSON.parse(eventData));
   } catch (err) {
@@ -514,7 +503,8 @@ function withJsonPayload(label: string, eventData: string, apply: (parsed: any) 
  * @param parsed - JSON-decoded event data (any shape).
  * @returns The step, or null for redacted/malformed payloads.
  */
-function parseToolStep(parsed: any): ToolStep | null { // eslint-disable-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseToolStep(parsed: any): ToolStep | null {
   if (typeof parsed?.tool !== 'string' || !parsed.tool) return null;
   if (parsed.state !== 'running' && parsed.state !== 'done') return null;
   const raw = parsed.detail && typeof parsed.detail === 'object' && !Array.isArray(parsed.detail) ? parsed.detail : {};
@@ -539,57 +529,73 @@ const SSE_HANDLERS: Record<string, SseHandler> = {
       options.onDelta?.(eventData);
     }
   },
-  'message.reasoning.delta': (eventData, options) => withJsonPayload('message.reasoning.delta', eventData, (parsed) => {
-    if (typeof parsed?.text === 'string' && parsed.text) options.onReasoning?.(parsed.text);
-  }),
-  'message.citations': (eventData, options) => withJsonPayload('citations', eventData, (parsed) => {
-    const citationsList = Array.isArray(parsed?.citations) ? (parsed.citations as Citation[]) : [];
-    options.onCitations?.(citationsList);
-  }),
-  'message.ui.delta': (eventData, options) => withJsonPayload('message.ui.delta', eventData, (parsed) => {
-    if (parsed && typeof parsed === 'object') options.onUiDelta?.(parsed as Record<string, unknown>);
-  }),
-  'message.ui.done': (eventData, options) => withJsonPayload('message.ui.done', eventData, (parsed) => {
-    if (parsed && typeof parsed === 'object') options.onUiDone?.(parsed as Record<string, unknown>);
-  }),
-  'message.ui.discard': (eventData, options) => withJsonPayload('message.ui.discard', eventData, (parsed) => {
-    // Privacy redaction rewrites old events to `{}`; ignore anything without a part id.
-    if (typeof parsed?.part_id === 'string') options.onUiDiscard?.(parsed.part_id);
-  }),
-  'message.input.request': (eventData, options) => withJsonPayload('message.input.request', eventData, (parsed) => {
-    // Privacy redaction rewrites old events to `{}`; ignore anything without an id.
-    if (parsed && typeof parsed.request_id === 'string') {
-      options.onInputRequest?.({
-        ...parsed,
-        options: Array.isArray(parsed.options) ? parsed.options : [],
-        slots: Array.isArray(parsed.slots) ? parsed.slots : [],
-      } as InputRequest);
-    }
-  }),
-  'ui.theme': (eventData, options) => withJsonPayload('ui.theme', eventData, (parsed) => {
-    // Only the three known modes are ever applied; anything else (including redacted {}) is ignored.
-    if (parsed?.mode === 'light' || parsed?.mode === 'dark' || parsed?.mode === 'system') options.onThemeRequest?.(parsed.mode);
-  }),
-  'message.input.resolved': (eventData, options) => withJsonPayload('message.input.resolved', eventData, (parsed) => {
-    if (parsed && typeof parsed.request_id === 'string') options.onInputResolved?.(parsed as InputResolved);
-  }),
+  'message.reasoning.delta': (eventData, options) =>
+    withJsonPayload('message.reasoning.delta', eventData, (parsed) => {
+      if (typeof parsed?.text === 'string' && parsed.text) options.onReasoning?.(parsed.text);
+    }),
+  'message.citations': (eventData, options) =>
+    withJsonPayload('citations', eventData, (parsed) => {
+      const citationsList = Array.isArray(parsed?.citations) ? (parsed.citations as Citation[]) : [];
+      options.onCitations?.(citationsList);
+    }),
+  'message.ui.delta': (eventData, options) =>
+    withJsonPayload('message.ui.delta', eventData, (parsed) => {
+      if (parsed && typeof parsed === 'object') options.onUiDelta?.(parsed as Record<string, unknown>);
+    }),
+  'message.ui.done': (eventData, options) =>
+    withJsonPayload('message.ui.done', eventData, (parsed) => {
+      if (parsed && typeof parsed === 'object') options.onUiDone?.(parsed as Record<string, unknown>);
+    }),
+  'message.ui.discard': (eventData, options) =>
+    withJsonPayload('message.ui.discard', eventData, (parsed) => {
+      // Privacy redaction rewrites old events to `{}`; ignore anything without a part id.
+      if (typeof parsed?.part_id === 'string') options.onUiDiscard?.(parsed.part_id);
+    }),
+  'message.input.request': (eventData, options) =>
+    withJsonPayload('message.input.request', eventData, (parsed) => {
+      // Privacy redaction rewrites old events to `{}`; ignore anything without an id.
+      if (parsed && typeof parsed.request_id === 'string') {
+        options.onInputRequest?.({
+          ...parsed,
+          options: Array.isArray(parsed.options) ? parsed.options : [],
+          slots: Array.isArray(parsed.slots) ? parsed.slots : [],
+        } as InputRequest);
+      }
+    }),
+  'ui.theme': (eventData, options) =>
+    withJsonPayload('ui.theme', eventData, (parsed) => {
+      // Only the three known modes are ever applied; anything else (including redacted {}) is ignored.
+      if (parsed?.mode === 'light' || parsed?.mode === 'dark' || parsed?.mode === 'system') options.onThemeRequest?.(parsed.mode);
+    }),
+  'message.input.resolved': (eventData, options) =>
+    withJsonPayload('message.input.resolved', eventData, (parsed) => {
+      if (parsed && typeof parsed.request_id === 'string') options.onInputResolved?.(parsed as InputResolved);
+    }),
   'message.done': handleDoneEvent,
-  web_search: (eventData, options) => withJsonPayload('web_search', eventData, (parsed) => {
-    if (parsed && typeof parsed.status === 'string') options.onWebSearch?.(parsed as WebSearchOutcome);
-  }),
-  'tool.status': (eventData, options) => withJsonPayload('tool.status', eventData, (parsed) => {
-    const step = parseToolStep(parsed);
-    if (!step) return; // redacted/malformed payloads (`{}`) are ignored
-    if (step.tool === 'web_search' || step.tool === 'query_collected_data') options.onToolStatus?.({ tool: step.tool, state: step.state });
-    options.onToolStep?.(step);
-  }),
-  'conversation.title': (eventData, options) => withJsonPayload('conversation.title', eventData, (parsed) => {
-    if (typeof parsed?.title === 'string' && parsed.title.trim()) options.onConversationTitle?.(parsed.title);
-  }),
-  'message.suggestions': (eventData, options) => withJsonPayload('message.suggestions', eventData, (parsed) => {
-    const list = Array.isArray(parsed?.suggestions) ? parsed.suggestions.filter((s: unknown): s is string => typeof s === 'string' && s !== '') : [];
-    if (typeof parsed?.message_id === 'string' && list.length) options.onSuggestions?.({ message_id: parsed.message_id, suggestions: list });
-  }),
+  web_search: (eventData, options) =>
+    withJsonPayload('web_search', eventData, (parsed) => {
+      if (parsed && typeof parsed.status === 'string') options.onWebSearch?.(parsed as WebSearchOutcome);
+    }),
+  'tool.status': (eventData, options) =>
+    withJsonPayload('tool.status', eventData, (parsed) => {
+      const step = parseToolStep(parsed);
+      if (!step) return; // redacted/malformed payloads (`{}`) are ignored
+      if (step.tool === 'web_search' || step.tool === 'query_collected_data')
+        options.onToolStatus?.({ tool: step.tool, state: step.state });
+      options.onToolStep?.(step);
+    }),
+  'conversation.title': (eventData, options) =>
+    withJsonPayload('conversation.title', eventData, (parsed) => {
+      if (typeof parsed?.title === 'string' && parsed.title.trim()) options.onConversationTitle?.(parsed.title);
+    }),
+  'message.suggestions': (eventData, options) =>
+    withJsonPayload('message.suggestions', eventData, (parsed) => {
+      const list = Array.isArray(parsed?.suggestions)
+        ? parsed.suggestions.filter((s: unknown): s is string => typeof s === 'string' && s !== '')
+        : [];
+      if (typeof parsed?.message_id === 'string' && list.length)
+        options.onSuggestions?.({ message_id: parsed.message_id, suggestions: list });
+    }),
   status: (eventData, options) => {
     try {
       const parsed = JSON.parse(eventData);
@@ -602,7 +608,8 @@ const SSE_HANDLERS: Record<string, SseHandler> = {
 };
 
 /** Normalizes a parsed `message.done` payload into the typed result (missing fields get safe defaults). */
-function toDoneResult(parsed: any): Parameters<NonNullable<StreamEventsOptions['onDone']>>[0] { // eslint-disable-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toDoneResult(parsed: any): Parameters<NonNullable<StreamEventsOptions['onDone']>>[0] {
   const ui = parsed?.generative_ui;
   const parts = parsed?.generative_ui_parts;
   return {
@@ -718,10 +725,7 @@ async function openEventStream(responseId: string, options: StreamEventsOptions)
  * @param options - Event listeners, abort signal, and resume cursor.
  * @returns Promise that resolves when the stream completes or is aborted.
  */
-export async function streamResponseEvents(
-  responseId: string,
-  options: StreamEventsOptions = {},
-): Promise<void> {
+export async function streamResponseEvents(responseId: string, options: StreamEventsOptions = {}): Promise<void> {
   const reader = await openEventStream(responseId, options);
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
@@ -781,11 +785,21 @@ export interface ChatAttachment {
  * Uploads one file through the shared ingestion pipeline. The server picks the destination: the private,
  * local-only "Chat attachments" source by default, or "Chat attachments (shared)" when `shareWithModel` is set.
  */
-export async function uploadChatAttachment(file: File, csrfToken: string, shareWithModel = false, signal?: AbortSignal): Promise<ChatAttachment> {
+export async function uploadChatAttachment(
+  file: File,
+  csrfToken: string,
+  shareWithModel = false,
+  signal?: AbortSignal,
+): Promise<ChatAttachment> {
   const form = new FormData();
   form.set('file', file);
   if (shareWithModel) form.set('share_with_model', 'true');
-  return apiRequest<ChatAttachment>('/api/v1/documents/chat-attachments', { method: 'POST', headers: csrfHeaders(csrfToken), body: form, signal });
+  return apiRequest<ChatAttachment>('/api/v1/documents/chat-attachments', {
+    method: 'POST',
+    headers: csrfHeaders(csrfToken),
+    body: form,
+    signal,
+  });
 }
 
 /** Reads a chat attachment's ingest status and current document version. */

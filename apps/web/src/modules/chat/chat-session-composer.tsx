@@ -4,14 +4,18 @@ import * as React from 'react';
 import { useTranslations } from 'next-intl';
 import { WEB_SEARCH_SEND_ENABLED } from './api';
 import { ATTACHMENT_STATUS_ID, ChatAttachmentBar } from './chat-attachments';
+import { AgentPicker } from './chat-agent-picker';
 import { ChatComposer } from './chat-composer';
 import { ChatContextBar } from './chat-context-bar';
 import { WEB_SEARCH_PROVIDER_LABELS } from './use-chat-web-search';
+import type { AgentProfile } from '@/modules/agents';
 import type { ChatSessionData } from './use-chat-session';
 
 /** Props of {@link SessionComposer}. */
 export interface SessionComposerProps {
   data: ChatSessionData;
+  /** Agent profiles, loaded lazily (undefined until the picker opens or a specialist is selected). */
+  profiles?: AgentProfile[];
   mode: 'drawer' | 'full';
   onSend: (content: string) => Promise<boolean>;
   onStop: () => Promise<void>;
@@ -86,15 +90,35 @@ function modelBinding({ latestAssistant, modelPicker }: ChatSessionData) {
 }
 
 /** Full-mode only composer slots: context badges, file attachments, the + menu and the send block reason. */
-function buildFullModeExtras(data: ChatSessionData, attachmentsBlocked: boolean) {
+function buildFullModeExtras(data: ChatSessionData, attachmentsBlocked: boolean, profiles: AgentProfile[] | undefined) {
   const { attachments, composer } = data;
   return {
     contextBar: <SessionContextBadges data={data} />,
     onAttachFiles: (files: File[]) => attachments.add(files),
-    attachmentBar: <ChatAttachmentBar state={attachments} disabled={attachmentsBlocked} inputRef={composer.fileInputRef} />,
+    attachments: <ChatAttachmentBar state={attachments} disabled={attachmentsBlocked} inputRef={composer.fileInputRef} />,
     menu: buildComposerMenu(data, attachmentsBlocked),
     sendBlockedBy: attachments.sendBlock ? ATTACHMENT_STATUS_ID : null,
+    agentPicker: buildAgentPicker(data, profiles),
+    modelLocked: data.agentMode,
   };
+}
+
+/**
+ * Agent picker slot of the full composer (C9): shows a pending retry's profile and locks while that retry is pending.
+ *
+ * @returns The picker element.
+ */
+function buildAgentPicker(data: ChatSessionData, profiles: AgentProfile[] | undefined) {
+  const { composer, pendingProfileRun } = data;
+  return (
+    <AgentPicker
+      value={pendingProfileRun?.profileId ?? composer.selectedProfileId}
+      disabled={Boolean(pendingProfileRun) || data.busy}
+      onChange={composer.setSelectedProfileId}
+      profiles={profiles}
+      onOpen={composer.openAgentPicker}
+    />
+  );
 }
 
 /**
@@ -102,28 +126,24 @@ function buildFullModeExtras(data: ChatSessionData, attachmentsBlocked: boolean)
  *
  * @param props - See {@link SessionComposerProps}.
  */
-export function SessionComposer({ data, mode, onSend, onStop, onCancelEdit }: SessionComposerProps) {
+export function SessionComposer({ data, profiles, mode, onSend, onStop, onCancelEdit }: SessionComposerProps) {
   const { attachments, live } = data;
   const full = mode === 'full';
   const attachmentsBlocked = data.busy || data.attachmentsUnavailable;
   const webSearch = useWebSearchToggle(data, full);
-  const fullExtras = full ? buildFullModeExtras(data, attachmentsBlocked) : undefined;
+  const fullExtras = full ? buildFullModeExtras(data, attachmentsBlocked, profiles) : undefined;
   return (
     <ChatComposer
       mode={mode}
-      contextBar={fullExtras?.contextBar}
       {...draftBinding(data)}
       onSend={onSend}
       onStop={onStop}
       editing={full && data.effectiveEditingMessageId && !data.pendingMessageMutation ? { onCancel: onCancelEdit } : undefined}
-      onAttachFiles={fullExtras?.onAttachFiles}
       attachmentBusy={attachmentsBlocked || attachments.full}
       isStreaming={live.isStreaming}
       disabled={live.isPending}
       {...modelBinding(data)}
-      attachments={fullExtras?.attachmentBar}
-      menu={fullExtras?.menu}
-      sendBlockedBy={fullExtras?.sendBlockedBy ?? null}
+      {...fullExtras}
       webSearch={webSearch}
       autoFocusKey={full ? (data.chatCtrl.activeConversationId ?? '') : undefined}
     />

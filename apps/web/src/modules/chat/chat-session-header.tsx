@@ -11,9 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { PickQrButton } from '@/modules/pick';
-import type { AgentProfile } from '@/modules/agents';
 
 export const profileTitleKeys: Record<
   string,
@@ -56,11 +54,6 @@ export interface ChatSessionHeaderProps {
   actionError?: string | null;
   onSendPrompt: (prompt: string) => void;
   onNewChat: () => void;
-  /** Profile id currently shown in the picker (a pending retry pins its own profile). */
-  profileValue: string;
-  profilePickerDisabled: boolean;
-  onProfileChange: (id: string) => void;
-  profiles: AgentProfile[] | undefined;
 }
 
 type ControlProps = Pick<
@@ -117,41 +110,7 @@ function MoreMenu({
 }
 
 /**
- * Agent profile picker (full mode): the Assistant plus each specialist, disabled when unavailable.
- *
- * @param props - Picker value, disabled flag, change handler and the loaded profiles.
- */
-function ProfilePicker({
-  profileValue,
-  profilePickerDisabled,
-  onProfileChange,
-  profiles,
-}: Pick<ChatSessionHeaderProps, 'profileValue' | 'profilePickerDisabled' | 'onProfileChange' | 'profiles'>) {
-  const tAgents = useTranslations('aiSettings');
-  return (
-    <Select value={profileValue} onValueChange={onProfileChange}>
-      <SelectTrigger aria-label={tAgents('agentSelect')} className="w-28 sm:w-40" disabled={profilePickerDisabled}>
-        <SelectValue placeholder={tAgents('agentSelect')} />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="assistant">{tAgents('agentAssistant')}</SelectItem>
-        {(profiles ?? []).map((profile) => (
-          <SelectItem key={profile.id} value={profile.id} disabled={!profile.enabled || profile.capability === 'unavailable'}>
-            {tAgents(profileTitleKeys[profile.id] ?? 'agentProfileKnowledge')}
-            {profile.capability === 'partial'
-              ? ` · ${tAgents('agentPartial')}`
-              : profile.capability === 'unavailable'
-                ? ` · ${tAgents('agentUnavailable')}`
-                : ''}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-/**
- * Session header shared by the quick drawer and the /chat route: title, QR pick, one "More" menu (rename, export, pin, archive, delete), agent picker, new chat.
+ * Session header shared by the quick drawer and the /chat route: title, QR pick, one "More" menu (rename, export, pin, archive, delete), new chat (the agent picker lives in the composer).
  *
  * @param props - See {@link ChatSessionHeaderProps}.
  * @returns The header row (drawer mode reserves room for the sheet close button).
@@ -195,7 +154,6 @@ export function ChatSessionHeader(props: ChatSessionHeaderProps) {
             onSetArchived={onSetArchived}
           />
         )}
-        {full && <ProfilePicker {...props} />}
         <Button
           type="button"
           onClick={onNewChat}

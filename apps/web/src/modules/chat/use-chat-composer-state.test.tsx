@@ -45,3 +45,12 @@ describe('useChatComposerState', () => {
     expect(result.current.resetToggles).toBe(reset);
   });
 });
+
+describe('useChatComposerState agent list (R7)', () => {
+  it('requests the agent list only after the picker opened', () => {
+    const { result } = renderHook(() => useChatComposerState());
+    expect(result.current.agentPickerOpened).toBe(false);
+    act(() => result.current.openAgentPicker());
+    expect(result.current.agentPickerOpened).toBe(true);
+  });
+});

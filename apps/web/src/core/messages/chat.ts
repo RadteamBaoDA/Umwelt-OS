@@ -81,6 +81,7 @@ export const chatMessages = {
     modelLine: 'Model: {model}',
     modelPickerLabel: 'Model for this chat',
     modelDefault: 'Default model',
+    modelLockedByAgent: 'Specialist agents choose their own model.',
     modelDefaultNamed: 'Default · {model}',
     sourcesCount: '{count, plural, one {# source} other {# sources}}',
     contextSelectionLocalOnly: 'Local-only documents are never sent to the cloud chat model. Remove them and try again.',
@@ -547,6 +548,7 @@ export const chatMessages = {
     modelLine: 'Mô hình: {model}',
     modelPickerLabel: 'Mô hình cho cuộc trò chuyện này',
     modelDefault: 'Mô hình mặc định',
+    modelLockedByAgent: 'Agent chuyên biệt tự chọn mô hình.',
     modelDefaultNamed: 'Mặc định · {model}',
     sourcesCount: '{count} nguồn',
     contextSelectionLocalOnly:

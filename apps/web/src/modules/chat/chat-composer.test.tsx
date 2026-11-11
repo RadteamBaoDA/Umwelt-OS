@@ -114,3 +114,27 @@ describe('ChatComposer streaming hints and model label (C20, U2)', () => {
     expect(screen.getByText(/Model: claude-x/)).toBeTruthy();
   });
 });
+
+describe('ChatComposer agent picker slot (C9)', () => {
+  const picker = { options: [{ providerId: 'p', model: 'm', label: 'P · m' }], value: null, defaultModel: 'm', onChange: vi.fn() };
+  /** Renders the full composer with the agent slot. */
+  const renderFull = (props: Partial<ChatComposerProps>) =>
+    render(
+      <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+        <ChatComposer mode="full" value="" onChange={vi.fn()} onSend={vi.fn()} isStreaming={false} modelPicker={picker} {...props} />
+      </NextIntlClientProvider>,
+    );
+
+  it('renders the agent picker in the toolbar and keeps the model picker enabled for the Assistant', () => {
+    renderFull({ agentPicker: <button type="button">agent-slot</button> });
+    expect(screen.getByText('agent-slot')).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'Model for this chat' }).hasAttribute('disabled')).toBe(false);
+    expect(screen.queryByTestId('chat-model-locked-hint')).toBeNull();
+  });
+
+  it('disables the model picker with a reason while a specialist agent is selected', () => {
+    renderFull({ modelLocked: true });
+    expect(screen.getByRole('combobox', { name: 'Model for this chat' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByTestId('chat-model-locked-hint').textContent).toBe('Specialist agents choose their own model.');
+  });
+});

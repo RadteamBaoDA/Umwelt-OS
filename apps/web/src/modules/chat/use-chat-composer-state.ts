@@ -12,6 +12,9 @@ export interface ChatComposerState {
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   providerGateOpen: boolean;
   setProviderGateOpen: (open: boolean) => void;
+  /** True once the agent picker was opened; the profile list is fetched only from then on (or in agent mode). */
+  agentPickerOpened: boolean;
+  openAgentPicker: () => void;
   selectedProfileId: string;
   setSelectedProfileId: (id: string) => void;
   /** Message whose prompt is being edited locally (before any pending mutation is considered). */
@@ -35,6 +38,8 @@ export function useChatComposerState(): ChatComposerState {
   const [providerGateOpen, setProviderGateOpen] = React.useState(false);
   const [editingMessageId, setEditingMessageId] = React.useState<string | null>(null);
   const draftStashRef = React.useRef<string | null>(null);
+  const [agentPickerOpened, setAgentPickerOpened] = React.useState(false);
+  const openAgentPicker = React.useCallback(() => setAgentPickerOpened(true), []);
   const [selectedProfileId, setSelectedProfileId] = React.useState('assistant');
   const resetToggles = React.useCallback(() => {
     setWebSearchOn(true);
@@ -48,6 +53,8 @@ export function useChatComposerState(): ChatComposerState {
     fileInputRef,
     providerGateOpen,
     setProviderGateOpen,
+    agentPickerOpened,
+    openAgentPicker,
     selectedProfileId,
     setSelectedProfileId,
     editingMessageId,

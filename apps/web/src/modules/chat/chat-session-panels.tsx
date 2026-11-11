@@ -59,11 +59,14 @@ export function AgentPanels(props: AgentPanelsProps) {
           {tAgents('agentPendingProfileRevision', { revision: pendingProfileRun.profileRevision })}
         </div>
       ) : null}
-      <ConversationAgentActivity
-        conversationId={conversationId}
-        csrfToken={csrfToken}
-        watch={Boolean(pendingProfileRun) || Boolean(runs?.items.some((run) => ACTIVE_RUN_STATUSES.includes(run.status)))}
-      />
+      {/* R7: approvals UI (and its chunk and polling) only exists while a specialist is in play. */}
+      {agentMode && (
+        <ConversationAgentActivity
+          conversationId={conversationId}
+          csrfToken={csrfToken}
+          watch={Boolean(pendingProfileRun) || Boolean(runs?.items.some((run) => ACTIVE_RUN_STATUSES.includes(run.status)))}
+        />
+      )}
       {agentMode && activeRun && (
         <div className="shrink-0 border-b border-border p-3">
           <AgentRunDetail run={activeRun} onCancel={onCancelRun} cancelling={cancelling} />

@@ -78,6 +78,31 @@ function SessionInputStack({
   );
 }
 
+/** Agent chrome above the transcript, wired to the session's agent-run queries (see {@link AgentPanels}). */
+function SessionAgentPanels({
+  data: d,
+  agent,
+  conversationId,
+}: {
+  data: ReturnType<typeof useChatSessionData>;
+  agent: ReturnType<typeof useChatAgentRuns>;
+  conversationId?: string | null;
+}) {
+  return (
+    <AgentPanels
+      conversationId={conversationId}
+      csrfToken={d.session.csrfToken}
+      agentMode={d.agentMode}
+      pendingProfileRun={d.pendingProfileRun}
+      activeRun={agent.activeAgentRun.data}
+      runs={agent.agentRuns.data}
+      onCancelRun={() => agent.cancelAgent.mutate()}
+      cancelling={agent.cancelAgent.isPending}
+      onOpenRun={agent.setActiveAgentRunId}
+    />
+  );
+}
+
 /**
  * Shared core chat session component powering both the quick-chat Sheet drawer and the /chat route.
  * Coordinates conversation querying, message sending with client_request_id idempotency,
@@ -112,9 +137,15 @@ export function ChatSession({
   const t = useTranslations('chat');
   const options = { conversationId, mode, onConversationCreated };
   const d = useChatSessionData(options);
-  const { session, chatCtrl, live, actions, composer, pendingProfileRun, pendingMessageMutation } = d;
+  const { session, chatCtrl, live, actions, composer, pendingMessageMutation } = d;
   const [themeRequest, setThemeRequest] = React.useState<'light' | 'dark' | 'system' | null>(null);
-  const agent = useChatAgentRuns({ conversationId, mode, agentMode: d.agentMode, csrfToken: session.csrfToken });
+  const agent = useChatAgentRuns({
+    conversationId,
+    mode,
+    agentMode: d.agentMode,
+    profilesWanted: composer.agentPickerOpened,
+    csrfToken: session.csrfToken,
+  });
   const cmd = useChatSessionCommands(d, agent, options, setThemeRequest);
   const setError = React.useCallback((message: string) => actions.patch({ error: message }), [actions]);
   const rootRef = React.useRef<HTMLDivElement>(null);
@@ -158,22 +189,8 @@ export function ChatSession({
           onExportConversation={handleExport}
           onSendPrompt={widget.onTranscriptSendPrompt}
           onNewChat={cmd.handleNewChat}
-          profileValue={pendingProfileRun?.profileId ?? composer.selectedProfileId}
-          profilePickerDisabled={Boolean(pendingProfileRun)}
-          onProfileChange={composer.setSelectedProfileId}
-          profiles={agent.profiles.data}
         />
-        <AgentPanels
-          conversationId={conversationId}
-          csrfToken={session.csrfToken}
-          agentMode={d.agentMode}
-          pendingProfileRun={pendingProfileRun}
-          activeRun={agent.activeAgentRun.data}
-          runs={agent.agentRuns.data}
-          onCancelRun={() => agent.cancelAgent.mutate()}
-          cancelling={agent.cancelAgent.isPending}
-          onOpenRun={agent.setActiveAgentRunId}
-        />
+        <SessionAgentPanels data={d} agent={agent} conversationId={conversationId} />
         {mode === 'drawer' && <ChatContextBar variant="bar" context={chatCtrl.context} onRemove={() => chatCtrl.setContext(null)} />}
         <RevisionBanners
           mode={mode}
@@ -197,7 +214,14 @@ export function ChatSession({
         <SessionInputStack data={d} cmd={cmd} conversationId={conversationId} />
 
         {/* Bottom composer */}
-        <SessionComposer data={d} mode={mode} onSend={cmd.handleSend} onStop={cmd.handleStop} onCancelEdit={cmd.handleCancelEdit} />
+        <SessionComposer
+          data={d}
+          profiles={agent.profiles.data}
+          mode={mode}
+          onSend={cmd.handleSend}
+          onStop={cmd.handleStop}
+          onCancelEdit={cmd.handleCancelEdit}
+        />
       </ChatDropZone>
     </PromptBridgeProvider>
   );

@@ -70,6 +70,10 @@ export interface ChatComposerProps {
   menu?: ComposerMenuProps;
   /** Per-chat model dropdown (full and drawer); omitted while no chat model is configured. */
   modelPicker?: ChatModelPicker;
+  /** Agent picker rendered beside the model picker in the full toolbar (C9). */
+  agentPicker?: React.ReactNode;
+  /** True while a specialist agent is selected: the model picker is disabled and a one-line reason is shown. */
+  modelLocked?: boolean;
   /** Edit mode (full Chat): shows the "editing a previous prompt" banner inside the box; Esc or Cancel calls `onCancel`. */
   editing?: { onCancel: () => void };
   /** When defined, the textarea takes focus each time this value changes (opening/switching a conversation), on fine pointers only. */
@@ -383,6 +387,8 @@ function FullComposer(props: ChatComposerProps & ComposerShared) {
     menu,
     webSearch,
     modelPicker,
+    agentPicker,
+    modelLocked = false,
     isStreaming,
     disabled,
     modelLabel = null,
@@ -399,13 +405,7 @@ function FullComposer(props: ChatComposerProps & ComposerShared) {
         {textarea}
         <div className="flex items-center gap-2">
           {menu && (
-            <FullMenu
-              menu={menu}
-              webSearch={webSearch}
-              webSearchChecked={webSearchChecked}
-              isStreaming={isStreaming}
-              disabled={disabled}
-            />
+            <FullMenu menu={menu} webSearch={webSearch} webSearchChecked={webSearchChecked} isStreaming={isStreaming} disabled={disabled} />
           )}
           {webSearchChecked && (
             <Badge variant="secondary" className="shrink-0 gap-1 text-xs" data-testid="chat-web-search-badge">
@@ -414,9 +414,15 @@ function FullComposer(props: ChatComposerProps & ComposerShared) {
             </Badge>
           )}
           <ModelLine modelLabel={modelLabel} sourcesCount={sourcesCount} hasPicker={Boolean(modelPicker)} />
-          {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled} />}
+          {agentPicker}
+          {modelPicker && <ModelPicker picker={modelPicker} disabled={isStreaming || disabled || modelLocked} />}
           {action}
         </div>
+        {modelLocked && modelPicker && (
+          <p className="text-xs text-muted-foreground" data-testid="chat-model-locked-hint">
+            {t('modelLockedByAgent')}
+          </p>
+        )}
       </div>
     </div>
   );
