@@ -77,3 +77,12 @@ def test_only_cited_evidence_and_uncited_answer_disclosed() -> None:
     assert [c.chunkId for c in res.citations] == [items[1].chunk_id]
     res = validate_answer_citations("Beta is true.", [], items)
     assert res.citations == [] and res.answer == "Beta is true."  # text kept, never replaced
+
+
+def test_no_post_hoc_citation_for_overlapping_uncited_answer() -> None:
+    """Strong word overlap with evidence no longer attaches ``[1]`` to an answer that cites nothing."""
+    item = _item("deployment completed successfully on tuesday afternoon")
+    res = validate_answer_citations(
+        "Deployment completed successfully on Tuesday afternoon.", [], [item]
+    )
+    assert res.citations == [] and "[1]" not in res.answer

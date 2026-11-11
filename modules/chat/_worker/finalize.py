@@ -158,9 +158,6 @@ def _validate_document_citations(
     validated = validate_answer_citations(text, candidate_citations, answer_context.evidence)
     kept = {(c.documentVersionId, c.chunkId): i for i, c in enumerate(validated.citations, 1)}
     number_map = {n: kept[key] for n in candidate_numbers if (key := evidence_key(n)) in kept}
-    if not doc_numbers and not number_map and validated.citations:
-        # Preserve the [1] marker attached by post-hoc lexical attribution during renumbering.
-        number_map[1] = 1
     return validated, number_map
 
 
