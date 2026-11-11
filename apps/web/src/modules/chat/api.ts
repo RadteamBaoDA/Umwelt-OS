@@ -137,6 +137,8 @@ export interface ChatMessage {
   generative_ui_parts?: Record<string, unknown>[];
   /** Model "thinking" text persisted with the answer; plain text only, null/absent when none was produced. */
   reasoning?: string | null;
+  /** True when the answer has no verified document or web citation (shown as a small "not based on your documents" label). */
+  uncited?: boolean;
   /** Follow-up question suggestions written after the answer settled; absent or empty when none. */
   suggestions?: string[];
   response_id: string | null;
@@ -282,6 +284,8 @@ export interface StreamEventsOptions {
     status: string;
     generative_ui?: Record<string, unknown> | null;
     generative_ui_parts?: Record<string, unknown>[];
+    /** Final answer carries no verified citation (`message.done.uncited`). */
+    uncited?: boolean;
   }) => void;
   onError?: (error: Error) => void;
 }
@@ -619,6 +623,7 @@ function toDoneResult(parsed: any): Parameters<NonNullable<StreamEventsOptions['
     status: parsed?.status ?? 'completed',
     generative_ui: ui && typeof ui === 'object' ? (ui as Record<string, unknown>) : null,
     generative_ui_parts: Array.isArray(parts) ? (parts as Record<string, unknown>[]) : undefined,
+    uncited: parsed?.uncited === true,
   };
 }
 

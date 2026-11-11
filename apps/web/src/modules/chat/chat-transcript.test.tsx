@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -347,6 +347,35 @@ describe('ChatTranscript meta row and steps (C10, C12, C19, U3)', () => {
     await userEvent.click(screen.getByTestId('sources-strip'));
     off();
     expect(scope).toBe(1);
+  });
+
+  it('shows the localized "not based on your documents" label only for an uncited answer (Q2)', () => {
+    const { rerender } = renderTranscript({ messages: [{ ...answer, uncited: true }] as never, conversationId: 'c1' });
+    expect(screen.getByTestId('message-uncited').textContent).toBe('Not based on your documents');
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <NextIntlClientProvider locale="en-US" messages={messages['en-us']}>
+          <ChatTranscript messages={[answer] as never} mode="full" conversationId="c1" />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByTestId('message-uncited')).toBeNull();
+  });
+
+  it('hides a retrieval step that found no documents but keeps one that found some (Q6)', () => {
+    renderTranscript({
+      messages: [answer],
+      conversationId: 'c1',
+      steps: [{ tool: 'retrieval', state: 'done', detail: { documents: 0 } }] as never,
+    });
+    expect(screen.queryByTestId('step-list')).toBeNull();
+    cleanup();
+    renderTranscript({
+      messages: [answer],
+      conversationId: 'c1',
+      steps: [{ tool: 'retrieval', state: 'done', detail: { documents: 2 } }] as never,
+    });
+    expect(screen.getByTestId('step-list')).toBeTruthy();
   });
 
   it('keeps "N steps" above the answer once the run settled', () => {

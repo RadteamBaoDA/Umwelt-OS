@@ -43,13 +43,24 @@ export function stepText(t: Translator, step: ToolStep): string {
 }
 
 /**
+ * Whether a step is worth showing: a finished retrieval that found no documents is noise for a general-knowledge answer
+ * (Q6), so it is hidden; every other step stays.
+ *
+ * @param step - Step to test.
+ */
+export function isVisibleStep(step: ToolStep): boolean {
+  return !(step.tool === 'retrieval' && step.state === 'done' && step.detail?.documents === 0);
+}
+
+/**
  * Compact processing-step list of a run. While streaming it is always expanded (running steps spin, finished ones show a
  * check). Once the answer settled it collapses to a one-line "N steps" toggle that expands on demand.
  *
  * @param props - `steps` in arrival order and whether the run is still streaming.
  * @returns The list, or null when there are no steps.
  */
-export function ChatStepList({ steps, streaming }: { steps: ToolStep[]; streaming: boolean }) {
+export function ChatStepList({ steps: allSteps, streaming }: { steps: ToolStep[]; streaming: boolean }) {
+  const steps = allSteps.filter(isVisibleStep);
   const t = useTranslations('chat');
   const [open, setOpen] = React.useState(false);
   const listId = React.useId();

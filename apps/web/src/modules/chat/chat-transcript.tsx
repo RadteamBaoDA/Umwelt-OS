@@ -566,8 +566,8 @@ function SourcesMeta({ citations, onOpen }: { citations: Citation[]; onOpen?: (c
 }
 
 /**
- * Text facts of the meta row, dot-separated: "N sources" (assistant answers that cite), the answering model and the
- * time. An absent fact adds neither text nor separator.
+ * Text facts of the meta row, dot-separated: "N sources" (assistant answers that cite), the answering model, the
+ * "not based on your documents" label of an uncited answer (Q2) and the time. An absent fact adds neither text nor separator.
  *
  * @param props - The message, host mode, the preformatted time and the sources opener (full Chat only).
  */
@@ -582,6 +582,7 @@ function MessageFacts({
   formattedDate: string | null;
   onOpenSources?: (citations: Citation[]) => void;
 }) {
+  const t = useTranslations('chat');
   const isUser = msg.role === 'user';
   const facts: React.ReactNode[] = [];
   if (!isUser && msg.citations?.length) {
@@ -591,6 +592,13 @@ function MessageFacts({
     facts.push(
       <span key="model" data-testid="message-model">
         {msg.model_identity}
+      </span>,
+    );
+  }
+  if (!isUser && msg.uncited) {
+    facts.push(
+      <span key="uncited" data-testid="message-uncited">
+        {t('uncitedNotice')}
       </span>,
     );
   }

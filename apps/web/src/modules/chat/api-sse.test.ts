@@ -41,9 +41,17 @@ describe('streamResponseEvents generative UI events', () => {
     // Each delta is the full snapshot (consumer replaces, never appends); malformed JSON is dropped.
     expect(onUiDelta.mock.calls.map((c) => c[0])).toEqual([d1, d2]);
     expect(onUiDone).toHaveBeenCalledWith(done);
-    expect(onDone).toHaveBeenCalledWith(
-      expect.objectContaining({ text: 'ok', generative_ui: done, status: 'completed' }),
-    );
+    expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ text: 'ok', generative_ui: done, status: 'completed' }));
+  });
+
+  it('carries the uncited flag of message.done (Q2)', async () => {
+    mockSse(`event: message.done
+data: ${JSON.stringify({ text: 'ok', uncited: true })}
+
+`);
+    const onDone = vi.fn();
+    await streamResponseEvents('r1', { onDone });
+    expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ uncited: true }));
   });
 
   it('dispatches message.ui.discard with the part id and ignores redacted payloads', async () => {
