@@ -185,10 +185,67 @@ async def test_web_adapter_records_the_final_url_and_resolves_links_against_it(m
     assert "https://a.example/new/rel" in calls  # relative link resolved against the final URL
 
 
+class MapGate(FakeGate):
+    """Maps requested URL -> (body, final_url); records every fetch."""
+
+    def __init__(self, mapping, calls):
+        super().__init__({}, calls)
+        self.mapping = mapping
+
+    async def fetch_bytes(self, url, **kwargs):
+        self.calls.append(url)
+        body, final = self.mapping[url]
+        return rest.Fetched(body.encode(), final_url=final)
+
+
+async def _crawl(monkeypatch, mapping, start, depth=2):
+    accepted, calls = [], []
+
+    async def state(run):
+        return SimpleNamespace(cursor=None)
+
+    async def accept(run, records, before, after, update=None):
+        accepted.append(records)
+
+    patch_collection(monkeypatch, "_state", state)
+    patch_collection(monkeypatch, "_accept_generic", accept)
+    run = web_run(MapGate(mapping, calls), {"url": start, "max_pages": 10, "max_depth": depth})
+    await collection._run_web(run)
+    return accepted[0], calls
+
+
 @pytest.mark.asyncio
-async def test_web_adapter_skips_pages_redirected_off_origin(monkeypatch):
-    records, _calls = await _run_redirected(monkeypatch, "https://evil.test/y")
-    assert records == []
+async def test_web_adapter_adopts_the_start_redirect_origin(monkeypatch):
+    mapping = {
+        "https://a.example/": ("<p>home</p><a href='/b'>b</a>", "https://www.a.example/"),
+        "https://www.a.example/b": ("<p>bee</p>", None),
+    }
+    records, calls = await _crawl(monkeypatch, mapping, "https://a.example/")
+    assert [r["provider_id"] for r in records] == [
+        "https://www.a.example/",
+        "https://www.a.example/b",
+    ]
+    assert calls == ["https://a.example/", "https://www.a.example/b"]
+
+
+@pytest.mark.asyncio
+async def test_web_adapter_skips_deep_pages_redirected_off_origin(monkeypatch):
+    mapping = {
+        "https://a.example/": ("<p>home</p><a href='/b'>b</a>", None),
+        "https://a.example/b": ("<p>bee</p>", "https://evil.test/b"),
+    }
+    records, _calls = await _crawl(monkeypatch, mapping, "https://a.example/")
+    assert [r["provider_id"] for r in records] == ["https://a.example/"]
+
+
+@pytest.mark.asyncio
+async def test_web_adapter_does_not_refetch_a_linked_start_redirect_target(monkeypatch):
+    mapping = {
+        "https://a.example/": ("<p>home</p><a href='/home'>h</a>", "https://a.example/home"),
+        "https://a.example/home": ("<p>again</p>", None),
+    }
+    _records, calls = await _crawl(monkeypatch, mapping, "https://a.example/")
+    assert calls == ["https://a.example/"]
 
 
 # ---- MCP adapter

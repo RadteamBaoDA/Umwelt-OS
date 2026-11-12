@@ -70,6 +70,23 @@ def split_limit(limit: int | None) -> tuple[int | None, int | None]:
     return limit - live, live
 
 
+def _split_for(provider_id: str, limit: int | None) -> tuple[int | None, int | None]:
+    """Return ``(collector_limit, live_limit)`` for one provider's policy limit.
+
+    Only provider ids debited by both the live proxy and the collector share a budget (75/25 via
+    ``split_limit``). Collector-only providers keep the whole limit for the collector; live-only ids
+    (``live_*``) keep it for live, since the other subject never debits.
+    """
+    # Lazy: live_map imports this module at import time.
+    from modules.connectors.live_map import PROVIDERS
+    from modules.connectors.live_map_catalog import CATALOG_IDS
+
+    proxied = {CATALOG_IDS[name] for name in PROVIDERS}
+    if provider_id in proxied and not provider_id.startswith("live_"):
+        return split_limit(limit)
+    return limit, limit
+
+
 def window_bounds(window: str, now: datetime) -> tuple[datetime, datetime]:
     """UTC-floored ``[start, end)`` for a policy window."""
     now = now.astimezone(UTC)
@@ -159,7 +176,7 @@ async def _debit_window(
     blocked; otherwise raises ``QuotaDeferred`` with the later of the block and window end. Runs
     inside the caller's savepoint; neither flushes nor commits.
     """
-    limit, cost = split_limit(policy.limit_units)[0], policy.cost_per_send
+    limit, cost = _split_for(provider_id, policy.limit_units)[0], policy.cost_per_send
     if (
         limit is not None and cost > limit
     ):  # a send that can never fit the collector's share defers to window end
@@ -294,7 +311,7 @@ async def debit_transient_send(
     async with session.begin_nested():
         for policy, subject, start, end in _plan(provider_id, now, None, None, live=True):
             cost = policy.cost_per_send
-            limit = split_limit(policy.limit_units)[1]
+            limit = _split_for(provider_id, policy.limit_units)[1]
             if limit is not None and cost > limit:
                 raise QuotaDeferred(policy.policy_key, end)
             admitted = (

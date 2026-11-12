@@ -19,7 +19,7 @@ from modules.connectors.credentials import decrypt_credential_input, secret_fing
 from modules.connectors.models import ConnectorWorldCredential
 from modules.connectors.providers.crypto import CRYPTO_ADAPTERS
 from modules.connectors.providers.disasters import DISASTER_ADAPTERS
-from modules.connectors.providers.feed_catalog import _retry_deadline
+from modules.connectors.providers.feed_catalog import _retry_deadline, send_fence_trace
 from modules.connectors.providers.hazards import HAZARD_ADAPTERS
 from modules.connectors.providers.json_feed import json_feed_adapters
 from modules.connectors.providers.macro import (
@@ -159,8 +159,14 @@ async def _json_get(
     *,
     params: dict[str, str],
     before_request: Callable[[], Awaitable[None]],
+    recheck: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
-    """Fetch one fixed-host HTTPS JSON response with a hard byte and time ceiling."""
+    """Fetch one fixed-host HTTPS JSON response with a hard byte and time ceiling.
+
+    ``before_request`` runs once before the send (it may debit quota). The header-time fence uses
+    ``recheck`` (no debit) via ``send_fence_trace``; without it ``before_request`` is reused, which
+    is only correct when it does not debit.
+    """
     try:
         async with asyncio.timeout(30):
             async with httpx.AsyncClient(
@@ -168,17 +174,12 @@ async def _json_get(
             ) as client:
                 await before_request()
 
-                async def final_send_fence(event_name: str, info: dict[str, object]) -> None:
-                    """Recheck source and credential authority after connection admission, before headers send."""
-                    if event_name.endswith("send_request_headers.started"):
-                        await before_request()
-
                 async with client.stream(
                     "GET",
                     url,
                     params=params,
                     headers={"Accept": "application/json"},
-                    extensions={"trace": final_send_fence},
+                    extensions={"trace": send_fence_trace(before_request, recheck)},
                 ) as response:
                     if response.status_code == 429:
                         raise ProviderRateLimited(
@@ -455,6 +456,7 @@ async def collect_world_data(
     access_fence: AccessFence,
     source_fence: SourceFence,
     before_request: Callable[[UUID | None], Awaitable[None]],
+    recheck: Callable[[], Awaitable[None]] | None = None,
 ) -> ProviderCollectionPage:
     """Fetch one leased provider scope and stamp matching typed record/page coverage.
 
@@ -462,6 +464,8 @@ async def collect_world_data(
     budget. Returned measurements use provider semantics without invented clocks.
     The scope/fence kwargs are the original native-fetch authority for the Alpha key capture;
     ``before_request`` runs before every physical send (Alpha passes its captured operation id).
+    ``recheck`` is the non-debiting header-time fence; the worker passes ``run.gate.recheck`` so each
+    send debits exactly once.
     """
     if collected_at.tzinfo is None or collected_at.utcoffset() is None:
         raise ValueError("collected_at must be timezone-aware")
@@ -478,6 +482,7 @@ async def collect_world_data(
                 "timezone": str(config.weather_timezone),
             },
             before_request=lambda: before_request(None),
+            recheck=recheck,
         )
         coverage: Literal["returned_snapshot", "truncated"] = (
             "truncated"
@@ -529,6 +534,7 @@ async def collect_world_data(
                 "apikey": key,
             },
             before_request=lambda: before_request(operation_id),
+            recheck=recheck,
         )
         records.extend(_market_records(source, config, payload, collected_at))
     return ProviderCollectionPage(

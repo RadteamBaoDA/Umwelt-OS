@@ -387,6 +387,7 @@ async def _native_world_data(call: NativeCall) -> Any:
         access_fence=a.access_fence,
         source_fence=a.source_fence,
         before_request=run.gate,
+        recheck=run.gate.recheck,
     )
 
 

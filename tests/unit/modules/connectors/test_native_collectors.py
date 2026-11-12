@@ -535,3 +535,55 @@ async def test_open_meteo_has_no_world_operation_or_post_collect(
     _world(monkeypatch, [uuid4()], None)
     with pytest.raises(ConflictError, match="Unexpected world credential capture"):
         await nc.WorldDataCollector().collect(_ctx([], provider="open_meteo"))
+
+
+@pytest.mark.asyncio
+async def test_world_data_send_debits_once_and_header_fence_only_rechecks(monkeypatch):
+    """The pre-send gate call debits; the header-time trace hook calls the non-debiting recheck."""
+    from modules.connectors.providers import world_data
+
+    events: list[str] = []
+
+    class Response:
+        status_code = 200
+        is_redirect = False
+        headers: dict[str, str] = {}
+
+        async def aiter_bytes(self):
+            yield b"{}"
+
+    class Stream:
+        def __init__(self, trace):
+            self.trace = trace
+
+        async def __aenter__(self):
+            await self.trace("connection.send_request_headers.started", {})
+            return Response()
+
+        async def __aexit__(self, *_a):
+            return False
+
+    class Client:
+        def __init__(self, **_kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        def stream(self, *_a, extensions, **_kw):
+            return Stream(extensions["trace"])
+
+    async def debit() -> None:
+        events.append("debit")
+
+    async def recheck() -> None:
+        events.append("recheck")
+
+    monkeypatch.setattr(world_data.httpx, "AsyncClient", Client)
+    await world_data._json_get(
+        "https://example.test", params={}, before_request=debit, recheck=recheck
+    )
+    assert events == ["debit", "recheck"]

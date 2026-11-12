@@ -220,3 +220,18 @@ def test_quota_split_edges():
     assert quota.split_limit(None) == (None, None)
     assert quota.split_limit(1) == (1, 0)  # unsplittable: collector keeps it, live is denied
     assert quota.split_limit(100) == (75, 25)
+
+
+@pytest.mark.parametrize(
+    ("provider_id", "expected"),
+    [
+        ("nasa_firms", (75, 25)),  # used by both the live proxy and the collector: split
+        ("coingecko", (100, 100)),  # collector-only (browser-only live): collector keeps all
+        ("live_vnexpress_world", (100, 100)),  # live-only proxied id keeps all for live
+        ("live_openweather_tiles", (100, 100)),
+    ],
+)
+def test_quota_split_applies_only_to_shared_providers(provider_id, expected):
+    from modules.connectors import quota
+
+    assert quota._split_for(provider_id, 100) == expected

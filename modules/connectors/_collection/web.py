@@ -254,8 +254,13 @@ async def _run_web(run: Run) -> None:
         spent += len(body)
         # Provenance and relative links follow the page that actually answered, not the requested URL.
         page_url = urldefrag(fetched.final_url)[0] if fetched.final_url else url
-        if rest._origin(page_url) != origin:
-            continue  # a redirect left the configured origin: never ingest or crawl from it
+        if depth == 0:
+            # The start URL may legitimately redirect (apex->www, http->https); every hop was already
+            # SSRF-checked by the gate, so the answering origin becomes the crawl origin.
+            origin = rest._origin(page_url)
+            visited.add(page_url)  # a linked redirect target must not be fetched a second time
+        elif rest._origin(page_url) != origin:
+            continue  # a deeper redirect left the crawl origin: never ingest or crawl from it
         # HTMLParser.feed on a multi-MB page would stall the worker loop (heartbeats, heavy-slot renewal).
         parts, links = await to_thread_joined(_parse_page, _decode_page(body, fetched.content_type))
         records.append(
