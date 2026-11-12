@@ -1,12 +1,14 @@
 'use client';
 
+import { X } from 'lucide-react';
 import { useTranslations } from 'next-intl';
-import { lazy, Suspense, useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { ShowMoreButton, useShowMore } from '@/components/show-more';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { formatDateTime } from '@/core/i18n';
+import { formatDateTime, normalizeFormattingLocale } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import type { GadgetFilters, GadgetInstance, GadgetScope } from '../api';
 import { safeLiveLink } from '../live-map-data';
@@ -17,7 +19,10 @@ import { termsAccepted, useLiveFeed, type ProviderStatus } from '../live-feed/us
 
 const WorldMap = lazy(() => import('./world-map').then((module) => ({ default: module.WorldMap })));
 
-/** Mount live queries only while this gadget is visible, allowing the last observer to abort shared requests. */
+/**
+ * Keeps the live map mounted (filters, selection and the map context survive scrolling and tab switches) and tells it
+ * whether it is on a visible page so polling and fetching pause while hidden.
+ */
 export function LiveMapGadget({ instance, isEditMode }: { instance: GadgetInstance; isEditMode: boolean }) {
   const [node, setNode] = useState<HTMLDivElement | null>(null);
   const [visible, setVisible] = useState(false);
@@ -39,14 +44,13 @@ export function LiveMapGadget({ instance, isEditMode }: { instance: GadgetInstan
   }, [node]);
   return (
     <div ref={setNode} className="h-full min-h-0">
-      {visible && (
-        <LiveMapContent
-          scope={instance.definition.scope ?? {}}
-          engine={instance.definition.filters?.map_engine ?? 'globe'}
-          weatherLayer={instance.definition.filters?.map_weather_layer ?? null}
-          isEditMode={isEditMode}
-        />
-      )}
+      <LiveMapContent
+        scope={instance.definition.scope ?? {}}
+        engine={instance.definition.filters?.map_engine ?? 'globe'}
+        weatherLayer={instance.definition.filters?.map_weather_layer ?? null}
+        isEditMode={isEditMode}
+        visible={visible}
+      />
     </div>
   );
 }
@@ -119,22 +123,42 @@ function EventLinks({ event, separator }: { event: { url?: string | null; source
   );
 }
 
-/** Event list: select button, source and time, links, plus the empty note. */
+/** Rows rendered before "show more": the feed can hold thousands of events and each row carries links and a time. */
+export const EVENT_LIST_INITIAL = 50;
+
+/**
+ * Event list: select button, source and time, links, plus `emptyState` when there are no events. Only the first
+ * `EVENT_LIST_INITIAL` rows render until expanded; `resetKey` (the active filters) collapses it again.
+ */
 function LiveEventList({
   events,
   onSelect,
+  emptyState,
+  resetKey,
   inDialog = false,
 }: {
   events: StoredEvent[];
   onSelect: (key: string) => void;
+  emptyState: ReactNode;
+  resetKey: string;
   inDialog?: boolean;
 }) {
   const t = useTranslations('dashboard');
   const display = useDisplayPreferences();
+  const shown = useShowMore(events, EVENT_LIST_INITIAL, resetKey);
+  // One formatter per locale/timezone instead of one per row (same options as formatDateTime).
+  const format = useMemo(() => {
+    const formatter = new Intl.DateTimeFormat(normalizeFormattingLocale(display.locale), {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+      timeZone: display.timezone,
+    });
+    return (value: string) => formatter.format(new Date(value));
+  }, [display.locale, display.timezone]);
   return (
     <div className={inDialog ? 'min-h-0' : 'min-h-0 flex-1 overflow-y-auto'}>
       <ul aria-label={t('liveMapEvents')} className="divide-y divide-border">
-        {events.map((event) => (
+        {shown.visible.map((event) => (
           <li key={event.key} className="py-1 text-xs">
             <Button
               type="button"
@@ -147,7 +171,7 @@ function LiveEventList({
             <span className="text-muted-foreground">
               {event.source} ·{' '}
               {event.observed_at && Number.isFinite(Date.parse(event.observed_at)) ? (
-                <time dateTime={event.observed_at}>{formatDateTime(event.observed_at, display.locale, display.timezone)}</time>
+                <time dateTime={event.observed_at}>{format(event.observed_at)}</time>
               ) : (
                 t('liveMapTimeUnknown')
               )}
@@ -156,7 +180,10 @@ function LiveEventList({
           </li>
         ))}
       </ul>
-      {events.length === 0 && <p className="text-xs text-muted-foreground">{t('liveMapEmpty')}</p>}
+      <div className="flex justify-center">
+        <ShowMoreButton state={shown} />
+      </div>
+      {events.length === 0 && <div className="text-xs text-muted-foreground">{emptyState}</div>}
     </div>
   );
 }
@@ -179,7 +206,8 @@ function LiveSourceStatus({
   const stateOf = (provider: string) => {
     const status = statuses[provider];
     if (config.isError) return t('liveMapConfigLoadError');
-    if (config.data && !termsAccepted(config, provider)) return t('liveMapTermsRequired');
+    // The sources dialog (overview) has no gadget settings, so its wording points at the dialog itself.
+    if (config.data && !termsAccepted(config, provider)) return t(inDialog ? 'liveMapTermsRequiredHere' : 'liveMapTermsRequired');
     if (status?.error) return t(status.error);
     return status?.fetchedAt
       ? t('liveMapSourceUpdated', { when: formatDateTime(status.fetchedAt, display.locale, display.timezone) })
@@ -217,13 +245,22 @@ function LiveWeatherNotes({
   weatherLayer,
   weatherState,
   config,
+  isOwner,
 }: {
   weatherLayer: string | null;
   weatherState: 'idle' | 'loading' | 'ready' | 'error';
+  isOwner: boolean;
   config: ReturnType<typeof useLiveFeed>['config'];
 }) {
   const t = useTranslations('dashboard');
   if (!weatherLayer) return null;
+  // Weather tiles are owner-only; observers get a plain notice instead of failing requests.
+  if (!isOwner)
+    return (
+      <p role="status" className="text-xs text-muted-foreground">
+        {t('liveMapOwnerOnly')}
+      </p>
+    );
   return (
     <>
       {weatherState === 'ready' && (
@@ -250,6 +287,28 @@ function LiveWeatherNotes({
         </p>
       )}
     </>
+  );
+}
+
+/** Details card of the selected event, anchored over the map, with a close control. */
+function SelectedEventPopup({ event, onClose }: { event: StoredEvent; onClose: () => void }) {
+  const t = useTranslations('dashboard');
+  return (
+    <div className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 p-2 pr-9 text-xs">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="absolute right-0.5 top-0.5 h-6 w-6"
+        aria-label={t('liveMapCloseEvent')}
+        onClick={onClose}
+      >
+        <X className="h-3.5 w-3.5" aria-hidden="true" />
+      </Button>
+      <strong>{event.title}</strong>
+      <p>{event.summary}</p>
+      <EventLinks event={event} separator={false} />
+    </div>
   );
 }
 
@@ -393,6 +452,49 @@ function LiveSourcesDialog({
   );
 }
 
+/**
+ * Why the event list is empty, in priority order: config loading, config failed (with retry), no accepted provider
+ * (overview: button opening the sources dialog; gadget: pointer to gadget settings), else a genuinely empty range.
+ * @param onOpenSources Provided only in the overview.
+ */
+function LiveEmptyState({
+  config,
+  accepted,
+  onOpenSources,
+}: {
+  config: ReturnType<typeof useLiveFeed>['config'];
+  accepted: string[];
+  onOpenSources?: () => void;
+}) {
+  const t = useTranslations('dashboard');
+  if (config.isPending) return <p role="status">{t('liveMapConfigLoading')}</p>;
+  if (config.isError)
+    return (
+      <div role="status" className="flex flex-wrap items-center gap-2">
+        <span>{t('liveMapConfigLoadError')}</span>
+        <Button type="button" size="sm" variant="outline" onClick={() => void config.refetch()}>
+          {t('liveMapConfigRetry')}
+        </Button>
+      </div>
+    );
+  if (accepted.length === 0)
+    return onOpenSources ? (
+      <div className="flex flex-wrap items-center gap-2">
+        <span>{t('liveMapNoSources')}</span>
+        <Button type="button" size="sm" variant="outline" onClick={onOpenSources}>
+          {t('liveMapEnableSources')}
+        </Button>
+      </div>
+    ) : (
+      <p>{t('liveMapTermsRequired')}</p>
+    );
+  return <p>{t('liveMapEmpty')}</p>;
+}
+
+/**
+ * Live map body: toolbar, map, event list and source status. Stays mounted while off-screen.
+ * @param visible False while the gadget is off-screen or the tab hidden: feed polling and map interaction pause.
+ */
 function LiveMapContent({
   scope,
   engine,
@@ -400,6 +502,7 @@ function LiveMapContent({
   isEditMode,
   overview = false,
   toolbarStart,
+  visible = true,
 }: {
   scope: GadgetScope;
   engine: 'globe' | 'flat';
@@ -407,6 +510,7 @@ function LiveMapContent({
   isEditMode: boolean;
   overview?: boolean;
   toolbarStart?: ReactNode;
+  visible?: boolean;
 }) {
   const t = useTranslations('dashboard');
   const { setNode, size } = useElementSize();
@@ -417,23 +521,29 @@ function LiveMapContent({
   const [selected, setSelected] = useState<string | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [weatherState, setWeatherState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
-  const feed = useLiveFeed(scope, { tags, days, query, now });
-  const { workspaceId, providers, config, results, events: filtered, points, statuses } = feed;
+  const feed = useLiveFeed(scope, { tags, days, query, now }, visible);
+  const { workspaceId, isOwner, providers, accepted, config, results, events: filtered, points, statuses } = feed;
   const selectedEvent = filtered.find((event) => event.key === selected);
+  // A selection whose event left the filtered list (filters, expiry) reads as cleared everywhere.
+  const activeSelection = selectedEvent ? selected : null;
+  const listResetKey = `${tags.join(',')}|${days}|${query}`;
   const mapProps = {
     focusSelected: true,
     features: points,
-    selectedFeatureId: selected,
+    selectedFeatureId: activeSelection,
     onSelectFeature: setSelected,
     width: size.width,
     height: size.height,
-    visible: true,
+    visible,
     interactive: !isEditMode,
     weatherLayer,
-    weatherWorkspaceId: termsAccepted(config, 'openweather') ? workspaceId : undefined,
+    weatherWorkspaceId: isOwner && termsAccepted(config, 'openweather') ? workspaceId : undefined,
     weatherRevision: config.data?.revision,
     onWeatherStateChange: setWeatherState,
   };
+  const emptyState = (
+    <LiveEmptyState config={config} accepted={accepted} onOpenSources={overview ? () => setSourcesOpen(true) : undefined} />
+  );
   return (
     <section className="flex h-full min-h-0 w-full flex-col gap-2 overflow-hidden bg-card p-3 text-card-foreground">
       <LiveMapToolbar
@@ -461,28 +571,23 @@ function LiveMapContent({
             </Suspense>
           </div>
         )}
-        {selectedEvent && (
-          <div className="absolute bottom-2 left-2 max-w-[90%] rounded bg-card/90 p-2 text-xs">
-            <strong>{selectedEvent.title}</strong>
-            <p>{selectedEvent.summary}</p>
-            <EventLinks event={selectedEvent} separator={false} />
-          </div>
-        )}
+        {selectedEvent && <SelectedEventPopup event={selectedEvent} onClose={() => setSelected(null)} />}
       </div>
-      <LiveWeatherNotes weatherLayer={weatherLayer} weatherState={weatherState} config={config} />
+      <LiveWeatherNotes weatherLayer={weatherLayer} weatherState={weatherState} config={config} isOwner={isOwner} />
+      <p className="shrink-0 text-xs text-muted-foreground">{t('mapBasemapCredit')}</p>
       {overview ? (
         <>
           <h3 className="shrink-0 text-xs font-medium text-muted-foreground">
             {t('liveMapEvents')} ({filtered.length})
           </h3>
-          <LiveEventList events={filtered} onSelect={setSelected} />
+          <LiveEventList events={filtered} onSelect={setSelected} emptyState={emptyState} resetKey={listResetKey} />
           <LiveSourcesDialog open={sourcesOpen} onOpenChange={setSourcesOpen}>
             <LiveSourceStatus providers={providers} config={config} statuses={statuses} inDialog />
           </LiveSourcesDialog>
         </>
       ) : (
         <>
-          <LiveEventList events={filtered} onSelect={setSelected} />
+          <LiveEventList events={filtered} onSelect={setSelected} emptyState={emptyState} resetKey={listResetKey} />
           <LiveSourceStatus providers={providers} config={config} statuses={statuses} />
         </>
       )}

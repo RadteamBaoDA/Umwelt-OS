@@ -1,7 +1,7 @@
 'use client';
 
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiRequest } from '@/core/api';
 import { useWorkspace } from '@/core/workspace-context';
 import type { GadgetScope } from '../api';
@@ -41,6 +41,8 @@ export type LiveErrorKey =
   | 'liveMapSecSetup'
   | 'liveMapSecContact'
   | 'liveMapRateLimited'
+  | 'liveMapOwnerOnly'
+  | 'liveMapStorageError'
   | 'liveMapSourceError';
 
 type LiveResponse = { items: LiveEvent[]; fetched_at: string; truncated: boolean };
@@ -48,6 +50,21 @@ type LiveResponse = { items: LiveEvent[]; fetched_at: string; truncated: boolean
 /** True when the config loaded without error and the owner accepted the provider's terms. */
 export function termsAccepted(config: { isError: boolean; data?: LiveConfig }, id: string): boolean {
   return !config.isError && Boolean(config.data?.terms_catalog.some((term) => term.id === id && term.accepted));
+}
+
+/**
+ * Proxied providers whose response is a complete snapshot: loaded and not truncated. A truncated response omits rows
+ * that still exist upstream, so deleting the stored rows it lacks would drop live events.
+ */
+export function snapshotProviders(proxied: readonly string[], results: readonly { data?: { truncated?: boolean } }[]): string[] {
+  return proxied.filter((_, index) => results[index]?.data && !results[index].data?.truncated);
+}
+
+/** Merge row lists by key; later lists win (stored < worker memory < fresh proxy rows). */
+export function mergeEvents(...lists: StoredEvent[][]): StoredEvent[] {
+  const merged = new Map<string, StoredEvent>();
+  for (const list of lists) for (const row of list) merged.set(row.key, row);
+  return [...merged.values()];
 }
 
 /** Fetch one provider through the workspace-scoped proxy; the signal cancels unobserved or switched requests. */
@@ -64,6 +81,7 @@ async function fetchLiveEvents(provider: string, scope: GadgetScope, signal: Abo
  */
 export function liveErrorKey(error: unknown, provider: string): LiveErrorKey {
   if (typeof error === 'string') {
+    if (error === 'storage') return 'liveMapStorageError';
     if (error === 'http_429') return 'liveMapRateLimited';
     return error === 'scope' && provider === 'github_releases' ? 'liveMapGithubSetup' : 'liveMapSourceError';
   }
@@ -79,13 +97,15 @@ export function liveErrorKey(error: unknown, provider: string): LiveErrorKey {
 
 /**
  * Owns the module worker lifecycle: spawn per workspace, post the accepted browser providers and scope, mirror tab
- * visibility (no background polling) and terminate on unmount.
- * @returns Worker-reported statuses, a counter that increments whenever the worker wrote new rows, `bump` to force a store re-read, and `refresh` to ask the worker to fetch now.
+ * and gadget visibility (`active`; no background polling while hidden) and terminate on unmount.
+ * @returns Worker-reported statuses, in-memory rows for providers whose store write failed, a counter that increments whenever the worker wrote new rows, `bump` to force a store re-read, and `refresh` to ask the worker to fetch now.
  */
-function useBrowserWorker(workspaceId: string | undefined, browserKey: string, scope: GadgetScope) {
+function useBrowserWorker(workspaceId: string | undefined, browserKey: string, scope: GadgetScope, active: boolean) {
   const workerRef = useRef<Worker | null>(null);
   const [workerStatus, setWorkerStatus] = useState<Record<string, ProviderStatus>>({});
   const [version, setVersion] = useState(0);
+  // Rows the worker could not persist, kept in memory per provider until a later write succeeds.
+  const [workerItems, setWorkerItems] = useState<Record<string, StoredEvent[]>>({});
 
   useEffect(() => {
     if (!workspaceId || typeof Worker === 'undefined') return;
@@ -94,19 +114,27 @@ function useBrowserWorker(workspaceId: string | undefined, browserKey: string, s
     next.onmessage = (message: MessageEvent<WorkerOutbound>) => {
       const data = message.data;
       if (data.type === 'changed') setVersion((current) => current + 1);
-      else
+      else if (data.type === 'items') setWorkerItems((current) => ({ ...current, [data.provider]: data.items }));
+      else {
+        // A clean run wrote to the store, so any in-memory fallback rows for the provider are obsolete.
+        if (data.ok)
+          setWorkerItems((current) =>
+            data.provider in current ? Object.fromEntries(Object.entries(current).filter(([id]) => id !== data.provider)) : current,
+          );
         setWorkerStatus((current) => ({
           ...current,
           [data.provider]: data.ok
             ? { fetchedAt: data.fetchedAt }
             : { fetchedAt: data.fetchedAt, error: liveErrorKey(data.error ?? '', data.provider) },
         }));
+      }
     };
     workerRef.current = next;
     return () => {
       next.terminate();
       workerRef.current = null;
       setWorkerStatus({});
+      setWorkerItems({});
     };
   }, [workspaceId]);
 
@@ -121,14 +149,15 @@ function useBrowserWorker(workspaceId: string | undefined, browserKey: string, s
   useEffect(() => {
     const worker = workerRef.current;
     if (!worker) return;
-    /** Poll only while the tab is visible. */
-    const update = () => worker.postMessage({ type: 'visibility', visible: document.visibilityState === 'visible' });
+    /** Poll only while the tab is visible and the owning gadget is on screen. */
+    const update = () => worker.postMessage({ type: 'visibility', visible: active && document.visibilityState === 'visible' });
     update();
     document.addEventListener('visibilitychange', update);
     return () => document.removeEventListener('visibilitychange', update);
-  }, [workspaceId]);
+  }, [workspaceId, active]);
   return {
     workerStatus,
+    workerItems,
     version,
     bump: () => setVersion((current) => current + 1),
     refresh: () => workerRef.current?.postMessage({ type: 'refresh' } satisfies WorkerInbound),
@@ -140,14 +169,17 @@ function useBrowserWorker(workspaceId: string | undefined, browserKey: string, s
  * proxied providers (also upserted into the store), and the filtered, merged read model.
  *
  * Terms gating: only providers whose terms the owner accepted are fetched or shown, on both paths. The worker
- * runs only while this hook is mounted (the gadget mounts it while visible) and pauses when the tab is hidden;
- * it is terminated on unmount. Without Worker or IndexedDB support the proxied providers still work in memory.
+ * stays alive while this hook is mounted but polls and refetches only while `active` (gadget on screen) and the
+ * tab is visible, so scrolling or switching tabs keeps filters and the map; it is terminated on unmount.
+ * An already in-flight proxied request is left to finish when the gadget goes inactive. Without Worker or IndexedDB support the proxied providers still work in memory.
  *
  * @returns Filtered events (newest first), stable map points, per-provider statuses and the config query.
  */
-export function useLiveFeed(scope: GadgetScope, filters: { tags: string[]; days: string; query: string; now: number }) {
+export function useLiveFeed(scope: GadgetScope, filters: { tags: string[]; days: string; query: string; now: number }, active = true) {
   const workspace = useWorkspace();
   const workspaceId = workspace.selection?.id;
+  // /live-map/events is owner-only; observers can read the config but would only collect 404s.
+  const { isOwner } = workspace;
   const providers = scope.live_map_providers ?? DEFAULT_PROVIDERS;
   const config = useQuery({
     queryKey: ['live-map-config', workspaceId],
@@ -155,7 +187,7 @@ export function useLiveFeed(scope: GadgetScope, filters: { tags: string[]; days:
     enabled: Boolean(workspaceId),
     staleTime: 60_000,
     gcTime: 0,
-    refetchInterval: 60_000,
+    refetchInterval: active ? 60_000 : false,
     refetchIntervalInBackground: false,
   });
   const accepted = providers.filter((provider) => termsAccepted(config, provider));
@@ -165,16 +197,16 @@ export function useLiveFeed(scope: GadgetScope, filters: { tags: string[]; days:
     queries: proxied.map((provider) => ({
       queryKey: ['live-map', workspaceId, provider, scope.live_map_country, scope.live_map_sec_cik, config.data?.revision],
       queryFn: ({ signal }: { signal: AbortSignal }) => fetchLiveEvents(provider, scope, signal),
-      enabled: Boolean(workspaceId) && termsAccepted(config, provider),
+      enabled: active && isOwner && Boolean(workspaceId) && termsAccepted(config, provider),
       staleTime: 60_000,
       gcTime: 0,
-      refetchInterval: 60_000,
+      refetchInterval: active ? 60_000 : false,
       refetchIntervalInBackground: false,
       retry: false,
     })),
   });
 
-  const { workerStatus, version, bump, refresh: refreshWorker } = useBrowserWorker(workspaceId, browserKey, scope);
+  const { workerStatus, workerItems, version, bump, refresh: refreshWorker } = useBrowserWorker(workspaceId, browserKey, scope, active);
   const [stored, setStored] = useState<StoredEvent[]>([]);
 
   useEffect(() => {
@@ -188,28 +220,42 @@ export function useLiveFeed(scope: GadgetScope, filters: { tags: string[]; days:
     };
   }, [workspaceId, version]);
 
-  const proxyEntries = proxied.flatMap((provider, index) => {
-    const result = results[index];
-    if (!termsAccepted(config, provider) || (result.error instanceof ApiError && result.error.status === 409)) return [];
-    const seenAt = new Date(result.dataUpdatedAt || 0).toISOString();
-    return (result.data?.items ?? []).map((item) => toStored(provider, providerTags(provider), item, seenAt));
-  });
-  const proxyStamp = results.map((result) => result.dataUpdatedAt).join(',');
+  const acceptedKey = accepted.join(',');
+  // Identifies the query outcomes the memos below derive from (results is a fresh array every render).
+  const proxyStamp = results.map((result) => `${result.dataUpdatedAt}:${result.errorUpdatedAt}`).join(',');
+  const proxyEntries = useMemo(
+    () =>
+      proxied.flatMap((provider, index) => {
+        const result = results[index];
+        if (!isOwner || !termsAccepted(config, provider) || (result.error instanceof ApiError && result.error.status === 409)) return [];
+        const seenAt = new Date(result.dataUpdatedAt || 0).toISOString();
+        return (result.data?.items ?? []).map((item) => toStored(provider, providerTags(provider), item, seenAt));
+      }),
+    // Derived from the query results identified by proxyStamp, plus ownership and the accepted terms.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [proxyStamp, isOwner, acceptedKey, config.data],
+  );
   useEffect(() => {
     if (!workspaceId || !proxyEntries.length) return;
     // Best-effort persistence: an unavailable or full store must not break the live (in-memory) view.
-    void upsertEvents(workspaceId, proxyEntries).then(bump, () => undefined);
+    // Providers with a complete (non-truncated) response are full snapshots, so their vanished rows are replaced.
+    void upsertEvents(workspaceId, proxyEntries, Date.now(), snapshotProviders(proxied, results)).then(bump, () => undefined);
     // proxyEntries derives from the query results identified by proxyStamp.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, proxyStamp]);
 
-  // Fresh proxy rows win over the stored copy of the same key.
-  const merged = new Map<string, StoredEvent>();
-  for (const row of [...stored, ...proxyEntries]) merged.set(row.key, row);
-  const events = filterEvents(
-    [...merged.values()],
-    { tags: filters.tags, days: Number(filters.days), query: filters.query, providers: accepted },
-    filters.now,
+  // Search input stays responsive; the heavy filter runs on the deferred value.
+  const query = useDeferredValue(filters.query);
+  const events = useMemo(
+    () =>
+      filterEvents(
+        mergeEvents(stored, Object.values(workerItems).flat(), proxyEntries),
+        { tags: filters.tags, days: Number(filters.days), query, providers: accepted },
+        filters.now,
+      ),
+    // `accepted` is identified by acceptedKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stored, workerItems, proxyEntries, filters.tags, filters.days, query, filters.now, acceptedKey],
   );
   // Keep the map's point identity stable until its serialized geometry changes so map interaction is not reset.
   const pointJson = JSON.stringify(liveMapPoints(events));
@@ -218,7 +264,8 @@ export function useLiveFeed(scope: GadgetScope, filters: { tags: string[]; days:
   const statuses: Record<string, ProviderStatus> = { ...workerStatus };
   proxied.forEach((provider, index) => {
     const result = results[index];
-    if (result.isError) statuses[provider] = { error: liveErrorKey(result.error, provider) };
+    if (!isOwner) statuses[provider] = { error: 'liveMapOwnerOnly' };
+    else if (result.isError) statuses[provider] = { error: liveErrorKey(result.error, provider) };
     else if (result.data) statuses[provider] = { fetchedAt: result.data.fetched_at, truncated: result.data.truncated };
   });
   /** Manual refresh of both paths: refetch proxied queries and ask the worker to fetch its providers now. */
@@ -226,5 +273,5 @@ export function useLiveFeed(scope: GadgetScope, filters: { tags: string[]; days:
     for (const result of results) void result.refetch();
     refreshWorker();
   };
-  return { workspaceId, providers, config, results, events, points, statuses, refresh };
+  return { workspaceId, isOwner, providers, accepted, config, results, events, points, statuses, refresh };
 }

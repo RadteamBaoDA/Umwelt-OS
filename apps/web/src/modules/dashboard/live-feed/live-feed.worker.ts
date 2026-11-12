@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { fetchSource, nextDelayMs, refreshable, type WorkerInbound, type WorkerOutbound } from './runner';
+import { fetchSource, initialDelayMs, nextDelayMs, refreshable, type WorkerInbound, type WorkerOutbound } from './runner';
 import { BROWSER_SOURCE_BY_ID, type LiveFeedScope } from './sources';
 import { toStored, upsertEvents } from './store';
 
@@ -47,13 +47,18 @@ async function run(provider: string, runGeneration: number): Promise<void> {
     const items = await fetchSource(provider, scope, now);
     if (runGeneration !== generation) return;
     const seenAt = new Date(now).toISOString();
-    await upsertEvents(
-      workspaceId,
-      items.map((item) => toStored(provider, source.tags, item, seenAt)),
-      now,
-    );
+    const rows = items.map((item) => toStored(provider, source.tags, item, seenAt));
     failures.set(provider, 0);
-    post({ type: 'changed' });
+    try {
+      await upsertEvents(workspaceId, rows, now, [provider]);
+      post({ type: 'changed' });
+    } catch {
+      // The source answered; only local persistence failed. Hand the rows to the page so they still show, and
+      // report a distinct `storage` error instead of a source failure (no backoff: the fetch itself was fine).
+      ok = false;
+      error = 'storage';
+      post({ type: 'items', provider, items: rows });
+    }
   } catch (caught) {
     ok = false;
     error = caught instanceof Error ? caught.message : 'network';
@@ -71,11 +76,26 @@ async function run(provider: string, runGeneration: number): Promise<void> {
   );
 }
 
-/** (Re)start polling for the current config when visible; otherwise stay idle. */
+/**
+ * (Re)start polling for the current config when visible; otherwise stay idle. Each provider is scheduled
+ * relative to its last run (never-run providers start at once) so tab switches do not refetch everything.
+ */
 function restart(): void {
   stopAll();
   if (!visible || !workspaceId) return;
-  for (const provider of providers) void run(provider, generation);
+  const runGeneration = generation;
+  const now = Date.now();
+  for (const provider of providers) {
+    const source = BROWSER_SOURCE_BY_ID[provider];
+    if (!source) continue;
+    timers.set(
+      provider,
+      setTimeout(
+        () => void run(provider, runGeneration),
+        initialDelayMs(nextDelayMs(source.intervalMs, failures.get(provider) ?? 0), lastRun.get(provider), now),
+      ),
+    );
+  }
 }
 
 ctx.onmessage = (message: MessageEvent<WorkerInbound>) => {
@@ -85,6 +105,8 @@ ctx.onmessage = (message: MessageEvent<WorkerInbound>) => {
     scope = data.scope;
     workspaceId = data.workspaceId;
     failures.clear();
+    // Only removed providers forget their last run; kept ones stay rate-limit aware across config changes.
+    for (const id of lastRun.keys()) if (!providers.includes(id)) lastRun.delete(id);
     restart();
   } else if (data.type === 'refresh') {
     // Manual refresh: fetch idle, not-recently-fetched providers now; their next run is rescheduled by run().

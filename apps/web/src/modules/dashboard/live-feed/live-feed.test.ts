@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LIVE_FEED_ORIGINS, buildAppCsp } from '@/core/csp';
 import { FIXTURES } from './fixtures';
-import { fetchSource, nextDelayMs, refreshable, REFRESH_MIN_GAP_MS } from './runner';
+import { fetchSource, initialDelayMs, nextDelayMs, refreshable, REFRESH_MIN_GAP_MS } from './runner';
 import { BROWSER_SOURCES, BROWSER_SOURCE_BY_ID, MAX_ITEMS, toIso } from './sources';
-import { filterEvents, pruneKeys, toStored, type StoredEvent } from './store';
+import { filterEvents, pruneKeys, staleKeys, toStored, type StoredEvent } from './store';
 
 describe('browser source parsers', () => {
   it.each(BROWSER_SOURCES.map((source) => source.id))('%s parses its fixture into safe events', (id) => {
@@ -105,7 +105,40 @@ describe('store helpers', () => {
   });
 });
 
+describe('stale rows and ordering', () => {
+  it('lists stored keys of a provider that the new snapshot omits', () => {
+    expect(staleKeys(['usgs:a', 'usgs:b', 'usgs:c'], ['usgs:b'])).toEqual(['usgs:a', 'usgs:c']);
+    expect(staleKeys([], ['usgs:b'])).toEqual([]);
+  });
+  it('ranks future-dated rows as now instead of above everything', () => {
+    const now = Date.parse('2026-11-12T00:00:00Z');
+    const mk = (id: string, observed_at: string) => ({
+      id,
+      category: 'geo',
+      title: id,
+      observed_at,
+      latitude: null,
+      longitude: null,
+      url: null,
+      source: 's',
+      summary: null,
+      provider: 'usgs',
+      tags: [] as string[],
+    });
+    const rows = [mk('launch', '2026-12-25T00:00:00Z'), mk('recent', '2026-11-11T23:00:00Z'), mk('now', '2026-11-12T00:00:00Z')];
+    const filters = { tags: [], days: 60, query: '', providers: ['usgs'] };
+    // The future launch clamps to now, so it ties with a row observed now (stable order) and never outranks it.
+    expect(filterEvents([rows[2], rows[0], rows[1]], filters, now).map((r) => r.id)).toEqual(['now', 'launch', 'recent']);
+    expect(filterEvents(rows, filters, now).map((r) => r.id)).toEqual(['launch', 'now', 'recent']);
+  });
+});
+
 describe('runner', () => {
+  it('delays a restart by the remainder of the interval since the last run', () => {
+    expect(initialDelayMs(600_000, undefined, 1_000_000)).toBe(0);
+    expect(initialDelayMs(600_000, 1_000_000 - 100_000, 1_000_000)).toBe(500_000);
+    expect(initialDelayMs(600_000, 1_000_000 - 700_000, 1_000_000)).toBe(0);
+  });
   it('backs off exponentially up to one hour', () => {
     expect(nextDelayMs(60_000, 0)).toBe(60_000);
     expect(nextDelayMs(60_000, 3)).toBe(480_000);

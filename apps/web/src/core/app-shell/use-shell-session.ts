@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { syncServerAccent } from '@/core/accent';
 import type { ModuleAvailability } from '@/core/module-registry';
+import { clearLiveFeed } from '@/core/live-feed-storage';
 import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { SESSION_KEY, useSession, type Session } from '@/core/session';
@@ -118,7 +119,11 @@ export function useShellSession(resetOverlays: () => void) {
         headers: csrfHeaders(session.data?.csrfToken ?? ''),
       });
     },
-    onSuccess: () => endSession(),
+    // Clear the third-party live-feed cache (time-bounded, never rejects) before the session ends and navigates.
+    onSuccess: async () => {
+      await clearLiveFeed();
+      endSession();
+    },
     onError: () => {
       signingOutRef.current = false;
       ownerSignOutInFlight = false;

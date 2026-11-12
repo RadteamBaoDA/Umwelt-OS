@@ -77,9 +77,9 @@ function useAccountErasureReset(client: QueryClient, endAuthSession: (erase?: bo
       void client.cancelQueries();
       client.clear();
       endAuthSession(true);
-      clearAccountBrowserStorage();
-      // Full navigation drops module-level state and requests not owned by React Query.
-      window.location.replace('/account-deletion');
+      // Full navigation drops module-level state and requests not owned by React Query; it waits (bounded) for the
+      // IndexedDB live-feed delete so the navigation cannot cut it off.
+      void clearAccountBrowserStorage().then(() => window.location.replace('/account-deletion'));
     };
     return subscribeToAccountErasure(erased);
   }, [client, endAuthSession]);

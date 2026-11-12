@@ -1,5 +1,6 @@
 import { BROWSER_SOURCE_BY_ID, type LiveFeedScope } from './sources';
 import type { LiveEvent } from '../live-map-data';
+import type { StoredEvent } from './store';
 
 /** Hard response size cap; a larger body is aborted rather than buffered. */
 export const MAX_BODY_BYTES = 5 * 1024 * 1024;
@@ -29,8 +30,14 @@ export function refreshable(
   return providers.filter((id) => !inFlight.has(id) && now - (lastRun.get(id) ?? 0) >= REFRESH_MIN_GAP_MS);
 }
 
-/** Messages the worker posts back; `changed` means new rows were written to the store. */
-export type WorkerOutbound = { type: 'status'; provider: string; ok: boolean; error?: string; fetchedAt: string } | { type: 'changed' };
+/**
+ * Messages the worker posts back; `changed` means new rows were written to the store, `items` carries a provider's
+ * fetched rows when the store write failed (the page keeps them in memory) and error `storage` marks that case.
+ */
+export type WorkerOutbound =
+  | { type: 'status'; provider: string; ok: boolean; error?: string; fetchedAt: string }
+  | { type: 'changed' }
+  | { type: 'items'; provider: string; items: StoredEvent[] };
 
 /**
  * Delay before the next fetch of a source: the normal interval, doubled per consecutive failure up to one hour.
@@ -38,6 +45,14 @@ export type WorkerOutbound = { type: 'status'; provider: string; ok: boolean; er
  */
 export function nextDelayMs(intervalMs: number, failures: number): number {
   return Math.min(intervalMs * 2 ** failures, MAX_BACKOFF_MS);
+}
+
+/**
+ * Delay before a provider's first fetch after a (re)start: the remainder of its interval since `lastRun`, or 0 when
+ * it never ran or the interval already elapsed. Keeps tab switches within providers' rate limits.
+ */
+export function initialDelayMs(intervalMs: number, lastRun: number | undefined, now: number): number {
+  return lastRun === undefined ? 0 : Math.max(0, intervalMs - (now - lastRun));
 }
 
 /** Read a response body as text, aborting once it exceeds `max` bytes. */

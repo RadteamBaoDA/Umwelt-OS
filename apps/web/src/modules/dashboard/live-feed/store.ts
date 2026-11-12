@@ -36,8 +36,18 @@ export function pruneKeys(rows: { key: string; observed_at: string | null; seen_
 }
 
 /**
+ * Keys of a provider's stored rows that its latest full snapshot no longer contains (expired alerts, ended
+ * giveaways, past launches). Pure; the caller deletes them in the same transaction as the upsert.
+ */
+export function staleKeys(existingKeys: readonly string[], newKeys: Iterable<string>): string[] {
+  const keep = new Set(newKeys);
+  return existingKeys.filter((key) => !keep.has(key));
+}
+
+/**
  * Filter by provider allowlist, period, any-of tags and a case-insensitive text query, newest first.
- * Events without a usable timestamp pass the period filter (same rule as the proxied list).
+ * Events without a usable timestamp pass the period filter (same rule as the proxied list). Ordering uses
+ * `min(eventTime, now)` so future-dated items (scheduled launches) rank as "now" instead of pinning the top.
  */
 export function filterEvents<T extends LiveEvent & { provider: string; tags?: string[] }>(
   rows: T[],
@@ -51,7 +61,7 @@ export function filterEvents<T extends LiveEvent & { provider: string; tags?: st
     .filter((row) => !row.observed_at || !Number.isFinite(Date.parse(row.observed_at)) || Date.parse(row.observed_at) >= cutoff)
     .filter((row) => !filters.tags.length || filters.tags.some((tag) => row.tags?.includes(tag)))
     .filter((row) => !query || `${row.title} ${row.source} ${row.tags?.join(' ') ?? ''}`.toLowerCase().includes(query))
-    .sort((a, b) => eventTime(b) - eventTime(a));
+    .sort((a, b) => Math.min(eventTime(b), now) - Math.min(eventTime(a), now));
 }
 
 /** Wrap an IDBRequest in a promise. */
@@ -81,8 +91,16 @@ function openDb(workspaceId: string): Promise<IDBDatabase> {
 /**
  * Upsert rows by key, then prune by age and count in the same readwrite transaction so readers never see an
  * over-cap store. Resolves after commit. Rejects (callers treat as best-effort) when storage is unavailable or full.
+ * @param snapshotProviders Providers whose `rows` are their complete current set: their stored rows absent from
+ * `rows` are deleted in the same transaction (every current source returns a full snapshot, never a delta). Pass
+ * only providers whose fetch succeeded; a failed fetch must leave the previous rows alone.
  */
-export async function upsertEvents(workspaceId: string, rows: StoredEvent[], now = Date.now()): Promise<void> {
+export async function upsertEvents(
+  workspaceId: string,
+  rows: StoredEvent[],
+  now = Date.now(),
+  snapshotProviders: readonly string[] = [],
+): Promise<void> {
   const db = await openDb(workspaceId);
   try {
     const tx = db.transaction(STORE, 'readwrite');
@@ -93,6 +111,11 @@ export async function upsertEvents(workspaceId: string, rows: StoredEvent[], now
       tx.onabort = () => reject(tx.error);
     });
     for (const row of rows) store.put(row);
+    for (const provider of snapshotProviders) {
+      const existing = (await request(store.index('provider').getAllKeys(provider))) as string[];
+      const fresh = rows.filter((row) => row.provider === provider).map((row) => row.key);
+      for (const key of staleKeys(existing, fresh)) store.delete(key);
+    }
     const all = (await request(store.getAll())) as StoredEvent[];
     for (const key of pruneKeys(all, now)) store.delete(key);
     await done;

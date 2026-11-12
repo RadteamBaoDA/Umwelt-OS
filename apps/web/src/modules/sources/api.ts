@@ -20,6 +20,10 @@ export type Source = {
   last_success_at: string | null;
   last_error_at: string | null;
   last_error_code: string | null;
+  /** Why the source stopped collecting (machine code); null while it is not blocked. Not yet in api-types.gen. */
+  blocked_error_code?: string | null;
+  /** Consecutive failed collection attempts; null when unknown. Not yet in api-types.gen. */
+  failure_count?: number | null;
   collected_at: string | null;
   indexed_at: string | null;
   collection_error_code: string | null;

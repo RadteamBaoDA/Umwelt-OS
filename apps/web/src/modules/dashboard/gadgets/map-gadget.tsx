@@ -442,15 +442,8 @@ function SelectedSourcesMapGadget({ instance, isEditMode = false }: { instance: 
         />
       )}
       <MapEvidence features={features} observations={observations} selectedFeatureId={selectedFeatureId} onPick={setSelectedFeatureId} />
-      {/* The data and basemap credit describes a drawn map, so it shows only when the plot is rendered. */}
-      {showPlot && (
-        <p className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">
-          <a className="underline" href="https://open-meteo.com/" target="_blank" rel="noreferrer">
-            {t('openMeteoAttribution')}
-          </a>{' '}
-          · {t('mapNoRemoteTiles')}
-        </p>
-      )}
+      {/* The basemap credit describes a drawn map, so it shows only when the plot is rendered. This gadget has no weather overlay, so no Open-Meteo credit. */}
+      {showPlot && <p className="line-clamp-2 shrink-0 break-words text-xs text-muted-foreground">{t('mapBasemapCredit')}</p>}
     </section>
   );
 }

@@ -9,10 +9,10 @@ const ERASURE_EVENT = 'umwelt:account-erased';
  * Remove app-owned preferences and private drafts; leave unrelated same-origin storage alone.
  * Every app key starts with `umwelt` (`umwelt:`, `umwelt.`, `umwelt-`) or the legacy `bbd:`; some embed the
  * erased account's ids (dashboard group keys), so accent and density also reset to defaults.
+ * Synchronous storage is cleared before the first await; the returned promise settles after the (time-bounded)
+ * IndexedDB live-feed delete and never rejects, so callers can await it before navigating.
  */
-export function clearAccountBrowserStorage(): void {
-  // Third-party live-feed items cached in IndexedDB are account-scoped browser data too; best-effort, not awaited.
-  void clearLiveFeed();
+export async function clearAccountBrowserStorage(): Promise<void> {
   for (const storageName of ['localStorage', 'sessionStorage'] as const) {
     try {
       const storage = window[storageName];
@@ -23,6 +23,8 @@ export function clearAccountBrowserStorage(): void {
       /* Blocked browser storage contains no accessible app state to clear. */
     }
   }
+  // Third-party live-feed items cached in IndexedDB are account-scoped browser data too.
+  await clearLiveFeed();
 }
 
 /** Notify this tab and other same-origin tabs after acceptance, without persisting a receipt. */
