@@ -109,11 +109,10 @@ async def test_gate_debits_once_per_physical_send_and_rechecks_at_header_time(mo
         deadline=1e18,
         quota_provider="open_meteo",
     )
-    for _ in range(2):  # two sends, each announced by a pre-call and a header-time call
-        await gate()
+    for _ in range(2):  # two sends, each one plain call: authorize + debit
         await gate()
     assert debits == [1, 2]
-    assert log.count("authorize") == 4
+    assert log.count("authorize") == 2
     assert log.index("commit") < len(log)  # the debit is committed (before the wire send)
 
 
@@ -152,7 +151,7 @@ async def test_gate_rejects_a_changed_alpha_credential_operation(monkeypatch):
     )
     first = uuid4()
     await gate(first)
-    await gate(first)  # header-time recheck of the same send
+    await gate(first)
     with pytest.raises(collection.CollectionFenceLost):
         await gate(uuid4())
 

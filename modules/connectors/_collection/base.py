@@ -180,10 +180,10 @@ ADAPTERS: dict[
 class SendGate:
     """Authorize and debit every physical send; commit before the wire, never refund.
 
-    Providers call it before a send and again from an httpx trace at header time. The first call
-    of a pair revalidates and debits (new ``send_sequence`` => new ledger row); the paired second
-    call only revalidates. Providers abort the whole collection on any send failure, and a gate
-    lives for one attempt, so an unpaired armed state cannot leak into a later send.
+    A plain call always revalidates and debits (new ``send_sequence`` => new ledger row). Providers
+    that also fence at httpx header time (``send_fence_trace``) call ``recheck`` for that second
+    step, which only revalidates; nothing is inferred from call order, so a send can never skip
+    its debit.
     """
 
     def __init__(
@@ -205,27 +205,32 @@ class SendGate:
         )
         self.sends = 0
         self.captured_operation: UUID | None = None
-        self._armed = False
         self._last_authorized: float | None = None
 
-    async def __call__(self, credential_operation_id: UUID | None = None) -> None:
-        """Run before one physical send (or at its header-time recheck)."""
+    async def __call__(
+        self, credential_operation_id: UUID | None = None, *, header_recheck: bool = False
+    ) -> None:
+        """Authorize and debit one physical send; ``header_recheck=True`` only revalidates, never debits.
+
+        Raises ``CollectionFenceLost`` when the credential operation changed; authorization and quota
+        errors propagate and abort the send. A header-time recheck is skipped when the same send passed
+        authorization within ``_RECHECK_SKIP_SECONDS``; the heartbeat owns slot renewal across slow sends.
+        """
         if credential_operation_id is not None:
             if self.captured_operation not in (None, credential_operation_id):
                 raise CollectionFenceLost("credential_changed", "revision_changed")
             self.captured_operation = credential_operation_id
-        if self._armed:
-            self._armed = False
-            # The header-time recheck follows the pre-send check of the same send; skip it when that
-            # check passed moments ago. Long sends (slow headers) still revalidate, and the heartbeat
-            # remains the sole owner of slot renewal across them.
+        if header_recheck:
             last = self._last_authorized
             if last is None or time.monotonic() - last >= _RECHECK_SKIP_SECONDS:
                 await self._authorize()
             return
         await self._authorize()
         await self._debit()
-        self._armed = True
+
+    async def recheck(self) -> None:
+        """Header-time fence for ``send_fence_trace``: revalidate only, no quota debit."""
+        await self(header_recheck=True)
 
     def bind_credential(self, fingerprint: str) -> None:
         """Key the shared credential budget on a deployment-keyed fingerprint (never the key)."""

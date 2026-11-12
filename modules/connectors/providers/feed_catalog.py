@@ -127,12 +127,17 @@ def _parse_time(value: str | None) -> datetime | None:
 def send_fence_trace(
     before_request: Callable[[], Awaitable[None]],
 ) -> Callable[[str, dict[str, object]], Awaitable[None]]:
-    """Build an httpx trace hook that reruns the native fence right before request headers hit the wire."""
+    """Build an httpx trace hook that reruns the native fence right before request headers hit the wire.
+
+    A ``SendGate`` exposes ``recheck`` (authorize without debiting) so the pre-send call remains the
+    only debit; plain callables are invoked as-is.
+    """
+    recheck = getattr(before_request, "recheck", before_request)
 
     async def final_send_fence(event_name: str, info: dict[str, object]) -> None:
         """Recheck original authority after connection admission, before headers send."""
         if event_name.endswith("send_request_headers.started"):
-            await before_request()
+            await recheck()
 
     return final_send_fence
 

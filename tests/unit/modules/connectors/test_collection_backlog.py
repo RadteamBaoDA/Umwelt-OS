@@ -115,19 +115,74 @@ async def test_heartbeat_does_not_cancel_after_accept(monkeypatch: pytest.Monkey
     assert not lost.is_set()
 
 
-@pytest.mark.asyncio
-async def test_header_recheck_skipped_when_recently_authorized(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _gate() -> base.SendGate:
+    """Gate with stubbed authorize/debit so only call semantics are exercised."""
     gate = base.SendGate(None, None, settings=None, deadline=1e18, quota_provider=None)  # type: ignore[arg-type]
-    gate._authorize = AsyncMock(
+    gate._authorize = AsyncMock(  # type: ignore[method-assign]
         side_effect=lambda: setattr(gate, "_last_authorized", base.time.monotonic())
-    )  # type: ignore[method-assign]
+    )
     gate._debit = AsyncMock()  # type: ignore[method-assign]
-    await gate()  # pre-send: authorize + debit
-    await gate()  # header-time: skipped (fresh)
-    assert gate._authorize.await_count == 1
-    await gate()  # next send: authorize + debit, arms again
-    gate._last_authorized = base.time.monotonic() - 10  # slow send: stamp is stale
-    await gate()  # header-time recheck runs
-    assert gate._authorize.await_count == 3
+    return gate
+
+
+@pytest.mark.asyncio
+async def test_consecutive_gate_calls_each_authorize_and_debit() -> None:
+    gate = _gate()
+    for _ in range(3):
+        await gate()
+    assert gate._authorize.await_count == 3  # type: ignore[attr-defined]
+    assert gate._debit.await_count == 3  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_header_recheck_never_debits_and_skips_when_fresh() -> None:
+    gate = _gate()
+    await gate()
+    await gate.recheck()  # fresh: skipped
+    assert gate._authorize.await_count == 1  # type: ignore[attr-defined]
+    gate._last_authorized = base.time.monotonic() - 10  # slow send: stale stamp
+    await gate.recheck()
+    assert gate._authorize.await_count == 2  # type: ignore[attr-defined]
+    assert gate._debit.await_count == 1  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_cross_origin_redirect_keeps_only_allowlisted_headers() -> None:
+    seen: dict[str, dict[str, str]] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen[req.headers["host"]] = dict(req.headers)
+        if req.headers["host"] == "a.test":
+            return httpx.Response(302, headers={"location": "https://b.test/y"})
+        return httpx.Response(200, content=b"ok")
+
+    await rest.fetch_bounded(
+        "https://a.test/x?k=1",
+        headers={"X-RapidAPI-Key": "secret", "User-Agent": "ua", "Accept": "*/*"},
+        before_send=AsyncMock(),
+        resolve=_resolve,
+        transport=httpx.MockTransport(handler),
+    )
+    assert seen["a.test"]["x-rapidapi-key"] == "secret"
+    assert "x-rapidapi-key" not in seen["b.test"]
+    assert seen["b.test"]["user-agent"] == "ua"
+
+
+@pytest.mark.asyncio
+async def test_same_origin_redirect_keeps_all_headers() -> None:
+    seen: list[dict[str, str]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(dict(req.headers))
+        if len(seen) == 1:
+            return httpx.Response(302, headers={"location": "https://a.test/y"})
+        return httpx.Response(200, content=b"ok")
+
+    await rest.fetch_bounded(
+        "https://a.test/x",
+        headers={"X-RapidAPI-Key": "secret"},
+        before_send=AsyncMock(),
+        resolve=_resolve,
+        transport=httpx.MockTransport(handler),
+    )
+    assert seen[1]["x-rapidapi-key"] == "secret"

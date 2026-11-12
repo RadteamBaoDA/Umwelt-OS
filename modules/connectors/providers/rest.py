@@ -118,7 +118,8 @@ def _pinned_request(
 
 
 MAX_REDIRECTS = 3
-_CREDENTIAL_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization", "x-api-key"})
+# Cross-origin hops send only these; providers put keys in arbitrary header names, so a denylist leaks.
+_CROSS_ORIGIN_HEADERS = frozenset({"accept", "accept-encoding", "accept-language", "user-agent"})
 
 
 async def fetch_bounded(
@@ -139,7 +140,7 @@ async def fetch_bounded(
     raising from it aborts the send. ``json_body`` is a fixed, already-serialised search query for read-only
     POST search APIs (VietnamWorks); it never carries credentials or owner content. 429 raises ``ProviderRateLimited`` with the full
     Retry-After; up to 3 GET redirects are followed (each hop re-resolved, re-checked and pinned, https->http refused,
-    credentials dropped cross-origin, one overall deadline and byte cap); other 3xx raise ``UnsafeDestination``; 304 returns no body.
+    only non-secret headers kept cross-origin, one overall deadline and byte cap); other 3xx raise ``UnsafeDestination``; 304 returns no body.
     """
     # Several public APIs (NWS, Wikimedia, CISA) reject UA-less clients; caller headers (e.g. SEC's contact
     # User-Agent) always win, compared case-insensitively.
@@ -180,9 +181,9 @@ async def fetch_bounded(
                 raise UnsafeDestination("non_public_destination")
             hop_headers = merged
             if _origin(current) != first_origin:
-                # Never forward credentials to a different origin.
+                # Allowlist: never forward unknown (possibly secret-bearing) headers to a different origin.
                 hop_headers = {
-                    k: v for k, v in merged.items() if k.lower() not in _CREDENTIAL_HEADERS
+                    k: v for k, v in merged.items() if k.lower() in _CROSS_ORIGIN_HEADERS
                 }
             pinned, request_headers, extensions = _pinned_request(
                 current, addresses[0], hop_headers
