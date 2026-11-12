@@ -117,24 +117,22 @@ async def test_inline_page_parse_would_be_flagged(loop_block_guard):
 # ---------------------------------------------------------------- A2
 
 
-def _usgs_body(count: int = 8_000) -> bytes:
-    features = [
+def _kev_body(count: int = 8_000) -> bytes:
+    """CISA KEV catalog payload (live_map's JSON provider) with ``count`` vulnerability rows."""
+    vulnerabilities = [
         {
-            "id": f"id{n}",
-            "properties": {
-                "title": f"quake {n}",
-                "time": 1_700_000_000_000 + n,
-                "url": f"https://e.example/{n}",
-            },
-            "geometry": {"coordinates": [10.0, 20.0, 1.0]},
+            "cveID": f"CVE-2026-{n:05d}",
+            "vulnerabilityName": f"vuln {n}",
+            "dateAdded": "2026-01-01",
+            "shortDescription": "d",
         }
         for n in range(count)
     ]
-    return json.dumps({"features": features}).encode()
+    return json.dumps({"vulnerabilities": vulnerabilities}).encode()
 
 
 async def test_live_map_parse_is_offloaded_and_identical(monkeypatch, loop_block_guard):
-    body = _usgs_body()
+    body = _kev_body()
     await loop_block_guard.reset()
 
     async def fetch(*_a, **_k):
@@ -146,7 +144,7 @@ async def test_live_map_parse_is_offloaded_and_identical(monkeypatch, loop_block
         return None
 
     got = await live_map.fetch_events(
-        "usgs",
+        "cisa_kev",
         country=None,
         owner=None,
         repo=None,
@@ -155,14 +153,15 @@ async def test_live_map_parse_is_offloaded_and_identical(monkeypatch, loop_block
         contact=None,
         before_send=before_send,
     )
-    assert got == live_map._parse("usgs", body)
+    assert got == live_map._parse("cisa_kev", body)
     assert len(got[0]) == live_map.MAX_ITEMS and got[1] is True
     loop_block_guard.assert_clean()
 
 
 async def test_live_map_malformed_rows_still_map_to_value_error(monkeypatch):
     async def fetch(*_a, **_k):
-        return rest.Fetched(json.dumps({"features": [{"id": "x"}]}).encode())
+        # Missing "vulnerabilities" key -> KeyError inside _parse_cisa_kev -> provider_response_invalid.
+        return rest.Fetched(json.dumps({"catalog": [{"cveID": "x"}]}).encode())
 
     monkeypatch.setattr(live_map.rest, "fetch_bounded", fetch)
 
@@ -171,7 +170,7 @@ async def test_live_map_malformed_rows_still_map_to_value_error(monkeypatch):
 
     with pytest.raises(ValueError, match="provider_response_invalid"):
         await live_map.fetch_events(
-            "usgs",
+            "cisa_kev",
             country=None,
             owner=None,
             repo=None,
