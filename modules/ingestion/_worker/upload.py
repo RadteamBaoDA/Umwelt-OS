@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -390,6 +391,10 @@ async def cleanup_storage_orphans(ctx: dict[str, object]) -> int:
     )
 
 
+PURGE_PASS_LIMIT = 1000
+PURGE_TIME_BUDGET_SECONDS = 30.0
+
+
 async def purge_collection_receipts(ctx: dict[str, object]) -> int:
     """Delete one bounded slice (500) of expired, no-longer-recoverable acceptance receipts.
 
@@ -411,9 +416,19 @@ async def purge_collection_receipts(ctx: dict[str, object]) -> int:
         (ingestion_api.purge_expired_datasource_data, {}),
     ):
         try:
-            async with factory() as session:
-                await purge(session, limit=1000, **extra)
-                await session.commit()
+            # One pass deletes at most `limit` rows; drain a backlog in repeated short transactions, stopping
+            # on a short pass or when the time budget is spent so the hourly cron never overruns.
+            deadline = time.monotonic() + PURGE_TIME_BUDGET_SECONDS
+            while True:
+                async with factory() as session:
+                    removed = await purge(session, limit=PURGE_PASS_LIMIT, **extra)
+                    await session.commit()
+                if (
+                    not isinstance(removed, int)
+                    or removed < PURGE_PASS_LIMIT
+                    or time.monotonic() >= deadline
+                ):
+                    break
         except Exception:
             logger.warning("collection retention step %s failed", purge.__name__, exc_info=True)
     return deleted

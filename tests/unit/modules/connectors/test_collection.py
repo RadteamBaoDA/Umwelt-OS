@@ -579,3 +579,44 @@ async def test_quota_wait_releases_lease_without_error_and_records_nothing(monke
     await collection.execute_collection(ctx, admission)
     assert settled[0]["outcome"] == "deferred"
     assert released == [None] and RECORDED == []
+
+
+@pytest.mark.asyncio
+async def test_external_cancellation_releases_the_lease_then_propagates(monkeypatch):
+    async def adapter(run):
+        raise asyncio.CancelledError
+
+    ctx, admission, settled = harness(monkeypatch, adapter)
+    with pytest.raises(asyncio.CancelledError):
+        await collection.execute_collection(ctx, admission)
+    assert (
+        released == [None] and settled == []
+    )  # lease freed, no health error, recovery owns the request
+
+
+@pytest.mark.asyncio
+async def test_release_survives_cancellation_and_logs_failure(monkeypatch, caplog):
+    done = []
+
+    async def slow_release(_session, _lease, **_k):
+        await asyncio.sleep(0.05)
+        done.append(1)
+
+    monkeypatch.setattr(collection.ingestion, "release_connector_collection", slow_release)
+    run = collection.Run(ctx={}, factory=factory([]), settings=None, attempt=attempt(), gate=None)
+    run.extras["lease"] = object()
+    task = asyncio.create_task(collection._release_lease(run, None))
+    await asyncio.sleep(0.01)
+    task.cancel()  # shield keeps the inner release running to completion
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0.1)
+    assert done == [1]
+
+    async def boom(_session, _lease, **_k):
+        raise RuntimeError("db down secret-token")
+
+    monkeypatch.setattr(collection.ingestion, "release_connector_collection", boom)
+    with caplog.at_level("WARNING"):
+        await collection._release_lease(run, None)
+    assert "lease release failed" in caplog.text and "secret-token" not in caplog.text

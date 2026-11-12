@@ -431,3 +431,31 @@ def test_receipt_migration_adds_and_drops_the_nullable_column() -> None:
 
     column = CollectionReceipt.__table__.c.collection_stats
     assert column.nullable and column.type.__class__.__name__ == "JSONB"
+
+
+async def test_failed_section_keeps_the_cursor_where_it_was(monkeypatch) -> None:
+    bodies = {
+        "https://tuoitre.vn/home.rss": rest.Fetched(_rss([("a", T0)])),
+        "https://tuoitre.vn/thoi-su.rss": rest.ProviderHttpError(500),
+    }
+    run, accepted, _ = _sections_run(monkeypatch, bodies, {"feed_sections": ["home", "thoi-su"]})
+    captured = {}
+
+    async def accept(_run, _lease, records, _coverage, _at, _update=None, **kw):
+        captured.update(kw)
+
+    patch_collection(monkeypatch, "_accept_native", accept)
+    await collection._run_feed(run)
+    assert (
+        captured["cursor_after"] is None
+    )  # None = keep lease.cursor_before; the failed section is re-read
+
+    ok_run, _, _ = _sections_run(
+        monkeypatch,
+        {"*": rest.Fetched(_rss([("a", T0)]))},
+        {"feed_sections": ["home", "thoi-su"]},
+    )
+    patch_collection(monkeypatch, "_accept_native", accept)  # make_run re-patched it
+    captured.clear()
+    await collection._run_feed(ok_run)
+    assert captured["cursor_after"] is not None  # healthy runs still advance

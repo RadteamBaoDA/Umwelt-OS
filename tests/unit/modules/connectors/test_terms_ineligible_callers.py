@@ -170,7 +170,7 @@ async def test_send_gate_translates_terms_to_terms_ineligible(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("make", FAMILIES)
 async def test_scheduler_rolls_back_and_skips_terms_ineligible_source(
-    monkeypatch: pytest.MonkeyPatch, make
+    monkeypatch: pytest.MonkeyPatch, make, caplog: pytest.LogCaptureFixture
 ) -> None:
     source_id, workspace_id = uuid4(), uuid4()
     log: list[str] = []
@@ -196,12 +196,16 @@ async def test_scheduler_rolls_back_and_skips_terms_ineligible_source(
 
     monkeypatch.setattr("modules.settings.public.module_is_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(scheduler, "_open_request", AsyncMock(side_effect=make()))
-    created = await scheduler._create_due_requests(
-        lambda: Session(log),
-        datetime.now(UTC),
-        False,  # type: ignore[arg-type]
-    )
+    with caplog.at_level("WARNING"):
+        created = await scheduler._create_due_requests(
+            lambda: Session(log),
+            datetime.now(UTC),
+            False,  # type: ignore[arg-type]
+        )
     assert created == 0
+    # The swallowed creation error is logged with the source id (never silently dropped).
+    assert "Scheduled collection request not created" in caplog.text
+    assert str(source_id) in caplog.text
     assert (
         log.count("rollback") >= 2 and log.count("commit") == 1
     )  # no dispatch row after the denial

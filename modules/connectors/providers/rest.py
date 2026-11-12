@@ -78,6 +78,7 @@ class Fetched:
     body: bytes | None
     etag: str | None = None
     last_modified: str | None = None
+    content_type: str | None = None
 
 
 async def resolve_public(host: str, port: int) -> list[str]:
@@ -187,7 +188,10 @@ async def fetch_bounded(
                 raise CollectionIncomplete
             body = await _read_capped(response, max_bytes)
             return Fetched(
-                body, response.headers.get("etag"), response.headers.get("last-modified")
+                body,
+                response.headers.get("etag"),
+                response.headers.get("last-modified"),
+                response.headers.get("content-type"),
             )
 
 

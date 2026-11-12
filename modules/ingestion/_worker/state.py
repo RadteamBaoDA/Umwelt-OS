@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -109,6 +109,8 @@ class WorkerState:
     normalization_rows: tuple[tuple[ObservationNormalization, SourceObservation], ...] = ()
     document_preparation: documents.NormalizedDocumentPreparation | None = None
     observation_preparation: observations.IngestionObservationPreparation | None = None
+    # (source, generation) -> provider scope, read once per slice instead of once per row.
+    provider_scope_cache: dict[tuple[Any, int], Any] = field(default_factory=dict, compare=False)
 
 
 def _capture_worker_claim(work: WorkerState) -> WorkerClaim:

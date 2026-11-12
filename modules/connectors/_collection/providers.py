@@ -395,6 +395,10 @@ async def _run_feed(run: Run) -> None:
     records, cursor_after = await _select(run, lease, found, collected_at)
     if "selection" in run.extras:
         run.extras["selection"]["failed_sections"] = failed
+    if failed:
+        # A failed section may hold items older than the newest cursor candidate; keep the old cursor so the next
+        # run re-reads them (dedup by record hash prevents duplicates of what this run stored).
+        cursor_after = None
     await _accept_native(
         run, lease, records, _coverage(records), collected_at, update, cursor_after=cursor_after
     )

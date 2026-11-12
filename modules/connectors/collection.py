@@ -317,7 +317,8 @@ async def _release_lease(run: Run, error_code: str | None) -> None:
     if lease is None or run.extras.get("accepted"):
         return
     a = run.attempt
-    with suppress(BaseException):
+
+    async def release() -> None:
         async with asyncio.timeout(3), run.factory() as session:
             await ingestion.release_connector_collection(
                 session,
@@ -326,6 +327,17 @@ async def _release_lease(run: Run, error_code: str | None) -> None:
                 scope=a.scope,
                 multi_workspace_enabled=a.multi,
             )
+
+    try:
+        # Shield: a cancelled worker task must still get its release through (the lease otherwise blocks the
+        # source until it expires). The inner task keeps running if this await is cancelled again.
+        await asyncio.shield(release())
+    except Exception as exc:  # noqa: BLE001  # best-effort: never mask the settled request, but log it
+        logger.warning(
+            "Collection lease release failed; source_id=%s error_type=%s",
+            getattr(a.source, "id", None),
+            type(exc).__name__,
+        )
 
 
 async def _record_unleased_failure(run: Run, error_code: str) -> None:
@@ -407,6 +419,8 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
         return  # accepted: the ingestion owner already settled request + slot in its own commit
     except asyncio.CancelledError:
         if not lost.is_set():
+            # External cancellation (worker shutdown/job abort): free the lease before propagating.
+            await _release_lease(run, None)  # shutdown is not a source failure: no health error
             raise
         await _release_lease(run, "collection_admission_lost")
         return  # renewal failure: C2 recovery or cancellation owns the request

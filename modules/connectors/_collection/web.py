@@ -175,6 +175,22 @@ class _PageText(HTMLParser):
             self.parts.append(data.strip())
 
 
+def _decode_page(body: bytes, content_type: str | None) -> str:
+    """Decode a fetched page using the ``Content-Type`` charset; unknown/absent/invalid charsets fall back to UTF-8.
+
+    Undecodable bytes are replaced, never raised, so one badly encoded page cannot fail the crawl.
+    """
+    charset = "utf-8"
+    for param in (content_type or "").split(";")[1:]:
+        key, _, value = param.partition("=")
+        if key.strip().lower() == "charset" and value.strip():
+            charset = value.strip().strip("\"'")
+    try:
+        return body.decode(charset, errors="replace")
+    except LookupError:
+        return body.decode("utf-8", errors="replace")
+
+
 def _parse_page(html: str) -> tuple[list[str], list[str]]:
     """Return the visible text parts and anchor hrefs of one HTML page.
 
@@ -235,7 +251,7 @@ async def _run_web(run: Run) -> None:
         body = _require_body(fetched)
         spent += len(body)
         # HTMLParser.feed on a multi-MB page would stall the worker loop (heartbeats, heavy-slot renewal).
-        parts, links = await to_thread_joined(_parse_page, body.decode("utf-8", errors="replace"))
+        parts, links = await to_thread_joined(_parse_page, _decode_page(body, fetched.content_type))
         records.append(
             normalize(
                 {

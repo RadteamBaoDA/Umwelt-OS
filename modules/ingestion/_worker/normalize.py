@@ -135,13 +135,17 @@ async def _prepare_row(
         )
     )
     common = _normalize_common_metadata(record.metadata, record.provider_id)
-    provider_scope = await connectors.get_current_provider_scope(
-        session,
-        observation.source_id,
-        generation,
-        scope=work.scope,
-        multi_workspace_enabled=enabled,
-    )
+    scope_key = (observation.source_id, generation)
+    if scope_key not in work.provider_scope_cache:
+        # Same for every row of the slice (one source, one generation): read once, cache None results too.
+        work.provider_scope_cache[scope_key] = await connectors.get_current_provider_scope(
+            session,
+            observation.source_id,
+            generation,
+            scope=work.scope,
+            multi_workspace_enabled=enabled,
+        )
+    provider_scope = work.provider_scope_cache[scope_key]
     accepted_at = observation.received_at
     if projection.provider in MEASUREMENT_PROVIDER_IDS and (
         provider_scope is None or accepted_at is None
@@ -483,6 +487,19 @@ async def _settle_terminal_run(
     stays queued. The event is delivered, or failed when this stage failed.
     """
     run, stage, event, source = work.run, work.stage, work.event, work.source
+    if failed_count:
+        # One bad record must not fail the run or flag the source: only a slice where nothing was usable fails.
+        # The runs/stages status checks have no success-with-warnings value, so a partial success stays
+        # 'succeeded'; the failed rows remain visible as disposition='failed' in the normalization journal.
+        total = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(ObservationNormalization)
+                .where(*_normalization_filters(work))
+            )
+            or 0
+        )
+        failed_count = failed_count if failed_count >= total else 0
     stage.status = "failed" if failed_count else "succeeded"
     stage.error_code = "normalization_failed" if failed_count else None
     stages = list(

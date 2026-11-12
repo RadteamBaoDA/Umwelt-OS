@@ -50,6 +50,7 @@ def running(token, attempt=1, deadline=None):
 def schedule():
     return SimpleNamespace(
         failure_count=0,
+        interval_minutes=60,
         next_eligible_at=None,
         blocked_error_code=None,
         blocked_dimensions=None,
@@ -167,3 +168,58 @@ async def test_clear_block_needs_newer_credential_revision():
         FakeSession(sched), uuid4(), credential_revision=8, workspace_id=sched.workspace_id
     )
     assert sched.blocked_error_code is None and sched.blocked_credential_revision is None
+
+
+def test_penalize_backs_off_exponentially_when_no_provider_deadline():
+    sched = schedule()
+    scheduler._penalize(sched, None)
+    first = sched.next_eligible_at - datetime.now(UTC)
+    assert timedelta(minutes=119) < first <= timedelta(minutes=120)  # 60 min * 2**1
+    for _ in range(20):
+        scheduler._penalize(sched, None)
+    capped = sched.next_eligible_at - datetime.now(UTC)
+    assert timedelta(hours=23) < capped <= timedelta(hours=24)
+    deadline = NOW + timedelta(hours=6)
+    scheduler._penalize(sched, deadline)
+    assert sched.next_eligible_at == deadline  # provider deadline wins
+
+
+@pytest.mark.asyncio
+async def test_failed_enqueue_is_made_due_again_so_only_the_claim_governs():
+    ids = [uuid4(), uuid4()]
+    executed = []
+
+    class Result:
+        def all(self):
+            return ids
+
+    class Session:
+        async def scalars(self, *_a, **_k):
+            return Result()
+
+        async def execute(self, statement, *_a, **_k):
+            executed.append(str(statement.compile()))
+
+        async def commit(self):
+            return None
+
+    class Ctx:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return Session()
+
+        async def __aexit__(self, *_a):
+            return None
+
+    class Redis:
+        async def enqueue_job(self, _name, request_id, **_k):
+            if request_id == str(ids[0]):
+                raise ConnectionError("redis down")
+            return object()
+
+    assert await scheduler._enqueue_queued({"redis": Redis()}, Ctx(), NOW) == 1
+    assert (
+        len(executed) == 1 and "enqueue_next_at" in executed[0]
+    )  # one reset UPDATE for the failed id

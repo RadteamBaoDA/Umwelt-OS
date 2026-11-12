@@ -130,7 +130,7 @@ class FakeSession:
     """Scripted session: three settlement counts in order, then the run's stages."""
 
     def __init__(
-        self, counts: tuple[int, int, int] = (0, 0, 2), stages: list[Any] | None = None
+        self, counts: tuple[int, ...] = (0, 0, 2), stages: list[Any] | None = None
     ) -> None:
         self.counts = list(counts)
         self.stages = stages
@@ -138,8 +138,11 @@ class FakeSession:
         self.rollbacks = 0
 
     async def scalar(self, *_a: Any, **_k: Any) -> int:
-        """Return pending, failed, then chunk-total counts."""
-        return self.counts.pop(0)
+        """Return pending, failed, chunk-total, then (only when something failed) journal-total counts.
+
+        The journal total defaults to 0 (every row failed) unless a fourth count is scripted.
+        """
+        return self.counts.pop(0) if self.counts else 0
 
     async def scalars(self, *_a: Any, **_k: Any) -> Any:
         """Return the run's stage rows."""
@@ -164,7 +167,7 @@ class Env:
         *,
         provider: str = "rss",
         native: bool = False,
-        counts: tuple[int, int, int] = (0, 0, 2),
+        counts: tuple[int, ...] = (0, 0, 2),
         stages: list[Any] | None = None,
         stage_status: str = "pending",
         preparation: Any = "prep",
@@ -210,6 +213,7 @@ class Env:
             normalization_rows=tuple(rows),
             document_preparation=preparation,
             observation_preparation="obs-prep",
+            provider_scope_cache={},
         )
         self._install(native)
 
@@ -642,6 +646,35 @@ async def test_validation_rejection_fails_that_row_and_keeps_earlier_rows(monkey
     assert env.event.status == "failed"
     assert ("processing_result", "normalization_failed") in env.events
     assert env.stage.result_count == 4
+
+
+@pytest.mark.asyncio
+async def test_one_bad_record_does_not_fail_the_run_or_flag_the_source(monkeypatch):
+    """A slice where at least one row normalized stays successful; only an all-failed slice fails."""
+    rows = [make_row(f"r{i}") for i in range(3)]
+    env = Env(monkeypatch, rows, counts=(0, 1, 4, 3))  # pending, failed, chunks, journal total
+    env.upsert_script = [Result(), documents.NormalizedDocumentValidationRejected("bad"), Result()]
+    await env.run_event()
+    assert rows[1][0].disposition == "failed"  # still visible in the journal
+    assert env.stage.status == "succeeded" and env.stage.error_code is None
+    assert env.run.status == "succeeded" and env.event.status == "delivered"
+    assert ("processing_result", None) in env.events
+
+
+@pytest.mark.asyncio
+async def test_provider_scope_is_read_once_per_slice(monkeypatch):
+    """The provider scope is identical for every row of a slice, so it is fetched once, not per row."""
+    rows = [make_row(f"r{i}") for i in range(3)]
+    env = Env(monkeypatch, rows)
+    calls = []
+
+    async def counting_scope(*_a, **_k):
+        calls.append(1)
+        return SimpleNamespace(discriminator="scope-1")
+
+    monkeypatch.setattr(worker.connectors, "get_current_provider_scope", counting_scope)
+    await env.run_event()
+    assert env.events.count("upsert") == 3 and len(calls) == 1
 
 
 @pytest.mark.asyncio

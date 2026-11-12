@@ -9,6 +9,7 @@ A slot fences one admitted attempt; it guarantees at most two concurrent admitte
 per workspace, not cancellation of remote HTTP already sent by an expired attempt.
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -21,7 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core import telemetry
 from core.config import Settings
-from core.errors import ConflictError, DomainError, NotFoundError, RateLimitedError
+from core.errors import (
+    ConflictError,
+    DomainError,
+    NotFoundError,
+    RateLimitedError,
+    error_detail,
+)
 from core.ids import uuid7
 from core.worker_context import worker_session_factory
 from core.workspaces.models import WorkspaceMembership
@@ -46,6 +53,7 @@ from modules.connectors.models import (
 )
 from modules.connectors.selection import RUN_DEADLINE_SECONDS
 
+logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 5
 SLOT_TTL = timedelta(seconds=120)  # renewal every 20 s is the executor's duty
 BUSY_DEFER = timedelta(seconds=30)
@@ -343,9 +351,19 @@ async def _defer(session: AsyncSession, request_id: UUID, delay: timedelta) -> N
 
 
 def _penalize(schedule: ConnectorSchedule | None, until: datetime | None) -> None:
-    """Record a terminal failure on the schedule; provider deadlines are never shortened."""
+    """Record a terminal failure on the schedule; provider deadlines are never shortened.
+
+    With no provider deadline (provider_rejected, destination_blocked, ...) a permanently failing source would be
+    retried every interval forever, so back off exponentially: ``interval * 2**min(failures, 6)``, capped at 24 h.
+    ``failure_count`` and ``next_eligible_at`` reset together on the next success (``settle`` succeeded branch).
+    """
     if schedule is not None:
         schedule.failure_count += 1
+        if until is None:
+            backoff = timedelta(minutes=schedule.interval_minutes) * 2 ** min(
+                schedule.failure_count, 6
+            )
+            until = datetime.now(UTC) + min(backoff, timedelta(hours=24))
         schedule.next_eligible_at = until
 
 
@@ -1107,8 +1125,15 @@ async def _create_due_requests(
                     )
                 )
                 await session.commit()
-            except (DomainError, HTTPException):
+            except (DomainError, HTTPException) as exc:
                 await session.rollback()
+                # Without this a source that can never open a request is skipped silently every tick.
+                logger.warning(
+                    "Scheduled collection request not created; source_id=%s workspace_id=%s error_code=%s",
+                    source_id,
+                    workspace_id,
+                    detail.get("code") if isinstance(detail := error_detail(exc), dict) else detail,
+                )
     return created
 
 
@@ -1155,6 +1180,7 @@ async def _enqueue_queued(
         await session.commit()
     enqueued = 0
     redis = ctx["redis"]
+    failed: list[UUID] = []
     for request_id in ids:
         try:
             job = await redis.enqueue_job(  # type: ignore[attr-defined]
@@ -1162,9 +1188,24 @@ async def _enqueue_queued(
                 str(request_id),
                 _job_id=f"collection:{claim}:{request_id}",
             )
-        except Exception:  # noqa: BLE001, S112  # best-effort enqueue: a failed id stays claimed and is retried after the claim expires
+        except Exception:  # noqa: BLE001  # best-effort enqueue: a failed id is retried after the claim expires
+            failed.append(request_id)
             continue
         enqueued += job is not None
+    if failed:
+        # The claim pre-set enqueue_next_at to now + REENQUEUE_AFTER (lost-job recovery). An enqueue that raised
+        # never reached Redis, so make it due now: only the 60 s claim expiry then delays the retry.
+        async with factory() as session:
+            await session.execute(
+                update(ConnectorCollectionRequest)
+                .where(
+                    ConnectorCollectionRequest.id.in_(failed),
+                    ConnectorCollectionRequest.enqueue_claim_token == claim,
+                    ConnectorCollectionRequest.status == "queued",
+                )
+                .values(enqueue_next_at=now)
+            )
+            await session.commit()
     return enqueued
 
 

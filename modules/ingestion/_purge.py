@@ -496,7 +496,7 @@ async def purge_expired_datasource_data(
     now = now or datetime.now(UTC)
     cutoffs = await sources.list_retention_cutoffs(session, now=now)
     if not cutoffs:
-        return 0
+        return await _purge_terminal_runs(session, cutoffs, now=now, limit=limit)
 
     deleted = await observations_public.purge_expired_noncurrent_observations(
         session, cutoffs, limit=limit
@@ -538,4 +538,51 @@ async def purge_expired_datasource_data(
             field="document_version_id",
         ),
     )
+    deleted += await _purge_terminal_runs(session, cutoffs, now=now, limit=limit)
     return deleted
+
+
+RUN_RETENTION = timedelta(days=30)  # default window for sources without a retention cutoff
+
+
+async def _purge_terminal_runs(
+    session: AsyncSession,
+    cutoffs: list[tuple[UUID, datetime]],
+    *,
+    now: datetime,
+    limit: int,
+) -> int:
+    """Delete one bounded slice of old terminal batches (cascading their run and stages); the caller commits.
+
+    Empty polls and fully purged batches otherwise leave batch/run/stage rows forever. A batch is eligible when
+    its run is ``succeeded``/``failed``, older than the source retention cutoff (``RUN_RETENTION`` for sources
+    without one), and no ``SourceObservation`` still hangs off it: ``source_observations.batch_id`` cascades,
+    so deleting a referenced batch would destroy observations backing current knowledge. Receipts keep plain
+    (unconstrained) batch/run ids and age out on their own schedule. ``SKIP LOCKED`` avoids blocking ingestion.
+    Returns the number of batches deleted.
+    """
+    aged = or_(
+        *(
+            and_(IngestionRun.source_id == sid, IngestionRun.created_at < cutoff)
+            for sid, cutoff in cutoffs
+        ),
+        and_(
+            IngestionRun.source_id.not_in([sid for sid, _ in cutoffs]) if cutoffs else True,
+            IngestionRun.created_at < now - RUN_RETENTION,
+        ),
+    )
+    doomed = (
+        select(IngestionRun.batch_id)
+        .where(
+            IngestionRun.status.in_(("succeeded", "failed")),
+            aged,
+            ~select(SourceObservation.id)
+            .where(SourceObservation.batch_id == IngestionRun.batch_id)
+            .exists(),
+        )
+        .order_by(IngestionRun.created_at)
+        .limit(limit)
+        .with_for_update(skip_locked=True, of=IngestionRun)
+    )
+    result = await session.execute(delete(IngestionBatch).where(IngestionBatch.id.in_(doomed)))
+    return int(getattr(result, "rowcount", 0) or 0)
