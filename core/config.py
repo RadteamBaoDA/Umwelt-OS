@@ -171,6 +171,10 @@ class Settings(BaseSettings):
     collector_scheduler_enabled: bool = Field(
         default=True, validation_alias="COLLECTOR_SCHEDULER_ENABLED"
     )
+    # Most-overdue scheduled requests queued per workspace per 15 s tick (running concurrency stays 1/workspace).
+    collector_requests_per_workspace_tick: int = Field(
+        default=4, ge=1, le=20, validation_alias="COLLECTOR_REQUESTS_PER_WORKSPACE_TICK"
+    )
     browser_service_url: AnyHttpUrl = AnyHttpUrl("http://browser:8001")
     browser_shared_token: SecretStr = SecretStr("")
     n8n_service_url: AnyHttpUrl = Field(

@@ -51,6 +51,11 @@ def credential_fingerprint(secret: str, *, deployment_key: str) -> str:
     return hmac.new(deployment_key.encode(), secret.encode(), hashlib.sha256).hexdigest()
 
 
+# Share of each policy limit the live proxy may use in its own windows. The collector keeps the full limit,
+# so for an upstream limit that is global per key the combined worst case is (100 + share)% of it.
+LIVE_QUOTA_SHARE_PERCENT = 25
+
+
 def window_bounds(window: str, now: datetime) -> tuple[datetime, datetime]:
     """UTC-floored ``[start, end)`` for a policy window."""
     now = now.astimezone(UTC)
@@ -76,8 +81,15 @@ def subject_hash(
     *,
     credential: str | None,
     egress: str | None,
+    live: bool = False,
 ) -> str:
-    """Shared-budget subject. Never includes a workspace; unknown credential/egress is instance-global."""
+    """Shared-budget subject. Never includes a workspace; unknown credential/egress is instance-global.
+
+    ``live`` gives the stateless live-map proxy its own subject so its traffic never drains the
+    persisted collector's windows (and vice versa).
+    """
+    if live:
+        return hashlib.sha256(f"live:{provider_id}:{policy.budget_kind}".encode()).hexdigest()
     if policy.budget_kind == "credential":
         subject = f"credential:{provider_id}:{credential or INSTANCE_GLOBAL_SUBJECT}"
     elif policy.budget_kind == "ip":
@@ -92,6 +104,7 @@ def _plan(
     now: datetime,
     credential: str | None,
     egress: str | None,
+    live: bool = False,
 ) -> list[tuple[QuotaWindowPolicy, str, datetime, datetime]]:
     """Resolve every quota window for ``provider_id`` into ``(policy, subject_hash, start, end)`` rows.
 
@@ -107,7 +120,7 @@ def _plan(
         rows.append(
             (
                 policy,
-                subject_hash(policy, provider_id, credential=credential, egress=egress),
+                subject_hash(policy, provider_id, credential=credential, egress=egress, live=live),
                 start,
                 end,
             )
@@ -256,12 +269,20 @@ async def debit_transient_send(
     """Atomically debit live provider windows without creating per-request ledger records.
 
     The caller commits before sending; failed or abandoned sends are not refunded. All
-    live requests share an instance-wide subject, including across key rotation.
+    live requests share an instance-wide ``live:`` subject (separate from the collector's), including
+    across key rotation, and are capped at ``LIVE_QUOTA_SHARE_PERCENT`` of each policy limit.
     """
     now = now or datetime.now(UTC)
     async with session.begin_nested():
-        for policy, subject, start, end in _plan(provider_id, now, None, None):
-            limit, cost = policy.limit_units, policy.cost_per_send
+        for policy, subject, start, end in _plan(provider_id, now, None, None, live=True):
+            cost = policy.cost_per_send
+            # Live traffic gets a fraction of the policy limit in its own windows; a policy whose
+            # single send exceeds that fraction still defers rather than overspending.
+            limit = (
+                None
+                if policy.limit_units is None
+                else max(cost, policy.limit_units * LIVE_QUOTA_SHARE_PERCENT // 100)
+            )
             if limit is not None and cost > limit:
                 raise QuotaDeferred(policy.policy_key, end)
             admitted = (

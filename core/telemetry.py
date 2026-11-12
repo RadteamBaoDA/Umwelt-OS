@@ -107,7 +107,7 @@ _TEXT_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s:@]+(?::[^/\s@]*)?@"), r"\1" + _MASK + "@"),
     (
         re.compile(
-            r"(?i)([?&](?:[a-z_]*(?:token|key|secret|password|signature|code|sig)[a-z_]*)=)[^&\s#]+"
+            r"(?i)([?&](?:[a-z_]*(?:token|key|secret|password|signature|code|sig|appid|app_id)[a-z_]*)=)[^&\s#]+"
         ),
         r"\1" + _MASK,
     ),
@@ -203,6 +203,10 @@ def _stable_record(record: logging.LogRecord, redacted: str) -> tuple[str, Any]:
 
 def install_log_redaction() -> None:
     """Scrub messages, extra fields, exception text and trace IDs before handlers see records."""
+    # httpx logs full request URLs at INFO; FRED/OpenWeatherMap carry keys in the query string,
+    # so keep those loggers at WARNING regardless of the redaction hook below.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     if getattr(logging.Logger.makeRecord, "_bbd_redacting", False):
         return
 

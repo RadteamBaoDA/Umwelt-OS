@@ -4,7 +4,7 @@ The gate raises ``ConflictError(TERMS_INELIGIBLE)`` (a ``DomainError``), not an 
 must map it exactly as it mapped the HTTP form. Both exception families are exercised.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Self
 from unittest.mock import AsyncMock, MagicMock
@@ -180,7 +180,9 @@ async def test_scheduler_rolls_back_and_skips_terms_ineligible_source(
 
         async def execute(self, stmt: object, params: object = None) -> object:
             """Return the picked ``(source_id, workspace_id)`` row for the selection query."""
-            return SimpleNamespace(all=lambda: [(source_id, workspace_id)])
+            return SimpleNamespace(
+                all=lambda: [(source_id, workspace_id, datetime.now(UTC) - timedelta(hours=2), 15)]
+            )
 
         async def commit(self) -> None:
             """Record the commit."""
@@ -203,6 +205,8 @@ async def test_scheduler_rolls_back_and_skips_terms_ineligible_source(
             False,  # type: ignore[arg-type]
         )
     assert created == 0
+    # A schedule two hours overdue on a 15 minute interval is surfaced as lag.
+    assert "Collection schedule lagging" in caplog.text
     # The swallowed creation error is logged with the source id (never silently dropped).
     assert "Scheduled collection request not created" in caplog.text
     assert str(source_id) in caplog.text

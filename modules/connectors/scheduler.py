@@ -120,6 +120,19 @@ def _request_scope(request: ConnectorCollectionRequest) -> InternalJobScope:
     )
 
 
+# Must match ck_connector_schedules_interval; any computed interval is rounded up into this set.
+ALLOWED_INTERVAL_MINUTES = (15, 30, 60, 360, 1440)
+
+
+def round_up_interval(minutes: int) -> int:
+    """Return the smallest allowed schedule interval >= ``minutes`` (the largest when it exceeds all).
+
+    Rounding up never schedules faster than a provider floor, and keeps the value inside the
+    ``connector_schedules`` check constraint so a floor change cannot turn into an IntegrityError.
+    """
+    return next((v for v in ALLOWED_INTERVAL_MINUTES if v >= minutes), ALLOWED_INTERVAL_MINUTES[-1])
+
+
 async def upsert_schedule(
     session: AsyncSession,
     *,
@@ -132,6 +145,7 @@ async def upsert_schedule(
 
     Enabling an overdue schedule keeps next_due_at, so it yields a single catch-up request.
     """
+    interval_minutes = round_up_interval(interval_minutes)
     now = datetime.now(UTC)
     row = await session.get(ConnectorSchedule, source_id, with_for_update=True)
     if row is None:
@@ -1043,9 +1057,17 @@ async def _recover_expired_slots(factory: async_sessionmaker[AsyncSession], now:
 
 
 async def _create_due_requests(
-    factory: async_sessionmaker[AsyncSession], now: datetime, multi: bool
+    factory: async_sessionmaker[AsyncSession],
+    now: datetime,
+    multi: bool,
+    per_workspace: int = 1,
 ) -> int:
-    """Create at most one scheduled request per workspace for up to 50 workspaces.
+    """Create up to ``per_workspace`` scheduled requests per workspace for up to 50 workspaces.
+
+    Extra requests only deepen the durable queue: the partial unique index on
+    connector_admission_slots.workspace_id keeps effective concurrency at one running
+    collection per workspace, and the global slots stay the fixed seeded pair (1, 2).
+    A schedule overdue by more than one interval is logged so lag is visible.
 
     Fair turns: workspaces and sources are ordered by persisted last_considered_at, and
     consideration is committed before scope work so a busy workspace cannot starve others.
@@ -1057,8 +1079,8 @@ async def _create_due_requests(
             (
                 await session.execute(
                     text("""
-            SELECT t.source_id, t.workspace_id FROM (
-              SELECT s.source_id, s.workspace_id, row_number() OVER (
+            SELECT t.source_id, t.workspace_id, t.next_due_at, t.interval_minutes FROM (
+              SELECT s.source_id, s.workspace_id, s.next_due_at, s.interval_minutes, row_number() OVER (
                 PARTITION BY s.workspace_id
                 ORDER BY coalesce(s.last_considered_at, '-infinity'::timestamptz), s.next_due_at, s.source_id) AS rn
               FROM connector_schedules s JOIN connector_provisioning p ON p.source_id = s.source_id
@@ -1066,14 +1088,21 @@ async def _create_due_requests(
                 AND (s.next_eligible_at IS NULL OR s.next_eligible_at <= :now)
                 AND p.execution_backend = 'native' AND p.state = 'active' AND p.desired_enabled
             ) t LEFT JOIN connector_workspace_dispatch d ON d.workspace_id = t.workspace_id
-            WHERE t.rn = 1 ORDER BY d.last_considered_at NULLS FIRST, t.workspace_id LIMIT :limit
+            WHERE t.rn <= :per_ws ORDER BY d.last_considered_at NULLS FIRST, t.workspace_id, t.rn LIMIT :limit
         """),
-                    {"now": now, "limit": TICK_WORKSPACES},
+                    {"now": now, "limit": TICK_WORKSPACES * per_workspace, "per_ws": per_workspace},
                 )
             ).all()
         )
         if not picked:
             return 0
+        for lag_row in picked:
+            if now - lag_row[2] > timedelta(minutes=lag_row[3]):
+                logger.warning(
+                    "Collection schedule lagging more than one interval; source_id=%s overdue_seconds=%d",
+                    lag_row[0],
+                    int((now - lag_row[2]).total_seconds()),
+                )
         await session.execute(
             update(ConnectorSchedule)
             .where(ConnectorSchedule.source_id.in_([row[0] for row in picked]))
@@ -1088,7 +1117,9 @@ async def _create_due_requests(
         )
         await session.commit()
     created = 0
-    for source_id, workspace_id in cast("list[tuple[UUID, UUID]]", picked):
+    for source_id, workspace_id, _due, _interval in cast(
+        "list[tuple[UUID, UUID, datetime, int]]", picked
+    ):
         async with factory() as session:
             owner = await session.scalar(
                 select(WorkspaceMembership).where(
@@ -1220,7 +1251,12 @@ async def dispatch_due_collections(ctx: dict[str, object]) -> int:
     factory = worker_session_factory(ctx)
     now = datetime.now(UTC)
     stale = await _recover_expired_slots(factory, now)
-    await _create_due_requests(factory, now, settings.multi_workspace_enabled)
+    await _create_due_requests(
+        factory,
+        now,
+        settings.multi_workspace_enabled,
+        settings.collector_requests_per_workspace_tick,
+    )
     enqueued = await _enqueue_queued(ctx, factory, datetime.now(UTC))
     await _emit_metrics(factory, datetime.now(UTC), stale)
     return enqueued

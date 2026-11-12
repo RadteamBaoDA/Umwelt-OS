@@ -333,7 +333,7 @@ async def test_generic_accept_uses_request_ref_and_a_request_scoped_batch_key(mo
         return [r for r in records if r.provider_id not in seen]
 
     monkeypatch.setattr(collection.ingestion, "drop_seen_records", drop_seen)
-    run = SimpleNamespace(attempt=attempt(), factory=factory([]))
+    run = SimpleNamespace(attempt=attempt(), factory=factory([]), extras={})
     record = {
         "provider_id": "1",
         "content": "c",

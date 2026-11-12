@@ -399,3 +399,17 @@ class TestRedactionStableRecords:
         rendered = logging.Formatter("%(message)s").format(record)
         assert "SECRETVALUE123456" not in rendered
         assert "SECRETVALUE123456" not in repr(record.args)
+
+
+@pytest.mark.parametrize("param", ["api_key", "appid", "apikey", "key", "app_id"])
+def test_redact_text_masks_provider_query_keys(param: str) -> None:
+    """FRED/OpenWeatherMap style query-string keys never survive redaction."""
+    out = telemetry.redact_text(f"GET https://api.example.com/x?a=1&{param}=SECRET123 HTTP/1.1")
+    assert "SECRET123" not in out and f"{param}=[redacted]" in out
+
+
+def test_install_log_redaction_keeps_httpx_above_info() -> None:
+    """The httpx logger must not emit INFO request URLs."""
+    logging.getLogger("httpx").setLevel(logging.INFO)
+    telemetry.install_log_redaction()
+    assert logging.getLogger("httpx").level == logging.WARNING

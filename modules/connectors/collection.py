@@ -411,7 +411,9 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
     main = asyncio.current_task()
     if main is None:
         raise RuntimeError("invariant violated: main must not be None")
-    beat = asyncio.create_task(_heartbeat(factory, attempt, main, lost))
+    beat = asyncio.create_task(
+        _heartbeat(factory, attempt, main, lost, accepted=lambda: bool(run.extras.get("accepted")))
+    )
     settle: dict[str, Any] | None = None
     try:
         async with asyncio.timeout(rest.RUN_DEADLINE_SECONDS):

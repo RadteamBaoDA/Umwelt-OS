@@ -1,5 +1,6 @@
 """W2-S per-workspace module gate on connector scheduler entrypoints, against the real registry (no DB)."""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -32,14 +33,18 @@ def _registry(disabled: bool) -> Any:
 async def test_dispatch_due_collections_checks_connectors_module(disabled: bool) -> None:
     session = MagicMock(commit=AsyncMock(), rollback=AsyncMock())
     session.execute = AsyncMock(
-        return_value=MagicMock(all=MagicMock(return_value=[(SOURCE_ID, WORKSPACE_ID)]))
+        return_value=MagicMock(
+            all=MagicMock(return_value=[(SOURCE_ID, WORKSPACE_ID, datetime.now(UTC), 15)])
+        )
     )
     session.scalar = AsyncMock(return_value=SimpleNamespace(user_id=7, revision=3))
     session.get = AsyncMock(return_value=SimpleNamespace(source_generation=1))
     opened = AsyncMock(return_value=SimpleNamespace(status="queued"))
     ctx = {
         "settings": SimpleNamespace(
-            multi_workspace_enabled=False, collector_scheduler_enabled=True
+            multi_workspace_enabled=False,
+            collector_scheduler_enabled=True,
+            collector_requests_per_workspace_tick=4,
         ),
         "session_factory": _factory(session),
     }

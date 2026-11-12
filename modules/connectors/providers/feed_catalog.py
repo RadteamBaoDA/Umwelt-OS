@@ -255,6 +255,9 @@ def _standard_reset_deadline(standard_reset: str, now: datetime) -> datetime:
         raise ValueError("provider_rate_deadline_invalid") from None
 
 
+_MAX_RETRY_WAIT = timedelta(hours=24)
+
+
 def _retry_deadline(headers: httpx.Headers, now: datetime) -> datetime:
     """Return the latest representable supplied deadline; map malformed or overflowing evidence to a fixed error."""
     structured_limit = headers.get("ratelimit")
@@ -277,7 +280,8 @@ def _retry_deadline(headers: httpx.Headers, now: datetime) -> datetime:
         deadlines.append(_standard_reset_deadline(standard_reset, now))
     if deadlines:
         # Multiple independent headers can impose different waits; never resume at the shorter one.
-        return max(deadlines)
+        # Cap a provider-supplied wait at 24 h so a hostile or buggy header cannot park a source for years.
+        return min(max(deadlines), now + _MAX_RETRY_WAIT)
     # ponytail: absent retry/reset evidence uses a one-minute finite fallback; malformed supplied deadlines fail closed.
     return now + timedelta(minutes=1)
 

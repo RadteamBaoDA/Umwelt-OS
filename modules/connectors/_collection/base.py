@@ -49,6 +49,8 @@ from modules.ingestion.public import (
 from modules.sources import public as sources
 from modules.sources.public import ConnectorSource, SourceFence
 
+# A header-time recheck is skipped when the same send passed authorisation this recently.
+_RECHECK_SKIP_SECONDS = 2.0
 RENEW_EVERY_SECONDS = 20
 PAYLOAD_RATE_LIMIT_BACKOFF = timedelta(
     minutes=15
@@ -204,6 +206,7 @@ class SendGate:
         self.sends = 0
         self.captured_operation: UUID | None = None
         self._armed = False
+        self._last_authorized: float | None = None
 
     async def __call__(self, credential_operation_id: UUID | None = None) -> None:
         """Run before one physical send (or at its header-time recheck)."""
@@ -213,7 +216,12 @@ class SendGate:
             self.captured_operation = credential_operation_id
         if self._armed:
             self._armed = False
-            await self._authorize()
+            # The header-time recheck follows the pre-send check of the same send; skip it when that
+            # check passed moments ago. Long sends (slow headers) still revalidate, and the heartbeat
+            # remains the sole owner of slot renewal across them.
+            last = self._last_authorized
+            if last is None or time.monotonic() - last >= _RECHECK_SKIP_SECONDS:
+                await self._authorize()
             return
         await self._authorize()
         await self._debit()
@@ -270,6 +278,8 @@ class SendGate:
                 or source.provider in REVISIONED_REST_PROVIDERS
             ):
                 await self._check_credential_revision(session, source)
+        # Stamped only after every check passed; a failed check raises before reaching here.
+        self._last_authorized = time.monotonic()
 
     async def _check_credential_revision(
         self, session: AsyncSession, source: ConnectorSource
@@ -499,8 +509,13 @@ async def _heartbeat(
     main: "asyncio.Task[Any]",
     lost: asyncio.Event,
     interval: float = RENEW_EVERY_SECONDS,
+    accepted: Callable[[], bool] = lambda: False,
 ) -> None:
-    """Renew the slot independently of response streaming; a failed renewal stops the attempt."""
+    """Renew the slot independently of response streaming; a failed renewal stops the attempt.
+
+    Once ``accepted()`` is true the accept transaction has committed and settled the request and slot, so a
+    failed renewal is expected and must not cancel the attempt (it would skip the realtime snapshot publish).
+    """
     while True:
         await asyncio.sleep(interval)
         async with factory() as session:
@@ -511,6 +526,8 @@ async def _heartbeat(
                 multi_workspace_enabled=attempt.multi,
             )
         if not ok:
+            if accepted():
+                return
             lost.set()
             main.cancel()
             return
@@ -665,6 +682,8 @@ async def _accept_generic(
             request_ref=a.ref,
             state_update=update,
         )
+    # Commit is done; flag it before publishing so the heartbeat cannot cancel the snapshot publish.
+    run.extras["accepted"] = True
     await _publish_realtime_snapshot(run, parsed, datetime.now(UTC))
 
 

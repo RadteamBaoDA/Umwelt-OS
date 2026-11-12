@@ -117,6 +117,10 @@ def _pinned_request(
     return pinned, request_headers, extensions
 
 
+MAX_REDIRECTS = 3
+_CREDENTIAL_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization", "x-api-key"})
+
+
 async def fetch_bounded(
     url: str,
     *,
@@ -134,20 +138,9 @@ async def fetch_bounded(
     handed to the transport; it is where the caller revalidates fences and debits quota, and
     raising from it aborts the send. ``json_body`` is a fixed, already-serialised search query for read-only
     POST search APIs (VietnamWorks); it never carries credentials or owner content. 429 raises ``ProviderRateLimited`` with the full
-    Retry-After; redirects and other 3xx raise ``UnsafeDestination``; 304 returns no body.
+    Retry-After; up to 3 GET redirects are followed (each hop re-resolved, re-checked and pinned, https->http refused,
+    credentials dropped cross-origin, one overall deadline and byte cap); other 3xx raise ``UnsafeDestination``; 304 returns no body.
     """
-    parts = urlsplit(url)
-    if (
-        parts.scheme not in {"http", "https"}
-        or not parts.hostname
-        or parts.username
-        or parts.password
-    ):
-        raise UnsafeDestination("url_not_allowed")
-    port = parts.port or (443 if parts.scheme == "https" else 80)
-    addresses = await resolve(parts.hostname, port)
-    if not addresses or any(not is_public_address(ip_address(address)) for address in addresses):
-        raise UnsafeDestination("non_public_destination")
     # Several public APIs (NWS, Wikimedia, CISA) reject UA-less clients; caller headers (e.g. SEC's contact
     # User-Agent) always win, compared case-insensitively.
     merged = {"Accept-Encoding": "gzip, deflate", **(headers or {})}
@@ -155,44 +148,84 @@ async def fetch_bounded(
         merged["User-Agent"] = DEFAULT_USER_AGENT
     if json_body is not None:
         merged.setdefault("Content-Type", "application/json")
-    pinned, request_headers, extensions = _pinned_request(url, addresses[0], merged)
-    async with httpx.AsyncClient(
-        transport=transport,
-        timeout=httpx.Timeout(timeout),
-        trust_env=False,
-        follow_redirects=False,
-        verify=True,
-    ) as client:
-        await before_send()
-        async with (
-            asyncio.timeout(timeout),
-            client.stream(
+    current = url
+    first_origin = _origin(url)
+    sent = False
+    # One deadline covers resolution-independent send time across every hop.
+    async with (
+        asyncio.timeout(timeout),
+        httpx.AsyncClient(
+            transport=transport,
+            timeout=httpx.Timeout(timeout),
+            trust_env=False,
+            follow_redirects=False,
+            verify=True,
+        ) as client,
+    ):
+        for hop in range(MAX_REDIRECTS + 1):
+            parts = urlsplit(current)
+            if (
+                parts.scheme not in {"http", "https"}
+                or not parts.hostname
+                or parts.username
+                or parts.password
+            ):
+                raise UnsafeDestination("url_not_allowed")
+            port = parts.port or (443 if parts.scheme == "https" else 80)
+            # Every hop is re-resolved and re-checked, then pinned to a validated address.
+            addresses = await resolve(parts.hostname, port)
+            if not addresses or any(
+                not is_public_address(ip_address(address)) for address in addresses
+            ):
+                raise UnsafeDestination("non_public_destination")
+            hop_headers = merged
+            if _origin(current) != first_origin:
+                # Never forward credentials to a different origin.
+                hop_headers = {
+                    k: v for k, v in merged.items() if k.lower() not in _CREDENTIAL_HEADERS
+                }
+            pinned, request_headers, extensions = _pinned_request(
+                current, addresses[0], hop_headers
+            )
+            if not sent:
+                # The caller's fence/quota check covers the logical fetch, so it runs once, not per hop.
+                await before_send()
+                sent = True
+            async with client.stream(
                 "GET" if json_body is None else "POST",
                 pinned,
                 headers=request_headers,
                 extensions=extensions,
                 content=json_body,
-            ) as response,
-        ):
-            status = response.status_code
-            if status == 429:
-                raise ProviderRateLimited(_retry_deadline(response.headers, datetime.now(UTC)))
-            if status == 304:
-                return Fetched(None)
-            if 300 <= status < 400:
-                raise UnsafeDestination("redirect_blocked")
-            if status >= 400:
-                raise ProviderHttpError(status)
-            advertised = response.headers.get("content-length")
-            if advertised is not None and advertised.isdigit() and int(advertised) > max_bytes:
-                raise CollectionIncomplete
-            body = await _read_capped(response, max_bytes)
-            return Fetched(
-                body,
-                response.headers.get("etag"),
-                response.headers.get("last-modified"),
-                response.headers.get("content-type"),
-            )
+            ) as response:
+                status = response.status_code
+                if status == 429:
+                    raise ProviderRateLimited(_retry_deadline(response.headers, datetime.now(UTC)))
+                if status == 304:
+                    return Fetched(None)
+                if 300 <= status < 400:
+                    location = response.headers.get("location")
+                    # POST bodies are never replayed; only GET redirects are followed.
+                    if json_body is not None or not location or hop >= MAX_REDIRECTS:
+                        raise UnsafeDestination("redirect_blocked")
+                    target = urljoin(current, location)
+                    if parts.scheme == "https" and urlsplit(target).scheme != "https":
+                        raise UnsafeDestination("redirect_blocked")
+                    current = target
+                    continue
+                if status >= 400:
+                    raise ProviderHttpError(status)
+                advertised = response.headers.get("content-length")
+                if advertised is not None and advertised.isdigit() and int(advertised) > max_bytes:
+                    raise CollectionIncomplete
+                body = await _read_capped(response, max_bytes)
+                return Fetched(
+                    body,
+                    response.headers.get("etag"),
+                    response.headers.get("last-modified"),
+                    response.headers.get("content-type"),
+                )
+    raise UnsafeDestination("redirect_blocked")  # pragma: no cover - loop always returns or raises
 
 
 _WBITS = {"gzip": 16 + zlib.MAX_WBITS, "x-gzip": 16 + zlib.MAX_WBITS, "deflate": zlib.MAX_WBITS}
