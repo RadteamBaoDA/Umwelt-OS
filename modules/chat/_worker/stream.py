@@ -16,6 +16,7 @@ from modules.chat._worker.base import (
     _UI_MILESTONE_KEYS,
     CANCEL_CHECK_INTERVAL,
     MAX_SKILL_ROUNDS,
+    MAX_TOOL_ROUNDS_PER_TURN,
     REASONING_MAX_CHARS,
     STREAM_FLUSH_CHARS,
     STREAM_FLUSH_SECONDS,
@@ -400,7 +401,8 @@ async def _finish_round(env: _ToolEnv, st: _StreamState, rs: _RoundState) -> boo
     """Flush the round, classify and answer its tool calls; False when the answer is complete.
 
     On True the next round's stream has been opened with the tool results appended. Raises ``_RunStopped``
-    when a fence stopped the run.
+    when a fence stopped the run. Every continuing round counts toward ``MAX_TOOL_ROUNDS_PER_TURN``, an absolute
+    backstop so a handler category outside the widget/data caps can never loop a turn forever.
     """
     c, ts = env.c, env.ts
     if not await _flush_pending(c, st):
@@ -409,7 +411,10 @@ async def _finish_round(env: _ToolEnv, st: _StreamState, rs: _RoundState) -> boo
     rc = await _classify_round(env, st, rs, rs.acc.calls())
     if not rc.handled:
         return False  # a plain text round (or nothing we may act on): the answer is complete
-    if not _bounded_continue(ts, rc, c.response_id):
+    ts.tool_rounds += 1
+    if ts.tool_rounds > MAX_TOOL_ROUNDS_PER_TURN:
+        logger.warning("Absolute tool-round ceiling reached for run %s", c.response_id)
+    if ts.tool_rounds > MAX_TOOL_ROUNDS_PER_TURN or not _bounded_continue(ts, rc, c.response_id):
         if rc.round_parts or rc.invalid_of or ts.synth_done:
             return False  # widget cap, or the synthesis round itself asked for tools again
         # Data-tool budget spent: close the turn with one no-tools round instead of dropping the calls

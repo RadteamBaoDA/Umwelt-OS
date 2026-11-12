@@ -1,5 +1,6 @@
 """Model-driven Generative UI in the chat worker: streamed tool calls, fencing, fallback and skill loop."""
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
@@ -956,6 +957,24 @@ async def test_user_input_is_limited_to_two_per_turn(monkeypatch: pytest.MonkeyP
     await gen.run()
     assert create.await_count == worker.MAX_USER_INPUT_REQUESTS_PER_TURN == 2
     assert len(gen.requests) == 3 and gen.events("message.done")
+
+
+async def test_unbounded_handler_category_stops_at_absolute_round_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With the per-category cap removed, only MAX_TOOL_ROUNDS_PER_TURN may end a model that always asks."""
+    patch_worker(monkeypatch, "MAX_USER_INPUT_REQUESTS_PER_TURN", 10**6)
+    gen = _UIGen(monkeypatch, [_ask({"kind": "text", "prompt": "Again?"})])
+    patch_worker(monkeypatch, "create_input_request", AsyncMock(return_value={"request_id": "rid"}))
+    patch_worker(
+        monkeypatch, "await_user_input", AsyncMock(return_value=InputOutcome("answered", "{}"))
+    )
+    # wait_for makes a regression fail fast instead of growing the payload until memory runs out.
+    await asyncio.wait_for(gen.run(), timeout=10)
+    gen.failed.assert_not_awaited()
+    ceiling = worker.MAX_TOOL_ROUNDS_PER_TURN
+    # Initial round + `ceiling` continuing rounds + one tool_choice="none" synthesis round.
+    assert len(gen.requests) == ceiling + 2 and gen.events("message.done")
 
 
 # ------------------------------------------- external router classifies before the model request

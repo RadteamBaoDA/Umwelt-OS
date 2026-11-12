@@ -111,6 +111,11 @@ MAX_SKILL_ROUNDS = 2
 MAX_SKILL_CALLS_PER_ROUND = 2
 
 
+# Absolute ceiling on continuing tool rounds in one turn, independent of the per-category caps. Sum of the
+# defaults is ~8 (3 widget rounds + 2 data rounds + 2 user-input requests + 1 synthesis), so normal turns never hit it.
+MAX_TOOL_ROUNDS_PER_TURN = 12
+
+
 MAX_TRIP_IMAGE_CALLS_PER_ROUND = 1  # get_trip_stop_images fans out to 8 lookups; one call per round
 
 
