@@ -2,6 +2,48 @@
 export const LIVE_FEED_DB_PREFIX = 'umwelt-live-feed:';
 
 /**
+ * Producers (dashboard workers) register their stop function here instead of core importing a feature module.
+ * Core owns the registry so the dependency points from feature to core only.
+ */
+const teardowns = new Set<() => void>();
+/** Latched by `teardownLiveFeed` for the rest of the page's life; the logout or erasure that sets it ends the session. */
+let teardownStarted = false;
+
+/**
+ * Register a callback that stops a live-feed producer (for example, terminating its worker) before storage is deleted.
+ * Registration is a set insert, so registering the same function twice runs it once per teardown.
+ * @param teardown Synchronous stop function; `teardownLiveFeed` runs it best-effort.
+ */
+export function registerLiveFeedTeardown(teardown: () => void): void {
+  teardowns.add(teardown);
+}
+
+/**
+ * Begin account-scoped teardown: latch the flag so page-side writes stop, then run every registered producer stop.
+ * The latch is set first so a query resolving during logout is refused rather than recreating the database. Errors
+ * from one producer do not stop the others or the caller's delete.
+ */
+export function teardownLiveFeed(): void {
+  teardownStarted = true;
+  for (const teardown of teardowns) {
+    try {
+      teardown();
+    } catch {
+      /* Best effort: the database delete still runs. */
+    }
+  }
+}
+
+/**
+ * Whether `teardownLiveFeed` has started on this page. Page-side writes check it so an in-flight proxied query cannot
+ * recreate a database that logout or erasure is deleting.
+ * @returns True after the first teardown on this page.
+ */
+export function isLiveFeedTeardownStarted(): boolean {
+  return teardownStarted;
+}
+
+/**
  * Delete every `umwelt-live-feed:*` database. Called on logout and account erasure so third-party items fetched
  * for one account do not outlive its session. Callers await it before navigating, bounded by `CLEAR_TIMEOUT_MS`.
  * Best-effort: browsers without `indexedDB.databases()` skip it. A delete blocked by an open connection resolves

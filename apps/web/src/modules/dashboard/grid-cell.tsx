@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import React, { useMemo, useState } from 'react';
 import type { DashboardPlacement, GadgetInstance } from './api';
-import { listSources, sourceKeys } from '@/modules/sources';
+import { listAllSources, sourceKeys } from '@/modules/sources';
 import { computeFreshnessTick, type FreshnessTick } from './freshness-strip';
 import { GadgetFrame } from './gadget-frame';
 import type { ActiveGesture } from './grid-geometry';
@@ -94,7 +94,7 @@ function gestureOutline(isTarget: boolean, overlapCount: number): string {
 }
 
 /**
- * Freshness ticks of the active sources an instance reads. Shares the dashboard's `[...sourceKeys.list,'dashboard-stale']`
+ * Freshness ticks of the active sources an instance reads. Shares the dashboard's `sourceKeys.listAll`
  * cache entry, so it adds no request beyond the one `useDashboardData` already makes; disabled for instances without sources.
  *
  * @param instance Gadget instance whose `definition.source_ids` are looked up.
@@ -102,7 +102,7 @@ function gestureOutline(isTarget: boolean, overlapCount: number): string {
  */
 function useSourceHealth(instance: GadgetInstance): FreshnessTick[] {
   const ids = instance.definition.source_ids ?? [];
-  const query = useQuery({ queryKey: [...sourceKeys.list, 'dashboard-stale'], queryFn: () => listSources(), enabled: ids.length > 0 });
+  const query = useQuery({ queryKey: sourceKeys.listAll, queryFn: listAllSources, enabled: ids.length > 0 });
   const items = query.data?.items;
   const idKey = ids.join(',');
   // Freshness is a wall-clock judgement, so it is recomputed whenever the source rows refresh (dataUpdatedAt), not on a timer.

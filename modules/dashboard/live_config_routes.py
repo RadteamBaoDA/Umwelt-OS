@@ -28,6 +28,7 @@ from modules.dashboard.live_credentials import (
     read_live_credentials,
     save_live_credentials,
 )
+from modules.dashboard.live_schemas import LiveConfigResponse
 
 router = APIRouter(prefix="/api/v1/live-map", tags=["live-map"])
 operator_router = APIRouter(prefix="/api/v1/operator/live-map", tags=["live-map"])
@@ -38,7 +39,7 @@ OwnerRead = Annotated[
 OwnerWrite = Annotated[WorkspaceContext, Depends(require_workspace_write)]
 
 
-@router.get("/config")
+@router.get("/config", response_model=LiveConfigResponse)
 async def read_config(
     request: Request, response: Response, session: Session, scope: OwnerRead
 ) -> dict[str, Any]:
@@ -67,7 +68,7 @@ async def read_config(
     return result
 
 
-@router.put("/config")
+@router.put("/config", response_model=LiveConfigResponse)
 async def save_config(
     value: LiveCredentialUpdate,
     request: Request,

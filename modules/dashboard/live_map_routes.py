@@ -25,6 +25,7 @@ from core.workspaces.public import lock_access_fence, read_access_fence
 from core.workspaces.schemas import AdminWorkspaceReadContext, PublicationFence, WorkspaceContext
 from modules.connectors.public import ProviderRateLimited, live_map
 from modules.dashboard.live_credentials import read_live_credentials, require_live_terms
+from modules.dashboard.live_schemas import LiveMapEventsResponse
 
 router = APIRouter(prefix="/api/v1/live-map", tags=["live-map"])
 Session = Annotated[AsyncSession, Depends(get_session)]
@@ -308,7 +309,7 @@ def _value_error_response(exc: ValueError) -> HTTPException:
     )
 
 
-@router.get("/events")
+@router.get("/events", response_model=LiveMapEventsResponse)
 async def events(
     provider: Annotated[str, Query(max_length=32)],
     request: Request,

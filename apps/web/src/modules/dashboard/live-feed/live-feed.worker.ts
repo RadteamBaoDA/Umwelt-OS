@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 import { fetchSource, initialDelayMs, nextDelayMs, refreshable, type WorkerInbound, type WorkerOutbound } from './runner';
-import { BROWSER_SOURCE_BY_ID, type LiveFeedScope } from './sources';
+import { BROWSER_SOURCE_BY_ID, snapshotScope, type LiveFeedScope } from './sources';
 import { toStored, upsertEvents } from './store';
 
 /**
@@ -50,7 +50,9 @@ async function run(provider: string, runGeneration: number): Promise<void> {
     const rows = items.map((item) => toStored(provider, source.tags, item, seenAt));
     failures.set(provider, 0);
     try {
-      await upsertEvents(workspaceId, rows, now, [provider]);
+      // Only true snapshot sources may delete stored rows; windowed sources just upsert (see sources.ts `snapshot`).
+      // fetchSource only returns after the payload parsed, so an empty `rows` here is a verified empty set (not drift).
+      await upsertEvents(workspaceId, rows, now, snapshotScope(provider), true);
       post({ type: 'changed' });
     } catch {
       // The source answered; only local persistence failed. Hand the rows to the page so they still show, and

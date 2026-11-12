@@ -11032,7 +11032,7 @@ export interface components {
             /** Live Map Github Repo */
             live_map_github_repo?: string | null;
             /** Live Map Providers */
-            live_map_providers?: ("usgs" | "eonet" | "firms" | "hackernews" | "lobsters" | "cisa_kev" | "nvd" | "business" | "fed" | "github_releases" | "sec")[];
+            live_map_providers?: ("usgs" | "eonet" | "firms" | "hackernews" | "lobsters" | "cisa_kev" | "nvd" | "business" | "fed" | "github_releases" | "sec" | "bbc_world" | "aljazeera" | "vnexpress_world" | "vnexpress_news" | "gaming_news" | "gdacs" | "nws_alerts" | "devto" | "coingecko" | "fear_greed" | "launches" | "freetogame" | "gamerpower")[];
             /** Live Map Sec Cik */
             live_map_sec_cik?: string | null;
             /** Lookback Days */
@@ -12067,6 +12067,24 @@ export interface components {
             items: components["schemas"]["LayoutItem"][];
         };
         /**
+         * LiveConfigResponse
+         * @description Sanitized live-map settings; saved keys are reported only as configured flags.
+         */
+        LiveConfigResponse: {
+            /** Firms Configured */
+            firms_configured: boolean;
+            /** Is Operator */
+            is_operator: boolean;
+            /** Openweather Configured */
+            openweather_configured: boolean;
+            /** Revision */
+            revision: number;
+            /** Sec Contact Email */
+            sec_contact_email?: string | null;
+            /** Terms Catalog */
+            terms_catalog: components["schemas"]["LiveTermsCatalogEntry"][];
+        };
+        /**
          * LiveCredentialUpdate
          * @description CAS update; absent fields keep their old value while explicit null removes it.
          */
@@ -12092,6 +12110,85 @@ export interface components {
             terms_revoke?: string[] | null;
             /** Terms Use */
             terms_use?: ("personal" | "noncommercial" | "commercial") | null;
+        };
+        /**
+         * LiveMapEvent
+         * @description Bounded, display-only provider record with validated coordinates.
+         */
+        LiveMapEvent: {
+            /** Category */
+            category: string;
+            /** Id */
+            id: string;
+            /** Latitude */
+            latitude: number | null;
+            /** Longitude */
+            longitude: number | null;
+            /** Observed At */
+            observed_at: string | null;
+            /** Source */
+            source: string;
+            /** Sources */
+            sources: components["schemas"]["LiveMapSourceLink"][];
+            /** Summary */
+            summary: string | null;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * LiveMapEventsResponse
+         * @description Response of ``GET /api/v1/live-map/events``: bounded events plus fetch time and truncation flag.
+         */
+        LiveMapEventsResponse: {
+            /** Fetched At */
+            fetched_at: string;
+            /** Items */
+            items: components["schemas"]["LiveMapEvent"][];
+            /** Truncated */
+            truncated: boolean;
+        };
+        /**
+         * LiveMapSourceLink
+         * @description One attributed original source of an event.
+         */
+        LiveMapSourceLink: {
+            /** Id */
+            id: string | null;
+            /** Url */
+            url: string;
+        };
+        /**
+         * LiveTermsCatalogEntry
+         * @description One provider's terms identity merged with this workspace's acknowledgement state.
+         */
+        LiveTermsCatalogEntry: {
+            /** Accepted */
+            accepted: boolean;
+            /** Acknowledged */
+            acknowledged: boolean;
+            /** Attribution */
+            attribution: string;
+            /**
+             * Eligibility
+             * @enum {string}
+             */
+            eligibility: "open" | "personal" | "noncommercial" | "review";
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Review State */
+            review_state?: string | null;
+            /** Terms Url */
+            terms_url: string;
+            /** Version */
+            version: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * LiveTermsDecision
@@ -15493,6 +15590,8 @@ export interface components {
          * @description Serialize source lifecycle, collection, processing, and generation state.
          */
         SourceRead: {
+            /** Blocked Error Code */
+            blocked_error_code?: string | null;
             /** Collected At */
             collected_at: string | null;
             /** Collection Error Code */
@@ -15502,6 +15601,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Failure Count */
+            failure_count?: number | null;
             /** Generation */
             generation: number;
             /**
@@ -24797,9 +24898,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LiveConfigResponse"];
                 };
             };
             /** @description Validation Error */
@@ -24836,9 +24935,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LiveConfigResponse"];
                 };
             };
             /** @description Validation Error */
@@ -24875,9 +24972,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LiveMapEventsResponse"];
                 };
             };
             /** @description Validation Error */

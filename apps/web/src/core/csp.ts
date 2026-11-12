@@ -18,6 +18,13 @@ export function createCspNonce(): string {
 /**
  * Exact origins the live-feed browser worker may fetch (public, CORS-capable sources). Keep in sync with
  * `modules/dashboard/live-feed/sources.ts`; a test asserts every browser source URL is covered here.
+ *
+ * Trade-off: these origins sit in the page-wide `connect-src` because narrowing them to the worker needs a CSP response
+ * header on the worker script. Next 16 (Turbopack) serves that script as a content-hashed chunk under `/_next/static/chunks/`
+ * (`turbopack-worker-<hash>.js`, wrapped by a bootstrap), so `headers()` in `next.config.ts` cannot target it by path, and a
+ * wildcard header on every static chunk would be unverified for the bootstrap/blob path and still bypassed by a blob worker
+ * that inherits the page policy. Page code is nonce-gated (`strict-dynamic`), so the extra origins widen only what already
+ * trusted scripts could fetch. Revisit if Next exposes a stable worker URL.
  */
 export const LIVE_FEED_ORIGINS = [
   'https://earthquake.usgs.gov',

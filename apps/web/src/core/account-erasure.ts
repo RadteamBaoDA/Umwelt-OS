@@ -1,4 +1,4 @@
-import { clearLiveFeed } from '@/core/live-feed-storage';
+import { clearLiveFeed, teardownLiveFeed } from '@/core/live-feed-storage';
 import { uuid7 } from '@/core/uuid7';
 
 /** Same-origin signal carrying no identity or bearer data. */
@@ -10,7 +10,8 @@ const ERASURE_EVENT = 'umwelt:account-erased';
  * Every app key starts with `umwelt` (`umwelt:`, `umwelt.`, `umwelt-`) or the legacy `bbd:`; some embed the
  * erased account's ids (dashboard group keys), so accent and density also reset to defaults.
  * Synchronous storage is cleared before the first await; the returned promise settles after the (time-bounded)
- * IndexedDB live-feed delete and never rejects, so callers can await it before navigating.
+ * IndexedDB live-feed delete and never rejects, so callers can await it before navigating. Live-feed workers are
+ * terminated before that delete so none can recreate the database while it is being removed.
  */
 export async function clearAccountBrowserStorage(): Promise<void> {
   for (const storageName of ['localStorage', 'sessionStorage'] as const) {
@@ -24,6 +25,7 @@ export async function clearAccountBrowserStorage(): Promise<void> {
     }
   }
   // Third-party live-feed items cached in IndexedDB are account-scoped browser data too.
+  teardownLiveFeed();
   await clearLiveFeed();
 }
 

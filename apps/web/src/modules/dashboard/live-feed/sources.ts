@@ -27,9 +27,18 @@ export type BrowserSource = {
   home: string;
   tags: string[];
   intervalMs: number;
+  /**
+   * True when each fetch is the complete current set for the provider, so stored rows it no longer returns are
+   * expired and may be deleted. False for windows, top-N lists and catalog slices, whose absence means nothing.
+   */
+  snapshot: boolean;
   /** Request URL, or null when the scope is incomplete (the source is then skipped with a scope error). */
   url: (scope: LiveFeedScope, now: number) => string | null;
-  /** Turn a parsed JSON body into bounded events; malformed items are dropped, never thrown. */
+  /**
+   * Turn a parsed JSON body into bounded events. Malformed items are dropped. Snapshot sources also throw when the
+   * top-level list is missing or not an array, or when a non-empty list has no valid item, so schema drift is never
+   * mistaken for an empty current set.
+   */
   parse: (json: unknown) => LiveEvent[];
 };
 
@@ -50,7 +59,9 @@ const optStr = z.string().nullish();
 export function toIso(value: unknown): string | null {
   if (typeof value === 'number') return Number.isFinite(value) ? new Date(value).toISOString() : null;
   if (typeof value !== 'string' || !value) return null;
-  const normalized = /(?:Z|[+-]\d\d:?\d\d)$/.test(value) ? value : `${value.replace(' ', 'T')}Z`;
+  // A date-only string (`2026-11-10`) has no time part to append Z to; anchor it at UTC midnight.
+  const dateOnly = /^\d{4}-\d\d-\d\d$/.test(value);
+  const normalized = dateOnly ? `${value}T00:00:00Z` : /(?:Z|[+-]\d\d:?\d\d)$/.test(value) ? value : `${value.replace(' ', 'T')}Z`;
   const time = Date.parse(normalized);
   return Number.isFinite(time) ? new Date(time).toISOString() : null;
 }
@@ -122,10 +133,39 @@ function field(json: unknown, key: string): unknown {
   return json && typeof json === 'object' ? (json as Record<string, unknown>)[key] : undefined;
 }
 
+/**
+ * Require the top-level item list of a snapshot payload. A missing or non-array list means schema drift or a
+ * non-data response, not an empty set, so it throws; `fetchSource` turns it into a `parse` failure and the worker
+ * then stores nothing. Only snapshot sources use this: an empty array returned here is a real empty current set.
+ * @param list The value found at the payload's list key (or the payload itself for top-level arrays).
+ * @returns The list, unchanged, when it is an array.
+ * @throws Error `payload_shape` when `list` is not an array.
+ */
+function requireList(list: unknown): unknown[] {
+  if (!Array.isArray(list)) throw new Error('payload_shape');
+  return list;
+}
+
+/**
+ * Map the items of a snapshot payload, failing when a non-empty list yields no valid item. `mapItems` silently drops
+ * schema failures, so an upstream field rename would turn every item into a drop and produce an empty set; the worker
+ * treats a verified empty set as authoritative and would prune every stored row. Throwing keeps those rows instead.
+ * An empty input list stays a real empty set. A partially valid list is accepted, dropping its bad items.
+ * @param list The already-required item array (see `requireList`).
+ * @returns Mapped events, at least one when `list` was non-empty.
+ * @throws Error `payload_shape` when `list` is non-empty and no item passes validation and building.
+ */
+function snapshotItems<S extends z.ZodType>(list: unknown[], schema: S, build: (item: z.infer<S>) => LiveEvent | null): LiveEvent[] {
+  const out = mapItems(list, schema, build);
+  if (list.length && !out.length) throw new Error('payload_shape');
+  return out;
+}
+
 const point = z.object({ coordinates: z.tuple([num, num]).rest(z.unknown()) });
 
 const usgs: BrowserSource = {
   id: 'usgs',
+  snapshot: false, // 2.5-day rolling window
   name: 'USGS',
   home: 'https://earthquake.usgs.gov/',
   tags: ['geo', 'disaster'],
@@ -151,6 +191,7 @@ const usgs: BrowserSource = {
 
 const eonet: BrowserSource = {
   id: 'eonet',
+  snapshot: false, // open events, capped at 100
   name: 'NASA EONET',
   home: 'https://eonet.gsfc.nasa.gov/',
   tags: ['geo', 'disaster'],
@@ -188,6 +229,7 @@ const eonet: BrowserSource = {
 
 const gdacs: BrowserSource = {
   id: 'gdacs',
+  snapshot: false, // 7-day window
   name: 'GDACS',
   home: 'https://www.gdacs.org/',
   tags: ['geo', 'disaster'],
@@ -237,6 +279,7 @@ function centroid(geometry: unknown): { lat: number; lon: number } | null {
 
 const nwsAlerts: BrowserSource = {
   id: 'nws_alerts',
+  snapshot: true, // active alerts: the full current set (Severe/Extreme)
   name: 'NWS alerts',
   home: 'https://www.weather.gov/',
   tags: ['weather'],
@@ -244,8 +287,8 @@ const nwsAlerts: BrowserSource = {
   // Severe and extreme only: the unfiltered list is hundreds of routine statements.
   url: () => 'https://api.weather.gov/alerts/active?status=actual&message_type=alert&severity=Severe,Extreme',
   parse: (json) =>
-    mapItems(
-      field(json, 'features'),
+    snapshotItems(
+      requireList(field(json, 'features')),
       z.object({
         geometry: z.unknown().optional(),
         properties: z.object({ id: str, event: str, headline: optStr, sent: optStr, severity: optStr, areaDesc: optStr, '@id': optStr }),
@@ -269,6 +312,7 @@ const nwsAlerts: BrowserSource = {
 
 const hackernews: BrowserSource = {
   id: 'hackernews',
+  snapshot: false, // front page, top 50
   name: 'Hacker News',
   home: 'https://news.ycombinator.com/',
   tags: ['technology'],
@@ -289,6 +333,7 @@ const hackernews: BrowserSource = {
 
 const nvd: BrowserSource = {
   id: 'nvd',
+  snapshot: false, // 2-day publication window
   name: 'NVD',
   home: 'https://nvd.nist.gov/',
   tags: ['security'],
@@ -328,6 +373,7 @@ const nvd: BrowserSource = {
 
 const devto: BrowserSource = {
   id: 'devto',
+  snapshot: false, // top 30 articles
   name: 'DEV',
   home: 'https://dev.to/',
   tags: ['technology'],
@@ -362,6 +408,7 @@ const GITHUB_NAME = /^[A-Za-z0-9._-]{1,100}$/;
 
 const githubReleases: BrowserSource = {
   id: 'github_releases',
+  snapshot: false, // latest 20 releases
   name: 'GitHub',
   home: 'https://github.com/',
   tags: ['technology'],
@@ -387,6 +434,7 @@ const githubReleases: BrowserSource = {
 
 const coingecko: BrowserSource = {
   id: 'coingecko',
+  snapshot: false, // top 50 by market cap
   name: 'CoinGecko',
   home: 'https://www.coingecko.com/',
   tags: ['finance', 'crypto'],
@@ -421,6 +469,7 @@ const coingecko: BrowserSource = {
 
 const fearGreed: BrowserSource = {
   id: 'fear_greed',
+  snapshot: false, // last 7 daily values
   name: 'Fear & Greed',
   home: 'https://alternative.me/crypto/fear-and-greed-index/',
   tags: ['finance', 'crypto'],
@@ -441,6 +490,7 @@ const fearGreed: BrowserSource = {
 
 const launches: BrowserSource = {
   id: 'launches',
+  snapshot: true, // upcoming launches; the soonest 30 are the current set
   name: 'Launch Library 2',
   home: 'https://thespacedevs.com/',
   tags: ['space'],
@@ -448,8 +498,8 @@ const launches: BrowserSource = {
   intervalMs: 600_000,
   url: () => 'https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=30',
   parse: (json) =>
-    mapItems(
-      field(json, 'results'),
+    snapshotItems(
+      requireList(field(json, 'results')),
       z.object({
         id: str,
         name: str,
@@ -476,6 +526,7 @@ const launches: BrowserSource = {
 
 const freetogame: BrowserSource = {
   id: 'freetogame',
+  snapshot: false, // newest 30 of the catalog
   name: 'FreeToGame',
   home: 'https://www.freetogame.com/',
   tags: ['gaming'],
@@ -501,14 +552,15 @@ const freetogame: BrowserSource = {
 
 const gamerpower: BrowserSource = {
   id: 'gamerpower',
+  snapshot: true, // active giveaways; newest 50 are the current set
   name: 'GamerPower',
   home: 'https://www.gamerpower.com/',
   tags: ['gaming'],
   intervalMs: 1_800_000,
   url: () => 'https://www.gamerpower.com/api/giveaways',
   parse: (json) =>
-    mapItems(
-      Array.isArray(json) ? json.slice(0, 50) : json,
+    snapshotItems(
+      requireList(json).slice(0, 50),
       z.object({ id: num, title: str, open_giveaway_url: optStr, description: optStr, published_date: optStr, type: optStr }),
       (g) =>
         event({
@@ -539,6 +591,16 @@ export const BROWSER_SOURCES: BrowserSource[] = [
   freetogame,
   gamerpower,
 ];
+
+/**
+ * Providers whose stored rows the worker may replace on a successful fetch (their complete current set), as the
+ * `snapshotProviders` argument of `upsertEvents`. Empty for windowed or capped sources.
+ * @param provider Browser source id.
+ * @returns `[provider]` for a snapshot source, otherwise `[]`.
+ */
+export function snapshotScope(provider: string): string[] {
+  return BROWSER_SOURCE_BY_ID[provider]?.snapshot ? [provider] : [];
+}
 
 /** Browser source lookup by provider id. */
 export const BROWSER_SOURCE_BY_ID: Record<string, BrowserSource> = Object.fromEntries(BROWSER_SOURCES.map((source) => [source.id, source]));

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import { syncServerAccent } from '@/core/accent';
 import type { ModuleAvailability } from '@/core/module-registry';
-import { clearLiveFeed } from '@/core/live-feed-storage';
+import { clearLiveFeed, teardownLiveFeed } from '@/core/live-feed-storage';
 import { fetchOwnerPreferences, OWNER_PREFERENCES_KEY } from '@/core/preferences';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { SESSION_KEY, useSession, type Session } from '@/core/session';
@@ -119,8 +119,10 @@ export function useShellSession(resetOverlays: () => void) {
         headers: csrfHeaders(session.data?.csrfToken ?? ''),
       });
     },
-    // Clear the third-party live-feed cache (time-bounded, never rejects) before the session ends and navigates.
+    // Stop live-feed workers first: a worker mid-write could reopen the IndexedDB after the delete and recreate it.
+    // Then clear the third-party live-feed cache (time-bounded, never rejects) before the session ends and navigates.
     onSuccess: async () => {
+      teardownLiveFeed();
       await clearLiveFeed();
       endSession();
     },

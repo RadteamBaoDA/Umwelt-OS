@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useWorkspace } from '@/core/workspace-context';
-import { listSources, sourceKeys, type Source } from '@/modules/sources';
+import { listAllSources, sourceKeys, type Source } from '@/modules/sources';
 import { dashboardKeys, getDashboard, listDashboards, type Dashboard } from './api';
 
 /** Management dialog state (topics / highlight rules) shared by the header button, first-run panel and deep link. */
@@ -95,10 +95,11 @@ export interface DashboardSources {
  */
 function useDashboardSources(activeDashboard: Dashboard | null, isOwner: boolean): DashboardSources {
   // Stale sources: sources this dashboard reads whose latest error is newer than the latest success.
+  // One all-pages query serves the dashboard's sources and the owner's workspace-wide counts.
   const sourcesQuery = useQuery({
-    queryKey: [...sourceKeys.list, 'dashboard-stale'],
-    queryFn: () => listSources(),
-    enabled: Boolean(activeDashboard),
+    queryKey: sourceKeys.listAll,
+    queryFn: listAllSources,
+    enabled: Boolean(activeDashboard) || isOwner,
   });
   const dashboardSourceIds = new Set(activeDashboard?.instances.flatMap((i) => i.definition.source_ids) ?? []);
   const dashboardSources = useMemo(
@@ -109,8 +110,6 @@ function useDashboardSources(activeDashboard: Dashboard | null, isOwner: boolean
   const staleSources = (sourcesQuery.data?.items ?? []).filter((s) =>
     dashboardSourceIds.has(s.id) && s.status === 'active' && s.last_error_at
     && (!s.last_success_at || Date.parse(s.last_error_at) > Date.parse(s.last_success_at)));
-  // Workspace-wide source list (shared ['sources','list'] cache) drives the first-run panel and Today counts.
-  const allSourcesQuery = useQuery({ queryKey: sourceKeys.list, queryFn: () => listSources(), enabled: isOwner });
   /** Newest successful collection across sources, for the title summary; null when unknown. */
   const lastUpdatedAt = useMemo(() => {
     const times = (sourcesQuery.data?.items ?? []).map((s) => (s.last_success_at ? Date.parse(s.last_success_at) : NaN)).filter(Number.isFinite);
@@ -119,7 +118,8 @@ function useDashboardSources(activeDashboard: Dashboard | null, isOwner: boolean
   return {
     dashboardSources,
     staleSources,
-    allSources: { isSuccess: allSourcesQuery.isSuccess, items: allSourcesQuery.data?.items },
+    // Owner-only: observers get no workspace-wide list (the endpoint is not theirs to read).
+    allSources: { isSuccess: isOwner && sourcesQuery.isSuccess, items: isOwner ? sourcesQuery.data?.items : undefined },
     lastUpdatedAt,
   };
 }

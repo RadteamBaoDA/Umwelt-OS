@@ -20,7 +20,7 @@ vi.mock('@/core/workspace-context', () => ({ useWorkspace: () => ({ isOwner: tru
 vi.mock('@/core/guarded-navigation', () => ({
   useGuardedNavigation: () => ({ registerLeaveGuard: () => () => undefined, continueNavigation: vi.fn() }),
 }));
-vi.mock('@/modules/sources', () => ({ listSources: () => Promise.resolve({ items: [{ id: 's' }] }), sourceKeys: { list: ['sources', 'list'] }, StarterPackWizard: () => null }));
+vi.mock('@/modules/sources', () => ({ listAllSources: () => Promise.resolve({ items: [{ id: 's' }] }), sourceKeys: { list: ['sources', 'list'], listAll: ['sources', 'list', 'all'] }, StarterPackWizard: () => null }));
 vi.mock('@/modules/news', () => ({ TopicSettings: () => null }));
 vi.mock('@/modules/settings', () => ({ HighlightRuleEditor: () => null }));
 vi.mock('./today-header', () => ({ TodayHeader: () => null }));

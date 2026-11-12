@@ -60,7 +60,34 @@ interface CitationViewProps {
   focusNonce?: number;
 }
 
-/** Sources rail entry (Chat.dc.html): numbered chip, title, meta, then the exact-item link. */
+/** Meta line of a rail card: web results show provider and host, documents the label and observation time. */
+function railMeta(citation: Citation, documentLabel: string, when: string | null): string {
+  return citation.sourceType === 'web'
+    ? [citation.provider, webHost(citation.url)].filter(Boolean).join(' · ')
+    : [documentLabel, when].filter(Boolean).join(' · ');
+}
+
+/** External link to a document's original page (its `canonical_url`); `href` must already pass `safeHttpUrl`. */
+function OriginalLink({ href, className }: { href: string; className: string }) {
+  const t = useTranslations('chat');
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer nofollow"
+      className={className}
+      aria-label={t('openOriginalFor', { host: webHost(href) })}
+    >
+      {t('openOriginal')}
+      <ExternalLinkIcon className="size-3" aria-hidden="true" />
+    </a>
+  );
+}
+
+/**
+ * Sources rail entry (Chat.dc.html): numbered chip, title, meta (web: provider and host), then the exact-item link and,
+ * for documents whose DTO carries a safe canonical `url`, an external link to the original.
+ */
 function CardCitation({ citation, index, locale, timezone, highlighted = false, scrollTarget = false, focusNonce = 0 }: CitationViewProps) {
   const t = useTranslations('chat');
   const cardRef = React.useRef<HTMLDivElement>(null);
@@ -71,6 +98,7 @@ function CardCitation({ citation, index, locale, timezone, highlighted = false, 
     citation.sourceType === 'web'
       ? safeHttpUrl(citation.url)
       : `/knowledge/documents/${encodeURIComponent(citation.documentId)}?${new URLSearchParams({ versionId: citation.documentVersionId, chunkId: citation.chunkId })}#cited-chunk`;
+  const externalHref = citation.sourceType !== 'web' ? safeHttpUrl(citation.url) : undefined;
   const when = citation.sourceType !== 'web' && citation.observedAt ? formatDateTime(citation.observedAt, locale, timezone) : null;
   const linkClass =
     'inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-1 text-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
@@ -91,9 +119,7 @@ function CardCitation({ citation, index, locale, timezone, highlighted = false, 
         </strong>
       </span>
       {citation.quote && <span className="line-clamp-1 text-xs text-muted-foreground">{citation.quote}</span>}
-      <span className="text-xs text-muted-foreground">
-        {citation.sourceType === 'web' ? webHost(citation.url) : [t('document'), when].filter(Boolean).join(' · ')}
-      </span>
+      <span className="text-xs text-muted-foreground">{railMeta(citation, t('document'), when)}</span>
       {href &&
         (citation.sourceType === 'web' ? (
           <a
@@ -111,6 +137,7 @@ function CardCitation({ citation, index, locale, timezone, highlighted = false, 
             {t('openExactItem')}
           </Link>
         ))}
+      {externalHref && <OriginalLink href={externalHref} className={linkClass} />}
     </div>
   );
 }

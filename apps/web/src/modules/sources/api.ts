@@ -1,13 +1,15 @@
 import { ApiError, apiRequest, csrfHeaders } from '@/core/api';
 import type { DataShape } from '@/core/data-shapes';
 import type { ApiResponse } from '@/core/api-contract';
+import type { components } from '@/core/api-types.gen';
 
 /** The two owner switches a source carries; both default to on so existing behavior is unchanged. */
 export type SourceAiOptions = { graph_enabled: boolean; rag_index_enabled: boolean };
 
 export type RealtimeMode = 'realtime' | 'near_realtime';
 
-export type Source = {
+/** Source row; `blocked_error_code` (why collection stopped) and `failure_count` come from the generated `SourceRead`. */
+export type Source = Pick<components['schemas']['SourceRead'], 'blocked_error_code' | 'failure_count'> & {
   id: string;
   type: string;
   name: string;
@@ -20,10 +22,6 @@ export type Source = {
   last_success_at: string | null;
   last_error_at: string | null;
   last_error_code: string | null;
-  /** Why the source stopped collecting (machine code); null while it is not blocked. Not yet in api-types.gen. */
-  blocked_error_code?: string | null;
-  /** Consecutive failed collection attempts; null when unknown. Not yet in api-types.gen. */
-  failure_count?: number | null;
   collected_at: string | null;
   indexed_at: string | null;
   collection_error_code: string | null;
@@ -330,6 +328,8 @@ export type PurgeOperation = {
 export const sourceKeys = {
   all: ['sources'] as const,
   list: ['sources', 'list'] as const,
+  /** Flat all-pages list shared by the dashboard (nested under `list`, so list invalidation refreshes it). */
+  listAll: ['sources', 'list', 'all'] as const,
   detail: (id: string) => ['sources', id] as const,
 };
 export const connectorKeys = {
@@ -347,6 +347,29 @@ export const connectorKeys = {
 /** Lists source records in pages of 50 and includes the optional opaque cursor. */
 export function listSources(cursor?: string) {
   return apiRequest<SourcePage>(`/api/v1/sources?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+}
+
+/** Page size and page cap of `listAllSources`: up to 2000 sources, beyond which the tail is ignored. */
+const ALL_SOURCES_PAGE = 100;
+const ALL_SOURCES_MAX_PAGES = 20;
+
+/**
+ * Loads every source by following the opaque cursor (the endpoint has no id filter and caps a page at 100), so
+ * dashboard freshness covers sources beyond the first page. Bounded to `ALL_SOURCES_MAX_PAGES` pages.
+ * @returns A single page whose `items` hold all fetched sources and `next_cursor` is null.
+ */
+export async function listAllSources(): Promise<SourcePage> {
+  const items: Source[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < ALL_SOURCES_MAX_PAGES; page += 1) {
+    const result: SourcePage = await apiRequest<SourcePage>(
+      `/api/v1/sources?limit=${ALL_SOURCES_PAGE}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+    );
+    items.push(...result.items);
+    cursor = result.next_cursor;
+    if (!cursor) break;
+  }
+  return { items, next_cursor: null };
 }
 
 export type SourceImpact = {

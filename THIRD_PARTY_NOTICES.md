@@ -30,7 +30,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-#### `@deck.gl/core`, `@deck.gl/layers`, `@deck.gl/mapbox`, and `@deck.gl/react` 9.4.0
+#### `@deck.gl/core`, `@deck.gl/layers`, and `@deck.gl/mapbox` 9.4.0
 
 MIT License
 

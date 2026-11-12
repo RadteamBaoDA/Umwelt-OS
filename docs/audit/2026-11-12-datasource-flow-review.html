@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review và cải thiện luồng Datasource — Umwelt-OS — 2026-11-12</title>
+<style>
+  :root { --bg:#f7f7f5; --surface:#fff; --text:#1c1c1a; --muted:#5d5d57; --line:#deded8; --accent:#2f5d8a; --hi:#b3261e; --mid:#9a6200; --lo:#3d6b3d; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161615; --surface:#201f1e; --text:#ecebe6; --muted:#a8a69e; --line:#3a3936; --accent:#8db8e0; --hi:#ff8a80; --mid:#f0b860; --lo:#9ccc9c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 40px 0 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 22px 0 8px; }
+  p, li { max-width: 78ch; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  code { font: 12.5px/1.4 ui-monospace, Consolas, monospace; background: color-mix(in srgb, var(--line) 45%, transparent); padding: 1px 5px; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; margin: 8px 0; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; }
+  td.n { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+  .tag { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+  .hi { color: var(--hi); } .mid { color: var(--mid); } .lo { color: var(--lo); }
+  .up { color: var(--lo); font-weight: 600; }
+  .kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 14px 0; }
+  .kpi div { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .kpi b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .kpi span { color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Review và cải thiện luồng Datasource</h1>
+<p class="sub">Umwelt-OS · nhánh <code>feature/fix-ui</code> · 2026-11-12 · luồng thu thập → lưu DB → hiển thị → dùng trong Chat · 14 commit local (chưa push) + thay đổi frontend live-feed chưa commit</p>
+
+<p><strong>Kết luận ngắn:</strong> luồng datasource đã từ "chạy được trên happy path nhưng có lỗi chặn trả lời chat, lỗ fail-open và lỗi âm thầm" lên mức ổn định. Trong khoảng 85 vấn đề tìm được (62 từ review đầu, 21 từ 2 vòng review lại, 2 từ review bảo mật tự động), đã sửa gần hết; phần còn lại nằm ở bảng "Hạn chế còn lại", trong đó có 2 lỗi bảo mật (rò credential khi redirect, gate bỏ trừ quota từ lâu) và 1 lỗi treo test ăn 37 GB RAM. Toàn bộ test xanh. Phần chưa kiểm chứng: xem trên trình duyệt, và một số hạn chế thiết kế liệt kê ở cuối.</p>
+
+<div class="kpi">
+  <div><b>7245</b><span>pytest pass (unit + top-level)</span></div>
+  <div><b>1376</b><span>vitest pass (237 file)</span></div>
+  <div><b>0</b><span>lỗi ruff / mypy (724 file) / tsc</span></div>
+  <div><b>8</b><span>test integration pass trên Postgres thật (Docker tạm)</span></div>
+</div>
+
+<h2>Điểm số</h2>
+<p>Do reviewer Fable độc lập chấm (thang 0–10), chỉ đọc code, không biết người sửa. Lần chấm đầu là sau vòng sửa thứ 2; lần chấm cuối là sau vòng 3. Đợt sửa cuối (6 lỗi N1–N6, xem dưới) làm <em>sau</em> lần chấm cuối và chưa được chấm lại, nên điểm thật hiện tại nhích hơn bảng một chút ở Collect và Display.</p>
+<table>
+  <tr><th>Giai đoạn</th><th>Logic</th><th>Correctness</th><th>UI/UX</th><th>Performance</th></tr>
+  <tr><td>Collect</td><td class="n">7 → <span class="up">7.5</span></td><td class="n">6 → <span class="up">6.5</span></td><td class="n">5 → <span class="up">7</span></td><td class="n">7 → 6.5</td></tr>
+  <tr><td>Storage / DB</td><td class="n">7 → <span class="up">8</span></td><td class="n">6 → <span class="up">8</span></td><td class="n">6 → —</td><td class="n">7 → <span class="up">7.5</span></td></tr>
+  <tr><td>Hiển thị</td><td class="n">6 → <span class="up">7</span></td><td class="n">5 → <span class="up">6.5</span></td><td class="n">7 → <span class="up">7.5</span></td><td class="n">6 → <span class="up">8</span></td></tr>
+  <tr><td>Chat</td><td class="n">8 → 8</td><td class="n">8 → 8</td><td class="n">7 → <span class="up">8</span></td><td class="n">7 → <span class="up">7.5</span></td></tr>
+</table>
+<p class="sub">Collect / Performance giảm 0.5 ở lần chấm cuối vì double-debit quota world-data (N1) và chia quota cho cả provider không dùng live (N5); cả hai đã sửa ở đợt cuối. Storage không có UI riêng nên reviewer không chấm UI/UX.</p>
+<p>Review ban đầu (trước khi sửa) không chấm điểm, nhưng tìm ra 11 lỗi high, 26 medium, 25 low; trong đó lỗi nặng nhất là chat bị huỷ thành "privacy" khi truy vấn rộng.</p>
+
+<h2>Đã cải thiện gì — theo giai đoạn</h2>
+
+<h3>1. Thu thập (collect)</h3>
+<table>
+  <tr><th>Trước</th><th>Sau</th></tr>
+  <tr><td>Cooldown nút "Collect now" không bao giờ chạy (cột thời gian không ai ghi)</td><td>Ghi <code>attempt_started_at</code>/<code>attempt_deadline_at</code> lúc admission; cooldown và metric quá hạn hoạt động</td></tr>
+  <tr><td>Nguồn bị chặn (thiếu key, chưa chấp nhận điều khoản…) vẫn trông như đang lên lịch</td><td>API trả <code>blocked_error_code</code>, <code>failure_count</code>; thẻ nguồn hiện lý do bằng en/vi</td></tr>
+  <tr><td>Nguồn rss/api/web/mcp fetch lỗi không ghi vào sức khoẻ nguồn</td><td>Ghi <code>last_error_code</code>; chờ quota không còn bị ghi thành lỗi</td></tr>
+  <tr><td>Nguồn lỗi vĩnh viễn bị gọi lại mỗi chu kỳ, không backoff</td><td>Backoff luỹ thừa chỉ đẩy lịch tự động (tối đa 24h); "Collect now" vẫn dùng được; kích hoạt lại thì xoá backoff</td></tr>
+  <tr><td>Một section feed lỗi làm cursor nhảy qua, mất item vĩnh viễn</td><td>Giữ cursor khi có section lỗi</td></tr>
+  <tr><td>Redirect 301 là lỗi cuối</td><td>Theo tối đa 3 redirect, kiểm tra lại IP công khai và pin mỗi hop, chặn https→http, hop khác origin chỉ gửi header an toàn (allowlist), lưu đúng URL cuối</td></tr>
+  <tr><td>Gate gửi request: lần gửi chẵn liên tiếp không bị trừ quota (lỗi có từ commit <code>485bb09f</code>); world-data lại trừ 2 lần</td><td>Mỗi lần gửi trừ đúng 1 lần; recheck lúc header tách riêng, không trừ quota</td></tr>
+  <tr><td>Dashboard live và collector dùng chung cửa sổ quota</td><td>Chia 25/75 chỉ cho provider dùng cả hai đường; tổng không vượt 100%</td></tr>
+  <tr><td>1 request/workspace mỗi 15s, trễ không báo</td><td>Tối đa 4/tick (setting <code>COLLECTOR_REQUESTS_PER_WORKSPACE_TICK</code>), cảnh báo trễ có giới hạn tần suất</td></tr>
+  <tr><td>Lease không nhả khi bị cancel; heartbeat có thể huỷ sau khi đã commit</td><td>Nhả lease có shield + log; heartbeat bỏ qua sau khi đã accept</td></tr>
+  <tr><td>Key FRED/OpenWeather có thể lọt log qua URL</td><td>Redact thêm <code>appid</code>/<code>app_id</code>; logger httpx ở WARNING</td></tr>
+  <tr><td>Retry-After không giới hạn; trang web giải mã luôn UTF-8</td><td>Cap 24h; tôn trọng charset của Content-Type</td></tr>
+</table>
+
+<h3>2. Lưu trữ (DB)</h3>
+<table>
+  <tr><th>Trước</th><th>Sau</th></tr>
+  <tr><td>Bảng <code>ingestion_batches/runs/stages</code> phình vô hạn (mỗi lần poll rỗng để lại 3 dòng)</td><td>Purge batch collector (<code>native:</code>) đã kết thúc, quá hạn và không còn observation; chạy trong savepoint; batch upload/crawl không bị đụng</td></tr>
+  <tr><td>Purge 1000 dòng/giờ, có thể chậm hơn tốc độ ingest</td><td>Lặp tới khi hết hoặc 30s</td></tr>
+  <tr><td>Một record hỏng làm fail cả run và gắn lỗi cho nguồn</td><td>Chỉ fail khi không record nào chuẩn hoá được; lỗi một phần ghi warning</td></tr>
+  <tr><td>N+1 khi đọc provider scope mỗi dòng</td><td>Đọc 1 lần/slice</td></tr>
+  <tr><td>Thiếu index cho truy vấn theo nguồn + thời gian</td><td>Migration <code>0023</code>: <code>(source_id, observed_at DESC)</code>, tạo concurrently; đã chạy trên Postgres thật</td></tr>
+</table>
+
+<h3>3. Hiển thị (dashboard, live map)</h3>
+<table>
+  <tr><th>Trước</th><th>Sau</th></tr>
+  <tr><td>Sự kiện hết hạn vẫn hiện như đang live; launch tương lai chiếm đầu danh sách</td><td>Nguồn "danh sách hiện hành" (NWS, launches, giveaways) thay theo snapshot, kể cả rỗng hợp lệ; feed cuốn chiếu giữ lịch sử; payload sai cấu trúc không xoá gì; sắp xếp kẹp tương lai về hiện tại</td></tr>
+  <tr><td>Luôn báo "No events in this range." dù lý do là đang tải, lỗi config hoặc chưa bật nguồn</td><td>Bốn trạng thái rỗng riêng, có nút mở dialog nguồn và Retry</td></tr>
+  <tr><td>Đổi tab/cuộn → huỷ và fetch lại tất cả (Launch Library 15 req/giờ)</td><td>Giữ mount; lịch fetch theo lần chạy trước; một worker dùng chung mỗi workspace, chỉ gửi lại config khi thật sự đổi</td></tr>
+  <tr><td>Non-owner poll 404 mỗi 60s</td><td>Ẩn nguồn proxy và lớp thời tiết, hiện "chỉ chủ sở hữu"</td></tr>
+  <tr><td>Danh sách tới 5000 dòng, tạo formatter mỗi dòng; globe tự re-center; thời tiết nháy mỗi 60s</td><td>Hiện 50 + "Xem thêm", 1 formatter, memo + deferred search; center 1 lần; giữ raster cũ tới khi có ảnh mới, làm mới 10 phút</td></tr>
+  <tr><td>Nhãn "vẽ trên thiết bị" sai sau khi chuyển sang tile OpenFreeMap</td><td>Sửa nhãn, thêm credit © OpenFreeMap © OpenStreetMap</td></tr>
+  <tr><td>IndexedDB không xoá khi logout</td><td>Dừng worker trước, rồi xoá, có timeout; core không còn phụ thuộc module dashboard</td></tr>
+  <tr><td>Freshness chỉ cho 50 nguồn đầu, fetch trùng 2 lần</td><td>Phân trang tới 2000 nguồn, 1 query dùng chung</td></tr>
+  <tr><td>Route live-map trả <code>dict</code>, type frontend viết tay</td><td>Pydantic response model; <code>api-types.gen.ts</code> sinh lại; frontend dùng type sinh</td></tr>
+</table>
+
+<h3>4. Chat dùng datasource</h3>
+<table>
+  <tr><th>Trước</th><th>Sau</th></tr>
+  <tr><td>Truy vấn dữ liệu rộng (&gt;100 evidence) huỷ cả câu trả lời dưới dạng "privacy"</td><td>Đọc khoá evidence theo lô 100, thứ tự khoá ổn định</td></tr>
+  <tr><td>Gadget mất hết nguồn → chat đọc cả workspace (tool và retrieval)</td><td>Fail-closed ở cả hai đường</td></tr>
+  <tr><td>Kết quả tool không giới hạn, không bọc chống prompt injection</td><td>Cap 20k ký tự + cờ <code>truncated</code>, cell SQL 500 ký tự, luật injection áp cho kết quả tool</td></tr>
+  <tr><td>Bước "Queried collected data" luôn ✓ kể cả khi lỗi/rỗng</td><td>Hiện "N dòng từ K nguồn" / "Không có dữ liệu" / "Truy vấn lỗi" (en/vi)</td></tr>
+  <tr><td>Vòng lặp tool không có trần tuyệt đối (gây test treo 37 GB)</td><td>Trần 12 vòng/turn + test hồi quy có timeout; <code>faulthandler_timeout</code> cho pytest</td></tr>
+  <tr><td>Aggregate đếm cả revision cũ, không giới hạn thời gian; query không dùng được index</td><td>Chỉ <code>is_current</code>, mặc định 90 ngày, tìm text qua <code>content_tsv</code></td></tr>
+  <tr><td>SQL mode được quảng cáo khi chưa cấu hình; pool reader 2 kết nối</td><td>Ẩn khi thiếu DSN; pool 4+2, lỗi <code>sql_reader_busy</code> rõ ràng</td></tr>
+  <tr><td>Call vượt budget biến mất im lặng</td><td>Trả <code>per_round_cap_exceeded</code> / <code>tool_budget_exhausted</code></td></tr>
+  <tr><td>Thẻ citation không có link gốc, tiêu đề "Collected record" tiếng Anh</td><td>Link "Mở bản gốc" an toàn, tiêu đề dịch</td></tr>
+</table>
+
+<h2>Kiểm chứng đã chạy</h2>
+<ul>
+  <li><code>pytest tests/unit tests/test_*.py</code>: 7245 pass, 2 skip. <code>ruff check</code>, <code>ruff format --check</code>, <code>mypy modules core</code> sạch.</li>
+  <li><code>vitest</code> (từ <code>apps/web</code>): 1376/1376 pass. <code>tsc --noEmit</code> sạch.</li>
+  <li>Docker harness tạm (tự xoá volume): migration tới <code>0023</code> chạy sạch; <code>test_observation_history.py</code> (gồm purge retention) 5/5 pass, cộng 3 test <code>test_auth_race.py</code> mà harness luôn chạy, trên Postgres thật. Hàm purge batch mới chạy qua đường này nhưng chưa có test integration riêng kiểm tra đúng batch bị xoá.</li>
+  <li>Test trần vòng tool được xác nhận fail trong 8s khi bỏ fix (không treo).</li>
+  <li>3 vòng review độc lập bằng Fable; mọi finding high đã được đọc lại code xác nhận trước khi sửa.</li>
+</ul>
+
+<h2>Thay đổi hành vi cần biết</h2>
+<ul>
+  <li>URL gốc của nguồn web redirect sang host khác → crawl theo host mới (vẫn kiểm tra SSRF mỗi hop). Muốn chặt hơn (chỉ apex↔www, http→https) thì cần quyết định.</li>
+  <li>Chuẩn hoá có record lỗi + trùng mà 0 record thành công giờ là <em>failed</em> (trước là succeeded).</li>
+  <li>Quota live chỉ còn 25% giới hạn của provider dùng chung.</li>
+  <li>So khớp metric/symbol trong chat không phân biệt hoa thường (không dùng được index thường cho 2 cột này).</li>
+</ul>
+
+<h2>Hạn chế còn lại (đã biết, chưa sửa)</h2>
+<table>
+  <tr><th>Mức</th><th>Vấn đề</th><th>Lý do chưa làm</th></tr>
+  <tr><td><span class="tag mid">Trung bình</span></td><td>Chưa xem trên trình duyệt: map MapLibre/deck.gl, empty state, popup, thẻ nguồn bị chặn, bước chat</td><td>Cần chạy dev + migrate <code>0023</code> trên DB dev của bạn</td></tr>
+  <tr><td><span class="tag mid">Trung bình</span></td><td>Mỗi workspace vẫn chỉ 1 request thu thập chạy cùng lúc (2 slot toàn cục)</td><td>Check constraint <code>slot_id IN (1,2)</code> + unique index → cần migration và quyết định thiết kế</td></tr>
+  <tr><td><span class="tag mid">Trung bình</span></td><td>Citation dữ liệu trỏ tới document chứ không tới từng dòng observation</td><td>Cần DTO evidence cấp row; validator citation hiện từ chối quote không nằm trong chunk</td></tr>
+  <tr><td><span class="tag lo">Thấp</span></td><td>Batch <code>connector-request:</code>, <code>file:</code>, <code>crawl:</code> không bị purge theo tuổi</td><td>Cố ý an toàn: chỉ xoá loại đã chắc chắn</td></tr>
+  <tr><td><span class="tag lo">Thấp</span></td><td>Hai gadget theo dõi 2 repo GitHub khác nhau dùng chung repo đầu tiên</td><td>Cần scope riêng cho từng provider trong worker</td></tr>
+  <tr><td><span class="tag lo">Thấp</span></td><td><code>launches</code>, <code>gamerpower</code> là danh sách có cap (30/50) nhưng coi như snapshot</td><td>Item bị đẩy khỏi cap sẽ biến mất tới khi quay lại</td></tr>
+  <tr><td><span class="tag lo">Thấp</span></td><td>Hop redirect của gate bọc closure (reddit, google, local) không recheck</td><td>Chỉ <code>SendGate</code> trần có <code>recheck</code>; đã ghi docstring</td></tr>
+  <tr><td><span class="tag lo">Thấp</span></td><td>Origin live-feed nằm trong <code>connect-src</code> toàn trang</td><td>Next 16 phục vụ worker qua chunk có hash, không đặt header riêng được</td></tr>
+  <tr><td><span class="tag lo">Thấp</span></td><td><code>public.py</code> của sources/observations/documents vẫn là alias ORM</td><td>AGENTS.md và test kiến trúc cho phép read projection; refactor lớn</td></tr>
+  <tr><td><span class="tag lo">Thấp</span></td><td>Xoá snapshot qua IndexedDB chưa có test end-to-end</td><td>Không có <code>fake-indexeddb</code>; thêm sẽ là dependency mới</td></tr>
+</table>
+
+<h2>Sự cố trong phiên</h2>
+<p>Một bản nháp sửa của agent chat (trả lời cả call vượt budget của <code>request_user_input</code>) làm mock model gọi lại vô hạn; <code>pytest tests/unit/modules/chat</code> treo và chiếm 37 GB RAM, process mồ côi sau khi shell của agent hết giờ. Nguyên nhân gốc: vòng <code>while True</code> trong <code>_stream_turn</code> không có trần tuyệt đối và pytest không có timeout. Đã thêm trần 12 vòng, test hồi quy có <code>asyncio.wait_for</code>, <code>faulthandler_timeout = 300</code>, và mọi lệnh test sau đó đều bọc <code>timeout</code>.</p>
+
+<h2>Commit (local, chưa push)</h2>
+<table>
+  <tr><th>Commit</th><th>Nội dung</th></tr>
+  <tr><td><code>e935ee62</code></td><td>Wave 1 backend: evidence theo lô, scope fail-closed, cooldown, blocked code, lỗi nguồn generic, quota wait</td></tr>
+  <tr><td><code>14548574</code></td><td>Wave 2 collect: cursor, lease, backoff, normalize, purge loop, N+1, charset</td></tr>
+  <tr><td><code>2e1b40da</code></td><td>Wave 2 chat: retrieval scope, provider hint, cap output, SQL mode, step outcome</td></tr>
+  <tr><td><code>b84cbd04</code></td><td>Trần vòng tool mỗi turn</td></tr>
+  <tr><td><code>ee8c1455</code></td><td>Frontend wave 1+2 (bạn commit)</td></tr>
+  <tr><td><code>e1ceab3f</code>, <code>0e18a55e</code></td><td>Backlog collect và chat</td></tr>
+  <tr><td><code>bd88abf4</code>, <code>1ebec939</code></td><td>Sửa bảo mật (header redirect, gate) + so khớp hoa thường</td></tr>
+  <tr><td><code>9434ab6b</code></td><td>Test offload bỏ provider <code>usgs</code> đã gỡ</td></tr>
+  <tr><td><code>f78d7432</code>, <code>85afab02</code></td><td>Review vòng 3</td></tr>
+  <tr><td><code>48f04247</code></td><td>World-data trừ quota 1 lần, origin redirect đầu, chia quota có phạm vi</td></tr>
+</table>
+<p>Chưa commit: các sửa frontend vòng display backlog, vòng 3 và đợt cuối trong <code>apps/web</code> (live-feed, worker pool, sources, citation panel, core live-feed storage) cùng <code>modules/dashboard/live_schemas.py</code> và route live-map — để bạn tự commit chung với phần live-feed đang làm.</p>
+</main>
+</body>
+</html>

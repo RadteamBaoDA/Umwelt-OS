@@ -38,9 +38,17 @@ export function pruneKeys(rows: { key: string; observed_at: string | null; seen_
 /**
  * Keys of a provider's stored rows that its latest full snapshot no longer contains (expired alerts, ended
  * giveaways, past launches). Pure; the caller deletes them in the same transaction as the upsert.
+ * An empty batch deletes nothing by default: a 200 that parses to [] (outage, empty proxied page) is indistinguishable
+ * from a real empty set, and wiping the store on it would destroy history. Only a caller that has proven the batch
+ * is a valid, authoritative empty set (a snapshot source whose payload parsed) may set `allowEmptySnapshot`.
+ * @param existingKeys Keys currently stored for the provider.
+ * @param newKeys Keys in the provider's new batch.
+ * @param allowEmptySnapshot True when an empty `newKeys` is a verified empty current set, so every stored key is stale.
+ * @returns Stored keys absent from the batch, or [] when the batch is empty and not authoritative.
  */
-export function staleKeys(existingKeys: readonly string[], newKeys: Iterable<string>): string[] {
+export function staleKeys(existingKeys: readonly string[], newKeys: Iterable<string>, allowEmptySnapshot = false): string[] {
   const keep = new Set(newKeys);
+  if (!keep.size && !allowEmptySnapshot) return [];
   return existingKeys.filter((key) => !keep.has(key));
 }
 
@@ -92,14 +100,18 @@ function openDb(workspaceId: string): Promise<IDBDatabase> {
  * Upsert rows by key, then prune by age and count in the same readwrite transaction so readers never see an
  * over-cap store. Resolves after commit. Rejects (callers treat as best-effort) when storage is unavailable or full.
  * @param snapshotProviders Providers whose `rows` are their complete current set: their stored rows absent from
- * `rows` are deleted in the same transaction (every current source returns a full snapshot, never a delta). Pass
- * only providers whose fetch succeeded; a failed fetch must leave the previous rows alone.
+ * `rows` are deleted in the same transaction. Pass only providers whose fetch succeeded and whose source is a true
+ * snapshot (see `snapshotScope` in sources.ts); a windowed or capped source must never be listed.
+ * @param allowEmptySnapshot Set only by the worker after a snapshot source's payload parsed successfully: then a
+ * listed provider with zero rows really has no current items, and all its stored rows are deleted. Proxied callers
+ * leave it false, so an empty batch there never prunes (see `staleKeys`).
  */
 export async function upsertEvents(
   workspaceId: string,
   rows: StoredEvent[],
   now = Date.now(),
   snapshotProviders: readonly string[] = [],
+  allowEmptySnapshot = false,
 ): Promise<void> {
   const db = await openDb(workspaceId);
   try {
@@ -114,7 +126,7 @@ export async function upsertEvents(
     for (const provider of snapshotProviders) {
       const existing = (await request(store.index('provider').getAllKeys(provider))) as string[];
       const fresh = rows.filter((row) => row.provider === provider).map((row) => row.key);
-      for (const key of staleKeys(existing, fresh)) store.delete(key);
+      for (const key of staleKeys(existing, fresh, allowEmptySnapshot)) store.delete(key);
     }
     const all = (await request(store.getAll())) as StoredEvent[];
     for (const key of pruneKeys(all, now)) store.delete(key);

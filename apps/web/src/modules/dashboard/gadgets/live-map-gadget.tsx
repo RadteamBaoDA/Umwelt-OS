@@ -232,6 +232,9 @@ function LiveSourceStatus({
             )}
             : {stateOf(provider)}
             {attribution && <span className="block">{attribution}</span>}
+            {statuses[provider]?.staleSince
+              ? ` · ${t('liveMapStaleNote', { when: formatDateTime(statuses[provider].staleSince, display.locale, display.timezone) })}`
+              : ''}
             {statuses[provider]?.truncated ? ` · ${t('observationTruncated')}` : ''}
           </p>
         );

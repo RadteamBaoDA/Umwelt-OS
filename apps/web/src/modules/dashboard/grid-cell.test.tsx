@@ -12,7 +12,7 @@ import type { GadgetInstance } from './api';
 const chat = vi.hoisted(() => ({ openDrawer: vi.fn() }));
 vi.mock('@/core/app-shell/chat-controller', () => ({ useChatController: () => chat }));
 const sourceApi = vi.hoisted(() => ({ listSources: vi.fn() }));
-vi.mock('@/modules/sources/api', async (original) => ({ ...(await original<object>()), listSources: sourceApi.listSources }));
+vi.mock('@/modules/sources/api', async (original) => ({ ...(await original<object>()), listAllSources: sourceApi.listSources }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'csrf' }) }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 

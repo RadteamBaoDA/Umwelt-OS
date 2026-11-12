@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { LIVE_FEED_ORIGINS, buildAppCsp } from '@/core/csp';
 import { FIXTURES } from './fixtures';
 import { fetchSource, initialDelayMs, nextDelayMs, refreshable, REFRESH_MIN_GAP_MS } from './runner';
-import { BROWSER_SOURCES, BROWSER_SOURCE_BY_ID, MAX_ITEMS, toIso } from './sources';
+import { BROWSER_SOURCES, BROWSER_SOURCE_BY_ID, MAX_ITEMS, snapshotScope, toIso } from './sources';
 import { filterEvents, pruneKeys, staleKeys, toStored, type StoredEvent } from './store';
 
 describe('browser source parsers', () => {
@@ -36,15 +36,35 @@ describe('browser source parsers', () => {
     const [alert] = BROWSER_SOURCE_BY_ID.nws_alerts.parse(FIXTURES.nws_alerts);
     expect(alert.latitude).toBeGreaterThan(36.9);
     expect(toIso('2026-11-12T03:45:56')).toBe('2026-11-12T03:45:56.000Z');
+    expect(toIso('2026-11-10')).toBe('2026-11-10T00:00:00.000Z');
     expect(toIso('2026-11-10 13:29:13')).toBe('2026-11-10T13:29:13.000Z');
     expect(toIso('nope')).toBeNull();
   });
   it('returns nothing for malformed bodies and caps item count and title length', () => {
-    for (const source of BROWSER_SOURCES) expect(source.parse({ unexpected: true })).toEqual([]);
+    for (const source of BROWSER_SOURCES.filter((source) => !source.snapshot)) expect(source.parse({ unexpected: true })).toEqual([]);
     const hits = Array.from({ length: 500 }, (_, i) => ({ objectID: String(i), title: 'x'.repeat(900), url: 'https://e.com' }));
     const parsed = BROWSER_SOURCE_BY_ID.hackernews.parse({ hits });
     expect(parsed).toHaveLength(MAX_ITEMS);
     expect(parsed[0].title).toHaveLength(500);
+  });
+  it('throws on a structurally invalid snapshot payload instead of reading it as an empty set', () => {
+    expect(() => BROWSER_SOURCE_BY_ID.nws_alerts.parse({ unexpected: true })).toThrow('payload_shape');
+    expect(() => BROWSER_SOURCE_BY_ID.launches.parse({ unexpected: true })).toThrow('payload_shape');
+    expect(() => BROWSER_SOURCE_BY_ID.gamerpower.parse({ unexpected: true })).toThrow('payload_shape');
+    expect(BROWSER_SOURCE_BY_ID.nws_alerts.parse({ features: [] })).toEqual([]);
+    expect(BROWSER_SOURCE_BY_ID.launches.parse({ results: [] })).toEqual([]);
+    expect(BROWSER_SOURCE_BY_ID.gamerpower.parse([])).toEqual([]);
+  });
+  it('treats a non-empty snapshot list with no valid item as drift, but keeps partially valid lists', () => {
+    // Every item fails the schema (renamed field): must throw so the worker keeps stored rows, not prune them.
+    expect(() => BROWSER_SOURCE_BY_ID.nws_alerts.parse({ features: [{ properties: {} }, { nope: 1 }] })).toThrow('payload_shape');
+    // A genuinely empty list is still an authoritative empty current set.
+    expect(BROWSER_SOURCE_BY_ID.nws_alerts.parse({ features: [] })).toEqual([]);
+    // One valid item among bad ones: the bad ones are dropped, the valid one is kept.
+    const mixed = BROWSER_SOURCE_BY_ID.nws_alerts.parse({
+      features: [{ properties: {} }, { properties: { id: 'a1', event: 'Flood Warning' } }],
+    });
+    expect(mixed.map((event) => event.id)).toEqual(['a1']);
   });
   it('requires a safe GitHub scope', () => {
     const github = BROWSER_SOURCE_BY_ID.github_releases;
@@ -109,6 +129,23 @@ describe('stale rows and ordering', () => {
   it('lists stored keys of a provider that the new snapshot omits', () => {
     expect(staleKeys(['usgs:a', 'usgs:b', 'usgs:c'], ['usgs:b'])).toEqual(['usgs:a', 'usgs:c']);
     expect(staleKeys([], ['usgs:b'])).toEqual([]);
+  });
+  it('deletes nothing when the new batch is empty (a 200 that parses to [] must not wipe history)', () => {
+    expect(staleKeys(['nws_alerts:a', 'nws_alerts:b'], [])).toEqual([]);
+  });
+  it('deletes every stored key when a verified empty snapshot is allowed', () => {
+    expect(staleKeys(['nws_alerts:a', 'nws_alerts:b'], [], true)).toEqual(['nws_alerts:a', 'nws_alerts:b']);
+    expect(staleKeys(['nws_alerts:a'], ['nws_alerts:a'], true)).toEqual([]);
+  });
+  it('routes deletes only to sources flagged as complete snapshots', () => {
+    expect(
+      BROWSER_SOURCES.filter((source) => source.snapshot)
+        .map((source) => source.id)
+        .sort(),
+    ).toEqual(['gamerpower', 'launches', 'nws_alerts']);
+    expect(snapshotScope('nws_alerts')).toEqual(['nws_alerts']);
+    expect(snapshotScope('usgs')).toEqual([]);
+    expect(snapshotScope('not_a_source')).toEqual([]);
   });
   it('ranks future-dated rows as now instead of above everything', () => {
     const now = Date.parse('2026-11-12T00:00:00Z');

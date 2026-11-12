@@ -11,10 +11,12 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { PasswordInput } from '@/components/ui/password-input';
 import { apiRequest, csrfHeaders } from '@/core/api';
+import type { components } from '@/core/api-types.gen';
 import { useWorkspaceSession } from '@/core/app-shell/workspace-shell';
 import { useWorkspace } from '@/core/workspace-context';
 
-type Config = { revision: number; openweather_configured: boolean; firms_configured: boolean; sec_contact_email: string | null; is_operator: boolean; terms_catalog: { id: string; label: string; terms_url: string; version: string; attribution: string; eligibility: 'open' | 'personal' | 'noncommercial' | 'review'; accepted: boolean; acknowledged: boolean; review_state: string | null }[] };
+/** Live-map config as the backend serializes it (generated from the OpenAPI schema). */
+type Config = components['schemas']['LiveConfigResponse'];
 
 /** Terms-acceptance draft: selected providers, use class, operator review confirmation and evidence reference. */
 function useTermsDraft() {

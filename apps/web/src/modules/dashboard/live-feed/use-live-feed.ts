@@ -3,11 +3,14 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiRequest } from '@/core/api';
+import type { components } from '@/core/api-types.gen';
+import { isLiveFeedTeardownStarted } from '@/core/live-feed-storage';
 import { useWorkspace } from '@/core/workspace-context';
 import type { GadgetScope } from '../api';
-import { liveMapPoints, type LiveEvent } from '../live-map-data';
-import type { WorkerInbound, WorkerOutbound } from './runner';
+import { liveMapPoints } from '../live-map-data';
+import type { WorkerOutbound } from './runner';
 import { isBrowserProvider, providerTags } from './sources';
+import { subscribeWorker, type PoolWorker } from './worker-pool';
 import { filterEvents, loadEvents, toStored, upsertEvents, type StoredEvent } from './store';
 
 /** Providers enabled when a gadget defines none. */
@@ -26,11 +29,14 @@ export const DEFAULT_PROVIDERS = [
   'coingecko',
 ];
 
-/** Live-map config response: revision plus the provider terms catalog (accepted flag and attribution). */
-export type LiveConfig = { revision: number; terms_catalog: { id: string; attribution: string; accepted: boolean }[] };
+/** Live-map config response (generated from the OpenAPI schema): revision, credential flags and the terms catalog. */
+export type LiveConfig = components['schemas']['LiveConfigResponse'];
 
-/** Last known fetch state of one provider, from either path; `error` is already a translation key. */
-export type ProviderStatus = { fetchedAt?: string; error?: LiveErrorKey; truncated?: boolean };
+/**
+ * Last known fetch state of one provider, from either path; `error` is already a translation key. `staleSince` is the
+ * last successful fetch (ISO) when a failed refetch left older rows on screen.
+ */
+export type ProviderStatus = { fetchedAt?: string; error?: LiveErrorKey; truncated?: boolean; staleSince?: string };
 
 /** Translation keys a provider failure can map to; response bodies are never rendered. */
 export type LiveErrorKey =
@@ -45,19 +51,71 @@ export type LiveErrorKey =
   | 'liveMapStorageError'
   | 'liveMapSourceError';
 
-type LiveResponse = { items: LiveEvent[]; fetched_at: string; truncated: boolean };
+type LiveResponse = components['schemas']['LiveMapEventsResponse'];
 
 /** True when the config loaded without error and the owner accepted the provider's terms. */
 export function termsAccepted(config: { isError: boolean; data?: LiveConfig }, id: string): boolean {
   return !config.isError && Boolean(config.data?.terms_catalog.some((term) => term.id === id && term.accepted));
 }
 
+/** The query state `snapshotProviders` reads: a failed refetch may still carry older `data`. */
+export type SnapshotResult = { isError?: boolean; data?: { truncated?: boolean } };
+
 /**
- * Proxied providers whose response is a complete snapshot: loaded and not truncated. A truncated response omits rows
- * that still exist upstream, so deleting the stored rows it lacks would drop live events.
+ * Backend-proxied providers whose response is the complete current set, so stored rows it no longer returns may be
+ * deleted. Missing ids default to false (`=== true` in `snapshotProviders`), so a new proxied provider never prunes.
+ * Every backend provider is false today, because none returns a bounded full state:
+ * - firms: rolling hotspot window; lobsters: front-page top-N; cisa_kev: newest-N slice of the KEV catalog;
+ * - business, bbc_world, aljazeera, vnexpress_world, vnexpress_news, gaming_news: rolling news windows;
+ * - fed: recent releases only; sec: recent EDGAR filings only.
+ * Flip an entry to true only when the backend returns every active item and the response is never capped.
  */
-export function snapshotProviders(proxied: readonly string[], results: readonly { data?: { truncated?: boolean } }[]): string[] {
-  return proxied.filter((_, index) => results[index]?.data && !results[index].data?.truncated);
+export const PROXIED_SNAPSHOT: Readonly<Record<string, boolean>> = {
+  firms: false,
+  lobsters: false,
+  cisa_kev: false,
+  business: false,
+  fed: false,
+  bbc_world: false,
+  aljazeera: false,
+  vnexpress_world: false,
+  vnexpress_news: false,
+  gaming_news: false,
+  sec: false,
+};
+
+/**
+ * Proxied providers whose response may replace their stored rows: flagged as a current-set snapshot in `snapshot`,
+ * included in the write (`included`, the same predicate that builds `proxyEntries`), not errored (a failed refetch keeps
+ * old data that is no longer current), loaded and not truncated. A truncated response omits rows that still exist
+ * upstream, so deleting the stored rows it lacks would drop live events.
+ * @param included Inclusion flags aligned with `proxied`; a provider left out of the write must not be pruned.
+ * @param snapshot Per-provider current-set flags; defaults to `PROXIED_SNAPSHOT`.
+ * @returns Provider ids safe to treat as complete snapshots.
+ */
+export function snapshotProviders(
+  proxied: readonly string[],
+  results: readonly SnapshotResult[],
+  included: readonly boolean[],
+  snapshot: Readonly<Record<string, boolean>> = PROXIED_SNAPSHOT,
+): string[] {
+  return proxied.filter((provider, index) => {
+    const result = results[index];
+    return Boolean(snapshot[provider] === true && included[index] && result && !result.isError && result.data && !result.data.truncated);
+  });
+}
+
+/**
+ * Whether a proxied provider's query result is written to the store. Owner-only path, accepted terms, and not a 409:
+ * the server refused the scope, so any retained data is not part of the current feed. Both the entries and the
+ * snapshot list use this predicate, so a provider cannot be pruned without its rows being replaced.
+ * @param result The query outcome; only `error` is read.
+ * @param accepted Whether the owner accepted the provider's terms.
+ * @param isOwner Whether the viewer may read the owner-only proxy.
+ * @returns True when the provider's rows belong in the store write.
+ */
+export function proxyIncluded(result: { error: unknown }, accepted: boolean, isOwner: boolean): boolean {
+  return isOwner && accepted && !(result.error instanceof ApiError && result.error.status === 409);
 }
 
 /** Merge row lists by key; later lists win (stored < worker memory < fresh proxy rows). */
@@ -96,72 +154,86 @@ export function liveErrorKey(error: unknown, provider: string): LiveErrorKey {
 }
 
 /**
- * Owns the module worker lifecycle: spawn per workspace, post the accepted browser providers and scope, mirror tab
- * and gadget visibility (`active`; no background polling while hidden) and terminate on unmount.
+ * Subscribes to the module worker shared per workspace (see worker-pool.ts): contributes the accepted browser
+ * providers and scope to the merged config, mirrors gadget visibility (`active`) and releases on unmount.
  * @returns Worker-reported statuses, in-memory rows for providers whose store write failed, a counter that increments whenever the worker wrote new rows, `bump` to force a store re-read, and `refresh` to ask the worker to fetch now.
  */
 function useBrowserWorker(workspaceId: string | undefined, browserKey: string, scope: GadgetScope, active: boolean) {
-  const workerRef = useRef<Worker | null>(null);
+  const subRef = useRef<ReturnType<typeof subscribeWorker> | null>(null);
   const [workerStatus, setWorkerStatus] = useState<Record<string, ProviderStatus>>({});
   const [version, setVersion] = useState(0);
   // Rows the worker could not persist, kept in memory per provider until a later write succeeds.
   const [workerItems, setWorkerItems] = useState<Record<string, StoredEvent[]>>({});
+  const providers = useMemo(() => (browserKey ? browserKey.split(',') : []), [browserKey]);
 
   useEffect(() => {
     if (!workspaceId || typeof Worker === 'undefined') return;
-    const next = new Worker(new URL('./live-feed.worker.ts', import.meta.url), { type: 'module' });
-    /** Record provider status or schedule a store re-read; the worker never sends anything else. */
-    next.onmessage = (message: MessageEvent<WorkerOutbound>) => {
-      const data = message.data;
-      if (data.type === 'changed') setVersion((current) => current + 1);
-      else if (data.type === 'items') setWorkerItems((current) => ({ ...current, [data.provider]: data.items }));
-      else {
-        // A clean run wrote to the store, so any in-memory fallback rows for the provider are obsolete.
-        if (data.ok)
-          setWorkerItems((current) =>
-            data.provider in current ? Object.fromEntries(Object.entries(current).filter(([id]) => id !== data.provider)) : current,
-          );
-        setWorkerStatus((current) => ({
-          ...current,
-          [data.provider]: data.ok
-            ? { fetchedAt: data.fetchedAt }
-            : { fetchedAt: data.fetchedAt, error: liveErrorKey(data.error ?? '', data.provider) },
-        }));
-      }
-    };
-    workerRef.current = next;
+    const subscription = subscribeWorker(
+      workspaceId,
+      {
+        providers,
+        scope,
+        active,
+        /** Record provider status or schedule a store re-read; the worker never sends anything else. */
+        onMessage: (data: WorkerOutbound) => {
+          if (data.type === 'changed') setVersion((current) => current + 1);
+          else if (data.type === 'items') setWorkerItems((current) => ({ ...current, [data.provider]: data.items }));
+          else {
+            // A clean run wrote to the store, so any in-memory fallback rows for the provider are obsolete.
+            if (data.ok)
+              setWorkerItems((current) =>
+                data.provider in current ? Object.fromEntries(Object.entries(current).filter(([id]) => id !== data.provider)) : current,
+              );
+            setWorkerStatus((current) => ({
+              ...current,
+              [data.provider]: data.ok
+                ? { fetchedAt: data.fetchedAt }
+                : { fetchedAt: data.fetchedAt, error: liveErrorKey(data.error ?? '', data.provider) },
+            }));
+          }
+        },
+      },
+      () => new Worker(new URL('./live-feed.worker.ts', import.meta.url), { type: 'module' }) as unknown as PoolWorker,
+    );
+    subRef.current = subscription;
     return () => {
-      next.terminate();
-      workerRef.current = null;
+      subscription.release();
+      subRef.current = null;
       setWorkerStatus({});
       setWorkerItems({});
     };
+    // Providers, scope and activity reach the shared worker through the update effect below, not by re-subscribing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
 
   useEffect(() => {
-    const worker = workerRef.current;
-    if (worker && workspaceId)
-      worker.postMessage({ type: 'config', providers: browserKey ? browserKey.split(',') : [], scope, workspaceId });
     // scope is compared by the fields browser sources read, not by identity.
+    subRef.current?.update({ providers, scope, active });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, browserKey, scope.live_map_github_owner, scope.live_map_github_repo]);
-
-  useEffect(() => {
-    const worker = workerRef.current;
-    if (!worker) return;
-    /** Poll only while the tab is visible and the owning gadget is on screen. */
-    const update = () => worker.postMessage({ type: 'visibility', visible: active && document.visibilityState === 'visible' });
-    update();
-    document.addEventListener('visibilitychange', update);
-    return () => document.removeEventListener('visibilitychange', update);
-  }, [workspaceId, active]);
+  }, [workspaceId, providers, active, scope.live_map_github_owner, scope.live_map_github_repo]);
   return {
     workerStatus,
     workerItems,
     version,
     bump: () => setVersion((current) => current + 1),
-    refresh: () => workerRef.current?.postMessage({ type: 'refresh' } satisfies WorkerInbound),
+    refresh: () => subRef.current?.refresh(),
   };
+}
+
+/**
+ * Status of one proxied provider's query. A failed refetch keeps the previous rows (react-query retains `data`), so the
+ * error carries `staleSince` (the last successful fetch) and the UI can say the shown rows are old.
+ * @returns The status, or undefined while the query has neither data nor an error.
+ */
+export function proxiedStatus(
+  result: { isError: boolean; error: unknown; data?: LiveResponse },
+  provider: string,
+  isOwner: boolean,
+): ProviderStatus | undefined {
+  if (!isOwner) return { error: 'liveMapOwnerOnly' };
+  if (result.isError) return { error: liveErrorKey(result.error, provider), staleSince: result.data?.fetched_at };
+  if (result.data) return { fetchedAt: result.data.fetched_at, truncated: result.data.truncated };
+  return undefined;
 }
 
 /**
@@ -227,7 +299,7 @@ export function useLiveFeed(scope: GadgetScope, filters: { tags: string[]; days:
     () =>
       proxied.flatMap((provider, index) => {
         const result = results[index];
-        if (!isOwner || !termsAccepted(config, provider) || (result.error instanceof ApiError && result.error.status === 409)) return [];
+        if (!proxyIncluded(result, termsAccepted(config, provider), isOwner)) return [];
         const seenAt = new Date(result.dataUpdatedAt || 0).toISOString();
         return (result.data?.items ?? []).map((item) => toStored(provider, providerTags(provider), item, seenAt));
       }),
@@ -236,10 +308,13 @@ export function useLiveFeed(scope: GadgetScope, filters: { tags: string[]; days:
     [proxyStamp, isOwner, acceptedKey, config.data],
   );
   useEffect(() => {
-    if (!workspaceId || !proxyEntries.length) return;
+    // With no rows there is nothing to write; an empty batch never prunes (see staleKeys), so skipping is equivalent.
+    // Once logout or erasure has started teardown, a late query must not reopen (and so recreate) the feed database.
+    if (!workspaceId || !proxyEntries.length || isLiveFeedTeardownStarted()) return;
     // Best-effort persistence: an unavailable or full store must not break the live (in-memory) view.
-    // Providers with a complete (non-truncated) response are full snapshots, so their vanished rows are replaced.
-    void upsertEvents(workspaceId, proxyEntries, Date.now(), snapshotProviders(proxied, results)).then(bump, () => undefined);
+    // Only providers whose response was included, loaded and complete may prune their vanished rows.
+    const included = proxied.map((provider, index) => proxyIncluded(results[index], termsAccepted(config, provider), isOwner));
+    void upsertEvents(workspaceId, proxyEntries, Date.now(), snapshotProviders(proxied, results, included)).then(bump, () => undefined);
     // proxyEntries derives from the query results identified by proxyStamp.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, proxyStamp]);
@@ -263,10 +338,8 @@ export function useLiveFeed(scope: GadgetScope, filters: { tags: string[]; days:
 
   const statuses: Record<string, ProviderStatus> = { ...workerStatus };
   proxied.forEach((provider, index) => {
-    const result = results[index];
-    if (!isOwner) statuses[provider] = { error: 'liveMapOwnerOnly' };
-    else if (result.isError) statuses[provider] = { error: liveErrorKey(result.error, provider) };
-    else if (result.data) statuses[provider] = { fetchedAt: result.data.fetched_at, truncated: result.data.truncated };
+    const status = proxiedStatus(results[index], provider, isOwner);
+    if (status) statuses[provider] = status;
   });
   /** Manual refresh of both paths: refetch proxied queries and ask the worker to fetch its providers now. */
   const refresh = () => {
