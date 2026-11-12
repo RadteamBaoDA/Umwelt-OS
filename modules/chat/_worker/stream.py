@@ -344,9 +344,11 @@ async def _run_data_tool(env: _ToolEnv, call: dict[str, str]) -> str:
 _TOOL_BUDGET_EXHAUSTED = json.dumps(
     {
         "error": "tool_budget_exhausted",
-        "instruction": "Answer now from the evidence already returned; cite its [n] markers.",
+        "detail": "The tool budget for this turn is spent; no further tools will run.",
     }
 )
+# An over-cap call in a round that still has rounds left: the model may call again next round.
+_PER_ROUND_CAP_EXCEEDED = json.dumps({"error": "per_round_cap_exceeded"})
 
 
 async def _answer_tool_calls(
@@ -362,6 +364,8 @@ async def _answer_tool_calls(
     Widget calls get a ``rendered`` stub (the payload is already on screen), invalid ones their validation
     error, data calls their handler's result (handlers may raise ``_RunStopped``). With ``budget_exhausted``
     data calls are not run: they get a ``tool_budget_exhausted`` result so the model answers from what it has.
+    Calls over a handler's per-round cap in a continuing round get ``per_round_cap_exceeded`` instead (no
+    instruction to stop: later rounds may still call tools).
     """
     ts = env.ts
     if any(id(call) not in rc.invalid_of and id(call) not in rc.part_of for call in rc.handled):
@@ -390,8 +394,10 @@ async def _answer_tool_calls(
         elif id(call) in rc.part_of:
             # The payload is already on screen; echoing it back would only cost tokens.
             content = json.dumps({"status": "rendered", "part_id": rc.part_of[id(call)]})
-        elif budget_exhausted or id(call) in rc.over_cap:
+        elif budget_exhausted:
             content = _TOOL_BUDGET_EXHAUSTED
+        elif id(call) in rc.over_cap:
+            content = _PER_ROUND_CAP_EXCEEDED
         else:
             content = await _run_data_tool(env, call)
         ts.messages_payload.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
@@ -402,7 +408,8 @@ async def _finish_round(env: _ToolEnv, st: _StreamState, rs: _RoundState) -> boo
 
     On True the next round's stream has been opened with the tool results appended. Raises ``_RunStopped``
     when a fence stopped the run. Every continuing round counts toward ``MAX_TOOL_ROUNDS_PER_TURN``, an absolute
-    backstop so a handler category outside the widget/data caps can never loop a turn forever.
+    backstop so a handler category outside the widget/data caps can never loop a turn forever; on that
+    ceiling the round's widgets are still recorded in ``ts.ui_parts``.
     """
     c, ts = env.c, env.ts
     if not await _flush_pending(c, st):
@@ -412,9 +419,12 @@ async def _finish_round(env: _ToolEnv, st: _StreamState, rs: _RoundState) -> boo
     if not rc.handled:
         return False  # a plain text round (or nothing we may act on): the answer is complete
     ts.tool_rounds += 1
-    if ts.tool_rounds > MAX_TOOL_ROUNDS_PER_TURN:
+    ceiling = ts.tool_rounds > MAX_TOOL_ROUNDS_PER_TURN
+    if ceiling:
         logger.warning("Absolute tool-round ceiling reached for run %s", c.response_id)
-    if ts.tool_rounds > MAX_TOOL_ROUNDS_PER_TURN or not _bounded_continue(ts, rc, c.response_id):
+        # _bounded_continue is skipped on this path, so keep this round's rendered widgets like it does.
+        ts.ui_parts.extend(rc.round_parts)
+    if ceiling or not _bounded_continue(ts, rc, c.response_id):
         if rc.round_parts or rc.invalid_of or ts.synth_done:
             return False  # widget cap, or the synthesis round itself asked for tools again
         # Data-tool budget spent: close the turn with one no-tools round instead of dropping the calls

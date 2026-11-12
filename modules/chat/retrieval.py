@@ -969,10 +969,22 @@ async def _evidence_chunk_reasons(
     for the lock-only state projection (same locks, ids/generation/status/local_only, no content or
     ORM rows). A ``ValueError`` from the owner (stale exact selection) is reported as a reason.
     Without selection fences the refs are read in chunks of ``_OWNER_READ_LIMIT`` and merged, so a broad
-    tool turn with more than 100 evidence items is not mistaken for a stale selection.
+    tool turn with more than 100 evidence items is not mistaken for a stale selection. Refs are sorted by
+    (source, document, version, chunk) first, the owner's lock order, so chunked reads lock in one global order.
     """
     reasons: list[str] = []
-    refs = [(item.document_version_id, item.chunk_id) for item in context.evidence]
+    # Same order the owner read locks in (source, document, version, chunk): chunked reads then take
+    # their locks in one global order, so two broad turns cannot lock overlapping batches in opposite order.
+    ordered = sorted(
+        context.evidence,
+        key=lambda item: (
+            str(item.source_id),
+            str(item.document_id),
+            str(item.document_version_id),
+            str(item.chunk_id),
+        ),
+    )
+    refs = [(item.document_version_id, item.chunk_id) for item in ordered]
     if not refs:
         return reasons
     read_chunks: Any

@@ -571,7 +571,8 @@ async def test_trip_images_tool_runs_in_loop_then_widget_renders(
     assert followup[-5]["tool_calls"][0]["function"]["name"] == "get_trip_stop_images"
     assert followup[-4]["tool_call_id"] == "t1" and followup[-4]["content"] == '{"stops": []}'
     assert followup[-3]["tool_call_id"] == "t2"
-    assert json.loads(followup[-3]["content"])["error"] == "tool_budget_exhausted"
+    over = json.loads(followup[-3]["content"])
+    assert over == {"error": "per_round_cap_exceeded"}  # a continuing round: no stop instruction
     assert json.loads(followup[-1]["content"]) == {"status": "rendered", "part_id": "w"}
     assert [d.data["kind"] for d in gen.events("message.ui.done")] == ["table"]
 

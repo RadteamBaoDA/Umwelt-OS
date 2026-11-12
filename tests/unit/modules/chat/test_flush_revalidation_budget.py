@@ -370,3 +370,38 @@ async def test_evidence_reasons_chunk_owner_reads_over_100_without_fences(
     )
     assert reasons == []
     assert sizes == [100, 50]
+
+
+async def test_evidence_reasons_read_refs_in_owner_lock_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Chunked owner reads receive refs sorted by (source, document, version, chunk), not evidence order."""
+    items = [_evidence() for _ in range(120)]
+    items.reverse()
+    context = AnswerContext(query="q", evidence=items)
+    seen: list[Any] = []
+
+    async def read(_session: Any, refs: list[Any], **_k: Any) -> list[Any]:
+        seen.extend(refs)
+        return []
+
+    monkeypatch.setattr(retrieval.documents_public, "lock_chat_evidence_state", read)
+    await retrieval._evidence_chunk_reasons(
+        MagicMock(),
+        context,
+        destination="remote",
+        require_current_versions=False,
+        lock_evidence=True,
+        scope_kw={"scope": SCOPE},
+        lightweight=True,
+    )
+    expected = sorted(
+        items,
+        key=lambda i: (
+            str(i.source_id),
+            str(i.document_id),
+            str(i.document_version_id),
+            str(i.chunk_id),
+        ),
+    )
+    assert seen == [(i.document_version_id, i.chunk_id) for i in expected]

@@ -725,3 +725,33 @@ async def test_enforced_empty_source_scope_skips_search(monkeypatch: pytest.Monk
     await retrieval._collect_search_refs(None, None, None, request, {}, collector, [])  # type: ignore[arg-type]
     search.assert_not_called()
     assert collector.refs == []
+
+
+@pytest.mark.asyncio
+async def test_ceiling_round_keeps_its_widgets_and_over_cap_payload_is_distinct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The absolute ceiling path records the round's widgets; over-cap answers carry no stop instruction."""
+    import json
+
+    from modules.chat._worker import stream
+
+    part = ("p1", {"id": "w", "name": "ui", "arguments": "{}"})
+    rc = SimpleNamespace(handled=[part[1]], round_parts=[part], invalid_of={}, over_cap=set())
+
+    async def flush(*_a):
+        return True
+
+    async def classify(*_a):
+        return rc
+
+    monkeypatch.setattr(stream, "_flush_pending", flush)
+    monkeypatch.setattr(stream, "_classify_round", classify)
+    ts = SimpleNamespace(tool_rounds=stream.MAX_TOOL_ROUNDS_PER_TURN, ui_parts=[], synth_done=False)
+    st = SimpleNamespace(pending_ui={"x": 1})
+    env = SimpleNamespace(c=SimpleNamespace(response_id=uuid4()), ts=ts, setup=None)
+    rs = SimpleNamespace(acc=SimpleNamespace(calls=lambda: []))
+    assert await stream._finish_round(env, st, rs) is False  # type: ignore[arg-type]
+    assert ts.ui_parts == [part]
+    assert json.loads(stream._PER_ROUND_CAP_EXCEEDED) == {"error": "per_round_cap_exceeded"}
+    assert "instruction" not in json.loads(stream._TOOL_BUDGET_EXHAUSTED)
