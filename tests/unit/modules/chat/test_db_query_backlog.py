@@ -47,7 +47,7 @@ def test_legacy_aggregation_values_map_to_none() -> None:
 
 
 def test_observation_filters_exact_and_index_friendly() -> None:
-    """Provider/metric/symbol compare the bare column (no lower()/upper() wrapper)."""
+    """Provider is exact; metric/symbol compare case-insensitively on the column."""
     sql = _sql(
         _observation_filters(
             _args(providers=["Binance"], metrics=["Price"], symbols=["btcusdt"]),
@@ -58,10 +58,9 @@ def test_observation_filters_exact_and_index_friendly() -> None:
         )
     )
     assert "observations.provider IN ('binance')" in sql
-    assert "observations.metric IN ('price')" in sql
-    assert "observations.symbol IN ('BTCUSDT')" in sql
-    assert "lower(" not in sql
-    assert "upper(observations.symbol" not in sql
+    assert "lower(observations.metric) IN ('price')" in sql
+    assert "upper(observations.symbol) IN ('BTCUSDT')" in sql
+    assert "lower(observations.provider" not in sql
 
 
 @pytest.mark.parametrize(

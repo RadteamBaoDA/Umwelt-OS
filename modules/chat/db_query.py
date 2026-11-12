@@ -861,11 +861,10 @@ def _observation_filters(
 
     ``is_current=false`` rows are superseded revisions of the same data point (ingestion inserts a new
     revision and flips the previous current row to false), so aggregates always filter ``is_current=true``:
-    averaging or counting across revisions would double-count one measurement. Provider/metric are matched
-    exactly against lower-cased input (provider ids and metric names are stored lower-case) and symbol
-    against upper-cased input (symbols are stored upper-case), so the
-    ``ix_observations_owner_series_current`` index prefix stays usable; ``region`` has no storage
-    convention and keeps its case-insensitive compare.
+    averaging or counting across revisions would double-count one measurement. Provider is matched
+    exactly against lower-cased input (the DB CHECK enforces lower-case ids). Metric and symbol are
+    compared case-insensitively on both sides because ingestion does not normalise their case;
+    ``region`` likewise.
     """
     obs_filters: list[Any] = [
         Observation.workspace_id == workspace_id,
@@ -879,11 +878,15 @@ def _observation_filters(
         )
     if args.metrics:
         obs_filters.append(
-            Observation.metric.in_([m.strip().lower() for m in args.metrics if m.strip()])
+            func.lower(Observation.metric).in_(
+                [m.strip().lower() for m in args.metrics if m.strip()]
+            )
         )
     if args.symbols:
         obs_filters.append(
-            Observation.symbol.in_([s.strip().upper() for s in args.symbols if s.strip()])
+            func.upper(Observation.symbol).in_(
+                [s.strip().upper() for s in args.symbols if s.strip()]
+            )
         )
     if args.region:
         obs_filters.append(func.upper(Observation.region) == args.region.strip().upper())
