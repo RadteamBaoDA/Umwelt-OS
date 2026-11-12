@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dashboardMessages } from '@/core/messages/dashboard';
 import { DashboardOverview } from './dashboard-overview';
 
-vi.mock('./gadgets/live-map-gadget', () => ({ LiveMapOverview: () => <div data-testid="map" /> }));
+vi.mock('./gadgets/live-map-gadget', () => ({ LiveMapOverview: ({ toolbarStart }: { toolbarStart?: React.ReactNode }) => <div data-testid="map">{toolbarStart}</div> }));
 vi.mock('./dashboard-panel', () => ({ DashboardPanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 
 /** Renders the overview in desktop (non-compact) mode. */

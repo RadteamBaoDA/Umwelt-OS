@@ -54,7 +54,7 @@ Never commit secrets or personal data. Provide placeholder configuration in `.en
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Umwelt-OS** (37085 symbols, 78299 relationships, 844 execution flows).
+This project is indexed by GitNexus as **Umwelt-OS** (52891 symbols, 113700 relationships, 890 execution flows).
 
 > Index stale? Run `node .gitnexus/run.cjs analyze --index-only` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? Bootstrap with `npx`, `bunx`, or `pnpm dlx` — e.g. `bunx gitnexus@latest analyze` (npm 11 npx crash; #1939).
 

@@ -18,6 +18,12 @@ describe('app CSP', () => {
     expect(csp).toContain("connect-src 'self' ws: wss:");
   });
 
+  it('lets the browser fetch the OpenFreeMap basemap', () => {
+    const csp = buildAppCsp('n', false);
+    expect(csp).toMatch(/connect-src [^;]*https:\/\/tiles\.openfreemap\.org/);
+    expect(csp).toMatch(/img-src [^;]*https:\/\/tiles\.openfreemap\.org/);
+  });
+
   it('creates distinct header-safe nonces', () => {
     const a = createCspNonce();
     expect(a).not.toBe(createCspNonce());

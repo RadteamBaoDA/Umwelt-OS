@@ -16,7 +16,7 @@ describe('live map visibility', () => {
     vi.unstubAllGlobals();
     request.mockReset();
   });
-  it('shows the EONET source links returned by the proxy', async () => {
+  it('shows the proxied source links returned by the proxy', async () => {
     let observe: IntersectionObserverCallback | undefined;
     vi.stubGlobal(
       'IntersectionObserver',
@@ -40,8 +40,8 @@ describe('live map visibility', () => {
         ? {
             revision: 1,
             terms_catalog: [
-              { id: 'eonet', accepted: true },
-              { id: 'usgs', accepted: true },
+              { id: 'lobsters', accepted: true },
+              { id: 'cisa_kev', accepted: true },
             ],
           }
         : {
@@ -51,7 +51,7 @@ describe('live map visibility', () => {
               {
                 id: '1',
                 title: 'Event',
-                source: 'NASA EONET',
+                source: 'Lobsters',
                 observed_at: null,
                 latitude: null,
                 longitude: null,
@@ -62,7 +62,7 @@ describe('live map visibility', () => {
             ],
           },
     );
-    const instance = { id: 'one', definition: { scope: { live_map_providers: ['eonet'] }, filters: {} } } as GadgetInstance;
+    const instance = { id: 'one', definition: { scope: { live_map_providers: ['lobsters'] }, filters: {} } } as GadgetInstance;
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <NextIntlClientProvider locale="en-US" messages={{ dashboard: dashboardMessages['en-us'] }}>
@@ -94,7 +94,7 @@ describe('live map visibility', () => {
         disconnect() {}
       },
     );
-    const accepted = { revision: 1, terms_catalog: [{ id: 'usgs', accepted: true }] };
+    const accepted = { revision: 1, terms_catalog: [{ id: 'cisa_kev', accepted: true }] };
     request.mockImplementation(async (url) =>
       url.includes('/config')
         ? accepted
@@ -106,7 +106,7 @@ describe('live map visibility', () => {
             ],
           },
     );
-    const instance = { id: 'one', definition: { scope: { live_map_providers: ['usgs'] }, filters: {} } } as GadgetInstance;
+    const instance = { id: 'one', definition: { scope: { live_map_providers: ['cisa_kev'] }, filters: {} } } as GadgetInstance;
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
@@ -119,7 +119,7 @@ describe('live map visibility', () => {
     act(() => observe?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
     expect(await screen.findByText('Old event')).toBeTruthy();
     act(() => {
-      client.setQueryData(['live-map-config', 'workspace'], { revision: 2, terms_catalog: [{ id: 'usgs', accepted: false }] });
+      client.setQueryData(['live-map-config', 'workspace'], { revision: 2, terms_catalog: [{ id: 'cisa_kev', accepted: false }] });
     });
     await waitFor(() => expect(screen.queryByText('Old event')).toBeNull());
   });
@@ -148,8 +148,8 @@ describe('live map visibility', () => {
         ? Promise.resolve({
             revision: 1,
             terms_catalog: [
-              { id: 'eonet', accepted: true },
-              { id: 'usgs', accepted: true },
+              { id: 'lobsters', accepted: true },
+              { id: 'cisa_kev', accepted: true },
             ],
           })
         : new Promise((_resolve, reject) => {
@@ -157,7 +157,7 @@ describe('live map visibility', () => {
             signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
           }),
     );
-    const instance = { id: 'one', definition: { scope: { live_map_providers: ['usgs'] }, filters: {} } } as GadgetInstance;
+    const instance = { id: 'one', definition: { scope: { live_map_providers: ['cisa_kev'] }, filters: {} } } as GadgetInstance;
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const renderMaps = (count: number) => (
       <QueryClientProvider client={client}>

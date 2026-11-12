@@ -210,8 +210,8 @@ PRESETS: tuple[DashboardPreset, ...] = (
         "Overview",
         "purpose",
         (
-            PresetSlot("news_feed", "news_feed"),
             PresetSlot("map", "map"),
+            PresetSlot("news_feed", "news_feed"),
             PresetSlot("highlights", "highlights"),
             PresetSlot("daily_brief", "daily_brief"),
         ),

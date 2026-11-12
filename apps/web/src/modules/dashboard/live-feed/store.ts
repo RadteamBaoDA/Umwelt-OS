@@ -1,0 +1,116 @@
+import { LIVE_FEED_DB_PREFIX as DB_PREFIX } from '@/core/live-feed-storage';
+import type { LiveEvent } from '../live-map-data';
+
+export { clearLiveFeed } from '@/core/live-feed-storage';
+
+/** An event as persisted locally: provider-qualified key, merged tags and the time the browser saw it. */
+export type StoredEvent = LiveEvent & { key: string; provider: string; tags: string[]; seen_at: string };
+
+/** Filters applied to stored and proxied events alike. */
+export type LiveFilters = { tags: string[]; days: number; query: string; providers: string[] };
+
+const STORE = 'events';
+/** Rows older than this are pruned after each write batch. */
+export const RETENTION_MS = 30 * 86_400_000;
+/** Row cap enforced after each write batch (oldest evicted first). */
+export const MAX_ROWS = 5_000;
+
+/** Convert a provider item into a stored row; the provider's tags are merged with the event's own. */
+export function toStored(provider: string, providerTags: string[], item: LiveEvent, seenAt: string): StoredEvent {
+  const tags = [...new Set([...providerTags, ...(item.tags ?? [])].map((tag) => tag.toLowerCase()))];
+  return { ...item, key: `${provider}:${item.id}`, provider, tags, seen_at: seenAt };
+}
+
+/** Event time used for ordering and pruning: observation time, else when it was first seen. */
+function eventTime(row: { observed_at: string | null; seen_at?: string }): number {
+  const parsed = Date.parse(row.observed_at ?? row.seen_at ?? '');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** Keys to delete: rows older than the retention window, then the oldest rows beyond `max`. */
+export function pruneKeys(rows: { key: string; observed_at: string | null; seen_at?: string }[], now: number, max = MAX_ROWS): string[] {
+  const fresh = rows.filter((row) => eventTime(row) >= now - RETENTION_MS);
+  const stale = rows.filter((row) => eventTime(row) < now - RETENTION_MS);
+  const overflow = fresh.sort((a, b) => eventTime(b) - eventTime(a)).slice(max);
+  return [...stale, ...overflow].map((row) => row.key);
+}
+
+/**
+ * Filter by provider allowlist, period, any-of tags and a case-insensitive text query, newest first.
+ * Events without a usable timestamp pass the period filter (same rule as the proxied list).
+ */
+export function filterEvents<T extends LiveEvent & { provider: string; tags?: string[] }>(
+  rows: T[],
+  filters: LiveFilters,
+  now: number,
+): T[] {
+  const cutoff = now - filters.days * 86_400_000;
+  const query = filters.query.trim().toLowerCase();
+  return rows
+    .filter((row) => filters.providers.includes(row.provider))
+    .filter((row) => !row.observed_at || !Number.isFinite(Date.parse(row.observed_at)) || Date.parse(row.observed_at) >= cutoff)
+    .filter((row) => !filters.tags.length || filters.tags.some((tag) => row.tags?.includes(tag)))
+    .filter((row) => !query || `${row.title} ${row.source} ${row.tags?.join(' ') ?? ''}`.toLowerCase().includes(query))
+    .sort((a, b) => eventTime(b) - eventTime(a));
+}
+
+/** Wrap an IDBRequest in a promise. */
+function request<T>(req: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/** Open (creating on first use) the per-workspace database; rejects when IndexedDB is unavailable. */
+function openDb(workspaceId: string): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') return reject(new Error('indexeddb_unavailable'));
+    const open = indexedDB.open(`${DB_PREFIX}${workspaceId}`, 1);
+    open.onupgradeneeded = () => {
+      const store = open.result.createObjectStore(STORE, { keyPath: 'key' });
+      store.createIndex('observed_at', 'observed_at');
+      store.createIndex('tags', 'tags', { multiEntry: true });
+      store.createIndex('provider', 'provider');
+    };
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => reject(open.error);
+  });
+}
+
+/**
+ * Upsert rows by key, then prune by age and count in the same readwrite transaction so readers never see an
+ * over-cap store. Resolves after commit. Rejects (callers treat as best-effort) when storage is unavailable or full.
+ */
+export async function upsertEvents(workspaceId: string, rows: StoredEvent[], now = Date.now()): Promise<void> {
+  const db = await openDb(workspaceId);
+  try {
+    const tx = db.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+    const done = new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+    for (const row of rows) store.put(row);
+    const all = (await request(store.getAll())) as StoredEvent[];
+    for (const key of pruneKeys(all, now)) store.delete(key);
+    await done;
+  } finally {
+    db.close();
+  }
+}
+
+/** Read every stored row of a workspace (at most MAX_ROWS); an unavailable store reads as empty. */
+export async function loadEvents(workspaceId: string): Promise<StoredEvent[]> {
+  try {
+    const db = await openDb(workspaceId);
+    try {
+      return (await request(db.transaction(STORE).objectStore(STORE).getAll())) as StoredEvent[];
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
+  }
+}

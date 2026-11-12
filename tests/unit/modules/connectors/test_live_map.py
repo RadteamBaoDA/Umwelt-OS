@@ -8,30 +8,7 @@ import pytest
 from modules.connectors import live_map
 
 
-def test_usgs_projection_bounds_and_https_links():
-    body = json.dumps(
-        {
-            "features": [
-                {
-                    "id": "e1",
-                    "properties": {
-                        "title": "Earthquake",
-                        "time": 1700000000000,
-                        "url": "http://invalid.example",
-                    },
-                    "geometry": {"coordinates": [120, 15]},
-                }
-            ]
-        }
-    ).encode()
-    items, truncated = live_map._parse("usgs", body)
-    assert not truncated
-    assert items[0]["latitude"] == 15 and items[0]["longitude"] == 120
-    assert items[0]["url"] is None
-    assert items[0]["observed_at"].startswith("2023-")
-
-
-def test_cisa_caps_latest_additions_and_usgs_covers_the_month():
+def test_cisa_caps_latest_additions():
     rows = [
         {
             "cveID": f"CVE-2026-{i:04d}",
@@ -44,7 +21,6 @@ def test_cisa_caps_latest_additions_and_usgs_covers_the_month():
     assert truncated and len(items) == 100
     assert items[0]["observed_at"].startswith("2026-01-05")
     assert items[-1]["observed_at"].startswith("2026-01-01")
-    assert live_map._endpoint("usgs", None, None, None, None, None).endswith("/4.5_month.geojson")
 
 
 def test_feed_refuses_dtd_and_normalizes_rss_time():
@@ -53,35 +29,6 @@ def test_feed_refuses_dtd_and_normalizes_rss_time():
     body = b"<rss><channel><item><guid>1</guid><title>News</title><pubDate>Wed, 04 Nov 2026 10:00:00 GMT</pubDate></item></channel></rss>"
     items, _ = live_map._parse("business", body)
     assert items[0]["observed_at"] == "2026-11-04T10:00:00+00:00"
-
-
-def test_eonet_uses_newest_timestamp_and_does_not_guess_polygon_location():
-    body = json.dumps(
-        {
-            "events": [
-                {
-                    "id": "x",
-                    "title": "Event",
-                    "geometry": [
-                        {
-                            "date": "2026-11-04T03:00:00Z",
-                            "type": "Polygon",
-                            "coordinates": [[[1, 2]]],
-                        },
-                        {"date": "2026-11-03T03:00:00Z", "type": "Point", "coordinates": [1, 2]},
-                    ],
-                    "sources": [
-                        {"id": "agency", "url": "https://example.com/event"},
-                        {"url": "http://unsafe.example"},
-                    ],
-                }
-            ]
-        }
-    ).encode()
-    items, _ = live_map._parse("eonet", body)
-    assert items[0]["latitude"] is None
-    assert items[0]["observed_at"] == "2026-11-04T03:00:00+00:00"
-    assert items[0]["sources"] == [{"id": "agency", "url": "https://example.com/event"}]
 
 
 def test_catalog_uses_distinct_reviewed_tile_and_release_identities():
@@ -99,7 +46,6 @@ def test_catalog_uses_distinct_reviewed_tile_and_release_identities():
 @pytest.mark.parametrize(
     "provider,kwargs",
     [
-        ("github_releases", {"owner": "../evil", "repo": "test"}),
         ("sec", {"cik": "1/../"}),
         ("firms", {"country": "../../evil", "secret": "key"}),
     ],
@@ -200,34 +146,6 @@ async def test_transient_quota_updates_only_shared_window_rows():
     ("provider", "payload", "title"),
     [
         (
-            "github_releases",
-            [
-                {
-                    "id": 8,
-                    "tag_name": "v1",
-                    "published_at": "2026-11-04T00:00:00Z",
-                    "html_url": "https://github.com/a/b/releases/tag/v1",
-                }
-            ],
-            "v1",
-        ),
-        (
-            "nvd",
-            {
-                "totalResults": 1,
-                "vulnerabilities": [
-                    {
-                        "cve": {
-                            "id": "CVE-2026-1234",
-                            "published": "2026-11-04T00:00:00Z",
-                            "descriptions": [{"lang": "en", "value": "Issue"}],
-                        }
-                    }
-                ],
-            },
-            "CVE-2026-1234",
-        ),
-        (
             "sec",
             {
                 "cik": "1",
@@ -260,3 +178,29 @@ def test_firms_marks_detection_as_unconfirmed_and_preserves_coordinates():
     assert not truncated and items[0]["latitude"] == 10.2 and items[0]["longitude"] == 106.5
     assert "not a confirmed fire" in items[0]["title"]
     assert items[0]["observed_at"] == "2026-11-04T09:15:00+00:00"
+
+
+def test_browser_only_providers_are_not_fetchable_but_have_terms_catalog_entries():
+    from modules.connectors.public import live_terms_catalog
+
+    catalog = live_terms_catalog()
+    for provider in (
+        "usgs", "eonet", "hackernews", "nvd", "github_releases", "gdacs", "nws_alerts",
+        "devto", "coingecko", "fear_greed", "launches", "freetogame", "gamerpower",
+    ):  # fmt: skip
+        assert provider not in live_map.PROVIDERS
+        assert catalog[provider]["terms_url"] and catalog[provider]["attribution"]
+
+
+@pytest.mark.parametrize(
+    "provider", ["bbc_world", "aljazeera", "vnexpress_world", "vnexpress_news", "gaming_news"]
+)
+def test_new_rss_providers_parse_and_have_fixed_https_endpoints(provider):
+    from modules.connectors.public import live_terms_catalog
+
+    assert live_map._endpoint(provider, None, None, None, None, None).startswith("https://")
+    assert provider in live_terms_catalog()
+    assert live_map.live_cache_seconds(provider) > 0
+    body = b"<rss><channel><item><guid>1</guid><title>News</title><link>https://example.com/a</link><pubDate>Wed, 04 Nov 2026 10:00:00 GMT</pubDate></item></channel></rss>"
+    items, _ = live_map._parse(provider, body)
+    assert items[0]["source"] and items[0]["url"] == "https://example.com/a"

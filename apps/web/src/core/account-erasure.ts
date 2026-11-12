@@ -1,3 +1,4 @@
+import { clearLiveFeed } from '@/core/live-feed-storage';
 import { uuid7 } from '@/core/uuid7';
 
 /** Same-origin signal carrying no identity or bearer data. */
@@ -10,6 +11,8 @@ const ERASURE_EVENT = 'umwelt:account-erased';
  * erased account's ids (dashboard group keys), so accent and density also reset to defaults.
  */
 export function clearAccountBrowserStorage(): void {
+  // Third-party live-feed items cached in IndexedDB are account-scoped browser data too; best-effort, not awaited.
+  void clearLiveFeed();
   for (const storageName of ['localStorage', 'sessionStorage'] as const) {
     try {
       const storage = window[storageName];

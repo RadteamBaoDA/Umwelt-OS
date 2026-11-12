@@ -16,12 +16,37 @@ export function createCspNonce(): string {
 }
 
 /**
+ * Exact origins the live-feed browser worker may fetch (public, CORS-capable sources). Keep in sync with
+ * `modules/dashboard/live-feed/sources.ts`; a test asserts every browser source URL is covered here.
+ */
+export const LIVE_FEED_ORIGINS = [
+  'https://earthquake.usgs.gov',
+  'https://eonet.gsfc.nasa.gov',
+  'https://www.gdacs.org',
+  'https://api.weather.gov',
+  'https://hn.algolia.com',
+  'https://services.nvd.nist.gov',
+  'https://dev.to',
+  'https://api.github.com',
+  'https://api.coingecko.com',
+  'https://api.alternative.me',
+  'https://ll.thespacedevs.com',
+  'https://www.freetogame.com',
+  'https://www.gamerpower.com',
+] as const;
+
+/** Public basemap host used by the dashboard map (see `modules/dashboard/gadgets/world-map.tsx`). */
+const OPENFREEMAP_ORIGIN = 'https://tiles.openfreemap.org';
+
+/**
  * Builds the app CSP header value.
  *
  * `script-src` uses the nonce plus `'strict-dynamic'` (so scripts loaded by Next's nonced bootstrap work and the host
  * allowlist is ignored by modern browsers); `'self'` is a fallback for CSP2-only browsers. `'unsafe-eval'` is dev-only
  * (React refresh). `style-src` keeps `'unsafe-inline'` deliberately: React `style` props, Recharts, and Radix set inline
- * styles and styles cannot execute script. Everything else is `'self'`; data:/blob: images and blob: workers serve the globe.
+ * styles and styles cannot execute script. Everything else is `'self'`; data:/blob: images and blob: workers serve the MapLibre map. The MapLibre basemap is fetched
+ * by the browser directly from OpenFreeMap (`OPENFREEMAP_ORIGIN`, no key, OSM data): style JSON, vector/raster tiles, glyphs and
+ * sprites go through `connect-src`; `img-src` is allowed too for raster tiles/sprites decoded as images.
  *
  * @param nonce - Per-request nonce from `createCspNonce`.
  * @param isDev - Allow `'unsafe-eval'` and websocket connects for the dev server.
@@ -32,9 +57,9 @@ export function buildAppCsp(nonce: string, isDev: boolean): string {
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ''}`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    `img-src 'self' data: blob: ${OPENFREEMAP_ORIGIN}`,
     "font-src 'self' data:",
-    `connect-src 'self'${isDev ? ' ws: wss:' : ''}`,
+    `connect-src 'self'${isDev ? ' ws: wss:' : ''} ${LIVE_FEED_ORIGINS.join(' ')} ${OPENFREEMAP_ORIGIN}`,
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",

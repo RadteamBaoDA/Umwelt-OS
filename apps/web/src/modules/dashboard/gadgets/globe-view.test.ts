@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { locationKey, shouldRecentre } from './globe-view';
+import { centroidView, fitWorldZoom, locationKey, shouldRecentre } from './globe-view';
 
 describe('globe view stability', () => {
   const a = [{ latitude: 10, longitude: 20 }, { latitude: -5.04, longitude: 100 }];
@@ -11,5 +11,17 @@ describe('globe view stability', () => {
     expect(shouldRecentre(locationKey(a), locationKey(a))).toBe(false);
     expect(shouldRecentre(locationKey(a), locationKey([...a, { latitude: 1, longitude: 1 }]))).toBe(true);
     expect(shouldRecentre(locationKey(a), '')).toBe(false);
+  });
+});
+
+describe('centroidView / fitWorldZoom', () => {
+  it('averages across the antimeridian and handles empty input', () => {
+    expect(centroidView([])).toBeNull();
+    const view = centroidView([{ latitude: 0, longitude: 179 }, { latitude: 0, longitude: -179 }])!;
+    expect(Math.abs(view.lng)).toBeCloseTo(180, 5);
+  });
+  it('fits the world without going below zoom 0', () => {
+    expect(fitWorldZoom(1024, 1024, 'mercator')).toBeGreaterThan(fitWorldZoom(256, 256, 'mercator'));
+    expect(fitWorldZoom(10, 10, 'globe')).toBe(0);
   });
 });

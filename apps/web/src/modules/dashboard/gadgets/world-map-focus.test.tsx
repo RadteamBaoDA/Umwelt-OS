@@ -1,22 +1,44 @@
 import { render, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ view: null as null | { target: number[] } }));
-vi.mock('@deck.gl/react', () => ({ DeckGL: ({ viewState }: { viewState: { 'world-flat': { target: number[] } } }) => { state.view = viewState['world-flat']; return null; } }));
-vi.mock('@deck.gl/layers', () => ({ BitmapLayer: class {}, GeoJsonLayer: class {}, ScatterplotLayer: class {} }));
-vi.mock('@deck.gl/core', () => ({ OrthographicView: class {} }));
+const state = vi.hoisted(() => ({ easeTo: vi.fn(), instances: 0 }));
+vi.mock('maplibre-gl/dist/maplibre-gl.css', () => ({}));
+vi.mock('maplibre-gl', () => {
+  const handler = { enable: vi.fn(), disable: vi.fn() };
+  class Map {
+    dragPan = handler; dragRotate = handler; scrollZoom = handler; boxZoom = handler; keyboard = handler;
+    doubleClickZoom = handler; touchZoomRotate = handler; touchPitch = handler;
+    easeTo = state.easeTo;
+    constructor() { state.instances += 1; }
+    addControl() {}
+    on() {}
+    isStyleLoaded() { return false; }
+    getCanvas() { return document.createElement('canvas'); }
+    setProjection() {}
+    setStyle() {}
+    resize() {}
+    jumpTo() {}
+    remove() {}
+  }
+  return { Map };
+});
+vi.mock('@deck.gl/mapbox', () => ({ MapboxOverlay: class { setProps() {} } }));
+vi.mock('@deck.gl/core', () => ({ COORDINATE_SYSTEM: { LNGLAT: 1 } }));
+vi.mock('@deck.gl/layers', () => ({ BitmapLayer: class {}, ScatterplotLayer: class {} }));
 vi.mock('next-intl', () => ({ useTranslations: () => (key: string) => key }));
 vi.mock('./weather-raster', () => ({ useWeatherRaster: () => null }));
-import { FlatMap } from './flat-map';
+import { WorldMap } from './world-map';
 
-describe('live map focus', () => {
-  it('centers a selected geographic event and keeps old maps at their own view', async () => {
-    const props = { features: [{ feature_id: 'event', latitude: 21, longitude: 105 }], selectedFeatureId: null as string | null, onSelectFeature: () => {}, width: 720, height: 360, visible: true, interactive: true };
-    const view = render(<FlatMap {...props} focusSelected />);
-    view.rerender(<FlatMap {...props} focusSelected selectedFeatureId="event" />);
-    await waitFor(() => expect(state.view?.target).toEqual([105, 21, 0]));
+describe('world map focus', () => {
+  it('eases to a selected geographic event only when focusSelected is set', async () => {
+    HTMLCanvasElement.prototype.getContext = (() => ({})) as never;
+    const props = { features: [{ feature_id: 'event', latitude: 21, longitude: 105 }], selectedFeatureId: null as string | null, onSelectFeature: () => {}, width: 720, height: 360, visible: true, interactive: true, projection: 'mercator' as const };
+    const view = render(<WorldMap {...props} focusSelected />);
+    view.rerender(<WorldMap {...props} focusSelected selectedFeatureId="event" />);
+    await waitFor(() => expect(state.easeTo).toHaveBeenCalledWith({ center: [105, 21], duration: 500 }));
+    state.easeTo.mockClear();
     view.unmount();
-    render(<FlatMap {...props} selectedFeatureId="event" />);
-    expect(state.view?.target).toEqual([0, 0, 0]);
+    render(<WorldMap {...props} selectedFeatureId="event" />);
+    expect(state.easeTo).not.toHaveBeenCalled();
   });
 });

@@ -21,7 +21,7 @@ from modules.connectors.live_map_catalog import CATALOG_IDS
 from modules.connectors.live_map_catalog import (
     live_cache_seconds as live_cache_seconds,
 )
-from modules.connectors.providers import news, rest, security
+from modules.connectors.providers import news, rest
 from modules.connectors.providers.feed_catalog import _retry_deadline
 from modules.connectors.public import ProviderRateLimited
 
@@ -34,30 +34,30 @@ MAX_ITEMS = 100
 MAX_BYTES = 4 * 1024 * 1024
 PROVIDERS = frozenset(
     {
-        "usgs",
-        "eonet",
         "firms",
-        "hackernews",
         "lobsters",
         "cisa_kev",
-        "nvd",
         "business",
         "fed",
-        "github_releases",
+        "bbc_world",
+        "aljazeera",
+        "vnexpress_world",
+        "vnexpress_news",
+        "gaming_news",
         "sec",
     }
 )
 SOURCE_NAMES = {
-    "usgs": "U.S. Geological Survey",
-    "eonet": "NASA EONET",
     "firms": "NASA FIRMS",
-    "hackernews": "Hacker News",
     "lobsters": "Lobsters",
     "cisa_kev": "CISA KEV",
-    "nvd": "NIST National Vulnerability Database",
     "business": "VnExpress",
     "fed": "Federal Reserve",
-    "github_releases": "GitHub",
+    "bbc_world": "BBC News",
+    "aljazeera": "Al Jazeera",
+    "vnexpress_world": "VnExpress",
+    "vnexpress_news": "VnExpress",
+    "gaming_news": "Eurogamer",
     "sec": "U.S. SEC EDGAR",
 }
 
@@ -162,27 +162,19 @@ def _endpoint(
 ) -> str:
     """Construct a fixed-origin endpoint after validating every path component."""
     endpoints = {
-        "usgs": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_month.geojson",
-        "eonet": "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=50",
-        "hackernews": "https://hacker-news.firebaseio.com/v0/topstories.json",
         "lobsters": "https://lobste.rs/rss",
         "cisa_kev": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
         "business": "https://vnexpress.net/rss/kinh-doanh.rss",
         "fed": "https://www.federalreserve.gov/feeds/press_all.xml",
+        "bbc_world": "https://feeds.bbci.co.uk/news/world/rss.xml",
+        "aljazeera": "https://www.aljazeera.com/xml/rss/all.xml",
+        "vnexpress_world": "https://vnexpress.net/rss/the-gioi.rss",
+        "vnexpress_news": "https://vnexpress.net/rss/thoi-su.rss",
+        # polygon.com resets connections from non-browser clients; Eurogamer serves the same topic.
+        "gaming_news": "https://www.eurogamer.net/feed",
     }
     if provider in endpoints:
         return endpoints[provider]
-    if provider == "nvd":
-        return security.nvd_request().url
-    if (
-        provider == "github_releases"
-        and owner
-        and repo
-        and re.fullmatch(r"[A-Za-z0-9-]{1,39}", owner)
-        and re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", repo)
-        and repo not in {".", ".."}
-    ):
-        return f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=100"
     if provider == "sec" and cik and re.fullmatch(r"[0-9]{1,10}", cik):
         return f"https://data.sec.gov/submissions/CIK{int(cik):010d}.json"
     if provider == "firms" and secret and country and re.fullmatch(r"[A-Z]{3}", country):
@@ -191,7 +183,7 @@ def _endpoint(
 
 
 def _parse_xml_items(provider: str, body: bytes) -> tuple[Any, list[Any]]:
-    """Parse an RSS/Atom provider (business, fed, lobsters) into ``(rows, records)``."""
+    """Parse an RSS/Atom provider (business, fed, lobsters, world/news/gaming feeds) into ``(rows, records)``."""
     root = news.safe_xml_root(body, max_bytes=MAX_BYTES)
     rows = news._scan_items(root)
     records = []
@@ -228,56 +220,6 @@ def _parse_firms(provider: str, body: bytes) -> tuple[Any, list[Any]]:
     return rows, records
 
 
-def _parse_usgs(provider: str, data: Any) -> tuple[Any, list[Any]]:
-    """Map a USGS GeoJSON feed into ``(rows, records)``."""
-    rows = data["features"]
-    records = []
-    for r in rows:
-        p, coords = r["properties"], r["geometry"]["coordinates"]
-        records.append(
-            _item(
-                provider,
-                r.get("id"),
-                p.get("title"),
-                p.get("time"),
-                lat=coords[1],
-                lon=coords[0],
-                url=p.get("url"),
-            )
-        )
-    return rows, records
-
-
-def _parse_eonet(provider: str, data: Any) -> tuple[Any, list[Any]]:
-    """Map NASA EONET events (latest dated point geometry, up to ten sources) into ``(rows, records)``."""
-    rows = data["events"]
-    records = []
-    for r in rows:
-        g = r.get("geometry") or []
-        dated = [entry for entry in g if isinstance(entry, dict) and _timestamp(entry.get("date"))]
-        point = max(dated, key=lambda entry: _timestamp(entry.get("date")) or "") if dated else {}
-        coords = point.get("coordinates") if point.get("type") == "Point" else None
-        record = _item(
-            provider,
-            r.get("id"),
-            r.get("title"),
-            point.get("date"),
-            lat=coords[1] if coords and len(coords) >= 2 else None,
-            lon=coords[0] if coords and len(coords) >= 2 else None,
-            url=r.get("link"),
-            summary=r.get("description"),
-        )
-        if record is not None:
-            sources = r.get("sources") if isinstance(r.get("sources"), list) else []
-            record["sources"] = [
-                {"id": _text(source.get("id"), 100), "url": link}
-                for source in sources[:10]
-                if isinstance(source, dict) and (link := _url(source.get("url")))
-            ]
-        records.append(record)
-    return rows, records
-
-
 def _parse_sec(provider: str, data: Any) -> tuple[Any, list[Any]]:
     """Map the SEC submissions index into ``(rows, records)`` of recent filings."""
     recent = data["filings"]["recent"]
@@ -297,26 +239,18 @@ def _parse_sec(provider: str, data: Any) -> tuple[Any, list[Any]]:
     return rows, records
 
 
-def _json_list_record(provider: str, r: Any) -> Any:
-    """Map one row of the list-shaped JSON providers (HN, Lobsters, CISA KEV, NVD, GitHub releases)."""
-    if provider == "hackernews":
-        return _item(
-            provider,
-            r.get("objectID"),
-            r.get("title"),
-            r.get("created_at"),
-            url=r.get("url") or f"https://news.ycombinator.com/item?id={r.get('objectID')}",
-        )
-    if provider == "lobsters":
-        return _item(
-            provider,
-            r.get("short_id"),
-            r.get("title"),
-            r.get("created_at"),
-            url=r.get("url") or r.get("comments_url"),
-        )
-    if provider == "cisa_kev":
-        return _item(
+def _parse_cisa_kev(provider: str, data: Any) -> tuple[Any, list[Any]]:
+    """Map the CISA KEV catalog into ``(rows, records)``, newest additions first.
+
+    The catalog is not guaranteed to arrive newest-first; sorting keeps recent additions inside the cap.
+    """
+    rows = sorted(
+        data["vulnerabilities"],
+        key=lambda row: row.get("dateAdded", "") if isinstance(row, dict) else "",
+        reverse=True,
+    )
+    records = [
+        _item(
             provider,
             r.get("cveID"),
             r.get("vulnerabilityName"),
@@ -324,59 +258,30 @@ def _json_list_record(provider: str, r: Any) -> Any:
             url=f"https://nvd.nist.gov/vuln/detail/{r.get('cveID')}",
             summary=r.get("shortDescription"),
         )
-    if provider == "nvd":
-        cve = r["cve"]
-        descriptions = cve.get("descriptions", [])
-        description = next((x.get("value") for x in descriptions if x.get("lang") == "en"), None)
-        return _item(
-            provider,
-            cve.get("id"),
-            cve.get("id"),
-            cve.get("published"),
-            url=f"https://nvd.nist.gov/vuln/detail/{cve.get('id')}",
-            summary=description,
-        )
-    return _item(
-        provider,
-        r.get("id"),
-        r.get("name") or r.get("tag_name"),
-        r.get("published_at"),
-        url=r.get("html_url"),
-        summary=r.get("body"),
-    )
+        for r in rows
+    ]
+    return rows, records
 
 
-def _parse_json_list(provider: str, data: Any) -> tuple[Any, list[Any]]:
-    """Map the list-shaped JSON providers into ``(rows, records)``.
-
-    CISA KEV is sorted newest-first because the catalog is not guaranteed to arrive that way and
-    recent additions must survive the cap.
-    """
-    rows = (
-        data
-        if isinstance(data, list)
-        else data[
-            {"hackernews": "hits", "cisa_kev": "vulnerabilities", "nvd": "vulnerabilities"}[
-                provider
-            ]
-        ]
-    )
-    if provider == "cisa_kev":
-        # The catalog is not guaranteed to arrive newest first; retain recent additions when capped.
-        rows = sorted(
-            rows,
-            key=lambda row: row.get("dateAdded", "") if isinstance(row, dict) else "",
-            reverse=True,
-        )
-    return rows, [_json_list_record(provider, r) for r in rows]
-
-
-# Provider -> JSON mapper; any provider absent here uses the list-shaped mapper.
+# Provider -> JSON mapper for the providers that return JSON.
 _JSON_PARSERS: dict[str, Callable[[str, Any], tuple[Any, list[Any]]]] = {
-    "usgs": _parse_usgs,
-    "eonet": _parse_eonet,
+    "cisa_kev": _parse_cisa_kev,
     "sec": _parse_sec,
 }
+
+# Providers served as RSS/Atom XML.
+_XML_PROVIDERS = frozenset(
+    {
+        "business",
+        "fed",
+        "lobsters",
+        "bbc_world",
+        "aljazeera",
+        "vnexpress_world",
+        "vnexpress_news",
+        "gaming_news",
+    }
+)
 
 
 def _parse(provider: str, body: bytes) -> tuple[list[dict[str, Any]], bool]:
@@ -384,22 +289,15 @@ def _parse(provider: str, body: bytes) -> tuple[list[dict[str, Any]], bool]:
 
     Pure and thread-safe (runs off the event loop). Malformed rows raise ``KeyError`` /
     ``IndexError`` / ``TypeError``, which ``fetch_events`` maps to ``provider_response_invalid``.
-    ``_item`` construction is not cut short at ``MAX_ITEMS``; NVD also truncates when the
-    provider reports more total results than were returned.
+    ``_item`` construction is not cut short at ``MAX_ITEMS``.
     """
-    if provider in {"business", "fed", "lobsters"}:
+    if provider in _XML_PROVIDERS:
         rows, records = _parse_xml_items(provider, body)
-        data: Any = None
     elif provider == "firms":
         rows, records = _parse_firms(provider, body)
-        data = None
     else:
-        data = json.loads(body)
-        rows, records = _JSON_PARSERS.get(provider, _parse_json_list)(provider, data)
-    truncated = len(rows) > MAX_ITEMS or (
-        provider == "nvd" and data.get("totalResults", 0) > len(rows)
-    )
-    return [r for r in records[:MAX_ITEMS] if r is not None], truncated
+        rows, records = _JSON_PARSERS[provider](provider, json.loads(body))
+    return [r for r in records[:MAX_ITEMS] if r is not None], len(rows) > MAX_ITEMS
 
 
 async def fetch_events(
@@ -417,42 +315,9 @@ async def fetch_events(
     if provider not in PROVIDERS:
         raise ValueError("provider_invalid")
     url = _endpoint(provider, country, owner, repo, cik, secret)
-    if provider == "hackernews":
-        async with asyncio.timeout(30):
-            listing = await rest.fetch_bounded(
-                url, before_send=before_send, max_bytes=256 * 1024, timeout=10
-            )
-            ids = json.loads(listing.body or b"null")
-            if not isinstance(ids, list) or any(
-                type(item) is not int or item <= 0 for item in ids[:30]
-            ):
-                raise ValueError("provider_response_invalid")
-            records = []
-            for item_id in ids[:30]:
-                result = await rest.fetch_bounded(
-                    f"https://hacker-news.firebaseio.com/v0/item/{item_id}.json",
-                    before_send=before_send,
-                    max_bytes=256 * 1024,
-                    timeout=10,
-                )
-                item = json.loads(result.body or b"null")
-                if not isinstance(item, dict):
-                    raise TypeError("provider_response_invalid")
-                records.append(
-                    _item(
-                        provider,
-                        item.get("id"),
-                        item.get("title"),
-                        item.get("time"),
-                        url=item.get("url") or f"https://news.ycombinator.com/item?id={item_id}",
-                    )
-                )
-            return [item for item in records if item], len(ids) > 30
     headers = {"User-Agent": f"Umwelt-OS {contact}"} if provider == "sec" and contact else {}
     if provider == "sec" and not contact:
         raise ValueError("contact_required")
-    if provider == "nvd" and secret:
-        headers["apiKey"] = secret
     body: bytes | None
     if provider == "firms":
         body = await _secret_fetch(url, before_send=before_send, max_bytes=MAX_BYTES)

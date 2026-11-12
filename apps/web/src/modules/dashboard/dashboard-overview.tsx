@@ -41,8 +41,8 @@ export function DashboardOverview({ panelId, children, editMode, compact, empty,
     {collapsed ? t('expandMap') : t('collapseMap')}
   </Button>;
   const map = <div id={MAP_PANEL_ID} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-border bg-card">
-    <LiveMapOverview />
-    {!compact && !editMode && <div className="absolute left-2 top-2 z-10">{toggle}</div>}
+    {/* Toggle sits in the map toolbar row (not absolutely positioned) so it cannot cover the filters. */}
+    <LiveMapOverview toolbarStart={!compact && !editMode ? toggle : undefined} />
   </div>;
   const gadgets = <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${editMode ? 'min-[1100px]:col-span-2' : ''}`}>
     <DashboardPanel panelId={panelId} empty={empty} canAdd={canAdd} onAdd={onAdd} scrollPositions={scrollPositions}>

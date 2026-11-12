@@ -54,7 +54,7 @@ async def test_event_cache_is_workspace_and_revision_scoped(monkeypatch):
     monkeypatch.setattr(routes.live_map, "fetch_events", fetch)
     for _ in range(2):
         await routes.events(
-            "usgs",
+            "business",
             request,
             Response(),
             Session(),
@@ -67,7 +67,7 @@ async def test_event_cache_is_workspace_and_revision_scoped(monkeypatch):
     assert len(calls) == 1
     revision = 2
     await routes.events(
-        "usgs",
+        "business",
         request,
         Response(),
         Session(),
@@ -80,7 +80,15 @@ async def test_event_cache_is_workspace_and_revision_scoped(monkeypatch):
     assert len(calls) == 2
     other = WorkspaceContext(user_id=2, workspace_id=uuid4(), role="owner", membership_revision=1)
     await routes.events(
-        "usgs", request, Response(), Session(), other, country=None, owner=None, repo=None, cik=None
+        "business",
+        request,
+        Response(),
+        Session(),
+        other,
+        country=None,
+        owner=None,
+        repo=None,
+        cik=None,
     )
     assert len(calls) == 3
 
@@ -115,13 +123,13 @@ async def test_revoked_terms_deny_even_a_cached_result(monkeypatch):
 
     monkeypatch.setattr(routes, "read_access_fence", fence)
     monkeypatch.setattr(routes, "read_live_credentials", credentials)
-    routes._cache[(workspace.workspace_id, 1, "usgs", None, None, None, None)] = (
+    routes._cache[(workspace.workspace_id, 1, "business", None, None, None, None)] = (
         float("inf"),
         {"items": []},
     )
     with pytest.raises((DomainError, HTTPException)) as exc:
         await routes.events(
-            "usgs",
+            "business",
             request,
             Response(),
             Session(),
@@ -198,7 +206,7 @@ async def test_identical_concurrent_fetches_share_inflight(monkeypatch):
 
     def invoke():
         return routes.events(
-            "usgs",
+            "business",
             request,
             Response(),
             Session(),
@@ -246,7 +254,7 @@ async def test_revision_change_during_fetch_denies_and_does_not_cache(monkeypatc
     monkeypatch.setattr(routes.live_map, "fetch_events", fetch)
     with pytest.raises((DomainError, HTTPException)) as exc:
         await routes.events(
-            "usgs",
+            "business",
             request,
             Response(),
             Session(),
@@ -270,7 +278,7 @@ async def test_disconnected_client_is_denied_before_quota_or_provider_send():
         user_id=1, workspace_id=uuid4(), role="owner", membership_revision=1
     )
     with pytest.raises((DomainError, HTTPException)) as error:
-        await routes._before_send(request, workspace, object(), 1, "hackernews")
+        await routes._before_send(request, workspace, object(), 1, "business")
     assert error.value.status_code == 499
 
 
@@ -312,7 +320,15 @@ async def test_administrator_can_read_live_events_with_owner_scope(monkeypatch):
     monkeypatch.setattr(routes, "require_publication_gate", lambda *args: None)
     monkeypatch.setattr(routes.live_map, "fetch_events", fetch)
     result = await routes.events(
-        "usgs", request, Response(), Session(), scope, country=None, owner=None, repo=None, cik=None
+        "business",
+        request,
+        Response(),
+        Session(),
+        scope,
+        country=None,
+        owner=None,
+        repo=None,
+        cik=None,
     )
     assert result["items"] == []
     assert calls and all(item.user_id == 2 and item.actor_user_id == 1 for item in calls)
@@ -397,7 +413,7 @@ async def test_shared_fetch_survives_leader_disconnect_while_another_client_wait
 
     def invoke(request):
         return routes.events(
-            "hackernews",
+            "business",
             request,
             Response(),
             Session(),
@@ -440,7 +456,7 @@ async def test_shared_send_uses_a_live_authorized_observer(monkeypatch):
         admitted.append(request)
 
     monkeypatch.setattr(routes, "_before_send", before_send)
-    await routes._shared_before_send(job, "hackernews")
+    await routes._shared_before_send(job, "business")
     assert admitted == [active.request]
 
 
@@ -525,7 +541,7 @@ async def test_new_waiter_joins_completed_fetch_during_first_publication(monkeyp
 
     def invoke(session):
         return routes.events(
-            "hackernews",
+            "business",
             request,
             Response(),
             session,
@@ -568,7 +584,7 @@ async def test_shared_send_considers_observer_joining_during_authorization(monke
         accepted.append(request)
 
     monkeypatch.setattr(routes, "_before_send", before_send)
-    task = asyncio.create_task(routes._shared_before_send(job, "hackernews"))
+    task = asyncio.create_task(routes._shared_before_send(job, "business"))
     await entered.wait()
     job.observers.add(second)
     release.set()
@@ -576,7 +592,7 @@ async def test_shared_send_considers_observer_joining_during_authorization(monke
     assert accepted == [second.request]
     job.observers.remove(second)
     with pytest.raises((DomainError, HTTPException)) as error:
-        await routes._shared_before_send(job, "hackernews")
+        await routes._shared_before_send(job, "business")
     assert error.value.status_code == 409
 
 
@@ -622,7 +638,7 @@ async def test_disconnect_during_final_revalidation_cancels_without_caching(monk
     monkeypatch.setattr(routes.live_map, "fetch_events", fetch)
     task = asyncio.create_task(
         routes.events(
-            "usgs",
+            "business",
             request,
             Response(),
             Session(),
@@ -678,7 +694,7 @@ async def test_shared_waiters_evict_only_one_full_cache_entry(monkeypatch):
 
     def invoke():
         return routes.events(
-            "usgs",
+            "business",
             request,
             Response(),
             Session(),

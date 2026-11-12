@@ -1,14 +1,50 @@
-import type {
-  GadgetDefinition, GadgetFilters, GadgetScope, GadgetTemplate, HighlightRule, ProviderMetrics,
-} from './api';
+import type { GadgetDefinition, GadgetFilters, GadgetScope, GadgetTemplate, HighlightRule, ProviderMetrics } from './api';
 import { CHART_FALLBACK_LOOKBACK_DAYS, METRIC_FALLBACK_LOOKBACK_DAYS } from './gadgets/use-effective-lookback';
 
 /** Hard ceiling of selectable datasources in multi mode. */
 export const MAX_SOURCES = 32;
 /** Live-map providers the owner may toggle. */
-export const LIVE_PROVIDERS = ['usgs', 'eonet', 'firms', 'hackernews', 'lobsters', 'cisa_kev', 'nvd', 'business', 'fed', 'github_releases', 'sec'] as const;
+export const LIVE_PROVIDERS = [
+  'usgs',
+  'eonet',
+  'gdacs',
+  'nws_alerts',
+  'firms',
+  'hackernews',
+  'lobsters',
+  'cisa_kev',
+  'nvd',
+  'devto',
+  'business',
+  'fed',
+  'github_releases',
+  'sec',
+  'coingecko',
+  'fear_greed',
+  'launches',
+  'freetogame',
+  'gamerpower',
+  'bbc_world',
+  'aljazeera',
+  'vnexpress_world',
+  'vnexpress_news',
+  'gaming_news',
+] as const;
 /** Live-map providers enabled for a new map gadget. */
-export const DEFAULT_LIVE_PROVIDERS = ['usgs', 'eonet', 'hackernews', 'lobsters', 'cisa_kev', 'nvd', 'business', 'fed'];
+export const DEFAULT_LIVE_PROVIDERS = [
+  'usgs',
+  'eonet',
+  'gdacs',
+  'nws_alerts',
+  'hackernews',
+  'lobsters',
+  'cisa_kev',
+  'nvd',
+  'business',
+  'fed',
+  'launches',
+  'coingecko',
+];
 /** Map layers offered by the selected-sources map. */
 export const MAP_LAYERS = ['world_observations', 'military', 'economic', 'disaster', 'escalation'] as const;
 
@@ -29,7 +65,10 @@ export type WeatherLayer = 'none' | 'temperature' | 'precipitation' | 'wind' | '
 export function fieldsFor(renderer: string): ReadonlySet<FieldKey> {
   const out = new Set<FieldKey>();
   if (LIST_RENDERERS.includes(renderer)) (['keywords', 'limit', 'rules'] as const).forEach((key) => out.add(key));
-  if (['finance_chart', 'provider_observation', 'weather'].includes(renderer)) { out.add('metrics'); out.add('lookback'); }
+  if (['finance_chart', 'provider_observation', 'weather'].includes(renderer)) {
+    out.add('metrics');
+    out.add('lookback');
+  }
   if (renderer === 'finance_chart' || renderer === 'provider_observation') out.add('symbols');
   if (renderer === 'map') out.add('map');
   if (renderer === 'intelligence_panel') out.add('cii');
@@ -61,7 +100,10 @@ export function fallbackLookback(renderer: string): number {
 
 /** True when a code-less FastAPI/pydantic 422 `details` list names `lookback_days` in an item's `loc` path. */
 export function namesLookbackField(details: unknown): boolean {
-  return Array.isArray(details) && details.some((item) => Array.isArray((item as { loc?: unknown })?.loc) && ((item as { loc: unknown[] }).loc).includes('lookback_days'));
+  return (
+    Array.isArray(details) &&
+    details.some((item) => Array.isArray((item as { loc?: unknown })?.loc) && (item as { loc: unknown[] }).loc.includes('lookback_days'))
+  );
 }
 
 /**
@@ -79,7 +121,9 @@ export function mergeCatalogEntries(entries: readonly (ProviderMetrics | undefin
   const known = entries as ProviderMetrics[];
   if (known.length === 1) return known[0];
   const metrics = new Map<string, string | null>();
-  for (const item of known) for (const metric of item.metrics) metrics.set(metric.id, metrics.has(metric.id) && metrics.get(metric.id) !== metric.unit ? null : metric.unit);
+  for (const item of known)
+    for (const metric of item.metrics)
+      metrics.set(metric.id, metrics.has(metric.id) && metrics.get(metric.id) !== metric.unit ? null : metric.unit);
   const lookbacks = known.flatMap((item) => (item.default_lookback_days === null ? [] : [item.default_lookback_days]));
   const cadences = known.map((item) => item.cadence_days);
   return {
@@ -98,7 +142,10 @@ export function mergeCatalogEntries(entries: readonly (ProviderMetrics | undefin
 
 /** Splits comma-separated text into trimmed, non-empty entries (optionally upper-cased). */
 export function splitList(value: string, upper = false): string[] {
-  return value.split(',').map((item) => (upper ? item.trim().toUpperCase() : item.trim())).filter(Boolean);
+  return value
+    .split(',')
+    .map((item) => (upper ? item.trim().toUpperCase() : item.trim()))
+    .filter(Boolean);
 }
 
 /** Every editable field of the gadget editor (one object instead of 26 separate states). */
@@ -153,7 +200,9 @@ function filterFieldsOf(filters: GadgetFilters | undefined): Pick<GadgetDraft, '
 }
 
 /** Scope-derived text fields of a draft (symbols, metrics, regions, channels, countries, layers). */
-function scopeFieldsOf(scope: GadgetScope | undefined): Pick<GadgetDraft, 'symbols' | 'metrics' | 'regions' | 'region' | 'channels' | 'cii' | 'layers'> {
+function scopeFieldsOf(
+  scope: GadgetScope | undefined,
+): Pick<GadgetDraft, 'symbols' | 'metrics' | 'regions' | 'region' | 'channels' | 'cii' | 'layers'> {
   return {
     symbols: joined(scope?.symbols),
     metrics: joined(scope?.metrics),
@@ -169,7 +218,7 @@ function scopeFieldsOf(scope: GadgetScope | undefined): Pick<GadgetDraft, 'symbo
 function mapFilterFieldsOf(definition: GadgetDefinition | null): Pick<GadgetDraft, 'mapMode' | 'weatherLayer' | 'engine' | 'precise'> {
   const filters = definition?.filters;
   return {
-    mapMode: definition ? filters?.map_mode ?? 'selected_sources' : 'live',
+    mapMode: definition ? (filters?.map_mode ?? 'selected_sources') : 'live',
     weatherLayer: filters?.map_weather_layer ?? 'none',
     engine: filters?.map_engine ?? 'globe',
     precise: filters?.show_precise_locations ?? false,
@@ -177,7 +226,9 @@ function mapFilterFieldsOf(definition: GadgetDefinition | null): Pick<GadgetDraf
 }
 
 /** Live-map fields of a draft that come from a definition's scope. */
-function liveMapFieldsOf(definition: GadgetDefinition | null): Pick<GadgetDraft, 'liveProviders' | 'country' | 'githubOwner' | 'githubRepo' | 'secCik'> {
+function liveMapFieldsOf(
+  definition: GadgetDefinition | null,
+): Pick<GadgetDraft, 'liveProviders' | 'country' | 'githubOwner' | 'githubRepo' | 'secCik'> {
   const scope = definition?.scope;
   return {
     liveProviders: initialLiveProviders(definition),
@@ -225,7 +276,11 @@ export function draftPatchForTemplate(picked: GadgetTemplate | undefined, render
     choice: renderer,
     mapMode: 'live',
     liveProviders: DEFAULT_LIVE_PROVIDERS,
-    country: '', githubOwner: '', githubRepo: '', secCik: '', weatherLayer: 'none',
+    country: '',
+    githubOwner: '',
+    githubRepo: '',
+    secCik: '',
+    weatherLayer: 'none',
     sourceIds: [],
     ...templateListFields(picked),
     region: '',
@@ -244,9 +299,14 @@ function templateListFields(picked: GadgetTemplate | undefined): Partial<GadgetD
   const filterText = filterFieldsOf(picked?.filters);
   const scopeText = scopeFieldsOf(picked?.scope);
   return {
-    keywords: filterText.keywords, exclude: filterText.exclude,
-    symbols: scopeText.symbols, metrics: scopeText.metrics, regions: scopeText.regions,
-    channels: scopeText.channels, cii: scopeText.cii, layers: scopeText.layers,
+    keywords: filterText.keywords,
+    exclude: filterText.exclude,
+    symbols: scopeText.symbols,
+    metrics: scopeText.metrics,
+    regions: scopeText.regions,
+    channels: scopeText.channels,
+    cii: scopeText.cii,
+    layers: scopeText.layers,
   };
 }
 
@@ -278,7 +338,9 @@ function currentMetricFits(current: string | undefined, nextEntry: ProviderMetri
 function multiProviderMetrics(ctx: SourceChangeContext, nextProviders: string[], nextEntry: ProviderMetrics): string {
   const entries = nextProviders.map((item) => ctx.catalog?.[item] as ProviderMetrics);
   const kept = splitList(ctx.draft.metrics).filter((id) => nextEntry.metrics_open || nextEntry.metrics.some((item) => item.id === id));
-  const added = entries.filter((item) => item.metrics.length > 0 && !kept.some((id) => item.metrics.some((metric) => metric.id === id))).map(defaultMetric);
+  const added = entries
+    .filter((item) => item.metrics.length > 0 && !kept.some((id) => item.metrics.some((metric) => metric.id === id)))
+    .map(defaultMetric);
   return [...new Set([...kept, ...added])].join(', ');
 }
 
@@ -297,7 +359,9 @@ function metricsAfterSourceChange(
   // A Metric gadget keeps only metrics the new provider lists (the save would 422 on a stale id); typed ids of
   // an open catalog are trusted only while the provider stays the same.
   if (renderer === 'provider_observation' && providerChanged && nextEntry) {
-    return splitList(metrics).filter((id) => nextEntry.metrics.some((item) => item.id === id)).join(', ');
+    return splitList(metrics)
+      .filter((id) => nextEntry.metrics.some((item) => item.id === id))
+      .join(', ');
   }
   return undefined;
 }
@@ -315,8 +379,15 @@ function symbolsAfterSourceChange(
   // Changed provider: keep only symbols it suggests; a provider without suggestions cannot validate any.
   if (providerOf(next[0]) === 'coingecko' && next[0] !== draft.sourceIds[0]) nextSymbols = [];
   // ponytail: several providers keep every typed symbol (symbols cannot be mapped to providers; the backend only requires some).
-  else if (providerChanged && nextProviders.length <= 1) nextSymbols = nextSymbols.filter((symbol) => nextEntry.suggested_symbols.includes(symbol));
-  if (draft.renderer === 'finance_chart' && nextSymbols.length === 0 && nextEntry.symbol_keyed && nextEntry.seed_symbol && nextEntry.suggested_symbols.length > 0) {
+  else if (providerChanged && nextProviders.length <= 1)
+    nextSymbols = nextSymbols.filter((symbol) => nextEntry.suggested_symbols.includes(symbol));
+  if (
+    draft.renderer === 'finance_chart' &&
+    nextSymbols.length === 0 &&
+    nextEntry.symbol_keyed &&
+    nextEntry.seed_symbol &&
+    nextEntry.suggested_symbols.length > 0
+  ) {
     nextSymbols = [nextEntry.suggested_symbols[0]];
   }
   return nextSymbols.join(', ');
@@ -327,7 +398,10 @@ function lookbackAfterSourceChange(draft: GadgetDraft, nextEntry: ProviderMetric
   const { renderer } = draft;
   if ((renderer === 'finance_chart' || renderer === 'provider_observation') && !draft.base && providerChanged && !draft.lookbackTouched) {
     // A Metric gadget never starts below its 30-day runtime window (same rule as useEffectiveLookback).
-    return String(Math.max(nextEntry.default_lookback_days ?? 0, renderer === 'provider_observation' ? fallbackLookback(renderer) : 0) || fallbackLookback(renderer));
+    return String(
+      Math.max(nextEntry.default_lookback_days ?? 0, renderer === 'provider_observation' ? fallbackLookback(renderer) : 0) ||
+        fallbackLookback(renderer),
+    );
   }
   return undefined;
 }
@@ -344,7 +418,8 @@ export function planSourceChange(ctx: SourceChangeContext): Partial<GadgetDraft>
   const { next, draft, providerOf, catalog } = ctx;
   const providersOf = (ids: string[]) => [...new Set(ids.map(providerOf).filter((item): item is string => item !== null))].sort();
   const nextProviders = providersOf(next);
-  const providerChanged = nextProviders.join() !== providersOf(draft.sourceIds).join() || providerOf(next[0]) !== providerOf(draft.sourceIds[0]);
+  const providerChanged =
+    nextProviders.join() !== providersOf(draft.sourceIds).join() || providerOf(next[0]) !== providerOf(draft.sourceIds[0]);
   const patch: Partial<GadgetDraft> = { sourceIds: next };
   const nextEntry = mergeCatalogEntries(nextProviders.map((item) => catalog?.[item]));
   const metrics = metricsAfterSourceChange(ctx, nextProviders, nextEntry, providerChanged);
@@ -423,13 +498,16 @@ function chartScope(ctx: SavePayloadContext, days: number | undefined): GadgetSc
 
 /** Scope of a map gadget (live providers only in live mode). */
 function mapScope(draft: GadgetDraft, capped: number | undefined): GadgetScope {
-  const live = draft.mapMode === 'live' ? {
-    live_map_providers: draft.liveProviders,
-    live_map_country: draft.country.trim().toUpperCase() || undefined,
-    live_map_github_owner: draft.githubOwner.trim() || undefined,
-    live_map_github_repo: draft.githubRepo.trim() || undefined,
-    live_map_sec_cik: draft.secCik.trim() || undefined,
-  } : {};
+  const live =
+    draft.mapMode === 'live'
+      ? {
+          live_map_providers: draft.liveProviders,
+          live_map_country: draft.country.trim().toUpperCase() || undefined,
+          live_map_github_owner: draft.githubOwner.trim() || undefined,
+          live_map_github_repo: draft.githubRepo.trim() || undefined,
+          live_map_sec_cik: draft.secCik.trim() || undefined,
+        }
+      : {};
   return { regions: splitList(draft.regions), map_layer_ids: draft.layers, lookback_days: capped, ...live };
 }
 
@@ -437,14 +515,25 @@ function mapScope(draft: GadgetDraft, capped: number | undefined): GadgetScope {
 function rendererScope(ctx: SavePayloadContext, days: number | undefined, capped: number | undefined): GadgetScope {
   const { draft, entry } = ctx;
   switch (draft.renderer) {
-    case 'finance_chart': return chartScope(ctx, days);
+    case 'finance_chart':
+      return chartScope(ctx, days);
     // A Metric gadget on a symbol-keyed provider keeps its picked symbols; clearing them must persist, so always send the list.
-    case 'provider_observation': return { metrics: splitList(draft.metrics), symbols: entry && !entry.symbol_keyed ? [] : splitList(draft.symbols, true), lookback_days: days };
-    case 'weather': return { metrics: splitList(draft.metrics), lookback_days: days };
-    case 'map': return mapScope(draft, capped);
-    case 'intelligence_panel': return { regions: splitList(draft.regions), cii_country_codes: splitList(draft.cii, true), lookback_days: capped };
-    case 'telegram_feed': return { channel_ids: splitList(draft.channels) };
-    default: return splitList(draft.symbols, true).length > 0 ? { symbols: splitList(draft.symbols, true) } : {};
+    case 'provider_observation':
+      return {
+        metrics: splitList(draft.metrics),
+        symbols: entry && !entry.symbol_keyed ? [] : splitList(draft.symbols, true),
+        lookback_days: days,
+      };
+    case 'weather':
+      return { metrics: splitList(draft.metrics), lookback_days: days };
+    case 'map':
+      return mapScope(draft, capped);
+    case 'intelligence_panel':
+      return { regions: splitList(draft.regions), cii_country_codes: splitList(draft.cii, true), lookback_days: capped };
+    case 'telegram_feed':
+      return { channel_ids: splitList(draft.channels) };
+    default:
+      return splitList(draft.symbols, true).length > 0 ? { symbols: splitList(draft.symbols, true) } : {};
   }
 }
 
@@ -461,7 +550,14 @@ export function buildDefinitionPayload(ctx: SavePayloadContext): { filters: Gadg
     limit: Number(draft.limit),
     keywords: keywords.length > 0 ? [...new Set(keywords)] : undefined,
     exclude_keywords: exclude.length > 0 ? [...new Set(exclude)] : undefined,
-    ...(draft.renderer === 'map' ? { map_engine: draft.engine, show_precise_locations: draft.precise, map_mode: draft.mapMode, map_weather_layer: draft.weatherLayer === 'none' ? null : draft.weatherLayer } : {}),
+    ...(draft.renderer === 'map'
+      ? {
+          map_engine: draft.engine,
+          show_precise_locations: draft.precise,
+          map_mode: draft.mapMode,
+          map_weather_layer: draft.weatherLayer === 'none' ? null : draft.weatherLayer,
+        }
+      : {}),
   };
   const days = draft.lookback.trim() === '' ? undefined : Number(draft.lookback);
   const capped = days === undefined ? undefined : Math.min(30, days);

@@ -15,8 +15,7 @@ import { LiveMapGadget } from './live-map-gadget';
 import { formatMetricLabel, formatProviderName } from './metric-label';
 import { BareButton } from '@/components/bare-button';
 
-const FlatMap = lazy(() => import('./flat-map').then((module) => ({ default: module.FlatMap })));
-const GlobeMap = lazy(() => import('./globe-map').then((module) => ({ default: module.GlobeMap })));
+const WorldMap = lazy(() => import('./world-map').then((module) => ({ default: module.WorldMap })));
 
 const PHONE_QUERY = '(max-width: 720px)';
 /** Subscribes to the phone-width media query. */
@@ -343,7 +342,7 @@ function MapPlot({
       {canRenderEngine && (
         <div className="absolute inset-0">
           <Suspense fallback={rendererLoading}>
-            {engine === 'globe' ? <GlobeMap {...engineProps} /> : <FlatMap {...engineProps} />}
+            <WorldMap {...engineProps} projection={engine === 'globe' ? 'globe' : 'mercator'} />
           </Suspense>
         </div>
       )}

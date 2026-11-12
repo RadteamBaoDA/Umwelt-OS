@@ -68,8 +68,22 @@ class GadgetScope(StrictConfiguration):
             "fed",
             "github_releases",
             "sec",
+            "bbc_world",
+            "aljazeera",
+            "vnexpress_world",
+            "vnexpress_news",
+            "gaming_news",
+            # Browser-only providers (fetched by the web worker, never by /live-map/events).
+            "gdacs",
+            "nws_alerts",
+            "devto",
+            "coingecko",
+            "fear_greed",
+            "launches",
+            "freetogame",
+            "gamerpower",
         ]
-    ] = Field(default_factory=list, max_length=11)
+    ] = Field(default_factory=list, max_length=32)
     live_map_country: Annotated[str, Field(pattern=r"^[A-Z]{3}$")] | None = None
     live_map_github_owner: Annotated[str, Field(pattern=r"^[A-Za-z0-9-]{1,39}$")] | None = None
     live_map_github_repo: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]{1,100}$")] | None = None

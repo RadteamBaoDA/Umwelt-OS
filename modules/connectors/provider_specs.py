@@ -76,6 +76,13 @@ _NON_FREE_QUOTA_POLICIES.update(
             QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 10),
             QuotaWindowPolicy("pilot_calls_utc_day", "provider", "day", "http_calls", 48),
         ),
+        **{
+            provider_id: (
+                QuotaWindowPolicy("pilot_calls_utc_minute", "provider", "minute", "http_calls", 10),
+                QuotaWindowPolicy("pilot_calls_utc_day", "provider", "day", "http_calls", 96),
+            )
+            for provider_id in ("live_vnexpress_world", "live_vnexpress_news", "live_gaming_news")
+        },
         "live_openweather_tiles": (
             QuotaWindowPolicy("pilot_calls_utc_minute", "credential", "minute", "http_calls", 60),
             QuotaWindowPolicy("pilot_calls_utc_day", "credential", "day", "http_calls", 600),

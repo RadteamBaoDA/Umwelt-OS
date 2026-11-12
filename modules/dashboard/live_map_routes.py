@@ -222,7 +222,7 @@ async def _admit(provider: str) -> None:
         recent = _recent.setdefault(provider, deque())
         while recent and recent[0] <= now - 60:
             recent.popleft()
-        if len(recent) >= ({"openweather": 60, "hackernews": 32}.get(provider, 10)):
+        if len(recent) >= ({"openweather": 60}.get(provider, 10)):
             raise HTTPException(429, "provider_rate_limited", headers=_HEADERS)
         recent.append(now)
 
