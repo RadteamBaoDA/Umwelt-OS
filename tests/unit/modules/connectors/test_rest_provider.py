@@ -365,3 +365,36 @@ async def test_validators_come_from_the_first_page_response():
 
     got = await rest.collect_rest(cfg(), None, fetch=fetcher(handler))
     assert got.etag == '"v2"' and got.last_modified.startswith("Wed")
+
+
+@pytest.mark.asyncio
+async def test_redirect_hops_recheck_without_a_second_debit_and_report_final_url():
+    calls = []
+
+    class Gate:
+        async def __call__(self):
+            calls.append("debit")
+
+        async def recheck(self):
+            calls.append("recheck")
+
+    def handler(request):
+        if request.url.path == "/x":
+            return httpx.Response(302, headers={"location": "/y"})
+        return httpx.Response(200, content=b"ok")
+
+    fetched = await rest.fetch_bounded(
+        "https://a.example/x",
+        before_send=Gate(),
+        resolve=public,
+        transport=httpx.MockTransport(handler),
+    )
+    assert calls == ["debit", "recheck"]
+    assert fetched.final_url == "https://a.example/y"
+    plain = await rest.fetch_bounded(
+        "https://a.example/z",
+        before_send=_noop,
+        resolve=public,
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"ok")),
+    )
+    assert plain.final_url is None

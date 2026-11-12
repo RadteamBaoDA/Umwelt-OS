@@ -147,3 +147,21 @@ def test_same_youtube_channel_normalizes_uc_prefix(
     feed_id: str | None, configured: str, same: bool
 ) -> None:
     assert fc._same_youtube_channel(feed_id, configured) is same
+
+
+@pytest.mark.asyncio
+async def test_send_fence_trace_uses_explicit_recheck_for_wrapped_gates():
+    from modules.connectors.providers.feed_catalog import send_fence_trace
+
+    calls = []
+
+    async def wrapped_gate():  # debits: must never run at header time
+        calls.append("debit")
+
+    async def recheck():
+        calls.append("recheck")
+
+    hook = send_fence_trace(wrapped_gate, recheck)
+    await hook("http11.send_request_headers.started", {})
+    await hook("http11.send_request_body.started", {})
+    assert calls == ["recheck"]

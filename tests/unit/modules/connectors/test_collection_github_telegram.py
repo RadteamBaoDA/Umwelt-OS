@@ -101,7 +101,7 @@ async def test_telegram_page_is_fenced_then_accepted_with_native_operation(monke
     async def snapshot(*_a, **_k):
         return SNAPSHOT
 
-    async def fetch(token, *, offset, remaining_bytes, before_request):
+    async def fetch(token, *, offset, remaining_bytes, before_request, recheck=None):
         seen["token"] = token
         return page
 

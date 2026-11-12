@@ -51,9 +51,23 @@ def credential_fingerprint(secret: str, *, deployment_key: str) -> str:
     return hmac.new(deployment_key.encode(), secret.encode(), hashlib.sha256).hexdigest()
 
 
-# Share of each policy limit the live proxy may use in its own windows. The collector keeps the full limit,
-# so for an upstream limit that is global per key the combined worst case is (100 + share)% of it.
+# Share of each policy limit reserved for the live proxy's own windows. The collector gets the remainder,
+# so the two subjects together never exceed 100% of an upstream limit that is global per key.
 LIVE_QUOTA_SHARE_PERCENT = 25
+
+
+def split_limit(limit: int | None) -> tuple[int | None, int | None]:
+    """Return ``(collector_limit, live_limit)`` for a policy limit; ``None`` (unlimited) stays unlimited.
+
+    Live reserves ``LIVE_QUOTA_SHARE_PERCENT`` (at least 1) and the collector keeps the rest, so the sum
+    never exceeds ``limit``. A limit below 2 cannot be split: the collector keeps it and live is denied.
+    """
+    if limit is None:
+        return None, None
+    if limit < 2:
+        return limit, 0
+    live = max(1, limit * LIVE_QUOTA_SHARE_PERCENT // 100)
+    return limit - live, live
 
 
 def window_bounds(window: str, now: datetime) -> tuple[datetime, datetime]:
@@ -145,8 +159,10 @@ async def _debit_window(
     blocked; otherwise raises ``QuotaDeferred`` with the later of the block and window end. Runs
     inside the caller's savepoint; neither flushes nor commits.
     """
-    limit, cost = policy.limit_units, policy.cost_per_send
-    if limit is not None and cost > limit:
+    limit, cost = split_limit(policy.limit_units)[0], policy.cost_per_send
+    if (
+        limit is not None and cost > limit
+    ):  # a send that can never fit the collector's share defers to window end
         raise QuotaDeferred(policy.policy_key, end)
     admitted = (
         await session.execute(
@@ -270,19 +286,15 @@ async def debit_transient_send(
 
     The caller commits before sending; failed or abandoned sends are not refunded. All
     live requests share an instance-wide ``live:`` subject (separate from the collector's), including
-    across key rotation, and are capped at ``LIVE_QUOTA_SHARE_PERCENT`` of each policy limit.
+    across key rotation, and are capped at the reserved ``LIVE_QUOTA_SHARE_PERCENT`` of each policy limit
+    (the collector is capped at the remainder, see ``split_limit``). A send costing more than the live
+    share defers to the window end rather than overspending.
     """
     now = now or datetime.now(UTC)
     async with session.begin_nested():
         for policy, subject, start, end in _plan(provider_id, now, None, None, live=True):
             cost = policy.cost_per_send
-            # Live traffic gets a fraction of the policy limit in its own windows; a policy whose
-            # single send exceeds that fraction still defers rather than overspending.
-            limit = (
-                None
-                if policy.limit_units is None
-                else max(cost, policy.limit_units * LIVE_QUOTA_SHARE_PERCENT // 100)
-            )
+            limit = split_limit(policy.limit_units)[1]
             if limit is not None and cost > limit:
                 raise QuotaDeferred(policy.policy_key, end)
             admitted = (

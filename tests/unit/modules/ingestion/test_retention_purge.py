@@ -82,3 +82,33 @@ async def test_terminal_run_purge_only_targets_unreferenced_terminal_batches():
         "ingestion_runs.status IN" in sql and "NOT (EXISTS" in sql and "source_observations" in sql
     )
     assert "SKIP LOCKED" in sql
+    assert (
+        "ingestion_batches.batch_key LIKE" in sql
+    )  # connector-collection batches only, never file:/crawl:
+
+
+@pytest.mark.asyncio
+async def test_terminal_run_purge_failure_is_isolated_in_a_savepoint():
+    from datetime import UTC, datetime
+
+    from modules.ingestion._purge import _purge_terminal_runs_isolated
+
+    events = []
+
+    class Nested:
+        async def __aenter__(self):
+            events.append("savepoint")
+
+        async def __aexit__(self, *exc):
+            events.append("rollback" if exc[0] else "release")
+            return False
+
+    class Db:
+        def begin_nested(self):
+            return Nested()
+
+        async def execute(self, statement):
+            raise RuntimeError("boom")
+
+    assert await _purge_terminal_runs_isolated(Db(), [], now=datetime.now(UTC), limit=5) == 0
+    assert events == ["savepoint", "rollback"]

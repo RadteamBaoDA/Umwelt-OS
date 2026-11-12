@@ -937,3 +937,34 @@ def test_extractor_registry_resolves_by_provider_and_accepts_registrations(monke
     record = IngestionRecord(provider_id="a", content="c", observed_at=NOW)
     with pytest.raises(ValueError, match="Native provider record metadata is missing"):
         nm.metadata_extractor_for("acme").extract(nm.ExtractionInput(record, NOW, "acme", None))
+
+
+@pytest.mark.parametrize(
+    ("processable", "stage_status", "warned"), [(3, "succeeded", True), (1, "failed", False)]
+)
+async def test_partial_normalization_failure_is_logged_but_total_failure_fails(
+    monkeypatch, caplog, processable, stage_status, warned
+):
+    """One failed row among processable rows keeps the stage succeeded with a warning; all failed fails it."""
+    from modules.ingestion._worker import normalize
+
+    async def record(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(normalize.sources, "record_processing_result_in_uow", record)
+    stage = SimpleNamespace(status="pending", error_code=None, run_id=uuid4())
+    run = SimpleNamespace(id=uuid4(), status="queued", error_code=None)
+    work = SimpleNamespace(
+        run=run,
+        stage=stage,
+        event=SimpleNamespace(status="pending"),
+        source=SimpleNamespace(id=uuid4(), generation=1),
+        scope=None,
+        access_fence=None,
+    )
+    monkeypatch.setattr(normalize, "_normalization_filters", lambda _w: ())
+    session = FakeSession([processable], stages=[stage])
+    with caplog.at_level("WARNING"):
+        await normalize._settle_terminal_run(session, work, True, 1)  # type: ignore[arg-type]
+    assert stage.status == stage_status
+    assert ("Normalization partially failed" in caplog.text) is warned

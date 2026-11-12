@@ -204,3 +204,19 @@ def test_new_rss_providers_parse_and_have_fixed_https_endpoints(provider):
     body = b"<rss><channel><item><guid>1</guid><title>News</title><link>https://example.com/a</link><pubDate>Wed, 04 Nov 2026 10:00:00 GMT</pubDate></item></channel></rss>"
     items, _ = live_map._parse(provider, body)
     assert items[0]["source"] and items[0]["url"] == "https://example.com/a"
+
+
+@pytest.mark.parametrize("limit", [2, 3, 4, 10, 60, 1000])
+def test_quota_split_never_exceeds_the_policy_limit(limit):
+    from modules.connectors import quota
+
+    collector, live = quota.split_limit(limit)
+    assert collector + live == limit and live >= 1 and collector >= 1
+
+
+def test_quota_split_edges():
+    from modules.connectors import quota
+
+    assert quota.split_limit(None) == (None, None)
+    assert quota.split_limit(1) == (1, 0)  # unsplittable: collector keeps it, live is denied
+    assert quota.split_limit(100) == (75, 25)

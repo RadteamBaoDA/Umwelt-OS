@@ -307,6 +307,9 @@ def _sends_no_credential(source: Any) -> bool:
     return entry is not None and entry.auth_methods == ("none",)
 
 
+_release_tasks: set[asyncio.Future[None]] = set()
+
+
 async def _release_lease(run: Run, error_code: str | None) -> None:
     """Best-effort release of an unaccepted native source lease; it expires on its own if this fails.
 
@@ -331,7 +334,11 @@ async def _release_lease(run: Run, error_code: str | None) -> None:
     try:
         # Shield: a cancelled worker task must still get its release through (the lease otherwise blocks the
         # source until it expires). The inner task keeps running if this await is cancelled again.
-        await asyncio.shield(release())
+        task = asyncio.ensure_future(release())
+        # The event loop only weakly references tasks; hold one so a shield-abandoned release is not collected.
+        _release_tasks.add(task)
+        task.add_done_callback(_release_tasks.discard)
+        await asyncio.shield(task)
     except Exception as exc:  # noqa: BLE001  # best-effort: never mask the settled request, but log it
         logger.warning(
             "Collection lease release failed; source_id=%s error_type=%s",

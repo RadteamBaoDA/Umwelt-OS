@@ -635,6 +635,11 @@ async def _run_telegram(run: Run) -> None:
         await run.gate()
         await _credential_fence(run, telegram=snapshot)
 
+    async def recheck_send() -> None:
+        """Header-time fence: revalidate the gate and the Telegram snapshot without a second debit."""
+        await run.gate.recheck()
+        await _credential_fence(run, telegram=snapshot)
+
     offset: int | None = None
     total_bytes = total_updates = 0
     for page_number in range(5):
@@ -644,6 +649,7 @@ async def _run_telegram(run: Run) -> None:
             offset=offset,
             remaining_bytes=min(10 * 1024 * 1024, remaining),
             before_request=before_send,
+            recheck=recheck_send,
         )
         total_bytes += page.transport_bytes
         total_updates += len(page.deliveries)

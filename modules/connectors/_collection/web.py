@@ -206,7 +206,9 @@ async def _run_web(run: Run) -> None:
     """Collect static web pages through bounded HTTP or queue a fenced browser-worker crawl.
 
     Browser mode hands its existing scheduler admission to the durable ingestion
-    crawl event; the worker later owns the bounded browser request and receipt.
+    crawl event; the worker later owns the bounded browser request and receipt. In bounded-HTTP mode a
+    redirect is recorded under the final URL (also the base for relative links), and a page whose final
+    origin differs from the configured origin is skipped.
     """
     from modules.connectors.registry import configuration, normalize
 
@@ -250,21 +252,25 @@ async def _run_web(run: Run) -> None:
         )
         body = _require_body(fetched)
         spent += len(body)
+        # Provenance and relative links follow the page that actually answered, not the requested URL.
+        page_url = urldefrag(fetched.final_url)[0] if fetched.final_url else url
+        if rest._origin(page_url) != origin:
+            continue  # a redirect left the configured origin: never ingest or crawl from it
         # HTMLParser.feed on a multi-MB page would stall the worker loop (heartbeats, heavy-slot renewal).
         parts, links = await to_thread_joined(_parse_page, _decode_page(body, fetched.content_type))
         records.append(
             normalize(
                 {
-                    "provider_id": url,
+                    "provider_id": page_url,
                     "content": "\n".join(parts)[:200_000],
                     "observed_at": datetime.now(UTC).isoformat(),
-                    "metadata": {"url": url},
+                    "metadata": {"url": page_url},
                 }
             )
         )
         if depth < config.max_depth:
             for href in links:
-                target = urldefrag(urljoin(url, href))[0]
+                target = urldefrag(urljoin(page_url, href))[0]
                 if target not in visited and len(queue) < 100 and rest._origin(target) == origin:
                     visited.add(target)
                     queue.append((target, depth + 1))

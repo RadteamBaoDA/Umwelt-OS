@@ -52,6 +52,7 @@ def schedule():
         failure_count=0,
         interval_minutes=60,
         next_eligible_at=None,
+        next_due_at=NOW,
         blocked_error_code=None,
         blocked_dimensions=None,
         blocked_connector_revision=None,
@@ -170,18 +171,35 @@ async def test_clear_block_needs_newer_credential_revision():
     assert sched.blocked_error_code is None and sched.blocked_credential_revision is None
 
 
-def test_penalize_backs_off_exponentially_when_no_provider_deadline():
+def test_penalize_backs_off_scheduled_cadence_only_when_no_provider_deadline():
     sched = schedule()
     scheduler._penalize(sched, None)
-    first = sched.next_eligible_at - datetime.now(UTC)
+    first = sched.next_due_at - datetime.now(UTC)
     assert timedelta(minutes=119) < first <= timedelta(minutes=120)  # 60 min * 2**1
+    # next_eligible_at stays reserved for provider deadlines, so manual collect is not blocked.
+    assert sched.next_eligible_at is None
     for _ in range(20):
         scheduler._penalize(sched, None)
-    capped = sched.next_eligible_at - datetime.now(UTC)
+    capped = sched.next_due_at - datetime.now(UTC)
     assert timedelta(hours=23) < capped <= timedelta(hours=24)
     deadline = NOW + timedelta(hours=6)
     scheduler._penalize(sched, deadline)
-    assert sched.next_eligible_at == deadline  # provider deadline wins
+    assert sched.next_eligible_at == deadline  # provider deadline gates every trigger
+
+
+@pytest.mark.asyncio
+async def test_upsert_schedule_clears_failure_backoff_on_reactivation():
+    sched = schedule()
+    sched.failure_count = 3
+    sched.next_due_at = datetime.now(UTC) + timedelta(hours=8)
+    await scheduler.upsert_schedule(
+        FakeSession(sched),
+        workspace_id=sched.workspace_id,
+        source_id=uuid4(),
+        interval_minutes=60,
+        enabled=True,
+    )
+    assert sched.failure_count == 0 and sched.next_due_at <= datetime.now(UTC)
 
 
 @pytest.mark.asyncio

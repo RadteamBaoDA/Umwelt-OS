@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from hashlib import sha256
 from html.parser import HTMLParser
+from typing import cast
 from urllib.parse import parse_qs, quote, urlsplit
 from xml.etree import ElementTree
 
@@ -126,18 +127,24 @@ def _parse_time(value: str | None) -> datetime | None:
 
 def send_fence_trace(
     before_request: Callable[[], Awaitable[None]],
+    recheck: Callable[[], Awaitable[None]] | None = None,
 ) -> Callable[[str, dict[str, object]], Awaitable[None]]:
     """Build an httpx trace hook that reruns the native fence right before request headers hit the wire.
 
-    A ``SendGate`` exposes ``recheck`` (authorize without debiting) so the pre-send call remains the
-    only debit; plain callables are invoked as-is.
+    ``recheck`` must authorize without debiting so the pre-send call remains the only debit; callers
+    that wrap the gate in a closure pass ``run.gate.recheck`` (plus their credential fence) explicitly.
+    Without it a ``SendGate`` is detected by its ``recheck`` attribute and any other callable is
+    invoked as-is (which is only correct when that callable does not debit).
     """
-    recheck = getattr(before_request, "recheck", before_request)
+    fence = cast(
+        "Callable[[], Awaitable[None]]",
+        recheck or getattr(before_request, "recheck", before_request),
+    )
 
     async def final_send_fence(event_name: str, info: dict[str, object]) -> None:
         """Recheck original authority after connection admission, before headers send."""
         if event_name.endswith("send_request_headers.started"):
-            await recheck()
+            await fence()
 
     return final_send_fence
 

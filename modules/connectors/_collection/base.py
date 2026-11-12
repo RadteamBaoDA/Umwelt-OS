@@ -183,7 +183,8 @@ class SendGate:
     A plain call always revalidates and debits (new ``send_sequence`` => new ledger row). Providers
     that also fence at httpx header time (``send_fence_trace``) call ``recheck`` for that second
     step, which only revalidates; nothing is inferred from call order, so a send can never skip
-    its debit.
+    its debit. Redirect hops of one logical ``fetch_bytes`` share that single authorization and debit;
+    ``fetch_bounded`` calls ``recheck`` (no debit) before each later hop.
     """
 
     def __init__(

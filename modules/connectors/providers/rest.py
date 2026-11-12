@@ -73,12 +73,16 @@ class ProviderHttpError(RuntimeError):
 
 @dataclass(frozen=True)
 class Fetched:
-    """One bounded response body; ``body is None`` means HTTP 304."""
+    """One bounded response body; ``body is None`` means HTTP 304.
+
+    ``final_url`` is the URL that produced the body after redirects; ``None`` means the request URL.
+    """
 
     body: bytes | None
     etag: str | None = None
     last_modified: str | None = None
     content_type: str | None = None
+    final_url: str | None = None
 
 
 async def resolve_public(host: str, port: int) -> list[str]:
@@ -122,6 +126,22 @@ MAX_REDIRECTS = 3
 _CROSS_ORIGIN_HEADERS = frozenset({"accept", "accept-encoding", "accept-language", "user-agent"})
 
 
+async def _authorize_hop(budget: asyncio.Timeout, before_send: BeforeSend, *, first: bool) -> None:
+    """Fence one network hop: the first runs ``before_send`` (debit), later hops only ``recheck`` if offered.
+
+    The caller's fence/quota check covers the logical fetch, so it runs once, not per hop. Its DB latency is
+    credited back to the HTTP ``budget`` so it never consumes the HTTP time budget.
+    """
+    if first:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        await before_send()
+        if (deadline := budget.when()) is not None:
+            budget.reschedule(deadline + loop.time() - started)
+    elif (recheck := getattr(before_send, "recheck", None)) is not None:
+        await recheck()
+
+
 async def fetch_bounded(
     url: str,
     *,
@@ -137,7 +157,9 @@ async def fetch_bounded(
 
     ``before_send`` runs exactly once, after resolution and immediately before the request is
     handed to the transport; it is where the caller revalidates fences and debits quota, and
-    raising from it aborts the send. ``json_body`` is a fixed, already-serialised search query for read-only
+    raising from it aborts the send. The time it takes is credited back to the HTTP deadline. Redirect hops
+    share that one authorization and debit; when ``before_send`` has a ``recheck`` (a SendGate) it is awaited
+    before each later hop to revalidate authority without debiting. ``json_body`` is a fixed, already-serialised search query for read-only
     POST search APIs (VietnamWorks); it never carries credentials or owner content. 429 raises ``ProviderRateLimited`` with the full
     Retry-After; up to 3 GET redirects are followed (each hop re-resolved, re-checked and pinned, https->http refused,
     only non-secret headers kept cross-origin, one overall deadline and byte cap); other 3xx raise ``UnsafeDestination``; 304 returns no body.
@@ -154,7 +176,7 @@ async def fetch_bounded(
     sent = False
     # One deadline covers resolution-independent send time across every hop.
     async with (
-        asyncio.timeout(timeout),
+        asyncio.timeout(timeout) as budget,
         httpx.AsyncClient(
             transport=transport,
             timeout=httpx.Timeout(timeout),
@@ -188,10 +210,8 @@ async def fetch_bounded(
             pinned, request_headers, extensions = _pinned_request(
                 current, addresses[0], hop_headers
             )
-            if not sent:
-                # The caller's fence/quota check covers the logical fetch, so it runs once, not per hop.
-                await before_send()
-                sent = True
+            await _authorize_hop(budget, before_send, first=not sent)
+            sent = True
             async with client.stream(
                 "GET" if json_body is None else "POST",
                 pinned,
@@ -225,6 +245,7 @@ async def fetch_bounded(
                     response.headers.get("etag"),
                     response.headers.get("last-modified"),
                     response.headers.get("content-type"),
+                    current if current != url else None,
                 )
     raise UnsafeDestination("redirect_blocked")  # pragma: no cover - loop always returns or raises
 

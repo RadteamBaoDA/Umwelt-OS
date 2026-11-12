@@ -61,6 +61,10 @@ REALTIME_BUSY_DEFER = timedelta(seconds=5)
 ENQUEUE_CLAIM = timedelta(seconds=60)
 REENQUEUE_AFTER = timedelta(minutes=5)  # lost Redis job: the durable row is enqueued again
 TICK_WORKSPACES = 50
+LAG_WARNING_INTERVAL = timedelta(hours=1)
+_lag_warned_at: dict[
+    UUID, datetime
+] = {}  # in-memory per process: at most one lag warning per schedule per hour
 # Failures that need owner action: never auto-retried, they gate the source's schedule.
 # The value is the blocked dimension; clear_collection_block re-opens it once that dimension moves.
 ACTION_REQUIRED = {
@@ -144,6 +148,10 @@ async def upsert_schedule(
     """Create or update a source schedule; activation owners call it, the caller commits.
 
     Enabling an overdue schedule keeps next_due_at, so it yields a single catch-up request.
+    Activation follows a configuration or credential revision change, so it also clears any failure
+    backoff (failure_count and the next_due_at push it caused). Callers pass the allowed set only: the
+    API validates ``schedule_interval_minutes`` as a Literal, and ``round_up_interval`` only absorbs
+    internally computed provider floors.
     """
     interval_minutes = round_up_interval(interval_minutes)
     now = datetime.now(UTC)
@@ -161,6 +169,10 @@ async def upsert_schedule(
     else:
         row.enabled = enabled
         row.interval_minutes = interval_minutes
+        if row.failure_count:
+            # Re-activation follows a config or credential change: the failure backoff no longer applies.
+            row.failure_count = 0
+            row.next_due_at = min(row.next_due_at, now)
     await session.flush()
 
 
@@ -367,18 +379,22 @@ async def _defer(session: AsyncSession, request_id: UUID, delay: timedelta) -> N
 def _penalize(schedule: ConnectorSchedule | None, until: datetime | None) -> None:
     """Record a terminal failure on the schedule; provider deadlines are never shortened.
 
-    With no provider deadline (provider_rejected, destination_blocked, ...) a permanently failing source would be
-    retried every interval forever, so back off exponentially: ``interval * 2**min(failures, 6)``, capped at 24 h.
-    ``failure_count`` and ``next_eligible_at`` reset together on the next success (``settle`` succeeded branch).
+    A provider deadline goes to ``next_eligible_at`` (a real provider instruction that blocks every
+    trigger). With none (provider_rejected, destination_blocked, ...) a permanently failing source would be
+    retried every interval forever, so the scheduled cadence backs off exponentially by pushing
+    ``next_due_at`` to ``now + interval * 2**min(failures, 6)`` (capped at 24 h, never moved earlier).
+    ``next_eligible_at`` is untouched, so a manual collect stays available (subject to its cooldown).
+    ``failure_count`` and ``next_eligible_at`` reset on the next success (``settle`` succeeded branch).
     """
     if schedule is not None:
         schedule.failure_count += 1
-        if until is None:
-            backoff = timedelta(minutes=schedule.interval_minutes) * 2 ** min(
-                schedule.failure_count, 6
-            )
-            until = datetime.now(UTC) + min(backoff, timedelta(hours=24))
-        schedule.next_eligible_at = until
+        if until is not None:
+            schedule.next_eligible_at = until
+            return
+        backoff = timedelta(minutes=schedule.interval_minutes) * 2 ** min(schedule.failure_count, 6)
+        schedule.next_due_at = max(
+            schedule.next_due_at, datetime.now(UTC) + min(backoff, timedelta(hours=24))
+        )
 
 
 async def _stale_reason(
@@ -1067,7 +1083,8 @@ async def _create_due_requests(
     Extra requests only deepen the durable queue: the partial unique index on
     connector_admission_slots.workspace_id keeps effective concurrency at one running
     collection per workspace, and the global slots stay the fixed seeded pair (1, 2).
-    A schedule overdue by more than one interval is logged so lag is visible.
+    A schedule overdue by more than one interval is logged (at most once per hour per schedule per
+    process) so lag is visible without flooding the log every tick.
 
     Fair turns: workspaces and sources are ordered by persisted last_considered_at, and
     consideration is committed before scope work so a busy workspace cannot starve others.
@@ -1097,7 +1114,11 @@ async def _create_due_requests(
         if not picked:
             return 0
         for lag_row in picked:
-            if now - lag_row[2] > timedelta(minutes=lag_row[3]):
+            last_warned = _lag_warned_at.get(lag_row[0])
+            if now - lag_row[2] > timedelta(minutes=lag_row[3]) and (
+                last_warned is None or now - last_warned >= LAG_WARNING_INTERVAL
+            ):
+                _lag_warned_at[lag_row[0]] = now
                 logger.warning(
                     "Collection schedule lagging more than one interval; source_id=%s overdue_seconds=%d",
                     lag_row[0],
@@ -1174,7 +1195,8 @@ async def _enqueue_queued(
     """Claim due native requests with an expiring token, then enqueue only their UUIDs.
 
     A failed or lost enqueue leaves the durable queued row; its claim expires and enqueue_next_at
-    brings it back. n8n requests are excluded: the managed template owns their delivery.
+    brings it back. n8n requests are excluded: the managed template owns their delivery. Making a
+    failed enqueue due again is best-effort (a DB error is logged and the tick continues).
     """
     claim = uuid7()
     async with factory() as session:
@@ -1226,17 +1248,22 @@ async def _enqueue_queued(
     if failed:
         # The claim pre-set enqueue_next_at to now + REENQUEUE_AFTER (lost-job recovery). An enqueue that raised
         # never reached Redis, so make it due now: only the 60 s claim expiry then delays the retry.
-        async with factory() as session:
-            await session.execute(
-                update(ConnectorCollectionRequest)
-                .where(
-                    ConnectorCollectionRequest.id.in_(failed),
-                    ConnectorCollectionRequest.enqueue_claim_token == claim,
-                    ConnectorCollectionRequest.status == "queued",
+        try:
+            async with factory() as session:
+                await session.execute(
+                    update(ConnectorCollectionRequest)
+                    .where(
+                        ConnectorCollectionRequest.id.in_(failed),
+                        ConnectorCollectionRequest.enqueue_claim_token == claim,
+                        ConnectorCollectionRequest.status == "queued",
+                    )
+                    .values(enqueue_next_at=now)
                 )
-                .values(enqueue_next_at=now)
+                await session.commit()
+        except Exception:  # best-effort: claim expiry still recovers these ids
+            logger.warning(
+                "Could not make failed enqueues due again; count=%d", len(failed), exc_info=True
             )
-            await session.commit()
     return enqueued
 
 

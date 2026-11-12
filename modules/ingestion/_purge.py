@@ -1,5 +1,6 @@
 """Ingestion purge preparation and retention sweeps (internal; import through ``public``)."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -28,6 +29,8 @@ from modules.ingestion.models import (
 from modules.knowledge.documents import public as documents
 from modules.sources import public as sources
 from modules.sources.public import SourceFence
+
+logger = logging.getLogger(__name__)
 
 
 async def _validate_source_ingestion_purge_in_uow(
@@ -496,7 +499,7 @@ async def purge_expired_datasource_data(
     now = now or datetime.now(UTC)
     cutoffs = await sources.list_retention_cutoffs(session, now=now)
     if not cutoffs:
-        return await _purge_terminal_runs(session, cutoffs, now=now, limit=limit)
+        return await _purge_terminal_runs_isolated(session, cutoffs, now=now, limit=limit)
 
     deleted = await observations_public.purge_expired_noncurrent_observations(
         session, cutoffs, limit=limit
@@ -538,28 +541,25 @@ async def purge_expired_datasource_data(
             field="document_version_id",
         ),
     )
-    deleted += await _purge_terminal_runs(session, cutoffs, now=now, limit=limit)
+    deleted += await _purge_terminal_runs_isolated(session, cutoffs, now=now, limit=limit)
     return deleted
 
 
 RUN_RETENTION = timedelta(days=30)  # default window for sources without a retention cutoff
 
 
-async def _purge_terminal_runs(
-    session: AsyncSession,
-    cutoffs: list[tuple[UUID, datetime]],
-    *,
-    now: datetime,
-    limit: int,
-) -> int:
-    """Delete one bounded slice of old terminal batches (cascading their run and stages); the caller commits.
+COLLECTION_BATCH_KEY_PREFIX = (
+    "native:"  # batch_key of native connector collection (see _native/collection.py)
+)
 
-    Empty polls and fully purged batches otherwise leave batch/run/stage rows forever. A batch is eligible when
-    its run is ``succeeded``/``failed``, older than the source retention cutoff (``RUN_RETENTION`` for sources
-    without one), and no ``SourceObservation`` still hangs off it: ``source_observations.batch_id`` cascades,
-    so deleting a referenced batch would destroy observations backing current knowledge. Receipts keep plain
-    (unconstrained) batch/run ids and age out on their own schedule. ``SKIP LOCKED`` avoids blocking ingestion.
-    Returns the number of batches deleted.
+
+def terminal_runs_doomed_query(
+    cutoffs: list[tuple[UUID, datetime]], *, now: datetime, limit: int
+) -> Select[Any]:
+    """Build the locked, bounded batch-id selection for :func:`_purge_terminal_runs` (no I/O).
+
+    Only connector-collection batches (``batch_key`` starts with ``native:``) qualify: upload batches
+    (``file:``) and crawl batches (``crawl:``) are owned by their own flows and must never be age-purged here.
     """
     aged = or_(
         *(
@@ -571,11 +571,16 @@ async def _purge_terminal_runs(
             IngestionRun.created_at < now - RUN_RETENTION,
         ),
     )
-    doomed = (
+    return (
         select(IngestionRun.batch_id)
         .where(
             IngestionRun.status.in_(("succeeded", "failed")),
             aged,
+            IngestionRun.batch_id.in_(
+                select(IngestionBatch.id).where(
+                    IngestionBatch.batch_key.like(f"{COLLECTION_BATCH_KEY_PREFIX}%")
+                )
+            ),
             ~select(SourceObservation.id)
             .where(SourceObservation.batch_id == IngestionRun.batch_id)
             .exists(),
@@ -584,5 +589,46 @@ async def _purge_terminal_runs(
         .limit(limit)
         .with_for_update(skip_locked=True, of=IngestionRun)
     )
+
+
+async def _purge_terminal_runs_isolated(
+    session: AsyncSession,
+    cutoffs: list[tuple[UUID, datetime]],
+    *,
+    now: datetime,
+    limit: int,
+) -> int:
+    """Run :func:`_purge_terminal_runs` inside a savepoint; a failure is logged and counts as 0 deletions.
+
+    The step is housekeeping, so its database error must not roll back the observation and document
+    purges already flushed in the caller's transaction.
+    """
+    try:
+        async with session.begin_nested():
+            return await _purge_terminal_runs(session, cutoffs, now=now, limit=limit)
+    except Exception:  # best-effort housekeeping; the savepoint already rolled back
+        logger.warning("Terminal run purge failed; skipped this pass", exc_info=True)
+        return 0
+
+
+async def _purge_terminal_runs(
+    session: AsyncSession,
+    cutoffs: list[tuple[UUID, datetime]],
+    *,
+    now: datetime,
+    limit: int,
+) -> int:
+    """Delete one bounded slice of old terminal collection batches (cascading run and stages); the caller commits.
+
+    Empty polls and fully purged batches otherwise leave batch/run/stage rows forever. A batch is eligible when
+    it is a connector-collection batch (``native:`` key; never uploads or crawls), its run is
+    ``succeeded``/``failed``, older than the source retention cutoff (``RUN_RETENTION`` for sources
+    without one), and no ``SourceObservation`` still hangs off it: ``source_observations.batch_id`` cascades,
+    so deleting a referenced batch would destroy observations backing current knowledge. Terminal runs are never
+    referenced by a live (queued/running) collection request, so no request check is needed. Receipts keep plain
+    (unconstrained) batch/run ids and age out on their own schedule. ``SKIP LOCKED`` avoids blocking ingestion.
+    Returns the number of batches deleted.
+    """
+    doomed = terminal_runs_doomed_query(cutoffs, now=now, limit=limit)
     result = await session.execute(delete(IngestionBatch).where(IngestionBatch.id.in_(doomed)))
     return int(getattr(result, "rowcount", 0) or 0)

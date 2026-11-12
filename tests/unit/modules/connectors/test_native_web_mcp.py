@@ -148,6 +148,49 @@ async def test_web_adapter_stays_same_origin_bounded_and_hands_records_to_accept
     ]
 
 
+class RedirectGate(FakeGate):
+    """Answers every request with a body that came from ``final`` (a redirect target)."""
+
+    def __init__(self, final, calls):
+        super().__init__({}, calls)
+        self.final = final
+
+    async def fetch_bytes(self, url, **kwargs):
+        self.calls.append(url)
+        return rest.Fetched(b"<p>hi</p><a href='rel'>r</a>", final_url=self.final)
+
+
+async def _run_redirected(monkeypatch, final):
+    accepted, calls = [], []
+
+    async def state(run):
+        return SimpleNamespace(cursor=None)
+
+    async def accept(run, records, before, after, update=None):
+        accepted.append(records)
+
+    patch_collection(monkeypatch, "_state", state)
+    patch_collection(monkeypatch, "_accept_generic", accept)
+    run = web_run(
+        RedirectGate(final, calls), {"url": "https://a.example/x", "max_pages": 5, "max_depth": 1}
+    )
+    await collection._run_web(run)
+    return accepted[0], calls
+
+
+@pytest.mark.asyncio
+async def test_web_adapter_records_the_final_url_and_resolves_links_against_it(monkeypatch):
+    records, calls = await _run_redirected(monkeypatch, "https://a.example/new/y#frag")
+    assert records[0]["provider_id"] == "https://a.example/new/y"
+    assert "https://a.example/new/rel" in calls  # relative link resolved against the final URL
+
+
+@pytest.mark.asyncio
+async def test_web_adapter_skips_pages_redirected_off_origin(monkeypatch):
+    records, _calls = await _run_redirected(monkeypatch, "https://evil.test/y")
+    assert records == []
+
+
 # ---- MCP adapter
 
 

@@ -484,21 +484,36 @@ async def _settle_terminal_run(
     """Derive the run status from its stages, mark the event and record the source processing result.
 
     Called only when no row is pending: any failed stage fails the run, all-succeeded succeeds it, otherwise it
-    stays queued. The event is delivered, or failed when this stage failed.
+    stays queued. The event is delivered, or failed when this stage failed. Failure is judged against the
+    non-duplicate, non-skipped rows; a partial failure keeps the run succeeded but logs a warning with counts.
     """
     run, stage, event, source = work.run, work.stage, work.event, work.source
     if failed_count:
         # One bad record must not fail the run or flag the source: only a slice where nothing was usable fails.
         # The runs/stages status checks have no success-with-warnings value, so a partial success stays
         # 'succeeded'; the failed rows remain visible as disposition='failed' in the normalization journal.
+        # Duplicate and skipped (tombstoned) rows never had a chance to succeed, so they must not mask a
+        # slice where every processable row failed: compare against normalized + failed rows only.
         total = int(
             await session.scalar(
                 select(func.count())
                 .select_from(ObservationNormalization)
-                .where(*_normalization_filters(work))
+                .where(
+                    *_normalization_filters(work),
+                    ObservationNormalization.disposition.in_(("normalized", "failed")),
+                )
             )
             or 0
         )
+        if failed_count < total:
+            # Not silent: the run stays succeeded, so surface the partial failure to operators.
+            logger.warning(
+                "Normalization partially failed; source_id=%s run_id=%s failed=%d processable=%d",
+                source.id,
+                run.id,
+                failed_count,
+                total,
+            )
         failed_count = failed_count if failed_count >= total else 0
     stage.status = "failed" if failed_count else "succeeded"
     stage.error_code = "normalization_failed" if failed_count else None

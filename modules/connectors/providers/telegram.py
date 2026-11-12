@@ -77,11 +77,13 @@ async def _telegram_call(
     *,
     max_response_bytes: int = _MAX_RESPONSE_BYTES,
     before_request: Callable[[], Awaitable[None]] | None = None,
+    recheck: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[Any, int]:
     """Call one Bot API method under an absolute 30-second budget and return its full body size.
 
     Native fetch passes ``before_request`` (run immediately before the send, aborting by raising);
-    setup-time scope validation has no native fence and omits it.
+    setup-time scope validation has no native fence and omits it. ``recheck`` is the non-debiting
+    header-time fence (see ``send_fence_trace``); omit it only when ``before_request`` does not debit.
     """
     if method not in _METHODS:
         raise ValueError("telegram_method_unsupported")
@@ -93,7 +95,7 @@ async def _telegram_call(
                 "POST",
                 f"https://api.telegram.org/bot{quote(token, safe='')}/{method}",
                 json=payload or {},
-                extensions={"trace": send_fence_trace(before_request)}
+                extensions={"trace": send_fence_trace(before_request, recheck)}
                 if before_request is not None
                 else {},
             ) as response:
@@ -197,8 +199,12 @@ async def fetch_telegram_updates(
     offset: int | None,
     before_request: Callable[[], Awaitable[None]],
     remaining_bytes: int = _MAX_RESPONSE_BYTES,
+    recheck: Callable[[], Awaitable[None]] | None = None,
 ) -> TelegramUpdatePage:
-    """Fetch one update page within its 10 MiB page and caller-supplied trigger byte budgets."""
+    """Fetch one update page within its 10 MiB page and caller-supplied trigger byte budgets.
+
+    ``recheck`` is the non-debiting header-time fence for callers whose ``before_request`` debits.
+    """
     _validate_token(token)
     if (
         isinstance(remaining_bytes, bool)
@@ -227,6 +233,7 @@ async def fetch_telegram_updates(
                 payload,
                 max_response_bytes=response_limit,
                 before_request=before_request,
+                recheck=recheck,
             )
     if len(result) > 100:
         raise _TelegramAPIError("telegram_response_invalid")
