@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    desc,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -49,6 +50,7 @@ class Observation(Base):
             "observed_at",
             "id",
         ),
+        Index("ix_observations_source_observed_desc", "source_id", desc("observed_at")),
         Index("ix_observations_document_version", "document_version_id"),
         Index("ix_observations_ingestion_observation_id", "ingestion_observation_id"),
         ForeignKeyConstraint(

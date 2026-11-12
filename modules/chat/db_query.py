@@ -9,13 +9,14 @@ timeout, and automatic ``EvidenceItem`` registration for grounded citations.
 from __future__ import annotations
 
 import json
-from contextlib import suppress
-from datetime import UTC, datetime
+from contextlib import AsyncExitStack, suppress
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import and_, desc, func, or_, select, text
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import and_, desc, exists, func, or_, select, text
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from core.config import Settings
@@ -43,6 +44,11 @@ MAX_DB_QUERY_ROWS = 50
 MAX_SQL_LENGTH = 2000
 MAX_TOOL_OUTPUT_CHARS = 20_000  # serialized result bound; trailing rows are dropped past it
 MAX_SQL_CELL_CHARS = 500  # per string cell in SQL mode (a body column could otherwise be huge)
+_MAX_SCOPE_IDS = (
+    32  # gadget/turn source-scope ids honoured; the rest are dropped (flagged scope_truncated)
+)
+_MAX_ALLOWED_SOURCES = 100  # newest allowed sources honoured (flagged sources_truncated)
+DEFAULT_AGGREGATION_WINDOW_DAYS = 90  # aggregation window when the model gives no date range
 
 
 class QueryCollectedDataArgs(BaseModel):
@@ -60,11 +66,15 @@ class QueryCollectedDataArgs(BaseModel):
     date_from: str | None = Field(default=None, max_length=64)
     date_to: str | None = Field(default=None, max_length=64)
     current_only: bool = True
-    aggregation: Literal["none", "latest", "avg", "min", "max", "sum", "count", "timeseries"] = (
-        "none"
-    )
+    aggregation: Literal["none", "avg", "min", "max", "sum", "count"] = "none"
     sql_query: str | None = Field(default=None, max_length=MAX_SQL_LENGTH)
     limit: int = Field(default=25, ge=1, le=MAX_DB_QUERY_ROWS)
+
+    @field_validator("aggregation", mode="before")
+    @classmethod
+    def _legacy_aggregation(cls, value: Any) -> Any:
+        """Map the retired ``latest``/``timeseries`` values to ``none`` (they never aggregated), so old calls still run."""
+        return "none" if value in ("latest", "timeseries") else value
 
 
 def sql_mode_available() -> bool:
@@ -138,21 +148,12 @@ def _db_query_base_properties() -> dict[str, Any]:
         },
         "current_only": {
             "type": "boolean",
-            "description": "When true (default), filter observations to is_current=true unless aggregation is timeseries.",
+            "description": "When true (default), return only the current revision of each observation. Aggregations always use current revisions only.",
         },
         "aggregation": {
             "type": "string",
-            "enum": [
-                "none",
-                "latest",
-                "avg",
-                "min",
-                "max",
-                "sum",
-                "count",
-                "timeseries",
-            ],
-            "description": "Optional SQL aggregation over observation values grouped by provider, metric, symbol, unit.",
+            "enum": ["none", "avg", "min", "max", "sum", "count"],
+            "description": "Optional SQL aggregation over observation values grouped by provider, metric, symbol, unit. Without date_from/date_to it covers the last 90 days (the result says so).",
         },
         "sql_query": {
             "type": "string",
@@ -206,7 +207,7 @@ def build_db_query_tool_spec(*, sql_enabled: bool = True) -> dict[str, Any]:
             "name": TOOL_QUERY_COLLECTED_DATA,
             "description": (
                 "Query the workspace's collected realtime and near-realtime datasource database "
-                "(PostgreSQL observations & documents + Redis hot cache). "
+                "(PostgreSQL observations & documents + connector snapshot metadata). "
                 "Supports 'structured' filter/aggregation mode and 'sql' read-only SELECT mode "
                 "against the pre-scoped views `scoped_observations` "
                 "(columns: id, source_id, provider, metric, symbol, region, value, unit, currency, "
@@ -261,7 +262,7 @@ async def active_collected_providers(
         source_scope=source_scope,
         allow_local_only=allow_local_only,
     )
-    return sorted({str(p) for _i, p, _n in allowed if p})[:30]
+    return sorted({str(p) for _i, p, _n in allowed[:_MAX_ALLOWED_SOURCES] if p})[:30]
 
 
 async def has_collected_datasource(
@@ -343,6 +344,10 @@ async def _allowed_sources(
 
     ``source_scope=None`` means no scope (plain chat: the whole workspace). A provided list is a hard
     allow-list that fails closed: an empty list, or one with no parseable UUID, permits no source.
+    Only connector-collected sources (``provider IS NOT NULL``) qualify, matching the grant check in
+    :func:`has_collected_datasource`. At most the first ``_MAX_SCOPE_IDS`` scope ids are honoured, and up to
+    ``_MAX_ALLOWED_SOURCES + 1`` newest rows are returned: the extra row lets the caller detect (and flag)
+    truncation, and the caller must slice to ``_MAX_ALLOWED_SOURCES``.
     """
     stmt = select(
         Source.id,
@@ -351,24 +356,30 @@ async def _allowed_sources(
     ).where(
         Source.workspace_id == workspace_id,
         Source.status == "active",
+        Source.provider.is_not(None),
     )
     if not allow_local_only:
         stmt = stmt.where(Source.local_only.is_(False))
     if source_scope is not None:
         scoped_ids: list[UUID] = []
-        for raw_id in source_scope[:32]:
+        for raw_id in source_scope[:_MAX_SCOPE_IDS]:
             with suppress(ValueError, TypeError):
                 scoped_ids.append(UUID(str(raw_id)))
         if not scoped_ids:
             return []
         stmt = stmt.where(Source.id.in_(scoped_ids))
-    rows = (await session.execute(stmt.order_by(Source.created_at.desc()).limit(100))).all()
+    rows = (
+        await session.execute(
+            stmt.order_by(Source.created_at.desc()).limit(_MAX_ALLOWED_SOURCES + 1)
+        )
+    ).all()
     return [(row.id, row.provider, row.name) for row in rows]
 
 
 CITATION_RULE = (
     "The citation value of each row is its source reference; write it after every fact taken from that "
-    "row, e.g. M4.7 Guam region [3]. Rows with url=null are still cited this way."
+    "row, e.g. M4.7 Guam region [3]. Rows with url=null are still cited this way. Rows whose citation is "
+    "null are still usable as data but have no source number: never invent or reuse a number for them."
 )
 
 
@@ -407,7 +418,9 @@ async def _register_evidence_for_versions(
     must also belong to the workspace). Unverified pairs are dropped: no evidence, no citation number.
 
     New evidence is numbered in ``version_pairs`` order. Every returned version is registered (no cap): the caller bounds rows by ``args.limit`` (<= 50), and
-    an uncited row would make the model drop the citation for the whole list.
+    an uncited row would make the model drop the citation for the whole list. A version without a chunk 0
+    is silently left out of the map; its row serialises ``citation: null`` and ``CITATION_RULE`` tells the
+    model such rows are usable but carry no number.
 
     Returns:
         Mapping of ``document_version_id`` to the citation number ``[n]`` the model must use; equal to the
@@ -563,6 +576,13 @@ async def execute_db_query_tool(
     if not allowed:
         return json.dumps({"status": "no_active_sources_in_scope", "rows": []})
 
+    # Truncation is surfaced to the model so a silently narrowed scope is never mistaken for the full one.
+    flags: dict[str, bool] = {}
+    if source_scope is not None and len(source_scope) > _MAX_SCOPE_IDS:
+        flags["scope_truncated"] = True
+    if len(allowed) > _MAX_ALLOWED_SOURCES:
+        flags["sources_truncated"] = True
+        allowed = allowed[:_MAX_ALLOWED_SOURCES]
     allowed_ids = [sid for sid, _prov, _name in allowed]
     date_from = _parse_iso_dt(args.date_from)
     date_to = _parse_iso_dt(args.date_to)
@@ -572,30 +592,38 @@ async def execute_db_query_tool(
             await session.execute(text("SET LOCAL statement_timeout = '2000ms'"))
             if args.mode == "sql" and args.sql_query:
                 return cap_tool_output(
-                    await _execute_sql_mode(
-                        session,
-                        args.sql_query,
-                        workspace_id=scope.workspace_id,
-                        allowed_source_ids=allowed_ids,
-                        limit=args.limit,
-                        evidence_list=evidence_list,
-                        web_numbering=web_numbering,
+                    _with_flags(
+                        await _execute_sql_mode(
+                            session,
+                            args.sql_query,
+                            workspace_id=scope.workspace_id,
+                            allowed_source_ids=allowed_ids,
+                            limit=args.limit,
+                            evidence_list=evidence_list,
+                            web_numbering=web_numbering,
+                        ),
+                        flags,
                     )
                 )
             return cap_tool_output(
-                await _execute_structured_mode(
-                    session,
-                    args,
-                    workspace_id=scope.workspace_id,
-                    allowed_source_ids=allowed_ids,
-                    date_from=date_from,
-                    date_to=date_to,
-                    evidence_list=evidence_list,
-                    redis=redis,
-                    web_numbering=web_numbering,
-                    available_providers=sorted({str(p) for _i, p, _n in allowed if p}),
+                _with_flags(
+                    await _execute_structured_mode(
+                        session,
+                        args,
+                        workspace_id=scope.workspace_id,
+                        allowed_source_ids=allowed_ids,
+                        date_from=date_from,
+                        date_to=date_to,
+                        evidence_list=evidence_list,
+                        redis=redis,
+                        web_numbering=web_numbering,
+                        available_providers=sorted({str(p) for _i, p, _n in allowed if p}),
+                    ),
+                    flags,
                 )
             )
+    except ChatSqlReaderBusyError:
+        return json.dumps({"error": "sql_reader_busy", "rows": []})
     except ChatSqlReaderUnavailableError:
         # Neutral on purpose: the model must not learn deployment env var names.
         return json.dumps({"error": "sql_mode_unavailable", "rows": []})
@@ -605,10 +633,25 @@ async def execute_db_query_tool(
         return json.dumps({"error": f"query_execution_failed: {type(exc).__name__}", "rows": []})
 
 
+def _with_flags(raw: str, flags: dict[str, bool]) -> str:
+    """Merge truncation ``flags`` (e.g. ``scope_truncated``) into a serialized tool result; no-op when empty."""
+    if not flags:
+        return raw
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        data.update(flags)
+    return json.dumps(data, ensure_ascii=False, default=str)
+
+
 CHAT_SQL_LOGIN_ROLE = "umwelt_chat_sql_login"
-_READER_POOL_SIZE = 2
+_READER_POOL_SIZE = 4
+_READER_MAX_OVERFLOW = 2
 _READER_STATEMENT_TIMEOUT_MS = 2000
 _reader_engines: dict[str, AsyncEngine] = {}
+
+
+class ChatSqlReaderBusyError(Exception):
+    """Raised when no reader connection frees up within the pool timeout (reported as ``sql_reader_busy``)."""
 
 
 class ChatSqlReaderUnavailableError(ValueError):
@@ -620,7 +663,7 @@ def _reader_engine() -> AsyncEngine:
 
     The URL comes only from ``CHAT_SQL_READER_DATABASE_URL``; there is deliberately no fallback to the
     application connection, because that would reintroduce a ``RESET ROLE`` path to the app user.
-    The engine (and so the URL) is cached for the process lifetime (small pool, no overflow, short pool timeout).
+    The engine (and so the URL) is cached for the process lifetime (small pool, 2 overflow, short pool timeout).
 
     Raises:
         ChatSqlReaderUnavailableError: the setting is empty.
@@ -639,7 +682,7 @@ def _reader_engine() -> AsyncEngine:
         engine = _reader_engines[url] = create_async_engine(
             url,
             pool_size=_READER_POOL_SIZE,
-            max_overflow=0,
+            max_overflow=_READER_MAX_OVERFLOW,
             pool_timeout=5,
             pool_pre_ping=True,
             pool_recycle=1800,
@@ -679,8 +722,13 @@ async def _run_sql_as_reader(
     reader backend pid, and a reader connection serves one query at a time, so concurrent queries on
     different pooled connections never share a row.
 
+    The fence-row delete deliberately stays on its own ``app_engine`` transaction rather than the caller's
+    session: that session is inside a read-only-intent savepoint with a 2 s statement timeout and may already be
+    aborted by the timeout it just raised, which would leave the fence row behind.
+
     Raises:
         ChatSqlReaderUnavailableError: the reader DSN is not configured (checked before any I/O).
+        ChatSqlReaderBusyError: no pooled reader connection became free within the pool timeout.
         TypeError: ``workspace_id``/source ids are not ``uuid.UUID`` (a plain ``str`` is refused so no free
             text ever becomes a fence value).
     """
@@ -689,7 +737,13 @@ async def _run_sql_as_reader(
     ):
         raise TypeError("workspace_id and every allowed source id must be uuid.UUID instances")
     engine = _reader_engine()
-    async with engine.connect() as conn:
+    async with AsyncExitStack() as stack:
+        try:
+            conn = await stack.enter_async_context(engine.connect())
+        except (
+            PoolTimeoutError
+        ) as exc:  # pool exhausted for pool_timeout seconds: a clear, retryable error
+            raise ChatSqlReaderBusyError("sql reader pool is busy") from exc
         pid: int | None = None
         try:
             pid = (await conn.execute(text("SELECT pg_backend_pid()"))).scalar_one()
@@ -804,37 +858,32 @@ def _observation_filters(
 
     Pure: builds expressions only, no I/O. The workspace and allowed-source predicates are
     always first so the permission boundary can never be dropped by an optional filter.
+
+    ``is_current=false`` rows are superseded revisions of the same data point (ingestion inserts a new
+    revision and flips the previous current row to false), so aggregates always filter ``is_current=true``:
+    averaging or counting across revisions would double-count one measurement. Provider/metric are matched
+    exactly against lower-cased input (provider ids and metric names are stored lower-case) and symbol
+    against upper-cased input (symbols are stored upper-case), so the
+    ``ix_observations_owner_series_current`` index prefix stays usable; ``region`` has no storage
+    convention and keeps its case-insensitive compare.
     """
     obs_filters: list[Any] = [
         Observation.workspace_id == workspace_id,
         Observation.source_id.in_(allowed_source_ids),
     ]
-    if args.current_only and args.aggregation not in (
-        "timeseries",
-        "avg",
-        "min",
-        "max",
-        "sum",
-        "count",
-    ):
+    if args.current_only or args.aggregation != "none":
         obs_filters.append(Observation.is_current.is_(True))
     if args.providers:
         obs_filters.append(
-            func.lower(Observation.provider).in_(
-                [p.strip().lower() for p in args.providers if p.strip()]
-            )
+            Observation.provider.in_([p.strip().lower() for p in args.providers if p.strip()])
         )
     if args.metrics:
         obs_filters.append(
-            func.lower(Observation.metric).in_(
-                [m.strip().lower() for m in args.metrics if m.strip()]
-            )
+            Observation.metric.in_([m.strip().lower() for m in args.metrics if m.strip()])
         )
     if args.symbols:
         obs_filters.append(
-            func.upper(Observation.symbol).in_(
-                [s.strip().upper() for s in args.symbols if s.strip()]
-            )
+            Observation.symbol.in_([s.strip().upper() for s in args.symbols if s.strip()])
         )
     if args.region:
         obs_filters.append(func.upper(Observation.region) == args.region.strip().upper())
@@ -907,9 +956,12 @@ def _document_filters(
     date_from: datetime | None,
     date_to: datetime | None,
 ) -> list[Any]:
-    """Build the workspace/source-scoped filter list (incl. full-text/ILIKE) for document queries.
+    """Build the workspace/source-scoped filter list (incl. full-text) for document queries.
 
-    Pure expression builder; the workspace and allowed-source predicates are always first.
+    Pure expression builder; the workspace and allowed-source predicates are always first. ``text_query``
+    matches the title (``ILIKE``, short column) or any chunk of the current version through the stored
+    ``document_chunks.content_tsv`` GIN column (no per-row ``to_tsvector`` and no ``ILIKE`` over full content).
+    Provider ids are stored lower-case, so the input is lower-cased and compared exactly.
     """
     doc_filters: list[Any] = [
         Document.workspace_id == workspace_id,
@@ -917,9 +969,7 @@ def _document_filters(
     ]
     if args.providers:
         doc_filters.append(
-            func.lower(Source.provider).in_(
-                [p.strip().lower() for p in args.providers if p.strip()]
-            )
+            Source.provider.in_([p.strip().lower() for p in args.providers if p.strip()])
         )
     if date_from is not None:
         doc_filters.append(func.coalesce(Document.observed_at, Document.created_at) >= date_from)
@@ -928,18 +978,11 @@ def _document_filters(
     if args.text_query and args.text_query.strip():
         q = args.text_query.strip()
         ts_query = func.websearch_to_tsquery("simple", q)
-        ts_vec = func.to_tsvector(
-            "simple",
-            func.concat(Document.title, " ", func.coalesce(DocumentVersion.content, "")),
+        chunk_match = exists().where(
+            DocumentChunk.document_version_id == DocumentVersion.id,
+            DocumentChunk.content_tsv.op("@@")(ts_query),
         )
-        pattern = f"%{q}%"
-        doc_filters.append(
-            or_(
-                ts_vec.op("@@")(ts_query),
-                Document.title.ilike(pattern),
-                DocumentVersion.content.ilike(pattern),
-            )
-        )
+        doc_filters.append(or_(chunk_match, Document.title.ilike(f"%{q}%")))
     return doc_filters
 
 
@@ -999,14 +1042,16 @@ async def _select_structured_documents(
 async def _hot_cache_snapshots(
     redis: Any, workspace_id: UUID, allowed_source_ids: list[UUID]
 ) -> list[dict[str, Any]]:
-    """Read up to 8 connector hot-cache snapshots from Redis; any failure yields what was read.
+    """Read up to 8 connector snapshot metadata entries from Redis with one ``MGET``; failure yields nothing.
 
-    The cache is a best-effort enrichment, so every error is suppressed (never raises).
+    The snapshots are a best-effort enrichment, so every error is suppressed (never raises).
     """
     hot_snapshots: list[dict[str, Any]] = []
+    keys = [f"connector:snapshot:{workspace_id}:{sid}" for sid in allowed_source_ids[:8]]
+    if not keys:
+        return hot_snapshots
     with suppress(Exception):
-        for sid in allowed_source_ids[:8]:
-            raw_snap = await redis.get(f"connector:snapshot:{workspace_id}:{sid}")
+        for raw_snap in await redis.mget(keys):
             if raw_snap:
                 snap = json.loads(
                     raw_snap.decode("utf-8") if isinstance(raw_snap, bytes) else str(raw_snap)
@@ -1106,14 +1151,21 @@ async def _execute_structured_mode(
 
     obs_rows: list[Any] = []
     if want_obs:
+        obs_from = date_from
+        if args.aggregation != "none" and date_from is None and date_to is None:
+            # Unbounded aggregation scans every revision ever collected; bound it and tell the model.
+            obs_from = datetime.now(UTC) - timedelta(days=DEFAULT_AGGREGATION_WINDOW_DAYS)
+            out["aggregation_window"] = (
+                f"last {DEFAULT_AGGREGATION_WINDOW_DAYS} days (no date range given)"
+            )
         obs_filters = _observation_filters(
             args,
             workspace_id=workspace_id,
             allowed_source_ids=allowed_source_ids,
-            date_from=date_from,
+            date_from=obs_from,
             date_to=date_to,
         )
-        if args.aggregation in ("avg", "min", "max", "sum", "count"):
+        if args.aggregation != "none":
             out["observation_aggregates"] = await _observation_aggregates(
                 session, obs_filters, args.limit
             )
@@ -1160,7 +1212,7 @@ async def _execute_structured_mode(
     if available_providers:
         out["available_providers"] = available_providers
 
-    if redis is not None and callable(getattr(redis, "get", None)):
+    if redis is not None and callable(getattr(redis, "mget", None)):
         hot_snapshots = await _hot_cache_snapshots(redis, workspace_id, allowed_source_ids)
         if hot_snapshots:
             out["hot_cache_snapshots"] = hot_snapshots

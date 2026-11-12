@@ -116,6 +116,27 @@ def _selection_detail(code: str, message: str) -> dict[str, _Any]:
     return {"code": code, "message": message, "details": {}}
 
 
+MAX_SCOPE_VALUE_CHARS = 200
+MAX_SCOPE_LIST_ITEMS = 20
+
+
+def bounded_scope_value(value: _Any) -> _Any:
+    """Bound one client-supplied gadget scope value before it is stored and echoed into the system prompt.
+
+    Strings are cut to ``MAX_SCOPE_VALUE_CHARS``; lists keep at most ``MAX_SCOPE_LIST_ITEMS`` scalar items
+    (nested containers are dropped), each bounded the same way. Pure; scalars other than ``str`` pass through.
+    """
+    if isinstance(value, str):
+        return value[:MAX_SCOPE_VALUE_CHARS]
+    if isinstance(value, list):
+        return [
+            item[:MAX_SCOPE_VALUE_CHARS] if isinstance(item, str) else item
+            for item in value[:MAX_SCOPE_LIST_ITEMS]
+            if isinstance(item, (str, int, float, bool))
+        ]
+    return value
+
+
 async def _resolve_gadget_instance_context(
     session: AsyncSession,
     context: dict[str, _Any],
@@ -163,7 +184,7 @@ async def _resolve_gadget_instance_context(
     raw_scope_obj = context.get("scope")
     raw_scope: dict[_Any, _Any] = raw_scope_obj if isinstance(raw_scope_obj, dict) else {}
     safe_scope = {
-        str(k)[:64]: v
+        str(k)[:64]: bounded_scope_value(v)
         for k, v in list(raw_scope.items())[:16]
         if isinstance(v, (str, int, float, bool, list))
     }

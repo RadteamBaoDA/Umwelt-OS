@@ -673,6 +673,21 @@ def _provider_hint(providers: Sequence[str]) -> str:
     )
 
 
+def _bounded_scope_json(scope: Any) -> str:
+    """Serialize the stored gadget scope for the system prompt with every value and the whole string bounded.
+
+    Defends the prompt against contexts stored before bounding existed; output is capped at 1000 characters.
+    """
+    from modules.chat._public.conversations import bounded_scope_value
+
+    safe = (
+        {str(k)[:64]: bounded_scope_value(v) for k, v in list(scope.items())[:16]}
+        if isinstance(scope, dict)
+        else {}
+    )
+    return json.dumps(safe, default=str)[:1000]
+
+
 def _gadget_note(
     req_params: dict[str, Any],
     db_query_on: bool,
@@ -691,8 +706,8 @@ def _gadget_note(
     )
     if gadget_meta:
         return (
-            f"\n\nThe user opened this chat from Dashboard gadget {gadget_meta.get('title')!r} "
-            f"(renderer={gadget_meta.get('renderer')!r}, scope={json.dumps(gadget_meta.get('scope') or {})}). "
+            f"\n\nThe user opened this chat from Dashboard gadget {str(gadget_meta.get('title') or '')[:200]!r} "
+            f"(renderer={str(gadget_meta.get('renderer') or '')[:64]!r}, scope={_bounded_scope_json(gadget_meta.get('scope'))}). "
             f"Call `{TOOL_QUERY_COLLECTED_DATA}` when you need current or historical observations/records "
             f"from the gadget's bound data sources." + _provider_hint(providers)
         )
