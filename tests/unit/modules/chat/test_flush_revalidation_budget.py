@@ -333,3 +333,40 @@ async def test_lightweight_flush_issues_fewer_reads_than_full_and_no_content_rea
         "source_fences",
         "lock_state_only",
     ]  # still locks every flush; no content/provenance read
+
+
+async def test_evidence_reasons_chunk_owner_reads_over_100_without_fences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """150 valid evidence items (broad data-tool turn) yield no reasons; the owner read sees <=100 refs."""
+    items = [_evidence() for _ in range(150)]
+    context = AnswerContext(query="q", evidence=items)
+    sizes: list[int] = []
+
+    async def read(_session: Any, refs: list[Any], **_k: Any) -> list[Any]:
+        if len(refs) > 100:
+            raise ValueError("too many")
+        sizes.append(len(refs))
+        return [
+            SimpleNamespace(
+                document_version_id=v,
+                chunk_id=c,
+                source_generation=next(i.source_generation for i in items if i.chunk_id == c),
+                source_status="active",
+                local_only=False,
+            )
+            for v, c in refs
+        ]
+
+    monkeypatch.setattr(retrieval.documents_public, "lock_chat_evidence_state", read)
+    reasons = await retrieval._evidence_chunk_reasons(
+        MagicMock(),
+        context,
+        destination="remote",
+        require_current_versions=False,
+        lock_evidence=True,
+        scope_kw={"scope": SCOPE},
+        lightweight=True,
+    )
+    assert reasons == []
+    assert sizes == [100, 50]

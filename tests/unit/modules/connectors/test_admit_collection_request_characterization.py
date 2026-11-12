@@ -202,6 +202,11 @@ async def test_free_slot_is_claimed_and_request_marked_running() -> None:
     assert slot.occupied_request_id == REQUEST_ID and slot.lease_kind == "collection"
     assert slot.admission_token == locked.active_admission_token == result.admission_token
     assert session.log[-2:] == ["flush", "commit"]
+    # Admission stamps the attempt window, which the manual-collect cooldown and overdue metric read.
+    assert locked.attempt_started_at is not None
+    assert locked.attempt_deadline_at - locked.attempt_started_at == timedelta(
+        seconds=scheduler.RUN_DEADLINE_SECONDS
+    )
 
 
 @pytest.mark.asyncio
@@ -214,3 +219,29 @@ async def test_concurrent_same_workspace_admission_defers_after_integrity_error(
     result, spies = await _admit(session)
     assert result is None and session.log[-2:] == ["flush", "rollback"]
     spies["defer"].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_collection_timing_exposes_blocked_code_and_failure_count() -> None:
+    """A blocked schedule reports why (blocked_error_code) and its failure_count next to the timing."""
+    due = datetime.now(UTC) + timedelta(hours=1)
+    blocked_id, free_id = uuid4(), uuid4()
+    results = [
+        [
+            (blocked_id, True, due, None, "credential_invalid", 3),
+            (free_id, True, due, None, None, 0),
+        ],
+        [],
+    ]
+
+    class _TimingSession:
+        async def execute(self, stmt: object) -> SimpleNamespace:
+            return SimpleNamespace(all=lambda: results.pop(0))
+
+    out = await scheduler.collection_timing(
+        _TimingSession(),  # type: ignore[arg-type]
+        WORKSPACE_ID,
+        [blocked_id, free_id],
+    )
+    assert out[blocked_id] == (due, None, "credential_invalid", 3)
+    assert out[free_id] == (due, None, None, 0)

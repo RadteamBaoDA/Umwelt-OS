@@ -166,6 +166,10 @@ async def test_gate_past_deadline_is_a_timeout_not_a_send():
         await gate()
 
 
+RECORDED: list[str] = []  # error codes written to source health by the unleased-failure path
+released: list[str | None] = []  # error codes passed to _release_lease
+
+
 def harness(monkeypatch, adapter, att=None, settled=None):
     settled = settled if settled is not None else []
 
@@ -179,9 +183,19 @@ def harness(monkeypatch, adapter, att=None, settled=None):
     async def noop(*_a, **_k):
         return None
 
+    async def record(_factory, source, error_code, **_k):
+        RECORDED.append(error_code)
+
+    RECORDED.clear()
+    monkeypatch.setattr("modules.connectors.mcp._record_result", record)
+    released.clear()
+
+    async def release(_run, error_code):
+        released.append(error_code)
+
     patch_collection(monkeypatch, "_load_attempt", load)
     patch_collection(monkeypatch, "_settle", settle)
-    patch_collection(monkeypatch, "_release_lease", noop)
+    patch_collection(monkeypatch, "_release_lease", release)
     patch_collection(monkeypatch, "_record_rate_limit", noop)
     patch_collection(monkeypatch, "_adapter_for", lambda source: adapter)
     ctx = {
@@ -543,3 +557,25 @@ def test_keyless_forbidden_is_a_provider_rejection_not_a_credential_error():
     assert not collection._sends_no_credential(SimpleNamespace(provider="mastodon", type="api"))
     assert not collection._sends_no_credential(SimpleNamespace(provider="coingecko", type="api"))
     assert not collection._sends_no_credential(SimpleNamespace(provider=None, type="api"))
+
+
+@pytest.mark.asyncio
+async def test_failed_generic_collection_records_source_error(monkeypatch):
+    async def adapter(run):
+        raise TimeoutError
+
+    ctx, admission, settled = harness(monkeypatch, adapter)
+    await collection.execute_collection(ctx, admission)
+    assert settled[0]["outcome"] == "failed"
+    assert RECORDED == [settled[0]["error_code"]]
+
+
+@pytest.mark.asyncio
+async def test_quota_wait_releases_lease_without_error_and_records_nothing(monkeypatch):
+    async def adapter(run):
+        raise quota.QuotaDeferred("p", datetime.now(UTC) + timedelta(hours=1))
+
+    ctx, admission, settled = harness(monkeypatch, adapter)
+    await collection.execute_collection(ctx, admission)
+    assert settled[0]["outcome"] == "deferred"
+    assert released == [None] and RECORDED == []

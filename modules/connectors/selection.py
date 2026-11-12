@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from modules.ingestion.public import IngestionRecord
 
 DEFAULT_MAX_ITEMS = 100
+# Wall-clock budget of one collection run; scheduler stamps it as attempt_deadline_at, executor enforces it.
+RUN_DEADLINE_SECONDS = 90
 SKEW = timedelta(minutes=10)  # clock-skew margin below a stored cursor; dedup absorbs the re-read
 
 

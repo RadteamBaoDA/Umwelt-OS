@@ -264,8 +264,8 @@ async def collection_timing(
     session: AsyncSession,
     scope: Scope,
     source_ids: list[UUID],
-) -> dict[UUID, tuple[datetime | None, datetime | None]]:
-    """Return (next_due_at, retry_at) per source in the caller's workspace, for source read DTOs."""
+) -> dict[UUID, tuple[datetime | None, datetime | None, str | None, int]]:
+    """Return (next_due_at, retry_at, blocked_error_code, failure_count) per source in the caller's workspace, for source read DTOs."""
     from modules.connectors import scheduler
 
     return await scheduler.collection_timing(session, scope.workspace_id, source_ids)

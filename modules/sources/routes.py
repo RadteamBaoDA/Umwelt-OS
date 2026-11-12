@@ -28,14 +28,16 @@ async def _with_timing(
     scope: WorkspaceContext | AdminWorkspaceReadContext,
     reads: list[SourceRead],
 ) -> None:
-    """Fill next_due_at/retry_at from connector schedule state, scoped to the workspace."""
+    """Fill next_due_at/retry_at/blocked_error_code/failure_count from connector schedule state, scoped to the workspace."""
     from modules.connectors import public as connectors
 
     timing = await connectors.collection_timing(
         session, scope, [r.id for r in reads if r.type != "manual"]
     )
     for read in reads:
-        read.next_due_at, read.retry_at = timing.get(read.id, (None, None))
+        read.next_due_at, read.retry_at, read.blocked_error_code, read.failure_count = timing.get(
+            read.id, (None, None, None, None)
+        )
 
 
 def _to_read(source: object) -> SourceRead:

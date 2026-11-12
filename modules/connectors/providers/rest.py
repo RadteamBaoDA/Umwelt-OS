@@ -26,6 +26,7 @@ from core.heavy_work import to_thread_joined
 from core.net_policy import is_public_address
 from modules.connectors.providers.feed_catalog import _retry_deadline
 from modules.connectors.public import ProviderRateLimited, overlap_floor
+from modules.connectors.selection import RUN_DEADLINE_SECONDS as RUN_DEADLINE_SECONDS
 from modules.connectors.selection import SKEW
 
 MAX_PAGES = 10
@@ -37,7 +38,6 @@ REQUEST_TIMEOUT_SECONDS = 30
 DEFAULT_USER_AGENT = (
     "Umwelt-OS/1.0 (self-hosted personal intelligence; +https://github.com/umwelt-os)"
 )
-RUN_DEADLINE_SECONDS = 90
 
 Resolver = Callable[[str, int], Awaitable[list[str]]]
 BeforeSend = Callable[[], Awaitable[None]]

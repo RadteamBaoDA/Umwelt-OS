@@ -283,7 +283,11 @@ async def _allowed_sources(
     source_scope: list[str] | None,
     allow_local_only: bool,
 ) -> list[tuple[UUID, str | None, str]]:
-    """Return ``(id, provider, name)`` for active workspace sources permitted in this chat turn."""
+    """Return ``(id, provider, name)`` for active workspace sources permitted in this chat turn.
+
+    ``source_scope=None`` means no scope (plain chat: the whole workspace). A provided list is a hard
+    allow-list that fails closed: an empty list, or one with no parseable UUID, permits no source.
+    """
     stmt = select(
         Source.id,
         Source.provider,
@@ -294,13 +298,14 @@ async def _allowed_sources(
     )
     if not allow_local_only:
         stmt = stmt.where(Source.local_only.is_(False))
-    if source_scope:
+    if source_scope is not None:
         scoped_ids: list[UUID] = []
         for raw_id in source_scope[:32]:
             with suppress(ValueError, TypeError):
                 scoped_ids.append(UUID(str(raw_id)))
-        if scoped_ids:
-            stmt = stmt.where(Source.id.in_(scoped_ids))
+        if not scoped_ids:
+            return []
+        stmt = stmt.where(Source.id.in_(scoped_ids))
     rows = (await session.execute(stmt.order_by(Source.created_at.desc()).limit(100))).all()
     return [(row.id, row.provider, row.name) for row in rows]
 

@@ -44,6 +44,7 @@ from modules.connectors.models import (
     ConnectorSchedule,
     ConnectorWorkspaceDispatch,
 )
+from modules.connectors.selection import RUN_DEADLINE_SECONDS
 
 MAX_ATTEMPTS = 5
 SLOT_TTL = timedelta(seconds=120)  # renewal every 20 s is the executor's duty
@@ -495,7 +496,8 @@ async def admit_collection_request(
     """Claim a global slot and move one queued request to running, or return None.
 
     Busy source, workspace or capacity defers without burning an attempt. Revision changes
-    cancel the request; the sixth admission fails it. Commits before any provider I/O.
+    cancel the request; the sixth admission fails it. Commits before any provider I/O. The admission
+    stamps ``attempt_started_at`` and ``attempt_deadline_at`` (now + run deadline).
     """
     peek = await session.get(ConnectorCollectionRequest, request_id)
     if peek is None or peek.status != "queued":
@@ -573,6 +575,9 @@ async def admit_collection_request(
     request.attempt += 1
     request.active_admission_token = token
     request.error_code = None
+    # Stamped at admission so the manual-collect cooldown and the overdue-attempt metric have data.
+    request.attempt_started_at = now
+    request.attempt_deadline_at = now + timedelta(seconds=RUN_DEADLINE_SECONDS)
     try:
         await session.flush()
     except IntegrityError:
@@ -1240,16 +1245,17 @@ async def collection_timing(
     session: AsyncSession,
     workspace_id: UUID,
     source_ids: list[UUID],
-) -> dict[UUID, tuple[datetime | None, datetime | None]]:
-    """Return (next_due_at, retry_at) per source for the workspace; read-only, no admission.
+) -> dict[UUID, tuple[datetime | None, datetime | None, str | None, int]]:
+    """Return (next_due_at, retry_at, blocked_error_code, failure_count) per source; read-only.
 
     retry_at is the later of a provider/penalty deadline on the schedule and a queued retry's
-    available_at, and only when still in the future.
+    available_at, and only when still in the future. ``blocked_error_code`` is why the scheduler
+    stopped dispatching this source (needs owner action); ``failure_count`` is its consecutive failures.
     """
     if not source_ids:
         return {}
     now = datetime.now(UTC)
-    out: dict[UUID, tuple[datetime | None, datetime | None]] = {}
+    out: dict[UUID, tuple[datetime | None, datetime | None, str | None, int]] = {}
     schedules = (
         await session.execute(
             select(
@@ -1257,6 +1263,8 @@ async def collection_timing(
                 ConnectorSchedule.enabled,
                 ConnectorSchedule.next_due_at,
                 ConnectorSchedule.next_eligible_at,
+                ConnectorSchedule.blocked_error_code,
+                ConnectorSchedule.failure_count,
             ).where(
                 ConnectorSchedule.workspace_id == workspace_id,
                 ConnectorSchedule.source_id.in_(source_ids),
@@ -1280,7 +1288,12 @@ async def collection_timing(
             )
         ).all()
     )
-    for source_id, enabled, due, eligible in schedules:
+    for source_id, enabled, due, eligible, blocked, failures in schedules:
         candidates = [t for t in (eligible, retries.get(source_id)) if t is not None and t > now]
-        out[source_id] = (due if enabled else None, max(candidates) if candidates else None)
+        out[source_id] = (
+            due if enabled else None,
+            max(candidates) if candidates else None,
+            blocked,
+            int(failures or 0),
+        )
     return out

@@ -522,3 +522,32 @@ def test_finalize_keeps_in_range_markers_for_tool_evidence() -> None:
     )
     assert len(cited.valid_citations) == 2
     assert not cited.uncited
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("scope", "queries", "expected_rows"),
+    [([], 0, 0), (["not-a-uuid", None], 0, 0), (None, 1, 1)],
+)
+async def test_allowed_sources_fails_closed_on_provided_scope(
+    scope: list[str] | None, queries: int, expected_rows: int
+) -> None:
+    """A provided scope with no valid id permits nothing; ``None`` keeps the whole-workspace default."""
+    from modules.chat.db_query import _allowed_sources
+
+    row = SimpleNamespace(id=uuid4(), provider="p", name="n")
+    executed: list[object] = []
+
+    class _S:
+        async def execute(self, stmt: object) -> SimpleNamespace:
+            executed.append(stmt)
+            return SimpleNamespace(all=lambda: [row])
+
+    got = await _allowed_sources(
+        _S(),  # type: ignore[arg-type]
+        workspace_id=uuid4(),
+        source_scope=scope,  # type: ignore[arg-type]
+        allow_local_only=True,
+    )
+    assert len(got) == expected_rows
+    assert len(executed) == queries

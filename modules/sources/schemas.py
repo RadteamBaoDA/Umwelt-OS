@@ -76,6 +76,9 @@ class SourceRead(BaseModel):
     # Filled by the route from connector schedule state; None for sources without a schedule.
     next_due_at: datetime | None = None
     retry_at: datetime | None = None
+    # Why the scheduler stopped dispatching this source (owner action needed) and its consecutive failures.
+    blocked_error_code: str | None = None
+    failure_count: int | None = None
     realtime_mode: Literal["realtime", "near_realtime"] | None = None
 
 

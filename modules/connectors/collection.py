@@ -307,8 +307,12 @@ def _sends_no_credential(source: Any) -> bool:
     return entry is not None and entry.auth_methods == ("none",)
 
 
-async def _release_lease(run: Run, error_code: str) -> None:
-    """Best-effort release of an unaccepted native source lease; it expires on its own if this fails."""
+async def _release_lease(run: Run, error_code: str | None) -> None:
+    """Best-effort release of an unaccepted native source lease; it expires on its own if this fails.
+
+    ``error_code=None`` releases the lease without writing a source health error (used for quota waits,
+    which are not failures).
+    """
     lease = run.extras.get("lease")
     if lease is None or run.extras.get("accepted"):
         return
@@ -322,6 +326,27 @@ async def _release_lease(run: Run, error_code: str) -> None:
                 scope=a.scope,
                 multi_workspace_enabled=a.multi,
             )
+
+
+async def _record_unleased_failure(run: Run, error_code: str) -> None:
+    """Record a failed fetch on source health for adapters that hold no lease (generic rss/api/web/mcp).
+
+    Leased native collections get ``last_error_code`` through ``release_connector_collection``; without a
+    lease nothing else would ever surface the failure. Best-effort: health recording must not mask the
+    settled request, and a stale generation/revoked actor is ignored by the sources owner.
+    """
+    from modules.connectors import mcp as mcp_runtime
+
+    a = run.attempt
+    with suppress(Exception):
+        await mcp_runtime._record_result(
+            run.factory,
+            a.source,
+            error_code,
+            scope=a.scope,
+            multi_workspace_enabled=a.multi,
+            expected_access_fence=a.access_fence,
+        )
 
 
 def _adapter_for(source: ConnectorSource) -> Adapter | None:
@@ -423,8 +448,11 @@ async def execute_collection(ctx: dict[str, object], admission: CollectionAdmiss
         beat.cancel()
         with suppress(asyncio.CancelledError):
             await beat
-    await _release_lease(run, str(settle.get("error_code") or "collection_deferred"))
-    await _settle(factory, admission, **settle)
+    # A deferred outcome (quota wait) is not an error: release the lease without recording a code.
+    await _release_lease(run, str(settle["error_code"]) if settle.get("error_code") else None)
+    accepted = await _settle(factory, admission, **settle)
+    if accepted and settle["outcome"] == "failed" and run.extras.get("lease") is None:
+        await _record_unleased_failure(run, str(settle.get("error_code") or "executor_error"))
 
 
 async def collect_source(ctx: dict[str, object], request_id: str) -> None:

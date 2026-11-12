@@ -943,6 +943,10 @@ async def _source_fence_reasons(
     return reasons
 
 
+# Owner evidence reads accept at most this many (version, chunk) refs per call.
+_OWNER_READ_LIMIT = 100
+
+
 async def _evidence_chunk_reasons(
     session: AsyncSession,
     context: AnswerContext,
@@ -959,6 +963,8 @@ async def _evidence_chunk_reasons(
     deletion cannot commit before the caller's publication commit; ``lightweight`` swaps that read
     for the lock-only state projection (same locks, ids/generation/status/local_only, no content or
     ORM rows). A ``ValueError`` from the owner (stale exact selection) is reported as a reason.
+    Without selection fences the refs are read in chunks of ``_OWNER_READ_LIMIT`` and merged, so a broad
+    tool turn with more than 100 evidence items is not mistaken for a stale selection.
     """
     reasons: list[str] = []
     refs = [(item.document_version_id, item.chunk_id) for item in context.evidence]
@@ -973,15 +979,28 @@ async def _evidence_chunk_reasons(
         )
     else:
         read_chunks = documents_public.read_chat_evidence_chunks
+    fences = tuple(context.selection_fences) if context.selection_fences else None
+    # The owner read caps one call at 100 refs. Broad data-tool turns register more evidence than that,
+    # so without exact selection fences the read is chunked on the same session: every chunk's locks
+    # stay held until the caller commits. Exact selections are bounded to 100 upstream and keep one call.
+    batches = (
+        [refs]
+        if fences is not None
+        else [refs[i : i + _OWNER_READ_LIMIT] for i in range(0, len(refs), _OWNER_READ_LIMIT)]
+    )
+    existing_chunks: list[Any] = []
     try:
-        existing_chunks = await read_chunks(
-            session,
-            refs,
-            require_active_source=True,
-            require_current_version=require_current_versions,
-            selection_fences=tuple(context.selection_fences) if context.selection_fences else None,
-            **scope_kw,
-        )
+        for batch in batches:
+            existing_chunks.extend(
+                await read_chunks(
+                    session,
+                    batch,
+                    require_active_source=True,
+                    require_current_version=require_current_versions,
+                    selection_fences=fences,
+                    **scope_kw,
+                )
+            )
     except ValueError:
         existing_chunks = []
         reasons.append("One or more exact selected evidence references are unavailable")

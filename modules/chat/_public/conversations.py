@@ -133,7 +133,7 @@ async def _resolve_gadget_instance_context(
 
     Returns:
         Normalized retrieval context carrying ``kind``, ``gadget_id``, ``title``, ``renderer``,
-        ``source_scope``, and ``gadget_scope``.
+        ``source_scope`` (always present, possibly empty), and ``gadget_scope``.
     """
     from modules.sources import public as sources_public
 
@@ -174,8 +174,9 @@ async def _resolve_gadget_instance_context(
         "renderer": str(context.get("renderer") or "")[:64],
         "gadget_scope": safe_scope,
     }
-    if valid_sources:
-        out["source_scope"] = valid_sources
+    # Always stored, even empty: an absent scope would widen the data tool to the whole workspace, so an
+    # empty list (every gadget source paused, local-only or deleted) must stay an explicit "no sources".
+    out["source_scope"] = valid_sources
     return out
 
 
