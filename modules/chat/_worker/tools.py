@@ -262,6 +262,27 @@ class _TripImagesHandler:
         )
 
 
+def _db_query_outcome(result: str) -> dict[str, int]:
+    """Counts-only summary of a ``query_collected_data`` result for the ``tool.status`` detail (pure).
+
+    ``{"rows": n, "sources": k}`` on success (``k`` = distinct providers among the rows, may be 0 when rows
+    carry none) and ``{"error": 1}`` when the result is an error or unparseable. No row content is exposed.
+    """
+    try:
+        data = json.loads(result)
+    except ValueError:
+        return {"error": 1}
+    if not isinstance(data, dict) or data.get("error"):
+        return {"error": 1}
+    rows: list[Any] = []
+    for key in ("rows", "observations", "documents"):
+        part = data.get(key)
+        if isinstance(part, list):
+            rows.extend(part)
+    providers = {r["provider"] for r in rows if isinstance(r, dict) and r.get("provider")}
+    return {"rows": len(rows), "sources": len(providers)}
+
+
 class _QueryCollectedDataHandler:
     """``query_collected_data``: scoped read-only database query bracketed by running/done status events."""
 
@@ -292,9 +313,10 @@ class _QueryCollectedDataHandler:
             if web_run is not None and web_run.evidence_base is not None and web_run.results
             else None
         )
+        outcome: dict[str, int] = {"error": 1}  # replaced on success; stays if the tool raises
         try:
             async with c.session_factory() as db_tool_session:
-                return await execute_db_query_tool(
+                result = await execute_db_query_tool(
                     db_tool_session,
                     parsed_db_args,
                     scope=c.scope,
@@ -306,11 +328,14 @@ class _QueryCollectedDataHandler:
                     redis=c.redis,
                     web_numbering=web_numbering,
                 )
+            outcome = _db_query_outcome(result)
+            return result
         finally:
-            # "done" also on error so the client never keeps a stale spinner; a run that ended
-            # meanwhile has nothing left to tell.
+            # "done" also on error so the client never keeps a stale spinner; the numeric detail tells
+            # the step list whether it found rows, found none or failed. A run that ended meanwhile has
+            # nothing left to tell.
             with contextlib.suppress(ResponseNoLongerActive):
-                await _publish_status(c, TOOL_QUERY_COLLECTED_DATA, "done")
+                await _publish_status(c, TOOL_QUERY_COLLECTED_DATA, "done", detail=outcome)
 
 
 class _LocalDataHandler:

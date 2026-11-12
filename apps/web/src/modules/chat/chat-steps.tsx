@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useTranslations } from 'next-intl';
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, Loader2Icon } from 'lucide-react';
+import { AlertCircleIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, Loader2Icon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { ToolStep } from './api';
 
@@ -19,6 +19,20 @@ const STEP_KEYS: Record<
 };
 
 /**
+ * Outcome sentence of a finished collected-data step from its counts-only detail, or null when the server sent none.
+ *
+ * @param t - `chat` translator.
+ * @param step - Finished `query_collected_data` step; `detail.error` = failed, else `rows` (+ `sources`).
+ */
+function dataOutcomeText(t: Translator, step: ToolStep): string | null {
+  const { detail } = step;
+  if (isStepFailed(step)) return t('stepDataFailed');
+  if (typeof detail?.rows !== 'number') return null;
+  if (detail.rows === 0) return t('stepDataEmpty');
+  return detail.sources ? t('stepDataRows', { rows: detail.rows, sources: detail.sources }) : t('stepDataRowsNoSources', { rows: detail.rows });
+}
+
+/**
  * Localized text of one step. Known tools (retrieval, web search, collected data, skills) get specific copy; unknown
  * tools fall back to generic copy that names the optional `label` instead of the raw tool id.
  *
@@ -32,6 +46,10 @@ export function stepText(t: Translator, step: ToolStep): string {
   if (tool === 'retrieval' && !running) {
     return typeof detail?.documents === 'number' ? t('stepRetrievalDone', { count: detail.documents }) : t('stepRetrievalDoneNoCount');
   }
+  if (tool === 'query_collected_data' && !running) {
+    const outcome = dataOutcomeText(t, step);
+    if (outcome) return outcome;
+  }
   // Tools whose copy has no placeholder: running key / finished key.
   const plain = STEP_KEYS[tool];
   if (plain) return t(running ? plain[0] : plain[1]);
@@ -40,6 +58,15 @@ export function stepText(t: Translator, step: ToolStep): string {
   const state = running ? 'Running' : 'Done';
   if (label) return t(`${family}${state}${family === 'stepSkill' ? '' : 'Label'}` as 'stepSkillRunning', { label });
   return t(`${family}${state}${family === 'stepSkill' ? 'NoLabel' : ''}` as 'stepGenericRunning');
+}
+
+/**
+ * Whether a finished step reports a failure (`detail.error`, set by the server for a failed collected-data query).
+ *
+ * @param step - Step to test.
+ */
+export function isStepFailed(step: ToolStep): boolean {
+  return step.state === 'done' && Boolean(step.detail?.error);
 }
 
 /**
@@ -97,6 +124,8 @@ export function ChatStepList({ steps: allSteps, streaming }: { steps: ToolStep[]
             <li key={`${step.tool}:${index}`} data-state={step.state} className="flex items-center gap-2">
               {step.state === 'running' ? (
                 <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : isStepFailed(step) ? (
+                <AlertCircleIcon className="size-3.5 text-danger" aria-hidden="true" />
               ) : (
                 <CheckIcon className="size-3.5" aria-hidden="true" />
               )}

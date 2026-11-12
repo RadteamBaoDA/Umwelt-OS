@@ -178,6 +178,9 @@ class AnswerContextRequest(BaseModel):
 
     query: str = Field(min_length=1, max_length=MAX_QUERY_LENGTH)
     source_scope: list[UUID] = Field(default_factory=list, max_length=MAX_SOURCE_SCOPE)
+    # True on gadget turns: ``source_scope`` is then a hard allow-list, so an empty one means "no sources"
+    # (search is skipped) instead of the plain-chat meaning "no filter".
+    source_scope_enforced: bool = False
     entity_ids: list[UUID] = Field(default_factory=list, max_length=MAX_ENTITY_SCOPE)
     date_context: datetime | date | str | None = None
     timezone: str | None = None

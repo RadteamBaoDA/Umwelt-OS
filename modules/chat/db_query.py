@@ -41,6 +41,8 @@ from modules.sources.public import SourceReadProjection as Source
 TOOL_QUERY_COLLECTED_DATA = "query_collected_data"
 MAX_DB_QUERY_ROWS = 50
 MAX_SQL_LENGTH = 2000
+MAX_TOOL_OUTPUT_CHARS = 20_000  # serialized result bound; trailing rows are dropped past it
+MAX_SQL_CELL_CHARS = 500  # per string cell in SQL mode (a body column could otherwise be huge)
 
 
 class QueryCollectedDataArgs(BaseModel):
@@ -65,12 +67,33 @@ class QueryCollectedDataArgs(BaseModel):
     limit: int = Field(default=25, ge=1, le=MAX_DB_QUERY_ROWS)
 
 
-def _db_query_parameter_properties() -> dict[str, Any]:
+def sql_mode_available() -> bool:
+    """Whether ``mode='sql'`` can run: the dedicated read-only reader DSN is configured (never raises)."""
+    return bool(Settings().chat_sql_reader_database_url)
+
+
+def _db_query_parameter_properties(sql_enabled: bool = True) -> dict[str, Any]:
     """Return the JSON-schema ``properties`` for the ``query_collected_data`` tool parameters.
+
+    Args:
+        sql_enabled: When False the ``sql`` mode and the ``sql_query`` parameter are omitted entirely.
 
     Returns:
         A fresh dict per call so callers cannot mutate shared module state.
     """
+    props = _db_query_base_properties()
+    if not sql_enabled:
+        props["mode"] = {
+            "type": "string",
+            "enum": ["structured"],
+            "description": "Use 'structured' for parameterized filters/aggregations.",
+        }
+        del props["sql_query"]
+    return props
+
+
+def _db_query_base_properties() -> dict[str, Any]:
+    """Return the full (SQL-enabled) parameter ``properties`` dict, fresh per call."""
     return {
         "mode": {
             "type": "string",
@@ -147,12 +170,36 @@ def _db_query_parameter_properties() -> dict[str, Any]:
     }
 
 
-def build_db_query_tool_spec() -> dict[str, Any]:
+def build_db_query_tool_spec(*, sql_enabled: bool = True) -> dict[str, Any]:
     """Return the OpenAI-compatible function tool specification for ``query_collected_data``.
+
+    Args:
+        sql_enabled: False hides ``mode='sql'`` (enum, ``sql_query`` and the view documentation) when the
+            reader DSN is not configured, so the model is never offered a mode that cannot run. The default
+            keeps the full spec byte-stable.
 
     Returns:
         Tool specification dictionary for the model gateway.
     """
+    if not sql_enabled:
+        return {
+            "type": "function",
+            "function": {
+                "name": TOOL_QUERY_COLLECTED_DATA,
+                "description": (
+                    "Query the workspace's collected realtime and near-realtime datasource database "
+                    "using parameterized 'structured' filters and aggregations. "
+                    "Measurement providers (prices, rates, weather, macro series) store numeric rows in "
+                    "observations. News and event feeds (earthquake, alert and news providers) store "
+                    "documents only, so use target='documents' or 'both' for them; observations are empty "
+                    "for those providers (e.g. emsc_quakes is documents-only; usgs is a measurement provider)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": _db_query_parameter_properties(sql_enabled=False),
+                },
+            },
+        }
     return {
         "type": "function",
         "function": {
@@ -189,23 +236,32 @@ def is_gadget_turn(retrieval_context: dict[str, Any] | None) -> bool:
     return ctx.get("kind") == "gadget" or isinstance(ctx.get(GADGET_SCOPE_KEY), dict)
 
 
+def turn_source_scope(retrieval_context: dict[str, Any] | None) -> list[str] | None:
+    """The turn's source allow-list from the stored retrieval context; ``None`` means no scope (whole workspace)."""
+    raw = (retrieval_context or {}).get("source_scope")
+    return raw if isinstance(raw, list) else None
+
+
 async def active_collected_providers(
-    session: AsyncSession, *, workspace_id: UUID, allow_local_only: bool
+    session: AsyncSession,
+    *,
+    workspace_id: UUID,
+    allow_local_only: bool,
+    source_scope: list[str] | None = None,
 ) -> list[str]:
     """Sorted distinct provider ids of the active collected sources this turn may query (bounded to 30).
 
-    Scoped exactly like :func:`has_collected_datasource`; read-only, one ``SELECT DISTINCT``. Used to tell
-    the model the exact ids to pass as ``providers`` in its first call.
+    Derived from :func:`_allowed_sources` so the hint can never name a provider outside the turn's scope
+    (a gadget turn sees only its bound sources; an empty provided scope yields none). Read-only. Used to
+    tell the model the exact ids to pass as ``providers`` in its first call.
     """
-    stmt = select(Source.provider).where(
-        Source.workspace_id == workspace_id,
-        Source.status == "active",
-        Source.provider.is_not(None),
+    allowed = await _allowed_sources(
+        session,
+        workspace_id=workspace_id,
+        source_scope=source_scope,
+        allow_local_only=allow_local_only,
     )
-    if not allow_local_only:
-        stmt = stmt.where(Source.local_only.is_(False))
-    rows = await session.execute(stmt.distinct().order_by(Source.provider).limit(30))
-    return [str(p) for p in rows.scalars().all()]
+    return sorted({str(p) for _i, p, _n in allowed if p})[:30]
 
 
 async def has_collected_datasource(
@@ -426,6 +482,33 @@ async def _register_evidence_for_versions(
     return by_version
 
 
+def cap_tool_output(raw: str) -> str:
+    """Bound a serialized tool result to ``MAX_TOOL_OUTPUT_CHARS`` by dropping trailing rows.
+
+    Pure. Under the bound the string is returned unchanged. Otherwise rows are popped one at a time from
+    the longest row list (``rows``/``observations``/``documents``/``observation_aggregates``) until it
+    fits, ``"truncated": true`` is set and ``row_count`` (SQL mode) is corrected, so the model knows the
+    list is partial. Dropped rows may still have registered evidence; that is harmless (unused numbers).
+    """
+    if len(raw) <= MAX_TOOL_OUTPUT_CHARS:
+        return raw
+    data = json.loads(raw)
+    data["truncated"] = True
+    keys = [
+        k
+        for k in ("rows", "observations", "documents", "observation_aggregates")
+        if isinstance(data.get(k), list)
+    ]
+    while True:
+        if "row_count" in data and isinstance(data.get("rows"), list):
+            data["row_count"] = len(data["rows"])
+        out = json.dumps(data, ensure_ascii=False, default=str)
+        keys = [k for k in keys if data[k]]
+        if len(out) <= MAX_TOOL_OUTPUT_CHARS or not keys:
+            return out
+        data[max(keys, key=lambda k: len(data[k]))].pop()
+
+
 async def execute_db_query_tool(
     session: AsyncSession,
     raw_arguments: dict[str, Any],
@@ -470,8 +553,7 @@ async def execute_db_query_tool(
     except Exception as exc:  # noqa: BLE001  # tool argument validation failure is reported to the model as invalid_arguments
         return json.dumps({"error": f"invalid_arguments: {type(exc).__name__}", "rows": []})
 
-    ctx = retrieval_context or {}
-    source_scope = ctx.get("source_scope") if isinstance(ctx.get("source_scope"), list) else None
+    source_scope = turn_source_scope(retrieval_context)
     allowed = await _allowed_sources(
         session,
         workspace_id=scope.workspace_id,
@@ -489,27 +571,34 @@ async def execute_db_query_tool(
         async with session.begin_nested():
             await session.execute(text("SET LOCAL statement_timeout = '2000ms'"))
             if args.mode == "sql" and args.sql_query:
-                return await _execute_sql_mode(
+                return cap_tool_output(
+                    await _execute_sql_mode(
+                        session,
+                        args.sql_query,
+                        workspace_id=scope.workspace_id,
+                        allowed_source_ids=allowed_ids,
+                        limit=args.limit,
+                        evidence_list=evidence_list,
+                        web_numbering=web_numbering,
+                    )
+                )
+            return cap_tool_output(
+                await _execute_structured_mode(
                     session,
-                    args.sql_query,
+                    args,
                     workspace_id=scope.workspace_id,
                     allowed_source_ids=allowed_ids,
-                    limit=args.limit,
+                    date_from=date_from,
+                    date_to=date_to,
                     evidence_list=evidence_list,
+                    redis=redis,
                     web_numbering=web_numbering,
+                    available_providers=sorted({str(p) for _i, p, _n in allowed if p}),
                 )
-            return await _execute_structured_mode(
-                session,
-                args,
-                workspace_id=scope.workspace_id,
-                allowed_source_ids=allowed_ids,
-                date_from=date_from,
-                date_to=date_to,
-                evidence_list=evidence_list,
-                redis=redis,
-                web_numbering=web_numbering,
-                available_providers=sorted({str(p) for _i, p, _n in allowed if p}),
             )
+    except ChatSqlReaderUnavailableError:
+        # Neutral on purpose: the model must not learn deployment env var names.
+        return json.dumps({"error": "sql_mode_unavailable", "rows": []})
     except ValueError as exc:
         return json.dumps({"error": str(exc), "rows": []})
     except Exception as exc:  # noqa: BLE001  # any query failure is returned as a sanitized tool error (exception type only)
@@ -682,6 +771,8 @@ async def _execute_sql_mode(
                 item[k] = v.isoformat()
             elif isinstance(v, UUID):
                 item[k] = str(v)
+            elif isinstance(v, str) and len(v) > MAX_SQL_CELL_CHARS:
+                item[k] = v[:MAX_SQL_CELL_CHARS]  # bound one oversized text cell (e.g. a full body)
             else:
                 item[k] = v
         ver_id = row.get("document_version_id")

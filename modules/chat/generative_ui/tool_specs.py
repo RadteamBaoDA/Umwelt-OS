@@ -430,6 +430,7 @@ def build_chat_tool_specs(
     include_theme: bool = False,
     include_db_query: bool = False,
     include_answer: bool = False,
+    include_db_sql: bool = True,
 ) -> list[dict[str, Any]]:
     """Build the OpenAI-format `tools` list for a generative-UI chat turn.
 
@@ -442,6 +443,7 @@ def build_chat_tool_specs(
         include_theme: Whether to expose the non-terminal `set_theme` tool.
         include_db_query: Whether to expose the non-terminal `query_collected_data` database query tool.
         include_answer: Whether to expose the terminal `render_answer` tool (only when web search returned results).
+        include_db_sql: Whether the db query tool advertises `mode='sql'` (False when no reader DSN is configured).
 
     Returns:
         Fresh (caller-mutable) list of function specs whose parameters come from the pydantic models.
@@ -516,7 +518,7 @@ def build_chat_tool_specs(
     if include_db_query:
         from modules.chat.db_query import build_db_query_tool_spec
 
-        specs.append(build_db_query_tool_spec())
+        specs.append(build_db_query_tool_spec(sql_enabled=include_db_sql))
     return copy.deepcopy(specs)
 
 

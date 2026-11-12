@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -356,25 +357,183 @@ def test_gadget_note_lists_provider_ids_and_round_budget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_active_collected_providers_scoped_like_grant() -> None:
-    """Provider ids come from one DISTINCT select fenced by workspace, active status and local-only."""
+async def test_active_collected_providers_follow_turn_scope() -> None:
+    """The hint derives from the allowed sources: unscoped = workspace, empty/invalid scope = none."""
     from modules.chat.db_query import active_collected_providers
+
+    rows = [
+        SimpleNamespace(id=uuid4(), provider="usgs", name="a"),
+        SimpleNamespace(id=uuid4(), provider="emsc_quakes", name="b"),
+        SimpleNamespace(id=uuid4(), provider=None, name="c"),
+    ]
 
     class _S:
         def __init__(self) -> None:
-            self.sql = ""
+            self.sql: list[str] = []
 
         async def execute(self, stmt: object) -> SimpleNamespace:
-            self.sql = str(stmt)
-            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: ["emsc_quakes"]))
+            self.sql.append(str(stmt))
+            return SimpleNamespace(all=lambda: rows)
 
     s = _S()
-    assert await active_collected_providers(s, workspace_id=uuid4(), allow_local_only=False) == [  # type: ignore[arg-type]
-        "emsc_quakes"
+    kw = {"workspace_id": uuid4(), "allow_local_only": False}
+    assert await active_collected_providers(s, **kw) == ["emsc_quakes", "usgs"]  # type: ignore[arg-type]
+    assert "local_only" in s.sql[0]
+    n = len(s.sql)
+    assert await active_collected_providers(s, source_scope=[], **kw) == []  # type: ignore[arg-type]
+    assert await active_collected_providers(s, source_scope=["nope"], **kw) == []  # type: ignore[arg-type]
+    assert len(s.sql) == n  # fail closed without touching the database
+    await active_collected_providers(s, source_scope=[str(uuid4())], **kw)  # type: ignore[arg-type]
+    assert len(s.sql) == n + 1 and "sources.id IN" in s.sql[-1]
+
+
+def test_cap_tool_output_drops_trailing_rows_and_flags_truncation() -> None:
+    """Oversized results shed trailing rows until they fit; small ones are untouched."""
+    import json
+
+    from modules.chat.db_query import MAX_TOOL_OUTPUT_CHARS, cap_tool_output
+
+    small = json.dumps({"rows": [{"a": 1}]})
+    assert cap_tool_output(small) == small
+    rows = [{"i": i, "body": "x" * 1000} for i in range(50)]
+    out = cap_tool_output(json.dumps({"mode": "sql", "row_count": 50, "rows": rows}))
+    data = json.loads(out)
+    assert len(out) <= MAX_TOOL_OUTPUT_CHARS
+    assert data["truncated"] is True
+    assert 0 < len(data["rows"]) < 50 and data["row_count"] == len(data["rows"])
+    assert [r["i"] for r in data["rows"]] == list(range(len(data["rows"])))  # leading rows kept
+
+
+@pytest.mark.asyncio
+async def test_sql_mode_caps_each_string_cell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A huge text cell is cut to MAX_SQL_CELL_CHARS."""
+    import json
+
+    from modules.chat import db_query
+
+    async def fake_reader(*_a: object, **_k: object) -> list[dict]:
+        return [{"body": "y" * 5000, "n": 1}]
+
+    monkeypatch.setattr(db_query, "_run_sql_as_reader", fake_reader)
+    out = json.loads(
+        await db_query._execute_sql_mode(
+            SimpleNamespace(bind=None),  # type: ignore[arg-type]
+            "SELECT 1 FROM scoped_observations",
+            workspace_id=uuid4(),
+            allowed_source_ids=[uuid4()],
+            limit=5,
+            evidence_list=[],
+        )
+    )
+    assert len(out["rows"][0]["body"]) == db_query.MAX_SQL_CELL_CHARS
+    assert out["rows"][0]["n"] == 1
+
+
+def test_tool_spec_hides_sql_mode_when_unavailable() -> None:
+    """Without a reader DSN the spec offers structured mode only and no sql_query parameter."""
+    spec = build_db_query_tool_spec(sql_enabled=False)["function"]
+    props = spec["parameters"]["properties"]
+    assert props["mode"]["enum"] == ["structured"]
+    assert "sql_query" not in props
+    assert "sql" not in spec["description"].lower()
+    names = {
+        t["function"]["name"]: t
+        for t in build_chat_tool_specs(
+            include_read_skill=False, include_db_query=True, include_db_sql=False
+        )
+    }
+    mode = names[TOOL_QUERY_COLLECTED_DATA]["function"]["parameters"]["properties"]["mode"]
+    assert mode["enum"] == ["structured"]
+
+
+def test_gadget_note_omits_sql_advice_when_unavailable() -> None:
+    """The prompt note drops mode='sql' when SQL mode is off and states the call budget."""
+    from modules.chat._worker.setup import _gadget_note
+
+    assert "mode='sql'" in _gadget_note({}, True, ["usgs"])
+    off = _gadget_note({}, True, ["usgs"], sql_on=False)
+    assert "mode='sql'" not in off and "2 tool calls per round" in off
+
+
+@pytest.mark.asyncio
+async def test_sql_mode_without_reader_returns_neutral_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The model sees ``sql_mode_unavailable`` with no env var name."""
+    import json
+
+    from modules.chat import db_query
+
+    async def fence(*_a: object, **_k: object) -> str:
+        return "f"
+
+    async def sources(*_a: object, **_k: object) -> list:
+        return [(uuid4(), "usgs", "n")]
+
+    class _Nested:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *_a: object) -> bool:
+            return False
+
+    session = SimpleNamespace(
+        begin_nested=lambda: _Nested(), execute=AsyncMock(return_value=None), bind=None
+    )
+    monkeypatch.setattr(db_query.workspaces, "read_access_fence", fence)
+    monkeypatch.setattr(db_query, "_allowed_sources", sources)
+    monkeypatch.setattr(
+        db_query, "Settings", lambda: SimpleNamespace(chat_sql_reader_database_url=None)
+    )
+    out = await db_query.execute_db_query_tool(
+        session,  # type: ignore[arg-type]
+        {"mode": "sql", "sql_query": "SELECT 1 FROM scoped_observations"},
+        scope=SimpleNamespace(workspace_id=uuid4()),  # type: ignore[arg-type]
+        multi_workspace_enabled=False,
+        expected_access_fence="f",  # type: ignore[arg-type]
+        retrieval_context=None,
+        allow_local_only=False,
+        evidence_list=[],
+    )
+    assert json.loads(out) == {"error": "sql_mode_unavailable", "rows": []}
+    assert "CHAT_SQL" not in out
+
+
+def test_db_query_outcome_reports_counts_or_error() -> None:
+    """The tool.status detail carries rows/sources on success and an error flag otherwise."""
+    import json
+
+    from modules.chat._worker.tools import _db_query_outcome
+
+    ok = json.dumps(
+        {
+            "observations": [{"provider": "usgs"}, {"provider": "usgs"}],
+            "documents": [{"provider": "emsc"}],
+        }
+    )
+    assert _db_query_outcome(ok) == {"rows": 3, "sources": 2}
+    empty = json.dumps({"status": "no_active_sources_in_scope", "rows": []})
+    assert _db_query_outcome(empty) == {"rows": 0, "sources": 0}
+    assert _db_query_outcome(json.dumps({"error": "x", "rows": []})) == {"error": 1}
+    assert _db_query_outcome("not json") == {"error": 1}
+
+
+@pytest.mark.asyncio
+async def test_over_cap_data_calls_are_answered_with_budget_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A third data call in a round is kept (so it gets a result) but flagged over-cap."""
+    from modules.chat._worker import stream
+
+    handler = SimpleNamespace(data_round=True, available=lambda _e: True, round_cap=lambda _e: 2)
+    monkeypatch.setattr(stream, "_TOOL_HANDLERS", {TOOL_QUERY_COLLECTED_DATA: handler})
+    monkeypatch.setattr(stream, "_round_terminals", lambda *_a: [])
+    calls = [
+        {"id": f"c{i}", "name": TOOL_QUERY_COLLECTED_DATA, "arguments": "{}"} for i in range(3)
     ]
-    assert "DISTINCT" in s.sql and "local_only" in s.sql
-    await active_collected_providers(s, workspace_id=uuid4(), allow_local_only=True)  # type: ignore[arg-type]
-    assert "local_only" not in s.sql
+    env = SimpleNamespace(c=SimpleNamespace(response_id=uuid4()), ts=SimpleNamespace(), setup=None)
+    rc = await stream._classify_round(env, None, SimpleNamespace(acc=None), calls)  # type: ignore[arg-type]
+    assert rc.handled == calls and rc.over_cap == {id(calls[2])}
 
 
 @pytest.mark.asyncio
@@ -551,3 +710,18 @@ async def test_allowed_sources_fails_closed_on_provided_scope(
     )
     assert len(got) == expected_rows
     assert len(executed) == queries
+
+
+@pytest.mark.asyncio
+async def test_enforced_empty_source_scope_skips_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A gadget turn with an empty scope must not search (empty source_ids would mean whole workspace)."""
+    from modules.chat import retrieval
+    from modules.chat.schemas import AnswerContextRequest
+
+    search = AsyncMock()
+    monkeypatch.setattr(retrieval.search_public, "search", search)
+    collector = retrieval._RefCollector()
+    request = AnswerContextRequest(query="q", source_scope_enforced=True)
+    await retrieval._collect_search_refs(None, None, None, request, {}, collector, [])  # type: ignore[arg-type]
+    search.assert_not_called()
+    assert collector.refs == []

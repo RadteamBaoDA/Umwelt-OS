@@ -435,7 +435,12 @@ async def _collect_search_refs(
     Appends hits scoring at least ``MIN_RELATIVE_SEARCH_SCORE`` of the best hit, in rank order, records
     scores, and extends ``warnings``. ``TypeError`` is re-raised; any other error is logged and
     reported as a warning. The worker commits before ``build_context`` so no locks are held.
+
+    Fail closed: when the scope is enforced (gadget turn) and empty, search is skipped, because the search
+    contract treats an empty ``source_ids`` as "no filter" and would read the whole workspace.
     """
+    if request.source_scope_enforced and not request.source_scope:
+        return
     try:
         search_req = SearchRequest(
             query=request.query,

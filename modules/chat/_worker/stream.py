@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import json
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, cast
 from uuid import UUID
 
@@ -223,6 +223,9 @@ class _RoundCalls:
     round_parts: list[tuple[str, dict[str, str]]]
     part_of: dict[int, str]
     invalid_of: dict[int, str]
+    # Data calls beyond their handler's per-round cap: still answered (with ``tool_budget_exhausted``) so
+    # the model learns they did not run instead of the call silently vanishing.
+    over_cap: set[int] = field(default_factory=set)
 
 
 async def _classify_round(
@@ -262,6 +265,7 @@ async def _classify_round(
             c.response_id,
         )
     handled: list[dict[str, str]] = []
+    over_cap: set[int] = set()
     used: dict[
         int, int
     ] = {}  # handler identity -> calls taken this round (handlers may share a cap)
@@ -276,7 +280,13 @@ async def _classify_round(
         ):
             used[id(handler)] = used.get(id(handler), 0) + 1
             handled.append(call)
-    return _RoundCalls(handled, round_parts, part_of, invalid_of)
+        elif handler is not None and handler.available(env) and used.get(id(handler), 0) > 0:
+            # Over the per-round cap after at least one call ran: answer it (not run) so the model knows.
+            # A handler with no budget left at all (cap 0, e.g. user input) stays dropped: answering would
+            # let a model that keeps asking loop forever instead of ending the turn.
+            handled.append(call)
+            over_cap.add(id(call))
+    return _RoundCalls(handled, round_parts, part_of, invalid_of, over_cap)
 
 
 def _bounded_continue(ts: _TurnState, rc: _RoundCalls, run_id: UUID) -> bool:
@@ -379,7 +389,7 @@ async def _answer_tool_calls(
         elif id(call) in rc.part_of:
             # The payload is already on screen; echoing it back would only cost tokens.
             content = json.dumps({"status": "rendered", "part_id": rc.part_of[id(call)]})
-        elif budget_exhausted:
+        elif budget_exhausted or id(call) in rc.over_cap:
             content = _TOOL_BUDGET_EXHAUSTED
         else:
             content = await _run_data_tool(env, call)

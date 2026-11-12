@@ -10,6 +10,9 @@ import { useDisplayPreferences } from '@/core/query-provider';
 import { formatDateTime, type AppLocaleId } from '@/core/i18n';
 import { safeHttpUrl } from '@/core/safe-url';
 
+/** Backend fallback title of a collected record without one (db_query.py); shown localized instead. */
+const COLLECTED_RECORD_FALLBACK_TITLE = 'Collected record';
+
 /** Host of an untrusted web URL for display; empty string when unparsable. */
 export function webHost(url: string): string {
   try {
@@ -83,7 +86,9 @@ function CardCitation({ citation, index, locale, timezone, highlighted = false, 
         <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-sm bg-raised px-1 text-xs font-semibold text-foreground">
           {index + 1}
         </span>
-        <strong className="line-clamp-2 text-sm font-semibold text-foreground">{citation.title}</strong>
+        <strong className="line-clamp-2 text-sm font-semibold text-foreground">
+          {citation.title === COLLECTED_RECORD_FALLBACK_TITLE ? t('collectedRecordTitle') : citation.title}
+        </strong>
       </span>
       {citation.quote && <span className="line-clamp-1 text-xs text-muted-foreground">{citation.quote}</span>}
       <span className="text-xs text-muted-foreground">

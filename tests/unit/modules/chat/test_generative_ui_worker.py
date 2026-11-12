@@ -541,7 +541,7 @@ async def test_trip_images_tool_runs_in_loop_then_widget_renders(
             [
                 _call(0, name="get_trip_stop_images", args=trip_args, call_id="t1"),
                 _call(1, name="get_trip_stop_images", args=trip_args, call_id="t2"),
-            ],  # 2nd call in a round is dropped
+            ],  # 2nd call in a round is not run but answered tool_budget_exhausted
             [_call(0, name="render_table", args=TABLE_ARGS, call_id="w")],
             END,
         ],
@@ -564,11 +564,13 @@ async def test_trip_images_tool_runs_in_loop_then_widget_renders(
     assert (
         tool.await_args.kwargs["local_only"] is False and tool.await_args.kwargs["secret"] == "sig"
     )
-    # The request list is shared and keeps growing: [-4:-2] is the image round, [-2:] the widget round.
+    # The request list is shared and keeps growing: [-5:-2] is the image round, [-2:] the widget round.
     followup = gen.requests[1]["messages"]
-    assert [m["role"] for m in followup[-4:-2]] == ["assistant", "tool"]
-    assert followup[-4]["tool_calls"][0]["function"]["name"] == "get_trip_stop_images"
-    assert followup[-3]["tool_call_id"] == "t1" and followup[-3]["content"] == '{"stops": []}'
+    assert [m["role"] for m in followup[-5:-2]] == ["assistant", "tool", "tool"]
+    assert followup[-5]["tool_calls"][0]["function"]["name"] == "get_trip_stop_images"
+    assert followup[-4]["tool_call_id"] == "t1" and followup[-4]["content"] == '{"stops": []}'
+    assert followup[-3]["tool_call_id"] == "t2"
+    assert json.loads(followup[-3]["content"])["error"] == "tool_budget_exhausted"
     assert json.loads(followup[-1]["content"]) == {"status": "rendered", "part_id": "w"}
     assert [d.data["kind"] for d in gen.events("message.ui.done")] == ["table"]
 
