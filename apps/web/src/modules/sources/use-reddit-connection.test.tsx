@@ -53,7 +53,7 @@ describe('useRedditConnection', () => {
     await act(() => result.current.connectReddit(saved));
     const [passedCtx, options] = mocks.startOAuthConnection.mock.calls[0];
     expect(passedCtx).toBe(context);
-    expect(options).toMatchObject({ action: 'reddit-connect', failureKey: 'redditConnectionFailed', saved });
+    expect(options).toMatchObject({ action: 'reddit-connect', failureKey: 'reddit.connectionFailed', saved });
     const controller = new AbortController();
     options.start({ id: 's1', generation: 3, revision: 2 }, { controller });
     expect(mocks.startRedditOAuth).toHaveBeenCalledWith('s1', 3, 2, 'csrf-1', controller.signal);
@@ -72,7 +72,7 @@ describe('useRedditConnection', () => {
     const options = mocks.revokeOAuthConnection.mock.calls[0][1];
     expect(options).toMatchObject({
       action: 'reddit-disconnect',
-      failureKey: 'redditDisconnectFailed',
+      failureKey: 'reddit.disconnectFailed',
       status: { connected: true, token_revision: 4 },
     });
     const controller = new AbortController();

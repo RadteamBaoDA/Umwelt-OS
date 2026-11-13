@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { flatCatalogs, jsonCatalogs, unflatten } from '@locales';
 
-/** Sorted ICU argument names (`{count, plural, ...}` -> `count`) so translations may reorder but not drop placeholders. */
+/**
+ * Sorted ICU argument names (`{count, plural, ...}` -> `count`) so translations may reorder but not drop placeholders.
+ * Plural/select branch bodies (`one {source}`) are removed first: their words are literal text that may legitimately
+ * differ per language (Vietnamese has only the `other` branch).
+ */
 function placeholders(message: string): string[] {
-  return [...new Set([...message.matchAll(/\{\s*(\w+)\s*[,}]/g)].map((m) => m[1]))].sort();
+  const withoutBranches = message.replace(/\b(?:zero|one|two|few|many|other|=\d+)\s*\{[^{}]*\}/g, '');
+  return [...new Set([...withoutBranches.matchAll(/\{\s*(\w+)\s*[,}]/g)].map((m) => m[1]))].sort();
 }
 
 describe.each(Object.keys(flatCatalogs['en-us']) as (keyof (typeof flatCatalogs)['en-us'])[])('catalog parity: %s', (ns) => {

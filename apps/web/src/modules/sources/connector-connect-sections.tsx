@@ -19,11 +19,13 @@ export function GoogleConnect({ m }: { m: ConnectorEditorModel }) {
       {['google_mail', 'google_calendar', 'google_drive'].includes(provider) && (
         <div className="grid gap-3">
           <p className="text-muted-foreground">
-            {googleStatusQuery.data?.state === 'ready' && providerCredentialConfigured ? t('googleConnected') : t('googleReadOnlyConsent')}
+            {googleStatusQuery.data?.state === 'ready' && providerCredentialConfigured
+              ? t('google.connected')
+              : t('google.readOnlyConsent')}
           </p>
           {googleStatusQuery.data?.error_code && (
             <p className="error" role="alert">
-              {t('googleGrantNeedsAttention')}
+              {t('google.grantNeedsAttention')}
             </p>
           )}
           <div className="flex flex-wrap gap-2">
@@ -33,11 +35,11 @@ export function GoogleConnect({ m }: { m: ConnectorEditorModel }) {
               disabled={locked || !sourceId || dirty || revision < 1}
               onClick={() => void connectGoogle()}
             >
-              {t('googleConnect')}
+              {t('google.connect')}
             </Button>
             {googleStatusQuery.data?.state === 'ready' && (
               <Button type="button" variant="outline" disabled={locked || dirty} onClick={() => void disconnectGoogle()}>
-                {t('googleDisconnect')}
+                {t('google.disconnect')}
               </Button>
             )}
           </div>
@@ -56,11 +58,11 @@ export function RedditConnect({ m }: { m: ConnectorEditorModel }) {
       {provider === 'reddit' && (
         <div className="grid gap-3">
           <p className="text-muted-foreground">
-            {redditStatusQuery.data?.state === 'ready' ? t('redditConnected') : t('redditReadOnlyConsent')}
+            {redditStatusQuery.data?.state === 'ready' ? t('reddit.connected') : t('reddit.readOnlyConsent')}
           </p>
           {redditStatusQuery.data?.error_code && (
             <p className="error" role="alert">
-              {t('redditGrantNeedsAttention')}
+              {t('reddit.grantNeedsAttention')}
             </p>
           )}
           <div className="flex flex-wrap gap-2">
@@ -70,11 +72,11 @@ export function RedditConnect({ m }: { m: ConnectorEditorModel }) {
               disabled={locked || !sourceId || dirty || revision < 1}
               onClick={() => void connectReddit()}
             >
-              {t('redditConnect')}
+              {t('reddit.connect')}
             </Button>
             {redditStatusQuery.data?.state === 'ready' && (
               <Button type="button" variant="outline" disabled={locked || dirty} onClick={() => void disconnectReddit()}>
-                {t('redditDisconnect')}
+                {t('reddit.disconnect')}
               </Button>
             )}
           </div>
@@ -104,7 +106,7 @@ export function BearerTokenField({ m }: { m: ConnectorEditorModel }) {
       {currentEntry?.auth_methods.includes('http_header') && (
         <div className="field">
           <Label htmlFor="source-local-bearer-token">
-            {t(provider === 'notion' ? 'notionIntegrationToken' : provider === 'slack' ? 'slackBotToken' : 'localBearerToken')}
+            {t(provider === 'notion' ? 'notion.integrationToken' : provider === 'slack' ? 'slack.botToken' : 'local.bearerToken')}
           </Label>
           <PasswordInput
             id="source-local-bearer-token"
@@ -121,16 +123,16 @@ export function BearerTokenField({ m }: { m: ConnectorEditorModel }) {
               setNotice('');
             }}
           />
-          <small className="text-muted-foreground">{providerCredentialConfigured ? t('credentialSavedWriteOnly') : t('secretHelp')}</small>
+          <small className="text-muted-foreground">{providerCredentialConfigured ? t('credential.savedWriteOnly') : t('secretHelp')}</small>
         </div>
       )}
       {!['telegram', 'alpha_vantage', 'rest', 'google_mail', 'google_calendar', 'google_drive', 'reddit'].includes(provider) &&
         !usesProviderCredential(currentEntry) &&
         currentEntry &&
         (currentEntry.auth_methods.every((method) => method === 'none') ? (
-          <p className="text-muted-foreground">{t('connectNoCredential')}</p>
+          <p className="text-muted-foreground">{t('connect.noCredential')}</p>
         ) : (
-          currentEntry.auth_methods.includes('oauth2') && <p className="text-muted-foreground">{t('connectOAuth')}</p>
+          currentEntry.auth_methods.includes('oauth2') && <p className="text-muted-foreground">{t('connect.oAuth')}</p>
         ))}
     </>
   );
@@ -157,7 +159,7 @@ export function TelegramCredential({ m }: { m: ConnectorEditorModel }) {
       {provider === 'telegram' && (
         <>
           <div className="field">
-            <Label htmlFor="source-telegram-secret-action">{t('telegramCredentialAction')}</Label>
+            <Label htmlFor="source-telegram-secret-action">{t('telegram.credentialAction')}</Label>
             <Select
               value={telegramSecretAction}
               onValueChange={(value) => {
@@ -180,7 +182,7 @@ export function TelegramCredential({ m }: { m: ConnectorEditorModel }) {
           </div>
           {telegramSecretAction === 'replace' && (
             <div className="field">
-              <Label htmlFor="source-telegram-token">{t('telegramBotToken')}</Label>
+              <Label htmlFor="source-telegram-token">{t('telegram.botToken')}</Label>
               <PasswordInput
                 id="source-telegram-token"
                 autoComplete="new-password"
@@ -227,7 +229,7 @@ export function ApiKeyField({ m }: { m: ConnectorEditorModel }) {
       {(provider === 'alpha_vantage' || (usesApiKey(currentEntry) && (backendChoice ?? 'native') === 'native')) && (
         <div className="field">
           <Label htmlFor="source-provider-key">
-            {t(provider === 'coingecko' ? 'coingeckoKey' : provider === 'alpha_vantage' ? 'alphaVantageKey' : 'providerKey')}
+            {t(provider === 'coingecko' ? 'coingecko.key' : provider === 'alpha_vantage' ? 'alphaVantageKey' : 'provider.key')}
           </Label>
           <PasswordInput
             id="source-provider-key"
@@ -244,10 +246,10 @@ export function ApiKeyField({ m }: { m: ConnectorEditorModel }) {
               setNotice('');
             }}
           />
-          <small className="text-muted-foreground">{providerCredentialConfigured ? t('credentialSavedWriteOnly') : t('secretHelp')}</small>
+          <small className="text-muted-foreground">{providerCredentialConfigured ? t('credential.savedWriteOnly') : t('secretHelp')}</small>
           {usesApiKey(currentEntry) && keyNeeded(visibleActivationError) && (
             <small className="error" role="alert">
-              {t('providerKeyNeeded')}
+              {t('provider.keyNeeded')}
             </small>
           )}
         </div>
@@ -292,14 +294,14 @@ export function RestAuthFields({ m }: { m: ConnectorEditorModel }) {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">{t('noAuthentication')}</SelectItem>
-                <SelectItem value="http_header">{t('headerAuthentication')}</SelectItem>
+                <SelectItem value="http_header">{t('header.authentication')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
           {authMethod === 'http_header' && (
             <>
               <div className="field">
-                <Label htmlFor="source-header-name">{t('headerName')}</Label>
+                <Label htmlFor="source-header-name">{t('header.name')}</Label>
                 <Input
                   id="source-header-name"
                   maxLength={128}
@@ -312,7 +314,7 @@ export function RestAuthFields({ m }: { m: ConnectorEditorModel }) {
                 />
               </div>
               <div className="field">
-                <Label htmlFor="source-provider-secret">{t('providerSecret')}</Label>
+                <Label htmlFor="source-provider-secret">{t('provider.secret')}</Label>
                 <PasswordInput
                   id="source-provider-secret"
                   autoComplete="new-password"

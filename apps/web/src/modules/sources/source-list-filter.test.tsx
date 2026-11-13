@@ -4,7 +4,6 @@ import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
-import { sourcesMessages } from '@/core/messages/sources';
 
 const nav = vi.hoisted(() => ({ params: new URLSearchParams(), replace: vi.fn() }));
 vi.mock('next/navigation', () => ({
@@ -55,7 +54,7 @@ function wrap(query: string) {
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <NextIntlClientProvider
         locale="en-US"
-        messages={{ sources: sourcesMessages['en-us'], gadgetSettings: getCatalog('en-us', 'gadgetSettings') }}
+        messages={{ sources: getCatalog('en-us', 'sources'), gadgetSettings: getCatalog('en-us', 'gadgetSettings') }}
       >
         <SourceList />
       </NextIntlClientProvider>

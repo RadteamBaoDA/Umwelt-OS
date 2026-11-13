@@ -21,19 +21,39 @@ const MAX_CHIPS = 3;
 export function CompatibleChips({ source }: { source: Pick<Source, 'id' | 'provider' | 'type'> }) {
   const t = useTranslations('sources');
   const tg = useTranslations('gadgetSettings');
-  const templates = useQuery({ queryKey: dashboardKeys.templates, queryFn: ({ signal }) => apiRequest<GadgetTemplate[]>('/api/v1/gadget-templates', { signal }), staleTime: 5 * 60_000 });
-  const catalog = useQuery({ queryKey: connectorKeys.catalog, queryFn: ({ signal }) => getConnectorCatalog(signal), staleTime: 5 * 60_000 });
+  const templates = useQuery({
+    queryKey: dashboardKeys.templates,
+    queryFn: ({ signal }) => apiRequest<GadgetTemplate[]>('/api/v1/gadget-templates', { signal }),
+    staleTime: 5 * 60_000,
+  });
+  const catalog = useQuery({
+    queryKey: connectorKeys.catalog,
+    queryFn: ({ signal }) => getConnectorCatalog(signal),
+    staleTime: 5 * 60_000,
+  });
   const builtins = useQuery({ queryKey: connectorKeys.builtins, queryFn: ({ signal }) => listBuiltinSources(signal) });
   const shapes = source.provider
-    ? catalog.data?.find((entry) => entry.provider_id === source.provider)?.data_shapes ?? builtins.data?.find((entry) => entry.id === source.provider)?.data_shapes
-    : source.type === 'manual' ? ['news' as const] : undefined;
+    ? (catalog.data?.find((entry) => entry.provider_id === source.provider)?.data_shapes ??
+      builtins.data?.find((entry) => entry.id === source.provider)?.data_shapes)
+    : source.type === 'manual'
+      ? ['news' as const]
+      : undefined;
   const matches = compatibleTemplates({ data_shapes: shapes }, templates.data ?? []);
   if (matches.length === 0) return null;
-  return <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground" data-testid="compatible-chips">
-    <span>{t('compatibleTitle')}</span>
-    {matches.slice(0, MAX_CHIPS).map((template) => <Badge key={template.id} variant="outline" asChild>
-      <Link href={addTemplateHref(template.id, source.id)} aria-label={t('compatibleAdd', { name: templateName(template.renderer, tg) })}>{templateName(template.renderer, tg)}</Link>
-    </Badge>)}
-    {matches.length > MAX_CHIPS && <span>{t('compatibleMore', { count: matches.length - MAX_CHIPS })}</span>}
-  </div>;
+  return (
+    <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground" data-testid="compatible-chips">
+      <span>{t('compatible.title')}</span>
+      {matches.slice(0, MAX_CHIPS).map((template) => (
+        <Badge key={template.id} variant="outline" asChild>
+          <Link
+            href={addTemplateHref(template.id, source.id)}
+            aria-label={t('compatible.add', { name: templateName(template.renderer, tg) })}
+          >
+            {templateName(template.renderer, tg)}
+          </Link>
+        </Badge>
+      ))}
+      {matches.length > MAX_CHIPS && <span>{t('compatible.more', { count: matches.length - MAX_CHIPS })}</span>}
+    </div>
+  );
 }

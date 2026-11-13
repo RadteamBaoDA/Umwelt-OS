@@ -137,7 +137,7 @@ async function connectGitHub(ctx: EditorContext) {
     if (!githubRequestIsCurrent(ctx, token, sourceId, generation, expectedRevision)) return;
     assignAuthorizationUrl(result.authorization_url);
   } catch {
-    if (requests.requestIsCurrent(token)) draft.setError('githubConnectionFailed');
+    if (requests.requestIsCurrent(token)) draft.setError('github.connectionFailed');
   } finally {
     requests.endRequest(token);
   }
@@ -158,7 +158,7 @@ async function resetGitHubHistory(ctx: EditorContext, gh: GitHubBundle) {
     if (!githubRequestIsCurrent(ctx, token, sourceId, generation, expectedRevision)) return;
     await gh.status.refetch();
   } catch {
-    if (requests.requestIsCurrent(token)) draft.setError('githubConnectionFailed');
+    if (requests.requestIsCurrent(token)) draft.setError('github.connectionFailed');
   } finally {
     requests.endRequest(token);
   }
@@ -223,7 +223,7 @@ async function confirmGitHubRecovery(ctx: EditorContext, gh: GitHubBundle) {
     review.setGithubRecoveryReview(null);
     assignAuthorizationUrl(result.authorization_url);
   } catch {
-    if (requests.requestIsCurrent(token)) draft.setError('githubConnectionFailed');
+    if (requests.requestIsCurrent(token)) draft.setError('github.connectionFailed');
     void status.refetch();
   } finally {
     requests.endRequest(token);
@@ -245,7 +245,7 @@ async function refreshGitHub(ctx: EditorContext, gh: GitHubBundle) {
     if (!githubRequestIsCurrent(ctx, token, sourceId, generation, expectedRevision)) return;
     await gh.status.refetch();
   } catch {
-    if (requests.requestIsCurrent(token)) draft.setError('githubConnectionFailed');
+    if (requests.requestIsCurrent(token)) draft.setError('github.connectionFailed');
     void gh.status.refetch();
   } finally {
     requests.endRequest(token);
@@ -270,7 +270,7 @@ async function reviewGitHubDisconnect(ctx: EditorContext, gh: GitHubBundle) {
     gh.review.githubReviewRef.current = { sourceId, sourceGeneration: generation, revision: expectedRevision, peers: inventory.peers };
     gh.review.setGithubDisconnectOpen(true);
   } catch {
-    if (requests.requestIsCurrent(token)) draft.setError('githubInventoryFailed');
+    if (requests.requestIsCurrent(token)) draft.setError('github.inventoryFailed');
   } finally {
     requests.endRequest(token);
   }
@@ -281,7 +281,7 @@ function publishDisconnectFailure(ctx: EditorContext, gh: GitHubBundle, cause: u
   if (cause instanceof ApiError && cause.status === 409) {
     dropPeerReview(gh.review);
     ctx.draft.setError('conflict');
-  } else ctx.draft.setError('githubConnectionFailed');
+  } else ctx.draft.setError('github.connectionFailed');
 }
 
 /** True when the editor no longer shows the exact source revision the peer inventory was reviewed against. */

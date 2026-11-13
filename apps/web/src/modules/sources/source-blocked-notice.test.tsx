@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { errorCodesMessages } from '@/core/messages/error-codes';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
@@ -10,7 +10,7 @@ import { SourceBlockedNotice } from './source-entry';
 
 const show = (source: Parameters<typeof SourceBlockedNotice>[0]['source']) =>
   render(
-    <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'], errorCodes: errorCodesMessages['en-us'] }}>
+    <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources'), errorCodes: errorCodesMessages['en-us'] }}>
       <SourceBlockedNotice source={source} />
     </NextIntlClientProvider>,
   );

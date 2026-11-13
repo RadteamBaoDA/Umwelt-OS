@@ -40,31 +40,56 @@ export function PickPhone() {
     if (!scanRef.current || scanRef.current.id !== id) {
       scanRef.current = { id, request: id ? scanPickSession(id) : Promise.reject(new ApiError(404, 'missing')) };
     }
-    scanRef.current.request.then((result) => {
-      if (cancelled) return;
-      setSessionId(id);
-      setOptions(result.options);
-      setPhase('options');
-    }).catch((error: unknown) => { if (!cancelled) setPhase(phaseFor(error)); });
-    return () => { cancelled = true; };
+    scanRef.current.request
+      .then((result) => {
+        if (cancelled) return;
+        setSessionId(id);
+        setOptions(result.options);
+        setPhase('options');
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setPhase(phaseFor(error));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   /** Sends the chosen option pool index. */
   const choose = (index: number) => {
-    submitPick(sessionId, index).then(() => setPhase('done')).catch((error: unknown) => setPhase(phaseFor(error)));
+    submitPick(sessionId, index)
+      .then(() => setPhase('done'))
+      .catch((error: unknown) => setPhase(phaseFor(error)));
   };
 
-  const message = { loading: t('phoneLoading'), done: t('phoneDone'), invalid: t('phoneInvalid'), error: t('phoneError'), tooMany: t('phoneTooMany'), options: '' }[phase];
+  const message = {
+    loading: t('phone.loading'),
+    done: t('phone.done'),
+    invalid: t('phone.invalid'),
+    error: t('phone.error'),
+    tooMany: t('phone.tooMany'),
+    options: '',
+  }[phase];
   return (
     <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center gap-4 p-6">
       <UmweltLogo />
-      <h1 className="text-xl font-semibold">{phase === 'invalid' ? t('phoneExpiredTitle') : t('phoneTitle')}</h1>
-      {phase === 'options' ? options.map((option) => (
-        <Button key={option.index} type="button" variant="outline" className="h-14 text-base" onClick={() => choose(option.index)}>
-          {option.label}
-        </Button>
-      )) : <p role="status" className="text-sm text-muted-foreground">{message}</p>}
-      {(phase === 'invalid' || phase === 'error' || phase === 'tooMany') && <Link href="/" className="text-sm font-medium underline underline-offset-4">{t('goToDashboard')}</Link>}
+      <h1 className="text-xl font-semibold">{phase === 'invalid' ? t('phone.expiredTitle') : t('phone.title')}</h1>
+      {phase === 'options' ? (
+        options.map((option) => (
+          <Button key={option.index} type="button" variant="outline" className="h-14 text-base" onClick={() => choose(option.index)}>
+            {option.label}
+          </Button>
+        ))
+      ) : (
+        <p role="status" className="text-sm text-muted-foreground">
+          {message}
+        </p>
+      )}
+      {(phase === 'invalid' || phase === 'error' || phase === 'tooMany') && (
+        <Link href="/" className="text-sm font-medium underline underline-offset-4">
+          {t('goToDashboard')}
+        </Link>
+      )}
     </main>
   );
 }

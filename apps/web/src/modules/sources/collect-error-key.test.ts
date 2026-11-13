@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import { collectErrorKey } from './builtin-sources';
 
 describe('collectErrorKey', () => {
-  it('maps known run error codes to collectError_<code>', () => {
-    expect(collectErrorKey('provider_rate_limited')).toBe('collectError_provider_rate_limited');
-    expect(collectErrorKey('cancelled')).toBe('collectError_cancelled');
-    for (const code of ['provider_timeout', 'provider_unavailable', 'provider_response_invalid', 'schema_changed', 'invalid_credential', 'credential_missing', 'collection_incomplete', 'destination_blocked']) {
-      expect(collectErrorKey(code)).toBe(`collectError_${code}`);
-    }
+  it('maps known run error codes to collectError.<code>', () => {
+    expect(collectErrorKey('provider_rate_limited')).toBe('collectError.providerRateLimited');
+    expect(collectErrorKey('cancelled')).toBe('collectError.cancelled');
+    expect(collectErrorKey('provider_timeout')).toBe('collectError.providerTimeout');
+    expect(collectErrorKey('provider_unavailable')).toBe('collectError.providerUnavailable');
+    expect(collectErrorKey('provider_response_invalid')).toBe('collectError.providerResponseInvalid');
+    expect(collectErrorKey('schema_changed')).toBe('collectError.schemaChanged');
+    expect(collectErrorKey('invalid_credential')).toBe('collectError.invalidCredential');
+    expect(collectErrorKey('credential_missing')).toBe('collectError.credentialMissing');
+    expect(collectErrorKey('collection_incomplete')).toBe('collectError.collectionIncomplete');
+    expect(collectErrorKey('destination_blocked')).toBe('collectError.destinationBlocked');
   });
 
   it('returns null for unknown, empty and missing codes', () => {
@@ -19,11 +24,13 @@ describe('collectErrorKey', () => {
   });
 
   it('has an en-us and vi-vi message for every mapped code', () => {
-    const codes = Object.keys(sourcesMessages['en-us']).filter((key) => key.startsWith('collectError_'));
-    expect(codes.length).toBeGreaterThanOrEqual(21);
-    for (const key of codes) {
-      expect(collectErrorKey(key.slice('collectError_'.length))).toBe(key);
-      expect((sourcesMessages['vi-vi'] as unknown as Record<string, string>)[key]).toBeTruthy();
+    const en = getCatalog('en-us', 'sources').collectError;
+    const vi = getCatalog('vi-vi', 'sources').collectError;
+    const names = Object.keys(en);
+    expect(names.length).toBeGreaterThanOrEqual(21);
+    for (const name of names) {
+      expect(vi[name as keyof typeof vi]).toBeTruthy();
+      expect(en[name as keyof typeof en]).toBeTruthy();
     }
   });
 });

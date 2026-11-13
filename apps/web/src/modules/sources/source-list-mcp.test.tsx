@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 
 vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams(), useRouter: () => ({ replace: () => undefined }) }));
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
@@ -32,8 +32,11 @@ describe('SourceList MCP rows', () => {
   it('offers Configure so grants reviewed after the wizard can be bound to an MCP source and renders Realtime/Near-realtime badges', async () => {
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}><SourceList /></NextIntlClientProvider>
-      </QueryClientProvider>);
+        <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+          <SourceList />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
     await screen.findByText('Mcp one');
     expect(screen.getAllByRole('button', { name: 'Configure' }).length).toBeGreaterThanOrEqual(1);
     const badges = screen.getAllByTestId('source-realtime-badge').map((node) => node.textContent);

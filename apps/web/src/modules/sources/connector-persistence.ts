@@ -63,7 +63,7 @@ function publishCollectFailure(ctx: EditorContext, cause: unknown) {
   }
   const { t, display } = ctx;
   ctx.draft.setNotice(
-    retryAt ? t('collectTooSoonAt', { time: formatDate(retryAt.toISOString(), display.locale, display.timezone) }) : t('collectTooSoon'),
+    retryAt ? t('collect.tooSoonAt', { time: formatDate(retryAt.toISOString(), display.locale, display.timezone) }) : t('collect.tooSoon'),
   );
 }
 
@@ -81,10 +81,10 @@ export async function collectNow(ctx: EditorContext): Promise<CollectionRequest 
     const final = await collectAndWait(id, ctx.csrfToken, {
       signal: token.controller.signal,
       onAccepted: (result) => {
-        if (requests.requestIsCurrent(token)) draft.setNotice(t('collectResult', { status: result.status }));
+        if (requests.requestIsCurrent(token)) draft.setNotice(t('collect.result', { status: result.status }));
       },
       onUpdate: (update) => {
-        if (requests.requestIsCurrent(token)) draft.setNotice(t('collectResult', { status: update.status }));
+        if (requests.requestIsCurrent(token)) draft.setNotice(t('collect.result', { status: update.status }));
       },
     });
     if (!final || !requests.requestIsCurrent(token)) return null;
@@ -92,7 +92,7 @@ export async function collectNow(ctx: EditorContext): Promise<CollectionRequest 
     if (final.status === 'failed' || final.status === 'cancelled') {
       draft.setError('actionFailed');
       const friendly = collectErrorKey(final.error_code);
-      draft.setNotice(friendly ? t(friendly) : t('collectFailedCode', { code: final.error_code ?? final.status }));
+      draft.setNotice(friendly ? t(friendly) : t('collect.failedCode', { code: final.error_code ?? final.status }));
     }
     await queryClient.invalidateQueries({ queryKey: connectorKeys.ingestion(id) });
     await queryClient.invalidateQueries({ queryKey: sourceKeys.all });
@@ -116,7 +116,7 @@ export async function refreshOwnerState(ctx: EditorContext, id: string, token: R
   ]);
   if (!requests.requestIsCurrent(token)) return false;
   if (configResult.status !== 'fulfilled' || activationResult.status !== 'fulfilled') {
-    draft.setError('reloadFailed');
+    draft.setError('reload.failed');
     return false;
   }
   const latestConfiguration = configResult.value;
@@ -164,7 +164,7 @@ async function fetchReloadedState(ctx: EditorContext, id: string, token: Request
 export async function reloadServerConfiguration(ctx: EditorContext) {
   const { draft, requests, queryClient, t } = ctx;
   const id = draft.sourceId;
-  if (!id || !window.confirm(t('reloadDiscardConfirmation'))) return;
+  if (!id || !window.confirm(t('reload.discardConfirmation'))) return;
   const token = requests.beginRequest('reload');
   if (!token) return;
   draft.setError('');
@@ -188,7 +188,7 @@ export async function reloadServerConfiguration(ctx: EditorContext) {
   } catch {
     if (requests.requestIsCurrent(token)) {
       draft.setConflict(true);
-      draft.setError('reloadFailed');
+      draft.setError('reload.failed');
     }
   } finally {
     requests.endRequest(token);
@@ -270,7 +270,7 @@ function publishValidationFailure(ctx: EditorContext, cause: unknown) {
   const { draft } = ctx;
   const outcomeUnknown = cause instanceof ApiError && cause.status === 503;
   publishFailure(ctx, cause);
-  if (outcomeUnknown) draft.setError('validationOutcomeUnknown');
+  if (outcomeUnknown) draft.setError('validation.outcomeUnknown');
   if (cause instanceof ApiError && cause.status === 409) draft.setConflict(true);
 }
 
@@ -350,7 +350,7 @@ function publishSaveFailure(ctx: EditorContext, cause: unknown) {
   if (cause instanceof ApiError && cause.status === 409) draft.setConflict(true);
   if (cause instanceof ApiError && cause.status >= 500) {
     draft.setConflict(true);
-    draft.setError('reloadFailed');
+    draft.setError('reload.failed');
   }
 }
 

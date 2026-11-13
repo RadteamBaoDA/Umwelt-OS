@@ -20,10 +20,10 @@ export function ScheduleStep({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       <div id="source-step-collect" hidden={!showStep('collect')} className="scroll-mt-4">
-        <SettingsSection title={t('panelSchedule')} description={t('panelScheduleHint')}>
+        <SettingsSection title={t('panel.schedule')} description={t('panel.scheduleHint')}>
           <FieldGrid>
             <div className="field">
-              <Label htmlFor="source-schedule">{t('schedule')}</Label>
+              <Label htmlFor="source-schedule">{t('schedule.label')}</Label>
               <Select
                 value={String(configuration.schedule_interval_minutes)}
                 onValueChange={(value) =>
@@ -36,7 +36,7 @@ export function ScheduleStep({ m }: { m: ConnectorEditorModel }) {
                 <SelectContent>
                   {(provider === 'alpha_vantage' ? [1440] : allowedIntervals(intervals, currentEntry)).map((minutes) => (
                     <SelectItem key={minutes} value={String(minutes)}>
-                      {t('everyMinutes', { minutes })}
+                      {t('every.minutes', { minutes })}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -60,7 +60,7 @@ export function ScheduleStep({ m }: { m: ConnectorEditorModel }) {
               <ScopeHint field="timezone" />
             </div>
             <div className="field">
-              <Label htmlFor="source-realtime-mode">{t('trackingModeLabel')}</Label>
+              <Label htmlFor="source-realtime-mode">{t('tracking.modeLabel')}</Label>
               <Select
                 value={configuration.realtime_mode ?? currentEntry?.realtime_tier ?? 'near_realtime'}
                 onValueChange={(value) => changeConfiguration('realtime_mode', value as RealtimeMode)}
@@ -69,11 +69,11 @@ export function ScheduleStep({ m }: { m: ConnectorEditorModel }) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="realtime">{t('trackingModeRealtime')}</SelectItem>
-                  <SelectItem value="near_realtime">{t('trackingModeNearRealtime')}</SelectItem>
+                  <SelectItem value="realtime">{t('tracking.modeRealtime')}</SelectItem>
+                  <SelectItem value="near_realtime">{t('tracking.modeNearRealtime')}</SelectItem>
                 </SelectContent>
               </Select>
-              <small className="text-muted-foreground">{t('trackingModeHelp')}</small>
+              <small className="text-muted-foreground">{t('tracking.modeHelp')}</small>
             </div>
           </FieldGrid>
           {builtinEntry && (
@@ -93,7 +93,7 @@ export function ScheduleStep({ m }: { m: ConnectorEditorModel }) {
           {isNativeEntry(currentEntry) && (
             <>
               <div className="field">
-                <Label htmlFor="source-history-mode">{t('historyMode')}</Label>
+                <Label htmlFor="source-history-mode">{t('history.mode')}</Label>
                 <Input
                   id="source-history-mode"
                   readOnly
@@ -145,7 +145,7 @@ export function AdvancedDetails({ m }: { m: ConnectorEditorModel }) {
                     />
                   </div>
                   <div className="field">
-                    <Label htmlFor="source-timeout">{t('timeout')}</Label>
+                    <Label htmlFor="source-timeout">{t('timeout.label')}</Label>
                     <Input
                       id="source-timeout"
                       type="number"
@@ -168,7 +168,7 @@ export function AdvancedDetails({ m }: { m: ConnectorEditorModel }) {
               {isNativeEntry(currentEntry) && (
                 <>
                   <div className="field">
-                    <Label htmlFor="source-native-timeout">{t('timeout')}</Label>
+                    <Label htmlFor="source-native-timeout">{t('timeout.label')}</Label>
                     <Input
                       id="source-native-timeout"
                       type="number"
@@ -196,10 +196,10 @@ export function BackendDetails({ m }: { m: ConnectorEditorModel }) {
     <>
       {showStep('collect') && workspace.isOwner && (
         <details className="rounded-lg border border-border p-4">
-          <summary className="cursor-pointer font-semibold">{t('backendAdvanced')}</summary>
+          <summary className="cursor-pointer font-semibold">{t('backend.advanced')}</summary>
           <div className="mt-3 grid gap-3">
             <div className="field">
-              <Label htmlFor="source-backend">{t('backendLabel')}</Label>
+              <Label htmlFor="source-backend">{t('backend.label')}</Label>
               <Select
                 value={backendChoice ?? 'native'}
                 onValueChange={(value) => {
@@ -210,14 +210,14 @@ export function BackendDetails({ m }: { m: ConnectorEditorModel }) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="native">{t('backendNative')}</SelectItem>
-                  <SelectItem value="n8n">{t('backendN8n')}</SelectItem>
+                  <SelectItem value="native">{t('backend.native')}</SelectItem>
+                  <SelectItem value="n8n">{t('backend.n8n')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             {(backendChoice ?? 'native') === 'n8n' && (
               <p className="text-muted-foreground" role="note">
-                {t('backendN8nPrereq')}
+                {t('backend.n8nPrereq')}
               </p>
             )}
           </div>
@@ -234,7 +234,7 @@ export function AdvancedSection({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       {showStep('collect') && (provider === 'web' || isNativeEntry(currentEntry) || workspace.isOwner) && (
-        <SettingsSection title={t('panelAdvanced')} description={t('panelAdvancedHint')}>
+        <SettingsSection title={t('panel.advanced')} description={t('panel.advancedHint')}>
           <AdvancedDetails m={m} />
           <BackendDetails m={m} />
         </SettingsSection>

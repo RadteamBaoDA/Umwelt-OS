@@ -12,10 +12,10 @@ import type { ConnectorEditorModel } from './connector-editor-types';
 /** Per Google provider: help message key, selected resource ids from the draft, and the server-side selection maximum. */
 function googleScopeInfo(provider: string, configuration: ConnectorEditorModel['configuration']) {
   if (provider === 'google_mail')
-    return { helpKey: 'googleMailLabelsHelp', selectedIds: configuration.google_mail_label_ids ?? [], maximum: 10 } as const;
+    return { helpKey: 'google.mailLabelsHelp', selectedIds: configuration.google_mail_label_ids ?? [], maximum: 10 } as const;
   if (provider === 'google_calendar')
-    return { helpKey: 'googleCalendarIdsHelp', selectedIds: configuration.google_calendar_ids ?? [], maximum: 25 } as const;
-  return { helpKey: 'googleDriveIdsHelp', selectedIds: configuration.google_drive_ids ?? [], maximum: 100 } as const;
+    return { helpKey: 'google.calendarIdsHelp', selectedIds: configuration.google_calendar_ids ?? [], maximum: 25 } as const;
+  return { helpKey: 'google.driveIdsHelp', selectedIds: configuration.google_drive_ids ?? [], maximum: 100 } as const;
 }
 
 /** Discovery button, Drive back navigation and Drive location line. */
@@ -30,7 +30,7 @@ export function GoogleDiscoveryToolbar({ m }: { m: ConnectorEditorModel }) {
         disabled={locked}
         onClick={() => void loadGoogleResources(provider === 'google_drive' ? googleResourceParent : undefined)}
       >
-        {busyAction === 'google-discovery' ? t('googleLoadingResources') : t('googleLoadResources')}
+        {busyAction === 'google-discovery' ? t('google.loadingResources') : t('google.loadResources')}
       </Button>
       {provider === 'google_drive' && googleResourcePath.length > 0 && (
         <Button
@@ -42,12 +42,12 @@ export function GoogleDiscoveryToolbar({ m }: { m: ConnectorEditorModel }) {
             void loadGoogleResources(path.at(-1)?.id, path);
           }}
         >
-          {t('googleDriveBack')}
+          {t('google.driveBack')}
         </Button>
       )}
       {provider === 'google_drive' && (
         <span className="text-sm text-muted-foreground">
-          {t('googleDriveLocation', { path: googleResourcePath.map((item) => item.name).join(' / ') || t('googleDriveRoot') })}
+          {t('google.driveLocation', { path: googleResourcePath.map((item) => item.name).join(' / ') || t('google.driveRoot') })}
         </span>
       )}
     </div>
@@ -62,7 +62,7 @@ export function GoogleResourceList({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       {googleResources.length > 0 && (
-        <div className="grid gap-2" role="group" aria-label={t('googleResourceList')}>
+        <div className="grid gap-2" role="group" aria-label={t('google.resourceList')}>
           {googleResources.map((resource) => {
             const checkboxId = `google-resource-${resource.id}`;
             return (
@@ -81,7 +81,7 @@ export function GoogleResourceList({ m }: { m: ConnectorEditorModel }) {
                     {resource.name}
                     {resource.mime_type ? (
                       <span className="ml-2 text-xs text-muted-foreground">
-                        {resource.kind === 'folder' ? t('googleDriveFolder') : resource.mime_type}
+                        {resource.kind === 'folder' ? t('google.driveFolder') : resource.mime_type}
                       </span>
                     ) : null}
                   </Label>
@@ -93,7 +93,7 @@ export function GoogleResourceList({ m }: { m: ConnectorEditorModel }) {
                     disabled={locked}
                     onClick={() => void loadGoogleResources(resource.id, [...googleResourcePath, resource])}
                   >
-                    {t('googleOpenFolder')}
+                    {t('google.openFolder')}
                   </Button>
                 )}
               </div>
@@ -116,26 +116,26 @@ export function GoogleScopePicker({ m }: { m: ConnectorEditorModel }) {
       {googleStatusQuery.data?.state === 'ready' ? (
         <>
           <p className="m-0 text-sm" role="status">
-            {t('googleReconnectForScope')}
+            {t('google.reconnectForScope')}
           </p>
           <GoogleDiscoveryToolbar m={m} />
           <p className="m-0 text-sm text-muted-foreground">
-            {t('googleResourceCount', { selected: info.selectedIds.length, maximum: info.maximum })}
+            {t('google.resourceCount', { selected: info.selectedIds.length, maximum: info.maximum })}
           </p>
           {googleDiscoveryError && (
             <p className="error" role="alert">
-              {t(googleDiscoveryError === 'limit' ? 'googleSelectionLimit' : 'googleDiscoveryFailed')}
+              {t(googleDiscoveryError === 'limit' ? 'google.selectionLimit' : 'google.discoveryFailed')}
             </p>
           )}
           {googleResourcesTruncated && (
             <p className="text-muted-foreground" role="status">
-              {t('googleResourcesTruncated')}
+              {t('google.resourcesTruncated')}
             </p>
           )}
           <GoogleResourceList m={m} />
         </>
       ) : (
-        <p className="m-0 text-sm text-muted-foreground">{t('googleConnectBeforeDiscovery')}</p>
+        <p className="m-0 text-sm text-muted-foreground">{t('google.connectBeforeDiscovery')}</p>
       )}
     </div>
   );
@@ -149,7 +149,7 @@ export function HealthScope({ m }: { m: ConnectorEditorModel }) {
     <>
       <FieldGrid>
         <div className="field">
-          <Label htmlFor="fhir-base-url">{t('fhirBaseUrl')}</Label>
+          <Label htmlFor="fhir-base-url">{t('fhir.baseUrl')}</Label>
           <Input
             id="fhir-base-url"
             type="url"
@@ -157,10 +157,10 @@ export function HealthScope({ m }: { m: ConnectorEditorModel }) {
             value={configuration.fhir_base_url ?? ''}
             onChange={(event) => changeConfiguration('fhir_base_url', event.target.value)}
           />
-          <small className="text-muted-foreground">{t('localEndpointHelp')}</small>
+          <small className="text-muted-foreground">{t('local.endpointHelp')}</small>
         </div>
         <div className="field">
-          <Label htmlFor="fhir-patient-id">{t('fhirPatientId')}</Label>
+          <Label htmlFor="fhir-patient-id">{t('fhir.patientId')}</Label>
           <Input
             id="fhir-patient-id"
             maxLength={128}
@@ -183,7 +183,7 @@ export function HomeAssistantScope({ m }: { m: ConnectorEditorModel }) {
     <>
       <FieldGrid>
         <div className="field">
-          <Label htmlFor="ha-base-url">{t('homeAssistantBaseUrl')}</Label>
+          <Label htmlFor="ha-base-url">{t('homeAssistant.baseUrl')}</Label>
           <Input
             id="ha-base-url"
             type="url"
@@ -191,10 +191,10 @@ export function HomeAssistantScope({ m }: { m: ConnectorEditorModel }) {
             value={configuration.ha_base_url ?? ''}
             onChange={(event) => changeConfiguration('ha_base_url', event.target.value)}
           />
-          <small className="text-muted-foreground">{t('localEndpointHelp')}</small>
+          <small className="text-muted-foreground">{t('local.endpointHelp')}</small>
         </div>
         <div className="field">
-          <Label htmlFor="ha-entity-ids">{t('homeAssistantEntityIds')}</Label>
+          <Label htmlFor="ha-entity-ids">{t('homeAssistant.entityIds')}</Label>
           <Input
             id="ha-entity-ids"
             value={(configuration.ha_entity_ids ?? []).join(', ')}
@@ -209,7 +209,7 @@ export function HomeAssistantScope({ m }: { m: ConnectorEditorModel }) {
               )
             }
           />
-          <small className="text-muted-foreground">{t('homeAssistantEntityIdsHelp')}</small>
+          <small className="text-muted-foreground">{t('homeAssistant.entityIdsHelp')}</small>
         </div>
       </FieldGrid>
     </>

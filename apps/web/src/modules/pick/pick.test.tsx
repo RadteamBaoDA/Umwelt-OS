@@ -137,7 +137,7 @@ describe('PickPhone', () => {
     });
     wrap(<PickPhone />);
     await userEvent.click(await screen.findByRole('button', { name: 'Ocean Waves' }));
-    expect(await screen.findByText(messages['en-us'].pick.phoneDone)).toBeTruthy();
+    expect(await screen.findByText(messages['en-us'].pick.phone.done)).toBeTruthy();
     const post = calls.find(([, init]) => init?.method === 'POST')!;
     expect(post[0]).toBe(`/api/v1/pick/phone/${SID}`);
     expect(JSON.parse(String(post[1]?.body))).toEqual({ index: 4 });
@@ -146,7 +146,7 @@ describe('PickPhone', () => {
   it('shows invalid for a missing id or an unknown session without calling the API when no id', async () => {
     const spy = vi.spyOn(globalThis, 'fetch');
     wrap(<PickPhone />);
-    expect(await screen.findByText(messages['en-us'].pick.phoneInvalid)).toBeTruthy();
+    expect(await screen.findByText(messages['en-us'].pick.phone.invalid)).toBeTruthy();
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -154,11 +154,11 @@ describe('PickPhone', () => {
     window.history.replaceState(null, '', `/pick?session=${SID}`);
     const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => json({ detail: 'x' }, 404));
     const { unmount } = wrap(<PickPhone />);
-    expect(await screen.findByText(messages['en-us'].pick.phoneInvalid)).toBeTruthy();
+    expect(await screen.findByText(messages['en-us'].pick.phone.invalid)).toBeTruthy();
     unmount();
     spy.mockImplementation(() => json({ detail: 'x' }, 429));
     wrap(<PickPhone />);
-    expect(await screen.findByText(messages['en-us'].pick.phoneTooMany)).toBeTruthy();
+    expect(await screen.findByText(messages['en-us'].pick.phone.tooMany)).toBeTruthy();
   });
 
   it('scans once under StrictMode double effects so the burned scan is not seen as invalid', async () => {
@@ -177,6 +177,6 @@ describe('PickPhone', () => {
     );
     expect(await screen.findByRole('button', { name: 'DNA Helix' })).toBeTruthy();
     expect(scans).toBe(1);
-    expect(screen.queryByText(messages['en-us'].pick.phoneInvalid)).toBeNull();
+    expect(screen.queryByText(messages['en-us'].pick.phone.invalid)).toBeNull();
   });
 });

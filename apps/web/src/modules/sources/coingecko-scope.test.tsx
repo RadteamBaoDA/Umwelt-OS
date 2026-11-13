@@ -3,11 +3,11 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import { ProviderScope } from './provider-scope';
 import type { ConnectorConfig } from './api';
 
-vi.mock('./api', async (importOriginal) => ({ ...await importOriginal<typeof import('./api')>(), searchCoinGeckoCoins: vi.fn() }));
+vi.mock('./api', async (importOriginal) => ({ ...(await importOriginal<typeof import('./api')>()), searchCoinGeckoCoins: vi.fn() }));
 
 import { searchCoinGeckoCoins } from './api';
 
@@ -15,17 +15,34 @@ const bitcoin = { id: 'bitcoin', symbol: 'BTC', name: 'Bitcoin' };
 const ether = { id: 'ethereum', symbol: 'ETH', name: 'Ethereum' };
 
 /** Mounts the controlled picker and applies each edit to its source configuration. */
-function mount(initial?: typeof bitcoin[]) {
-  const config: ConnectorConfig = { timeout_seconds: 30, timezone: 'UTC', schedule_interval_minutes: 15, ...(initial ? { coingecko_assets: initial } : {}) };
-  const changes: typeof bitcoin[][] = [];
+function mount(initial?: (typeof bitcoin)[]) {
+  const config: ConnectorConfig = {
+    timeout_seconds: 30,
+    timezone: 'UTC',
+    schedule_interval_minutes: 15,
+    ...(initial ? { coingecko_assets: initial } : {}),
+  };
+  const changes: (typeof bitcoin)[][] = [];
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const view = (next: ConnectorConfig) => <QueryClientProvider client={client}><NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}>
-    <ProviderScope provider="coingecko" sourceId="source-1" credentialConfigured configuration={next} disabled={false} resetEpoch={0} onChange={(_key, value) => {
-      const assets = value as typeof bitcoin[];
-      changes.push(assets);
-      rerender(view({ ...next, coingecko_assets: assets }));
-    }} />
-  </NextIntlClientProvider></QueryClientProvider>;
+  const view = (next: ConnectorConfig) => (
+    <QueryClientProvider client={client}>
+      <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+        <ProviderScope
+          provider="coingecko"
+          sourceId="source-1"
+          credentialConfigured
+          configuration={next}
+          disabled={false}
+          resetEpoch={0}
+          onChange={(_key, value) => {
+            const assets = value as (typeof bitcoin)[];
+            changes.push(assets);
+            rerender(view({ ...next, coingecko_assets: assets }));
+          }}
+        />
+      </NextIntlClientProvider>
+    </QueryClientProvider>
+  );
   const { rerender } = render(view(config));
   return { changes, rerender };
 }

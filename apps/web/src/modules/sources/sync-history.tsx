@@ -16,8 +16,8 @@ import { useErrorCodeLabel } from '@/core/error-codes';
 import { CollectionStats, connectorKeys, getSourceIngestion, IngestionRun, IngestionRunStatus, retryRun, Source, sourceKeys } from './api';
 
 /** Maps run and stage states to their translated message keys. */
-function statusKey(status: string): 'runQueued' | 'runRunning' | 'runSucceeded' | 'runNeedsOcr' | 'runFailed' {
-  return status === 'running' ? 'runRunning' : status === 'succeeded' ? 'runSucceeded' : status === 'needs_ocr' ? 'runNeedsOcr' : status === 'failed' ? 'runFailed' : 'runQueued';
+function statusKey(status: string): 'run.queued' | 'run.running' | 'run.succeeded' | 'run.needsOcr' | 'run.failed' {
+  return status === 'running' ? 'run.running' : status === 'succeeded' ? 'run.succeeded' : status === 'needs_ocr' ? 'run.needsOcr' : status === 'failed' ? 'run.failed' : 'run.queued';
 }
 
 /** Source timestamps (last success, collected, indexed, next due, retry), stale notice and last collection error code. */
@@ -25,13 +25,13 @@ function SourceFreshness({ source, intervalMinutes }: { source: Source; interval
   const t = useTranslations('sources');
   const display = useDisplayPreferences();
   /** One muted "label: date" line, omitted when the timestamp is absent. */
-  const dated = (key: 'collectedAt' | 'indexedAt' | 'nextDueAt' | 'retryAt', value: string | null | undefined) => value && <p className="m-0 text-muted-foreground">{t(key)}: {formatDate(value, display.locale, display.timezone)}</p>;
+  const dated = (key: 'collectedAt' | 'indexedAt' | 'nextDueAt' | 'retry.at', value: string | null | undefined) => value && <p className="m-0 text-muted-foreground">{t(key)}: {formatDate(value, display.locale, display.timezone)}</p>;
   return <div className="grid gap-1 text-sm sm:grid-cols-2">
     <p className="m-0 text-muted-foreground">{t('lastSuccess')}: {source.last_success_at ? formatDate(source.last_success_at, display.locale, display.timezone) : t('never')}</p>
     {dated('collectedAt', source.collected_at)}
     {dated('indexedAt', source.indexed_at)}
     {dated('nextDueAt', source.next_due_at)}
-    {dated('retryAt', source.retry_at)}
+    {dated('retry.at', source.retry_at)}
     {isStale(source.last_success_at, intervalMinutes) && <p className="m-0 text-muted-foreground" role="status">{t('stale')}</p>}
     {source.collection_error_code && <p className="m-0 text-destructive" role="alert">{t('collectionError')}: {source.collection_error_code}</p>}
   </div>;
@@ -80,11 +80,11 @@ export function SyncHistory({ source, intervalMinutes }: { source: Source; inter
   return <section className="grid gap-4" aria-label={t('recentRuns')}>
     <SourceFreshness source={source} intervalMinutes={intervalMinutes} />
     <label className="flex items-center gap-2 text-sm">
-      <span>{t('runFilterStatus')}</span>
+      <span>{t('run.filterStatus')}</span>
       <Select value={status} onValueChange={changeStatus}>
         <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">{t('runFilterAll')}</SelectItem>
+          <SelectItem value="all">{t('run.filterAll')}</SelectItem>
           {(['queued', 'running', 'succeeded', 'needs_ocr', 'failed'] as const).map((value) => <SelectItem key={value} value={value}>{t(statusKey(value))}</SelectItem>)}
         </SelectContent>
       </Select>
@@ -94,20 +94,20 @@ export function SyncHistory({ source, intervalMinutes }: { source: Source; inter
     {history.data && <>
       <Table>
         <TableHeader><TableRow>
-          <TableHead>{t('runColumnId')}</TableHead>
-          <TableHead>{t('runColumnStarted')}</TableHead>
-          <TableHead>{t('runColumnStatus')}</TableHead>
-          <TableHead>{t('runColumnStages')}</TableHead>
-          <TableHead>{t('runColumnError')}</TableHead>
+          <TableHead>{t('run.columnId')}</TableHead>
+          <TableHead>{t('run.columnStarted')}</TableHead>
+          <TableHead>{t('run.columnStatus')}</TableHead>
+          <TableHead>{t('run.columnStages')}</TableHead>
+          <TableHead>{t('run.columnError')}</TableHead>
         </TableRow></TableHeader>
         <TableBody>
           {displayed.map((run) => <RunRow key={run.run_id} run={run} source={source} t={t} locale={display.locale} timezone={display.timezone} retryPending={retry.isPending} onRetry={(stageKey) => retry.mutate({ runId: run.run_id, stageKey })} />)}
-          {displayed.length === 0 && <TableRow><TableCell colSpan={5} className="text-muted-foreground">{t('runNoMatches')}</TableCell></TableRow>}
+          {displayed.length === 0 && <TableRow><TableCell colSpan={5} className="text-muted-foreground">{t('run.noMatches')}</TableCell></TableRow>}
         </TableBody>
       </Table>
       <TablePagination page={pageIndex + 1} hasPrev={pageIndex > 0} hasNext={Boolean(history.data.next_cursor)} disabled={history.isFetching} onPrev={() => setCursors((current) => current.slice(0, -1))} onNext={nextPage} />
     </>}
-    {['youtube', 'arxiv', 'huggingface', 'github_releases', 'telegram'].includes(source.provider ?? '') && <p className="text-sm text-muted-foreground">{t('providerHistoryCaveat')}</p>}
+    {['youtube', 'arxiv', 'huggingface', 'github_releases', 'telegram'].includes(source.provider ?? '') && <p className="text-sm text-muted-foreground">{t('provider.historyCaveat')}</p>}
     <p className="text-sm text-muted-foreground">{t('embeddedStatus')}</p>
     {retry.error && <p className="error" role="alert">{t('actionFailed')}</p>}
   </section>;
@@ -133,15 +133,15 @@ function RunRow({ run, source, t, locale, timezone, retryPending, onRetry }: {
       <div className="grid gap-2">{run.stages.map((stage) => <details key={stage.stage_key} className="rounded border border-border px-2 py-1">
         <summary className="cursor-pointer">{stage.stage_key === 'normalize' ? t('normalizeStage') : stage.stage_key}: {t(statusKey(stage.status))}</summary>
         <div className="grid gap-1 pt-2 text-xs text-muted-foreground">
-          <span>{t('runAttempts', { count: stage.attempts })}{stage.error_code ? ` · ${errorLabel(stage.error_code)}` : ''}</span>
+          <span>{t('run.attempts', { count: stage.attempts })}{stage.error_code ? ` · ${errorLabel(stage.error_code)}` : ''}</span>
           {stage.result_count !== null && <span>{t(stage.stage_key === 'normalize' || stage.stage_key === 'parse_file' ? 'chunkCount' : 'resultCount')}: {stage.result_count}</span>}
           {stage.stage_key === 'normalize' && <span>{t('normalizedCount')}: {stage.normalized_count} · {t('selectedCurrentCount')}: {stage.selected_current_count} · {t('duplicateCount')}: {stage.duplicate_count} · {t('skippedCount')}: {stage.skipped_count} · {t('failedCount')}: {stage.failed_count} · {t('pendingCount')}: {stage.pending_count}</span>}
-          {stage.status === 'failed' && run.status === 'failed' && source.status === 'active' && !hasActiveStage && <Button type="button" size="sm" variant="outline" disabled={retryPending} onClick={() => onRetry(stage.stage_key)}>{t('runRetryStage', { stage: stage.stage_key })}</Button>}
+          {stage.status === 'failed' && run.status === 'failed' && source.status === 'active' && !hasActiveStage && <Button type="button" size="sm" variant="outline" disabled={retryPending} onClick={() => onRetry(stage.stage_key)}>{t('run.retryStage', { stage: stage.stage_key })}</Button>}
         </div>
       </details>)}
       {run.collection_stats && <CollectionStatsLines stats={run.collection_stats} t={t} locale={locale} timezone={timezone} />}</div>
     </TableCell>
-    <TableCell className="whitespace-normal">{run.error_code ? `${t('runError')}: ${errorLabel(run.error_code)}` : '—'}</TableCell>
+    <TableCell className="whitespace-normal">{run.error_code ? `${t('run.error')}: ${errorLabel(run.error_code)}` : '—'}</TableCell>
   </TableRow>;
 }
 
@@ -154,12 +154,12 @@ function RunRow({ run, source, t, locale, timezone, retryPending, onRetry }: {
 function CollectionStatsLines({ stats, t, locale, timezone }: { stats: CollectionStats; t: ReturnType<typeof useTranslations<'sources'>>; locale: AppLocaleId; timezone: string }) {
   const failed = stats.failed_sections ?? [];
   return <div className="grid gap-1 text-xs text-muted-foreground">
-    {stats.new != null && <span>{t('runCollectionNew', { new: stats.new, backlog: stats.backlog ?? 0 })}</span>}
-    {stats.gap && <span className="text-destructive" role="status">{t('runCollectionGap', { gap: `${formatDate(stats.gap[0], locale, timezone)} – ${formatDate(stats.gap[1], locale, timezone)}` })}</span>}
-    {Boolean(stats.duplicates) && <span>{t('runCollectionDuplicates', { count: stats.duplicates ?? 0 })}</span>}
-    {stats.truncated === true && <span className="text-destructive" role="status">{t('runCollectionTruncated')}</span>}
-    {Boolean(stats.failed_calls) && <span className="text-destructive" role="alert">{t('runCollectionFailedCalls', { count: stats.failed_calls ?? 0 })}</span>}
-    {stats.caught_up === false && <span role="status">{t('runCollectionCatchingUp')}</span>}
-    {failed.length > 0 && <span className="text-destructive" role="alert">{t('runCollectionFailedSections', { sections: failed.join(', ') })}</span>}
+    {stats.new != null && <span>{t('run.collectionNew', { new: stats.new, backlog: stats.backlog ?? 0 })}</span>}
+    {stats.gap && <span className="text-destructive" role="status">{t('run.collectionGap', { gap: `${formatDate(stats.gap[0], locale, timezone)} – ${formatDate(stats.gap[1], locale, timezone)}` })}</span>}
+    {Boolean(stats.duplicates) && <span>{t('run.collectionDuplicates', { count: stats.duplicates ?? 0 })}</span>}
+    {stats.truncated === true && <span className="text-destructive" role="status">{t('run.collectionTruncated')}</span>}
+    {Boolean(stats.failed_calls) && <span className="text-destructive" role="alert">{t('run.collectionFailedCalls', { count: stats.failed_calls ?? 0 })}</span>}
+    {stats.caught_up === false && <span role="status">{t('run.collectionCatchingUp')}</span>}
+    {failed.length > 0 && <span className="text-destructive" role="alert">{t('run.collectionFailedSections', { sections: failed.join(', ') })}</span>}
   </div>;
 }

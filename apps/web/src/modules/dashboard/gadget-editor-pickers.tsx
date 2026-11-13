@@ -19,6 +19,7 @@ import { formatDateTime } from '@/core/i18n';
 import { useDisplayPreferences } from '@/core/query-provider';
 import { uuid7 } from '@/core/uuid7';
 import { SourceWizard, type CoinGeckoCoin } from '@/modules/sources';
+import { providerLabelKey } from '@/modules/sources/public-api';
 import { dashboardKeys, listGadgetSources, type HighlightRule, type ProviderMetrics } from './api';
 import { MAX_SOURCES, splitList } from './gadget-editor-model';
 
@@ -113,11 +114,11 @@ export function DatasourcePicker({ acceptedShapes, mode, value, onChange, invali
   const display = useDisplayPreferences();
   // Follows next_cursor page by page so owners with more than 100 sources can still reach every compatible one.
   const { query: sources, rows: loaded } = useSourceRows();
-  /** Provider label from the sources catalog (`provider<PascalId>`), else the raw provider id. */
+  /** Provider label from the sources catalog (literal `provider.*` table), else the raw provider id. */
   const providerLabel = (provider: string | null) => {
     if (!provider) return '';
-    const key = `provider${provider.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join('')}`;
-    return ts.has(key) ? ts(key as 'name') : provider;
+    const key = providerLabelKey(provider);
+    return key ? ts(key) : provider;
   };
   /** Secondary line: provider label and last successful collection time (or "never updated"). */
   const meta = (option: { provider: string | null; last_success_at: string | null }) => [

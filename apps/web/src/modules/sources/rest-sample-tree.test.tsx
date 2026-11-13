@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 const request = vi.hoisted(() => vi.fn());
 vi.mock('@/core/api', async (original) => ({ ...(await original<typeof import('@/core/api')>()), apiRequest: request }));
 vi.mock('next-intl', async () => {
-  const { sourcesMessages } = await import('@/core/messages/sources');
-  const en = sourcesMessages['en-us'] as unknown as Record<string, string>;
+  const { flatCatalogs } = await import('@locales');
+  const en: Record<string, string> = flatCatalogs['en-us'].sources;
   return { useTranslations: () => (key: string) => en[key] ?? key };
 });
 
@@ -34,9 +34,9 @@ describe('RestSampleTree', () => {
   });
 
   it('maps error codes to messages', () => {
-    const t = (key: string) => key;
-    expect(restSampleErrorMessage(t, { message: 'rest_sample_not_json' })).toBe('restError_rest_sample_not_json');
-    expect(restSampleErrorMessage(t, { code: 'x', message: 'free text' })).toBe('restFallback');
+    const t = ((key: string) => key) as unknown as Parameters<typeof restSampleErrorMessage>[0];
+    expect(restSampleErrorMessage(t, { message: 'rest_sample_not_json' })).toBe('restError.restSampleNotJson');
+    expect(restSampleErrorMessage(t, { code: 'x', message: 'free text' })).toBe('rest.fallback');
     expect(pathForTarget('id_field', 'a.b', '')).toBe('a.b');
   });
 });
@@ -46,6 +46,9 @@ describe('restSample', () => {
     request.mockResolvedValue({ status_code: 200, truncated: false, sample: {} });
     const body = { expected_revision: 1, expected_source_generation: 2, configuration: {}, auth_method: 'none' } as never;
     await restSample('s1', body);
-    expect(request).toHaveBeenCalledWith('/api/v1/connectors/s1/rest-sample', expect.objectContaining({ method: 'POST', body: JSON.stringify(body) }));
+    expect(request).toHaveBeenCalledWith(
+      '/api/v1/connectors/s1/rest-sample',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(body) }),
+    );
   });
 });

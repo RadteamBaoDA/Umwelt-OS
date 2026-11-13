@@ -11,17 +11,17 @@ import { matchesShapes } from './shape-filter';
 
 /** Message key of the per-provider history note; providers without an entry fall back to the catalog's own description. */
 const HISTORY_KEYS = {
-  youtube: 'youtubeHistory',
-  arxiv: 'arxivHistory',
-  huggingface: 'huggingfaceHistory',
-  github: 'githubAppHistory',
-  github_releases: 'githubReleasesHistory',
-  telegram: 'telegramHistory',
+  youtube: 'youtube.history',
+  arxiv: 'arxiv.history',
+  huggingface: 'huggingface.history',
+  github: 'github.appHistory',
+  github_releases: 'github.releasesHistory',
+  telegram: 'telegram.history',
 } as const;
 
 /** Maps a picker group id to its message key; `nokey` is the leading group of providers needing no credentials. */
 function providerGroupTitleKey(group: string) {
-  return group === 'nokey' ? 'providerGroupNoKey' : PROVIDER_GROUP_KEY[group as ProviderGroup];
+  return group === 'nokey' ? 'provider.groupNoKey' : PROVIDER_GROUP_KEY[group as ProviderGroup];
 }
 
 /**
@@ -61,7 +61,7 @@ export function useConnectorCatalog(provider: string, sourceId: string, shapeFil
   const providerGroups = buildProviderGroups(
     catalog.filter((entry) => entry.kind !== 'group'),
     PROVIDER_GROUP_ORDER,
-    (category) => t(PROVIDER_GROUP_KEY[category as ProviderGroup] ?? 'providerGroupOther'),
+    (category) => t(PROVIDER_GROUP_KEY[category as ProviderGroup] ?? 'provider.groupOther'),
     providerQuery,
   );
   /** Formats provider availability and unsupported-operation information for the connector catalog. */

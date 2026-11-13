@@ -243,7 +243,7 @@ function SourceHealthBadge({ sourceHealth }: { sourceHealth: readonly FreshnessT
         <span>{t(failing ? 'source.failingBadge' : 'source.staleBadge')}</span>
       </Badge>
       <Button type="button" size="sm" variant="ghost" className="h-6 shrink-0 px-1.5 text-[11px]" disabled={state === 'running'} onClick={() => void collect()}>
-        {state === 'running' ? ts('collecting') : ts('collectNow')}
+        {state === 'running' ? ts('collecting') : ts('collect.now')}
       </Button>
       {state === 'failed' && (
         <span role="alert" className="shrink-0 text-[11px] text-destructive">

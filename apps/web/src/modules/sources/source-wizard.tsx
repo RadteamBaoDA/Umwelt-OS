@@ -85,10 +85,10 @@ export function WizardShell({ title, mode, steps, stepIndex, onStepChange, busy,
       <DialogContent size="full" closeLabel={t('close')} className="grid-rows-[auto_1fr_auto] content-start">
         <DialogHeader className="text-left">
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{t('stepCounter', { current: stepIndex + 1, total: steps.length })}</DialogDescription>
+          <DialogDescription>{t('step.counter', { current: stepIndex + 1, total: steps.length })}</DialogDescription>
         </DialogHeader>
         <div className="grid min-h-0 grid-cols-1 auto-rows-max content-start gap-4 overflow-y-auto min-[900px]:grid-cols-[220px_1fr] min-[900px]:items-start">
-          <ol aria-label={t('wizardStepsLabel')} className="m-0 flex list-none flex-wrap gap-2 p-0 pb-1 min-[900px]:sticky min-[900px]:top-0 min-[900px]:grid min-[900px]:grid-flow-row min-[900px]:auto-cols-auto">
+          <ol aria-label={t('wizard.stepsLabel')} className="m-0 flex list-none flex-wrap gap-2 p-0 pb-1 min-[900px]:sticky min-[900px]:top-0 min-[900px]:grid min-[900px]:grid-flow-row min-[900px]:auto-cols-auto">
             {steps.map((step, index) => {
               // Add mode never lets the owner skip ahead of validated steps; edit mode is free navigation.
               const reachable = mode === 'edit' || index <= stepIndex;
@@ -114,13 +114,13 @@ export function WizardShell({ title, mode, steps, stepIndex, onStepChange, busy,
     <AlertDialog open={confirmOpen} onOpenChange={(open) => { if (!discarding) setConfirmOpen(open); }}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{t('discardNewSourceTitle')}</AlertDialogTitle>
-          <AlertDialogDescription>{t('discardNewSourceBody')}</AlertDialogDescription>
+          <AlertDialogTitle>{t('discard.newSourceTitle')}</AlertDialogTitle>
+          <AlertDialogDescription>{t('discard.newSourceBody')}</AlertDialogDescription>
         </AlertDialogHeader>
         {discardFailed && <p className="text-destructive" role="alert">{t('actionFailed')}</p>}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={discarding}>{t('discardNewSourceKeep')}</AlertDialogCancel>
-          <AlertDialogAction disabled={discarding} onClick={(event) => { event.preventDefault(); void confirmDiscard(); }}>{t('discardNewSourceConfirm')}</AlertDialogAction>
+          <AlertDialogCancel disabled={discarding}>{t('discard.newSourceKeep')}</AlertDialogCancel>
+          <AlertDialogAction disabled={discarding} onClick={(event) => { event.preventDefault(); void confirmDiscard(); }}>{t('discard.newSourceConfirm')}</AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
@@ -161,7 +161,7 @@ function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard, 
   const mcp = snapshot.provider === 'mcp';
   const ids: EditorStep[] = mcp ? ['connect', 'verify'] : ['connect', 'choose', 'collect', 'verify']; // Google providers share the generic step list.
   if (!edit) ids.unshift('provider');
-  const titles: Record<EditorStep, string> = { provider: t('stepProviderName'), connect: mcp ? t('stepMcpConfigure') : t('wizConnect'), choose: t('wizChooseData'), collect: t('stepSchedule'), verify: t('stepVerify') };
+  const titles: Record<EditorStep, string> = { provider: t('step.providerName'), connect: mcp ? t('step.mcpConfigure') : t('wizConnect'), choose: t('wizChooseData'), collect: t('step.schedule'), verify: t('step.verify') };
   const valid: Record<EditorStep, boolean> = { provider: snapshot.providerOk || Boolean(snapshot.sourceId), connect: snapshot.connectOk, choose: snapshot.chooseOk, collect: true, verify: true };
   const steps: WizardStepDef[] = ids.map((id) => ({ id, title: titles[id], valid: valid[id] }));
   const step = ids[Math.min(index, ids.length - 1)];
@@ -185,7 +185,7 @@ function ConnectorWizard({ source, onClose, onChanged, registerTransitionGuard, 
     onClose();
   }
 
-  return <WizardShell title={edit ? t('wizardTitleEdit') : t('wizardTitleConnector')} mode={edit ? 'edit' : 'add'} steps={steps} stepIndex={Math.min(index, ids.length - 1)}
+  return <WizardShell title={edit ? t('wizard.titleEdit') : t('wizard.titleConnector')} mode={edit ? 'edit' : 'add'} steps={steps} stepIndex={Math.min(index, ids.length - 1)}
     onStepChange={setIndex} busy={snapshot.busy} onNext={onNext} onRequestClose={onClose}
     final={{ label: t('done'), disabled: !edit && !verified,
       // Report the id before closing so the host can select it; only a verified add reports (discard never does).

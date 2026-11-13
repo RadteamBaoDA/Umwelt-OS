@@ -167,7 +167,7 @@ export async function prepareNext(
   if (from === 'choose' && isGoogleProvider(draft.provider) && (draft.dirty || draft.revision === 0)) {
     const saved = await saveConfiguration(ctx);
     if (!saved) return false;
-    draft.setNotice(ctx.t('googleReconnectForScope'));
+    draft.setNotice(ctx.t('google.reconnectForScope'));
     await connectGoogle(saved);
     return false;
   }
@@ -176,14 +176,14 @@ export async function prepareNext(
 }
 
 /** Message key of the localized activation state label. */
-const ACTIVATION_LABEL_KEYS: Record<string, string> = {
-  queued: 'stateQueued',
-  provisioning: 'stateProvisioning',
-  saved_not_active: 'stateSavedNotActive',
-  reconciliation_required: 'stateReconciliationRequired',
-  disabled: 'stateDisabled',
-  active: 'statusActive',
-};
+const ACTIVATION_LABEL_KEYS = {
+  queued: 'state.queued',
+  provisioning: 'state.provisioning',
+  saved_not_active: 'state.savedNotActive',
+  reconciliation_required: 'state.reconciliationRequired',
+  disabled: 'state.disabled',
+  active: 'status.active',
+} as const;
 
 /** Connections the wizard gate reads (grant readiness) and the Google reconnect used by `prepareNext`. */
 type WizardInputs = {
@@ -204,16 +204,22 @@ export function useConnectorWizard(ctx: EditorContext, inputs: WizardInputs) {
   const { t, draft, requests, currentEntry, configuration, activation } = ctx;
   const { step, actionsRef, onSnapshot } = inputs;
   const locked = requests.busyAction !== '' || requests.actionsBusy;
-  const activationLabel = t((ACTIVATION_LABEL_KEYS[activation.visibleActivationState] ?? 'stateUnknown') as 'stateUnknown');
+  const activationLabel = t(
+    ACTIVATION_LABEL_KEYS[activation.visibleActivationState as keyof typeof ACTIVATION_LABEL_KEYS] ?? 'state.unknown',
+  );
   const currentStep = draft.revision > 0 ? 'collect' : draft.validation ? 'choose' : 'connect';
   const steps = [
     {
       id: 'connect',
-      title: t('stepConnect'),
-      status: draft.validation ? t('stepValidated') : draft.providerCredentialConfigured ? t('stepCredentialSaved') : t('stepNotValidated'),
+      title: t('step.connect'),
+      status: draft.validation
+        ? t('step.validated')
+        : draft.providerCredentialConfigured
+          ? t('step.credentialSaved')
+          : t('step.notValidated'),
     },
-    { id: 'choose', title: t('stepChooseData'), status: t(providerKey(draft.provider) as 'provider') },
-    { id: 'collect', title: t('stepCollect'), status: t('everyMinutes', { minutes: configuration.schedule_interval_minutes }) },
+    { id: 'choose', title: t('step.chooseData'), status: t(providerKey(draft.provider)) },
+    { id: 'collect', title: t('step.collect'), status: t('every.minutes', { minutes: configuration.schedule_interval_minutes }) },
   ] as const;
   const embedded = step !== undefined;
   /** True when the section tagged with one of these wizard steps should be visible (always true outside the wizard). */

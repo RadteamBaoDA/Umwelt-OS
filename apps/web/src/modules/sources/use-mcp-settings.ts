@@ -53,7 +53,7 @@ function useMcpLifecycle(core: McpState['core'], stateRef: { current: McpState }
  * Navigation guard: unsaved drafts, grant edits or an unacknowledged one-time token block leaving the page; accepting the
  * leave drops the typed credential and the displayed token.
  */
-function useMcpLeaveGuard(state: McpState, t: (key: 'discardDraftConfirm' | 'tokenAckRequired') => string) {
+function useMcpLeaveGuard(state: McpState, t: (key: 'discardDraftConfirm' | 'token.ackRequired') => string) {
   const { registerLeaveGuard } = useGuardedNavigation();
   const { dirty, setDirty, setDraft } = state.drafts;
   const { grantDirty, setGrantDirty } = state.grants;
@@ -64,7 +64,7 @@ function useMcpLeaveGuard(state: McpState, t: (key: 'discardDraftConfirm' | 'tok
         hasUnsavedChanges: () => dirty || grantDirty || tokenState.current.exists,
         confirmDiscard: () => {
           if (tokenState.current.exists && !tokenState.current.acknowledged) {
-            window.alert(t('tokenAckRequired'));
+            window.alert(t('token.ackRequired'));
             return false;
           }
           return window.confirm(t('discardDraftConfirm'));

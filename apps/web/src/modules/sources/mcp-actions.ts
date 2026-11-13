@@ -31,7 +31,7 @@ import { emptyGrantDraft } from './use-mcp-state';
 /** Everything an MCP action reads: the state bundles of the current render plus the CSRF token, translator and snapshot refresh. */
 export type McpActionContext = McpState & {
   csrfToken: string;
-  t: (key: 'discardDraftConfirm' | 'tokenAckRequired') => string;
+  t: (key: 'discardDraftConfirm' | 'token.ackRequired') => string;
   refresh: (preferredId?: string, preserveDraft?: boolean) => Promise<boolean>;
 };
 
@@ -40,11 +40,11 @@ function sessionIsLive(ctx: McpActionContext, requestSession: number): boolean {
   return ctx.core.mounted.current && ctx.core.sessionGeneration.current === requestSession;
 }
 
-/** Re-reads the snapshot preserving the draft after a failed write, then shows `successKey` or `reconciliationFailed`. */
+/** Re-reads the snapshot preserving the draft after a failed write, then shows `successKey` or `reconciliation.failed`. */
 async function reconcileAfterFailure(ctx: McpActionContext, requestSession: number, successKey: ReturnType<typeof errorKey> | 'conflict') {
   const reconciled = await ctx.refresh(ctx.core.currentId.current ?? undefined, true);
   if (!sessionIsLive(ctx, requestSession)) return;
-  ctx.core.setError(reconciled ? successKey : 'reconciliationFailed');
+  ctx.core.setError(reconciled ? successKey : 'reconciliation.failed');
 }
 
 /** Freezes writes for a conflict or a committed runtime-refresh failure, then reconciles; 404 only reconciles. */
@@ -90,7 +90,7 @@ export async function perform(
     if (!sessionIsLive(ctx, requestSession)) return;
     if (!reconciled) {
       core.setReconciliationRequired(true);
-      core.setError('reconciliationFailed');
+      core.setError('reconciliation.failed');
     }
   } catch (cause) {
     if (!sessionIsLive(ctx, requestSession)) return;
@@ -158,7 +158,7 @@ export async function save(ctx: McpActionContext) {
     if (!sessionIsLive(ctx, requestSession)) return;
     if (!reconciled) {
       core.setReconciliationRequired(true);
-      core.setError('reconciliationFailed');
+      core.setError('reconciliation.failed');
     }
   } catch (cause) {
     await handleSaveFailure(ctx, cause, requestSession);
@@ -249,12 +249,12 @@ export function saveGrants(ctx: McpActionContext) {
   const { discovery, grantDrafts } = ctx.grants;
   if (!selected || !discovery) return;
   if (grantDraftsInvalid(grantDrafts)) {
-    ctx.core.setError('grantScopeRequired');
+    ctx.core.setError('grant.scopeRequired');
     return;
   }
   const selections = buildGrantSelections(discovery, grantDrafts);
   if (selectionsViolateBounds(selections)) {
-    ctx.core.setError('grantScopeRequired');
+    ctx.core.setError('grant.scopeRequired');
     return;
   }
   if (selections.length === 0) {
@@ -270,7 +270,7 @@ export function issue(ctx: McpActionContext) {
   if (inbound.tokenView || core.reconciliationRequired || core.conflict) return;
   const payload = buildInboundIssue(inbound);
   if (!payload) {
-    core.setError('inboundRequired');
+    core.setError('inbound.required');
     return;
   }
   void perform(
@@ -402,7 +402,7 @@ export async function reconcileMetadata(ctx: McpActionContext) {
   if (!sessionIsLive(ctx, requestSession)) return;
   if (!succeeded) {
     core.setReconciliationRequired(true);
-    core.setError('reconciliationFailed');
+    core.setError('reconciliation.failed');
     return;
   }
   if (core.conflict && !drafts.hasDraftRef.current) core.setConflict(false);

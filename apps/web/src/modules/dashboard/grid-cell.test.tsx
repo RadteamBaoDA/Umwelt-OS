@@ -5,8 +5,6 @@ import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
 
-import { sourcesMessages } from '@/core/messages/sources';
-
 import type { GadgetInstance } from './api';
 
 const chat = vi.hoisted(() => ({ openDrawer: vi.fn() }));
@@ -58,7 +56,7 @@ const renderCell = (renderer: string) =>
           dashboard: getCatalog('en-us', 'dashboard'),
           uiSweep: getCatalog('en-us', 'uiSweep'),
           gadgetSettings: getCatalog('en-us', 'gadgetSettings'),
-          sources: sourcesMessages['en-us'],
+          sources: getCatalog('en-us', 'sources'),
         }}
       >
         <GridCell

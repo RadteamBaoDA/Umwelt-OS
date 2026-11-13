@@ -33,17 +33,17 @@ import { BareButton } from '@/components/bare-button';
 
 const CATEGORY_ORDER: BuiltinCategory[] = ['news', 'economy', 'hazards', 'space', 'security', 'tech'];
 const CATEGORY_KEY = {
-  news: 'builtinCategoryNews',
-  economy: 'builtinCategoryEconomy',
-  hazards: 'builtinCategoryHazards',
-  space: 'builtinCategorySpace',
-  security: 'builtinCategorySecurity',
-  tech: 'builtinCategoryTech',
+  news: 'builtinCategory.news',
+  economy: 'builtinCategory.economy',
+  hazards: 'builtinCategory.hazards',
+  space: 'builtinCategory.space',
+  security: 'builtinCategory.security',
+  tech: 'builtinCategory.tech',
 } as const;
 const USES = [
-  ['personal', 'termsUsePersonal'],
-  ['noncommercial', 'termsUseNoncommercial'],
-  ['commercial', 'termsUseCommercial'],
+  ['personal', 'terms.usePersonal'],
+  ['noncommercial', 'terms.useNoncommercial'],
+  ['commercial', 'terms.useCommercial'],
 ] as const;
 
 /**
@@ -68,7 +68,7 @@ export function BuiltinResumeList({ onChanged }: { onChanged: () => void }) {
     try {
       await enableBuiltinSource(item.id, 'personal', csrfToken);
     } catch {
-      setError(t('builtinResumeFailed'));
+      setError(t('builtin.resumeFailed'));
     } finally {
       setBusyId(null);
       void queryClient.invalidateQueries({ queryKey: connectorKeys.builtins });
@@ -78,8 +78,8 @@ export function BuiltinResumeList({ onChanged }: { onChanged: () => void }) {
   }
 
   return (
-    <section className="flex flex-col gap-2" aria-label={t('builtinResumeTitle')}>
-      <h3 className="m-0 text-sm font-semibold">{t('builtinResumeTitle')}</h3>
+    <section className="flex flex-col gap-2" aria-label={t('builtin.resumeTitle')}>
+      <h3 className="m-0 text-sm font-semibold">{t('builtin.resumeTitle')}</h3>
       {error && (
         <p className="text-destructive" role="alert">
           {error}
@@ -89,7 +89,7 @@ export function BuiltinResumeList({ onChanged }: { onChanged: () => void }) {
         <div key={item.id} className="flex items-center justify-between gap-3 rounded-md border border-border p-3">
           <span className="font-medium">{item.label}</span>
           <Button variant="outline" disabled={busyId !== null} onClick={() => void resume(item)}>
-            {busyId === item.id ? t('enabling') : t('builtinResume')}
+            {busyId === item.id ? t('enabling') : t('builtin.resume')}
           </Button>
         </div>
       ))}
@@ -108,50 +108,49 @@ function groupByCategory(items: BuiltinSource[]): [BuiltinCategory, BuiltinSourc
 /** Message key (in the `sources` namespace) for a failed built-in enable; 403 operator/terms codes get specific text. */
 export function builtinEnableErrorKey(
   cause: unknown,
-): 'builtinErrorOperator' | 'builtinErrorTerms' | 'builtinAlreadyAdded' | 'builtinErrorGeneric' {
+): 'builtinError.operator' | 'builtinError.terms' | 'builtin.alreadyAdded' | 'builtinError.generic' {
   const message = cause instanceof ApiError ? cause.message : '';
   const code = cause instanceof ApiError ? cause.code : null;
-  if (message === 'operator_required') return 'builtinErrorOperator';
-  if (message === 'provider_terms_ineligible') return 'builtinErrorTerms';
-  if (message === 'builtin_already_added' || code === 'builtin_already_added') return 'builtinAlreadyAdded';
-  return 'builtinErrorGeneric';
+  if (message === 'operator_required') return 'builtinError.operator';
+  if (message === 'provider_terms_ineligible') return 'builtinError.terms';
+  if (message === 'builtin_already_added' || code === 'builtin_already_added') return 'builtin.alreadyAdded';
+  return 'builtinError.generic';
 }
 
-const COLLECT_ERROR_CODES = [
-  'provider_rate_limited',
-  'provider_collection_failed',
-  'retry_exhausted',
-  'transient_failure',
-  'collection_unsupported',
-  'admission_expired',
-  'executor_error',
-  'invalid_normalization_record',
-  'record_exceeds_normalization_limit',
-  'cancelled',
-  'source_generation_changed',
-  'required_credential_binding_unresolved',
-  'provider_revoked',
-  'provider_timeout',
-  'provider_unavailable',
-  'provider_response_invalid',
-  'schema_changed',
-  'invalid_credential',
-  'credential_missing',
-  'collection_incomplete',
-  'destination_blocked',
-] as const;
+/** Literal `sources` catalog key per collection run `error_code` (no runtime key building; add a row with the catalog entry). */
+const COLLECT_ERROR_KEY = {
+  provider_rate_limited: 'collectError.providerRateLimited',
+  provider_collection_failed: 'collectError.providerCollectionFailed',
+  retry_exhausted: 'collectError.retryExhausted',
+  transient_failure: 'collectError.transientFailure',
+  collection_unsupported: 'collectError.collectionUnsupported',
+  admission_expired: 'collectError.admissionExpired',
+  executor_error: 'collectError.executorError',
+  invalid_normalization_record: 'collectError.invalidNormalizationRecord',
+  record_exceeds_normalization_limit: 'collectError.recordExceedsNormalizationLimit',
+  cancelled: 'collectError.cancelled',
+  source_generation_changed: 'collectError.sourceGenerationChanged',
+  required_credential_binding_unresolved: 'collectError.requiredCredentialBindingUnresolved',
+  provider_revoked: 'collectError.providerRevoked',
+  provider_timeout: 'collectError.providerTimeout',
+  provider_unavailable: 'collectError.providerUnavailable',
+  provider_response_invalid: 'collectError.providerResponseInvalid',
+  schema_changed: 'collectError.schemaChanged',
+  invalid_credential: 'collectError.invalidCredential',
+  credential_missing: 'collectError.credentialMissing',
+  collection_incomplete: 'collectError.collectionIncomplete',
+  destination_blocked: 'collectError.destinationBlocked',
+} as const;
 
 /** Message key (in the `sources` namespace) of a plain-language collection-run error. */
-export type MessageKey = `collectError_${(typeof COLLECT_ERROR_CODES)[number]}`;
+export type MessageKey = (typeof COLLECT_ERROR_KEY)[keyof typeof COLLECT_ERROR_KEY];
 
 /**
- * Maps a collection run's `error_code` to its `collectError_<code>` message (sentence plus suggested action).
+ * Maps a collection run's `error_code` to its `collectError.<code>` message (sentence plus suggested action).
  * Pure; unknown, empty or missing codes return null so the caller keeps its raw-code fallback text.
  */
 export function collectErrorKey(code: string | null | undefined): MessageKey | null {
-  return (COLLECT_ERROR_CODES as readonly string[]).includes(code ?? '')
-    ? `collectError_${code as (typeof COLLECT_ERROR_CODES)[number]}`
-    : null;
+  return Object.hasOwn(COLLECT_ERROR_KEY, code ?? '') ? COLLECT_ERROR_KEY[code as keyof typeof COLLECT_ERROR_KEY] : null;
 }
 
 /**
@@ -187,11 +186,11 @@ export function BuiltinTermsFields({
     onRealtimeModeChange?.(next);
   };
   return (
-    <section className="grid gap-3 text-sm" aria-label={t('builtinDialogTitle', { name: builtin.label })}>
-      <h3 className="m-0 text-base font-semibold">{t('builtinDialogTitle', { name: builtin.label })}</h3>
-      <p className="text-muted-foreground">{t('builtinTermsHint')}</p>
+    <section className="grid gap-3 text-sm" aria-label={t('builtin.dialogTitle', { name: builtin.label })}>
+      <h3 className="m-0 text-base font-semibold">{t('builtin.dialogTitle', { name: builtin.label })}</h3>
+      <p className="text-muted-foreground">{t('builtin.termsHint')}</p>
       <p>
-        <strong>{t('guideAttribution')}:</strong> {builtin.attribution}
+        <strong>{t('guide.attribution')}:</strong> {builtin.attribution}
       </p>
       <p>
         <a
@@ -200,13 +199,13 @@ export function BuiltinTermsFields({
           target="_blank"
           rel="noopener noreferrer"
         >
-          {t('providerTerms')}
+          {t('provider.terms')}
         </a>{' '}
-        · {t('termsVersion')}: {builtin.terms_checked_on}
+        · {t('terms.version')}: {builtin.terms_checked_on}
       </p>
-      {builtin.eligibility === 'review' && <p role="note">{t('builtinOperatorNote')}</p>}
+      {builtin.eligibility === 'review' && <p role="note">{t('builtin.operatorNote')}</p>}
       <div className="field">
-        <Label htmlFor="builtin-declared-use">{t('termsDeclaredUse')}</Label>
+        <Label htmlFor="builtin-declared-use">{t('terms.declaredUse')}</Label>
         <Select value={use} onValueChange={(value) => onUseChange(value as DeclaredUse)}>
           <SelectTrigger id="builtin-declared-use">
             <SelectValue />
@@ -221,17 +220,17 @@ export function BuiltinTermsFields({
         </Select>
       </div>
       <div className="field">
-        <Label htmlFor="builtin-realtime-mode">{t('trackingModeLabel')}</Label>
+        <Label htmlFor="builtin-realtime-mode">{t('tracking.modeLabel')}</Label>
         <Select value={effectiveRealtimeMode} onValueChange={(value) => handleRealtimeModeChange(value as RealtimeMode)}>
           <SelectTrigger id="builtin-realtime-mode">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="realtime">{t('trackingModeRealtime')}</SelectItem>
-            <SelectItem value="near_realtime">{t('trackingModeNearRealtime')}</SelectItem>
+            <SelectItem value="realtime">{t('tracking.modeRealtime')}</SelectItem>
+            <SelectItem value="near_realtime">{t('tracking.modeNearRealtime')}</SelectItem>
           </SelectContent>
         </Select>
-        <small className="text-muted-foreground">{t('trackingModeHelp')}</small>
+        <small className="text-muted-foreground">{t('tracking.modeHelp')}</small>
       </div>
       {error && (
         <p className="text-destructive" role="alert">
@@ -289,15 +288,15 @@ function ShapeFilterEmpty({
   const anyCompatible = rows.some((row) => matchesShapes(row.data_shapes, shapeFilter));
   return (
     <p role="status" className="text-muted-foreground">
-      {anyCompatible ? t('addBuiltinAllAdded') : t('shapeFilterNoBuiltin')}{' '}
+      {anyCompatible ? t('add.builtinAllAdded') : t('shape.filterNoBuiltin')}{' '}
       {onAddConnector && !anyCompatible && (
         <Button variant="outline" size="sm" onClick={onAddConnector}>
-          {t('addConnector')}
+          {t('add.connector')}
         </Button>
       )}{' '}
       {onClearFilter && (
         <Button variant="outline" size="sm" onClick={onClearFilter}>
-          {t('shapeFilterClear')}
+          {t('shape.filterClear')}
         </Button>
       )}
     </p>
@@ -321,11 +320,11 @@ function BuiltinPickRow({ row, selected, onPick }: { row: BuiltinSource; selecte
         <span className="m-0 flex flex-wrap items-center gap-2 font-medium">
           {row.label}
           <Badge variant={tier === 'realtime' ? 'default' : 'secondary'}>
-            {t(tier === 'realtime' ? 'badgeRealtime' : 'badgeNearRealtime')}
+            {t(tier === 'realtime' ? 'badge.realtime' : 'badge.nearRealtime')}
           </Badge>
-          {added && <Badge variant="secondary">{t('builtinAdded')}</Badge>}
-          {row.execution === 'experimental' && <Badge variant="outline">{t('builtinExperimental')}</Badge>}
-          {row.eligibility === 'review' && <Badge variant="secondary">{t('builtinReviewClass')}</Badge>}
+          {added && <Badge variant="secondary">{t('builtin.added')}</Badge>}
+          {row.execution === 'experimental' && <Badge variant="outline">{t('builtin.experimental')}</Badge>}
+          {row.eligibility === 'review' && <Badge variant="secondary">{t('builtin.reviewClass')}</Badge>}
         </span>
         <span className="block text-sm text-muted-foreground">{row.attribution}</span>
       </span>
@@ -352,14 +351,14 @@ function BuiltinPickStep({
   const t = useTranslations('sources');
   const rows = builtins.data ?? [];
   return (
-    <section className="flex flex-col gap-3" aria-label={t('stepBuiltinPick')}>
-      <p className="text-muted-foreground">{t('builtinPickHint')}</p>
+    <section className="flex flex-col gap-3" aria-label={t('step.builtinPick')}>
+      <p className="text-muted-foreground">{t('builtin.pickHint')}</p>
       {builtins.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
       {builtins.isError && (
         <p className="text-destructive" role="alert">
-          {t('builtinLoadFailed')}{' '}
+          {t('builtin.loadFailed')}{' '}
           <Button variant="outline" onClick={() => builtins.refetch()}>
-            {t('retry')}
+            {t('retry.label')}
           </Button>
         </p>
       )}
@@ -382,22 +381,22 @@ function BuiltinPickStep({
 function BuiltinVerifyStep({ test, createdId, onRetry }: { test: TestState; createdId: string; onRetry: () => void }) {
   const t = useTranslations('sources');
   return (
-    <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('verifyTitle')}>
-      <h3 className="m-0 text-base font-semibold">{t('verifyTitle')}</h3>
-      {test.phase === 'activating' && <p role="status">{t('verifyWaitingActivation')}</p>}
-      {test.phase === 'collecting' && <p role="status">{t('verifyCollecting')}</p>}
-      {test.phase === 'succeeded' && <p role="status">{t('verifySucceeded')}</p>}
-      {test.phase === 'no_changes' && <p role="status">{t('verifyNoChanges')}</p>}
+    <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('verify.title')}>
+      <h3 className="m-0 text-base font-semibold">{t('verify.title')}</h3>
+      {test.phase === 'activating' && <p role="status">{t('verify.waitingActivation')}</p>}
+      {test.phase === 'collecting' && <p role="status">{t('verify.collecting')}</p>}
+      {test.phase === 'succeeded' && <p role="status">{t('verify.succeeded')}</p>}
+      {test.phase === 'no_changes' && <p role="status">{t('verify.noChanges')}</p>}
       {test.phase === 'failed' && (
         <p className="error" role="alert">
-          {t('verifyFailed', { code: test.code ?? 'unknown' })}
+          {t('verify.failed', { code: test.code ?? 'unknown' })}
         </p>
       )}
-      {test.runId && <p className="text-muted-foreground">{t('verifyRunId', { id: test.runId })}</p>}
+      {test.runId && <p className="text-muted-foreground">{t('verify.runId', { id: test.runId })}</p>}
       {test.phase === 'failed' && createdId && (
         <div>
           <Button variant="outline" onClick={onRetry}>
-            {t('verifyRetry')}
+            {t('verify.retry')}
           </Button>
         </div>
       )}
@@ -460,7 +459,7 @@ async function enablePicked(
   };
   try {
     const result = await enableBuiltinSource(selected.id, state.use, csrfToken, undefined, options);
-    return result.source_id ? { sourceId: result.source_id } : { errorKey: 'builtinErrorGeneric' };
+    return result.source_id ? { sourceId: result.source_id } : { errorKey: 'builtinError.generic' };
   } catch (cause) {
     return { errorKey: builtinEnableErrorKey(cause) };
   }
@@ -529,12 +528,12 @@ export function BuiltinWizard({ onClose, onChanged, shapeFilter, onClearFilter, 
 
   return (
     <WizardShell
-      title={t('wizardTitleBuiltin')}
+      title={t('wizard.titleBuiltin')}
       mode="add"
       steps={[
-        { id: 'pick', title: t('stepBuiltinPick'), valid: selected !== null && selected.source_id === null },
-        { id: 'terms', title: t('stepBuiltinTerms'), valid: true },
-        { id: 'verify', title: t('stepVerify'), valid: verified },
+        { id: 'pick', title: t('step.builtinPick'), valid: selected !== null && selected.source_id === null },
+        { id: 'terms', title: t('step.builtinTerms'), valid: true },
+        { id: 'verify', title: t('step.verify'), valid: verified },
       ]}
       stepIndex={index}
       onStepChange={setIndex}

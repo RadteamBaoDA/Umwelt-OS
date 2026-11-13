@@ -50,13 +50,13 @@ export function toPayload(value: Draft): McpConnectionDraft {
 /** Maps server error states to localized feedback while distinguishing conflicts and committed refresh failures. */
 export function errorKey(
   error: unknown,
-): 'requestFailed' | 'sessionExpired' | 'conflict' | 'catalogFull' | 'invalidInput' | 'runtimeRefreshFailed' | 'transportUnavailable' {
+): 'requestFailed' | 'sessionExpired' | 'conflict' | 'catalogFull' | 'invalidInput' | 'runtimeRefreshFailed' | 'transport.unavailable' {
   if (!(error instanceof ApiError)) return 'requestFailed';
   if (error.status === 401) return 'sessionExpired';
   if (error.status === 409) return error.message.toLowerCase().includes('catalog') ? 'catalogFull' : 'conflict';
   if (error.status === 422) return 'invalidInput';
   if (error.status === 503 && error.code === 'mcp_runtime_refresh_failed') return 'runtimeRefreshFailed';
-  if (error.status === 503) return 'transportUnavailable';
+  if (error.status === 503) return 'transport.unavailable';
   return 'requestFailed';
 }
 
@@ -64,40 +64,40 @@ export function errorKey(
 export function healthMessageKey(
   value: string | null,
 ):
-  | 'healthConnected'
-  | 'healthDisabled'
-  | 'healthNeedsReview'
-  | 'healthUnavailable'
-  | 'healthProtocolError'
-  | 'healthAuthError'
-  | 'healthTimeout'
-  | 'healthUnknown' {
+  | 'health.connected'
+  | 'health.disabled'
+  | 'health.needsReview'
+  | 'health.unavailable'
+  | 'health.protocolError'
+  | 'health.authError'
+  | 'health.timeout'
+  | 'health.unknown' {
   const keys: Record<string, ReturnType<typeof healthMessageKey>> = {
-    connected: 'healthConnected',
-    disabled: 'healthDisabled',
-    needs_review: 'healthNeedsReview',
-    unavailable: 'healthUnavailable',
-    protocol_error: 'healthProtocolError',
-    auth_error: 'healthAuthError',
-    timeout: 'healthTimeout',
+    connected: 'health.connected',
+    disabled: 'health.disabled',
+    needs_review: 'health.needsReview',
+    unavailable: 'health.unavailable',
+    protocol_error: 'health.protocolError',
+    auth_error: 'health.authError',
+    timeout: 'health.timeout',
   };
-  return value ? (keys[value] ?? 'healthUnknown') : 'healthUnknown';
+  return value ? (keys[value] ?? 'health.unknown') : 'health.unknown';
 }
 
 /** Maps the supported grant purposes to their translated labels. */
-export function grantPurposeMessageKey(value: McpGrant['purpose']): 'purposeChat' | 'purposeCollection' {
-  return value === 'collection' ? 'purposeCollection' : 'purposeChat';
+export function grantPurposeMessageKey(value: McpGrant['purpose']): 'purpose.chat' | 'purpose.collection' {
+  return value === 'collection' ? 'purpose.collection' : 'purpose.chat';
 }
 
 /** Maps server risk classifications to translated labels while retaining their visible policy meaning. */
 export function grantRiskMessageKey(
   value: McpGrant['risk'],
-): 'riskReadOnly' | 'riskInternalWrite' | 'riskExternalWrite' | 'riskDestructive' {
+): 'risk.readOnly' | 'risk.internalWrite' | 'risk.externalWrite' | 'risk.destructive' {
   const keys = {
-    READ_ONLY: 'riskReadOnly',
-    INTERNAL_WRITE: 'riskInternalWrite',
-    EXTERNAL_WRITE: 'riskExternalWrite',
-    DESTRUCTIVE: 'riskDestructive',
+    READ_ONLY: 'risk.readOnly',
+    INTERNAL_WRITE: 'risk.internalWrite',
+    EXTERNAL_WRITE: 'risk.externalWrite',
+    DESTRUCTIVE: 'risk.destructive',
   } as const;
   return keys[value];
 }
@@ -157,7 +157,7 @@ export function selectionsViolateBounds(selections: McpGrantChoice[]): boolean {
   );
 }
 
-/** Validated inbound-client issue form, or null when the form violates a bound (the caller reports `inboundRequired`). */
+/** Validated inbound-client issue form, or null when the form violates a bound (the caller reports `inbound.required`). */
 export function buildInboundIssue(form: {
   clientName: string;
   clientExpiry: string;

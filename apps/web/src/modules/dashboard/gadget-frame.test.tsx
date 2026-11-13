@@ -5,8 +5,6 @@ import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
 
-import { sourcesMessages } from '@/core/messages/sources';
-
 import type { GadgetInstance } from './api';
 
 const chat = vi.hoisted(() => ({ openDrawer: vi.fn() }));
@@ -56,7 +54,7 @@ const renderFrame = (props: Partial<GadgetFrameProps> = {}, children: React.Reac
           dashboard: getCatalog('en-us', 'dashboard'),
           uiSweep: getCatalog('en-us', 'uiSweep'),
           gadgetSettings: getCatalog('en-us', 'gadgetSettings'),
-          sources: sourcesMessages['en-us'],
+          sources: getCatalog('en-us', 'sources'),
         }}
       >
         <GadgetFrame instance={instance()} isEditMode={false} {...props}>
@@ -164,7 +162,7 @@ describe('GadgetFrame', () => {
     view.unmount();
     renderFrame({ sourceHealth: [tick('stale'), tick('failing', 'provider_rate_limited')] });
     const badge = screen.getByText(getCatalog('en-us', 'dashboard').source.failingBadge).closest('[title]');
-    expect(badge?.getAttribute('title')).toBe(sourcesMessages['en-us'].collectError_provider_rate_limited);
+    expect(badge?.getAttribute('title')).toBe(getCatalog('en-us', 'sources').collectError.providerRateLimited);
     await user.click(screen.getByRole('button', { name: 'Collect now' }));
     expect(collect.collectAndWait).toHaveBeenCalledWith('s1', 'csrf', expect.objectContaining({ signal: expect.anything() }));
   });

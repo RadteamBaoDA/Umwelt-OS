@@ -1,7 +1,4 @@
 /* eslint-disable no-restricted-imports -- message catalogs are imported by path on purpose: the module index files pull in components that import this barrel (import cycle). */
-import mcpCatalog from '@/modules/sources/mcp-messages.json';
-import { storyMessages } from '@/modules/news/story-messages';
-import { pickMessages } from '@/modules/pick/messages';
 import { automationMessages } from '@/modules/automations/messages';
 import { observabilityMessages } from '@/modules/observability/messages';
 import { exportMessages } from '@/modules/settings/export-messages';
@@ -14,7 +11,6 @@ import { loginMessages } from './messages/login';
 import { accountMessages } from './messages/account';
 import { accountDeletionMessages } from './messages/account-deletion';
 import { jsonCatalogs } from '@locales';
-import { sourcesMessages } from './messages/sources';
 import { memoryMessages } from './messages/memory';
 import { memoryPrivacyMessages } from './messages/memory-privacy';
 import { aiSettingsMessages } from './messages/ai-settings';
@@ -52,7 +48,7 @@ export const messages = {
     account: accountMessages['en-us'],
     accountDeletion: accountDeletionMessages['en-us'],
     common: jsonCatalogs['en-us'].common,
-    sources: sourcesMessages['en-us'],
+    sources: jsonCatalogs['en-us'].sources,
     chat: jsonCatalogs['en-us'].chat,
     memory: memoryMessages['en-us'],
     memoryPrivacy: memoryPrivacyMessages['en-us'],
@@ -68,15 +64,15 @@ export const messages = {
     entities: searchEntitiesMessages['en-us'],
     observability: observabilityMessages['en-us'],
     exports: exportMessages['en-us'],
-    mcp: mcpCatalog['en-us'],
+    mcp: jsonCatalogs['en-us'].mcp,
     detail: detailMessages['en-us'],
     documents: documentsMessages['en-us'],
-    news: storyMessages['en-us'],
+    news: jsonCatalogs['en-us'].news,
     daily: jsonCatalogs['en-us'].daily,
     github: jsonCatalogs['en-us'].github,
     automations: automationMessages['en-us'],
     notifications: jsonCatalogs['en-us'].notifications,
-    pick: pickMessages['en-us'],
+    pick: jsonCatalogs['en-us'].pick,
     workspaces: workspacesMessages['en-us'],
     globalSettings: globalSettingsMessages['en-us'],
     errorCodes: errorCodesMessages['en-us'],
@@ -98,7 +94,7 @@ export const messages = {
     account: accountMessages['vi-vi'],
     accountDeletion: accountDeletionMessages['vi-vi'],
     common: jsonCatalogs['vi-vi'].common,
-    sources: sourcesMessages['vi-vi'],
+    sources: jsonCatalogs['vi-vi'].sources,
     chat: jsonCatalogs['vi-vi'].chat,
     memory: memoryMessages['vi-vi'],
     memoryPrivacy: memoryPrivacyMessages['vi-vi'],
@@ -114,15 +110,15 @@ export const messages = {
     entities: searchEntitiesMessages['vi-vi'],
     observability: observabilityMessages['vi-vi'],
     exports: exportMessages['vi-vi'],
-    mcp: mcpCatalog['vi-vi'],
+    mcp: jsonCatalogs['vi-vi'].mcp,
     detail: detailMessages['vi-vi'],
     documents: documentsMessages['vi-vi'],
-    news: storyMessages['vi-vi'],
+    news: jsonCatalogs['vi-vi'].news,
     daily: jsonCatalogs['vi-vi'].daily,
     github: jsonCatalogs['vi-vi'].github,
     automations: automationMessages['vi-vi'],
     notifications: jsonCatalogs['vi-vi'].notifications,
-    pick: pickMessages['vi-vi'],
+    pick: jsonCatalogs['vi-vi'].pick,
     workspaces: workspacesMessages['vi-vi'],
     globalSettings: globalSettingsMessages['vi-vi'],
     errorCodes: errorCodesMessages['vi-vi'],

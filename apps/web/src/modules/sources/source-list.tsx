@@ -36,8 +36,8 @@ function ShapeFilterBanner({ renderer, onClear }: { renderer: string | null; onC
   const t = useTranslations('sources');
   const tg = useTranslations('gadgetSettings');
   return <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted p-3 text-sm">
-    <span>{t('shapeFilterBanner', { renderer: renderer ? templateName(renderer, tg) : '' })}</span>
-    <Button size="sm" variant="outline" onClick={onClear}>{t('shapeFilterClear')}</Button>
+    <span>{t('shape.filterBanner', { renderer: renderer ? templateName(renderer, tg) : '' })}</span>
+    <Button size="sm" variant="outline" onClick={onClear}>{t('shape.filterClear')}</Button>
   </div>;
 }
 
@@ -126,19 +126,19 @@ function useConnectorDetails(connectors: Source[]) {
 /** Add menu: starter packs button plus the Add datasource dropdown (built-in / connector / file upload). */
 function AddDatasourceMenu({ empty, allBuiltinsAdded, onSelect }: { empty: boolean; allBuiltinsAdded: boolean; onSelect: (kind: 'starter' | 'builtin' | 'connector' | 'upload') => void }) {
   const t = useTranslations('sources');
-  return <div className="flex flex-wrap items-center justify-end gap-2 max-[1023px]:justify-start" role="group" aria-label={t('tableToolbar')}>
-    <Button size="sm" variant={empty ? 'default' : 'outline'} onClick={() => onSelect('starter')}>{t('starterPacks')}</Button>
+  return <div className="flex flex-wrap items-center justify-end gap-2 max-[1023px]:justify-start" role="group" aria-label={t('table.toolbar')}>
+    <Button size="sm" variant={empty ? 'default' : 'outline'} onClick={() => onSelect('starter')}>{t('starter.packs')}</Button>
     <DropdownMenu>
-      <DropdownMenuTrigger asChild><Button size="sm">{t('addDatasource')}<ChevronDown aria-hidden="true" /></Button></DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild><Button size="sm">{t('add.datasource')}<ChevronDown aria-hidden="true" /></Button></DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem disabled={allBuiltinsAdded} onSelect={() => onSelect('builtin')}>
-          <span className="flex flex-col"><span>{t('menuBuiltin')}</span><span className="text-xs text-muted-foreground">{allBuiltinsAdded ? t('addBuiltinAllAdded') : t('menuBuiltinHint')}</span></span>
+          <span className="flex flex-col"><span>{t('menu.builtin')}</span><span className="text-xs text-muted-foreground">{allBuiltinsAdded ? t('add.builtinAllAdded') : t('menu.builtinHint')}</span></span>
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onSelect('connector')}>
-          <span className="flex flex-col"><span>{t('menuConnector')}</span><span className="text-xs text-muted-foreground">{t('menuConnectorHint')}</span></span>
+          <span className="flex flex-col"><span>{t('menu.connector')}</span><span className="text-xs text-muted-foreground">{t('menu.connectorHint')}</span></span>
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onSelect('upload')}>
-          <span className="flex max-w-72 flex-col"><span>{t('menuUpload')}</span><span className="text-xs text-muted-foreground">{t('menuUploadHint')}</span></span>
+          <span className="flex max-w-72 flex-col"><span>{t('menu.upload')}</span><span className="text-xs text-muted-foreground">{t('menu.uploadHint')}</span></span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -150,7 +150,7 @@ function UploadDialog({ onClose, onChanged }: { onClose: () => void; onChanged: 
   const t = useTranslations('sources');
   return <Dialog open onOpenChange={(open) => { if (!open) { onChanged(); onClose(); } }}>
     <DialogContent>
-      <DialogHeader><DialogTitle>{t('uploadDialogTitle')}</DialogTitle><DialogDescription>{t('menuUploadHint')}</DialogDescription></DialogHeader>
+      <DialogHeader><DialogTitle>{t('upload.dialogTitle')}</DialogTitle><DialogDescription>{t('menu.uploadHint')}</DialogDescription></DialogHeader>
       <Upload />
     </DialogContent>
   </Dialog>;
@@ -244,12 +244,12 @@ export function SourceList() {
     <SourceDialogs dialog={dialog} editSession={editSession} shapeFilter={shapeFilter} onClearFilter={clearFilter} transition={transition} registerTransitionGuard={registerTransitionGuard} refresh={refresh} onCreated={setCreatedId} onBuildDashboard={() => router.push('/dashboard?preset=monitor')} />
     <CreatedSourceNote items={items} sourceId={createdId} />
     {sources.isPending && <div className="skeleton" aria-label={t('loading')} />}
-    {sources.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => sources.refetch()}>{t('retry')}</Button></p>}
-    {sources.isSuccess && items.length === 0 && <p className="empty-state">{t('empty')} {t('starterEmptyHint')}</p>}
+    {sources.isError && <p className="error" role="alert">{t('loadFailed')} <Button variant="outline" onClick={() => sources.refetch()}>{t('retry.label')}</Button></p>}
+    {sources.isSuccess && items.length === 0 && <p className="empty-state">{t('empty')} {t('starter.emptyHint')}</p>}
     {items.length > 0 && <SourcesTable filter={filter} counts={counts} onFilterChange={(next) => { setFilter(next); pager.setPage(1); }} pagination={<TablePagination {...pager} />}>
       {pager.pageItems.map((source) => {
         const configuration = configurationBySourceId.get(source.id);
-        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : configuration?.isPending ? t('scheduleLoading') : t('scheduleUnknown')} timezone={configuration?.data?.configuration.timezone ?? null} realtimeMode={configuration?.data?.configuration.realtime_mode ?? null} operationId={operations[source.id] ?? ''} editingId={dialog?.kind === 'edit' ? dialog.source.id : null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); refresh(); }} onEdit={(value) => transition({ kind: 'edit', source: value })} onChanged={refresh} onRemoved={() => headingRef.current?.focus()} />;
+        return <SourceEntry key={source.id} source={source} schedule={configuration?.data ? scheduleLabel(configuration.data.configuration.schedule_interval_minutes, t) : configuration?.isPending ? t('schedule.loading') : t('schedule.unknown')} timezone={configuration?.data?.configuration.timezone ?? null} realtimeMode={configuration?.data?.configuration.realtime_mode ?? null} operationId={operations[source.id] ?? ''} editingId={dialog?.kind === 'edit' ? dialog.source.id : null} onPurgeStarted={(id) => setOperations((current) => ({ ...current, [source.id]: id }))} purged={Boolean(purged[source.id])} onPurgeFinished={() => { if (purged[source.id]) return; setPurged((current) => ({ ...current, [source.id]: true })); refresh(); }} onEdit={(value) => transition({ kind: 'edit', source: value })} onChanged={refresh} onRemoved={() => headingRef.current?.focus()} />;
       })}
     </SourcesTable>}
     {items.length > 0 && visible.length === 0 && <p className="empty-state">{t('emptyFiltered')}</p>}

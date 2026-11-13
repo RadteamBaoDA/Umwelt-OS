@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import type { Source } from './api';
 
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 't' }) }));
@@ -15,14 +15,39 @@ const control = vi.hoisted(() => ({ verifyResult: { phase: 'succeeded' } as { ph
 vi.mock('./connector-editor', async () => {
   const { useEffect, useState } = await import('react');
   return {
-    ConnectorEditor: ({ step, actionsRef, onSnapshot, source }: { step: string; actionsRef: { current: unknown }; onSnapshot: (s: unknown) => void; source: Source | null }) => {
+    ConnectorEditor: ({
+      step,
+      actionsRef,
+      onSnapshot,
+      source,
+    }: {
+      step: string;
+      actionsRef: { current: unknown };
+      onSnapshot: (s: unknown) => void;
+      source: Source | null;
+    }) => {
       const [sourceId, setSourceId] = useState(source?.id ?? '');
       const [verify, setVerify] = useState<{ phase: string; code?: string }>({ phase: 'idle' });
       useEffect(() => {
-        actionsRef.current = { createSource: async () => { setSourceId('new1'); return 'new1'; }, prepareNext: async () => true, verify: async () => setVerify(control.verifyResult) };
+        actionsRef.current = {
+          createSource: async () => {
+            setSourceId('new1');
+            return 'new1';
+          },
+          prepareNext: async () => true,
+          verify: async () => setVerify(control.verifyResult),
+        };
       });
-      useEffect(() => { onSnapshot({ sourceId, provider: 'rss', busy: false, providerOk: true, connectOk: true, chooseOk: true, verify }); }, [sourceId, verify, onSnapshot]);
-      return <div data-testid="editor">{step}<button onClick={() => void (actionsRef.current as { verify: () => Promise<void> }).verify()}>run-verify</button>{verify.phase === 'failed' && <p role="alert">{verify.code}</p>}</div>;
+      useEffect(() => {
+        onSnapshot({ sourceId, provider: 'rss', busy: false, providerOk: true, connectOk: true, chooseOk: true, verify });
+      }, [sourceId, verify, onSnapshot]);
+      return (
+        <div data-testid="editor">
+          {step}
+          <button onClick={() => void (actionsRef.current as { verify: () => Promise<void> }).verify()}>run-verify</button>
+          {verify.phase === 'failed' && <p role="alert">{verify.code}</p>}
+        </div>
+      );
     },
   };
 });
@@ -32,15 +57,22 @@ import { SourceWizard } from './source-wizard';
 const queryClient = () => new QueryClient({ defaultOptions: { queries: { retry: false } } });
 const onClose = vi.fn();
 const onChanged = vi.fn();
-const renderWizard = (request: Parameters<typeof SourceWizard>[0]['request']) => render(
-  <QueryClientProvider client={queryClient()}>
-    <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}>
-      <SourceWizard request={request} onClose={onClose} onChanged={onChanged} registerTransitionGuard={() => undefined} />
-    </NextIntlClientProvider>
-  </QueryClientProvider>);
+const renderWizard = (request: Parameters<typeof SourceWizard>[0]['request']) =>
+  render(
+    <QueryClientProvider client={queryClient()}>
+      <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+        <SourceWizard request={request} onClose={onClose} onChanged={onChanged} registerTransitionGuard={() => undefined} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
 const editSource = { id: 's9', type: 'rss', name: 'Existing', status: 'active' } as Source;
 
-beforeEach(() => { Object.values(api).forEach((mock) => mock.mockReset()); onClose.mockClear(); onChanged.mockClear(); control.verifyResult = { phase: 'succeeded' }; });
+beforeEach(() => {
+  Object.values(api).forEach((mock) => mock.mockReset());
+  onClose.mockClear();
+  onChanged.mockClear();
+  control.verifyResult = { phase: 'succeeded' };
+});
 afterEach(() => cleanup());
 
 describe('SourceWizard connector add flow', () => {

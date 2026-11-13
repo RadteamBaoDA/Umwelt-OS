@@ -105,9 +105,9 @@ describe('mcp model helpers', () => {
     expect(errorKey(new ApiError(409, 'stale'))).toBe('conflict');
     expect(errorKey(new ApiError(422, 'x'))).toBe('invalidInput');
     expect(errorKey(new ApiError(503, 'x', { code: 'mcp_runtime_refresh_failed' }))).toBe('runtimeRefreshFailed');
-    expect(errorKey(new ApiError(503, 'x'))).toBe('transportUnavailable');
-    expect(healthMessageKey('connected')).toBe('healthConnected');
-    expect(healthMessageKey(null)).toBe('healthUnknown');
+    expect(errorKey(new ApiError(503, 'x'))).toBe('transport.unavailable');
+    expect(healthMessageKey('connected')).toBe('health.connected');
+    expect(healthMessageKey(null)).toBe('health.unknown');
   });
 
   it('validates grant drafts: collection needs one source and expiry must be in the future', () => {
@@ -413,7 +413,7 @@ describe('mcp actions', () => {
       await perform(result.current, () => Promise.reject(new ApiError(503, 'x', { code: 'mcp_runtime_refresh_failed' })));
     });
     expect(result.current.core.reconciliationRequired).toBe(true);
-    expect(result.current.core.error).toBe('reconciliationFailed');
+    expect(result.current.core.error).toBe('reconciliation.failed');
   });
 
   it('drops a result that finishes after the session changed', async () => {
@@ -485,7 +485,7 @@ describe('mcp actions', () => {
   it('refuses to issue a client with an incomplete form and reports inboundRequired', () => {
     const { result } = renderHook(() => useCtx(vi.fn()));
     act(() => issue(result.current));
-    expect(result.current.core.error).toBe('inboundRequired');
+    expect(result.current.core.error).toBe('inbound.required');
     expect(mcp.createMcpInboundClient).not.toHaveBeenCalled();
   });
 

@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import type { Source } from './api';
 
 const editorMounts = vi.fn();
@@ -14,25 +14,43 @@ vi.mock('@/core/guarded-navigation', () => ({ useGuardedNavigation: () => ({ ens
 vi.mock('./connector-editor', () => ({
   ConnectorEditor: ({ source, onClose }: { source: Source | null; onClose: () => void; [key: string]: unknown }) => {
     editorMounts(source?.id);
-    return <div data-testid="editor">{source?.id}<button onClick={onClose}>close-editor</button></div>;
+    return (
+      <div data-testid="editor">
+        {source?.id}
+        <button onClick={onClose}>close-editor</button>
+      </div>
+    );
   },
 }));
 vi.mock('./api', async (original) => ({
   ...(await original<typeof import('./api')>()),
-  listSources: vi.fn(async () => ({ items: [{ id: 's1', type: 'manual', name: 'One', status: 'active' }, { id: 's2', type: 'manual', name: 'Two', status: 'active' }], next_cursor: null })),
+  listSources: vi.fn(async () => ({
+    items: [
+      { id: 's1', type: 'manual', name: 'One', status: 'active' },
+      { id: 's2', type: 'manual', name: 'Two', status: 'active' },
+    ],
+    next_cursor: null,
+  })),
   listBuiltinSources: vi.fn(async () => []),
 }));
 
 import { SourceList } from './source-list';
 
-const renderList = () => render(
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}><SourceList /></NextIntlClientProvider>
-  </QueryClientProvider>);
+const renderList = () =>
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+        <SourceList />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
 
 describe('SourceList ?source deep link', () => {
   beforeEach(() => editorMounts.mockClear());
-  afterEach(() => { cleanup(); window.history.replaceState(null, '', '/'); });
+  afterEach(() => {
+    cleanup();
+    window.history.replaceState(null, '', '/');
+  });
 
   it('opens the editor for a loaded source id once', async () => {
     window.history.replaceState(null, '', '/?source=s2');

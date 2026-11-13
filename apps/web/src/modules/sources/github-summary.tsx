@@ -81,35 +81,35 @@ export function GitHubWebhookStatus() {
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4" aria-labelledby="github-webhook-heading">
       <h3 id="github-webhook-heading" className="m-0 text-base font-semibold">
-        {t('githubWebhookStatus')}
+        {t('github.webhookStatus')}
       </h3>
       {webhook.isPending && <p className="text-muted-foreground">{t('loading')}</p>}
       {webhook.isError && (
         <p className="error" role="alert">
-          {t('githubWebhookUnavailable')}{' '}
+          {t('github.webhookUnavailable')}{' '}
           <Button variant="outline" onClick={() => webhook.refetch()}>
-            {t('retry')}
+            {t('retry.label')}
           </Button>
         </p>
       )}
       {webhook.data && (
         <>
           <p role="status">
-            {t(webhook.data.receiver_configured ? 'githubWebhookReady' : 'githubWebhookNotConfigured')} ·{' '}
-            {t('githubWebhookRevision', { revision: webhook.data.receiver_revision })}
+            {t(webhook.data.receiver_configured ? 'github.webhookReady' : 'github.webhookNotConfigured')} ·{' '}
+            {t('github.webhookRevision', { revision: webhook.data.receiver_revision })}
           </p>
           <p className="text-muted-foreground">
-            {t('githubWebhookBacklog', {
+            {t('github.webhookBacklog', {
               pending: webhook.data.pending_count,
               deliveries: webhook.data.pending_deliveries,
               hints: webhook.data.pending_hints,
               capacity: 100000,
             })}
           </p>
-          <p className="text-muted-foreground">{t('githubWebhookAttention', { count: webhook.data.needs_attention })}</p>
+          <p className="text-muted-foreground">{t('github.webhookAttention', { count: webhook.data.needs_attention })}</p>
           {webhook.data.oldest_pending_at && (
             <p className="text-muted-foreground">
-              {t('githubWebhookOldest', { time: formatDateTime(webhook.data.oldest_pending_at, display.locale, display.timezone) })}
+              {t('github.webhookOldest', { time: formatDateTime(webhook.data.oldest_pending_at, display.locale, display.timezone) })}
             </p>
           )}
         </>

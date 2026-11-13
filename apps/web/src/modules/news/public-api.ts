@@ -3,5 +3,4 @@
 export { createTopic, fetchAllTopics, fetchTopics, updateTopic } from './api';
 export { cleanExcerpt } from './excerpt';
 export { fetchStories } from './story-api';
-export { storyMessages } from './story-messages';
 export { type Topic } from './types';

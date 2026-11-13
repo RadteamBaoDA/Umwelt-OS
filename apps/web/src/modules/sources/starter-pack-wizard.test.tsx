@@ -4,23 +4,48 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/core/api';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import type { BuiltinSource } from './api';
 
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
-const api = vi.hoisted(() => ({ listBuiltinSources: vi.fn(), listSources: vi.fn(), getConnectorCatalog: vi.fn(), enableBuiltinSource: vi.fn(), createScopedSource: vi.fn() }));
+const api = vi.hoisted(() => ({
+  listBuiltinSources: vi.fn(),
+  listSources: vi.fn(),
+  getConnectorCatalog: vi.fn(),
+  enableBuiltinSource: vi.fn(),
+  createScopedSource: vi.fn(),
+}));
 vi.mock('./api', async (original) => ({ ...(await original<typeof import('./api')>()), ...api }));
 
 import { StarterPackWizard } from './starter-pack-wizard';
 
 const row = (id: string, over: Partial<BuiltinSource> = {}): BuiltinSource => ({
-  id, label: `Label ${id}`, category: 'news', eligibility: 'open', terms_url: 'https://e.org', terms_checked_on: '2026-11-04', attribution: 'x',
-  execution: 'supported', source_id: null, enabled: false, data_shapes: ['news'], ...over,
+  id,
+  label: `Label ${id}`,
+  category: 'news',
+  eligibility: 'open',
+  terms_url: 'https://e.org',
+  terms_checked_on: '2026-11-04',
+  attribution: 'x',
+  execution: 'supported',
+  source_id: null,
+  enabled: false,
+  data_shapes: ['news'],
+  ...over,
 });
-const wrap = (onAddConnector?: () => void, onBuildDashboard?: () => void) => render(
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}><StarterPackWizard onClose={() => undefined} onChanged={() => undefined} onAddConnector={onAddConnector} onBuildDashboard={onBuildDashboard} /></NextIntlClientProvider>
-  </QueryClientProvider>);
+const wrap = (onAddConnector?: () => void, onBuildDashboard?: () => void) =>
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+        <StarterPackWizard
+          onClose={() => undefined}
+          onChanged={() => undefined}
+          onAddConnector={onAddConnector}
+          onBuildDashboard={onBuildDashboard}
+        />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
 const checkbox = (name: string) => screen.findByRole('checkbox', { name: `Add ${name}` });
 /** Unchecks every row except the given built-in ids, so a run touches a known, ordered subset. */
 async function keepOnly(keep: string[]) {
@@ -36,7 +61,15 @@ beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
   api.listSources.mockResolvedValue({ items: [], next_cursor: null });
   api.getConnectorCatalog.mockResolvedValue([]);
-  api.listBuiltinSources.mockResolvedValue([row('hn_top'), row('lobsters', { source_id: 'x', enabled: true }), row('vn_stock', { min_interval_minutes: 360 }), row('wwr_jobs'), row('itviec_jobs', { min_interval_minutes: 360 }), row('vietnamworks_jobs', { min_interval_minutes: 360 }), row('bbc_world')]);
+  api.listBuiltinSources.mockResolvedValue([
+    row('hn_top'),
+    row('lobsters', { source_id: 'x', enabled: true }),
+    row('vn_stock', { min_interval_minutes: 360 }),
+    row('wwr_jobs'),
+    row('itviec_jobs', { min_interval_minutes: 360 }),
+    row('vietnamworks_jobs', { min_interval_minutes: 360 }),
+    row('bbc_world'),
+  ]);
   api.enableBuiltinSource.mockResolvedValue(row('hn_top'));
   api.createScopedSource.mockResolvedValue({ id: 'new' });
 });

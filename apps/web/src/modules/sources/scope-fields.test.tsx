@@ -3,7 +3,7 @@ import { render } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import { ProviderScope } from './provider-scope';
 import { useIdListText } from './scope-fields';
 
@@ -12,23 +12,29 @@ describe('useIdListText', () => {
     const { result, rerender } = renderHook(({ ids, epoch }) => useIdListText(ids, epoch), { initialProps: { ids: ['a', 'b'], epoch: 0 } });
     expect(result.current.value).toBe('a, b');
     let parsed: string[] = [];
-    act(() => { parsed = result.current.edit('a, b, '); });
+    act(() => {
+      parsed = result.current.edit('a, b, ');
+    });
     expect(parsed).toEqual(['a', 'b']);
     rerender({ ids: parsed, epoch: 0 });
     expect(result.current.value).toBe('a, b, ');
     rerender({ ids: ['x'], epoch: 0 });
     expect(result.current.value).toBe('x');
-    act(() => { result.current.edit('x, '); });
+    act(() => {
+      result.current.edit('x, ');
+    });
     rerender({ ids: ['x'], epoch: 1 });
     expect(result.current.value).toBe('x');
   });
 });
 
 describe('ProviderScope registry', () => {
-  const wrap = (provider: 'bluesky' | 'notion', onChange = vi.fn()) => render(
-    <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}>
-      <ProviderScope provider={provider} configuration={{} as never} disabled={false} resetEpoch={0} onChange={onChange} />
-    </NextIntlClientProvider>);
+  const wrap = (provider: 'bluesky' | 'notion', onChange = vi.fn()) =>
+    render(
+      <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+        <ProviderScope provider={provider} configuration={{} as never} disabled={false} resetEpoch={0} onChange={onChange} />
+      </NextIntlClientProvider>,
+    );
 
   it('keeps the Bluesky handle pattern with single backslash escape', () => {
     wrap('bluesky');

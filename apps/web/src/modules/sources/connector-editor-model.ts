@@ -94,13 +94,13 @@ export function providerCredentialRequired(entry: ConnectorCatalogEntry | undefi
 export const PROVIDER_GROUP_ORDER = ['news', 'economy', 'hazards', 'space', 'security', 'tech', 'other'] as const;
 export type ProviderGroup = (typeof PROVIDER_GROUP_ORDER)[number];
 export const PROVIDER_GROUP_KEY = {
-  news: 'builtinCategoryNews',
-  economy: 'builtinCategoryEconomy',
-  hazards: 'builtinCategoryHazards',
-  space: 'builtinCategorySpace',
-  security: 'builtinCategorySecurity',
-  tech: 'builtinCategoryTech',
-  other: 'providerGroupOther',
+  news: 'builtinCategory.news',
+  economy: 'builtinCategory.economy',
+  hazards: 'builtinCategory.hazards',
+  space: 'builtinCategory.space',
+  security: 'builtinCategory.security',
+  tech: 'builtinCategory.tech',
+  other: 'provider.groupOther',
 } as const;
 
 /** True when the schedule/activation gate asks the owner to (re)enter a provider key. */
@@ -113,66 +113,69 @@ export function isProvider(value: string): value is Provider {
   return value.length > 0;
 }
 
-/** Maps a provider identifier to its localized catalog key. */
-export function providerKey(providerId: string): string {
-  return (
-    (
-      {
-        rss: 'providerRss',
-        web: 'providerWeb',
-        rest: 'providerRest',
-        mcp: 'providerMcp',
-        github: 'providerGithub',
-        google_mail: 'providerGoogleMail',
-        google_calendar: 'providerGoogleCalendar',
-        google_drive: 'providerGoogleDrive',
-        youtube: 'providerYoutube',
-        arxiv: 'providerArxiv',
-        huggingface: 'providerHuggingface',
-        github_releases: 'providerGithubReleases',
-        telegram: 'providerTelegram',
-        alpha_vantage: 'providerAlphaVantage',
-        coingecko: 'providerCoinGecko',
-        open_meteo: 'providerOpenMeteo',
-        google_news: 'providerGoogleNews',
-        openalex: 'providerOpenAlex',
-        reddit: 'providerReddit',
-        hacker_news: 'providerHackerNews',
-        mastodon: 'providerMastodon',
-        bluesky: 'providerBluesky',
-        x: 'providerX',
-        vietnamese_press: 'providerVietnamesePress',
-        gdelt_government: 'providerGdelt',
-        finance: 'providerFinance',
-        weather_disaster_climate: 'providerWeather',
-        cyber_cve: 'providerCyber',
-        map_osint: 'providerMapOsint',
-        browser: 'providerBrowser',
-        health: 'providerHealth',
-        iot: 'providerIot',
-        notion: 'providerNotion',
-        slack: 'providerSlack',
-        home_assistant: 'providerHomeAssistant',
-        bbc_world: 'providerBbcWorld',
-        vnexpress_business: 'providerVnexpressBusiness',
-        dantri_news: 'providerDantriNews',
-        thanhnien_news: 'providerThanhnienNews',
-        tuoitre_news: 'providerTuoitreNews',
-        hn_top: 'providerHnTop',
-        gdelt_economy: 'providerGdeltEconomy',
-        world_bank: 'providerWorldBank',
-        frankfurter: 'providerFrankfurter',
-        ecb: 'providerEcb',
-        binance: 'providerBinance',
-        alternative_me: 'providerAlternativeMe',
-        usgs: 'providerUsgs',
-        coinpaprika: 'providerCoinpaprika',
-        nasa_eonet: 'providerNasaEonet',
-        cisa_kev: 'providerCisaKev',
-        sec_edgar: 'providerSecEdgar',
-      } as Record<string, string>
-    )[providerId] ?? 'provider'
-  );
+/** Literal `sources` catalog key of each provider's display name that the provider picker translates; others use the catalog label. */
+const PROVIDER_KEY = {
+  rss: 'provider.rss',
+  web: 'provider.web',
+  rest: 'provider.rest',
+  mcp: 'provider.mcp',
+  github: 'provider.github',
+  google_mail: 'provider.googleMail',
+  google_calendar: 'provider.googleCalendar',
+  google_drive: 'provider.googleDrive',
+  youtube: 'provider.youtube',
+  arxiv: 'provider.arxiv',
+  huggingface: 'provider.huggingface',
+  github_releases: 'provider.githubReleases',
+  telegram: 'provider.telegram',
+  alpha_vantage: 'provider.alphaVantage',
+  coingecko: 'provider.coinGecko',
+  open_meteo: 'provider.openMeteo',
+  google_news: 'provider.googleNews',
+  openalex: 'provider.openAlex',
+  reddit: 'provider.reddit',
+  hacker_news: 'provider.hackerNews',
+  mastodon: 'provider.mastodon',
+  bluesky: 'provider.bluesky',
+  x: 'provider.x',
+  vietnamese_press: 'provider.vietnamesePress',
+  gdelt_government: 'provider.gdelt',
+  finance: 'provider.finance',
+  weather_disaster_climate: 'provider.weather',
+  cyber_cve: 'provider.cyber',
+  map_osint: 'provider.mapOsint',
+  browser: 'provider.browser',
+  health: 'provider.health',
+  iot: 'provider.iot',
+  notion: 'provider.notion',
+  slack: 'provider.slack',
+  home_assistant: 'provider.homeAssistant',
+  bbc_world: 'provider.bbcWorld',
+  vnexpress_business: 'provider.vnexpressBusiness',
+  dantri_news: 'provider.dantriNews',
+  thanhnien_news: 'provider.thanhnienNews',
+  tuoitre_news: 'provider.tuoitreNews',
+  hn_top: 'provider.hnTop',
+  gdelt_economy: 'provider.gdeltEconomy',
+  world_bank: 'provider.worldBank',
+  frankfurter: 'provider.frankfurter',
+  ecb: 'provider.ecb',
+  binance: 'provider.binance',
+  alternative_me: 'provider.alternativeMe',
+  usgs: 'provider.usgs',
+  coinpaprika: 'provider.coinpaprika',
+  nasa_eonet: 'provider.nasaEonet',
+  cisa_kev: 'provider.cisaKev',
+  sec_edgar: 'provider.secEdgar',
+} as const;
+
+/**
+ * Maps a provider identifier to its localized catalog key.
+ * @param providerId Catalog provider id.
+ * @returns A `provider.<id>` key, or `provider.label` (the generic word) when the picker should show the catalog label instead.
+ */
+export function providerKey(providerId: string): (typeof PROVIDER_KEY)[keyof typeof PROVIDER_KEY] | 'provider.label' {
+  return Object.hasOwn(PROVIDER_KEY, providerId) ? PROVIDER_KEY[providerId as keyof typeof PROVIDER_KEY] : 'provider.label';
 }
 
 /**
@@ -236,9 +239,9 @@ export function errorText(error: unknown): string {
     error.status === 409 &&
     (error.code === 'builtin_already_added' || error.message === 'builtin_already_added')
   )
-    return 'builtinAlreadyAdded';
+    return 'builtin.alreadyAdded';
   if (error instanceof ApiError && error.status === 409) return 'conflict';
-  if (intervalBelowMinimum(error)) return 'scheduleBelowMinimum';
+  if (intervalBelowMinimum(error)) return 'schedule.belowMinimum';
   if (error instanceof ApiError && error.status === 422) return 'configurationInvalid';
   if (error instanceof ApiError && error.status === 503) return 'serviceUnavailable';
   if (error instanceof Error && error.message === 'source_name_required') return 'sourceNameRequired';
@@ -300,41 +303,41 @@ export function scopeIssues(cause: unknown): ScopeIssue[] {
 }
 
 /** Form label message key for each configuration field, so a server issue names the field the owner sees. */
-export const FIELD_LABEL_KEYS: Record<string, string> = {
-  news_query: 'newsQuery',
-  news_site: 'newsSite',
-  news_locale: 'newsLocale',
-  sec_cik: 'secCik',
-  sec_contact_email: 'secContactEmail',
-  scholarly_query: 'scholarlyQuery',
+export const FIELD_LABEL_KEYS = {
+  news_query: 'news.query',
+  news_site: 'news.site',
+  news_locale: 'news.locale',
+  sec_cik: 'sec.cik',
+  sec_contact_email: 'sec.contactEmail',
+  scholarly_query: 'scholarly.query',
   fred_series_id: 'fredSeriesId',
-  owm_latitude: 'weatherLatitude',
-  owm_longitude: 'weatherLongitude',
+  owm_latitude: 'weather.latitude',
+  owm_longitude: 'weather.longitude',
   openaq_location_id: 'openaqLocationId',
   firms_country: 'firmsCountry',
-  youtube_channel_id: 'youtubeChannelId',
-  arxiv_category: 'arxivCategory',
-  huggingface_author: 'huggingfaceAuthor',
+  youtube_channel_id: 'youtube.channelId',
+  arxiv_category: 'arxiv.category',
+  huggingface_author: 'huggingface.author',
   bluesky_actor: 'blueskyActor',
-  reddit_subreddit: 'redditSubreddit',
-  mastodon_instance_url: 'mastodonInstanceUrl',
-  mastodon_account: 'mastodonAccount',
-  mastodon_hashtag: 'mastodonHashtag',
-  x_account: 'xAccount',
-  x_query: 'xQuery',
-  github_owner: 'githubOwner',
-  github_repository: 'githubRepository',
-  github_history_days: 'githubHistoryDays',
-  telegram_chat_ids: 'telegramChannelIds',
-  market_symbols: 'marketSymbols',
-  market_currency: 'marketCurrency',
-  market_exchange_timezone: 'marketExchangeTimezone',
-  weather_latitude: 'weatherLatitude',
-  weather_longitude: 'weatherLongitude',
-  weather_timezone: 'weatherTimezone',
-  weather_metrics: 'weatherMetrics',
-  notion_page_ids: 'notionPageIds',
-  slack_channel_ids: 'slackChannelIds',
+  reddit_subreddit: 'reddit.subreddit',
+  mastodon_instance_url: 'mastodon.instanceUrl',
+  mastodon_account: 'mastodon.account',
+  mastodon_hashtag: 'mastodon.hashtag',
+  x_account: 'x.account',
+  x_query: 'x.query',
+  github_owner: 'github.owner',
+  github_repository: 'github.repository',
+  github_history_days: 'github.historyDays',
+  telegram_chat_ids: 'telegram.channelIds',
+  market_symbols: 'market.symbols',
+  market_currency: 'market.currency',
+  market_exchange_timezone: 'market.exchangeTimezone',
+  weather_latitude: 'weather.latitude',
+  weather_longitude: 'weather.longitude',
+  weather_timezone: 'weather.timezone',
+  weather_metrics: 'weather.metrics',
+  notion_page_ids: 'notion.pageIds',
+  slack_channel_ids: 'slack.channelIds',
   feed_url: 'sourceUrl',
   url: 'pageUrl',
   items_path: 'itemsPath',
@@ -342,14 +345,19 @@ export const FIELD_LABEL_KEYS: Record<string, string> = {
   title_field: 'titleField',
   content_field: 'contentField',
   updated_field: 'updatedField',
-  fhir_base_url: 'fhirBaseUrl',
-  fhir_patient_id: 'fhirPatientId',
-  ha_base_url: 'homeAssistantBaseUrl',
-  ha_entity_ids: 'homeAssistantEntityIds',
+  fhir_base_url: 'fhir.baseUrl',
+  fhir_patient_id: 'fhir.patientId',
+  ha_base_url: 'homeAssistant.baseUrl',
+  ha_entity_ids: 'homeAssistant.entityIds',
   timezone: 'timezone',
-  history_mode: 'history',
-  schedule_interval_minutes: 'schedule',
-};
+  history_mode: 'history.label',
+  schedule_interval_minutes: 'schedule.label',
+} as const;
+
+/** `sources` catalog key of a configuration field's form label, or `undefined` for a field without a label (callers show the raw field name). */
+export function fieldLabelKey(field: string): (typeof FIELD_LABEL_KEYS)[keyof typeof FIELD_LABEL_KEYS] | undefined {
+  return Object.hasOwn(FIELD_LABEL_KEYS, field) ? FIELD_LABEL_KEYS[field as keyof typeof FIELD_LABEL_KEYS] : undefined;
+}
 
 /** Wizard step an embedded editor renders; every other section stays mounted but hidden so the draft survives step changes. */
 export type EditorStep = 'provider' | 'connect' | 'choose' | 'collect' | 'verify';

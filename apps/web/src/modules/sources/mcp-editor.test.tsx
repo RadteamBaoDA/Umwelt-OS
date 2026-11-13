@@ -2,24 +2,46 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import mcpCatalog from './mcp-messages.json';
+import { getCatalog } from '@locales';
 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'Europe/Paris' }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
 vi.mock('@/core/guarded-navigation', () => ({ useGuardedNavigation: () => ({ registerLeaveGuard: () => () => undefined }) }));
 const api = vi.hoisted(() => ({ listSources: vi.fn() }));
 vi.mock('./api', async (original) => ({ ...(await original<typeof import('./api')>()), ...api }));
-const mcp = vi.hoisted(() => ({ listMcpConnections: vi.fn(), listMcpInboundClients: vi.fn(), listMcpNativeTools: vi.fn(), listMcpGrants: vi.fn() }));
+const mcp = vi.hoisted(() => ({
+  listMcpConnections: vi.fn(),
+  listMcpInboundClients: vi.fn(),
+  listMcpNativeTools: vi.fn(),
+  listMcpGrants: vi.fn(),
+}));
 vi.mock('./mcp-api', async (original) => ({ ...(await original<typeof import('./mcp-api')>()), ...mcp }));
 
 import { McpSettings } from './mcp-editor';
 
-const connection = { id: 'c1', name: 'Docs server', transport: 'streamable_http', enabled: false, revision: 3, endpoint: 'https://mcp.example.test', auth_method: 'none', timeout_seconds: 10, health: 'connected', error_code: null, updated_at: '2026-01-01T00:00:00Z', credential_configured: false, deployment_profile_id: null, deployment_profile_hash: null };
+const connection = {
+  id: 'c1',
+  name: 'Docs server',
+  transport: 'streamable_http',
+  enabled: false,
+  revision: 3,
+  endpoint: 'https://mcp.example.test',
+  auth_method: 'none',
+  timeout_seconds: 10,
+  health: 'connected',
+  error_code: null,
+  updated_at: '2026-01-01T00:00:00Z',
+  credential_configured: false,
+  deployment_profile_id: null,
+  deployment_profile_hash: null,
+};
 
-const wrap = () => render(
-  <NextIntlClientProvider locale="en-US" messages={{ mcp: (mcpCatalog as Record<string, Record<string, string>>)['en-us'] }}>
-    <McpSettings />
-  </NextIntlClientProvider>);
+const wrap = () =>
+  render(
+    <NextIntlClientProvider locale="en-US" messages={{ mcp: getCatalog('en-us', 'mcp') }}>
+      <McpSettings />
+    </NextIntlClientProvider>,
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();

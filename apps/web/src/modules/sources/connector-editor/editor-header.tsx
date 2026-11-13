@@ -58,7 +58,7 @@ export function EditorSourceActions({
         onConfirm={(deleteData) => void actions.disconnect(deleteData)}
         trigger={
           <Button variant="outline" aria-disabled={off}>
-            {actions.busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnectDelete' : 'disconnectAction')}
+            {actions.busy ? t('disconnecting') : t(source.status === 'archived' ? 'disconnect.delete' : 'disconnect.action')}
           </Button>
         }
       />
@@ -95,9 +95,9 @@ export function HeaderTitle({ m }: { m: ConnectorEditorModel }) {
     <div>
       <h2>{name || source?.name || t('editTitle')}</h2>
       <p className="text-muted-foreground">
-        <span className="badge">{sourceStatus === 'paused' ? t('statusPaused') : activationLabel}</span>{' '}
-        {revision > 0 ? t('editorRevision', { revision }) : t('editorRevisionNew')}
-        {dirty || secret ? ` · ${t('editorUnsaved')}` : ''}
+        <span className="badge">{sourceStatus === 'paused' ? t('status.paused') : activationLabel}</span>{' '}
+        {revision > 0 ? t('editor.revision', { revision }) : t('editor.revisionNew')}
+        {dirty || secret ? ` · ${t('editor.unsaved')}` : ''}
       </p>
     </div>
   );
@@ -111,7 +111,7 @@ export function HeaderPrimaryActions({ m }: { m: ConnectorEditorModel }) {
     <>
       {sourceStatus === 'active' && visibleActivationState === 'active' && !dirty && (
         <Button variant="outline" disabled={locked} onClick={collectNow}>
-          {busyAction === 'collect' ? t('collecting') : t('collectNow')}
+          {busyAction === 'collect' ? t('collecting') : t('collect.now')}
         </Button>
       )}
       {sourceStatus === 'paused' && provider !== 'mcp' && (

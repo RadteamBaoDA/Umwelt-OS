@@ -16,4 +16,5 @@ export {
   triggerCollection,
 } from './api';
 export { isStale, periodKind } from './freshness';
+export { providerLabelKey } from './provider-label-keys';
 export { collectAndWait } from './use-source-actions';

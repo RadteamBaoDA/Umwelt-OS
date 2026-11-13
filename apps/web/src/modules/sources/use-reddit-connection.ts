@@ -27,7 +27,7 @@ export function useRedditConnection(ctx: EditorContext) {
     if (provider !== 'reddit') return;
     await startOAuthConnection(ctx, {
       action: 'reddit-connect',
-      failureKey: 'redditConnectionFailed',
+      failureKey: 'reddit.connectionFailed',
       saved,
       start: (fence, token) => startRedditOAuth(fence.id, fence.generation, fence.revision, ctx.csrfToken, token.controller.signal),
     });
@@ -37,7 +37,7 @@ export function useRedditConnection(ctx: EditorContext) {
   async function disconnectReddit() {
     await revokeOAuthConnection(ctx, {
       action: 'reddit-disconnect',
-      failureKey: 'redditDisconnectFailed',
+      failureKey: 'reddit.disconnectFailed',
       status: redditStatusQuery.data,
       refetch: redditStatusQuery.refetch,
       revoke: (fence, tokenRevision, token) =>

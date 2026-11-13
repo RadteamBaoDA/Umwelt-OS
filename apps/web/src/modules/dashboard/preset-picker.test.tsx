@@ -6,8 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/core/api';
 import { getCatalog } from '@locales';
 
-import { sourcesMessages } from '@/core/messages/sources';
-
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
 vi.mock('next/link', () => ({
@@ -35,7 +33,7 @@ const renderer = (id: string) => {
 const messages = {
   dashboard: getCatalog('en-us', 'dashboard'),
   gadgetSettings: getCatalog('en-us', 'gadgetSettings'),
-  sources: sourcesMessages['en-us'],
+  sources: getCatalog('en-us', 'sources'),
   uiSweep: getCatalog('en-us', 'uiSweep'),
 };
 

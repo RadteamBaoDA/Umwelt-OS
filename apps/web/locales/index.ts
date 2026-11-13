@@ -6,8 +6,12 @@ import enDaily from './en-us/daily.json';
 import enDashboard from './en-us/dashboard.json';
 import enGadgetSettings from './en-us/gadgetSettings.json';
 import enGithub from './en-us/github.json';
+import enMcp from './en-us/mcp.json';
+import enNews from './en-us/news.json';
 import enNotifications from './en-us/notifications.json';
+import enPick from './en-us/pick.json';
 import enShell from './en-us/shell.json';
+import enSources from './en-us/sources.json';
 import enTaskGoal from './en-us/taskGoal.json';
 import enUiSweep from './en-us/uiSweep.json';
 import viChat from './vi-vi/chat.json';
@@ -16,8 +20,12 @@ import viDaily from './vi-vi/daily.json';
 import viDashboard from './vi-vi/dashboard.json';
 import viGadgetSettings from './vi-vi/gadgetSettings.json';
 import viGithub from './vi-vi/github.json';
+import viMcp from './vi-vi/mcp.json';
+import viNews from './vi-vi/news.json';
 import viNotifications from './vi-vi/notifications.json';
+import viPick from './vi-vi/pick.json';
 import viShell from './vi-vi/shell.json';
+import viSources from './vi-vi/sources.json';
 import viTaskGoal from './vi-vi/taskGoal.json';
 import viUiSweep from './vi-vi/uiSweep.json';
 
@@ -33,8 +41,12 @@ export const flatCatalogs = {
     dashboard: enDashboard,
     gadgetSettings: enGadgetSettings,
     github: enGithub,
+    mcp: enMcp,
+    news: enNews,
     notifications: enNotifications,
+    pick: enPick,
     shell: enShell,
+    sources: enSources,
     taskGoal: enTaskGoal,
     uiSweep: enUiSweep,
   },
@@ -45,8 +57,12 @@ export const flatCatalogs = {
     dashboard: viDashboard,
     gadgetSettings: viGadgetSettings,
     github: viGithub,
+    mcp: viMcp,
+    news: viNews,
     notifications: viNotifications,
+    pick: viPick,
     shell: viShell,
+    sources: viSources,
     taskGoal: viTaskGoal,
     uiSweep: viUiSweep,
   },
@@ -64,8 +80,12 @@ export const jsonCatalogs = {
     dashboard: unflatten(enDashboard),
     gadgetSettings: unflatten(enGadgetSettings),
     github: unflatten(enGithub),
+    mcp: unflatten(enMcp),
+    news: unflatten(enNews),
     notifications: unflatten(enNotifications),
+    pick: unflatten(enPick),
     shell: unflatten(enShell),
+    sources: unflatten(enSources),
     taskGoal: unflatten(enTaskGoal),
     uiSweep: unflatten(enUiSweep),
   },
@@ -76,8 +96,12 @@ export const jsonCatalogs = {
     dashboard: unflatten(viDashboard),
     gadgetSettings: unflatten(viGadgetSettings),
     github: unflatten(viGithub),
+    mcp: unflatten(viMcp),
+    news: unflatten(viNews),
     notifications: unflatten(viNotifications),
+    pick: unflatten(viPick),
     shell: unflatten(viShell),
+    sources: unflatten(viSources),
     taskGoal: unflatten(viTaskGoal),
     uiSweep: unflatten(viUiSweep),
   },

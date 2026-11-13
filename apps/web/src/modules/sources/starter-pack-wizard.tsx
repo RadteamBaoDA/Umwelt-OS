@@ -15,19 +15,19 @@ import { WizardShell } from './source-wizard';
 import { builtinOptionsFor, defaultEditText, editTextValid, scopedSpecFor, STARTER_PACKS, type PackItem } from './starter-packs';
 
 /** Per-row creation state; `error` is a `sources` message key shown for failed rows. */
-type RowStatus = { state: 'creating' | 'done' | 'exists' | 'failed'; error?: 'builtinErrorOperator' | 'builtinErrorTerms' | 'builtinErrorGeneric' | 'scheduleBelowMinimum' };
+type RowStatus = { state: 'creating' | 'done' | 'exists' | 'failed'; error?: 'builtinError.operator' | 'builtinError.terms' | 'builtinError.generic' | 'schedule.belowMinimum' };
 
 /** Maps a failed create to a translated message key; an already-added built-in is not a failure. */
 function failureKey(cause: unknown): 'exists' | NonNullable<RowStatus['error']> {
-  if (intervalBelowMinimum(cause)) return 'scheduleBelowMinimum';
+  if (intervalBelowMinimum(cause)) return 'schedule.belowMinimum';
   const key = builtinEnableErrorKey(cause);
-  return key === 'builtinAlreadyAdded' ? 'exists' : key;
+  return key === 'builtin.alreadyAdded' ? 'exists' : key;
 }
 
-const FIELD_LABEL = { vn_symbols: 'starterFieldVnSymbols', job_keywords: 'starterFieldJobKeywords', crypto_symbols: 'starterFieldCrypto', github_repo: 'starterFieldRepo', arxiv_category: 'starterFieldArxiv', weather: 'starterFieldWeather' } as const;
+const FIELD_LABEL = { vn_symbols: 'starter.fieldVnSymbols', job_keywords: 'starter.fieldJobKeywords', crypto_symbols: 'starter.fieldCrypto', github_repo: 'starter.fieldRepo', arxiv_category: 'starter.fieldArxiv', weather: 'starter.fieldWeather' } as const;
 
 /** Badge message key per row state; rows without a status yet read as pending. */
-const STATUS_KEY = { creating: 'starterStatusCreating', done: 'starterStatusDone', exists: 'starterStatusExists', failed: 'starterStatusFailed' } as const;
+const STATUS_KEY = { creating: 'starter.statusCreating', done: 'starter.statusDone', exists: 'starter.statusExists', failed: 'starter.statusFailed' } as const;
 
 /** Everything needed to create one starter item; `name` is already trimmed. */
 interface CreateContext {
@@ -63,20 +63,20 @@ function StarterItemRow({ item, added, name, checked, text, defaultName, locatio
   const invalid = checked && !editTextValid(item, text);
   return <div className="flex flex-col gap-2 rounded-md border border-border p-3">
     <div className="flex flex-wrap items-center gap-3">
-      <Checkbox aria-label={t('starterItemSelect', { name: defaultName })} checked={checked} disabled={added} onCheckedChange={(next) => onToggle(next === true)} />
-      <Input aria-label={t('starterNameLabel', { name: defaultName })} aria-invalid={checked && name.trim().length === 0} className="h-8 min-w-0 flex-1 basis-56" maxLength={200} disabled={added} value={name}
+      <Checkbox aria-label={t('starter.itemSelect', { name: defaultName })} checked={checked} disabled={added} onCheckedChange={(next) => onToggle(next === true)} />
+      <Input aria-label={t('starter.nameLabel', { name: defaultName })} aria-invalid={checked && name.trim().length === 0} className="h-8 min-w-0 flex-1 basis-56" maxLength={200} disabled={added} value={name}
         onChange={(event) => onName(event.target.value)} />
-      {added && <Badge variant="secondary">{t('starterAlreadyAdded')}</Badge>}
+      {added && <Badge variant="secondary">{t('starter.alreadyAdded')}</Badge>}
     </div>
-    {raisedTo !== null && !added && <small className="text-muted-foreground" role="note">{t('starterIntervalRaised', { minutes: raisedTo })}</small>}
+    {raisedTo !== null && !added && <small className="text-muted-foreground" role="note">{t('starter.intervalRaised', { minutes: raisedTo })}</small>}
     {item.edit && !added && <div className="field">
       <Label htmlFor={`starter-${item.id}-value`}>{t(FIELD_LABEL[item.edit])}</Label>
       <div className="flex flex-wrap items-center gap-2">
         <Input id={`starter-${item.id}-value`} className="min-w-0 flex-1 basis-56" aria-invalid={invalid} value={text} onChange={(event) => onText(event.target.value)} />
-        {item.edit === 'weather' && <Button type="button" variant="outline" size="sm" onClick={onUseLocation}>{t('starterUseMyLocation')}</Button>}
+        {item.edit === 'weather' && <Button type="button" variant="outline" size="sm" onClick={onUseLocation}>{t('starter.useMyLocation')}</Button>}
       </div>
-      {invalid && <small className="text-destructive" role="alert">{t('starterFieldInvalid')}</small>}
-      {item.edit === 'weather' && locationError && <small className="text-destructive" role="alert">{t('starterLocationFailed')}</small>}
+      {invalid && <small className="text-destructive" role="alert">{t('starter.fieldInvalid')}</small>}
+      {item.edit === 'weather' && locationError && <small className="text-destructive" role="alert">{t('starter.locationFailed')}</small>}
     </div>}
   </div>;
 }
@@ -85,10 +85,10 @@ function StarterItemRow({ item, added, name, checked, text, defaultName, locatio
 function LinkedinGuide({ onAddConnector }: { onAddConnector?: () => void }) {
   const t = useTranslations('sources');
   return <div className="flex flex-col gap-2 rounded-md border border-dashed border-border p-3" data-testid="starter-linkedin-guide">
-    <strong>{t('starterLinkedinTitle')}</strong>
-    <p className="m-0 text-sm text-muted-foreground">{t('starterLinkedinIntro')}</p>
-    <ol className="m-0 pl-5 text-sm"><li>{t('starterLinkedinStep1')}</li><li>{t('starterLinkedinStep2')}</li><li>{t('starterLinkedinStep3')}</li></ol>
-    {onAddConnector && <div><Button type="button" variant="outline" size="sm" onClick={onAddConnector}>{t('starterLinkedinAddGmail')}</Button></div>}
+    <strong>{t('starter.linkedinTitle')}</strong>
+    <p className="m-0 text-sm text-muted-foreground">{t('starter.linkedinIntro')}</p>
+    <ol className="m-0 pl-5 text-sm"><li>{t('starter.linkedinStep1')}</li><li>{t('starter.linkedinStep2')}</li><li>{t('starter.linkedinStep3')}</li></ol>
+    {onAddConnector && <div><Button type="button" variant="outline" size="sm" onClick={onAddConnector}>{t('starter.linkedinAddGmail')}</Button></div>}
   </div>;
 }
 
@@ -99,9 +99,9 @@ function StarterProgressStep({ running, runItems, statuses, nameOf, onRetry, onB
   const t = useTranslations('sources');
   const failed = runItems.filter((item) => statuses[item.id]?.state === 'failed');
   const doneCount = runItems.filter((item) => statuses[item.id]?.state === 'done' || statuses[item.id]?.state === 'exists').length;
-  return <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('stepStarterCreate')}>
-    {running && <p role="status">{t('starterRunning')}</p>}
-    {!running && <p role="status">{t('starterSummary', { done: doneCount, failed: failed.length })}</p>}
+  return <section className="flex flex-col gap-3" aria-live="polite" aria-label={t('step.starterCreate')}>
+    {running && <p role="status">{t('starter.running')}</p>}
+    {!running && <p role="status">{t('starter.summary', { done: doneCount, failed: failed.length })}</p>}
     <ul className="m-0 flex list-none flex-col gap-2 p-0">
       {runItems.map((item) => {
         const status = statuses[item.id];
@@ -109,13 +109,13 @@ function StarterProgressStep({ running, runItems, statuses, nameOf, onRetry, onB
           <span className="font-medium">{nameOf(item)}</span>
           <span className="flex items-center gap-2 text-sm">
             {status?.state === 'failed' && status.error && <span className="text-destructive" role="alert">{t(status.error)}</span>}
-            <Badge variant={status?.state === 'failed' ? 'outline' : 'secondary'}>{t(status ? STATUS_KEY[status.state] : 'starterStatusPending')}</Badge>
+            <Badge variant={status?.state === 'failed' ? 'outline' : 'secondary'}>{t(status ? STATUS_KEY[status.state] : 'starter.statusPending')}</Badge>
           </span>
         </li>;
       })}
     </ul>
     {!running && onBuildDashboard && doneCount > 0 && <div><Button type="button" onClick={onBuildDashboard}>{t('buildDashboard')}</Button></div>}
-    {!running && failed.length > 0 && <div><Button type="button" variant="outline" onClick={() => onRetry(failed)}>{t('starterRetryFailed')}</Button></div>}
+    {!running && failed.length > 0 && <div><Button type="button" variant="outline" onClick={() => onRetry(failed)}>{t('starter.retryFailed')}</Button></div>}
   </section>;
 }
 
@@ -218,17 +218,17 @@ export function StarterPackWizard({ onClose, onChanged, onAddConnector, onBuildD
   }
 
   const steps = [
-    { id: 'choose', title: t('stepStarterChoose'), valid: ready },
-    { id: 'create', title: t('stepStarterCreate'), valid: true },
+    { id: 'choose', title: t('step.starterChoose'), valid: ready },
+    { id: 'create', title: t('step.starterCreate'), valid: true },
   ];
 
-  return <WizardShell title={t('starterTitle')} mode="add" steps={steps} stepIndex={index} onStepChange={setIndex} busy={running} onNext={onNext} onRequestClose={onClose}
+  return <WizardShell title={t('starter.title')} mode="add" steps={steps} stepIndex={index} onStepChange={setIndex} busy={running} onNext={onNext} onRequestClose={onClose}
     final={{ label: t('done'), disabled: running, onClick: onClose }}>
-    {index === 0 && <section className="flex flex-col gap-4" aria-label={t('stepStarterChoose')}>
-      <p className="m-0 text-muted-foreground">{t('starterIntro')}</p>
-      <p className="m-0 text-sm text-muted-foreground" role="note">{t('starterTermsNote')}</p>
+    {index === 0 && <section className="flex flex-col gap-4" aria-label={t('step.starterChoose')}>
+      <p className="m-0 text-muted-foreground">{t('starter.intro')}</p>
+      <p className="m-0 text-sm text-muted-foreground" role="note">{t('starter.termsNote')}</p>
       {(builtins.isPending || existing.isPending) && <p className="text-muted-foreground">{t('loading')}</p>}
-      {(builtins.isError || existing.isError) && <p className="text-destructive" role="alert">{t('starterLoadFailed')} <Button variant="outline" onClick={() => { void builtins.refetch(); void existing.refetch(); }}>{t('retry')}</Button></p>}
+      {(builtins.isError || existing.isError) && <p className="text-destructive" role="alert">{t('starter.loadFailed')} <Button variant="outline" onClick={() => { void builtins.refetch(); void existing.refetch(); }}>{t('retry.label')}</Button></p>}
       {loaded && packs.map((pack) => <div key={pack.id} className="flex flex-col gap-2" role="group" aria-label={t(pack.labelKey)}>
         <h3 className="m-0 text-sm font-semibold text-muted-foreground">{t(pack.labelKey)}</h3>
         {pack.items.map((item) => {
@@ -240,7 +240,7 @@ export function StarterPackWizard({ onClose, onChanged, onAddConnector, onBuildD
         })}
         {pack.guide === 'linkedin' && <LinkedinGuide onAddConnector={onAddConnector} />}
       </div>)}
-      {loaded && !ready && picked.length === 0 && <p className="m-0 text-sm text-muted-foreground" role="status">{t('starterNothing')}</p>}
+      {loaded && !ready && picked.length === 0 && <p className="m-0 text-sm text-muted-foreground" role="status">{t('starter.nothing')}</p>}
     </section>}
     {index === 1 && <StarterProgressStep running={running} runItems={runItems} statuses={statuses} nameOf={nameOf} onRetry={(items) => void run(items)} onBuildDashboard={onBuildDashboard} />}
   </WizardShell>;

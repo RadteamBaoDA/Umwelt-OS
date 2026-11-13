@@ -225,7 +225,7 @@ async function runSaveAndEnable(
     native: usesProviderCredential(ctx.currentEntry) && Boolean(activationDraft.secret),
   };
   if (providerKeyMissing(ctx, keys)) {
-    draft.setError('providerSecretRequired');
+    draft.setError('provider.secretRequired');
     return null;
   }
   await storeReplacementKeys(ctx, token, id, progress.nextRevision, keys, activationDraft.secret);
@@ -295,7 +295,7 @@ async function runRetryActivation(ctx: EditorContext, token: RequestToken, id: s
   const replacingNativeKey = usesProviderCredential(ctx.currentEntry) && Boolean(requestedSecret);
   if (replacingNativeKey) await saveNativeRestCredential(id, draft.revision, requestedSecret, ctx.csrfToken, token.controller.signal);
   if (providerCredentialRequired(ctx.currentEntry) && !replacingNativeKey && !draft.providerCredentialConfigured) {
-    draft.setError('providerSecretRequired');
+    draft.setError('provider.secretRequired');
     return;
   }
   await activateAndRefresh(ctx, token, id, requestedSecret, replacingNativeKey);

@@ -14,7 +14,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { SyncHistory } from '../sync-history';
-import { FIELD_LABEL_KEYS } from '../connector-editor-model';
+import { fieldLabelKey } from '../connector-editor-model';
 
 /** Verify-step banner when the saved configuration is not active, with a retry action. */
 export function ActivationIssueBanner({ m }: { m: ConnectorEditorModel }) {
@@ -42,12 +42,12 @@ export function ActivationIssueBanner({ m }: { m: ConnectorEditorModel }) {
           Boolean(visibleActivationError)) && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive p-4" role="status">
             <p>
-              <strong>{t('activationIssueTitle')}</strong> {t('savedInactive')}
-              {visibleActivationError ? ` ${t('activationError')}: ${visibleActivationError}` : ''}
+              <strong>{t('activation.issueTitle')}</strong> {t('savedInactive')}
+              {visibleActivationError ? ` ${t('activation.error')}: ${visibleActivationError}` : ''}
             </p>
             {!dirty && (
               <Button variant="outline" disabled={locked || termsBlocked} onClick={retryActivation}>
-                {busyAction === 'activate' ? t('enabling') : t('retryActivation')}
+                {busyAction === 'activate' ? t('enabling') : t('retry.activation')}
               </Button>
             )}
           </div>
@@ -71,13 +71,13 @@ export function EditorMessages({ m }: { m: ConnectorEditorModel }) {
                   | 'conflict'
                   | 'configurationInvalid'
                   | 'serviceUnavailable'
-                  | 'validationOutcomeUnknown'
+                  | 'validation.outcomeUnknown'
                   | 'sourceNameRequired'
                   | 'actionFailed'
-                  | 'reloadFailed'
-                  | 'builtinAlreadyAdded'
-                  | 'redditConnectionFailed'
-                  | 'redditDisconnectFailed',
+                  | 'reload.failed'
+                  | 'builtin.alreadyAdded'
+                  | 'reddit.connectionFailed'
+                  | 'reddit.disconnectFailed',
               )}
           {errorDetail && ` | ${errorDetail}`}
         </p>
@@ -85,22 +85,25 @@ export function EditorMessages({ m }: { m: ConnectorEditorModel }) {
       {/* Each rejected field by its form label, so the owner knows exactly which input to fix. */}
       {issues.length > 0 && (
         <ul className="error m-0 list-disc pl-5" data-testid="scope-issues">
-          {issues.map((issue) => (
-            <li key={issue.field}>
-              {t.has(FIELD_LABEL_KEYS[issue.field] ?? '') ? t(FIELD_LABEL_KEYS[issue.field] as 'history') : issue.field}:{' '}
-              {t(
-                (
-                  {
-                    required: 'issueRequired',
-                    format: 'issueFormat',
-                    tooLong: 'issueTooLong',
-                    range: 'issueRange',
-                    invalid: 'issueInvalid',
-                  } as const
-                )[issue.reason],
-              )}
-            </li>
-          ))}
+          {issues.map((issue) => {
+            const labelKey = fieldLabelKey(issue.field);
+            return (
+              <li key={issue.field}>
+                {labelKey ? t(labelKey) : issue.field}:{' '}
+                {t(
+                  (
+                    {
+                      required: 'issue.required',
+                      format: 'issue.format',
+                      tooLong: 'issue.tooLong',
+                      range: 'issue.range',
+                      invalid: 'issue.invalid',
+                    } as const
+                  )[issue.reason],
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
       {notice && (
@@ -122,7 +125,7 @@ export function ConflictSection({ m }: { m: ConnectorEditorModel }) {
         <SettingsSection title={t('conflict')}>
           <div role="group" aria-label={t('conflict')}>
             <Button variant="outline" disabled={locked} onClick={reloadServerConfiguration}>
-              {t('reloadDiscard')}
+              {t('reload.discard')}
             </Button>
           </div>
         </SettingsSection>
@@ -139,7 +142,7 @@ export function TermsNotice({ m }: { m: ConnectorEditorModel }) {
     <>
       {showStep('choose', 'verify') && (termsBlocked || visibleActivationError === 'terms_not_accepted') && (
         <p className="error" role="status">
-          {t('termsActivationBlocked')}
+          {t('terms.activationBlocked')}
         </p>
       )}
     </>
@@ -178,11 +181,11 @@ export function GitHubDisconnectDialog({ m }: { m: ConnectorEditorModel }) {
       <AlertDialog open={githubDisconnectOpen} onOpenChange={setGithubDisconnectOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{t('githubDisconnect')}</AlertDialogTitle>
-            <AlertDialogDescription>{t('githubPeerReview', { count: githubPeers.length })}</AlertDialogDescription>
+            <AlertDialogTitle>{t('github.disconnect')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('github.peerReview', { count: githubPeers.length })}</AlertDialogDescription>
           </AlertDialogHeader>
           <div>
-            <strong>{t('githubPeerList')}</strong>
+            <strong>{t('github.peerList')}</strong>
             <ul>
               {githubPeers.map((peer) => (
                 <li key={peer.source_id}>{peer.source_id}</li>
@@ -192,7 +195,7 @@ export function GitHubDisconnectDialog({ m }: { m: ConnectorEditorModel }) {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={locked}>{t('cancel')}</AlertDialogCancel>
             <Button disabled={locked} onClick={confirmGitHubDisconnect}>
-              {busyAction === 'github-disconnect' ? t('saving') : t('githubDisconnect')}
+              {busyAction === 'github-disconnect' ? t('saving') : t('github.disconnect')}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -224,12 +227,12 @@ export function GitHubRecoveryDialog({ m }: { m: ConnectorEditorModel }) {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{t('githubRecoveryTitle')}</AlertDialogTitle>
+            <AlertDialogTitle>{t('github.recoveryTitle')}</AlertDialogTitle>
             {githubRecoveryReview && (
               <AlertDialogDescription>
-                {t('githubRecoveryDisclosure', {
+                {t('github.recoveryDisclosure', {
                   operationId: githubRecoveryReview.operationId,
-                  kind: t(githubRecoveryReview.kind === 'authorization' ? 'githubRecoveryAuthorization' : 'githubRecoveryRefresh'),
+                  kind: t(githubRecoveryReview.kind === 'authorization' ? 'github.recoveryAuthorization' : 'github.recoveryRefresh'),
                   sourceId: githubRecoveryReview.originSourceId,
                   generation: githubRecoveryReview.originGeneration,
                   revision: githubRecoveryReview.originRevision,
@@ -240,7 +243,7 @@ export function GitHubRecoveryDialog({ m }: { m: ConnectorEditorModel }) {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={locked}>{t('cancel')}</AlertDialogCancel>
             <Button disabled={locked || !githubRecoveryReview} onClick={confirmGitHubRecovery}>
-              {busyAction === 'github-recovery' ? t('saving') : t('githubAcknowledgeConnect')}
+              {busyAction === 'github-recovery' ? t('saving') : t('github.acknowledgeConnect')}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -249,14 +252,14 @@ export function GitHubRecoveryDialog({ m }: { m: ConnectorEditorModel }) {
   );
 }
 
-export const ACTIVATION_STATE_TITLE_KEY: Record<string, string> = {
-  queued: 'stateQueued',
-  provisioning: 'stateProvisioning',
-  saved_not_active: 'stateSavedNotActive',
-  reconciliation_required: 'stateReconciliationRequired',
-  disabled: 'stateDisabled',
+export const ACTIVATION_STATE_TITLE_KEY = {
+  queued: 'state.queued',
+  provisioning: 'state.provisioning',
+  saved_not_active: 'state.savedNotActive',
+  reconciliation_required: 'state.reconciliationRequired',
+  disabled: 'state.disabled',
   active: 'active',
-};
+} as const;
 
 /** Activation diagnostics lines: refresh failure, error code, saved-inactive and pending credential cleanup notes. */
 export function ActivationNotes({ m }: { m: ConnectorEditorModel }) {
@@ -264,16 +267,16 @@ export function ActivationNotes({ m }: { m: ConnectorEditorModel }) {
   const { activationQuery, visibleActivationState, visibleActivationError } = m;
   return (
     <>
-      {activationQuery.isError && <p className="error">{t('activationRefreshFailed')}</p>}
+      {activationQuery.isError && <p className="error">{t('activation.refreshFailed')}</p>}
       {visibleActivationError && (
         <p className="error">
-          {t('activationError')}: {visibleActivationError}
+          {t('activation.error')}: {visibleActivationError}
         </p>
       )}
       {visibleActivationState === 'saved_not_active' && <p className="text-muted-foreground">{t('savedInactive')}</p>}
       {visibleActivationError === 'credential_delete_pending' && (
         <p className="text-muted-foreground" role="status">
-          {t('credentialPending')}
+          {t('credential.pending')}
         </p>
       )}
     </>
@@ -320,10 +323,10 @@ export function ActivationDetails({ m }: { m: ConnectorEditorModel }) {
         <SettingsSection
           title={
             <>
-              {t('activationState')}:{' '}
+              {t('activation.state')}:{' '}
               {visibleActivationState === 'active' && source?.collection_error_code
                 ? t('activeCollectionFailed')
-                : t((ACTIVATION_STATE_TITLE_KEY[visibleActivationState] ?? 'stateUnknown') as 'stateUnknown')}
+                : t(ACTIVATION_STATE_TITLE_KEY[visibleActivationState as keyof typeof ACTIVATION_STATE_TITLE_KEY] ?? 'state.unknown')}
             </>
           }
         >

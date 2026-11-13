@@ -4,7 +4,7 @@ import { NextIntlClientProvider } from 'next-intl';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '@/core/api';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import type { ConnectorCatalogEntry, ConnectorConfiguration, Source } from './api';
 
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 't' }) }));
@@ -96,7 +96,7 @@ function mount(source?: Source) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>
-      <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}>
+      <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
         {children}
       </NextIntlClientProvider>
     </QueryClientProvider>
@@ -186,7 +186,7 @@ describe('useConnectorEditor save and enable', () => {
     await act(async () => {
       await result.current.saveAndEnable();
     });
-    expect(result.current.error).toBe('providerSecretRequired');
+    expect(result.current.error).toBe('provider.secretRequired');
     expect(api.activateConnector).not.toHaveBeenCalled();
   });
 
@@ -198,7 +198,7 @@ describe('useConnectorEditor save and enable', () => {
     });
     expect(result.current.verify).toEqual({ phase: 'failed', code: 'local_only_source' });
     expect(result.current.error).toBe('');
-    expect(result.current.notice).toBe(sourcesMessages['en-us'].savedInactive);
+    expect(result.current.notice).toBe(getCatalog('en-us', 'sources').savedInactive);
   });
 
   it('serializes actions: a second request while one runs is refused', async () => {

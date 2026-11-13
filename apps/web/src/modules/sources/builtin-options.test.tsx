@@ -2,23 +2,52 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import type { BuiltinSource } from './api';
 import { BuiltinOptions } from './builtin-options';
 
 const rss: BuiltinSource = {
-  id: 'tuoitre_news', label: 'Tuổi Trẻ', category: 'news', eligibility: 'open', terms_url: 'https://e.org', terms_checked_on: '2026-10-07', attribution: 'x',
-  execution: 'supported', source_id: null, enabled: false, data_shapes: ['news'],
-  applicable_options: ['name', 'schedule_interval_minutes', 'max_items', 'include_keywords', 'exclude_keywords', 'max_age_days', 'feed_sections'],
-  sections: [{ slug: 'home', label_en: 'Home', label_vi: 'Trang chủ' }, { slug: 'world', label_en: 'World', label_vi: 'Thế giới' }], default_section: 'home',
+  id: 'tuoitre_news',
+  label: 'Tuổi Trẻ',
+  category: 'news',
+  eligibility: 'open',
+  terms_url: 'https://e.org',
+  terms_checked_on: '2026-10-07',
+  attribution: 'x',
+  execution: 'supported',
+  source_id: null,
+  enabled: false,
+  data_shapes: ['news'],
+  applicable_options: [
+    'name',
+    'schedule_interval_minutes',
+    'max_items',
+    'include_keywords',
+    'exclude_keywords',
+    'max_age_days',
+    'feed_sections',
+  ],
+  sections: [
+    { slug: 'home', label_en: 'Home', label_vi: 'Trang chủ' },
+    { slug: 'world', label_en: 'World', label_vi: 'Thế giới' },
+  ],
+  default_section: 'home',
 };
-const snapshot: BuiltinSource = { ...rss, id: 'usgs', applicable_options: ['name', 'schedule_interval_minutes'], sections: null, default_section: null };
+const snapshot: BuiltinSource = {
+  ...rss,
+  id: 'usgs',
+  applicable_options: ['name', 'schedule_interval_minutes'],
+  sections: null,
+  default_section: null,
+};
 
 const view = (builtin: BuiltinSource, values = {}, extra: Record<string, unknown> = {}) => {
   const onChange = vi.fn();
-  render(<NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}>
-    <BuiltinOptions builtin={builtin} values={values} onChange={onChange} {...extra} />
-  </NextIntlClientProvider>);
+  render(
+    <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+      <BuiltinOptions builtin={builtin} values={values} onChange={onChange} {...extra} />
+    </NextIntlClientProvider>,
+  );
   return onChange;
 };
 afterEach(() => cleanup());
@@ -71,7 +100,11 @@ describe('BuiltinOptions', () => {
   });
 
   it('labels sections in Vietnamese', () => {
-    render(<NextIntlClientProvider locale="vi-VN" messages={{ sources: sourcesMessages['vi-vi'] }}><BuiltinOptions builtin={rss} values={{ feed_sections: ['home'] }} onChange={vi.fn()} /></NextIntlClientProvider>);
+    render(
+      <NextIntlClientProvider locale="vi-VN" messages={{ sources: getCatalog('vi-vi', 'sources') }}>
+        <BuiltinOptions builtin={rss} values={{ feed_sections: ['home'] }} onChange={vi.fn()} />
+      </NextIntlClientProvider>,
+    );
     expect(screen.getByRole('checkbox', { name: 'Thế giới' })).toBeTruthy();
   });
 
@@ -142,7 +175,11 @@ describe('BuiltinOptions', () => {
     });
 
     it('labels per-type options in Vietnamese', () => {
-      render(<NextIntlClientProvider locale="vi-VN" messages={{ sources: sourcesMessages['vi-vi'] }}><BuiltinOptions builtin={typed('usgs', ['region'])} values={{}} onChange={vi.fn()} /></NextIntlClientProvider>);
+      render(
+        <NextIntlClientProvider locale="vi-VN" messages={{ sources: getCatalog('vi-vi', 'sources') }}>
+          <BuiltinOptions builtin={typed('usgs', ['region'])} values={{}} onChange={vi.fn()} />
+        </NextIntlClientProvider>,
+      );
       expect(screen.getByText('Khu vực')).toBeTruthy();
     });
   });

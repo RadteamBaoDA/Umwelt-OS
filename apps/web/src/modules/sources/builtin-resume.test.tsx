@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import type { BuiltinSource } from './api';
 
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
@@ -13,14 +13,28 @@ vi.mock('./api', async (original) => ({ ...(await original<typeof import('./api'
 import { BuiltinResumeList } from './builtin-sources';
 
 const row = (over: Partial<BuiltinSource>): BuiltinSource => ({
-  id: 'bbc_world', label: 'BBC World News', category: 'news', eligibility: 'review', terms_url: 'https://example.org/terms',
-  terms_checked_on: '2026-10-07', attribution: 'Credit the BBC.', execution: 'supported', source_id: 'src-1', enabled: false, data_shapes: ['measurement'], ...over,
+  id: 'bbc_world',
+  label: 'BBC World News',
+  category: 'news',
+  eligibility: 'review',
+  terms_url: 'https://example.org/terms',
+  terms_checked_on: '2026-10-07',
+  attribution: 'Credit the BBC.',
+  execution: 'supported',
+  source_id: 'src-1',
+  enabled: false,
+  data_shapes: ['measurement'],
+  ...over,
 });
 const onChanged = vi.fn();
-const wrap = () => render(
-  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-    <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}><BuiltinResumeList onChanged={onChanged} /></NextIntlClientProvider>
-  </QueryClientProvider>);
+const wrap = () =>
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+        <BuiltinResumeList onChanged={onChanged} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
 
 beforeEach(() => {
   [...Object.values(api)].forEach((mock) => mock.mockReset());

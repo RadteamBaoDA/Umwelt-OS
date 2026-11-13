@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import type { ConnectorConfig } from './api';
 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
@@ -13,9 +13,11 @@ const base: ConnectorConfig = { timeout_seconds: 30, timezone: 'UTC', schedule_i
 describe('Mastodon scope form', () => {
   it('offers instance, account and hashtag inputs (not the Telegram fallback) and reports typed values', () => {
     const onChange = vi.fn();
-    render(<NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}>
-      <ProviderScope provider="mastodon" configuration={base} disabled={false} resetEpoch={0} onChange={onChange} />
-    </NextIntlClientProvider>);
+    render(
+      <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+        <ProviderScope provider="mastodon" configuration={base} disabled={false} resetEpoch={0} onChange={onChange} />
+      </NextIntlClientProvider>,
+    );
     expect(screen.queryByLabelText(/telegram/i)).toBeNull();
     fireEvent.change(screen.getByLabelText(/instance url/i), { target: { value: 'https://mastodon.social' } });
     fireEvent.change(screen.getByLabelText(/^Account/), { target: { value: 'Mastodon' } });

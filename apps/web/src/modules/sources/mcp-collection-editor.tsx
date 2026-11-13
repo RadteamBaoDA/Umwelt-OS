@@ -111,8 +111,8 @@ type Draft = ReturnType<typeof useMcpCollectionDraft>;
 function GrantChecklist({ draft, busy, onDraftChange }: { draft: Draft; busy: boolean; onDraftChange: (dirty: boolean) => void }) {
   const t = useTranslations('sources');
   const { visibleGrants, grantIds, setGrantIds, argumentsByGrant, setArgumentsByGrant } = draft;
-  return <div role="group" aria-label={t('mcpCollectionGrants')} className="flex flex-col gap-2"><h4 className="m-0 text-sm font-semibold">{t('mcpCollectionGrants')}</h4>
-    {visibleGrants.length === 0 ? <p className="text-muted-foreground">{t('mcpNoGrants')}</p> : visibleGrants.map((grant) => <div key={grant.id} className="space-y-2"><CheckboxField><Checkbox id={`mcp-grant-${grant.id}`} disabled={busy || (!grantIds.includes(grant.id) && grantIds.length >= 10)} checked={grantIds.includes(grant.id)} onCheckedChange={(checked) => { setGrantIds((current) => checked ? [...new Set([...current, grant.id])] : current.filter((id) => id !== grant.id)); onDraftChange(true); }} /><Label htmlFor={`mcp-grant-${grant.id}`}>{grant.capability_id} · {grant.risk}</Label></CheckboxField>{grantIds.includes(grant.id) && <div className="field"><Label htmlFor={`mcp-args-${grant.id}`}>{t('mcpArguments')}</Label><Input id={`mcp-args-${grant.id}`} value={argumentsByGrant[grant.id] ?? '{}'} onChange={(event) => { setArgumentsByGrant((current) => ({ ...current, [grant.id]: event.target.value })); onDraftChange(true); }} /></div>}</div>)}
+  return <div role="group" aria-label={t('mcp.collectionGrants')} className="flex flex-col gap-2"><h4 className="m-0 text-sm font-semibold">{t('mcp.collectionGrants')}</h4>
+    {visibleGrants.length === 0 ? <p className="text-muted-foreground">{t('mcp.noGrants')}</p> : visibleGrants.map((grant) => <div key={grant.id} className="space-y-2"><CheckboxField><Checkbox id={`mcp-grant-${grant.id}`} disabled={busy || (!grantIds.includes(grant.id) && grantIds.length >= 10)} checked={grantIds.includes(grant.id)} onCheckedChange={(checked) => { setGrantIds((current) => checked ? [...new Set([...current, grant.id])] : current.filter((id) => id !== grant.id)); onDraftChange(true); }} /><Label htmlFor={`mcp-grant-${grant.id}`}>{grant.capability_id} · {grant.risk}</Label></CheckboxField>{grantIds.includes(grant.id) && <div className="field"><Label htmlFor={`mcp-args-${grant.id}`}>{t('mcp.arguments')}</Label><Input id={`mcp-args-${grant.id}`} value={argumentsByGrant[grant.id] ?? '{}'} onChange={(event) => { setArgumentsByGrant((current) => ({ ...current, [grant.id]: event.target.value })); onDraftChange(true); }} /></div>}</div>)}
   </div>;
 }
 
@@ -120,7 +120,7 @@ function GrantChecklist({ draft, busy, onDraftChange }: { draft: Draft; busy: bo
 function ScheduleFields({ draft, busy, onDraftChange }: { draft: Draft; busy: boolean; onDraftChange: (dirty: boolean) => void }) {
   const t = useTranslations('sources');
   const { scheduleMinutes, setScheduleMinutes, timezone, setTimezone } = draft;
-  return <FieldGrid><div className="field"><Label htmlFor="mcp-collection-schedule">{t('schedule')}</Label><Select disabled={busy} value={String(scheduleMinutes)} onValueChange={(value) => { setScheduleMinutes(Number(value) as ScheduleMinutes); onDraftChange(true); }}><SelectTrigger id="mcp-collection-schedule"><SelectValue /></SelectTrigger><SelectContent>{intervals.map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('everyMinutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
+  return <FieldGrid><div className="field"><Label htmlFor="mcp-collection-schedule">{t('schedule.label')}</Label><Select disabled={busy} value={String(scheduleMinutes)} onValueChange={(value) => { setScheduleMinutes(Number(value) as ScheduleMinutes); onDraftChange(true); }}><SelectTrigger id="mcp-collection-schedule"><SelectValue /></SelectTrigger><SelectContent>{intervals.map((minutes) => <SelectItem key={minutes} value={String(minutes)}>{t('every.minutes', { minutes })}</SelectItem>)}</SelectContent></Select></div>
     <div className="field"><Label htmlFor="mcp-collection-timezone">{t('timezone')}</Label><Input disabled={busy} id="mcp-collection-timezone" value={timezone} onChange={(event) => { setTimezone(event.target.value); onDraftChange(true); }} maxLength={64} /></div></FieldGrid>;
 }
 
@@ -176,15 +176,15 @@ export function McpCollectionEditor({ sourceId, sourceStatus, onChanged, onDraft
     finally { setBusy(false); }
   }
 
-  return <SettingsSection title={t('mcpCollectionTitle')} description={t('mcpCollectionHelp')}>
-    {draft.loading ? <p className="text-muted-foreground">{t('loading')}</p> : connections.length === 0 ? <p className="error">{t('mcpNoConnection')}</p> : <>
-      <div className="field"><Label htmlFor="mcp-collection-connection">{t('mcpConnection')}</Label><Select disabled={busy} value={connectionId} onValueChange={(value) => { setConnectionId(value); setGrantIds([]); onDraftChange(true); }}><SelectTrigger id="mcp-collection-connection"><SelectValue /></SelectTrigger><SelectContent>{connections.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
+  return <SettingsSection title={t('mcp.collectionTitle')} description={t('mcp.collectionHelp')}>
+    {draft.loading ? <p className="text-muted-foreground">{t('loading')}</p> : connections.length === 0 ? <p className="error">{t('mcp.noConnection')}</p> : <>
+      <div className="field"><Label htmlFor="mcp-collection-connection">{t('mcp.connection')}</Label><Select disabled={busy} value={connectionId} onValueChange={(value) => { setConnectionId(value); setGrantIds([]); onDraftChange(true); }}><SelectTrigger id="mcp-collection-connection"><SelectValue /></SelectTrigger><SelectContent>{connections.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
       <GrantChecklist draft={draft} busy={busy} onDraftChange={onDraftChange} />
       <ScheduleFields draft={draft} busy={busy} onDraftChange={onDraftChange} />
       {sourceStatus === 'paused' && <Button variant="outline" disabled={busy} onClick={resume}>{t('resume')}</Button>}
-      {error === 'staleConflict' && <div role="alert"><p className="error">{t('mcpCollectionStaleConflict')}</p><Button variant="outline" disabled={busy} onClick={reloadConflict}>{t('mcpCollectionReload')}</Button></div>}
+      {error === 'staleConflict' && <div role="alert"><p className="error">{t('mcp.collectionStaleConflict')}</p><Button variant="outline" disabled={busy} onClick={reloadConflict}>{t('mcp.collectionReload')}</Button></div>}
       <SettingsActions><Button variant="outline" disabled={saveBlocked} onClick={() => void save(false)}>{busy ? t('saving') : t('save')}</Button><Button disabled={saveBlocked} onClick={() => void save(true)}>{busy ? t('enabling') : t('saveEnable')}</Button></SettingsActions>
     </>}
-    {error && error !== 'staleConflict' && <p className="error" role="alert">{t(error === 'argumentsInvalid' ? 'mcpArgumentsInvalid' : 'mcpCollectionSaveFailed')}</p>}
+    {error && error !== 'staleConflict' && <p className="error" role="alert">{t(error === 'argumentsInvalid' ? 'mcp.argumentsInvalid' : 'mcp.collectionSaveFailed')}</p>}
   </SettingsSection>;
 }

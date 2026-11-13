@@ -2,19 +2,31 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import type { BuiltinSource } from './api';
 import { BuiltinOptions } from './builtin-options';
 
 const base: BuiltinSource = {
-  id: 'vn_stock', label: 'Vietnam stocks', category: 'economy', eligibility: 'review', terms_url: 'https://e.org', terms_checked_on: '2026-11-04', attribution: 'x',
-  execution: 'supported', source_id: null, enabled: false, data_shapes: ['measurement'], applicable_options: ['name', 'schedule_interval_minutes', 'vn_symbols'],
+  id: 'vn_stock',
+  label: 'Vietnam stocks',
+  category: 'economy',
+  eligibility: 'review',
+  terms_url: 'https://e.org',
+  terms_checked_on: '2026-11-04',
+  attribution: 'x',
+  execution: 'supported',
+  source_id: null,
+  enabled: false,
+  data_shapes: ['measurement'],
+  applicable_options: ['name', 'schedule_interval_minutes', 'vn_symbols'],
 };
 const view = (builtin: BuiltinSource, values = {}) => {
   const onChange = vi.fn();
-  render(<NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}>
-    <BuiltinOptions builtin={builtin} values={values} onChange={onChange} showSchedule />
-  </NextIntlClientProvider>);
+  render(
+    <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+      <BuiltinOptions builtin={builtin} values={values} onChange={onChange} showSchedule />
+    </NextIntlClientProvider>,
+  );
   return onChange;
 };
 afterEach(() => cleanup());
@@ -49,7 +61,11 @@ describe('BuiltinOptions interval floor and tickers', () => {
 
 describe('BuiltinOptions job filters', () => {
   const jobs: BuiltinSource = {
-    ...base, id: 'vietnamworks_jobs', label: 'VietnamWorks jobs', data_shapes: ['news'], min_interval_minutes: 360,
+    ...base,
+    id: 'vietnamworks_jobs',
+    label: 'VietnamWorks jobs',
+    data_shapes: ['news'],
+    min_interval_minutes: 360,
     applicable_options: ['name', 'schedule_interval_minutes', 'job_keywords', 'job_cities', 'job_levels', 'job_min_salary_usd'],
   };
 

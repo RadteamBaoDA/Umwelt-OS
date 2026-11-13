@@ -76,7 +76,9 @@ export function StoryList(props: StoryListProps) {
     >
       <StoryListChrome vm={vm} />
 
-      {embedded ? <FeedSourceTabs sourceIds={vm.sourceIds} sourceNames={vm.sourceNames} value={vm.sourceTab} onChange={vm.setSourceTab} /> : null}
+      {embedded ? (
+        <FeedSourceTabs sourceIds={vm.sourceIds} sourceNames={vm.sourceNames} value={vm.sourceTab} onChange={vm.setSourceTab} />
+      ) : null}
 
       <StoryTrends vm={vm} />
 
@@ -144,7 +146,7 @@ function StoryRowMeta({ vm, story }: { vm: StoryListVm; story: Story }) {
             : [t('sources', { count: story.source_count }), t('evidence', { count: story.evidence_count })]),
           relativeTime(story.observed_at),
         ].join(' · ')}
-        {story.relevance !== null && relevanceVaries ? ` · ${t('relevance')} ${Math.round(story.relevance * 100)}%` : null}
+        {story.relevance !== null && relevanceVaries ? ` · ${t('relevance.label')} ${Math.round(story.relevance * 100)}%` : null}
       </span>
       {story.incomplete_reasons.map((reason) => (
         <span key={reason} className="mt-1 block text-xs text-muted-foreground">
@@ -282,14 +284,14 @@ function StoryListStatus({ vm }: { vm: StoryListVm }) {
         <div className="flex flex-col items-start gap-2 text-sm text-muted-foreground" data-testid="news-empty">
           {noSources ? (
             <>
-              <p className="m-0">{t('emptyNoSources')}</p>
+              <p className="m-0">{t('empty.noSources')}</p>
               <Button asChild variant="outline" size="sm">
                 <Link href="/settings/sources">{t('addNewsSource')}</Link>
               </Button>
             </>
           ) : (
             <>
-              <p className="m-0">{t('emptyAwaitingCollection')}</p>
+              <p className="m-0">{t('empty.awaitingCollection')}</p>
               <Button
                 variant="outline"
                 size="sm"
@@ -361,11 +363,7 @@ function StoryListBody({ vm }: { vm: StoryListVm }) {
       </ol>
     </div>
   ) : (
-    <ol
-      className={
-        embedded && view === 'cards' ? 'grid shrink-0 gap-3 @[40rem]/gadget:grid-cols-2' : 'shrink-0 divide-y divide-border'
-      }
-    >
+    <ol className={embedded && view === 'cards' ? 'grid shrink-0 gap-3 @[40rem]/gadget:grid-cols-2' : 'shrink-0 divide-y divide-border'}>
       {rows.map((story) => (
         <StoryRow key={story.id} vm={vm} story={story} />
       ))}

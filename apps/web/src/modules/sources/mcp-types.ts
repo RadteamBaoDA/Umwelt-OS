@@ -23,11 +23,11 @@ export type McpMessageKey =
   | 'catalogFull'
   | 'invalidInput'
   | 'runtimeRefreshFailed'
-  | 'transportUnavailable'
+  | 'transport.unavailable'
   | 'clipboardFailed'
-  | 'inboundRequired'
-  | 'grantScopeRequired'
-  | 'reconciliationFailed'
-  | 'tokenAckRequired';
+  | 'inbound.required'
+  | 'grant.scopeRequired'
+  | 'reconciliation.failed'
+  | 'token.ackRequired';
 /** Pending owner confirmation for a destructive or invalidating MCP action. */
 export type ConfirmState = { action: 'rotate' | 'revoke' | 'dismiss' | 'save-empty-grants' | 'discover'; client?: McpInboundClient } | null;

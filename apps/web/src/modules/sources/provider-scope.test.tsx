@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { flatCatalogs, getCatalog } from '@locales';
 import type { ConnectorCatalogEntry, Source } from './api';
 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
@@ -9,16 +9,37 @@ vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale
 import { ProviderGuide } from './provider-scope';
 
 const entry = (over: Partial<ConnectorCatalogEntry>): ConnectorCatalogEntry => ({
-  provider_id: 'alternative_me', label: 'Alternative.me Fear and Greed', auth_methods: ['none'], scope_fields: [], configuration_fields: [],
-  quota_limits: {}, history_description: null, collection_modes: [], supports_history: false, supports_edit: false, supports_delete: false,
-  availability: 'implemented', unavailable_operations: [], terms_url: 'https://alternative.me/crypto/fear-and-greed-index/',
-  attribution: 'Display Alternative.me with a link adjacent to the index.', hosts: ['api.alternative.me'], default_interval_minutes: 1440,
-  key_fields: [], data_shapes: ['measurement'], runtime_verified: false, quota_policies: [{ policy_key: 'k', budget_kind: 'provider', window: 'day', unit: 'http_calls', limit_units: 8, basis: 'pilot_local' }], ...over,
+  provider_id: 'alternative_me',
+  label: 'Alternative.me Fear and Greed',
+  auth_methods: ['none'],
+  scope_fields: [],
+  configuration_fields: [],
+  quota_limits: {},
+  history_description: null,
+  collection_modes: [],
+  supports_history: false,
+  supports_edit: false,
+  supports_delete: false,
+  availability: 'implemented',
+  unavailable_operations: [],
+  terms_url: 'https://alternative.me/crypto/fear-and-greed-index/',
+  attribution: 'Display Alternative.me with a link adjacent to the index.',
+  hosts: ['api.alternative.me'],
+  default_interval_minutes: 1440,
+  key_fields: [],
+  data_shapes: ['measurement'],
+  runtime_verified: false,
+  quota_policies: [{ policy_key: 'k', budget_kind: 'provider', window: 'day', unit: 'http_calls', limit_units: 8, basis: 'pilot_local' }],
+  ...over,
 });
 const source = { last_success_at: '2026-10-01T00:00:00Z', collection_error_code: 'provider_unavailable' } as Source;
 
-const view = (e: ConnectorCatalogEntry, s?: Source) => render(
-  <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}><ProviderGuide entry={e} source={s} now={new Date('2026-10-09T00:00:00Z')} /></NextIntlClientProvider>);
+const view = (e: ConnectorCatalogEntry, s?: Source) =>
+  render(
+    <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+      <ProviderGuide entry={e} source={s} now={new Date('2026-10-09T00:00:00Z')} />
+    </NextIntlClientProvider>,
+  );
 
 describe('ProviderGuide', () => {
   it('shows attribution with terms link, catalog quota and cadence only', () => {
@@ -49,9 +70,29 @@ describe('ProviderGuide', () => {
     expect(screen.getByTestId('guide-steps').textContent).toMatch(/generate an API key/);
   });
   it('has the same guide providers and step counts in en-us and vi-vi', () => {
-    const guides = (loc: 'en-us' | 'vi-vi') => Object.fromEntries(Object.entries(sourcesMessages[loc].guideSteps).map(([id, steps]) => [id, Object.keys(steps).length]));
+    const guides = (loc: 'en-us' | 'vi-vi') => {
+      const counts: Record<string, number> = {};
+      for (const key of Object.keys(flatCatalogs[loc].sources)) {
+        const guide = /^guideSteps\.([^.]+)\.s\d+$/.exec(key);
+        if (guide) counts[guide[1]] = (counts[guide[1]] ?? 0) + 1;
+      }
+      return counts;
+    };
     expect(guides('vi-vi')).toEqual(guides('en-us'));
-    for (const id of ['rss', 'rest', 'web', 'mcp', 'fred', 'finnhub_news', 'newsapi', 'openweathermap', 'openaq', 'nasa_firms', 'coingecko', 'alpha_vantage']) {
+    for (const id of [
+      'rss',
+      'rest',
+      'web',
+      'mcp',
+      'fred',
+      'finnhub_news',
+      'newsapi',
+      'openweathermap',
+      'openaq',
+      'nasa_firms',
+      'coingecko',
+      'alpha_vantage',
+    ]) {
       expect(guides('en-us')[id]).toBeGreaterThan(0);
     }
   });

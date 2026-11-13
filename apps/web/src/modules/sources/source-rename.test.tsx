@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
 const api = vi.hoisted(() => ({ renameSource: vi.fn() }));
@@ -13,11 +13,18 @@ import { RenameSource, SOURCE_NAME_MAX } from './source-rename';
 
 const source = { id: 's1', name: 'Old name', status: 'active' as const };
 const onRenamed = vi.fn();
-const view = (over = {}) => render(
-  <QueryClientProvider client={new QueryClient()}>
-    <NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}><RenameSource source={{ ...source, ...over }} onRenamed={onRenamed} /></NextIntlClientProvider>
-  </QueryClientProvider>);
-beforeEach(() => { api.renameSource.mockReset(); onRenamed.mockClear(); });
+const view = (over = {}) =>
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+        <RenameSource source={{ ...source, ...over }} onRenamed={onRenamed} />
+      </NextIntlClientProvider>
+    </QueryClientProvider>,
+  );
+beforeEach(() => {
+  api.renameSource.mockReset();
+  onRenamed.mockClear();
+});
 afterEach(() => cleanup());
 
 describe('RenameSource', () => {

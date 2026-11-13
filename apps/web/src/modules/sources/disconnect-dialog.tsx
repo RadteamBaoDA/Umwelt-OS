@@ -54,30 +54,30 @@ export function DisconnectDialog({ sourceId, name, archived, disabled, trigger, 
     </Tooltip> : <AlertDialogTrigger asChild>{trigger}</AlertDialogTrigger>}
     <AlertDialogContent onCloseAutoFocus={onCloseAutoFocus}>
       <AlertDialogHeader>
-        <AlertDialogTitle>{t(archived ? 'disconnectDeleteTitle' : 'disconnectTitle', { name })}</AlertDialogTitle>
-        <AlertDialogDescription>{t('disconnectIntro')}</AlertDialogDescription>
+        <AlertDialogTitle>{t(archived ? 'disconnect.deleteTitle' : 'disconnect.title', { name })}</AlertDialogTitle>
+        <AlertDialogDescription>{t('disconnect.intro')}</AlertDialogDescription>
       </AlertDialogHeader>
-      <RadioGroup value={choice} onValueChange={(value) => setChoice(value === 'delete' ? 'delete' : 'keep')} aria-label={t('disconnectChoice')} className="grid gap-3">
+      <RadioGroup value={choice} onValueChange={(value) => setChoice(value === 'delete' ? 'delete' : 'keep')} aria-label={t('disconnect.choice')} className="grid gap-3">
         {!archived && <div className="flex items-start gap-3 rounded-lg border border-border p-3 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-accent">
           <RadioGroupItem id="disconnect-keep" value="keep" />
-          <Label htmlFor="disconnect-keep" className="grid gap-1"><strong>{t('disconnectKeep')}</strong><span className="text-muted-foreground">{t('disconnectKeepConsequence')}</span></Label>
+          <Label htmlFor="disconnect-keep" className="grid gap-1"><strong>{t('disconnect.keep')}</strong><span className="text-muted-foreground">{t('disconnect.keepConsequence')}</span></Label>
         </div>}
         <div className="flex items-start gap-3 rounded-lg border border-border p-3 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-accent">
           <RadioGroupItem id="disconnect-delete" value="delete" />
-          <Label htmlFor="disconnect-delete" className="grid gap-1"><strong>{t('disconnectDelete')}</strong><span className="text-muted-foreground">{t('disconnectDeleteConsequence')}</span></Label>
+          <Label htmlFor="disconnect-delete" className="grid gap-1"><strong>{t('disconnect.delete')}</strong><span className="text-muted-foreground">{t('disconnect.deleteConsequence')}</span></Label>
         </div>
       </RadioGroup>
       <div role="status">{impact.data
         ? <ul className="m-0 flex list-disc flex-col gap-1 rounded-lg bg-muted py-3 pe-4 ps-8 text-sm">
-          <li>{t('impactItems', { count: shown(impact.data.document_count) })}</li>
-          <li>{t('impactGadgets', { gadgets: shown(impact.data.gadget_definition_count), placements: shown(impact.data.gadget_placement_count) })}</li>
-          <li>{t('impactChats', { count: shown(impact.data.conversation_count) })}</li>
+          <li>{t('impact.items', { count: shown(impact.data.document_count) })}</li>
+          <li>{t('impact.gadgets', { gadgets: shown(impact.data.gadget_definition_count), placements: shown(impact.data.gadget_placement_count) })}</li>
+          <li>{t('impact.chats', { count: shown(impact.data.conversation_count) })}</li>
         </ul>
-        : <p className="text-muted-foreground m-0">{impact.isFetching ? t('disconnectImpactLoading') : t('disconnectImpactUnknown')}</p>}</div>
+        : <p className="text-muted-foreground m-0">{impact.isFetching ? t('disconnect.impactLoading') : t('disconnect.impactUnknown')}</p>}</div>
       <AlertDialogFooter>
         <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
         <AlertDialogAction variant={deleting ? 'destructive' : undefined} onClick={() => onConfirm(deleting)}>
-          {t(deleting ? 'disconnectDelete' : 'disconnectKeep')}
+          {t(deleting ? 'disconnect.delete' : 'disconnect.keep')}
         </AlertDialogAction>
       </AlertDialogFooter>
     </AlertDialogContent>

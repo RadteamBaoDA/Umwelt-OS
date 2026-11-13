@@ -1,20 +1,28 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import type { ConnectorConfig } from './api';
 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 
 import { ProviderScope } from './provider-scope';
 
-const base: ConnectorConfig = { timeout_seconds: 30, timezone: 'UTC', schedule_interval_minutes: 30, history_mode: 'returned_snapshot', news_site: 'any', news_locale: 'en-US' };
+const base: ConnectorConfig = {
+  timeout_seconds: 30,
+  timezone: 'UTC',
+  schedule_interval_minutes: 30,
+  history_mode: 'returned_snapshot',
+  news_site: 'any',
+  news_locale: 'en-US',
+};
 
 const view = (locale: 'en-us' | 'vi-vi', configuration: ConnectorConfig, onChange = vi.fn()) => {
   render(
-    <NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={{ sources: sourcesMessages[locale] }}>
+    <NextIntlClientProvider locale={locale === 'en-us' ? 'en-US' : 'vi-VN'} messages={{ sources: getCatalog(locale, 'sources') }}>
       <ProviderScope provider="google_news" configuration={configuration} disabled={false} resetEpoch={0} onChange={onChange} />
-    </NextIntlClientProvider>);
+    </NextIntlClientProvider>,
+  );
   return onChange;
 };
 

@@ -25,7 +25,14 @@ export function RestSamplePreview({ m }: { m: ConnectorEditorModel }) {
     setBusy(true);
     setError(null);
     try {
-      setResult(await restSample(m.sourceId, { expected_revision: m.revision, expected_source_generation: m.sourceGenerationRef.current, configuration: { ...m.configuration }, auth_method: 'none' }));
+      setResult(
+        await restSample(m.sourceId, {
+          expected_revision: m.revision,
+          expected_source_generation: m.sourceGenerationRef.current,
+          configuration: { ...m.configuration },
+          auth_method: 'none',
+        }),
+      );
     } catch (e) {
       setResult(null);
       setError(restSampleErrorMessage(t, e instanceof ApiError ? { code: e.code, message: e.message } : {}));
@@ -37,15 +44,17 @@ export function RestSamplePreview({ m }: { m: ConnectorEditorModel }) {
   return (
     <div className="space-y-2">
       <Button type="button" variant="outline" disabled={!supported || busy} onClick={() => void run()}>
-        {busy ? t('restTesting') : t('restTest')}
+        {busy ? t('rest.testing') : t('rest.test')}
       </Button>
-      {m.authMethod !== 'none' && <p className="m-0 text-sm text-muted">{t('restHeaderAuth')}</p>}
+      {m.authMethod !== 'none' && <p className="m-0 text-sm text-muted">{t('rest.headerAuth')}</p>}
       {error && (
         <p className="m-0 text-sm text-danger" role="alert">
           {error}
         </p>
       )}
-      {result && <RestSampleTree result={result} itemsPath={m.configuration.items_path ?? ''} onFill={(k, v) => m.changeConfiguration(k, v)} />}
+      {result && (
+        <RestSampleTree result={result} itemsPath={m.configuration.items_path ?? ''} onFill={(k, v) => m.changeConfiguration(k, v)} />
+      )}
     </div>
   );
 }

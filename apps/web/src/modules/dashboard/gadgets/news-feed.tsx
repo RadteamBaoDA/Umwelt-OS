@@ -48,17 +48,20 @@ export function NewsFeed({ instance }: NewsFeedProps) {
   const selected = sourceIds.length > 0 ? selectedTarget : null;
   const closeDetail = useCallback(() => setSelected(null), []);
   const { filters, scope, highlight_rules: highlightRules } = instance.definition;
-  const keywordQuery = (filters.keywords ?? []).map((word) => word.trim()).filter(Boolean).join(' ');
+  const keywordQuery = (filters.keywords ?? [])
+    .map((word) => word.trim())
+    .filter(Boolean)
+    .join(' ');
   const queryIsTooLong = keywordQuery.length > 200;
   const query = keywordQuery && !queryIsTooLong ? keywordQuery : undefined;
   const hasUnsupportedScope = Object.values(scope).some((values) => Array.isArray(values) && values.length > 0);
   const hasUnsupportedExclusions = Boolean(filters.exclude_keywords?.length);
   const hasUnsupportedHighlights = highlightRules.length > 0;
   const unsupportedNotices = [
-    ...(hasUnsupportedScope ? [t('unsupportedScopeSelectors')] : []),
-    ...(hasUnsupportedExclusions ? [t('unsupportedExcludeKeywords')] : []),
-    ...(hasUnsupportedHighlights ? [t('unsupportedHighlights')] : []),
-    ...(queryIsTooLong ? [t('unsupportedKeywordLimit')] : []),
+    ...(hasUnsupportedScope ? [t('unsupported.scopeSelectors')] : []),
+    ...(hasUnsupportedExclusions ? [t('unsupported.excludeKeywords')] : []),
+    ...(hasUnsupportedHighlights ? [t('unsupported.highlights')] : []),
+    ...(queryIsTooLong ? [t('unsupported.keywordLimit')] : []),
     ...(keywordQuery ? [t('trendsFilterUnavailable')] : []),
   ];
   const showTrends = unsupportedNotices.length === 0;
@@ -66,29 +69,41 @@ export function NewsFeed({ instance }: NewsFeedProps) {
 
   // Returned bare (no wrapper) so the gadget frame's `has-[>[data-gadget-notice]]` rule can shrink the empty card.
   if (sourceIds.length === 0) {
-    return <GadgetNotice kind="setup" message={t('sourceSelectionRequired')} action={{ href: '/settings/sources', label: t('configureSources') }} />;
+    return (
+      <GadgetNotice
+        kind="setup"
+        message={t('sourceSelectionRequired')}
+        action={{ href: '/settings/sources', label: t('configureSources') }}
+      />
+    );
   }
 
   return (
-    <div ref={listFallbackRef} tabIndex={-1} className="flex h-full min-h-0 flex-col gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+    <div
+      ref={listFallbackRef}
+      tabIndex={-1}
+      className="flex h-full min-h-0 flex-col gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+    >
       {unsupportedNotices.length ? (
         <div role="status" className="space-y-1 rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
-          {unsupportedNotices.map((notice) => <p key={notice}>{notice}</p>)}
+          {unsupportedNotices.map((notice) => (
+            <p key={notice}>{notice}</p>
+          ))}
         </div>
       ) : null}
       <StoryList
-          sourceIds={sourceIds}
-          query={query}
-          limit={filters.limit ?? 25}
-          showTrends={showTrends}
-          embedded
-          instanceId={instance.id}
-          sourceNames={sourceNames}
-          onSelectStory={(storyId, trigger) => {
-            returnFocusRef.current = trigger;
-            setSelected({ kind: 'story', id: storyId, sourceGadget: instance.id, sourceIds: [...sourceIds] });
-          }}
-        />
+        sourceIds={sourceIds}
+        query={query}
+        limit={filters.limit ?? 25}
+        showTrends={showTrends}
+        embedded
+        instanceId={instance.id}
+        sourceNames={sourceNames}
+        onSelectStory={(storyId, trigger) => {
+          returnFocusRef.current = trigger;
+          setSelected({ kind: 'story', id: storyId, sourceGadget: instance.id, sourceIds: [...sourceIds] });
+        }}
+      />
       <DetailDialog
         target={selected}
         onClose={closeDetail}

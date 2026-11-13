@@ -50,17 +50,17 @@ export function VerifyPhaseMessages({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       {verify.phase === 'saving' && <p role="status">{t('saving')}</p>}
-      {verify.phase === 'activating' && <p role="status">{t('verifyWaitingActivation')}</p>}
-      {verify.phase === 'collecting' && <p role="status">{t('verifyCollecting')}</p>}
-      {verify.phase === 'succeeded' && <p role="status">{t('verifySucceeded')}</p>}
-      {verify.phase === 'no_changes' && <p role="status">{t('verifyNoChanges')}</p>}
+      {verify.phase === 'activating' && <p role="status">{t('verify.waitingActivation')}</p>}
+      {verify.phase === 'collecting' && <p role="status">{t('verify.collecting')}</p>}
+      {verify.phase === 'succeeded' && <p role="status">{t('verify.succeeded')}</p>}
+      {verify.phase === 'no_changes' && <p role="status">{t('verify.noChanges')}</p>}
       {verify.phase === 'failed' && (
         <p className="error" role="alert">
-          {verify.code === 'local_only_source' ? t('verifyLocalOnly') : t('verifyFailed', { code: verify.code ?? 'unknown' })}
+          {verify.code === 'local_only_source' ? t('verify.localOnly') : t('verify.failed', { code: verify.code ?? 'unknown' })}
           {!error && errorDetail && ` | ${errorDetail}`}
         </p>
       )}
-      {verify.runId && <p className="text-muted-foreground">{t('verifyRunId', { id: verify.runId })}</p>}
+      {verify.runId && <p className="text-muted-foreground">{t('verify.runId', { id: verify.runId })}</p>}
     </>
   );
 }
@@ -72,10 +72,10 @@ export function VerifyStep({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       {step === 'verify' && (
-        <SettingsSection title={t('verifyTitle')} description={t('verifyIntro')}>
+        <SettingsSection title={t('verify.title')} description={t('verify.intro')}>
           <div>
             <Button disabled={locked || verifyBusy || sourceStatus !== 'active' || termsBlocked} onClick={() => void runVerify()}>
-              {verify.phase === 'failed' ? t('verifyRetry') : t('verifyRun')}
+              {verify.phase === 'failed' ? t('verify.retry') : t('verify.run')}
             </Button>
           </div>
           <VerifyPhaseMessages m={m} />
@@ -119,7 +119,7 @@ export function SourceEditorBody({ m }: { m: ConnectorEditorModel }) {
                   'conflict' | 'configurationInvalid' | 'serviceUnavailable' | 'sourceNameRequired' | 'actionFailed',
               )}{' '}
               <Button variant="outline" onClick={() => configurationQuery.refetch()}>
-                {t('retry')}
+                {t('retry.label')}
               </Button>
             </div>
           )}

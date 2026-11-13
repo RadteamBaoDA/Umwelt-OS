@@ -66,32 +66,32 @@ function formatDate(value: string | null, locale: AppLocaleId, timezone: string,
 /** Resolves registered provider IDs to translated names, then to the catalog label, so new providers need no message key; otherwise the raw ID. */
 function providerLabel(provider: string | null, t: ReturnType<typeof useTranslations<'sources'>>, catalogLabel?: string) {
   if (!provider) return null;
-  const keys: Record<string, string> = {
-    youtube: 'providerYoutube',
-    arxiv: 'providerArxiv',
-    huggingface: 'providerHuggingface',
-    github_releases: 'providerGithubReleases',
-    telegram: 'providerTelegram',
-    vn_stock: 'providerVnStock',
-    github_trending: 'providerGithubTrending',
-    wwr_jobs: 'providerWwrJobs',
-    vietnamworks_jobs: 'providerVietnamworksJobs',
-    itviec_jobs: 'providerItviecJobs',
-    rss: 'providerRss',
-    web: 'providerWeb',
-    rest: 'providerRest',
-  };
-  const key = keys[provider];
-  return key ? t(key as 'providerYoutube') : (catalogLabel ?? provider);
+  const keys = {
+    youtube: 'provider.youtube',
+    arxiv: 'provider.arxiv',
+    huggingface: 'provider.huggingface',
+    github_releases: 'provider.githubReleases',
+    telegram: 'provider.telegram',
+    vn_stock: 'provider.vnStock',
+    github_trending: 'provider.githubTrending',
+    wwr_jobs: 'provider.wwrJobs',
+    vietnamworks_jobs: 'provider.vietnamworksJobs',
+    itviec_jobs: 'provider.itviecJobs',
+    rss: 'provider.rss',
+    web: 'provider.web',
+    rest: 'provider.rest',
+  } as const;
+  const key = Object.hasOwn(keys, provider) ? keys[provider as keyof typeof keys] : undefined;
+  return key ? t(key) : (catalogLabel ?? provider);
 }
 
 /** Formats a connector schedule interval as localized display text. */
 export function scheduleLabel(minutes: number, t: ReturnType<typeof useTranslations<'sources'>>) {
-  if (minutes === 15 || minutes === 30) return t('everyMinutes', { minutes });
-  if (minutes === 60) return t('everyHour');
-  if (minutes === 360) return t('everyHours', { hours: 6 });
+  if (minutes === 15 || minutes === 30) return t('every.minutes', { minutes });
+  if (minutes === 60) return t('every.hour');
+  if (minutes === 360) return t('every.hours', { hours: 6 });
   if (minutes === 1440) return t('dailyAtMidnight');
-  return t('scheduleUnknown');
+  return t('schedule.unknown');
 }
 
 /** Shows allowlisted owner cleanup progress, polling for at most 30 seconds with abortable GETs and manual refresh afterward. */
@@ -135,7 +135,7 @@ function PurgeProgress({ operationId, onSucceeded }: { operationId: string; onSu
   }, [succeeded, onSucceeded]);
   const refreshButton = (
     <Button type="button" variant="outline" disabled={operation.isFetching} onClick={() => void operation.refetch()}>
-      {operation.isFetching ? t('cleanupRefreshingProgress') : t('cleanupRefreshProgress')}
+      {operation.isFetching ? t('cleanup.refreshingProgress') : t('cleanup.refreshProgress')}
     </Button>
   );
   if (!operation.data)
@@ -149,33 +149,33 @@ function PurgeProgress({ operationId, onSucceeded }: { operationId: string; onSu
     );
 
   const ownerLabels = new Map<string, string>([
-    ['documents', t('cleanupOwnerDocuments')],
-    ['raw', t('cleanupOwnerRaw')],
-    ['chat', t('cleanupOwnerChat')],
-    ['memory', t('cleanupOwnerMemory')],
-    ['agents', t('cleanupOwnerAgents')],
-    ['dashboard', t('cleanupOwnerDashboard')],
-    ['notifications', t('cleanupOwnerNotifications')],
-    ['automations', t('cleanupOwnerAutomations')],
+    ['documents', t('cleanup.ownerDocuments')],
+    ['raw', t('cleanup.ownerRaw')],
+    ['chat', t('cleanup.ownerChat')],
+    ['memory', t('cleanup.ownerMemory')],
+    ['agents', t('cleanup.ownerAgents')],
+    ['dashboard', t('cleanup.ownerDashboard')],
+    ['notifications', t('cleanup.ownerNotifications')],
+    ['automations', t('cleanup.ownerAutomations')],
   ]);
   const pendingOwners = [
-    ...new Set(operation.data.pending_owner_codes.map((code) => ownerLabels.get(code) ?? t('cleanupOwnerOther'))),
+    ...new Set(operation.data.pending_owner_codes.map((code) => ownerLabels.get(code) ?? t('cleanup.ownerOther'))),
   ].slice(0, 9);
   return (
     <div>
       <p role="status">
-        {succeeded ? t('cleanupComplete') : operation.data.status}
+        {succeeded ? t('cleanup.complete') : operation.data.status}
         {operation.data.error_code ? ` · ${operation.data.error_code}` : ''}
       </p>
       {operation.data.memory_status === 'failed' &&
         (operation.data.memory_error_code === 'legacy_provenance_unresolved' ||
           operation.data.memory_error_code === 'evidence_identity_unavailable') && (
           <p className="error" role="alert">
-            {t('cleanupMemoryUnavailable')}
+            {t('cleanup.memoryUnavailable')}
           </p>
         )}
       {pendingOwners.length > 0 && (
-        <p className="text-muted-foreground">{t('cleanupPendingOwnerStages', { owners: pendingOwners.join(', ') })}</p>
+        <p className="text-muted-foreground">{t('cleanup.pendingOwnerStages', { owners: pendingOwners.join(', ') })}</p>
       )}
       {refreshButton}
     </div>
@@ -184,23 +184,23 @@ function PurgeProgress({ operationId, onSucceeded }: { operationId: string; onSu
 
 const CHIP_KEY: Record<
   SourceRowState,
-  'statusActive' | 'statusPaused' | 'statusArchived' | 'stateSavedNotActive' | 'stateError' | 'stateReconnect'
+  'status.active' | 'status.paused' | 'status.archived' | 'state.savedNotActive' | 'state.error' | 'state.reconnect'
 > = {
-  active: 'statusActive',
-  paused: 'statusPaused',
-  archived: 'statusArchived',
-  savedNotActive: 'stateSavedNotActive',
-  error: 'stateError',
-  reconnect: 'stateReconnect',
+  active: 'status.active',
+  paused: 'status.paused',
+  archived: 'status.archived',
+  savedNotActive: 'state.savedNotActive',
+  error: 'state.error',
+  reconnect: 'state.reconnect',
 };
-const ACTIVATION_STATE_KEY: Record<string, string> = {
-  queued: 'stateQueued',
-  provisioning: 'stateProvisioning',
+const ACTIVATION_STATE_KEY = {
+  queued: 'state.queued',
+  provisioning: 'state.provisioning',
   active: 'active',
-  saved_not_active: 'stateSavedNotActive',
-  reconciliation_required: 'stateReconciliationRequired',
-  disabled: 'stateDisabled',
-};
+  saved_not_active: 'state.savedNotActive',
+  reconciliation_required: 'state.reconciliationRequired',
+  disabled: 'state.disabled',
+} as const;
 const CELL = 'px-3 py-3 align-top text-sm max-[1023px]:block max-[1023px]:px-0 max-[1023px]:py-1';
 
 /** Border/text classes of the status chip: green when active, red for error and saved-but-not-active, neutral otherwise. */
@@ -278,10 +278,10 @@ function useRemovedFocusHandoff(onRemoved: () => void) {
 
 /** Localised reasons for the blocked codes the backend emits; other codes fall back to the humanized code. */
 const BLOCKED_REASON_KEY = {
-  invalid_credential: 'blockedInvalidCredential',
-  schema_changed: 'blockedSchemaChanged',
-  terms_not_accepted: 'blockedTermsNotAccepted',
-  credential_missing: 'blockedCredentialMissing',
+  invalid_credential: 'blocked.invalidCredential',
+  schema_changed: 'blocked.schemaChanged',
+  terms_not_accepted: 'blocked.termsNotAccepted',
+  credential_missing: 'blocked.credentialMissing',
 } as const;
 
 /** Why a source stopped (`blocked_error_code`) and how many attempts failed; renders nothing for a healthy source. */
@@ -294,7 +294,7 @@ export function SourceBlockedNotice({ source }: { source: Pick<Source, 'blocked_
   const known = code ? BLOCKED_REASON_KEY[code as keyof typeof BLOCKED_REASON_KEY] : undefined;
   return (
     <p className="m-0 text-sm text-negative">
-      {code && t('blockedLine', { reason: known ? t(known) : errorLabel(code) })}
+      {code && t('blocked.line', { reason: known ? t(known) : errorLabel(code) })}
       {code && failures > 0 && ' · '}
       {failures > 0 && t('failureCount', { count: failures })}
     </p>
@@ -328,7 +328,7 @@ function SourceNameCell({
         <RenameSource source={source} onRenamed={onChanged} />
         {mode && (
           <Badge variant="outline" data-testid="source-realtime-badge">
-            {t(mode === 'realtime' ? 'badgeRealtime' : 'badgeNearRealtime')}
+            {t(mode === 'realtime' ? 'badge.realtime' : 'badge.nearRealtime')}
           </Badge>
         )}
       </div>
@@ -366,7 +366,7 @@ function SourceStatusCell({
       {connector && activation?.error_code && <p className="text-muted-foreground">{errorLabel(activation.error_code)}</p>}
       {connector && activation && activation.state !== 'active' && (
         <p className="text-muted-foreground">
-          {t('activationState')}: {t((ACTIVATION_STATE_KEY[activation.state] ?? 'stateUnknown') as 'stateUnknown')}
+          {t('activation.state')}: {t(ACTIVATION_STATE_KEY[activation.state as keyof typeof ACTIVATION_STATE_KEY] ?? 'state.unknown')}
         </p>
       )}
     </td>
@@ -399,13 +399,13 @@ function SourceTimingCells({
         <span className="sr-only">{t('never')}</span>
       </>
     );
-  const mobileLabel = (key: 'colSchedule' | 'colCollected' | 'colIndexed') => (
+  const mobileLabel = (key: 'col.schedule' | 'col.collected' | 'col.indexed') => (
     <span className="text-muted-foreground mr-1 min-[1024px]:hidden">{t(key)}:</span>
   );
   return (
     <>
       <td className={CELL}>
-        {mobileLabel('colSchedule')}
+        {mobileLabel('col.schedule')}
         {connector ? (
           <>
             {schedule}
@@ -421,11 +421,11 @@ function SourceTimingCells({
         )}
       </td>
       <td className={`${CELL} tabular-nums min-[1024px]:whitespace-nowrap`}>
-        {mobileLabel('colCollected')}
+        {mobileLabel('col.collected')}
         {dateOrDash(source.collected_at)}
       </td>
       <td className={`${CELL} tabular-nums min-[1024px]:whitespace-nowrap`}>
-        {mobileLabel('colIndexed')}
+        {mobileLabel('col.indexed')}
         {dateOrDash(source.indexed_at)}
       </td>
     </>
@@ -450,7 +450,7 @@ function DisconnectAction({
 }) {
   const t = useTranslations('sources');
   const archived = source.status === 'archived';
-  const disconnectLabel = busy ? t('disconnecting') : t(archived ? 'disconnectDelete' : 'disconnectAction');
+  const disconnectLabel = busy ? t('disconnecting') : t(archived ? 'disconnect.delete' : 'disconnect.action');
   return (
     <DisconnectDialog
       sourceId={source.id}
@@ -508,12 +508,12 @@ function ConnectorLeadingActions({
   return (
     <>
       {rowState === 'savedNotActive' && !archived && (
-        <SourceAction label={t('retryActivation')} icon={<RefreshCw size={16} />} disabled={busy} onClick={() => onEdit(source)} />
+        <SourceAction label={t('retry.activation')} icon={<RefreshCw size={16} />} disabled={busy} onClick={() => onEdit(source)} />
       )}
       {!archived && <SourceAction label={t('configure')} icon={<Settings2 size={16} />} onClick={() => onEdit(source)} />}
       {source.status === 'active' && activationActive && (
         <SourceAction
-          label={collecting ? t('collecting') : t('collectNow')}
+          label={collecting ? t('collecting') : t('collect.now')}
           icon={<Download size={16} />}
           disabled={collecting || busy || collect.collectBlocked}
           onClick={() => collect.collect.mutate()}
@@ -601,7 +601,7 @@ function SourceDetailRow({
       <td colSpan={6} className="px-3 pb-4 max-[1023px]:block max-[1023px]:px-0">
         {collectResult && (
           <p className="text-muted-foreground" role="status">
-            {t('collectResult', { status: collectResult.status })}
+            {t('collect.result', { status: collectResult.status })}
             {!collectResult.hasRun ? ` ${t('noRunId')}` : ''}
           </p>
         )}
@@ -609,14 +609,14 @@ function SourceDetailRow({
         {collectBlocked && (
           <p className="text-muted-foreground" role="status">
             {collectNextAt
-              ? t('collectTooSoonAt', { time: formatDate(collectNextAt.toISOString(), display.locale, display.timezone, '') })
-              : t('collectTooSoon')}
+              ? t('collect.tooSoonAt', { time: formatDate(collectNextAt.toISOString(), display.locale, display.timezone, '') })
+              : t('collect.tooSoon')}
           </p>
         )}
         {(Boolean(error) || (collect.collect.error && !collectBlocked) || activationError) && (
           <p className="error" role="alert">
             {t('actionFailed')}
-            {activationError && ` · ${t('stateUnknown')}`}
+            {activationError && ` · ${t('state.unknown')}`}
           </p>
         )}
       </td>
@@ -632,7 +632,7 @@ function SourceHistoryDialog({ source, open, onOpenChange }: { source: Source; o
       <DialogContent className="w-[80vw] max-w-[80vw] sm:max-w-[80vw]">
         <DialogHeader>
           <DialogTitle>
-            {t('runHistoryTitle')} · {source.name}
+            {t('run.historyTitle')} · {source.name}
           </DialogTitle>
           <DialogDescription>{t('recentRuns')}</DialogDescription>
         </DialogHeader>

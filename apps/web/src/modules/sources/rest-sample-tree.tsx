@@ -9,15 +9,38 @@ export type RestTarget = 'items_path' | 'id_field' | 'title_field' | 'content_fi
 const TARGETS: RestTarget[] = ['items_path', 'id_field', 'title_field', 'content_field', 'updated_field'];
 
 /** Translator over the `sources` namespace (`useTranslations('sources')`). */
-type Translate = (key: string) => string;
+type Translate = ReturnType<typeof useTranslations<'sources'>>;
 
-/** Server error codes that have a `restError_<code>` message. */
-const REST_ERROR_CODES: readonly string[] = ['rest_sample_auth_unsupported', 'rest_sample_url_refused', 'rest_sample_too_large', 'rest_sample_not_json', 'rest_sample_rate_limited', 'rest_sample_upstream_error', 'rest_sample_unreachable'];
+/** Literal `sources` catalog key per server error code that has a dedicated message (no runtime key building). */
+const REST_ERROR_KEY = {
+  rest_sample_auth_unsupported: 'restError.restSampleAuthUnsupported',
+  rest_sample_url_refused: 'restError.restSampleUrlRefused',
+  rest_sample_too_large: 'restError.restSampleTooLarge',
+  rest_sample_not_json: 'restError.restSampleNotJson',
+  rest_sample_rate_limited: 'restError.restSampleRateLimited',
+  rest_sample_upstream_error: 'restError.restSampleUpstreamError',
+  rest_sample_unreachable: 'restError.restSampleUnreachable',
+} as const;
 
-/** Maps a server error code (ApiError code or message) to a human message; unknown text falls back to a generic one. */
+/** Literal `sources` catalog key of the label for each mapping target in the "fill" select. */
+const REST_TARGET_KEY = {
+  items_path: 'restTarget.itemsPath',
+  id_field: 'restTarget.idField',
+  title_field: 'restTarget.titleField',
+  content_field: 'restTarget.contentField',
+  updated_field: 'restTarget.updatedField',
+} as const satisfies Record<RestTarget, string>;
+
+/**
+ * Maps a server error code (ApiError code or message) to a human message; unknown text falls back to a generic one.
+ * @param t Translator over the `sources` namespace.
+ * @param error ApiError `code` and `message`; the first one naming a known `rest_sample_*` code wins.
+ */
 export function restSampleErrorMessage(t: Translate, error: { code?: string | null; message?: string }): string {
-  const key = [error.code, error.message].find((c): c is string => typeof c === 'string' && REST_ERROR_CODES.includes(c));
-  return key ? t(`restError_${key}`) : t('restFallback');
+  const key = [error.code, error.message].find(
+    (c): c is keyof typeof REST_ERROR_KEY => typeof c === 'string' && Object.hasOwn(REST_ERROR_KEY, c),
+  );
+  return key ? t(REST_ERROR_KEY[key]) : t('rest.fallback');
 }
 
 /**
@@ -63,31 +86,43 @@ function Node({ name, path, value, onPick }: { name: string; path: string; value
  * Status line, truncation note and a collapsible JSON tree of a REST sample. Clicking a key writes its dotted path
  * (converted by `pathForTarget`) into the field chosen in the "Fill into" select through `onFill`.
  */
-export function RestSampleTree({ result, itemsPath, onFill }: { result: { status_code: number; truncated: boolean; sample: unknown }; itemsPath: string; onFill: (target: RestTarget, value: string) => void }) {
+export function RestSampleTree({
+  result,
+  itemsPath,
+  onFill,
+}: {
+  result: { status_code: number; truncated: boolean; sample: unknown };
+  itemsPath: string;
+  onFill: (target: RestTarget, value: string) => void;
+}) {
   const t = useTranslations('sources');
   const [target, setTarget] = useState<RestTarget>('items_path');
   const root = typeof result.sample === 'object' && result.sample !== null ? Object.entries(result.sample) : [];
   return (
     <div className="space-y-2 text-sm">
       <p className="m-0">
-        {t('restStatus')}: {result.status_code}
+        {t('rest.status')}: {result.status_code}
       </p>
       {result.truncated && (
         <p className="m-0 text-muted" role="status">
-          {t('restTruncated')}
+          {t('rest.truncated')}
         </p>
       )}
       <label className="flex items-center gap-2">
-        {t('restFill')}
-        <select className="rounded-md border border-line bg-surface px-2 py-1" value={target} onChange={(e) => setTarget(e.target.value as RestTarget)}>
+        {t('rest.fill')}
+        <select
+          className="rounded-md border border-line bg-surface px-2 py-1"
+          value={target}
+          onChange={(e) => setTarget(e.target.value as RestTarget)}
+        >
           {TARGETS.map((target) => (
             <option key={target} value={target}>
-              {t(`restTarget_${target}`)}
+              {t(REST_TARGET_KEY[target])}
             </option>
           ))}
         </select>
       </label>
-      <p className="m-0 text-muted">{t('restHint')}</p>
+      <p className="m-0 text-muted">{t('rest.hint')}</p>
       <div className="max-h-72 overflow-auto rounded-md border border-line bg-surface p-2">
         {root.map(([k, v]) => (
           <Node key={k} name={k} path={k} value={v} onPick={(p) => onFill(target, pathForTarget(target, p, itemsPath))} />

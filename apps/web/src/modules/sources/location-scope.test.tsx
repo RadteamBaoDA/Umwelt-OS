@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { NextIntlClientProvider } from 'next-intl';
-import { sourcesMessages } from '@/core/messages/sources';
+import { getCatalog } from '@locales';
 import type { ConnectorConfig } from './api';
 
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
@@ -13,16 +13,19 @@ const base: ConnectorConfig = { timeout_seconds: 30, timezone: 'UTC', schedule_i
 /** Installs a fake Geolocation API whose single request resolves with the given outcome. */
 function fakeGeolocation(outcome: { latitude: number; longitude: number } | { code: number }) {
   const getCurrentPosition = vi.fn((ok: PositionCallback, fail: PositionErrorCallback) => {
-    if ('code' in outcome) fail({ code: outcome.code, PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3, message: '' } as GeolocationPositionError);
+    if ('code' in outcome)
+      fail({ code: outcome.code, PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3, message: '' } as GeolocationPositionError);
     else ok({ coords: outcome } as GeolocationPosition);
   });
   Object.defineProperty(navigator, 'geolocation', { value: { getCurrentPosition }, configurable: true });
 }
 
 const view = (provider: 'open_meteo' | 'openweathermap', onChange = vi.fn()) => {
-  render(<NextIntlClientProvider locale="en-US" messages={{ sources: sourcesMessages['en-us'] }}>
-    <ProviderScope provider={provider} configuration={base} disabled={false} resetEpoch={0} onChange={onChange} />
-  </NextIntlClientProvider>);
+  render(
+    <NextIntlClientProvider locale="en-US" messages={{ sources: getCatalog('en-us', 'sources') }}>
+      <ProviderScope provider={provider} configuration={base} disabled={false} resetEpoch={0} onChange={onChange} />
+    </NextIntlClientProvider>,
+  );
   return onChange;
 };
 

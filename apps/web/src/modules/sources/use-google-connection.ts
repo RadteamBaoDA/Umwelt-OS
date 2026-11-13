@@ -96,7 +96,7 @@ export function useGoogleConnection(ctx: EditorContext) {
     if (!isGoogleProvider(provider)) return;
     await startOAuthConnection(ctx, {
       action: 'google-connect',
-      failureKey: 'googleConnectionFailed',
+      failureKey: 'google.connectionFailed',
       saved,
       start: (fence, token) =>
         startGoogleOAuth(fence.id, provider, fence.generation, fence.revision, ctx.csrfToken, token.controller.signal),
@@ -159,7 +159,7 @@ export function useGoogleConnection(ctx: EditorContext) {
   async function disconnectGoogle() {
     await revokeOAuthConnection(ctx, {
       action: 'google-disconnect',
-      failureKey: 'googleDisconnectFailed',
+      failureKey: 'google.disconnectFailed',
       status: googleStatusQuery.data,
       refetch: googleStatusQuery.refetch,
       revoke: (fence, tokenRevision, token) =>

@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { minIntervalMinutes, type BuiltinSource, type BuiltinTypeOptions, type ConnectorConfig } from './api';
+import { optionLabelKey, optionValueKey } from './builtin-option-keys';
 import { OPTION_SPECS, type OptionSpec } from './builtin-option-specs';
 
 const INTERVALS = [15, 30, 60, 360, 1440] as const;
@@ -38,7 +39,8 @@ function humanize(value: string): string {
 function TypedOption({ spec, value, onValue, disabled }: { spec: OptionSpec; value: unknown; onValue: (value: unknown) => void; disabled: boolean }) {
   const t = useTranslations('sources');
   const id = `builtin-option-${spec.key}`;
-  const label = t(`optk_${spec.key}` as never);
+  const labelKey = optionLabelKey(spec.key);
+  const label = labelKey ? t(labelKey) : spec.key;
   if (spec.kind === 'bool') {
     return <div className="field flex items-center gap-2"><Switch id={id} aria-label={label} disabled={disabled} checked={value === true} onCheckedChange={(on) => onValue(on ? true : undefined)} />
       <Label htmlFor={id}>{label}</Label></div>;
@@ -52,18 +54,19 @@ function TypedOption({ spec, value, onValue, disabled }: { spec: OptionSpec; val
     return <fieldset className="field m-0 border-0 p-0" disabled={disabled}><legend className="mb-1 text-sm font-medium">{label}</legend>
       <div className="grid gap-2 sm:grid-cols-3">{(spec.values ?? []).map((item) => {
         const on = selected.includes(item);
+        const valueKey = spec.labelled ? optionValueKey(item) : undefined;
         return <label key={item} className="flex items-center gap-2 text-sm">
           <Checkbox checked={on} disabled={disabled || (!on && selected.length >= max)}
             onCheckedChange={(next) => { const list = next === true ? [...selected, item] : selected.filter((entry) => entry !== item); if (list.length <= max) onValue(list); }} />
-          <span>{spec.labelled ? t(`optv_${item}` as never) : item}</span></label>;
+          <span>{valueKey ? t(valueKey) : item}</span></label>;
       })}</div>
-      <small className="text-muted-foreground">{t('optMultiMax', { max })}</small></fieldset>;
+      <small className="text-muted-foreground">{t('opt.multiMax', { max })}</small></fieldset>;
   }
   if (spec.kind === 'enum') {
     return <div className="field"><Label htmlFor={id}>{label}</Label>
       <Select disabled={disabled} value={typeof value === 'string' ? value : UNSET} onValueChange={(next) => onValue(next === UNSET ? undefined : next)}>
         <SelectTrigger id={id}><SelectValue /></SelectTrigger>
-        <SelectContent><SelectItem value={UNSET}>{t('optSelectUnset')}</SelectItem>
+        <SelectContent><SelectItem value={UNSET}>{t('opt.selectUnset')}</SelectItem>
           {(spec.values ?? []).map((item) => <SelectItem key={item} value={item}>{humanize(item)}</SelectItem>)}</SelectContent>
       </Select></div>;
   }
@@ -93,7 +96,7 @@ function TagsOption({ id, label, spec, value, disabled, onValue }: { id: string;
       const terms = [...new Map(parseTerms(text).map((term) => [term.toLowerCase(), term])).values()].slice(0, max);
       onValue(terms.length ? terms : undefined);
     }} />
-    <small id={`${id}-help`} className="text-muted-foreground">{t('optTagsHelp', { max })}</small></div>;
+    <small id={`${id}-help`} className="text-muted-foreground">{t('opt.tagsHelp', { max })}</small></div>;
 }
 
 /** Keyword input that keeps the raw text locally so a trailing comma survives typing, while reporting parsed terms. */
@@ -102,7 +105,7 @@ function KeywordField({ id, label, terms, onTerms }: { id: string; label: string
   const [raw, setRaw] = useState(terms.join(', '));
   return <div className="field"><Label htmlFor={id}>{label}</Label>
     <Input id={id} value={raw} aria-describedby={`${id}-help`} onChange={(event) => { setRaw(event.target.value); onTerms(parseTerms(event.target.value)); }} />
-    <small id={`${id}-help`} className="text-muted-foreground">{t('optKeywordsHelp')}</small></div>;
+    <small id={`${id}-help`} className="text-muted-foreground">{t('opt.keywordsHelp')}</small></div>;
 }
 
 /** Props shared by every BuiltinOptions field section; each section renders nothing when its option is not applicable. */
@@ -117,7 +120,7 @@ interface OptionSectionProps {
 function NameOption({ applicable, values, onChange, disabled, builtin, show }: OptionSectionProps & { builtin: BuiltinSource; show: boolean }) {
   const t = useTranslations('sources');
   if (!(show && applicable.has('name'))) return null;
-  return <div className="field"><Label htmlFor="builtin-option-name">{t('optName')}</Label>
+  return <div className="field"><Label htmlFor="builtin-option-name">{t('opt.name')}</Label>
     <Input id="builtin-option-name" maxLength={200} disabled={disabled} value={values.name ?? builtin.label} onChange={(event) => onChange('name', event.target.value)} /></div>;
 }
 
@@ -127,10 +130,10 @@ function ScheduleOption({ applicable, values, onChange, disabled, builtin, show 
   if (!(show && applicable.has('schedule_interval_minutes'))) return null;
   const floor = minIntervalMinutes(builtin);
   const intervals = INTERVALS.filter((value) => value >= floor);
-  return <div className="field"><Label htmlFor="builtin-option-schedule">{t('optSchedule')}</Label>
+  return <div className="field"><Label htmlFor="builtin-option-schedule">{t('opt.schedule')}</Label>
     <Select disabled={disabled} value={values.schedule_interval_minutes ? String(values.schedule_interval_minutes) : undefined} onValueChange={(value) => onChange('schedule_interval_minutes', Number(value) as ConnectorConfig['schedule_interval_minutes'])}>
-      <SelectTrigger id="builtin-option-schedule"><SelectValue placeholder={t('optScheduleDefault')} /></SelectTrigger>
-      <SelectContent>{intervals.map((value) => <SelectItem key={value} value={String(value)}>{t('everyMinutes', { minutes: value })}</SelectItem>)}</SelectContent>
+      <SelectTrigger id="builtin-option-schedule"><SelectValue placeholder={t('opt.scheduleDefault')} /></SelectTrigger>
+      <SelectContent>{intervals.map((value) => <SelectItem key={value} value={String(value)}>{t('every.minutes', { minutes: value })}</SelectItem>)}</SelectContent>
     </Select>
     {floor > 15 && <small className="text-muted-foreground">{floor >= 60 ? t('minIntervalHours', { hours: floor / 60 }) : t('minIntervalMinutes', { minutes: floor })}</small>}</div>;
 }
@@ -153,7 +156,7 @@ function SectionsOption({ applicable, values, onChange, disabled, builtin }: Opt
     if (next.length < 1 || next.length > MAX_SECTIONS) return;
     onChange('feed_sections', next);
   };
-  return <fieldset className="field m-0 border-0 p-0" disabled={disabled}><legend className="mb-1 text-sm font-medium">{t('optSections')}</legend>
+  return <fieldset className="field m-0 border-0 p-0" disabled={disabled}><legend className="mb-1 text-sm font-medium">{t('opt.sections')}</legend>
     <div className="grid gap-2 sm:grid-cols-2">{sections.map((section) => {
       const label = locale.toLowerCase().startsWith('vi') ? section.label_vi : section.label_en;
       const on = selected.includes(section.slug);
@@ -161,8 +164,8 @@ function SectionsOption({ applicable, values, onChange, disabled, builtin }: Opt
         <Checkbox checked={on} disabled={disabled || (!on && selected.length >= MAX_SECTIONS)} onCheckedChange={(next) => toggle(section.slug, next === true)} />
         <span>{label}</span></label>;
     })}</div>
-    <small className="text-muted-foreground">{t('optSectionsHelp')}</small>
-    <small className="text-muted-foreground" role="status">{t('optSectionsCost', { count: selected.length, minutes, requests: requestsPerDay })}</small></fieldset>;
+    <small className="text-muted-foreground">{t('opt.sectionsHelp')}</small>
+    <small className="text-muted-foreground" role="status">{t('opt.sectionsCost', { count: selected.length, minutes, requests: requestsPerDay })}</small></fieldset>;
 }
 
 /** Bounded integer field (max items / max age) with help text; emptied input reports `undefined`. */
@@ -176,10 +179,10 @@ function BoundedNumberOption({ id, label, help, max, value, disabled, onNumber }
 function FilterOptions({ applicable, values, onChange, disabled }: OptionSectionProps) {
   const t = useTranslations('sources');
   return <>
-    {applicable.has('max_items') && <BoundedNumberOption id="builtin-option-max-items" label={t('optMaxItems')} help={t('optMaxItemsHelp')} max={100} value={values.max_items} disabled={disabled} onNumber={(next) => onChange('max_items', next)} />}
-    {applicable.has('include_keywords') && <KeywordField id="builtin-option-include" label={t('optInclude')} terms={values.include_keywords ?? []} onTerms={(terms) => onChange('include_keywords', terms)} />}
-    {applicable.has('exclude_keywords') && <KeywordField id="builtin-option-exclude" label={t('optExclude')} terms={values.exclude_keywords ?? []} onTerms={(terms) => onChange('exclude_keywords', terms)} />}
-    {applicable.has('max_age_days') && <BoundedNumberOption id="builtin-option-max-age" label={t('optMaxAge')} help={t('optMaxAgeHelp')} max={365} value={values.max_age_days} disabled={disabled} onNumber={(next) => onChange('max_age_days', next)} />}
+    {applicable.has('max_items') && <BoundedNumberOption id="builtin-option-max-items" label={t('opt.maxItems')} help={t('opt.maxItemsHelp')} max={100} value={values.max_items} disabled={disabled} onNumber={(next) => onChange('max_items', next)} />}
+    {applicable.has('include_keywords') && <KeywordField id="builtin-option-include" label={t('opt.include')} terms={values.include_keywords ?? []} onTerms={(terms) => onChange('include_keywords', terms)} />}
+    {applicable.has('exclude_keywords') && <KeywordField id="builtin-option-exclude" label={t('opt.exclude')} terms={values.exclude_keywords ?? []} onTerms={(terms) => onChange('exclude_keywords', terms)} />}
+    {applicable.has('max_age_days') && <BoundedNumberOption id="builtin-option-max-age" label={t('opt.maxAge')} help={t('opt.maxAgeHelp')} max={365} value={values.max_age_days} disabled={disabled} onNumber={(next) => onChange('max_age_days', next)} />}
   </>;
 }
 
@@ -223,7 +226,7 @@ export function BuiltinOptions({ builtin, values, onChange, showName = false, sh
     <FilterOptions {...common} />
     {typed.map((spec) => <TypedOption key={spec.key} spec={spec} disabled={disabled} value={(values as Record<string, unknown>)[spec.key]}
       onValue={(next) => onChange(spec.key as BuiltinOptionKey, next as never)} />)}
-    {typed.some((spec) => spec.native) && <p className="m-0 text-sm text-muted-foreground" role="note">{t('optNativeHint')}</p>}
-    <p className="m-0 text-sm text-muted-foreground">{t('optAppliesNew')}</p>
+    {typed.some((spec) => spec.native) && <p className="m-0 text-sm text-muted-foreground" role="note">{t('opt.nativeHint')}</p>}
+    <p className="m-0 text-sm text-muted-foreground">{t('opt.appliesNew')}</p>
   </div>;
 }

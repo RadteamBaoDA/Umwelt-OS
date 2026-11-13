@@ -35,10 +35,10 @@ function GitHubWindowNotes({ m }: { m: ConnectorEditorModel }) {
     <>
       {data?.expires_at && (
         <p>
-          {t('githubExpires')}: {formatDate(data.expires_at, display.locale, display.timezone)}
+          {t('github.expires')}: {formatDate(data.expires_at, display.locale, display.timezone)}
         </p>
       )}
-      {data && <p>{t('githubScanWindow', { days: data.sync.history_days })}</p>}
+      {data && <p>{t('github.scanWindow', { days: data.sync.history_days })}</p>}
     </>
   );
 }
@@ -51,11 +51,11 @@ function GitHubWarningNotes({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       {(sync?.unverified_hints ?? 0) > 0 && (
-        <p className="error">{t('githubEvidenceUnverified', { count: sync?.unverified_hints ?? 0 })}</p>
+        <p className="error">{t('github.evidenceUnverified', { count: sync?.unverified_hints ?? 0 })}</p>
       )}
-      {source?.provider === 'github' && source.status === 'paused' && <p className="error">{t('githubSourcePaused')}</p>}
+      {source?.provider === 'github' && source.status === 'paused' && <p className="error">{t('github.sourcePaused')}</p>}
       {(sync?.reconcile_exhausted ?? 0) > 0 && (
-        <p className="error">{t('githubReconcileExhausted', { count: sync?.reconcile_exhausted ?? 0 })}</p>
+        <p className="error">{t('github.reconcileExhausted', { count: sync?.reconcile_exhausted ?? 0 })}</p>
       )}
     </>
   );
@@ -68,10 +68,10 @@ function GitHubHistoryNotes({ m }: { m: ConnectorEditorModel }) {
   const resetAt = githubStatusQuery.data?.sync.last_reset_at;
   return (
     <>
-      <p className="text-muted-foreground">{t('githubDeletionUnsupported')}</p>
+      <p className="text-muted-foreground">{t('github.deletionUnsupported')}</p>
       {resetAt && (
         <p className="text-muted-foreground">
-          {t('githubGapRecorded')}: {formatDate(resetAt, display.locale, display.timezone)}
+          {t('github.gapRecorded')}: {formatDate(resetAt, display.locale, display.timezone)}
         </p>
       )}
     </>
@@ -87,14 +87,14 @@ function GitHubResourceProgress({ m }: { m: ConnectorEditorModel }) {
     <>
       {sync?.resources.map((item) => (
         <p key={item.resource} className={item.incomplete ? 'error' : 'muted'}>
-          {t('githubResourceProgress', { resource: item.resource, phase: item.phase, page: item.page, sweep: item.sweep_revision })}
+          {t('github.resourceProgress', { resource: item.resource, phase: item.phase, page: item.page, sweep: item.sweep_revision })}
           {item.floor && item.upper
             ? ` · ${formatDate(item.floor, display.locale, display.timezone)} – ${formatDate(item.upper, display.locale, display.timezone)}`
             : ''}
           {item.completed_upper ? ` · ${formatDate(item.completed_upper, display.locale, display.timezone)}` : ''}
         </p>
       ))}
-      {sync?.cursor_invalid && <p className="error">{t('githubCursorInvalid')}</p>}
+      {sync?.cursor_invalid && <p className="error">{t('github.cursorInvalid')}</p>}
     </>
   );
 }
@@ -106,7 +106,7 @@ function GitHubRecoveryNotes({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       {(data?.state === 'reconciliation_required' || data?.coordinator_state === 'reconciliation_required' || data?.recovery_available) && (
-        <p className="error">{t('githubReconciliation')}</p>
+        <p className="error">{t('github.reconciliation')}</p>
       )}
       {data?.recovery_available && data.operation_source_id && (
         <p className="text-muted-foreground">
@@ -126,9 +126,9 @@ function GitHubFailureNotes({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       {['provider_revoke_outcome_unknown', 'provider_revoke_pending'].includes(githubStatusQuery.data?.coordinator_error_code ?? '') && (
-        <p className="error">{t('githubRevokeUnknown')}</p>
+        <p className="error">{t('github.revokeUnknown')}</p>
       )}
-      {githubStatusQuery.isError && <p className="error">{t('githubConnectionFailed')}</p>}
+      {githubStatusQuery.isError && <p className="error">{t('github.connectionFailed')}</p>}
     </>
   );
 }
@@ -139,7 +139,7 @@ function RetryRevokeControl({ m }: { m: ConnectorEditorModel }) {
   const { locked, dirty, busyAction, reviewGitHubDisconnect } = m;
   return (
     <Button variant="outline" disabled={locked || dirty} onClick={reviewGitHubDisconnect}>
-      {busyAction === 'github-peers' ? t('loading') : t('githubRetryRevoke')}
+      {busyAction === 'github-peers' ? t('loading') : t('github.retryRevoke')}
     </Button>
   );
 }
@@ -154,7 +154,7 @@ function ReviewRecoveryControl({ m }: { m: ConnectorEditorModel }) {
       disabled={locked || dirty || sourceStatus !== 'active' || revision < 1 || !githubStatusQuery.data?.operation_source_id}
       onClick={reviewGitHubRecovery}
     >
-      {t('githubReviewRecovery')}
+      {t('github.reviewRecovery')}
     </Button>
   );
 }
@@ -164,7 +164,7 @@ function WaitControl() {
   const t = useTranslations('sources');
   return (
     <p className="text-muted-foreground" role="status">
-      {t('githubRecoveryWait')}
+      {t('github.recoveryWait')}
     </p>
   );
 }
@@ -176,10 +176,10 @@ function ReadyControls({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       <Button variant="outline" disabled={locked || dirty} onClick={refreshGitHub}>
-        {busyAction === 'github-refresh' ? t('saving') : t('githubRefresh')}
+        {busyAction === 'github-refresh' ? t('saving') : t('github.refresh')}
       </Button>
       <Button variant="outline" disabled={locked || dirty} onClick={reviewGitHubDisconnect}>
-        {busyAction === 'github-peers' ? t('loading') : t('githubDisconnect')}
+        {busyAction === 'github-peers' ? t('loading') : t('github.disconnect')}
       </Button>
     </>
   );
@@ -191,7 +191,7 @@ function ConnectControl({ m }: { m: ConnectorEditorModel }) {
   const { locked, dirty, sourceStatus, revision, busyAction, connectGitHub } = m;
   return (
     <Button variant="outline" disabled={locked || dirty || sourceStatus !== 'active' || revision < 1} onClick={connectGitHub}>
-      {busyAction === 'github-connect' ? t('loading') : t('githubConnect')}
+      {busyAction === 'github-connect' ? t('loading') : t('github.connect')}
     </Button>
   );
 }
@@ -219,7 +219,7 @@ function GitHubActions({ m }: { m: ConnectorEditorModel }) {
     <div className="form-actions">
       {provider === 'github' && githubStatusQuery.data?.sync.scope_sha256 && (
         <Button variant="outline" disabled={locked || dirty || sourceStatus !== 'active' || revision < 1} onClick={resetGitHubHistory}>
-          {busyAction === 'github-reset' ? t('saving') : t('githubResetHistory')}
+          {busyAction === 'github-reset' ? t('saving') : t('github.resetHistory')}
         </Button>
       )}
       <GitHubModeControls m={m} />
@@ -234,7 +234,7 @@ export function GitHubSection({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       {showStep('connect', 'verify') && provider === 'github' && (
-        <SettingsSection title={githubStatusQuery.data?.state === 'ready' ? t('githubConnected') : t('githubNotConnected')}>
+        <SettingsSection title={githubStatusQuery.data?.state === 'ready' ? t('github.connected') : t('github.notConnected')}>
           <GitHubWindowNotes m={m} />
           <GitHubWarningNotes m={m} />
           <GitHubHistoryNotes m={m} />

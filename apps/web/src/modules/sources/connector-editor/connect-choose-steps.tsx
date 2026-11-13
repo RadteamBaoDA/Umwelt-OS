@@ -42,7 +42,7 @@ export function StepperNav({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       {!embedded && (
-        <ol aria-label={t('stepperLabel')} className="m-0 grid list-none grid-cols-3 gap-3 p-0 max-[720px]:grid-cols-1">
+        <ol aria-label={t('stepper.label')} className="m-0 grid list-none grid-cols-3 gap-3 p-0 max-[720px]:grid-cols-1">
           {steps.map((step) => (
             <li key={step.id}>
               <a
@@ -67,7 +67,7 @@ export function ConnectStep({ m }: { m: ConnectorEditorModel }) {
   const { showStep, provider } = m;
   return (
     <div id="source-step-connect" hidden={!showStep('connect')} className="scroll-mt-4">
-      <SettingsSection title={t('panelCredentials')} description={t('panelCredentialsHint')}>
+      <SettingsSection title={t('panel.credentials')} description={t('panel.credentialsHint')}>
         {CONNECT_SECTIONS[connectFamily(provider)].map((Section, index) => (
           <Section key={index} m={m} />
         ))}
@@ -96,14 +96,14 @@ export function GuideAndTerms({ m }: { m: ConnectorEditorModel }) {
         (sourceId ? (
           builtinReview ? (
             <p className="text-muted-foreground" role="status">
-              {t('builtinUseToggle')}
+              {t('builtin.useToggle')}
             </p>
           ) : (
             <ProviderTerms sourceId={sourceId} entry={currentEntry} csrfToken={csrfToken} disabled={locked} />
           )
         ) : (
           <p className="text-muted-foreground" role="status">
-            {t('termsRequired')}
+            {t('terms.required')}
           </p>
         ))}
     </>
@@ -202,9 +202,9 @@ export function ValidateRow({ m }: { m: ConnectorEditorModel }) {
       </div>
       {validation && (
         <p className="status-panel" role="status">
-          {t('validationPassed', { time: formatDate(validation.at, display.locale, display.timezone) })}
+          {t('validation.passed', { time: formatDate(validation.at, display.locale, display.timezone) })}
           {validation.verifiedBotId ? ` ${t('verifiedBot')}: ${validation.verifiedBotId}` : ''}
-          {validation.scopeVerified ? ` · ${t('scopeVerified')}` : ''}
+          {validation.scopeVerified ? ` · ${t('scope.verified')}` : ''}
         </p>
       )}
     </>
@@ -218,7 +218,7 @@ export function ChooseStep({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       <div id="source-step-choose" hidden={!showStep('choose')} className="scroll-mt-4">
-        <SettingsSection title={t('panelScope')} description={t('panelScopeHint')}>
+        <SettingsSection title={t('panel.scope')} description={t('panel.scopeHint')}>
           <GuideAndTerms m={m} />
           <ScopeFields m={m} />
           <RestFields m={m} />
@@ -236,13 +236,13 @@ export function ChooseNotes({ m }: { m: ConnectorEditorModel }) {
   return (
     <>
       {showStep('choose') && historyDescription && (
-        <SettingsSection title={t('history')}>
+        <SettingsSection title={t('history.label')}>
           <p className="m-0 text-sm">{historyDescription}</p>
-          {isNativeEntry(currentEntry) && <p className="m-0 text-sm text-muted-foreground">{t('providerHistoryCaveat')}</p>}
+          {isNativeEntry(currentEntry) && <p className="m-0 text-sm text-muted-foreground">{t('provider.historyCaveat')}</p>}
         </SettingsSection>
       )}
       {showStep('choose') && provider === 'open_meteo' && (
-        <SettingsSection title={t('providerTerms')}>
+        <SettingsSection title={t('provider.terms')}>
           <p className="m-0 text-sm">{t('openMeteoTerms')}</p>
         </SettingsSection>
       )}

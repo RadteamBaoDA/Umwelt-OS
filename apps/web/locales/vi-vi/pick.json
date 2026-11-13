@@ -1,0 +1,19 @@
+{
+  "open": "Chọn gợi ý từ điện thoại",
+  "title": "Chọn từ điện thoại",
+  "description": "Quét mã bằng điện thoại cùng mạng.",
+  "waiting": "Đang chờ quét mã…",
+  "scanned": "Đã quét. Hãy chọn một gợi ý trên điện thoại…",
+  "picked": "Đã nhận gợi ý.",
+  "expired": "Mã đã hết hạn. Đóng và mở lại để lấy mã mới.",
+  "startError": "Không thể bắt đầu phiên điện thoại.",
+  "noLan": "Không tìm thấy địa chỉ mạng LAN; điện thoại có thể không kết nối được.",
+  "phone.title": "Chọn một gợi ý",
+  "phone.expiredTitle": "Liên kết đã hết hạn",
+  "phone.loading": "Đang tải…",
+  "phone.done": "Đã gửi. Bạn có thể quay lại máy tính.",
+  "phone.invalid": "Liên kết đã hết hạn hoặc không còn hợp lệ. Hãy mở mã mới trên máy tính.",
+  "goToDashboard": "Đến trang tổng quan",
+  "phone.error": "Đã xảy ra lỗi. Vui lòng thử lại.",
+  "phone.tooMany": "Quá nhiều lần thử. Hãy đợi một phút rồi thử lại."
+}

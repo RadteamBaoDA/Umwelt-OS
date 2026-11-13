@@ -23,7 +23,7 @@ export function ProviderStepSearch({ m }: { m: ConnectorEditorModel }) {
         <header className="section-heading">
           <div>
             <h2>{t('setupTitle')}</h2>
-            <p className="text-muted-foreground">{t('stepConnect')}</p>
+            <p className="text-muted-foreground">{t('step.connect')}</p>
           </div>
         </header>
       )}
@@ -32,29 +32,29 @@ export function ProviderStepSearch({ m }: { m: ConnectorEditorModel }) {
         <p className="error" role="alert">
           {t('loadFailed')}{' '}
           <Button variant="outline" onClick={() => catalogQuery.refetch()}>
-            {t('retry')}
+            {t('retry.label')}
           </Button>
         </p>
       )}
       {Boolean(shapeFilter?.length) && catalogQuery.isSuccess && !sourceId && !catalog.some((entry) => entry.kind !== 'group') && (
         <p role="status" className="text-muted-foreground">
-          {t('shapeFilterNone')}{' '}
+          {t('shape.filterNone')}{' '}
           {onClearFilter && (
             <Button variant="outline" size="sm" onClick={onClearFilter}>
-              {t('shapeFilterClear')}
+              {t('shape.filterClear')}
             </Button>
           )}
         </p>
       )}
       {catalog.length > 0 && (
         <div className="field">
-          <Label htmlFor="source-provider-search">{t('providerSearchLabel')}</Label>
+          <Label htmlFor="source-provider-search">{t('provider.searchLabel')}</Label>
           <Input
             id="source-provider-search"
             type="search"
             autoFocus
             autoComplete="off"
-            placeholder={t('providerSearchPlaceholder')}
+            placeholder={t('provider.searchPlaceholder')}
             value={providerQuery}
             onChange={(event) => setProviderQuery(event.target.value)}
           />
@@ -62,7 +62,7 @@ export function ProviderStepSearch({ m }: { m: ConnectorEditorModel }) {
       )}
       {catalog.length > 0 && providerGroups.length === 0 && (
         <p role="status" className="text-muted-foreground">
-          {t('providerSearchNone')}
+          {t('provider.searchNone')}
         </p>
       )}
     </>
@@ -101,12 +101,12 @@ export function ProviderGroups({ m }: { m: ConnectorEditorModel }) {
                     selectProvider(localProvider, entry);
                   }}
                 >
-                  <strong>{providerKey(entry.provider_id) === 'provider' ? entry.label : t(providerKey(entry.provider_id))}</strong>
+                  <strong>{providerKey(entry.provider_id) === 'provider.label' ? entry.label : t(providerKey(entry.provider_id))}</strong>
                   {(catalogStatus(entry) || !entry.code_available) && (
                     <span>{[catalogStatus(entry), entry.code_available ? '' : t('codeUnavailable')].filter(Boolean).join(' · ')}</span>
                   )}
-                  {added && <Badge variant="secondary">{t('builtinAdded')}</Badge>}
-                  {!supported && <small>{t('providerUnavailableReason')}</small>}
+                  {added && <Badge variant="secondary">{t('builtin.added')}</Badge>}
+                  {!supported && <small>{t('provider.unavailableReason')}</small>}
                 </Button>
               );
             })}
@@ -138,7 +138,7 @@ export function IdentityPanel({ m }: { m: ConnectorEditorModel }) {
   } = m;
   return (
     <>
-      <SettingsSection title={t('panelIdentity')} description={t('panelIdentityHint')}>
+      <SettingsSection title={t('panel.identity')} description={t('panel.identityHint')}>
         <div className="form source-editor-form">
           <p className="text-muted-foreground">{t('selectedProvider', { provider: currentEntry?.label ?? provider })}</p>
           <div className="field">
@@ -163,7 +163,7 @@ export function IdentityPanel({ m }: { m: ConnectorEditorModel }) {
                   | 'serviceUnavailable'
                   | 'sourceNameRequired'
                   | 'actionFailed'
-                  | 'builtinAlreadyAdded',
+                  | 'builtin.alreadyAdded',
               )}
               {errorDetail && ` | ${errorDetail}`}
             </p>

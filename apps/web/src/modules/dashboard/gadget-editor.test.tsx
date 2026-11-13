@@ -5,8 +5,6 @@ import { NextIntlClientProvider } from 'next-intl';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getCatalog } from '@locales';
 
-import { sourcesMessages } from '@/core/messages/sources';
-
 vi.mock('@/core/query-provider', () => ({ useDisplayPreferences: () => ({ locale: 'en-us', timezone: 'UTC' }) }));
 vi.mock('@/core/app-shell/workspace-shell', () => ({ useWorkspaceSession: () => ({ csrfToken: 'c' }) }));
 vi.mock('./live-map-config', () => ({ LiveMapConfig: () => null }));
@@ -75,7 +73,7 @@ const source = (id: string, name: string, provider: string, shapes: string[], la
 const messages = {
   gadgetSettings: getCatalog('en-us', 'gadgetSettings'),
   dashboard: getCatalog('en-us', 'dashboard'),
-  sources: sourcesMessages['en-us'],
+  sources: getCatalog('en-us', 'sources'),
   uiSweep: getCatalog('en-us', 'uiSweep'),
 };
 /** Backend metric catalog snapshot (verified against `metric_catalog_read()` by pytest). */
