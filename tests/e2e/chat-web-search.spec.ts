@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { uiText } from './ui-text';
+import { uiRe, uiText } from './ui-text';
 
 // Web search UI (P15 W4). All network is mocked via page.route; nothing reaches a real backend or provider.
 // Mirrors WEB_SEARCH_SEND_ENABLED (modules/chat/api.ts), enabled with W2; the toggle-off case is skipped while it is true.
@@ -42,8 +42,8 @@ test.describe('web search toggle', () => {
     await mockChat(page, { configured: true });
     await page.goto('/dashboard');
     // The quick-chat shortcut (QuickChatShortcut in workspace-shell) only renders on /dashboard/<id>; the command palette opens the drawer from anywhere.
-    await page.getByRole('button', { name: 'Search or run a command' }).click();
-    await page.getByText('Quick chat', { exact: true }).first().click();
+    await page.getByRole('button', { name: uiText('shell', 'searchOrRun') }).click();
+    await page.getByText(uiText('chat', 'quickChat'), { exact: true }).first().click();
     await expect(page.getByRole('dialog')).toBeVisible();
     // The drawer + menu holds no web search item.
     await expect(page.locator('#chat-web-search')).toHaveCount(0);
@@ -53,7 +53,7 @@ test.describe('web search toggle', () => {
     test.skip(!SEND_ENABLED, 'toggle hidden until W3 enables WEB_SEARCH_SEND_ENABLED');
     await mockChat(page, { configured: false });
     await page.goto('/chat');
-    await page.getByRole('button', { name: 'Add context, files or options' }).click();
+    await page.getByRole('button', { name: uiText('chat', 'composer.menu') }).click();
     // Unconfigured: the item is a link to Settings (not a disabled checkbox), with the setup hint as its explanation.
     const setup = page.getByTestId('chat-web-search-setup');
     await expect(setup).toHaveAttribute('href', '/settings/web-search');
@@ -66,7 +66,7 @@ test.describe('web search toggle', () => {
     test.skip(SEND_ENABLED, 'only meaningful while WEB_SEARCH_SEND_ENABLED is false');
     await mockChat(page, { configured: true });
     await page.goto('/chat');
-    await page.getByRole('button', { name: 'Add context, files or options' }).click();
+    await page.getByRole('button', { name: uiText('chat', 'composer.menu') }).click();
     await expect(page.locator('#chat-web-search')).toHaveCount(0);
   });
 
@@ -79,12 +79,12 @@ test.describe('web search toggle', () => {
       await route.fulfill({ status: 500, json: { detail: 'stop' } });
     });
     await openChat(page);
-    await page.getByRole('button', { name: 'Add context, files or options' }).click();
+    await page.getByRole('button', { name: uiText('chat', 'composer.menu') }).click();
     // The toggle defaults to on whenever web search is usable (use-chat-composer-state.ts), so it is ticked already.
-    await expect(page.getByRole('menuitemcheckbox', { name: 'Search the web' })).toBeChecked();
+    await expect(page.getByRole('menuitemcheckbox', { name: uiText('chat', 'web.searchToggle') })).toBeChecked();
     await page.keyboard.press('Escape');
     // The checkbox item keeps the + menu open (and focused); press Enter on the composer itself, not the menu.
-    const composer = page.getByRole('textbox', { name: /Ask a question about your knowledge/ });
+    const composer = page.getByRole('textbox', { name: uiRe('chat', 'composer.placeholder') });
     await composer.fill('q1');
     await composer.press('Enter');
     await expect.poll(() => bodies.length).toBe(1);
@@ -111,21 +111,22 @@ test.describe('web citations (EN)', () => {
 
   // Same-URL dedupe happens server-side before numbering (test_web_citations_with_same_url_are_deduped); the client renders stored citations 1:1 so [n] markers stay aligned.
 
+  // Each reason maps to its owner-locale sentence (chat-transcript WEB_REASON_KEYS), so the expectation follows E2E_LOCALE.
   const reasons: Array<[string, string, string]> = [
-    ['not_configured', 'skipped', 'not configured'],
-    ['query_too_long', 'skipped', 'too long'],
-    ['local_only_context', 'skipped', 'local-only'],
-    ['daily_limit', 'skipped', 'daily web search limit'],
-    ['run_inactive', 'skipped', 'stopped before the search ran'],
-    ['timeout', 'unavailable', 'timed out'],
-    ['provider_error', 'unavailable', 'returned an error'],
-    ['network_denied', 'unavailable', 'blocked'],
+    ['not_configured', 'skipped', 'web.reason_not_configured'],
+    ['query_too_long', 'skipped', 'web.reason_query_too_long'],
+    ['local_only_context', 'skipped', 'web.reason_local_only_context'],
+    ['daily_limit', 'skipped', 'web.reason_daily_limit'],
+    ['run_inactive', 'skipped', 'web.reason_run_inactive'],
+    ['timeout', 'unavailable', 'web.reason_timeout'],
+    ['provider_error', 'unavailable', 'web.reason_provider_error'],
+    ['network_denied', 'unavailable', 'web.reason_network_denied'],
   ];
-  for (const [reason, status, text] of reasons) {
+  for (const [reason, status, key] of reasons) {
     test(`notice for ${reason}`, async ({ page }) => {
       await mockChat(page, { webSearch: { status, reason, result_count: 0 } });
       await openChat(page);
-      await expect(page.getByTestId('web-search-notice')).toContainText(text);
+      await expect(page.getByTestId('web-search-notice')).toContainText(uiText('chat', key));
     });
   }
 });
